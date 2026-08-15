@@ -1,6 +1,7 @@
 #include "SnowDeformation.h"
 
 #include "Globals.h"
+#include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
@@ -10,6 +11,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	StampRadius,
 	RefillTime,
 	RefillOnlyWhenSnowing,
+	SnowClassDepths,
+	SnowTexturePath,
+	SnowTextureLinear,
+	SnowBorderNoise,
+	SnowBorderSmoothness,
+	SnowBorderTrampledFade,
+	SnowBorderUntrampledFade,
+	RangeShellM,
 	RangeTrenchesM)
 
 void SnowDeformation::SetupResources()
@@ -46,6 +55,58 @@ void SnowDeformation::SetupResources()
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
 	}
+
+	{
+		D3D11_TEXTURE2D_DESC terrainDesc = {
+			.Width = kShellWindowDim,
+			.Height = kShellWindowDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE
+		};
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC terrainSrvDesc = {
+			.Format = terrainDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = {
+				.MostDetailedMip = 0,
+				.MipLevels = 1 }
+		};
+
+		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
+		shellTerrainTexture->CreateSRV(terrainSrvDesc);
+	}
+
+	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
+
+	auto device = globals::d3d::device;
+
+	D3D11_RASTERIZER_DESC rasterDesc{};
+	rasterDesc.FillMode = D3D11_FILL_SOLID;
+	rasterDesc.CullMode = D3D11_CULL_NONE;
+	rasterDesc.DepthClipEnable = TRUE;
+	DX::ThrowIfFailed(device->CreateRasterizerState(&rasterDesc, shellRasterState.put()));
+	Util::SetResourceName(shellRasterState.get(), "SnowDeformation::ShellRasterState");
+
+	D3D11_DEPTH_STENCIL_DESC depthDesc{};
+	depthDesc.DepthEnable = TRUE;
+	depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+	depthDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+	DX::ThrowIfFailed(device->CreateDepthStencilState(&depthDesc, shellDepthState.put()));
+	Util::SetResourceName(shellDepthState.get(), "SnowDeformation::ShellDepthState");
+
+	D3D11_SAMPLER_DESC samplerDesc{};
+	samplerDesc.Filter = D3D11_FILTER_ANISOTROPIC;
+	samplerDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	samplerDesc.MaxAnisotropy = 8;
+	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, shellSnowSampler.put()));
+	Util::SetResourceName(shellSnowSampler.get(), "SnowDeformation::ShellSnowSampler");
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -102,6 +163,9 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+
+	if (settings.EnableSnowDeformation && globals::state->inWorld)
+		UpdateShellTerrainWindow();
 
 	if (!settings.EnableSnowDeformation)
 		return;
@@ -186,6 +250,15 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationUpdateCS)
 		deformationUpdateCS->Release();
 	deformationUpdateCS = nullptr;
+	if (shellVS)
+		shellVS->Release();
+	shellVS = nullptr;
+	if (shellPS)
+		shellPS->Release();
+	shellPS = nullptr;
+	if (depthSyncCS)
+		depthSyncCS->Release();
+	depthSyncCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
