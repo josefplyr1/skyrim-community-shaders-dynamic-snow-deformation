@@ -68,7 +68,11 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;    // depth window: trench-floor visibility override toward borders
 	float BorderUntrampledFade;  // depth band: untrampled edge dissolve
-	float2 padShell;
+	float SnowSnowFade;          // statics skin: object <-> landscape snow cross-fade band
+	float SkinFadeStart;         // statics skin: distance dissolve start (units)
+
+	float SkinFadeEnd;
+	float3 padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);

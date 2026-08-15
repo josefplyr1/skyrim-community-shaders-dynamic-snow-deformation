@@ -116,11 +116,17 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 26.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
+		float ObjectsSnowDepth = 0.0f;
+		/** @brief Statics skin, rounded class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. */
+		float SnowMeshesDepth = 3.0f;
+		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
+		float RoadMeshesDepth = 10.0f;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
 		bool SnowTextureLinear = false;
-		/** @brief World-unit jitter of WHERE class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
+		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 32.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
@@ -128,9 +134,14 @@ public:
 		float SnowBorderTrampledFade = 20.0f;
 		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
 		float SnowBorderUntrampledFade = 5.0f;
+		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
+		float SnowSnowFade = 10.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
+		float RangeSkinsM = 750.0f;
+		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
+		float RangeSkinsFadeM = 100.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -253,7 +264,13 @@ public:
 
 		float BorderTrampledFade;
 		float BorderUntrampledFade;
-		float2 padShell;
+		/** @brief View-ray band over which the statics skin cross-fades into the landscape shell behind it. */
+		float SnowSnowFade;
+		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
+		float SkinFadeStart;
+
+		float SkinFadeEnd;
+		float3 padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -322,6 +339,140 @@ public:
 	uint32_t shellStatSnowTexels = 0;
 	float shellStatMinHeight = 0.0f;
 	float shellStatMaxHeight = 0.0f;
+
+	// ---- Statics snow skin: capture & redraw ----
+
+	/** @brief One snow-flagged draw captured this frame, for re-rendering inflated in DrawShell. NiPointer keeps the geometry alive across the frame even if its cell detaches mid-frame. */
+	struct CapturedSnowStatic
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiTransform world;
+		/** @brief Road/bridge match: this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
+		bool road;
+	};
+
+	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
+	std::vector<CapturedSnowStatic> capturedStatics;
+	std::unordered_set<void*> capturedStaticsSet;
+	std::atomic<uint32_t> statCapturedStatics{ 0 };
+
+	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
+	void InstallStaticsCaptureHook();
+
+	/** @brief Depth copy taken after the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell; Terrain Blending's technique adapted to the two snow kinds. */
+	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
+
+	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
+	struct alignas(16) StaticsCB
+	{
+		float4 WorldRow0;
+		float4 WorldRow1;
+		float4 WorldRow2;
+		/** @brief flat-class depth (walkways, roofs, planks); road captures use RoadMeshesDepth for both classes so the GPU pick cannot override it. */
+		float ObjectsDepth;
+		/** @brief The top-down height window (center-anchored, camera-following). */
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
+		/** @brief >0.5: a smoothed-normal buffer is bound at VS t10 for this object (pillow inflation for flat meshes). */
+		float HasSmoothedNormals;
+		/** @brief rounded-class depth (rocks, drifts, logs); the VS picks per mesh from the GPU flatness stats. */
+		float RoundedDepth;
+		/** @brief Vertex count = index of the flatness-stats element appended to the SmoothedNormals buffer. */
+		float VertexCountF;
+		float padStat2;
+	};
+	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
+
+	// ---- Smoothed normals for the statics skin (pillow inflation) ----
+
+	/** @brief GPU-side per-mesh CB for SmoothNormalsCS. Layout must match SmoothCB in SmoothNormalsCS.hlsl. */
+	struct alignas(16) SmoothCB
+	{
+		uint32_t VertexCount;
+		uint32_t StrideBytes;
+		uint32_t NormalOffsetBytes;
+		uint32_t PosIsFloat32;
+		uint32_t TableMask;
+		uint32_t padSm[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
+
+	/** @brief Per unique geometry (keyed by vertex buffer pointer): position-averaged normals, built once by SmoothNormalsCS. Split-normal flat meshes (planks, roofs, pole caps) inflate along these so their snow drapes as a sealed pillow instead of a hovering parallel sheet. */
+	struct SmoothedNormalsEntry
+	{
+		winrt::com_ptr<ID3D11Buffer> buffer;
+		winrt::com_ptr<ID3D11ShaderResourceView> srv;
+		bool ready = false;
+	};
+	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
+	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
+	ID3D11ComputeShader* smoothResolveCS = nullptr;
+	/** @brief Third pass: one-group reduction writing the mesh's flat/rounded classification (fraction of smoothed-vs-raw divergent vertices) into the stats element appended at SmoothedNormals[vertexCount]. */
+	ID3D11ComputeShader* smoothFlatStatsCS = nullptr;
+	ConstantBuffer* smoothCB = nullptr;
+
+	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
+	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
+
+	// ---- Top-down object height windows ----
+
+	// 4096 units at 8-unit texels, following the camera; matches the
+	// shell's inner grid density.
+	static constexpr uint kHeightMapDim = 512;
+	static constexpr float kHeightMapHalfExtent = 2048.0f;
+	/** @brief Height sentinels for texels no object covers. */
+	static constexpr float kHeightMapEmptyTop = -100000.0f;
+	static constexpr float kHeightMapEmptyBottom = 100000.0f;
+
+	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
+	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
+	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
+	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
+	Texture2D* heightSkinDepth = nullptr;
+	uint heightCurrent = 0;
+	bool heightMapValid = false;
+	float2 heightWindowCenter = { 0, 0 };
+
+	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
+	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
+	ID3D11VertexShader* heightVS = nullptr;
+	ID3D11PixelShader* heightPS = nullptr;
+	ID3D11ComputeShader* heightScrollCS = nullptr;
+
+	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) HeightProcessCB
+	{
+		DirectX::XMINT2 ScrollDelta;
+		uint ClearAll;
+		/** @brief Units/frame the accumulated tops/bottoms drift toward empty; stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
+		float GhostDecay;
+	};
+	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
+	ConstantBuffer* heightProcessCB = nullptr;
+
+	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
+	void CreateHeightFieldResources();
+	/** @brief Scrolls the accumulated height maps to the new window position and rasterizes this frame's captured statics into them (MAX/MIN). Called from DrawShell before the screen-space passes. Implemented in SnowDeformation/Statics.cpp. */
+	void RenderObjectHeightMap();
+
+	ID3D11VertexShader* staticsVS = nullptr;
+	ID3D11PixelShader* staticsPS = nullptr;
+	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
+	ID3D11VertexShader* patchVS = nullptr;
+	ID3D11PixelShader* patchPS = nullptr;
+	/** @brief Retained VS bytecode: input layouts are created against it, one per vertex descriptor. */
+	winrt::com_ptr<ID3DBlob> staticsVSBlob;
+	bool staticsShadersFailed = false;
+	ConstantBuffer* staticsCB = nullptr;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
+
+	/** @brief Compiles the statics skin VS (keeping bytecode) and PS on first use. Implemented in SnowDeformation/Statics.cpp. */
+	bool EnsureStaticsShaders();
+	/** @brief Re-draws this frame's captured projected-snow statics inflated, inside DrawShell's bound state. Implemented in SnowDeformation/Statics.cpp. */
+	void DrawCapturedStatics();
 
 	/** @brief Caches a "tile is snow material" bitmask per landscape quad material, for the terrain shader's per-tile snow detection. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);

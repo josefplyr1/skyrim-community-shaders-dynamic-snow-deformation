@@ -12,14 +12,20 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillTime,
 	RefillOnlyWhenSnowing,
 	SnowClassDepths,
+	ObjectsSnowDepth,
+	SnowMeshesDepth,
+	RoadMeshesDepth,
 	SnowTexturePath,
 	SnowTextureLinear,
 	SnowBorderNoise,
 	SnowBorderSmoothness,
 	SnowBorderTrampledFade,
 	SnowBorderUntrampledFade,
+	SnowSnowFade,
 	RangeShellM,
-	RangeTrenchesM)
+	RangeTrenchesM,
+	RangeSkinsM,
+	RangeSkinsFadeM)
 
 void SnowDeformation::SetupResources()
 {
@@ -81,6 +87,30 @@ void SnowDeformation::SetupResources()
 	}
 
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
+	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
+	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
+	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
+
+	CreateHeightFieldResources();
+
+	{
+		// RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth): the
+		// extreme surfaces win per texel in any draw order — no depth buffer.
+		D3D11_BLEND_DESC minmaxBlendDesc{};
+		minmaxBlendDesc.IndependentBlendEnable = TRUE;
+		for (int i = 0; i < 3; i++) {
+			minmaxBlendDesc.RenderTarget[i].BlendEnable = TRUE;
+			minmaxBlendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].BlendOp = i == 1 ? D3D11_BLEND_OP_MIN : D3D11_BLEND_OP_MAX;
+			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
+			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
+			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
+		}
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&minmaxBlendDesc, heightMaxBlendState.put()));
+		Util::SetResourceName(heightMaxBlendState.get(), "SnowDeformation::HeightMinMaxBlend");
+	}
 
 	auto device = globals::d3d::device;
 
@@ -163,6 +193,12 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+
+	// New frame: publish last frame's statics-capture count and reset the
+	// list before this frame's opaque rendering fills it again.
+	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
+	capturedStatics.clear();
+	capturedStaticsSet.clear();
 
 	if (settings.EnableSnowDeformation && globals::state->inWorld)
 		UpdateShellTerrainWindow();
@@ -259,6 +295,39 @@ void SnowDeformation::ClearShaderCache()
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (staticsVS)
+		staticsVS->Release();
+	staticsVS = nullptr;
+	if (staticsPS)
+		staticsPS->Release();
+	staticsPS = nullptr;
+	if (patchVS)
+		patchVS->Release();
+	patchVS = nullptr;
+	if (patchPS)
+		patchPS->Release();
+	patchPS = nullptr;
+	staticsVSBlob = nullptr;
+	staticsILCache.clear();
+	staticsShadersFailed = false;
+	if (smoothAccumulateCS)
+		smoothAccumulateCS->Release();
+	smoothAccumulateCS = nullptr;
+	if (smoothResolveCS)
+		smoothResolveCS->Release();
+	smoothResolveCS = nullptr;
+	if (smoothFlatStatsCS)
+		smoothFlatStatsCS->Release();
+	smoothFlatStatsCS = nullptr;
+	if (heightVS)
+		heightVS->Release();
+	heightVS = nullptr;
+	if (heightPS)
+		heightPS->Release();
+	heightPS = nullptr;
+	if (heightScrollCS)
+		heightScrollCS->Release();
+	heightScrollCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
