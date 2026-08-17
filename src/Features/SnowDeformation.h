@@ -265,6 +265,8 @@ public:
 		float UndulationSpacing = 1.0f;
 		/** @brief Tessellated relief depth in world units: near-camera geometric relief from the PBR displacement map. 0 disables the tessellated path entirely. */
 		float ReliefDepth = 12.0f;
+		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
+		float ParallaxShadowStrength = 1.0f;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
@@ -527,6 +529,9 @@ public:
 
 		/** @brief Wide exclusion field window: xy = world centre, z = 1/half extent, w > 0.5 when the field was baked this frame. */
 		float4 ExclusionFieldWindow;
+
+		/** @brief Parallax self-shadow on the shell's snow micro-relief: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = user strength (0 disables the taps), zw unused. */
+		float4 SnowParallaxShadow;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

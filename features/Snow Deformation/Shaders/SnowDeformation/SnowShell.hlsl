@@ -38,6 +38,13 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "Skylighting/Skylighting.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #	include "SnowDeformation/SnowLights.hlsli"
+// Extended Materials' parallax self-shadow math (Tatarchuk 2006) reused
+// verbatim: DisplacementParams, AdjustDisplacementNormalized, the tap-count
+// and quality constants. Only the four fetches are replaced, so they can run
+// through our anti-tiling taps. LANDSCAPE/TRUE_PBR stay undefined, so the
+// terrain and PBR branches of the header compile out. Extended Materials is
+// CORE, so the include always resolves.
+#	include "ExtendedMaterials/ExtendedMaterials.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -150,6 +157,10 @@ cbuffer ShellCB : register(b0)
 	// Wide exclusion field window: xy = world centre, z = 1/half extent,
 	// w > 0.5 when the field was baked this frame.
 	float4 ExclusionFieldWindow;
+
+	// Parallax self-shadow: x = HeightScale (PBR JSON displacementScale),
+	// y = user strength (0 disables), zw unused.
+	float4 SnowParallaxShadow;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -174,8 +185,10 @@ Texture2D<float> ObjectSkinDepthMap : register(t12);
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
-// Displacement companion (_p): parallax occlusion relief.
-Texture2D<float> SnowHeightMap : register(t8);
+// Displacement companion (_p): tessellated relief and the parallax
+// self-shadow. float4 to match Extended Materials' own TexParallaxSampler
+// convention; the SRV is single-channel, so only .x carries data.
+Texture2D<float4> SnowHeightMap : register(t8);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -1142,6 +1155,20 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
 }
 
+// Displacement through the SAME anti-tiling taps as every other map. The
+// parallax shadow must occlude the grain the normal map actually draws, and
+// each tap reads an unrelated patch of the texture — shadowing from a single
+// un-offset fetch would shade features that are not on screen. The taps'
+// offsets are per-cell constants, so walking the shadow ray by uvOffset on
+// each of them is exact. Explicit mip: the loop's fetches are uniform, and a
+// blurred height field resolves to mush.
+float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
+{
+	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
+	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
+	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
+}
+
 // Depth-delta histogram (heatmap mode): 4 distance bands x 8 signed-delta
 // buckets. SM5.0 shares PS UAV slots with the render-target outputs, so the
 // heatmap runs as its own permutation with a single SV_Target — matching the
@@ -1347,6 +1374,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// distance fade is tighter than bumpFade.
 	float disturb = ChurnWeight(pixelCarve, bermCenter) * CrispStrengthV;
 	disturb *= 1.0 - smoothstep(300.0, 1000.0, shellZ);
+
+	// Tangent basis for the snow maps. The snow uv is a world-XY planar
+	// projection, so the frame is axis-aligned by construction: bumpT is
+	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
+	// BEFORE the normal map perturbs it, matching Lighting.hlsl's use of the
+	// interpolated TBN. Shared with the parallax shadow below.
+	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+	float3 bumpB = cross(normalWS, bumpT);
+
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
@@ -1358,8 +1394,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
-		float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-		float3 bumpB = cross(normalWS, bumpT);
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
 	}
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
@@ -1512,6 +1546,74 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// hugs the surface the march actually saw.
 		sssBlend *= 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
+
+	// Parallax self-shadow on the snow's own grain: Extended Materials'
+	// GetParallaxSoftShadowMultiplier, the term PBR ground already receives
+	// and the shell did not, which is why the shell read flat under low sun
+	// beside shaded ground. Four fixed taps along the light in tangent space,
+	// no march. Distinct from the heightfield march above: that one shadows at
+	// TERRAIN scale (mounds, berms, dunes, 28-1000 units); this one shadows
+	// WITHIN one texture repeat.
+	//
+	// The four fetches are ours (tap-blended) but every constant and the
+	// occlusion formula are Extended Materials' own, so the response matches
+	// the ground beside us by construction rather than by tuning.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallaxShadow.y > 0.001 && bumpFade > 0.001 &&
+		sunShadow > 0.01 && satNdotL > 0.001)
+	{
+		DisplacementParams snowDisp;
+		snowDisp.DisplacementScale = 1.0;
+		snowDisp.DisplacementOffset = 0.0;
+		// kSnowUVTile matches the landscape's tiling, so the JSON
+		// displacementScale transfers 1:1 - no correction factor.
+		snowDisp.HeightScale = SnowParallaxShadow.x;
+		snowDisp.FlattenAmount = 0.0;
+
+		// Same mip rule as ExtendedMaterials::GetMipLevelFromDims' PARALLAX
+		// path: MIN of the derivatives (standard mipmapping takes max), then
+		// floor. Deliberately sharper than hardware - the marched height field
+		// has to keep its edges.
+		float2 heightDims;
+		SnowHeightMap.GetDimensions(heightDims.x, heightDims.y);
+		float2 heightTexels = snowUV * heightDims;
+		float2 htdx = ddx(heightTexels);
+		float2 htdy = ddy(heightTexels);
+		float heightMip = floor(max(0.5 * log2(max(min(dot(htdx, htdx), dot(htdy, htdy)), 1e-8)) + SharedData::MipBias, 0.0));
+
+		// Light into the snow uv's own frame. bumpT/bumpB ARE the uv axes, so
+		// this is the planar-projection equivalent of mul(DirLightDirection, tbn).
+		float2 lightUV = float2(dot(L, bumpT), dot(L, bumpB));
+
+		float quality = shellZ < ExtendedMaterials::ParallaxCheapDistance ?
+		                    ExtendedMaterials::ParallaxNearShadowQuality :
+		                    ExtendedMaterials::ParallaxFarShadowQuality;
+		uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
+		float shadowStrength = ExtendedMaterials::ShadowIntensity * (4.0 / tapCount) * SnowParallaxShadow.y;
+
+		float2 rayDir = lightUV * 0.1 * snowDisp.HeightScale;
+		float4 multipliers = rcp(float4(1, 2, 3, 4) + screenNoise);
+
+		float sh0 = ExtendedMaterials::AdjustDisplacementNormalized(
+			SampleSnowHeight(snowTaps, 0.0.xx, heightMip), snowDisp);
+		// Unwritten lanes stay at sh0 and contribute zero occlusion.
+		float4 sh = sh0.xxxx;
+		sh.x = ExtendedMaterials::AdjustDisplacementNormalized(
+			SampleSnowHeight(snowTaps, rayDir * multipliers.x, heightMip), snowDisp);
+		if (quality > 0.25)
+			sh.y = ExtendedMaterials::AdjustDisplacementNormalized(
+				SampleSnowHeight(snowTaps, rayDir * multipliers.y, heightMip), snowDisp);
+		if (quality > 0.5)
+			sh.z = ExtendedMaterials::AdjustDisplacementNormalized(
+				SampleSnowHeight(snowTaps, rayDir * multipliers.z, heightMip), snowDisp);
+		if (quality > 0.75)
+			sh.w = ExtendedMaterials::AdjustDisplacementNormalized(
+				SampleSnowHeight(snowTaps, rayDir * multipliers.w, heightMip), snowDisp);
+
+		float parallaxShadow = 1.0 - saturate(dot(max(0.0, sh - sh0), shadowStrength));
+		// Faded on the same band as the normal map it occludes: past it the
+		// grain is not drawn, so shadowing it would darken nothing visible.
+		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
 	}
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;

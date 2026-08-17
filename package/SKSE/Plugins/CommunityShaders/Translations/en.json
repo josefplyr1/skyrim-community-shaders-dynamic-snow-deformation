@@ -1406,6 +1406,8 @@
     "feature.snow_deformation.object_trenches_tooltip": "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way.",
     "feature.snow_deformation.objects_snow_depth": "Flat Objects",
     "feature.snow_deformation.objects_snow_depth_tooltip": "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh.",
+    "feature.snow_deformation.parallax_shadow_strength": "Parallax Shadow",
+    "feature.snow_deformation.parallax_shadow_strength_tooltip": "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost).",
     "feature.snow_deformation.range_skins": "Object Snow",
     "feature.snow_deformation.range_skins_fade": "Distant Snow Blend",
     "feature.snow_deformation.range_skins_fade_tooltip": "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects.",
