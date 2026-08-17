@@ -474,6 +474,16 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	globals::profiler->EndPass();
 
 	// ---- Restore everything.
+	// Including the CONSTANT BUFFER, not just pipeline state. The caster pass
+	// above overwrites the SHARED shellCB with a light-space view and a zeroed
+	// CameraPosAdjust (correct for its own absolute-world rendering). Every
+	// later consumer this frame reads the same buffer, and the statics skins
+	// derive camDist from CameraPosAdjust: left zeroed it puts the camera at
+	// the world origin, so every object measures ~80k units away and the
+	// distance collapse flattens every skin's lift to nothing. Presented as
+	// "distant objects have no snow" because near objects were re-drawn on the
+	// frames where the shell pass had refreshed the buffer.
+	shellCB->Update(*lastShellCBData);
 	{
 		ID3D11RenderTargetView* rtvs[8];
 		for (uint32_t i = 0; i < 8; i++)
