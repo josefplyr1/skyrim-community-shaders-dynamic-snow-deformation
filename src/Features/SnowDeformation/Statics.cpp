@@ -92,13 +92,31 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim))
 		return;
-	// Object LOD never qualifies. LOD trishapes carry the same projected-snow
-	// flags as the real meshes they stand in for, but each merges a whole
-	// worldspace quad, so a skin on one is a flat sheet at the LOD surface
-	// cutting through everything the real meshes build. City worldspaces draw
-	// object LOD inside their own walls, which is where this shows.
-	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
-		return;
+	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
+	// reference comes close. Windhelm's merged quads measured 8700-11500.
+	constexpr float kMergedLODRadius = 4096.0f;
+
+	// Object LOD needs DISCRIMINATING, not blanket rejection. A merged LOD
+	// trishape carries the same projected-snow flags as the meshes it stands in
+	// for but spans a quad, so a skin on one is a flat sheet at the LOD surface
+	// cutting through everything the real meshes build (the Windhelm sheet).
+	// Per-object LOD wears the same flags and is how Skyrim draws DISTANT real
+	// objects — rejecting it wholesale removed object snow past the LOD switch
+	// entirely. Discriminate by SPAN, which is the property the object probe
+	// actually measured; the ownership half of the test lives in the backstop
+	// below, which still catches merged LOD arriving without the flags.
+	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape)) {
+		const float lodRadius = a_pass->geometry->worldBound.radius;
+		const bool merged = lodRadius > kMergedLODRadius;
+		// One-shot per disposition: one launch then shows whether per-object
+		// LOD reaches this hook at all, instead of another blind round trip.
+		static std::atomic<bool> loggedKept{ false }, loggedRejected{ false };
+		if (!(merged ? loggedRejected : loggedKept).exchange(true))
+			logger::info("[SNOW DEFORMATION] object LOD {}: worldBound radius {:.0f}",
+				merged ? "REJECTED (merged quad)" : "kept (per-object)", lodRadius);
+		if (merged)
+			return;
+	}
 	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
@@ -139,7 +157,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// Backstop for LOD geometry that reaches here without the flags: nothing
 	// belonging to a real reference spans a cell, and merged LOD trishapes
 	// hang off no reference at all.
-	if (a_pass->geometry->worldBound.radius > 4096.0f) {
+	if (a_pass->geometry->worldBound.radius > kMergedLODRadius) {
 		bool referenced = false;
 		for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
 			referenced = node->GetUserData() != nullptr;
@@ -1177,6 +1195,36 @@ void SnowDeformation::DrawCapturedStatics()
 		return;
 	if (!EnsureStaticsShaders())
 		return;
+
+	// One-shot capture histogram by camera distance. Every draw-loop skip is
+	// already logged and none fire, so if distant objects are missing skins the
+	// gate is either up in the capture hook (nothing captured out there) or
+	// down in the shader (captured and drawn, but shaded away). This tells the
+	// two apart in one launch instead of bisecting for it. Fires once, on the
+	// first frame with a populated exterior, so a loading frame cannot skew it.
+	{
+		static std::atomic<bool> loggedHistogram{ false };
+		if (capturedStatics.size() > 50 && !loggedHistogram.exchange(true)) {
+			constexpr float kBandM[] = { 25.0f, 50.0f, 100.0f, 200.0f, 400.0f, 750.0f };
+			uint32_t bands[std::size(kBandM) + 1] = {};
+			float furthest = 0.0f;
+			auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+			for (const auto& cap : capturedStatics) {
+				const float dx = cap.world.translate.x - eye.x;
+				const float dy = cap.world.translate.y - eye.y;
+				const float metres = std::sqrt(dx * dx + dy * dy) / kUnitsPerMeter;
+				furthest = std::max(furthest, metres);
+				size_t band = 0;
+				while (band < std::size(kBandM) && metres > kBandM[band])
+					++band;
+				++bands[band];
+			}
+			logger::info("[SNOW DEFORMATION] capture histogram ({} total, furthest {:.0f} m): "
+						 "<25m={} 25-50={} 50-100={} 100-200={} 200-400={} 400-750={} >750m={}",
+				capturedStatics.size(), furthest,
+				bands[0], bands[1], bands[2], bands[3], bands[4], bands[5], bands[6]);
+		}
+	}
 
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
