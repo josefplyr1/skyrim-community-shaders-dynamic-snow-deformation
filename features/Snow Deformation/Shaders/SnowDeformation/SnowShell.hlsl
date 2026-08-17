@@ -1169,6 +1169,68 @@ float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
 	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
 }
 
+// Mip for the height march, by the same rule as
+// ExtendedMaterials::GetMipLevelFromDims' PARALLAX path: MIN of the
+// derivatives (standard mipmapping takes max), then floor. Deliberately
+// sharper than hardware - a blurred height field resolves to mush. Takes
+// derivatives, so call it in uniform flow, not inside the shadow branch.
+float SnowHeightMip(float2 uv)
+{
+	float2 dims;
+	SnowHeightMap.GetDimensions(dims.x, dims.y);
+	float2 texels = uv * dims;
+	float2 dx = ddx(texels);
+	float2 dy = ddy(texels);
+	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
+}
+
+// Extended Materials' parallax soft shadow (Tatarchuk 2006) with the four
+// fetches routed through the anti-tiling taps. Returns raw OCCLUSION, before
+// the saturate, so a caller blending more than one planar projection can mix
+// them and clamp once.
+// MUST stay in step with the copy in SnowStaticsShell.hlsl.
+float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float quality, float noise, DisplacementParams params)
+{
+	uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
+	float shadowStrength = ExtendedMaterials::ShadowIntensity * (4.0 / tapCount);
+	float2 rayDir = lightUV * 0.1 * params.HeightScale;
+	float4 multipliers = rcp(float4(1, 2, 3, 4) + noise);
+
+	float sh0 = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, 0.0.xx, mip), params);
+	// Unwritten lanes stay at sh0 and contribute zero occlusion.
+	float4 sh = sh0.xxxx;
+	sh.x = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.x, mip), params);
+	if (quality > 0.25)
+		sh.y = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.y, mip), params);
+	if (quality > 0.5)
+		sh.z = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.z, mip), params);
+	if (quality > 0.75)
+		sh.w = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.w, mip), params);
+	return dot(max(0.0, sh - sh0), shadowStrength);
+}
+
+// The shells' shared DisplacementParams: HeightScale is the PBR JSON
+// displacementScale verbatim, because kSnowUVTile equals the landscape
+// tiling and EM's UV-space slab depth therefore lands on the same world
+// depth the ground beside us gets.
+DisplacementParams SnowDisplacementParams()
+{
+	DisplacementParams params;
+	params.DisplacementScale = 1.0;
+	params.DisplacementOffset = 0.0;
+	params.HeightScale = SnowParallaxShadow.x;
+	params.FlattenAmount = 0.0;
+	return params;
+}
+
+// Near/far tap budget, Extended Materials' own thresholds.
+float SnowParallaxQuality(float viewDist)
+{
+	return viewDist < ExtendedMaterials::ParallaxCheapDistance ?
+	           ExtendedMaterials::ParallaxNearShadowQuality :
+	           ExtendedMaterials::ParallaxFarShadowQuality;
+}
+
 // Depth-delta histogram (heatmap mode): 4 distance bands x 8 signed-delta
 // buckets. SM5.0 shares PS UAV slots with the render-target outputs, so the
 // heatmap runs as its own permutation with a single SV_Target — matching the
@@ -1366,6 +1428,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
+	// Uniform flow: the parallax shadow branch below is divergent, and
+	// derivatives taken inside it would be garbage at its edges.
+	float snowHeightMip = SnowHeightMip(snowUV);
 	// Disturbed-snow crisping (RDR2 reference): churned snow reads finer-
 	// grained than settled cover. Where the surface is carved (trench walls
 	// and floors) or piled (berms), layer in a higher-frequency tap of the
@@ -1562,55 +1627,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowHeight > 0.5 && SnowParallaxShadow.y > 0.001 && bumpFade > 0.001 &&
 		sunShadow > 0.01 && satNdotL > 0.001)
 	{
-		DisplacementParams snowDisp;
-		snowDisp.DisplacementScale = 1.0;
-		snowDisp.DisplacementOffset = 0.0;
-		// kSnowUVTile matches the landscape's tiling, so the JSON
-		// displacementScale transfers 1:1 - no correction factor.
-		snowDisp.HeightScale = SnowParallaxShadow.x;
-		snowDisp.FlattenAmount = 0.0;
-
-		// Same mip rule as ExtendedMaterials::GetMipLevelFromDims' PARALLAX
-		// path: MIN of the derivatives (standard mipmapping takes max), then
-		// floor. Deliberately sharper than hardware - the marched height field
-		// has to keep its edges.
-		float2 heightDims;
-		SnowHeightMap.GetDimensions(heightDims.x, heightDims.y);
-		float2 heightTexels = snowUV * heightDims;
-		float2 htdx = ddx(heightTexels);
-		float2 htdy = ddy(heightTexels);
-		float heightMip = floor(max(0.5 * log2(max(min(dot(htdx, htdx), dot(htdy, htdy)), 1e-8)) + SharedData::MipBias, 0.0));
-
 		// Light into the snow uv's own frame. bumpT/bumpB ARE the uv axes, so
 		// this is the planar-projection equivalent of mul(DirLightDirection, tbn).
 		float2 lightUV = float2(dot(L, bumpT), dot(L, bumpB));
+		float occlusion = SnowParallaxOcclusion(snowTaps, lightUV, snowHeightMip,
+			SnowParallaxQuality(shellZ), screenNoise, SnowDisplacementParams());
 
-		float quality = shellZ < ExtendedMaterials::ParallaxCheapDistance ?
-		                    ExtendedMaterials::ParallaxNearShadowQuality :
-		                    ExtendedMaterials::ParallaxFarShadowQuality;
-		uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
-		float shadowStrength = ExtendedMaterials::ShadowIntensity * (4.0 / tapCount) * SnowParallaxShadow.y;
-
-		float2 rayDir = lightUV * 0.1 * snowDisp.HeightScale;
-		float4 multipliers = rcp(float4(1, 2, 3, 4) + screenNoise);
-
-		float sh0 = ExtendedMaterials::AdjustDisplacementNormalized(
-			SampleSnowHeight(snowTaps, 0.0.xx, heightMip), snowDisp);
-		// Unwritten lanes stay at sh0 and contribute zero occlusion.
-		float4 sh = sh0.xxxx;
-		sh.x = ExtendedMaterials::AdjustDisplacementNormalized(
-			SampleSnowHeight(snowTaps, rayDir * multipliers.x, heightMip), snowDisp);
-		if (quality > 0.25)
-			sh.y = ExtendedMaterials::AdjustDisplacementNormalized(
-				SampleSnowHeight(snowTaps, rayDir * multipliers.y, heightMip), snowDisp);
-		if (quality > 0.5)
-			sh.z = ExtendedMaterials::AdjustDisplacementNormalized(
-				SampleSnowHeight(snowTaps, rayDir * multipliers.z, heightMip), snowDisp);
-		if (quality > 0.75)
-			sh.w = ExtendedMaterials::AdjustDisplacementNormalized(
-				SampleSnowHeight(snowTaps, rayDir * multipliers.w, heightMip), snowDisp);
-
-		float parallaxShadow = 1.0 - saturate(dot(max(0.0, sh - sh0), shadowStrength));
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallaxShadow.y);
 		// Faded on the same band as the normal map it occludes: past it the
 		// grain is not drawn, so shadowing it would darken nothing visible.
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);

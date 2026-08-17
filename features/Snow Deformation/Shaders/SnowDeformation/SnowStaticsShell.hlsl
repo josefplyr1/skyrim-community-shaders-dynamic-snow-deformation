@@ -36,6 +36,9 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "Skylighting/Skylighting.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
 #	include "SnowDeformation/SnowLights.hlsli"
+// Extended Materials' parallax self-shadow math; see SnowShell.hlsl for why
+// only the fetches are reimplemented.
+#	include "ExtendedMaterials/ExtendedMaterials.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -132,6 +135,15 @@ cbuffer ShellCB : register(b0)
 	// >0.5: read the berm field from the bake at t14 instead of recomputing
 	// its 17 taps per call.
 	float BermBakeActive;
+
+	// Landscape-shell only; declared so SnowParallaxShadow lands on ShellCB's
+	// offset (560). Do not drop them.
+	float4 SeamBounds;
+	float4 ExclusionFieldWindow;
+
+	// Parallax self-shadow: x = HeightScale (PBR JSON displacementScale),
+	// y = user strength (0 disables), zw unused.
+	float4 SnowParallaxShadow;
 }
 
 cbuffer StaticCB : register(b1)
@@ -189,8 +201,10 @@ Texture2D<float> SceneDepth : register(t3);
 // TruePBR snow companion maps (see SnowShell.hlsl); inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
-// Displacement companion (_p): tessellated relief.
-Texture2D<float> SnowHeightMap : register(t8);
+// Displacement companion (_p): tessellated relief and the parallax
+// self-shadow. float4 to match Extended Materials' TexParallaxSampler
+// convention; the SRV is single-channel, so only .x carries data.
+Texture2D<float4> SnowHeightMap : register(t8);
 // Depth after the terrain shell drew (its surface included); the skin's
 // view-ray reference for cross-fading into the landscape shell.
 Texture2D<float> ShellDepthCopy : register(t9);
@@ -1336,6 +1350,78 @@ float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTa
 	return c;
 }
 
+// --- Parallax self-shadow. Mirrors SnowShell.hlsl; keep the two in step. ---
+
+float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
+{
+	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
+	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
+	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
+}
+
+// Takes derivatives; call in uniform flow, not inside the shadow branch.
+float SnowHeightMip(float2 uv)
+{
+	float2 dims;
+	SnowHeightMap.GetDimensions(dims.x, dims.y);
+	float2 texels = uv * dims;
+	float2 dx = ddx(texels);
+	float2 dy = ddy(texels);
+	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
+}
+
+// Returns raw OCCLUSION, before the saturate, so the two planar projections
+// can be mixed and clamped once.
+float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float quality, float noise, DisplacementParams params)
+{
+	uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
+	float shadowStrength = ExtendedMaterials::ShadowIntensity * (4.0 / tapCount);
+	float2 rayDir = lightUV * 0.1 * params.HeightScale;
+	float4 multipliers = rcp(float4(1, 2, 3, 4) + noise);
+
+	float sh0 = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, 0.0.xx, mip), params);
+	float4 sh = sh0.xxxx;
+	sh.x = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.x, mip), params);
+	if (quality > 0.25)
+		sh.y = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.y, mip), params);
+	if (quality > 0.5)
+		sh.z = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.z, mip), params);
+	if (quality > 0.75)
+		sh.w = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.w, mip), params);
+	return dot(max(0.0, sh - sh0), shadowStrength);
+}
+
+// Two-plane occlusion, blended on the RESULTS. Unlike the sample blend above
+// this cannot share one ray: each projection has its own uv axes, so the
+// light resolves to a different 2D direction in each. Flat-topped pixels skip
+// the side plane entirely, as with SampleSnowPlanar.
+float SnowParallaxOcclusionPlanar(SnowTaps topTaps, SnowTaps sideTaps, float sideWeight,
+	float2 lightUVTop, float2 lightUVSide, float mipTop, float mipSide,
+	float quality, float noise, DisplacementParams params)
+{
+	float o = SnowParallaxOcclusion(topTaps, lightUVTop, mipTop, quality, noise, params);
+	[branch] if (sideWeight > 0.001)
+		o = lerp(o, SnowParallaxOcclusion(sideTaps, lightUVSide, mipSide, quality, noise, params), sideWeight);
+	return o;
+}
+
+DisplacementParams SnowDisplacementParams()
+{
+	DisplacementParams params;
+	params.DisplacementScale = 1.0;
+	params.DisplacementOffset = 0.0;
+	params.HeightScale = SnowParallaxShadow.x;
+	params.FlattenAmount = 0.0;
+	return params;
+}
+
+float SnowParallaxQuality(float viewDist)
+{
+	return viewDist < ExtendedMaterials::ParallaxCheapDistance ?
+	           ExtendedMaterials::ParallaxNearShadowQuality :
+	           ExtendedMaterials::ParallaxFarShadowQuality;
+}
+
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -1745,11 +1831,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
 	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
-	float2 snowSidePlane = abs(normalWS.x) > abs(normalWS.y) ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
+	// Captured, not recomputed: normalWS is perturbed further below (berm
+	// ridge, normal map), and the parallax shadow must resolve the light into
+	// the SAME plane these uvs were built on.
+	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
+	float2 snowSidePlane = snowSideDropsX ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
 	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
+	// Uniform flow: the parallax shadow branch below is divergent, and
+	// derivatives taken inside it would be garbage at its edges.
+	float snowHeightMip = SnowHeightMip(snowUV);
+	float snowHeightMipSide = SnowHeightMip(snowUVSide);
 
 	// Object trench detail: shading-only berm ridge along trails, plus the
 	// disturbance weight for the crisp grain below. The landscape shell's
@@ -1770,6 +1864,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float disturb = ChurnWeight(pixelDeform, bermC) * ObjCrispStrengthV;
 	disturb *= 1.0 - smoothstep(300.0, 1000.0, pixelDist);
 
+	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
+	// Built from the geometric normal before the normal map perturbs it, and
+	// shared with the parallax shadow below.
+	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+	float3 bumpB = cross(normalWS, bumpT);
+
 	// Micro-relief; identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
@@ -1789,8 +1889,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;
-		float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-		float3 bumpB = cross(normalWS, bumpT);
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
 	}
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
@@ -1870,6 +1968,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float sssBlend = smoothstep(4000.0, 9000.0, pixelDist);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
+	// Parallax self-shadow on the snow grain, same term and constants as the
+	// terrain shell so object snow and ground snow shadow identically across
+	// the SnowSnowFade cross-fade. Object snow needs it in both projections:
+	// a rock's flank is exactly where the side plane owns the pixel.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallaxShadow.y > 0.001 && bumpFade > 0.001 &&
+		sunShadow > 0.01 && satNdotL > 0.001)
+	{
+		// Top plane's uv axes are bumpT/bumpB. The side plane is raw world
+		// axes by construction, and it only owns near-vertical pixels, where
+		// the wall and the projection plane nearly coincide.
+		float2 lightUVTop = float2(dot(L, bumpT), dot(L, bumpB));
+		float2 lightUVSide = snowSideDropsX ? float2(L.y, L.z) : float2(L.x, L.z);
+
+		float occlusion = SnowParallaxOcclusionPlanar(snowTaps, snowTapsSide, snowSteepness,
+			lightUVTop, lightUVSide, snowHeightMip, snowHeightMipSide,
+			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
+
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallaxShadow.y);
+		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
+	}
+
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
