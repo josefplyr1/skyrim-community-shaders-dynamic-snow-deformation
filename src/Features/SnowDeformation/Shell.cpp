@@ -336,15 +336,15 @@ void SnowDeformation::DrawShell()
 	// the PBR config's displacementScale is deliberately not multiplied in,
 	// the slider is authoritative).
 	cbData.SnowReliefDepth = std::max(settings.ReliefDepth, 0.0f);
-	// Parallax self-shadow. HeightScale is the PBR config's displacementScale
-	// verbatim: kSnowUVTile now equals the game's landscape tiling, so the
-	// UV-space slab depth Extended Materials derives from it lands on the same
-	// world depth the ground beside us gets. No correction factor.
-	cbData.SnowParallaxShadow = {
+	// Parallax. HeightScale is the PBR config's displacementScale verbatim:
+	// kSnowUVTile now equals the game's landscape tiling, so the UV-space slab
+	// depth Extended Materials derives from it lands on the same world depth
+	// the ground beside us gets. No correction factor.
+	cbData.SnowParallax = {
 		snowDisplacementScale,
 		std::clamp(settings.ParallaxShadowStrength, 0.0f, 2.0f),
-		0.0f,
-		0.0f
+		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
+		(float)std::clamp(settings.ParallaxSteps, 4, 16)
 	};
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);

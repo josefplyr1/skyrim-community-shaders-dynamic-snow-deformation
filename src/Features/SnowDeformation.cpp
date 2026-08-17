@@ -37,6 +37,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	Tessellation,
 	ReliefDepth,
 	ParallaxShadowStrength,
+	ParallaxDepth,
+	ParallaxSteps,
 	TrenchFloorFade,
 	BermHeight,
 	ChurnHeight,

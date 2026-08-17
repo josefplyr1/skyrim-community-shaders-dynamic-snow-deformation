@@ -158,9 +158,10 @@ cbuffer ShellCB : register(b0)
 	// w > 0.5 when the field was baked this frame.
 	float4 ExclusionFieldWindow;
 
-	// Parallax self-shadow: x = HeightScale (PBR JSON displacementScale),
-	// y = user strength (0 disables), zw unused.
-	float4 SnowParallaxShadow;
+	// Parallax: x = HeightScale (PBR JSON displacementScale), y = self-shadow
+	// strength (0 disables), z = occlusion depth multiplier (0 disables the
+	// march), w = coarse march steps.
+	float4 SnowParallax;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1248,7 +1249,7 @@ DisplacementParams SnowDisplacementParams()
 	DisplacementParams params;
 	params.DisplacementScale = 1.0;
 	params.DisplacementOffset = 0.0;
-	params.HeightScale = SnowParallaxShadow.x;
+	params.HeightScale = SnowParallax.x;
 	params.FlattenAmount = 0.0;
 	return params;
 }
@@ -1259,6 +1260,90 @@ float SnowParallaxQuality(float viewDist)
 	return viewDist < ExtendedMaterials::ParallaxCheapDistance ?
 	           ExtendedMaterials::ParallaxNearShadowQuality :
 	           ExtendedMaterials::ParallaxFarShadowQuality;
+}
+
+// Shift a tap set's uvs without rebuilding the lattice: the per-cell hash
+// offsets and barycentric weights belong to the WORLD position and must not
+// move with the parallax offset, or the anti-tiling pattern swims.
+SnowTaps OffsetSnowTaps(SnowTaps taps, float2 uvOffset)
+{
+	taps.uv0 += uvOffset;
+	taps.uv1 += uvOffset;
+	taps.uv2 += uvOffset;
+	return taps;
+}
+
+// Parallax occlusion march: Extended Materials' GetParallaxCoords, with the
+// fetches routed through the anti-tiling taps so the depth it resolves is the
+// depth of the grain that actually gets drawn. Structure, the grazing-angle
+// limiter, the contact refinement and the secant solve are EM's; the loop is
+// scalar rather than quad-vectorized because each of our fetches is already a
+// 3-tap blend, so the cost lives in the taps and not in the lane count.
+//
+// Returns a uv OFFSET (zero when disabled), applied to the base uv and to
+// every tap. Marching the blended field rather than the dominant tap is
+// deliberate: the dominant tap flips at Voronoi boundaries, and a flip means
+// a different patch of texture, so the resolved offset would jump there.
+float2 SnowParallaxOffset(SnowTaps taps, float3 viewTS, float mip, float distFade, uint maxSteps, DisplacementParams params)
+{
+	// EM's grazing limiter, NOT a true 1/z: unbounded shear at grazing angles
+	// breaks the sampling derivatives into marbling. That is the failure that
+	// killed the 2026-08-14 attempt (7ce548ba), and the reason this divisor
+	// looks arbitrary.
+	viewTS.xy /= viewTS.z * 0.7 + 0.3 + params.FlattenAmount;
+
+	float maxHeight = 0.1 * params.HeightScale;
+	float minHeight = maxHeight * 0.5;
+
+	uint numSteps = (uint)max(4.0, round(maxSteps * (1.0 - distFade)));
+	float stepSize = rcp((float)numSteps);
+	float2 perStep = viewTS.xy * maxHeight * stepSize;
+
+	// Ray enters half a slab above the polygon plane: displacement 0.5 IS the
+	// plane (EM centres its height convention), so relief runs both ways.
+	float2 prevOffset = viewTS.xy * minHeight;
+	float prevBound = 1.0;
+	float prevHeight = 1.0;
+
+	float2 pt1 = 0.0.xx;
+	float2 pt2 = 0.0.xx;
+
+	uint stepsLeft = numSteps;
+	bool refined = false;
+	[loop] while (stepsLeft > 0)
+	{
+		float2 offs = prevOffset - perStep;
+		float bound = prevBound - stepSize;
+		float h = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, offs, mip), params);
+		[branch] if (h >= bound)
+		{
+			pt1 = float2(bound, h);
+			pt2 = float2(prevBound, prevHeight);
+			if (refined)
+				break;
+			// Contact refinement: re-march the straddling interval at the full
+			// budget, so N steps resolve like N*N. prev* still holds the empty
+			// end of the interval, which is where the finer march restarts.
+			refined = true;
+			stepsLeft = numSteps;
+			stepSize /= (float)numSteps;
+			perStep /= (float)numSteps;
+			continue;
+		}
+		prevOffset = offs;
+		prevBound = bound;
+		prevHeight = h;
+		stepsLeft--;
+	}
+
+	// Line-line intersection of the ray against the height segment.
+	float d2 = pt2.x - pt2.y;
+	float d1 = pt1.x - pt1.y;
+	float denom = d2 - d1;
+	float parallaxAmount = denom == 0.0 ? 0.0 : (pt1.x * d2 - pt2.x * d1) / denom;
+
+	float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
+	return viewTS.xy * offset * (1.0 - distFade);
 }
 
 // Depth-delta histogram (heatmap mode): 4 distance bands x 8 signed-delta
@@ -1478,6 +1563,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 bumpB = cross(normalWS, bumpT);
 
+	float3 V = -normalize(input.WorldPos);
+
+	// Parallax occlusion: the depth the shell was missing. The normal map
+	// only tilts the lighting; this moves the texture itself, so grain
+	// occludes grain and the surface reads as thick. Runs BEFORE every snow
+	// fetch, and shifts the tap set rather than rebuilding it, so albedo,
+	// normal, RMAOS and the parallax shadow all ride the displaced position.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
+	{
+		// bumpT/bumpB ARE the uv axes (world-XY planar projection), so this is
+		// the planar equivalent of normalize(mul(tbn, viewDirection)).
+		float3 viewTS = normalize(float3(dot(V, bumpT), dot(V, bumpB), dot(V, normalWS)));
+		DisplacementParams pomParams = SnowDisplacementParams();
+		pomParams.HeightScale *= SnowParallax.z;
+		float2 pomOffset = SnowParallaxOffset(snowTaps, viewTS, snowHeightMip,
+			1.0 - bumpFade, (uint)max(SnowParallax.w, 4.0), pomParams);
+		snowUV += pomOffset;
+		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
+	}
+
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
@@ -1546,7 +1651,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
 
-	float3 V = -normalize(input.WorldPos);
 	float3 L = SharedData::DirLightDirection.xyz;
 	float3 H = normalize(V + L);
 	float satNdotL = saturate(dot(normalWS, L));
@@ -1654,7 +1758,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// The four fetches are ours (tap-blended) but every constant and the
 	// occlusion formula are Extended Materials' own, so the response matches
 	// the ground beside us by construction rather than by tuning.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallaxShadow.y > 0.001 && bumpFade > 0.001 &&
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.y > 0.001 && bumpFade > 0.001 &&
 		sunShadow > 0.01 && satNdotL > 0.001)
 	{
 		// Light into the snow uv's own frame. bumpT/bumpB ARE the uv axes, so
@@ -1663,7 +1767,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float occlusion = SnowParallaxOcclusion(snowTaps, lightUV, snowHeightMip,
 			SnowParallaxQuality(shellZ), screenNoise, SnowDisplacementParams());
 
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallaxShadow.y);
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
 		// Faded on the same band as the normal map it occludes: past it the
 		// grain is not drawn, so shadowing it would darken nothing visible.
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);

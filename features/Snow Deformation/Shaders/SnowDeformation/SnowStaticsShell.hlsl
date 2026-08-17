@@ -136,14 +136,14 @@ cbuffer ShellCB : register(b0)
 	// its 17 taps per call.
 	float BermBakeActive;
 
-	// Landscape-shell only; declared so SnowParallaxShadow lands on ShellCB's
+	// Landscape-shell only; declared so SnowParallax lands on ShellCB's
 	// offset (560). Do not drop them.
 	float4 SeamBounds;
 	float4 ExclusionFieldWindow;
 
-	// Parallax self-shadow: x = HeightScale (PBR JSON displacementScale),
-	// y = user strength (0 disables), zw unused.
-	float4 SnowParallaxShadow;
+	// Parallax: x = HeightScale, y = self-shadow strength. zw are the
+	// landscape shell's occlusion march params; object snow does not march.
+	float4 SnowParallax;
 }
 
 cbuffer StaticCB : register(b1)
@@ -1440,7 +1440,7 @@ DisplacementParams SnowDisplacementParams()
 	DisplacementParams params;
 	params.DisplacementScale = 1.0;
 	params.DisplacementOffset = 0.0;
-	params.HeightScale = SnowParallaxShadow.x;
+	params.HeightScale = SnowParallax.x;
 	params.FlattenAmount = 0.0;
 	return params;
 }
@@ -2002,7 +2002,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// terrain shell so object snow and ground snow shadow identically across
 	// the SnowSnowFade cross-fade. Object snow needs it in both projections:
 	// a rock's flank is exactly where the side plane owns the pixel.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallaxShadow.y > 0.001 && bumpFade > 0.001 &&
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.y > 0.001 && bumpFade > 0.001 &&
 		sunShadow > 0.01 && satNdotL > 0.001)
 	{
 		// Top plane's uv axes are bumpT/bumpB. The side plane is raw world
@@ -2015,7 +2015,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			lightUVTop, lightUVSide, snowHeightMip, snowHeightMipSide,
 			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
 
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallaxShadow.y);
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
 	}
 

@@ -269,6 +269,10 @@ public:
 		float ReliefDepth = 0.0f;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
+		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
+		float ParallaxDepth = 1.0f;
+		/** @brief Coarse steps in the parallax march before contact refinement (which re-marches the hit interval at the same budget, so N resolves like N*N). Scaled down with distance. The main quality/cost dial. */
+		int ParallaxSteps = 8;
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
@@ -532,8 +536,8 @@ public:
 		/** @brief Wide exclusion field window: xy = world centre, z = 1/half extent, w > 0.5 when the field was baked this frame. */
 		float4 ExclusionFieldWindow;
 
-		/** @brief Parallax self-shadow on the shell's snow micro-relief: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = user strength (0 disables the taps), zw unused. */
-		float4 SnowParallaxShadow;
+		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w = coarse march steps. */
+		float4 SnowParallax;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
