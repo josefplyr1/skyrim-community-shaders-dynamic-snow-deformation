@@ -609,9 +609,13 @@ void SnowDeformation::DrawShell()
 	// displacement relief as real geometry. The domain shader runs the full
 	// surface evaluation, so it needs the same field textures and CB the
 	// legacy VS reads, plus the height map and its sampler.
-	auto* tessVS = settings.ReliefDepth > 0.01f ? GetShellTessVS() : nullptr;
-	auto* tessHS = settings.ReliefDepth > 0.01f ? GetShellHS() : nullptr;
-	auto* tessDS = settings.ReliefDepth > 0.01f ? GetShellDS() : nullptr;
+	// Gated on Tessellation, NOT on ReliefDepth: the tessellated path's real
+	// client is trench smoothness (the hull factors key off the deformation
+	// map), and that must survive relief being turned off. With relief at 0
+	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
+	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
+	auto* tessHS = settings.Tessellation ? GetShellHS() : nullptr;
+	auto* tessDS = settings.Tessellation ? GetShellDS() : nullptr;
 	const bool tessellate = tessVS && tessHS && tessDS;
 	globals::profiler->BeginPass("SnowDeformation::Shell");
 	if (tessellate) {

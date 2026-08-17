@@ -263,7 +263,9 @@ public:
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
-		/** @brief Tessellated relief depth in world units: near-camera geometric relief from the PBR displacement map. 0 disables the tessellated path entirely. */
+		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth since 2026-08-17. */
+		bool Tessellation = true;
+		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. */
 		float ReliefDepth = 12.0f;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 1.0f;

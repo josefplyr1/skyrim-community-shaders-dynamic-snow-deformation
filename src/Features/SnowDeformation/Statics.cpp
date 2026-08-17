@@ -1394,7 +1394,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// object trenches pick up the same wall smoothness and rim relief as
 		// the landscape shell. Self-sufficient bindings, same rationale as
 		// the skins.
-		const bool tessellatePatch = settings.ReliefDepth > 0.01f && patchTessVS && patchHS && patchDS;
+		const bool tessellatePatch = settings.Tessellation && patchTessVS && patchHS && patchDS;
 		if (tessellatePatch) {
 			context->VSSetShader(patchTessVS, nullptr, 0);
 			context->HSSetShader(patchHS, nullptr, 0);

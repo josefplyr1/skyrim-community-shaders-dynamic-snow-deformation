@@ -117,7 +117,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
 		ImGui::SliderFloat(T(TKEY("relief_depth"), "Relief Depth"), &settings.ReliefDepth, 0.0f, 12.0f, "%.1f units");
 		if (auto _ttRd2 = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Real geometric relief from the snow texture's displacement map, tessellated near the camera. Compressed snow and trench floors stay smooth. 0 disables tessellation."));
+			ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Geometric relief from the snow texture's displacement map on UNTRAMPLED snow, tessellated near the camera. Trenches never receive it (carved ground is excluded), so this costs vertices only on open snowfields: at 0 they stop being subdivided at all, which is most of the Shell pass's tessellation cost, and trench smoothing is unaffected. Note the relief currently samples the displacement map without the anti-tiling offsets the shading uses, so its bumps do not sit where the texture's bumps are."));
 		ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPss = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
@@ -249,6 +249,9 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Landscape Trenches"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttTd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected."));
+		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
+		if (auto _ttTess = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on - Relief Depth only sets how far the extra vertices are then displaced on untrampled snow. Off costs nothing but leaves every trench as angular as the grid beneath it."));
 		ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttBh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));

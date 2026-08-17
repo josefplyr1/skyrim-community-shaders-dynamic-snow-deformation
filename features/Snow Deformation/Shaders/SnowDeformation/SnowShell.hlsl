@@ -1001,14 +1001,21 @@ float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 	float2 midLocal = 0.5 * (gridLocalA + gridLocalB);
 	float2 midAbs = GridOrigin + midLocal;
 	float dist = length(midAbs - ShellCameraPosAdjust.xy);
+	// Undeformed ground is subdivided ONLY to carry the displacement-map
+	// relief, so with relief off its base reach goes to zero and the factor
+	// clamps to 1 - no vertices spent on a surface that is not displaced.
+	// Trenches keep their boost either way: the carve is what the tessellated
+	// path actually exists for, and it is the half that survives relief being
+	// retired. At relief > 0 the curve is exactly the old lerp(1, boost, t).
+	float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
 	// Past the cutoff even the fully boosted reach clamps to 1, so the taps -
 	// three bicubics, sixteen loads each, the bulk of this shader - cannot
 	// change the answer and are skipped.
-	float reach = kTessNear;
+	float reach = kTessNear * reliefBase;
 	[branch] if (dist < kTessCutoff)
 	{
 		float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
-		reach = kTessNear * lerp(1.0, kTessReachBoost, smoothstep(0.02, 0.25, deform));
+		reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
 	}
 	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 }

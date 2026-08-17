@@ -816,7 +816,11 @@ float PatchEdgeTessFactor(float2 worldA, float2 worldB)
 	float2 mid = 0.5 * (worldA + worldB);
 	float dist = length(mid - ShellCameraPosAdjust.xy);
 	float deform = max(max(SampleDeformation(worldA - GridOrigin), SampleDeformation(worldB - GridOrigin)), SampleDeformation(mid - GridOrigin));
-	float reach = 1600.0 * lerp(1.0, 3.0, smoothstep(0.02, 0.25, deform));
+	// Undeformed edges subdivide only to carry the relief; at relief 0 their
+	// base reach goes to zero and the factor clamps to 1. Kept in step with
+	// EdgeTessFactor in SnowShell.hlsl. Still edge-derived only, so crack-free.
+	float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
+	float reach = 1600.0 * lerp(reliefBase, 3.0, smoothstep(0.02, 0.25, deform));
 	return clamp(reach / max(dist, 32.0), 1.0, 8.0);
 }
 
