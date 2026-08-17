@@ -808,6 +808,72 @@ struct TessFactorsPatch
 };
 #endif
 
+#if defined(DOMAINSHADER) || defined(PSHADER)
+// Anti-tiling tap machinery, shared with the DOMAIN shaders so their relief
+// and the pixel shader's shading describe ONE height field. Mirrors
+// SnowShell.hlsl; keep the two in step.
+
+// Cheap 2D cell hash for stochastic tiling offsets (matches SnowShell.hlsl).
+float2 StochasticHash(float2 cell)
+{
+	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
+	p3 += dot(p3, p3.yzx + 33.33);
+	return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
+}
+
+// Anti-tiling snow taps; identical to the terrain shell's, so the texture
+// pattern continues seamlessly from ground onto objects, and every snow map
+// (albedo, normal, RMAOS) agrees on the same stochastic offsets.
+struct SnowTaps
+{
+	float2 uv0, uv1, uv2;
+	float3 weights;
+	float2 duvdx, duvdy;
+};
+
+// Derivative-free core, so the DOMAIN shaders can build the same taps the
+// pixel shader will shade that point with. See SnowShell.hlsl.
+SnowTaps ComputeSnowTapsNoGrad(float2 uv, float2 worldXY)
+{
+	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
+	float2 cellBase = floor(lattice);
+	float2 f = frac(lattice);
+
+	float2 v0, v1, v2;
+	float3 bary;
+	if (f.x + f.y < 1.0) {
+		v0 = cellBase;
+		v1 = cellBase + float2(1, 0);
+		v2 = cellBase + float2(0, 1);
+		bary = float3(1.0 - f.x - f.y, f.x, f.y);
+	} else {
+		v0 = cellBase + float2(1, 1);
+		v1 = cellBase + float2(0, 1);
+		v2 = cellBase + float2(1, 0);
+		bary = float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
+	}
+
+	bary = pow(bary, 4.0);
+	bary /= dot(bary, 1.0);
+
+	SnowTaps taps;
+	taps.uv0 = uv + StochasticHash(v0);
+	taps.uv1 = uv + StochasticHash(v1);
+	taps.uv2 = uv + StochasticHash(v2);
+	taps.weights = bary;
+	taps.duvdx = 0.0.xx;
+	taps.duvdy = 0.0.xx;
+	return taps;
+}
+
+float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
+{
+	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
+	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
+	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
+}
+#endif
+
 #if defined(HULLSHADER) && defined(PATCH)
 // Same trench-aware quad factors as the landscape shell: the patch IS the
 // trench layer, so deformed edges get extended detail reach.
@@ -881,7 +947,9 @@ VS_OUTPUT main(TessFactorsPatch factors, float2 domainUV : SV_DomainLocation, co
 		{
 			float2 snowUV = (SnowUVOffset + v.GridLocal) / kSnowUVTile;
 			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
-			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
+			// Through the PS's anti-tiling taps, not a single un-offset fetch
+			// (see SnowShell.hlsl's domain shader for why).
+			float h = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, v.WorldAbs.xy), 0.0.xx, mip);
 			v.WorldAbs.z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(v.SkinDepth / 6.0) * (1.0 - v.Deform);
 		}
 	}
@@ -1260,7 +1328,11 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 		{
 			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
-			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
+			// Through the PS's anti-tiling taps. Top-plane taps specifically:
+			// the relief is already biased to up-facing surfaces by
+			// saturate(inflateWS.z), and that is exactly where the PS's
+			// two-plane blend hands the pixel to the top plane too.
+			float h = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, worldAbs.xy), 0.0.xx, mip);
 			float carve = saturate(SampleDeformation(gridLocal));
 			worldAbs += inflateWS * ((h - 0.5) * SnowReliefDepth * reliefFade * saturate(lift.Depth / 6.0) * (1.0 - carve) * saturate(inflateWS.z) * smoothstep(0.3, 0.7, interpHealth));
 		}
@@ -1285,52 +1357,12 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 #endif
 
 #ifdef PSHADER
-// Cheap 2D cell hash for stochastic tiling offsets (matches SnowShell.hlsl).
-float2 StochasticHash(float2 cell)
-{
-	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-	p3 += dot(p3, p3.yzx + 33.33);
-	return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
-}
 
-// Anti-tiling snow taps; identical to the terrain shell's, so the texture
-// pattern continues seamlessly from ground onto objects, and every snow map
-// (albedo, normal, RMAOS) agrees on the same stochastic offsets.
-struct SnowTaps
-{
-	float2 uv0, uv1, uv2;
-	float3 weights;
-	float2 duvdx, duvdy;
-};
+
 
 SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
 {
-	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
-	float2 cellBase = floor(lattice);
-	float2 f = frac(lattice);
-
-	float2 v0, v1, v2;
-	float3 bary;
-	if (f.x + f.y < 1.0) {
-		v0 = cellBase;
-		v1 = cellBase + float2(1, 0);
-		v2 = cellBase + float2(0, 1);
-		bary = float3(1.0 - f.x - f.y, f.x, f.y);
-	} else {
-		v0 = cellBase + float2(1, 1);
-		v1 = cellBase + float2(0, 1);
-		v2 = cellBase + float2(1, 0);
-		bary = float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
-	}
-
-	bary = pow(bary, 4.0);
-	bary /= dot(bary, 1.0);
-
-	SnowTaps taps;
-	taps.uv0 = uv + StochasticHash(v0);
-	taps.uv1 = uv + StochasticHash(v1);
-	taps.uv2 = uv + StochasticHash(v2);
-	taps.weights = bary;
+	SnowTaps taps = ComputeSnowTapsNoGrad(uv, worldXY);
 	taps.duvdx = ddx(uv);
 	taps.duvdy = ddy(uv);
 	return taps;
@@ -1356,12 +1388,6 @@ float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTa
 
 // --- Parallax self-shadow. Mirrors SnowShell.hlsl; keep the two in step. ---
 
-float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
-{
-	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
-	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
-	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
-}
 
 // Takes derivatives; call in uniform flow, not inside the shadow branch.
 float SnowHeightMip(float2 uv)

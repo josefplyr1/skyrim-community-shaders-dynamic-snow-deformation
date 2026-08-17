@@ -1052,46 +1052,7 @@ TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputC
 }
 #endif
 
-#ifdef DOMAINSHADER
-[domain("quad")]
-VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
-{
-	float2 gridLocal = lerp(
-		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
-		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
-
-	float coverage;
-	float terrainHeight;
-	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
-
-	// Real relief from the PBR displacement map, replacing the parallax
-	// approximation: sampled at the same snow UV the PS shades with, so the
-	// normal map's shading and the geometry describe the same surface.
-	// Gated by local depth (thin cover and carved floors stay flat), by the
-	// deformation (compressed snow is smooth), and faded with the same
-	// distance band as the micro-normal.
-	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
-	{
-		float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
-		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
-		float depthAbove = z - terrainHeight;
-		[branch] if (reliefFade > 0.001 && depthAbove > 0.5)
-		{
-			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-			// Coarser mips with distance: vertex density falls below texel
-			// density out there and full-res sampling shimmers.
-			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
-			float h = SnowHeightMap.SampleLevel(SnowSampler, snowUV, mip).x;
-			float carve = saturate(SampleDeformation(gridLocal));
-			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
-		}
-	}
-
-	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
-}
-#endif
-
-#ifdef PSHADER
+#if defined(DOMAINSHADER) || defined(PSHADER)
 // Cheap 2D cell hash for stochastic tiling offsets.
 float2 StochasticHash(float2 cell)
 {
@@ -1112,7 +1073,13 @@ struct SnowTaps
 	float2 duvdx, duvdy;
 };
 
-SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
+// Derivative-free core, so the DOMAIN shader can build the same taps the
+// pixel shader will shade that point with. Only SampleGrad needs
+// duvdx/duvdy, and only the PS uses SampleGrad; the DS samples at an
+// explicit mip. The blended field is continuous across lattice cell
+// boundaries (the barycentric weight of a departing tap reaches zero there),
+// so vertices and pixels landing in different cells still agree.
+SnowTaps ComputeSnowTapsNoGrad(float2 uv, float2 worldXY)
 {
 	// World-anchored lattice (~427 units per cell): the snow uv rebases by
 	// tile multiples as the camera-following grid moves, so a uv-derived
@@ -1147,6 +1114,76 @@ SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
 	taps.uv1 = uv + StochasticHash(v1);
 	taps.uv2 = uv + StochasticHash(v2);
 	taps.weights = bary;
+	taps.duvdx = 0.0.xx;
+	taps.duvdy = 0.0.xx;
+	return taps;
+}
+
+// Displacement through the SAME anti-tiling taps as every other map, so the
+// domain shader's geometry and the pixel shader's shading describe ONE
+// height field. Each tap reads an unrelated patch of the texture, so a
+// single un-offset fetch describes a field decorrelated from what is drawn.
+// The taps' offsets are per-cell constants, so walking a ray by uvOffset on
+// each of them is exact. Explicit mip: the shadow loop's fetches must be
+// uniform, and a blurred height field resolves to mush.
+float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
+{
+	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
+	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
+	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
+}
+#endif
+
+#ifdef DOMAINSHADER
+[domain("quad")]
+VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
+{
+	float2 gridLocal = lerp(
+		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
+		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
+
+	float coverage;
+	float terrainHeight;
+	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+
+	// Real relief from the PBR displacement map, through the SAME anti-tiling
+	// taps the PS shades with, so the normal map's shading and the geometry
+	// describe one surface. (Until 2026-08-17 this took a single un-offset
+	// tap while the PS blended three at random per-cell offsets: the two
+	// fields were decorrelated, so geometry bumps sat where the texture had
+	// none. That is what made the relief read wrong against its own shading.)
+	// Gated by local depth (thin cover and carved floors stay flat), by the
+	// deformation (compressed snow is smooth), and faded with the same
+	// distance band as the micro-normal.
+	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
+	{
+		float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
+		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
+		float depthAbove = z - terrainHeight;
+		[branch] if (reliefFade > 0.001 && depthAbove > 0.5)
+		{
+			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+			// Coarser mips with distance: vertex density falls below texel
+			// density out there and full-res sampling shimmers.
+			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
+			// Same uv and same world XY the PS feeds ComputeSnowTaps, so the
+			// tap set here is the one that will shade this point.
+			SnowTaps reliefTaps = ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal);
+			float h = SampleSnowHeight(reliefTaps, 0.0.xx, mip);
+			float carve = saturate(SampleDeformation(gridLocal));
+			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
+		}
+	}
+
+	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+}
+#endif
+
+
+#ifdef PSHADER
+SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
+{
+	SnowTaps taps = ComputeSnowTapsNoGrad(uv, worldXY);
 	// All taps share the continuous base uv's derivatives: the per-cell
 	// offsets jump at lattice seams, and sampler-derived gradients there make
 	// anisotropic filtering fetch the deepest mips (discolored streaks).
@@ -1160,20 +1197,6 @@ float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
 	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
 	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
-}
-
-// Displacement through the SAME anti-tiling taps as every other map. The
-// parallax shadow must occlude the grain the normal map actually draws, and
-// each tap reads an unrelated patch of the texture — shadowing from a single
-// un-offset fetch would shade features that are not on screen. The taps'
-// offsets are per-cell constants, so walking the shadow ray by uvOffset on
-// each of them is exact. Explicit mip: the loop's fetches are uniform, and a
-// blurred height field resolves to mush.
-float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
-{
-	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
-	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
-	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
 }
 
 // Mip for the height march, by the same rule as
