@@ -808,71 +808,7 @@ struct TessFactorsPatch
 };
 #endif
 
-#if defined(DOMAINSHADER) || defined(PSHADER)
-// Anti-tiling tap machinery, shared with the DOMAIN shaders so their relief
-// and the pixel shader's shading describe ONE height field. Mirrors
-// SnowShell.hlsl; keep the two in step.
-
-// Cheap 2D cell hash for stochastic tiling offsets (matches SnowShell.hlsl).
-float2 StochasticHash(float2 cell)
-{
-	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-	p3 += dot(p3, p3.yzx + 33.33);
-	return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
-}
-
-// Anti-tiling snow taps; identical to the terrain shell's, so the texture
-// pattern continues seamlessly from ground onto objects, and every snow map
-// (albedo, normal, RMAOS) agrees on the same stochastic offsets.
-struct SnowTaps
-{
-	float2 uv0, uv1, uv2;
-	float3 weights;
-	float2 duvdx, duvdy;
-};
-
-// Derivative-free core, so the DOMAIN shaders can build the same taps the
-// pixel shader will shade that point with. See SnowShell.hlsl.
-SnowTaps ComputeSnowTapsNoGrad(float2 uv, float2 worldXY)
-{
-	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
-	float2 cellBase = floor(lattice);
-	float2 f = frac(lattice);
-
-	float2 v0, v1, v2;
-	float3 bary;
-	if (f.x + f.y < 1.0) {
-		v0 = cellBase;
-		v1 = cellBase + float2(1, 0);
-		v2 = cellBase + float2(0, 1);
-		bary = float3(1.0 - f.x - f.y, f.x, f.y);
-	} else {
-		v0 = cellBase + float2(1, 1);
-		v1 = cellBase + float2(0, 1);
-		v2 = cellBase + float2(1, 0);
-		bary = float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y);
-	}
-
-	bary = pow(bary, 4.0);
-	bary /= dot(bary, 1.0);
-
-	SnowTaps taps;
-	taps.uv0 = uv + StochasticHash(v0);
-	taps.uv1 = uv + StochasticHash(v1);
-	taps.uv2 = uv + StochasticHash(v2);
-	taps.weights = bary;
-	taps.duvdx = 0.0.xx;
-	taps.duvdy = 0.0.xx;
-	return taps;
-}
-
-float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
-{
-	return taps.weights.x * SnowHeightMap.SampleLevel(SnowSampler, taps.uv0 + uvOffset, mip).x +
-	       taps.weights.y * SnowHeightMap.SampleLevel(SnowSampler, taps.uv1 + uvOffset, mip).x +
-	       taps.weights.z * SnowHeightMap.SampleLevel(SnowSampler, taps.uv2 + uvOffset, mip).x;
-}
-#endif
+#include "SnowDeformation/SnowParallax.hlsli"
 
 #if defined(HULLSHADER) && defined(PATCH)
 // Same trench-aware quad factors as the landscape shell: the patch IS the
@@ -1360,21 +1296,6 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 
 
-SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
-{
-	SnowTaps taps = ComputeSnowTapsNoGrad(uv, worldXY);
-	taps.duvdx = ddx(uv);
-	taps.duvdy = ddy(uv);
-	return taps;
-}
-
-float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
-{
-	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
-	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
-	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
-}
-
 // Two-plane projection blend, on the SAMPLES. Flat-topped pixels never touch
 // the side plane, so the second set of stochastic taps is only paid for on
 // slopes and rims.
@@ -1388,38 +1309,6 @@ float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTa
 
 // --- Parallax self-shadow. Mirrors SnowShell.hlsl; keep the two in step. ---
 
-
-// Takes derivatives; call in uniform flow, not inside the shadow branch.
-float SnowHeightMip(float2 uv)
-{
-	float2 dims;
-	SnowHeightMap.GetDimensions(dims.x, dims.y);
-	float2 texels = uv * dims;
-	float2 dx = ddx(texels);
-	float2 dy = ddy(texels);
-	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
-}
-
-// Returns raw OCCLUSION, before the saturate, so the two planar projections
-// can be mixed and clamped once.
-float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float quality, float noise, DisplacementParams params)
-{
-	uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
-	float shadowStrength = ExtendedMaterials::ShadowIntensity * (4.0 / tapCount);
-	float2 rayDir = lightUV * 0.1 * params.HeightScale;
-	float4 multipliers = rcp(float4(1, 2, 3, 4) + noise);
-
-	float sh0 = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, 0.0.xx, mip), params);
-	float4 sh = sh0.xxxx;
-	sh.x = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.x, mip), params);
-	if (quality > 0.25)
-		sh.y = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.y, mip), params);
-	if (quality > 0.5)
-		sh.z = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.z, mip), params);
-	if (quality > 0.75)
-		sh.w = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.w, mip), params);
-	return dot(max(0.0, sh - sh0), shadowStrength);
-}
 
 // Two-plane occlusion, blended on the RESULTS. Unlike the sample blend above
 // this cannot share one ray: each projection has its own uv axes, so the
@@ -1435,22 +1324,6 @@ float SnowParallaxOcclusionPlanar(SnowTaps topTaps, SnowTaps sideTaps, float sid
 	return o;
 }
 
-DisplacementParams SnowDisplacementParams()
-{
-	DisplacementParams params;
-	params.DisplacementScale = 1.0;
-	params.DisplacementOffset = 0.0;
-	params.HeightScale = SnowParallax.x;
-	params.FlattenAmount = 0.0;
-	return params;
-}
-
-float SnowParallaxQuality(float viewDist)
-{
-	return viewDist < ExtendedMaterials::ParallaxCheapDistance ?
-	           ExtendedMaterials::ParallaxNearShadowQuality :
-	           ExtendedMaterials::ParallaxFarShadowQuality;
-}
 
 struct PS_OUTPUT
 {
@@ -1900,6 +1773,42 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 bumpB = cross(normalWS, bumpT);
 
+	float3 V = -normalize(input.WorldPos);
+
+	// Parallax occlusion, same marcher the landscape shell uses (shared in
+	// SnowParallax.hlsli, so the two cannot drift). Object snow needs it in
+	// BOTH projections, and unlike SampleSnowPlanar the two cannot share one
+	// march: each projection has its own uv axes, so the view resolves to a
+	// different 2D direction in each and the offsets are not interchangeable.
+	// Each plane therefore marches itself and shifts its OWN tap set; the
+	// existing sample blend then mixes them exactly as before.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
+	{
+		DisplacementParams pomParams = SnowDisplacementParams();
+		pomParams.HeightScale *= SnowParallax.z;
+		uint pomSteps = (uint)max(SnowParallax.w, 4.0);
+		float pomFade = 1.0 - bumpFade;
+
+		// Top plane: bumpT/bumpB ARE its uv axes.
+		float3 viewTSTop = normalize(float3(dot(V, bumpT), dot(V, bumpB), dot(V, normalWS)));
+		float2 offsetTop = SnowParallaxOffset(snowTaps, viewTSTop, snowHeightMip, pomFade, pomSteps, pomParams);
+		snowUV += offsetTop;
+		snowTaps = OffsetSnowTaps(snowTaps, offsetTop);
+
+		// Side plane: raw world axes by construction, matching how
+		// snowSidePlane was built. Only steep pixels pay for it.
+		[branch] if (snowSteepness > 0.001)
+		{
+			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+			float3 sideB = float3(0.0, 0.0, 1.0);
+			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
+			float3 viewTSSide = normalize(float3(dot(V, sideT), dot(V, sideB), abs(dot(V, sideN))));
+			float2 offsetSide = SnowParallaxOffset(snowTapsSide, viewTSSide, snowHeightMipSide, pomFade, pomSteps, pomParams);
+			snowUVSide += offsetSide;
+			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
+		}
+	}
+
 	// Micro-relief; identical recipe to the terrain shell so ground and
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
@@ -1968,7 +1877,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
 
-	float3 V = -normalize(input.WorldPos);
 	float3 L = SharedData::DirLightDirection.xyz;
 	float3 H = normalize(V + L);
 	float satNdotL = saturate(dot(normalWS, L));
