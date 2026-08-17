@@ -1354,6 +1354,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float debugDeformation = SnowDeformation::GetDeformation(debugWorldXY);
 		baseColor.xyz = lerp(baseColor.xyz, float3(debugOutside, debugDeformation, snowDeformationSnowness), 0.75);
 	}
+
+	// Tiling ruler: three grids on the same ground, for measuring the land
+	// texture's world-space repeat against the shell's kSnowUVTile.
+	// Red = one landscape texture repeat, green = 256 world units (the shell's
+	// tile), blue = 4096 (cell boundary; the scale anchor that proves the
+	// world XY is right). Red per green IS the tiling ratio.
+	[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 2) != 0)
+	{
+		float2 rulerWorldXY = input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
+		// Constant ~1px lines: distance to the nearest gridline, in units of
+		// that grid's own screen-space derivative.
+#		define SNOW_RULER_LINE(COORD) \
+			(1.0 - smoothstep(0.0, 1.0, (0.5 - abs(frac(COORD) - 0.5)) / max(fwidth(COORD), 1e-9)))
+
+		float2 landLineXY = SNOW_RULER_LINE(uvOriginal);
+		float2 tileLineXY = SNOW_RULER_LINE(rulerWorldXY / 256.0);
+		float2 cellLineXY = SNOW_RULER_LINE(rulerWorldXY / 4096.0);
+#		undef SNOW_RULER_LINE
+
+		float3 rulerColor = 0.0;
+		rulerColor.x = max(landLineXY.x, landLineXY.y);
+		rulerColor.y = max(tileLineXY.x, tileLineXY.y);
+		rulerColor.z = max(cellLineXY.x, cellLineXY.y);
+		baseColor.xyz = lerp(baseColor.xyz, rulerColor, saturate(dot(rulerColor, 1.0)));
+	}
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor = TexColorSampler.SampleBias(SampColorSampler, diffuseUv, SharedData::MipBias);

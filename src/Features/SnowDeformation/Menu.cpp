@@ -316,6 +316,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
 
+		ImGui::Checkbox(T(TKEY("debug_tiling_ruler"), "Debug Tiling Ruler"), &debugTilingRuler);
+		if (auto _ttRuler = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
+
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 		{
 			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha" };

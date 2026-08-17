@@ -1213,6 +1213,8 @@ public:
 
 	/** @brief Runtime-only diagnostic toggle; not persisted in settings JSON. */
 	bool debugTerrainOverlay = false;
+	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
+	bool debugTilingRuler = false;
 
 protected:
 	/** @brief Fills perFrameData.Stamps from the player and nearby loaded actors. Implemented in SnowDeformation/Stamping.cpp. */
