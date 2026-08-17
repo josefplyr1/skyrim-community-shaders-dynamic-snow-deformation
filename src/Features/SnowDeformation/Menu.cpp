@@ -334,7 +334,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 		{
-			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha" };
+			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals" };
 			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
 			if (auto _ttSdv = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Edge taper: red = height the slump allows, green = up-facing, blue = no height data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends."));

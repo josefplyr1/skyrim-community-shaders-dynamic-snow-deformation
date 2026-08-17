@@ -1028,6 +1028,14 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float collapseEnd = SkinCollapseEnd(depthBase);
 		float camDist = length(worldBase - ShellCameraPosAdjust.xyz);
 		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
+		// Floor at the minimum coat instead of zero. Collapsing all the way
+		// puts the skin vertex EXACTLY on its source vertex, where it z-fights
+		// its own mesh and rasterises nothing at all - so distant objects lost
+		// their snow outright instead of flattening into a painted layer. Same
+		// hazard kMinSkinLift guards depthBase against at line ~944; the
+		// collapse multiplies after it, so it needs its own floor. Scaled by
+		// upFacing so genuinely steep faces still stay bare.
+		depth = max(depth, kMinSkinLift * upFacing);
 	}
 
 	SkinLift o;
@@ -1142,9 +1150,17 @@ VS_OUTPUT main(VS_INPUT input)
 	// pixel. Thresholding here makes low-poly rocks flip whole FACES between
 	// snowed and bare; thresholding the interpolated normal varies smoothly.
 	// Debug view: smuggle the two lift masks through the shading interpolants.
-	vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : v.NormalWS.z;
+	[flatten] if (StaticsDebugView > 2.5)
+	{
+		vsout.Coverage = v.SmoothWS.z * 0.5 + 0.5;
+		vsout.Flat = v.Flat;
+	}
+	else
+	{
+		vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : v.NormalWS.z;
+		vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : v.Flat;
+	}
 	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
-	vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : v.Flat;
 	vsout.Lift = lift.CoverDepth;
 	return vsout;
 }
@@ -1284,9 +1300,22 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	vsout.WorldPos = rel;
 	vsout.NormalWS = normalWS;
 	// Debug view: smuggle the two lift masks through the shading interpolants.
-	vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : nSum.z / max(length(nSum), 1e-3);
+	// Mode 3 swaps in upFacing's OWN two inputs instead (smoothed normal z,
+	// and the flat/rounded class), because those are the only things that can
+	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
+	// then traceable to whichever of the two is lying.
+	float smoothZ = nSum.z / max(length(nSum), 1e-3);
+	[flatten] if (StaticsDebugView > 2.5)
+	{
+		vsout.Coverage = smoothZ * 0.5 + 0.5;
+		vsout.Flat = isFlat;
+	}
+	else
+	{
+		vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : smoothZ;
+		vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : isFlat;
+	}
 	vsout.GridLocal = gridLocal;
-	vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : isFlat;
 	vsout.Lift = lift.CoverDepth;
 	return vsout;
 }
@@ -1982,7 +2011,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef PATCH
 		preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 #else
-		[branch] if (StaticsDebugView > 1.5)
+		[branch] if (StaticsDebugView > 2.5)
+		{
+			// Normals mode. R = smoothed normal z remapped (0.5 = horizontal,
+			// 1 = straight up), G = the flat/rounded class. An up-facing
+			// surface reading R near 0.5 means the normal data is wrong, not
+			// the geometry.
+			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
+		}
+		else [branch] if (StaticsDebugView > 1.5)
 		{
 			// Coverage mode. R = coverageAlpha as the dither sees it, G = the
 			// facing gates' product, B = the two seam blends. A rim band that
