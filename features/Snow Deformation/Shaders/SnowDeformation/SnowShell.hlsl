@@ -185,7 +185,11 @@ Texture2D<float> BermFieldMap : register(t14);
 Texture2D<float2> ExclusionFieldMap : register(t15);
 SamplerState SnowSampler : register(s0);
 
-static const float kSnowUVTile = 256.0;
+// The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
+// measured in-game 2026-08-17 (tiling ruler). Same texture at the same world
+// rate as the ground beside us; see CODE-NOTES.md. Mirrored in
+// SnowStaticsShell.hlsl, SnowDeformation.hlsli and Shell.cpp.
+static const float kSnowUVTile = 4096.0 / 24.0;
 
 // Distance warp: inner kWarpInnerVerts vertices per side keep linear
 // GridSpacing; beyond them each ring's spacing grows by kWarpGrowth so the
@@ -1077,7 +1081,7 @@ float2 StochasticHash(float2 cell)
 }
 
 // Anti-tiling snow fetch: blend 3 taps of the texture at random per-cell UV
-// offsets over a triangular lattice, so the 256-unit repeat never lines up.
+// offsets over a triangular lattice, so the texture repeat never lines up.
 // Weight sharpening keeps the cross-fade zones from reading as ghosted
 // double-images. Taps are computed once and applied to every snow map
 // (albedo, normal, RMAOS) so all channels agree on the same offsets.
@@ -1094,6 +1098,9 @@ SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
 	// tile multiples as the camera-following grid moves, so a uv-derived
 	// lattice jumps with the camera. Hash cell selection tolerates absolute-
 	// coordinate float error (unlike height-field finite differences).
+	// Deliberately NOT tied to kSnowUVTile: cell size is a world-space feature
+	// size, held fixed so the tiling change is the only variable in-game.
+	// First dial if the finer tile reads repetitive (2.5 repeats/cell now).
 	float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
 	float2 cellBase = floor(lattice);
 	float2 f = frac(lattice);

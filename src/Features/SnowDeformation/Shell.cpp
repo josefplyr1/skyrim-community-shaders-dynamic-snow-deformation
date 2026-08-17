@@ -321,8 +321,8 @@ void SnowDeformation::DrawShell()
 	};
 
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
-	// in small numbers (256-unit texture tiling).
-	constexpr float kSnowUVTile = 256.0f;
+	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
+	constexpr float kSnowUVTile = 4096.0f / 24.0f;
 	cbData.SnowUVOffset = {
 		std::fmod(cbData.GridOrigin.x, kSnowUVTile),
 		std::fmod(cbData.GridOrigin.y, kSnowUVTile)

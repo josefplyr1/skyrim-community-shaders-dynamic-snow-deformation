@@ -15,7 +15,7 @@ namespace SnowDeformation
 	static const float MapDim = 2048.0;
 	// Must match kSnowUVTile in SnowShell.hlsl: identical world tiling on the
 	// shell and the recolored LOD is what makes the handoff invisible.
-	static const float SnowUVTile = 256.0;
+	static const float SnowUVTile = 4096.0 / 24.0;
 
 	// Snow classification of a baked LOD terrain texel: bright and
 	// desaturated (gamma-space input). Must match ClassifyLODSnow in

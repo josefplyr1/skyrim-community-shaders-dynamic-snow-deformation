@@ -197,7 +197,9 @@ Texture2D<float> ShellDepthCopy : register(t9);
 SamplerState SnowSampler : register(s0);
 #endif
 
-static const float kSnowUVTile = 256.0;
+// Must match kSnowUVTile in SnowShell.hlsl (the game's landscape tiling:
+// 24 repeats per 4096-unit cell).
+static const float kSnowUVTile = 4096.0 / 24.0;
 
 // Minimum lift. At exactly zero the skin is coincident with its source mesh
 // and z-fights it invisible; a tenth of a unit clears that without reading as
