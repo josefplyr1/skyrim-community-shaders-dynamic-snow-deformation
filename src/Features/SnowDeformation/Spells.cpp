@@ -67,24 +67,11 @@ static constexpr float kTrailRadius = 35.0f;
 static constexpr float kTrailRate = 100.0f;
 // Snow shallower than this has no column worth cutting through.
 static constexpr float kMinTrailDepth = 2.0f;
-// Reach of a cloak on the ground, matching the radius Josef tuned the test
-// emitter to when comparing it against Flame Cloak in game.
-static constexpr float kCloakRadius = 100.0f;
-// A cloak wraps the body, not the boots, so the aura is treated as sitting at
-// roughly mid-chest. GroundMark then fades it exactly as it fades any other
-// source held above the snow, rather than a cloak scouring at full strength
-// simply because an actor's position happens to sit at their feet.
-static constexpr float kCloakCentreHeight = 70.0f;
-// How often cloaks are re-sampled on the game thread. A cloak lasts a minute;
-// a quarter second of staleness costs nothing and keeps the task off the
-// game thread's back.
-static constexpr float kAuraSampleInterval = 0.25f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
 // radiant mark rather than a full crater directly beneath the burst.
 static constexpr float kBlastLandingReach = 220.0f;
-
 SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectSetting* a_effect)
 {
 	if (!a_effect)
@@ -306,120 +293,6 @@ void SnowDeformation::RegisterSpellCastSink()
 	}
 }
 
-void SnowDeformation::SampleActorAuras()
-{
-	std::unordered_map<uint32_t, ActorAura> sampled;
-
-	auto walk = [&](RE::Actor* a_actor) {
-		if (!a_actor || !a_actor->Is3DLoaded())
-			return;
-		// Strongest cloak wins rather than one mark per effect: two cloaks at
-		// once should not melt twice as fast in the same ring.
-		ActorAura best{};
-		best.rateScale = 0.0f;
-		// GetActiveEffectList, NOT VisitActiveEffects. The visitor helpers in
-		// MagicTarget.h live inside an ENABLE_SKYRIM_VR block and reach the
-		// game through a hardcoded VR address (REL::ID 33756); the ALL preset
-		// compiles VR support, so that path builds happily and then calls a
-		// completely unrelated function on SE/AE. GetActiveEffectList is
-		// declared in BOTH branches - a native virtual here, a shim on VR - so
-		// it is the portable one.
-		auto* effects = a_actor->GetActiveEffectList();
-		if (!effects)
-			return;
-		for (auto* activeEffect : *effects) {
-			const RE::EffectSetting* base = activeEffect ? activeEffect->GetBaseObject() : nullptr;
-			if (!base)
-				continue;
-			// The archetype IS the discriminator. A cloak declares itself as
-			// one, so there is no guessing from delivery, which alone would
-			// sweep up every racial resistance an actor carries.
-			if (base->data.archetype != RE::EffectSetting::Archetype::kCloak)
-				continue;
-			if (base->data.delivery != RE::MagicSystem::Delivery::kSelf)
-				continue;
-
-			const SpellElement candidate = ClassifyElement(base);
-			if (candidate == SpellElement::None)
-				continue;
-
-			const float candidateRate = activeEffect->effect ?
-			                                std::clamp(activeEffect->effect->effectItem.magnitude / kSpellReferenceMagnitude,
-												kSpellMagnitudeMin, kSpellMagnitudeMax) :
-			                                1.0f;
-			if (candidateRate > best.rateScale) {
-				best.rateScale = candidateRate;
-				best.element = candidate;
-			}
-		}
-		if (best.element != SpellElement::None)
-			sampled[a_actor->formID] = best;
-	};
-
-	if (auto* player = RE::PlayerCharacter::GetSingleton())
-		walk(player);
-	if (auto* processLists = RE::ProcessLists::GetSingleton())
-		for (auto& handle : processLists->highActorHandles)
-			if (auto actor = handle.get())
-				walk(actor.get());
-
-	{
-		std::scoped_lock lock(auraCacheLock);
-		auraCache = std::move(sampled);
-	}
-	auraSampleQueued = false;
-}
-
-void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const ActorAura& a_aura)
-{
-	if (spellEmitters.size() >= kMaxSpellEmitters || !a_actor || !a_actor->Is3DLoaded())
-		return;
-	auto* tes = RE::TES::GetSingleton();
-	if (!tes)
-		return;
-
-	const RE::NiPoint3 position = a_actor->GetPosition();
-	float groundZ = position.z;
-	tes->GetLandHeight(position, groundZ);
-
-	float strength = 0.0f;
-	float radius = 0.0f;
-	// A cloak wraps the body, not the boots, and an actor's position sits at
-	// their feet - so the aura is treated as riding at mid-chest and GroundMark
-	// fades it exactly as it fades any other source held above the snow.
-	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, kCloakRadius, strength, radius))
-		return;
-	if (strength < kMinSpellStrength)
-		return;
-	spellStats.auras++;
-
-	// Sweeps with the wearer, so a cloaked actor crossing snow leaves a band
-	// rather than a row of rings.
-	const float2 current{ position.x, position.y };
-	float2 previous = current;
-	const uint32_t formID = a_actor->formID;
-	if (auto it = spellAuraPrev.find(formID); it != spellAuraPrev.end()) {
-		const float dx = current.x - it->second.x;
-		const float dy = current.y - it->second.y;
-		if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
-			previous = it->second;
-	}
-	currentAuraPositions[formID] = current;
-
-	spellStats.lastStrength = strength;
-	spellStats.lastRadius = radius;
-
-	SpellEmitter emitter{};
-	emitter.position = current;
-	emitter.previous = previous;
-	emitter.radius = radius;
-	emitter.strength = strength;
-	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_aura.rateScale;
-	emitter.element = a_aura.element;
-	emitter.mark = MarkForElement(a_aura.element);
-	spellEmitters.push_back(emitter);
-}
-
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -428,7 +301,6 @@ void SnowDeformation::GatherSpellEmitters()
 	if (!settings.EnableSpellIntegration) {
 		spellPrevPositions.clear();
 		spellTrailPrev.clear();
-		spellAuraPrev.clear();
 		return;
 	}
 
@@ -462,49 +334,6 @@ void SnowDeformation::GatherSpellEmitters()
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
 	std::unordered_map<uint32_t, float2> currentTrailPositions;
-	currentAuraPositions.clear();
-
-	// Cloaks. Which actors wear one is sampled on the GAME thread and only the
-	// answer is read here - the effect list is rewritten constantly as effects
-	// land and expire, and walking it from this thread crashed inside the
-	// game's own iterator. Positions are still read here, so the ring sits
-	// where the wearer is now rather than where the last sample found them.
-	{
-		const float auraDelta = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
-		auraSampleTimer -= auraDelta;
-		if (auraSampleTimer <= 0.0f && !auraSampleQueued.exchange(true)) {
-			auraSampleTimer = kAuraSampleInterval;
-			if (auto* task = SKSE::GetTaskInterface())
-				task->AddTask([]() { globals::features::snowDeformation.SampleActorAuras(); });
-			else
-				auraSampleQueued = false;
-		}
-
-		std::unordered_map<uint32_t, ActorAura> cloaked;
-		{
-			std::scoped_lock lock(auraCacheLock);
-			cloaked = auraCache;
-		}
-		if (!cloaked.empty()) {
-			auto mark = [&](RE::Actor* a_actor) {
-				if (!a_actor)
-					return;
-				if (cameraPosition.GetSquaredDistance(a_actor->GetPosition()) > cullRadius * cullRadius)
-					return;
-				if (auto it = cloaked.find(a_actor->formID); it != cloaked.end())
-					ConsiderActorAuras(a_actor, it->second);
-			};
-			// Actors are walked here rather than from the stamp loop because
-			// that loop's gates are about CARVING - airborne, elevated,
-			// settled - and none of them should decide whether a cloak warms
-			// the ground beneath it.
-			mark(RE::PlayerCharacter::GetSingleton());
-			if (auto* processLists = RE::ProcessLists::GetSingleton())
-				for (auto& handle : processLists->highActorHandles)
-					if (auto actor = handle.get())
-						mark(actor.get());
-		}
-	}
 
 	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
@@ -841,7 +670,6 @@ void SnowDeformation::GatherSpellEmitters()
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);
-	spellAuraPrev = std::move(currentAuraPositions);
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
 	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }

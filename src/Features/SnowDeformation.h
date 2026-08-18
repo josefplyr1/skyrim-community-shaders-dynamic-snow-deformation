@@ -1400,45 +1400,6 @@ protected:
 	 */
 	void ConsiderHazard(RE::TESObjectREFR* a_ref);
 
-	/** @brief An elemental cloak found on an actor, sampled on the game thread. */
-	struct ActorAura
-	{
-		SpellElement element = SpellElement::None;
-		float rateScale = 1.0f;
-	};
-
-	/**
-	 * @brief Walks actors' active effects for cloaks. GAME THREAD ONLY.
-	 *
-	 * The active-effect list belongs to the game thread and is rewritten
-	 * constantly as effects land and expire. Walking it from the render thread
-	 * crashed inside the game's own iterator, so this runs through the SKSE
-	 * task interface and the render thread reads only the result.
-	 */
-	void SampleActorAuras();
-
-	/**
-	 * @brief Emits the mark for one cloaked actor.
-	 *
-	 * Takes the cloak already resolved: the racy part is the effect walk, and
-	 * that has happened on the game thread by the time this is called. The
-	 * actor's POSITION is read here so the ring sits where the wearer is now
-	 * rather than where the last sample found them.
-	 */
-	void ConsiderActorAuras(RE::Actor* a_actor, const ActorAura& a_aura);
-
-	/** @brief Cloaked actors by formID, written by the game thread, read by the render thread. */
-	std::unordered_map<uint32_t, ActorAura> auraCache;
-	std::mutex auraCacheLock;
-	/** @brief A sample is already queued; do not stack another. */
-	std::atomic<bool> auraSampleQueued = false;
-	/** @brief Seconds until the next sample. Cloaks come and go slowly, so this need not be every frame. */
-	float auraSampleTimer = 0.0f;
-
-	/** @brief Last XY per cloaked actor (formID), so a moving aura sweeps a band rather than dotting it. */
-	std::unordered_map<uint32_t, float2> spellAuraPrev;
-	/** @brief This frame's aura positions, swapped into spellAuraPrev at the end of the gather. */
-	std::unordered_map<uint32_t, float2> currentAuraPositions;
 
 	/**
 	 * @brief What a projectile will leave behind when it dies, recorded while
@@ -1520,8 +1481,6 @@ protected:
 		uint streams = 0;
 		/** @brief Placed hazards seen: spell walls, runes. */
 		uint hazards = 0;
-		/** @brief Elemental cloaks riding an actor this frame. */
-		uint auras = 0;
 		/** @brief Blasts marked from a projectile leaving the manager - the route that does not depend on explosions being references at all. */
 		uint detonations = 0;
 		/** @brief Projectiles currently carrying a blast, waiting to die. A spell that never appears here was never recorded; one that sits here and never fires is being rejected at detonation. */
