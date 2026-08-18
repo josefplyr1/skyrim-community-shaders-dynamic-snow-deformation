@@ -92,11 +92,13 @@ static constexpr float kPitScaleMax = 2.2f;
 static constexpr float kStreamPitScale = 0.65f;
 // The corridor a bolt cuts on its way in is thinner still.
 static constexpr float kTrailPitScale = 0.5f;
-// Effect area that maps to an unscaled reach for a self-centred area spell.
-// Blizzard authors 40, which is the yardstick the rest scale against.
-static constexpr float kSelfAreaReference = 40.0f;
-static constexpr float kSelfAreaScaleMin = 0.5f;
-static constexpr float kSelfAreaScaleMax = 4.0f;
+// Magic-effect area is authored in feet, not in world units - roughly 21 units
+// to the foot at Skyrim's scale. Blizzard's 40 is therefore about 850 units
+// across, which is why treating the number as a multiplier on a 90 unit radius
+// left it a fraction of its own animation.
+static constexpr float kSelfAreaToUnits = 21.0f;
+static constexpr float kSelfAreaReachMin = 60.0f;
+static constexpr float kSelfAreaReachMax = 1400.0f;
 // Where a cloak's arcs land, as a fraction of its reach. How OFTEN they land
 // and how big each one is are settings, since taste decides both.
 static constexpr float kCloakStrikeInner = 0.45f;
@@ -308,7 +310,7 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	SpellElement cloakElement = SpellElement::None;
 	float cloakRate = 1.0f;
 	float cloakDuration = 0.0f;
-	float cloakRadiusScale = 1.0f;
+	float cloakReachOverride = 0.0f;
 	for (auto* item : spell->effects) {
 		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
 		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf)
@@ -329,10 +331,10 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 				cloakDuration = item->effectItem.duration > 0 ?
 				                    static_cast<float>(item->effectItem.duration) :
 				                    kCloakDefaultDuration;
-				cloakRadiusScale = selfArea ?
-				                       std::clamp(static_cast<float>(item->effectItem.area) / kSelfAreaReference,
-										   kSelfAreaScaleMin, kSelfAreaScaleMax) :
-				                       1.0f;
+				cloakReachOverride = selfArea ?
+				                         std::clamp(static_cast<float>(item->effectItem.area) * kSelfAreaToUnits,
+											 kSelfAreaReachMin, kSelfAreaReachMax) :
+				                         0.0f;
 			}
 			continue;
 		}
@@ -354,7 +356,7 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 			cloak.element = cloakElement;
 			cloak.rateScale = cloakRate;
 			cloak.remaining = cloakDuration;
-			cloak.radiusScale = cloakRadiusScale;
+			cloak.reachOverride = cloakReachOverride;
 			std::scoped_lock lock(feature.queuedCastLock);
 			if (feature.queuedCloaks.size() < kMaxSpellEmitters)
 				feature.queuedCloaks.push_back(cloak);
@@ -406,7 +408,9 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	const float baseReach = arcs ? settings.ShockCloakRadius :
 	                               (MarkForElement(a_cloak.element) == SpellMark::Crust ? settings.CrustRadius :
 																						  settings.CloakRadius);
-	const float cloakReach = std::max(baseReach, 1.0f) * a_cloak.radiusScale;
+	// An area spell states its own reach; a cloak names none and takes the
+	// per-element setting.
+	const float cloakReach = a_cloak.reachOverride > 0.0f ? a_cloak.reachOverride : std::max(baseReach, 1.0f);
 	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, cloakReach, heightFade, radius))
 		return;
 	if (heightFade < kMinSpellStrength)

@@ -46,6 +46,8 @@
 	X(CrustSheen) \
 	X(CrustTint) \
 	X(CrustBreakRadius) \
+	X(CrustThawMinutes) \
+	X(CrustBreakOnCarve) \
 	X(ScorchStrength) \
 	X(SnowClassDepths) \
 	X(TextureDepths) \
@@ -476,6 +478,10 @@ void SnowDeformation::Prepass()
 	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
 	perFrameData.MeltEdgeNoise = std::max(settings.MeltEdgeIrregularity, 0.0f);
 	perFrameData.CrustPrintDepth = std::clamp(settings.CrustPrintDepth, 0.0f, 1.0f);
+	perFrameData.CrustThaw = settings.CrustThawMinutes > 0.01f ?
+	                             1.0f / (settings.CrustThawMinutes * 60.0f) :
+	                             0.0f;
+	perFrameData.CrustBreakOnCarve = std::max(settings.CrustBreakOnCarve, 0.0f);
 
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.

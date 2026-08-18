@@ -259,15 +259,19 @@ public:
 		/** @brief How icy crusted snow shades: 0 leaves it looking like powder, 1 gives the full polish. */
 		float CrustGloss = 1.0f;
 		/** @brief Roughness of fully crusted snow. Lower is glassier; snow sits near 0.6. */
-		float CrustRoughness = 0.18f;
+		float CrustRoughness = 0.25f;
 		/** @brief How far a crust flattens the snow's own normal map. The strongest of the ice cues by a distance: powder reads as grain and ice reads as a sheet, so smoothing the surface says "frozen over" louder than reflectance or colour can. */
-		float CrustNormalFlatten = 0.80f;
+		float CrustNormalFlatten = 0.50f;
 		/** @brief Brightness of the grazing-angle sheen on crusted snow. Snow is already near-white, so a specular lobe has almost no headroom above it; a sheet catching the sky at a glancing angle is the one thing powder cannot do, and this is the strongest ice cue after smoothness. */
-		float CrustSheen = 0.9f;
+		float CrustSheen = 1.00f;
 		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
-		float CrustSpecular = 0.14f;
+		float CrustSpecular = 0.250f;
 		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
-		std::array<float, 3> CrustTint = { 0.88f, 0.92f, 1.00f };
+		std::array<float, 3> CrustTint = { 0.78f, 0.88f, 1.00f };
+		/** @brief Minutes a crust takes to thaw on its own, with no snowfall at all. Ice answers to temperature rather than to weather, so this runs even under a clear sky where the refill has stopped. */
+		float CrustThawMinutes = 4.0f;
+		/** @brief How completely carving through a crust destroys it, against how deep the cut went. At 1 a shallow print barely dulls the glaze; higher values let any cut break the skin properly, which is what stops a trench through ice reading as a groove in ice cream. */
+		float CrustBreakOnCarve = 3.0f;
 		/** @brief Stamp radius past which a shape counts as heavy enough to break a crust rather than print on it. A human foot sits well under this; a mammoth or a landing dragon well over. */
 		float CrustBreakRadius = 30.0f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
@@ -427,7 +431,11 @@ public:
 		float MeltEdgeNoise;
 		/** @brief Settings::CrustPrintDepth, how deep a boot still prints on fully crusted snow. */
 		float CrustPrintDepth;
-		float3 perFramePad;
+		/** @brief Crust lost per second regardless of weather - ice answers to temperature, not to snowfall. */
+		float CrustThaw;
+		/** @brief How completely a carve destroys the crust it cuts through, against the depth of the cut. */
+		float CrustBreakOnCarve;
+		float perFramePad;
 
 
 		float4 Stamps[kMaxStamps];
@@ -1556,8 +1564,8 @@ protected:
 		float strikeTimer = 0.0f;
 		/** @brief Advances per discharge so successive arcs land in different places. */
 		uint32_t strikeSeed = 0;
-		/** @brief Multiplier on the cloak reach, from the effect's authored area. A cloak names none and stays at 1; a self-centred area spell like Blizzard is far wider than one. */
-		float radiusScale = 1.0f;
+		/** @brief Reach in world units taken straight from the effect's authored area, or 0 when it named none and the per-element cloak radius should be used instead. */
+		float reachOverride = 0.0f;
 	};
 	/** @brief Queued by the sink on the game thread, drained by the gather. */
 	std::vector<CloakState> queuedCloaks;

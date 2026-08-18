@@ -109,7 +109,15 @@ cbuffer PerFrame : register(b0)
 	// the shell floats above them, so a crust that refuses to take a print at
 	// all puts feet inside apparently solid ice.
 	float CrustPrintDepth;
-	float3 perFramePad;
+	// Crust lost per second regardless of weather. Ice gives way to
+	// temperature, not to snowfall, so this is deliberately NOT folded into
+	// the refill - which stops entirely in clear weather and would otherwise
+	// leave a glaze standing for ever.
+	float CrustThaw;
+	// How completely carving through a crust destroys it, against how deep the
+	// cut went. Anything that cuts snow has broken the skin over it.
+	float CrustBreakOnCarve;
+	float perFramePad;
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -193,8 +201,10 @@ float StampNoise(float2 p)
 		// zero from the other side.
 		melted = melted >= 0.0 ? min(max(melted - refill, 0.0), deformation) :
 		                         min(melted + refill, 0.0);
-		// Fresh snow buries a crust as readily as it fills a trench.
-		crust = max(crust - refill, 0.0);
+		// Fresh snow buries a crust as readily as it fills a trench, and ice
+		// gives way to temperature besides - so a glaze fades even under a
+		// clear sky, where the refill has stopped entirely.
+		crust = max(crust - refill - CrustThaw * DeltaTime, 0.0);
 	}
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
@@ -262,8 +272,15 @@ float StampNoise(float2 p)
 				// weight this shape puts through, unused by carves otherwise.
 				float force = saturate(StampEnds[i].w);
 				float resist = standingCrust * (1.0 - force);
-				carve = max(carve, Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist));
-				crustBreak = max(crustBreak, force * falloff);
+				float printed = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
+				carve = max(carve, printed);
+
+				// Anything that CUTS a crust has broken the skin over it, not
+				// merely dented it - so the cut takes the glaze with it, in
+				// proportion to how deep it went. Without this a trench
+				// through ice keeps its polish all the way down and reads as
+				// a groove ploughed through ice cream.
+				crustBreak = max(crustBreak, saturate(max(force, printed * CrustBreakOnCarve) * falloff));
 			}
 			else if (StampEnds[i].z > 2.5)
 			{
@@ -372,6 +389,10 @@ float StampNoise(float2 p)
 		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
 	crustNow = saturate(crustNow * (1.0 - crustBreak));
 
+	// Alpha is written as 1, not 0. Nothing reads it yet - it is being kept for
+	// blood - but the ImGui debug preview blends the map with its alpha, and a
+	// zero there renders the whole thing invisible. Whatever claims .w later
+	// needs its own debug view rather than this one.
 	CurrentDeformation[pixel] = float4(total,
-		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, 0.0);
+		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, 1.0);
 }
