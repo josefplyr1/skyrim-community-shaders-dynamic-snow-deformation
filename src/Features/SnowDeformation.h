@@ -237,15 +237,15 @@ public:
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.11f;
 		/** @brief Depth a shock discharge pocks the snow to, as a fraction of the layer. Lightning throws snow aside rather than boring into it, so this stays well under a footprint's carve. */
-		float PitDepth = 0.55f;
+		float PitDepth = 1.00f;
 		/** @brief Reach of a single discharge mark, in world units, before its arc legs. */
-		float PitRadius = 70.0f;
+		float PitRadius = 50.0f;
 		/** @brief Reach of a SHOCK cloak, kept apart from the fire one: arcs jump clear of the body where heat wraps it, so the two want different numbers. */
-		float ShockCloakRadius = 80.0f;
+		float ShockCloakRadius = 75.0f;
 		/** @brief Seconds between a shock cloak's discharges. Higher is sparser - lightning cracks now and then rather than pouring. */
-		float ShockCloakInterval = 0.30f;
+		float ShockCloakInterval = 1.50f;
 		/** @brief Size of one cloak arc against the cloak's own reach. */
-		float ShockCloakStrikeScale = 0.28f;
+		float ShockCloakStrikeScale = 0.25f;
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
