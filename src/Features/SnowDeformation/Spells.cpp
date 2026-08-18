@@ -51,6 +51,16 @@ static constexpr float kMinSpellStrength = 0.04f;
 // A velocity shorter than this carries no usable direction, so the aim comes
 // off the caster instead.
 static constexpr float kMinSpellSpeed = 1.0f;
+// Width of the corridor a projectile cuts through the snow layer. A bolt is
+// slim, but the deformation map's texels are about 7 units, so a groove much
+// narrower than this aliases away to nothing.
+static constexpr float kTrailRadius = 35.0f;
+// A bolt crosses the whole snow layer inside a frame or two, so its corridor
+// has to arrive at once. Unlike a blast there is nothing to hold open: the
+// projectile is already gone.
+static constexpr float kTrailRate = 100.0f;
+// Snow shallower than this has no column worth cutting through.
+static constexpr float kMinTrailDepth = 2.0f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
@@ -314,6 +324,7 @@ void SnowDeformation::GatherSpellEmitters()
 
 	if (!settings.EnableSpellIntegration) {
 		spellPrevPositions.clear();
+		spellTrailPrev.clear();
 		return;
 	}
 
@@ -343,6 +354,7 @@ void SnowDeformation::GatherSpellEmitters()
 	const RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
+	std::unordered_map<uint32_t, float2> currentTrailPositions;
 
 	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
@@ -436,11 +448,13 @@ void SnowDeformation::GatherSpellEmitters()
 		// because the things that detonate are precisely the ones that gate
 		// rejects. The element comes off its own effect, so a blast needs
 		// neither the explosion reference nor the explosion-to-element table.
+		// A held stream marks continuously through the contact trace below, so it
+		// must neither leave a crater every time one of its short lived
+		// projectiles expires nor cut a corridor on the way. Everything else
+		// marks by striking.
+		const bool strikes = effect->data.castingType != RE::MagicSystem::CastingType::kConcentration;
+
 		{
-			// A held stream marks continuously through the contact trace below
-			// and must NOT also leave a crater every time one of its short
-			// lived projectiles expires. Everything else marks by striking.
-			const bool strikes = effect->data.castingType != RE::MagicSystem::CastingType::kConcentration;
 			if (!blast && !strikes)
 				spellStats.rejectedNoBlast++;
 			if (strikes || blast) {
@@ -456,6 +470,48 @@ void SnowDeformation::GatherSpellEmitters()
 				pending.radius = authored * std::max(settings.BlastRadiusScale, 0.0f);
 				pending.element = element;
 				projectileBlasts[projectile->formID] = pending;
+			}
+		}
+
+		// The corridor a projectile cuts on its way in. The shell has no
+		// collision, so a bolt flies THROUGH the snow and detonates on the
+		// terrain underneath: without this it silently vanishes for the frames
+		// it spends inside the layer, then a crater appears from nowhere.
+		//
+		// Depth cut is what the column loses above the projectile, so a bolt
+		// skimming the surface scores a shallow groove and one deep in the
+		// snow melts nearly to the ground - which is also why this reads
+		// correctly on a slope, where entry and impact are at different depths.
+		if (strikes) {
+			const float columnDepth = GetNominalSnowDepthAt(position.x, position.y, 0.0f);
+			float trailGroundZ = position.z;
+			tes->GetLandHeight(position, trailGroundZ);
+			const float heightAboveLand = position.z - trailGroundZ;
+
+			const float2 currentTrail{ position.x, position.y };
+			float2 previousTrail = currentTrail;
+			if (auto it = spellTrailPrev.find(projectile->formID); it != spellTrailPrev.end()) {
+				const float dx = currentTrail.x - it->second.x;
+				const float dy = currentTrail.y - it->second.y;
+				if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
+					previousTrail = it->second;
+			}
+			currentTrailPositions[projectile->formID] = currentTrail;
+
+			if (columnDepth > kMinTrailDepth && heightAboveLand >= 0.0f && heightAboveLand < columnDepth) {
+				const float cut = 1.0f - heightAboveLand / columnDepth;
+				if (cut >= kMinSpellStrength && spellEmitters.size() < kMaxSpellEmitters) {
+					SpellEmitter emitter{};
+					emitter.position = currentTrail;
+					emitter.previous = previousTrail;
+					emitter.radius = kTrailRadius;
+					emitter.strength = cut;
+					emitter.rate = kTrailRate;
+					emitter.element = element;
+					emitter.mark = MarkForElement(element);
+					spellEmitters.push_back(emitter);
+					spellStats.trails++;
+				}
 			}
 		}
 
@@ -597,6 +653,7 @@ void SnowDeformation::GatherSpellEmitters()
 	}
 
 	spellPrevPositions = std::move(currentPositions);
+	spellTrailPrev = std::move(currentTrailPositions);
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
 	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }

@@ -233,11 +233,11 @@ public:
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
-		float MeltBowlFloor = 0.15f;
+		float MeltBowlFloor = 0.11f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
 		/** @brief Scale on the crater a detonation leaves, against the radius the explosion record authors. Bethesda's blast radii are tuned for damage, not for how far the ground should be scarred, and read far too wide on snow at 1.0. */
-		float BlastRadiusScale = 0.50f;
+		float BlastRadiusScale = 0.33f;
 		/** @brief Depth per second a reference-magnitude fire stream melts at its core. Effect magnitude scales it, so a stronger spell melts faster without reaching any deeper. */
 		float SpellMeltRate = 0.8f;
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
@@ -1365,6 +1365,15 @@ protected:
 	/** @brief Last XY per projectile (formID), for the capsule sweep. */
 	std::unordered_map<uint32_t, float2> spellPrevPositions;
 
+	/**
+	 * @brief Last XY per projectile, for the corridor it cuts through the snow.
+	 *
+	 * Separate from spellPrevPositions, which tracks where a stream's cone
+	 * LANDS rather than where its projectile is. A trail is about the
+	 * projectile's own path.
+	 */
+	std::unordered_map<uint32_t, float2> spellTrailPrev;
+
 	/** @brief Behaviour table for an effect, from its resist variable. Implemented in SnowDeformation/Spells.cpp. */
 	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
 
@@ -1479,6 +1488,8 @@ protected:
 		uint detonations = 0;
 		/** @brief Projectiles currently carrying a blast, waiting to die. A spell that never appears here was never recorded; one that sits here and never fires is being rejected at detonation. */
 		uint armed = 0;
+		/** @brief Sub-surface corridors marked this frame: projectiles cutting through the snow layer. */
+		uint trails = 0;
 		/** @brief Projectiles whose effects name no element this feature knows. */
 		uint rejectedElement = 0;
 		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */
