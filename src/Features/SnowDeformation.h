@@ -1414,6 +1414,26 @@ protected:
 	std::unordered_map<const RE::BGSExplosion*, SpellElement> explosionElements;
 	bool explosionElementsBuilt = false;
 
+	/**
+	 * @brief What a projectile will leave behind when it dies, recorded while
+	 * it is still alive.
+	 *
+	 * A projectile that drops out of Projectile::Manager has detonated, and
+	 * its own effect already told us the element - so this path needs neither
+	 * the explosion reference nor the explosion-to-element table. It is also
+	 * the only route that works if spawned explosions never reach a cell's
+	 * reference list at all.
+	 */
+	struct PendingBlast
+	{
+		float2 position{};
+		float heightAboveLand = 0.0f;
+		float radius = 0.0f;
+		SpellElement element = SpellElement::None;
+	};
+	/** @brief Per live projectile (formID), rebuilt every frame. */
+	std::unordered_map<uint32_t, PendingBlast> projectileBlasts;
+
 	/** @brief Explosions already marked, so a multi-frame blast marks once. Pruned each frame against what is still live. */
 	std::unordered_set<uint32_t> explosionsStamped;
 	/** @brief Explosions seen this frame, rebuilt by the reference scan. */
@@ -1426,8 +1446,10 @@ protected:
 		uint streams = 0;
 		/** @brief Placed hazards seen: spell walls, runes. */
 		uint hazards = 0;
-		/** @brief Detonating explosions seen this frame (marked or not). */
+		/** @brief Explosion REFERENCES seen by the reference scan this frame. */
 		uint explosions = 0;
+		/** @brief Blasts marked from a projectile leaving the manager - the route that does not depend on explosions being references at all. */
+		uint detonations = 0;
 		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
 		uint groundContacts = 0;
 		uint emitters = 0;

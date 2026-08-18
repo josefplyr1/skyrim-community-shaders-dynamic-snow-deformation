@@ -332,6 +332,16 @@ void SnowDeformation::GatherSpellEmitters()
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
 
+	// Every projectile still in the manager, recorded before any culling or
+	// classification. Anything missing from this next frame has DIED; a
+	// projectile that merely flew out of the window is still in here, so
+	// leaving is never mistaken for detonating.
+	std::unordered_set<uint32_t> stillAlive;
+	stillAlive.reserve(live.size());
+	for (auto& projectile : live)
+		if (projectile)
+			stillAlive.insert(projectile->formID);
+
 	for (auto& projectile : live) {
 		if (spellEmitters.size() >= kMaxSpellEmitters)
 			break;
@@ -363,6 +373,23 @@ void SnowDeformation::GatherSpellEmitters()
 		const RE::NiPoint3 position = projectile->GetPosition();
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
 			continue;
+
+		// Remember what this projectile would leave if it went off here. The
+		// element comes off its own effect, so a detonation needs neither the
+		// explosion reference nor the explosion-to-element table.
+		{
+			const RE::BGSExplosion* blast = runtime.explosion ? runtime.explosion : effect->data.explosion;
+			if (blast) {
+				float blastGroundZ = position.z;
+				tes->GetLandHeight(position, blastGroundZ);
+				PendingBlast pending{};
+				pending.position = { position.x, position.y };
+				pending.heightAboveLand = position.z - blastGroundZ;
+				pending.radius = std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
+				pending.element = element;
+				projectileBlasts[projectile->formID] = pending;
+			}
+		}
 
 		// Where the stream lands. A flame held at hand height still melts what
 		// it is pointed at, so the mark belongs at the ground contact, not
@@ -422,6 +449,46 @@ void SnowDeformation::GatherSpellEmitters()
 		emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
 		emitter.element = element;
 		emitter.mark = MarkForElement(element);
+		spellEmitters.push_back(emitter);
+	}
+
+	// A projectile gone from the manager has detonated. This is where a rune
+	// finally marks the snow: it is a projectile the whole time it waits, and
+	// what carves the ground is the blast it becomes on the frame it vanishes.
+	for (auto it = projectileBlasts.begin(); it != projectileBlasts.end();) {
+		if (stillAlive.contains(it->first)) {
+			++it;
+			continue;
+		}
+		const PendingBlast blast = it->second;
+		it = projectileBlasts.erase(it);
+
+		if (blast.element == SpellElement::None)
+			continue;
+		float strength = 0.0f;
+		float radius = 0.0f;
+		// The same rule everything else obeys: a bolt bursting against a chest
+		// marks weakly and broadly below it, not sharply at that height.
+		if (!GroundMark(blast.heightAboveLand, blast.radius, strength, radius))
+			continue;
+		if (strength < kMinSpellStrength)
+			continue;
+		spellStats.detonations++;
+		if (spellEmitters.size() >= kMaxSpellEmitters)
+			continue;
+
+		spellStats.lastStrength = strength;
+		spellStats.lastRadius = radius;
+
+		SpellEmitter emitter{};
+		emitter.position = blast.position;
+		emitter.previous = blast.position;
+		emitter.radius = radius;
+		emitter.strength = strength;
+		// A detonation is over inside a frame, so its mark arrives whole.
+		emitter.rate = kExplosionRate;
+		emitter.element = blast.element;
+		emitter.mark = MarkForElement(blast.element);
 		spellEmitters.push_back(emitter);
 	}
 
