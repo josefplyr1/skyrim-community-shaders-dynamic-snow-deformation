@@ -22,6 +22,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	EnableSpellIntegration,
 	SpellMeltRate,
 	BlastRadiusScale,
+	CloakRadius,
 	SnowClassDepths,
 	TextureDepths,
 	ObjectsSnowDepth,

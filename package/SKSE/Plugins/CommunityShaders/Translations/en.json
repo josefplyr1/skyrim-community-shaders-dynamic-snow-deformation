@@ -1340,6 +1340,8 @@
     "feature.snow_deformation.class_depths": "Snow Depth by Texture Class",
     "feature.snow_deformation.class_depths_tooltip": "Starting height for each snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). This is the DEFAULT a texture uses until it is given its own value below. Negative values submerge the shell below the surface. Retunes live from cached data.",
     "feature.snow_deformation.clear": "Clear Deformation Map",
+    "feature.snow_deformation.cloak_radius": "Cloak Radius",
+    "feature.snow_deformation.cloak_radius_tooltip": "How far a cloak marks the ground its wearer walks over. A cloak wraps the body rather than resting on the snow, so its mark is softer than a flame played directly onto the ground - widen this if the ring reads too tight around the feet.",
     "feature.snow_deformation.crisp_scale": "Grain Fineness",
     "feature.snow_deformation.crisp_scale_tooltip": "How much finer the snow normal map repeats on disturbed snow (shading only).",
     "feature.snow_deformation.crisp_strength": "Grain Strength",

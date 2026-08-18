@@ -236,6 +236,8 @@ public:
 		float MeltBowlFloor = 0.11f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
+		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
+		float CloakRadius = 160.0f;
 		/** @brief Scale on the crater a detonation leaves, against the radius the explosion record authors. Bethesda's blast radii are tuned for damage, not for how far the ground should be scarred, and read far too wide on snow at 1.0. */
 		float BlastRadiusScale = 0.33f;
 		/** @brief Depth per second a reference-magnitude fire stream melts at its core. Effect magnitude scales it, so a stronger spell melts faster without reaching any deeper. */

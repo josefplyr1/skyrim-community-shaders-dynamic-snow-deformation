@@ -67,9 +67,6 @@ static constexpr float kTrailRadius = 35.0f;
 static constexpr float kTrailRate = 100.0f;
 // Snow shallower than this has no column worth cutting through.
 static constexpr float kMinTrailDepth = 2.0f;
-// Reach of a cloak on the ground, matching the radius Josef tuned the test
-// emitter to when comparing it against Flame Cloak in game.
-static constexpr float kCloakRadius = 100.0f;
 // A cloak wraps the body, not the boots, so the aura is treated as riding at
 // roughly mid-chest. GroundMark then fades it exactly as it fades any other
 // source held above the snow, rather than scouring at full strength simply
@@ -350,7 +347,8 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a
 
 	float strength = 0.0f;
 	float radius = 0.0f;
-	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, kCloakRadius, strength, radius))
+	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, std::max(settings.CloakRadius, 1.0f),
+			strength, radius))
 		return;
 	if (strength < kMinSpellStrength)
 		return;

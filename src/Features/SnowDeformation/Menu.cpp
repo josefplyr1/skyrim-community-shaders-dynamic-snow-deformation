@@ -315,6 +315,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_persistence_tooltip"), "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate."));
+		ImGui::SliderFloat(T(TKEY("cloak_radius"), "Cloak Radius"), &settings.CloakRadius, 60.0f, 400.0f, "%.0f");
+		if (auto _ttCloak = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cloak_radius_tooltip"), "How far a cloak marks the ground its wearer walks over. A cloak wraps the body rather than resting on the snow, so its mark is softer than a flame played directly onto the ground - widen this if the ring reads too tight around the feet."));
 		ImGui::SliderFloat(T(TKEY("blast_radius_scale"), "Blast Radius"), &settings.BlastRadiusScale, 0.1f, 2.0f, "%.2fx");
 		if (auto _ttBlast = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar, so the default halves them."));
