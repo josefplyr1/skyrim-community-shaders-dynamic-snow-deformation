@@ -2,13 +2,28 @@
 //
 // The map is a square world-space window following the camera in whole-texel
 // steps. Each frame the previous map is re-read at a scrolled offset, snow
-// refill is applied, and this frame's actor stamps are max-blended in.
+// refill is applied, and this frame's stamps are blended in.
 // Texel value = normalized depression depth (0 = untouched, 1 = ground).
+//
+// Two stamp classes share the buffer, selected per stamp by StampEnds[i].z:
+//   CARVE (0) - a shape displaces snow. Instantaneous depth, max-blended:
+//               standing in a trench does not deepen it.
+//   MELT  (1) - a heat source removes snow while it stands there. Additive
+//               and dt-scaled, so DWELL TIME is what deepens the bowl.
+// Melt may drive a texel past 1.0 into MeltCeiling headroom. Every consumer
+// saturates, so that excess is invisible depth which must decay through the
+// refill before ground starts covering again - melted ground stays clear
+// longer than a footprint, and heat lingers after the source is gone.
 
 #define MAX_STAMPS 256
 
 // Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
+// Melt bowls hold full strength across the inner third and then rise for a
+// long way, matching the campfire basins in SnowExclusions.hlsli. Carve uses
+// the much steeper StampFalloffStart instead: a trench has walls, a melt bowl
+// has shoulders.
+#define MELT_FALLOFF_START 0.35
 // Refill multiplier at full supply and full wind; interior texels with a
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
@@ -32,8 +47,15 @@ cbuffer PerFrame : register(b0)
 	// 0-1; zero = uniform refill.
 	float2 WindBias;
 
-	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth, w: radius
-	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule segment start)
+	// Seconds this frame; melt accumulates per second, not per frame.
+	float DeltaTime;
+	// Ceiling on the accumulated value, 1.0 + headroom. Exactly 1.0 disables
+	// the headroom and melt then behaves like a saturating carve.
+	float MeltCeiling;
+	float2 perFramePad;
+
+	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
+	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 }
 
 Texture2D<float> PreviousDeformation : register(t0);
@@ -100,6 +122,11 @@ float StampNoise(float2 p)
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
+	// Carve and melt accumulate separately so the result cannot depend on the
+	// order stamps happen to sit in the buffer.
+	float carve = deformation;
+	float melt = 0.0;
+
 	for (uint i = 0; i < StampCount; i++) {
 		// Capsule stamp: distance to the segment from the actor's previous
 		// position, so trails are continuous regardless of movement speed.
@@ -121,13 +148,21 @@ float StampNoise(float2 p)
 			{
 				edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
 			}
-			// Falloff from StampFalloffStart of the radius: low values keep a
-			// wide edge band coarser consumers of the map can still represent,
-			// high values hold full depth almost to the edge.
-			float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
-			deformation = max(deformation, Stamps[i].z * falloff);
+			[branch] if (StampEnds[i].z < 0.5)
+			{
+				// Falloff from StampFalloffStart of the radius: low values keep a
+				// wide edge band coarser consumers of the map can still represent,
+				// high values hold full depth almost to the edge.
+				float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
+				carve = max(carve, Stamps[i].z * falloff);
+			}
+			else
+			{
+				float falloff = 1.0 - smoothstep(MELT_FALLOFF_START, 1.0, edgeDist);
+				melt += Stamps[i].z * StampEnds[i].w * DeltaTime * falloff;
+			}
 		}
 	}
 
-	CurrentDeformation[pixel] = deformation;
+	CurrentDeformation[pixel] = min(carve + melt, MeltCeiling);
 }

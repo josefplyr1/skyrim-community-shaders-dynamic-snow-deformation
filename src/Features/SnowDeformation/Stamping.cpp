@@ -726,6 +726,20 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	}
 	propPrevPositions = std::move(currentPropPositions);
 
+	// Debug melt emitter: a stationary heat source, so the additive stamp path
+	// and the headroom decay can be watched without any spell detection.
+	if (debugMeltEmitterActive && stampCount < kMaxStamps) {
+		float4 stamp{};
+		stamp.x = debugMeltEmitterPos.x;
+		stamp.y = debugMeltEmitterPos.y;
+		stamp.z = 1.0f;
+		stamp.w = debugMeltEmitterRadius;
+		perFrameData.Stamps[stampCount] = stamp;
+		perFrameData.StampEnds[stampCount] = { debugMeltEmitterPos.x, debugMeltEmitterPos.y,
+			kStampModeMelt, debugMeltEmitterRate };
+		stampCount++;
+	}
+
 	stampPrevPositions = std::move(currentPositions);
 	perFrameData.StampCount = stampCount;
 }

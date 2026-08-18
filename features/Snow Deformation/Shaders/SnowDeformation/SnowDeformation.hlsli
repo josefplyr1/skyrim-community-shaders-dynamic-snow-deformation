@@ -69,7 +69,9 @@ namespace SnowDeformation
 			float s01 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h1.y), 0);
 			float s11 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h1.y), 0);
 
-			deformation = (g0.y * (g0.x * s00 + g1.x * s10) + g1.y * (g0.x * s01 + g1.x * s11)) * border;
+			// Saturated before the border fade: melt writes past 1.0 into the
+			// refill headroom and only the visible 0-1 range shades.
+			deformation = saturate(g0.y * (g0.x * s00 + g1.x * s10) + g1.y * (g0.x * s01 + g1.x * s11)) * border;
 		}
 		return deformation;
 	}

@@ -329,7 +329,11 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Clamped here rather than at each call site: melt writes past 1.0 into
+	// the refill headroom, and this is the single tap every consumer goes
+	// through (bicubic, fast, and the berm field's 17 taps). The B-spline
+	// weights are a convex combination, so clamping here bounds them all.
+	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
 // B-spline bicubic sample of the deformation map, built from four bilinear

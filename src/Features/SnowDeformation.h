@@ -32,6 +32,9 @@ public:
 	// so trench detail coarsens with range.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
+	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
+	static constexpr float kStampModeCarve = 0.0f;
+	static constexpr float kStampModeMelt = 1.0f;
 
 	/** @brief Skyrim world units per meter (1 unit â‰ˆ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -225,6 +228,8 @@ public:
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
+		/** @brief Extra depth beyond full melt that a heat source may accumulate. Invisible - every consumer saturates at 1.0 - so it is a persistence budget the refill must burn off before ground starts covering again: melted ground stays clear longer than a footprint, and heat lingers after the source is gone. 0 = no headroom. */
+		float MeltHeadroom = 1.5f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
@@ -361,6 +366,12 @@ public:
 		float StampNoiseAmp;
 		/** @brief Unit wind direction (world XY, blowing toward) times wind strength 0-1; zero = uniform refill. */
 		float2 WindBias;
+
+		/** @brief Seconds this frame. Melt accumulates per second, not per frame, so the bowl a heat source digs does not depend on framerate. */
+		float DeltaTime;
+		/** @brief Ceiling on the accumulated depth, 1.0 + MeltHeadroom. Exactly 1.0 disables the headroom and melt then behaves like a saturating carve. */
+		float MeltCeiling;
+		float2 perFramePad;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1226,6 +1237,15 @@ public:
 
 	/** @brief Runtime-only diagnostic toggle; not persisted in settings JSON. */
 	bool debugTerrainOverlay = false;
+
+	/** @brief Debug melt emitter: a stationary heat source dropped from the menu at the player, exercising the additive stamp path before any spell detection exists. Runtime-only, never persisted. */
+	bool debugMeltEmitterActive = false;
+	/** @brief World position of the dropped emitter. */
+	RE::NiPoint3 debugMeltEmitterPos{};
+	/** @brief Emitter radius in world units (300 = kFireClearRadius, the campfire benchmark). */
+	float debugMeltEmitterRadius = 300.0f;
+	/** @brief Emitter accumulation rate in depth units per second at the core. */
+	float debugMeltEmitterRate = 0.35f;
 	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
 	bool debugTilingRuler = false;
 

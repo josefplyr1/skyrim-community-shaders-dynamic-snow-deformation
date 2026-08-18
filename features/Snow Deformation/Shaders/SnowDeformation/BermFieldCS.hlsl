@@ -31,6 +31,10 @@ cbuffer PerFrame : register(b0)
 	float StampFalloffStart;
 	float StampNoiseAmp;
 	float2 WindBias;
+
+	float DeltaTime;
+	float MeltCeiling;
+	float2 perFramePad;
 }
 
 // Must match kBermTaps in SnowShell.hlsl / SnowStaticsShell.hlsl.
@@ -55,7 +59,10 @@ float TapBilinear(float2 t, float2 dims)
 	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Saturated: melt writes past 1.0 into the refill headroom, and a berm
+	// averaged over raw over-melt values would throw a ridge proportional to
+	// invisible depth.
+	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
 // A tap whose window UV leaves [0,1] contributes 0, matching

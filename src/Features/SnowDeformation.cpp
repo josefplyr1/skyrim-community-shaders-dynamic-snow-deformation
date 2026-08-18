@@ -16,6 +16,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TrailIrregularity,
 	RefillRateMultiplier,
 	RefillOnlyWhenSnowing,
+	MeltHeadroom,
 	SnowClassDepths,
 	TextureDepths,
 	ObjectsSnowDepth,
@@ -411,6 +412,13 @@ void SnowDeformation::Prepass()
 	snowfallIntensity = ComputeSnowfallIntensity();
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
 	perFrameData.RefillAmount = deltaTime / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+
+	// Melt stamps accumulate per second, and may run past full depth into
+	// headroom the shells never show. That excess decays through the refill
+	// above before coverage returns, which is what keeps a melted bowl clear
+	// longer than a footprint.
+	perFrameData.DeltaTime = deltaTime;
+	perFrameData.MeltCeiling = 1.0f + std::max(settings.MeltHeadroom, 0.0f);
 
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.

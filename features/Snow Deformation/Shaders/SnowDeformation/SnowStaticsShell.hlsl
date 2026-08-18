@@ -261,7 +261,8 @@ float SampleDeformation(float2 gridLocal)
 	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Saturated: melt writes past 1.0 into the refill headroom.
+	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
 // ---- Object trench detail (berm shading, churn, crisp grain) ----
@@ -367,7 +368,8 @@ float PatchDeformBilinear(float2 t, float2 dims)
 	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
 	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Saturated: melt writes past 1.0 into the refill headroom.
+	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
 float SampleDeformationSmooth(float2 gridLocal)
