@@ -351,7 +351,9 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.CrustRoughness, 0.02f, 0.6f),
 		std::clamp(settings.CrustNormalFlatten, 0.0f, 1.0f) };
 	cbData.CrustLook = { std::clamp(settings.CrustSpecular, 0.0f, 0.5f),
-		settings.CrustTint[0], settings.CrustTint[1], settings.CrustTint[2] };
+		settings.CrustTint[0], settings.CrustTint[1],
+		std::max(settings.CrustSheen, 0.0f) };
+	cbData.CrustLook2 = { settings.CrustTint[2], 0.0f, 0.0f, 0.0f };
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);

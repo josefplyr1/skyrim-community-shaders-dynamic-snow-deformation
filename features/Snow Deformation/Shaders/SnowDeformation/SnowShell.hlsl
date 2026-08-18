@@ -168,8 +168,13 @@ cbuffer ShellCB : register(b0)
 	// snow normal map.
 	float4 SpellShading;
 
-	// x = reflectance of fully crusted snow, yzw = its colour cast.
+	// x = reflectance of fully crusted snow, yz = its colour cast (red, green),
+	// w = grazing-angle sheen strength. Blue of the cast rides SpellShading is
+	// not needed - see CrustTintBlue below.
 	float4 CrustLook;
+	// x = blue of the crust colour cast. Its own row rather than crowding
+	// CrustLook, which the sheen took.
+	float4 CrustLook2;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1499,12 +1504,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// picks up reflectance, and a colour cast is applied - all three on
 	// sliders, because how icy this should read is a matter of taste and the
 	// physically honest values were far too subtle to see.
+	// Only the colour cast belongs here. Roughness and reflectance are applied
+	// AFTER the RMAOS block below, which overwrites both from the snow material
+	// whenever a PBR set is installed - setting them here threw them away one
+	// line later, which is why smoothness and tint were the only two of four
+	// crust knobs that did anything.
 	[branch] if (crustAmount > 0.001)
-	{
-		kSnowRoughness = lerp(kSnowRoughness, SpellShading.z, crustAmount);
-		kSnowF0 = lerp(kSnowF0, CrustLook.xxx, crustAmount);
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * CrustLook.yzw, crustAmount);
-	}
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape
@@ -1518,6 +1524,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
+	}
+
+	// Crust polishes whatever the material ended up being, PBR set or not. It
+	// has to come after the block above rather than before it, or an installed
+	// RMAOS map silently discards both.
+	[branch] if (crustAmount > 0.001)
+	{
+		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
+		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
@@ -1671,6 +1686,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
 	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
+
+	// Ice reads at GRAZING angles, where a sheet catches the sky and powder
+	// does not. Snow is already near-white, so a specular lobe has almost no
+	// headroom left above it and the honest BRDF response is swallowed - this
+	// adds the one thing white snow cannot already be doing.
+	[branch] if (crustAmount > 0.001)
+	{
+		float grazing = pow(1.0 - satNdotV, 4.0);
+		directSpecular += grazing * crustAmount * CrustLook.w * sunLight;
+	}
 
 	// Placed lights (fires, lanterns): the clustered LLF list, with each
 	// shadow-casting light's own map sampled at the shell surface.

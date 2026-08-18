@@ -92,6 +92,11 @@ static constexpr float kPitScaleMax = 2.2f;
 static constexpr float kStreamPitScale = 0.65f;
 // The corridor a bolt cuts on its way in is thinner still.
 static constexpr float kTrailPitScale = 0.5f;
+// Effect area that maps to an unscaled reach for a self-centred area spell.
+// Blizzard authors 40, which is the yardstick the rest scale against.
+static constexpr float kSelfAreaReference = 40.0f;
+static constexpr float kSelfAreaScaleMin = 0.5f;
+static constexpr float kSelfAreaScaleMax = 4.0f;
 // Where a cloak's arcs land, as a fraction of its reach. How OFTEN they land
 // and how big each one is are settings, since taste decides both.
 static constexpr float kCloakStrikeInner = 0.45f;
@@ -303,15 +308,19 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	SpellElement cloakElement = SpellElement::None;
 	float cloakRate = 1.0f;
 	float cloakDuration = 0.0f;
+	float cloakRadiusScale = 1.0f;
 	for (auto* item : spell->effects) {
 		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
 		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf)
 			continue;
 
-		// A cloak declares itself by ARCHETYPE, so it needs no guessing from
-		// delivery alone - which would sweep up every standing ability an
-		// actor carries. Everything the mark needs is on this record.
-		if (base->data.archetype == RE::EffectSetting::Archetype::kCloak) {
+		// A cloak declares itself by ARCHETYPE. A self-centred AREA spell -
+		// Blizzard and its like - does not, but behaves the same way for our
+		// purposes: it sits on the caster and works the ground around them for
+		// a duration. Its authored AREA is what separates it from an ordinary
+		// self buff, which has none, so no standing ability gets swept up.
+		const bool selfArea = item->effectItem.area > 0;
+		if (base->data.archetype == RE::EffectSetting::Archetype::kCloak || selfArea) {
 			const SpellElement candidate = ClassifyElement(base);
 			if (candidate != SpellElement::None) {
 				cloakElement = candidate;
@@ -320,6 +329,10 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 				cloakDuration = item->effectItem.duration > 0 ?
 				                    static_cast<float>(item->effectItem.duration) :
 				                    kCloakDefaultDuration;
+				cloakRadiusScale = selfArea ?
+				                       std::clamp(static_cast<float>(item->effectItem.area) / kSelfAreaReference,
+										   kSelfAreaScaleMin, kSelfAreaScaleMax) :
+				                       1.0f;
 			}
 			continue;
 		}
@@ -341,6 +354,7 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 			cloak.element = cloakElement;
 			cloak.rateScale = cloakRate;
 			cloak.remaining = cloakDuration;
+			cloak.radiusScale = cloakRadiusScale;
 			std::scoped_lock lock(feature.queuedCastLock);
 			if (feature.queuedCloaks.size() < kMaxSpellEmitters)
 				feature.queuedCloaks.push_back(cloak);
@@ -389,7 +403,10 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	// Shock keeps its own reach: arcs jump clear of the body where heat wraps
 	// it, so one number for both had them fighting.
 	const bool arcs = MarkForElement(a_cloak.element) == SpellMark::Pit;
-	const float cloakReach = std::max(arcs ? settings.ShockCloakRadius : settings.CloakRadius, 1.0f);
+	const float baseReach = arcs ? settings.ShockCloakRadius :
+	                               (MarkForElement(a_cloak.element) == SpellMark::Crust ? settings.CrustRadius :
+																						  settings.CloakRadius);
+	const float cloakReach = std::max(baseReach, 1.0f) * a_cloak.radiusScale;
 	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, cloakReach, heightFade, radius))
 		return;
 	if (heightFade < kMinSpellStrength)

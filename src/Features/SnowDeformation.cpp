@@ -43,6 +43,7 @@
 	X(CrustRoughness) \
 	X(CrustNormalFlatten) \
 	X(CrustSpecular) \
+	X(CrustSheen) \
 	X(CrustTint) \
 	X(CrustBreakRadius) \
 	X(ScorchStrength) \

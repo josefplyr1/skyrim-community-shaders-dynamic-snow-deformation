@@ -388,6 +388,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("crust_roughness"), "Frost Ice Roughness"), &settings.CrustRoughness, 0.02f, 0.60f, "%.2f");
 		if (auto _ttCrustRough = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("crust_roughness_tooltip"), "Surface roughness of fully crusted snow. Loose snow sits near 0.6; lower values tighten the highlight into a glassy sheet. Needs a light source at a grazing angle to show, so judge it in sunlight rather than under cloud."));
+		ImGui::SliderFloat(T(TKEY("crust_sheen"), "Frost Ice Sheen"), &settings.CrustSheen, 0.0f, 3.0f, "%.2f");
+		if (auto _ttCrustSheen = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("crust_sheen_tooltip"), "Brightness of the glancing-angle sheen, where a frozen sheet catches the sky and powder does not. Snow is already almost white, so ordinary shine has nowhere left to go - this is the strongest ice cue after smoothness, and the one to reach for if the glaze still reads flat."));
 		ImGui::SliderFloat(T(TKEY("crust_specular"), "Frost Ice Shine"), &settings.CrustSpecular, 0.0f, 0.50f, "%.3f");
 		if (auto _ttCrustSpec = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("crust_specular_tooltip"), "How strongly crusted snow reflects. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible next to it - this is a look knob rather than a measurement, so push it until the glaze reads."));

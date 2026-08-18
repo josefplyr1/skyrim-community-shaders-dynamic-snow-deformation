@@ -262,6 +262,8 @@ public:
 		float CrustRoughness = 0.18f;
 		/** @brief How far a crust flattens the snow's own normal map. The strongest of the ice cues by a distance: powder reads as grain and ice reads as a sheet, so smoothing the surface says "frozen over" louder than reflectance or colour can. */
 		float CrustNormalFlatten = 0.80f;
+		/** @brief Brightness of the grazing-angle sheen on crusted snow. Snow is already near-white, so a specular lobe has almost no headroom above it; a sheet catching the sky at a glancing angle is the one thing powder cannot do, and this is the strongest ice cue after smoothness. */
+		float CrustSheen = 0.9f;
 		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
 		float CrustSpecular = 0.14f;
 		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
@@ -609,8 +611,10 @@ public:
 
 		/** @brief x = how dark a shock discharge burns the snow it struck, y = crust shading strength, z = crust roughness, w = how far crust flattens the snow normal map. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
 		float4 SpellShading;
-		/** @brief x = reflectance of fully crusted snow, yzw = its colour cast. Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x = reflectance of fully crusted snow, yz = red and green of its colour cast, w = grazing-angle sheen strength. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook;
+		/** @brief x = blue of the crust colour cast. Appended LAST; mirror any change in SnowShell.hlsl. */
+		float4 CrustLook2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -1552,6 +1556,8 @@ protected:
 		float strikeTimer = 0.0f;
 		/** @brief Advances per discharge so successive arcs land in different places. */
 		uint32_t strikeSeed = 0;
+		/** @brief Multiplier on the cloak reach, from the effect's authored area. A cloak names none and stays at 1; a self-centred area spell like Blizzard is far wider than one. */
+		float radiusScale = 1.0f;
 	};
 	/** @brief Queued by the sink on the game thread, drained by the gather. */
 	std::vector<CloakState> queuedCloaks;

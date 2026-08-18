@@ -1360,6 +1360,8 @@
     "feature.snow_deformation.crust_rate_tooltip": "How fast frost sets a crust, for a spell of Frostbite's strength. Like a melt this changes how quickly the glaze arrives, never how hard it ends up.",
     "feature.snow_deformation.crust_roughness": "Frost Ice Roughness",
     "feature.snow_deformation.crust_roughness_tooltip": "Surface roughness of fully crusted snow. Loose snow sits near 0.6; lower values tighten the highlight into a glassy sheet. Needs a light source at a grazing angle to show, so judge it in sunlight rather than under cloud.",
+    "feature.snow_deformation.crust_sheen": "Frost Ice Sheen",
+    "feature.snow_deformation.crust_sheen_tooltip": "Brightness of the glancing-angle sheen, where a frozen sheet catches the sky and powder does not. Snow is already almost white, so ordinary shine has nowhere left to go - this is the strongest ice cue after smoothness, and the one to reach for if the glaze still reads flat.",
     "feature.snow_deformation.crust_specular": "Frost Ice Shine",
     "feature.snow_deformation.crust_specular_tooltip": "How strongly crusted snow reflects. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible next to it - this is a look knob rather than a measurement, so push it until the glaze reads.",
     "feature.snow_deformation.crust_tint": "Frost Ice Tint",
