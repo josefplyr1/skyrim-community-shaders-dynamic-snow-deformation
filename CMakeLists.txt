@@ -640,8 +640,13 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
         VERBATIM
     )
 
-    # Only copy shaders when HLSL files change; copy individually so unchanged
-    # files do not get their timestamps updated.
+    # Only copy shaders when a copied file changes; copy individually so unchanged
+    # files do not get their timestamps updated. _shader_copy_inputs accumulates
+    # every file the copy commands below touch and is used verbatim as the DEPENDS
+    # list: the Shaders/ trees hold non-HLSL files too (notably the feature
+    # Shaders/Features/*.ini), and depending on HLSL_FILES alone left an ini-only
+    # change stranded in the source tree while the DLL's baked-in required version
+    # moved on - the feature then refused to load with a version mismatch.
     file(
         GLOB_RECURSE _package_shaders
         LIST_DIRECTORIES FALSE
@@ -650,6 +655,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
     # Exclude test files from production packages
     list(FILTER _package_shaders EXCLUDE REGEX "/Tests/")
     set(_shader_copy_cmds)
+    set(_shader_copy_inputs ${_package_shaders})
 
     set(_feature_shader_paths_file "${CMAKE_CURRENT_BINARY_DIR}/feature_shader_paths.txt")
     file(WRITE "${_feature_shader_paths_file}" "")
@@ -682,6 +688,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
                 "${_fpath}/Shaders/*"
             )
             list(FILTER _feat_shaders EXCLUDE REGEX "/Tests/")
+            list(APPEND _shader_copy_inputs ${_feat_shaders})
             append_copy_if_different(_shader_copy_cmds _feat_shaders "${_fpath}/Shaders" "${AIO_DIR}/Shaders")
         endif()
     endforeach()
@@ -693,7 +700,7 @@ if(AUTO_PLUGIN_DEPLOYMENT OR AIO_ZIP_TO_DIST)
             ${_shader_copy_cmds}
         COMMAND ${CMAKE_COMMAND} -E touch copy_shaders.stamp
         DEPENDS
-            ${HLSL_FILES}
+            ${_shader_copy_inputs}
             ${CMAKE_SOURCE_DIR}/cmake/CleanupStaleEntries.cmake
         COMMENT "Copying changed shaders into AIO/Shaders"
     )
