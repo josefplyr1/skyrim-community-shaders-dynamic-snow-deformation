@@ -7,71 +7,99 @@
 
 #include <dxgi1_4.h>
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
-	SnowDeformation::Settings,
-	EnableSnowDeformation,
-	StampRadius,
-	FootPrintScale,
-	TrenchWallSharpness,
-	TrailIrregularity,
-	RefillRateMultiplier,
-	RefillOnlyWhenSnowing,
-	MeltPersistence,
-	MeltBowlFloor,
-	MeltEdgeIrregularity,
-	EnableSpellIntegration,
-	SpellMeltRate,
-	BlastRadiusScale,
-	CloakRadius,
-	PitDepth,
-	PitRadius,
-	ScorchStrength,
-	SnowClassDepths,
-	TextureDepths,
-	ObjectsSnowDepth,
-	SnowMeshesDepth,
-	RoadMeshesDepth,
-	SnowTexturePath,
-	SnowTextureLinear,
-	TrampleZoneScale,
-	TrampleZoneHeight,
-	WallDriftHeight,
-	SnowBorderNoise,
-	SnowBorderSmoothness,
-	SnowBorderTrampledFade,
-	SnowBorderUntrampledFade,
-	SnowSnowFade,
-	SnowMoundSteepness,
-	UndulationStrength,
-	UndulationSpacing,
-	Tessellation,
-	ReliefDepth,
-	ParallaxShadowStrength,
-	SkinMergedLODAtlases,
-	ParallaxDepth,
-	ParallaxSteps,
-	TrenchFloorFade,
-	BermHeight,
-	ChurnHeight,
-	ChurnSize,
-	CrispScale,
-	CrispStrength,
-	ObjBermHeight,
-	ObjChurnHeight,
-	ObjChurnSize,
-	ObjCrispScale,
-	ObjCrispStrength,
-	RangeTrenchesM,
-	RangeSkinsM,
-	RangeSkinsFadeM,
-	RangeSkinsGeometryM,
-	SkinDistantBareness,
-	ObjectTrenches,
-	DistantSnowLineZ,
-	DistantSnowNorthDrop,
-	DistantSnowLineFade,
-	LODSnowSensitivity,
-	HorizonSnow)
+// Settings serialisation, written out rather than generated.
+//
+// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT tops out at 63 fields and
+// that ceiling was reached exactly: adding the lightning cloak knobs pushed it
+// over, and the macro failed with a hundred errors naming every field in the
+// struct rather than the one thing that was wrong. The JSON shape here is
+// identical - one flat object keyed by field name - so settings files written
+// before this change load unchanged, and there is no ceiling left to hit when
+// frost adds its own.
+#define SNOWDEF_SETTINGS_FIELDS(X) \
+	X(EnableSnowDeformation) \
+	X(StampRadius) \
+	X(FootPrintScale) \
+	X(TrenchWallSharpness) \
+	X(TrailIrregularity) \
+	X(RefillRateMultiplier) \
+	X(RefillOnlyWhenSnowing) \
+	X(MeltPersistence) \
+	X(MeltBowlFloor) \
+	X(MeltEdgeIrregularity) \
+	X(EnableSpellIntegration) \
+	X(SpellMeltRate) \
+	X(BlastRadiusScale) \
+	X(CloakRadius) \
+	X(PitDepth) \
+	X(PitRadius) \
+	X(ShockCloakRadius) \
+	X(ShockCloakInterval) \
+	X(ShockCloakStrikeScale) \
+	X(ScorchStrength) \
+	X(SnowClassDepths) \
+	X(TextureDepths) \
+	X(ObjectsSnowDepth) \
+	X(SnowMeshesDepth) \
+	X(RoadMeshesDepth) \
+	X(SnowTexturePath) \
+	X(SnowTextureLinear) \
+	X(TrampleZoneScale) \
+	X(TrampleZoneHeight) \
+	X(WallDriftHeight) \
+	X(SnowBorderNoise) \
+	X(SnowBorderSmoothness) \
+	X(SnowBorderTrampledFade) \
+	X(SnowBorderUntrampledFade) \
+	X(SnowSnowFade) \
+	X(SnowMoundSteepness) \
+	X(UndulationStrength) \
+	X(UndulationSpacing) \
+	X(Tessellation) \
+	X(ReliefDepth) \
+	X(ParallaxShadowStrength) \
+	X(SkinMergedLODAtlases) \
+	X(ParallaxDepth) \
+	X(ParallaxSteps) \
+	X(TrenchFloorFade) \
+	X(BermHeight) \
+	X(ChurnHeight) \
+	X(ChurnSize) \
+	X(CrispScale) \
+	X(CrispStrength) \
+	X(ObjBermHeight) \
+	X(ObjChurnHeight) \
+	X(ObjChurnSize) \
+	X(ObjCrispScale) \
+	X(ObjCrispStrength) \
+	X(RangeTrenchesM) \
+	X(RangeSkinsM) \
+	X(RangeSkinsFadeM) \
+	X(RangeSkinsGeometryM) \
+	X(SkinDistantBareness) \
+	X(ObjectTrenches) \
+	X(DistantSnowLineZ) \
+	X(DistantSnowNorthDrop) \
+	X(DistantSnowLineFade) \
+	X(LODSnowSensitivity) \
+	X(HorizonSnow)
+
+void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
+{
+#define X(field) j[#field] = s.field;
+	SNOWDEF_SETTINGS_FIELDS(X)
+#undef X
+}
+
+void from_json(const nlohmann::json& j, SnowDeformation::Settings& s)
+{
+	// A missing key keeps the default, matching what WITH_DEFAULT did, so a
+	// settings file written before a field existed still loads.
+	const SnowDeformation::Settings defaults{};
+#define X(field) s.field = j.value(#field, defaults.field);
+	SNOWDEF_SETTINGS_FIELDS(X)
+#undef X
+}
 
 void SnowDeformation::CreateDeformationTextures()
 {

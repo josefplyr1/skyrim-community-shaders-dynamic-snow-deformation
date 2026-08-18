@@ -240,6 +240,12 @@ public:
 		float PitDepth = 0.55f;
 		/** @brief Reach of a single discharge mark, in world units, before its arc legs. */
 		float PitRadius = 70.0f;
+		/** @brief Reach of a SHOCK cloak, kept apart from the fire one: arcs jump clear of the body where heat wraps it, so the two want different numbers. */
+		float ShockCloakRadius = 80.0f;
+		/** @brief Seconds between a shock cloak's discharges. Higher is sparser - lightning cracks now and then rather than pouring. */
+		float ShockCloakInterval = 0.30f;
+		/** @brief Size of one cloak arc against the cloak's own reach. */
+		float ShockCloakStrikeScale = 0.28f;
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
@@ -1434,6 +1440,8 @@ protected:
 		float radius = 0.0f;
 		/** @brief Pit sizing, taken from the AUTHORED blast radius before the fire-tuned blast scale touches it. */
 		float pitScale = 1.0f;
+		/** @brief How far past the last sighting a traced landing still counts as where this projectile struck. A hitscan bolt resolves at its muzzle, so its strike can be its whole range away; a travelling one moves only a frame's worth. */
+		float landingReach = 0.0f;
 		SpellElement element = SpellElement::None;
 	};
 	/** @brief Per live projectile (formID), rebuilt every frame. */

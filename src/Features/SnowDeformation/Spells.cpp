@@ -6,9 +6,12 @@
 // How far along a stream to look for the ground it lands on. A held flame is
 // a cone from the hand, and what melts is where that cone LANDS - the
 // projectile's own altitude says nothing about whether the fire reaches snow.
-// Long enough for the master beams, which out-range everything else by a wide
-// margin; a short reach left Lightning Storm marking nothing at distance.
-static constexpr float kSpellStreamReach = 2400.0f;
+// Fallback trace length for a projectile whose record names no range. The real
+// reach comes from the projectile itself: a fixed number either strands the
+// master beams short or hands Sparks a reach it never had.
+static constexpr float kSpellStreamReachDefault = 900.0f;
+static constexpr float kSpellReachMin = 200.0f;
+static constexpr float kSpellReachMax = 4000.0f;
 static constexpr int kSpellTraceSteps = 20;
 // Footprint where a stream meets the ground.
 static constexpr float kSpellContactRadius = 70.0f;
@@ -89,14 +92,13 @@ static constexpr float kPitScaleMax = 2.2f;
 static constexpr float kStreamPitScale = 0.65f;
 // The corridor a bolt cuts on its way in is thinner still.
 static constexpr float kTrailPitScale = 0.5f;
-// A shock cloak arcs in BURSTS. A steady ring every frame raised a continuous
-// ridge that grew as the wearer walked - morphing mountains into existence -
-// where the arcs should leave scattered pocks popping up behind them instead.
-static constexpr float kCloakStrikeInterval = 0.14f;
-// Where a cloak's arcs land, as a fraction of its reach, and how small each is
-// next to the cloak that threw it.
+// Where a cloak's arcs land, as a fraction of its reach. How OFTEN they land
+// and how big each one is are settings, since taste decides both.
 static constexpr float kCloakStrikeInner = 0.45f;
-static constexpr float kCloakStrikeScale = 0.32f;
+// Travel a projectile could plausibly have made since it was last seen, as a
+// slice of a second. A landing further out than this was something else
+// stopping the flight, not the ground.
+static constexpr float kBlastTravelWindow = 0.05f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
@@ -164,7 +166,7 @@ static bool GroundMark(float a_heightAbove, float a_contactRadius, float& a_stre
 // Marched rather than raycast: the land height is the surface the shell is
 // built on, so agreeing with it matters more than agreeing with collision.
 static bool TraceGroundContact(RE::TES* a_tes, const RE::NiPoint3& a_origin,
-	const RE::NiPoint3& a_direction, RE::NiPoint3& a_contact)
+	const RE::NiPoint3& a_direction, float a_reach, RE::NiPoint3& a_contact)
 {
 	auto gapAt = [&](const RE::NiPoint3& a_point) {
 		float landZ = a_point.z;
@@ -181,7 +183,7 @@ static bool TraceGroundContact(RE::TES* a_tes, const RE::NiPoint3& a_origin,
 
 	for (int step = 1; step <= kSpellTraceSteps; step++) {
 		const RE::NiPoint3 sample =
-			a_origin + a_direction * (kSpellStreamReach * static_cast<float>(step) / kSpellTraceSteps);
+			a_origin + a_direction * (a_reach * static_cast<float>(step) / kSpellTraceSteps);
 		const float gap = gapAt(sample);
 		if (gap <= 0.0f) {
 			// Linear refine across the straddling pair; a marched crossing is
@@ -383,8 +385,11 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 
 	float heightFade = 0.0f;
 	float radius = 0.0f;
-	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, std::max(settings.CloakRadius, 1.0f),
-			heightFade, radius))
+	// Shock keeps its own reach: arcs jump clear of the body where heat wraps
+	// it, so one number for both had them fighting.
+	const bool arcs = MarkForElement(a_cloak.element) == SpellMark::Pit;
+	const float cloakReach = std::max(arcs ? settings.ShockCloakRadius : settings.CloakRadius, 1.0f);
+	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, cloakReach, heightFade, radius))
 		return;
 	if (heightFade < kMinSpellStrength)
 		return;
@@ -426,7 +431,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 		a_cloak.strikeTimer -= a_deltaTime;
 		if (a_cloak.strikeTimer > 0.0f)
 			return;
-		a_cloak.strikeTimer = kCloakStrikeInterval;
+		a_cloak.strikeTimer = std::max(settings.ShockCloakInterval, 0.02f);
 
 		// Advanced per discharge, so successive arcs never stack on one spot.
 		// Hashed rather than sequential: an incrementing angle would walk
@@ -435,7 +440,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 		const float angle = static_cast<float>(seed >> 8 & 0xFFFF) / 65535.0f * 6.2831853f;
 		const float spread = kCloakStrikeInner +
 		                     (1.0f - kCloakStrikeInner) * static_cast<float>(seed >> 3 & 0xFF) / 255.0f;
-		const float reach = std::max(settings.CloakRadius, 1.0f) * spread;
+		const float reach = cloakReach * spread;
 
 		const float2 strike{ current.x + std::cos(angle) * reach, current.y + std::sin(angle) * reach };
 		emitter.position = strike;
@@ -444,7 +449,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 		emitter.radius = radius;
 		emitter.strength = strength;
 		emitter.rate = 0.0f;
-		emitter.pitScale = std::max(settings.CloakRadius, 1.0f) * kCloakStrikeScale /
+		emitter.pitScale = cloakReach * std::max(settings.ShockCloakStrikeScale, 0.05f) /
 		                   std::max(settings.PitRadius, 4.0f);
 		spellEmitters.push_back(emitter);
 		return;
@@ -617,6 +622,17 @@ void SnowDeformation::GatherSpellEmitters()
 		else if (!ShooterAim(runtime.shooter, direction))
 			direction = { 0.0f, 0.0f, -1.0f };
 
+		// How far this projectile can actually reach, off its own record. A
+		// single global number gave Sparks the range of a master beam.
+		float spellReach = kSpellStreamReachDefault;
+		bool hitscan = false;
+		if (auto* baseForm = projectile->GetBaseObject())
+			if (auto* projectileBase = baseForm->As<RE::BGSProjectile>()) {
+				if (projectileBase->data.range > 1.0f)
+					spellReach = std::clamp(projectileBase->data.range, kSpellReachMin, kSpellReachMax);
+			}
+		hitscan = runtime.flags.any(RE::Projectile::Flags::kHitScan);
+
 		// Remember what this projectile would leave if it went off here, for
 		// EVERY projectile - this must sit above the concentration gate below,
 		// because the things that detonate are precisely the ones that gate
@@ -639,6 +655,12 @@ void SnowDeformation::GatherSpellEmitters()
 				                           kImpactRadiusDefault;
 				PendingBlast pending{};
 				pending.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
+				// A hitscan bolt resolves where it was fired, so the only
+				// sighting we ever get is the muzzle and its strike may be its
+				// whole range away. Bounding that by a frame of travel put the
+				// mark at the caster's feet instead of on the target.
+				pending.landingReach = hitscan ? spellReach :
+				                                 std::max(kSpellReachMin, speed * kBlastTravelWindow);
 				pending.position = position;
 				pending.direction = direction;
 				pending.heightAboveLand = position.z - blastGroundZ;
@@ -705,7 +727,7 @@ void SnowDeformation::GatherSpellEmitters()
 		float radius = 0.0f;
 
 		RE::NiPoint3 contact{};
-		if (TraceGroundContact(tes, position, direction, contact)) {
+		if (TraceGroundContact(tes, position, direction, spellReach, contact)) {
 			spellStats.groundContacts++;
 			markPosition = contact;
 			strength = 1.0f;
@@ -776,8 +798,9 @@ void SnowDeformation::GatherSpellEmitters()
 		float radius = 0.0f;
 
 		RE::NiPoint3 landing{};
-		const bool landed = TraceGroundContact(tes, blast.position, blast.direction, landing) &&
-		                    blast.position.GetDistance(landing) <= kBlastLandingReach;
+		const float reach = std::max(blast.landingReach, kBlastLandingReach);
+		const bool landed = TraceGroundContact(tes, blast.position, blast.direction, reach, landing) &&
+		                    blast.position.GetDistance(landing) <= reach;
 		if (landed) {
 			markPosition = { landing.x, landing.y };
 			strength = 1.0f;
