@@ -45,6 +45,11 @@ static constexpr float kMinSpellStrength = 0.04f;
 // A velocity shorter than this carries no usable direction, so the aim comes
 // off the caster instead.
 static constexpr float kMinSpellSpeed = 1.0f;
+// How near the last sighting a traced landing has to be to count as where the
+// bolt actually struck. Further than this and the flight was stopped by
+// something else - an actor, a wall - so the ground below only gets the weaker
+// radiant mark rather than a full crater directly beneath the burst.
+static constexpr float kBlastLandingReach = 220.0f;
 
 SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectSetting* a_effect)
 {
@@ -363,37 +368,12 @@ void SnowDeformation::GatherSpellEmitters()
 		const SpellElement element = ClassifyElement(effect);
 		if (element == SpellElement::None)
 			continue;
-		// Concentration only: a held stream is the case the additive melt path
-		// exists for. Aimed one-shots arrive with the explosion detector,
-		// which is where their impact actually lives.
-		if (effect->data.castingType != RE::MagicSystem::CastingType::kConcentration)
-			continue;
-		spellStats.streams++;
 
 		const RE::NiPoint3 position = projectile->GetPosition();
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
 			continue;
 
-		// Remember what this projectile would leave if it went off here. The
-		// element comes off its own effect, so a detonation needs neither the
-		// explosion reference nor the explosion-to-element table.
-		{
-			const RE::BGSExplosion* blast = runtime.explosion ? runtime.explosion : effect->data.explosion;
-			if (blast) {
-				float blastGroundZ = position.z;
-				tes->GetLandHeight(position, blastGroundZ);
-				PendingBlast pending{};
-				pending.position = { position.x, position.y };
-				pending.heightAboveLand = position.z - blastGroundZ;
-				pending.radius = std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
-				pending.element = element;
-				projectileBlasts[projectile->formID] = pending;
-			}
-		}
-
-		// Where the stream lands. A flame held at hand height still melts what
-		// it is pointed at, so the mark belongs at the ground contact, not
-		// under the projectile.
+		// Heading, shared by the stream trace and the blast below.
 		RE::NiPoint3 direction = runtime.velocity;
 		const float speed = direction.Length();
 		if (speed > kMinSpellSpeed)
@@ -401,6 +381,35 @@ void SnowDeformation::GatherSpellEmitters()
 		else if (!ShooterAim(runtime.shooter, direction))
 			direction = { 0.0f, 0.0f, -1.0f };
 
+		// Remember what this projectile would leave if it went off here, for
+		// EVERY projectile - this must sit above the concentration gate below,
+		// because the things that detonate are precisely the ones that gate
+		// rejects. The element comes off its own effect, so a blast needs
+		// neither the explosion reference nor the explosion-to-element table.
+		{
+			const RE::BGSExplosion* blast = runtime.explosion ? runtime.explosion : effect->data.explosion;
+			if (blast) {
+				float blastGroundZ = position.z;
+				tes->GetLandHeight(position, blastGroundZ);
+				PendingBlast pending{};
+				pending.position = position;
+				pending.direction = direction;
+				pending.heightAboveLand = position.z - blastGroundZ;
+				pending.radius = std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
+				pending.element = element;
+				projectileBlasts[projectile->formID] = pending;
+			}
+		}
+
+		// Concentration only from here: a held stream is what the sweeping
+		// contact trace below is for. Everything else marks by detonating.
+		if (effect->data.castingType != RE::MagicSystem::CastingType::kConcentration)
+			continue;
+		spellStats.streams++;
+
+		// Where the stream lands. A flame held at hand height still melts what
+		// it is pointed at, so the mark belongs at the ground contact, not
+		// under the projectile.
 		RE::NiPoint3 markPosition{};
 		float strength = 0.0f;
 		float radius = 0.0f;
@@ -465,12 +474,28 @@ void SnowDeformation::GatherSpellEmitters()
 
 		if (blast.element == SpellElement::None)
 			continue;
+
+		// A bolt dies between frames, so the last sighting sits short of the
+		// impact - the faster it flew, the shorter. Carrying the flight on to
+		// the ground puts the crater where it struck instead of where it was
+		// last drawn, which is the same reason a fire stream marks its contact
+		// rather than its emitter.
+		float2 markPosition = { blast.position.x, blast.position.y };
 		float strength = 0.0f;
 		float radius = 0.0f;
-		// The same rule everything else obeys: a bolt bursting against a chest
-		// marks weakly and broadly below it, not sharply at that height.
-		if (!GroundMark(blast.heightAboveLand, blast.radius, strength, radius))
+
+		RE::NiPoint3 landing{};
+		const bool landed = TraceGroundContact(tes, blast.position, blast.direction, landing) &&
+		                    blast.position.GetDistance(landing) <= kBlastLandingReach;
+		if (landed) {
+			markPosition = { landing.x, landing.y };
+			strength = 1.0f;
+			radius = blast.radius;
+		} else if (!GroundMark(blast.heightAboveLand, blast.radius, strength, radius)) {
+			// Stopped by an actor or a wall well above the snow: the ground
+			// below takes the weaker, broader mark rather than a full crater.
 			continue;
+		}
 		if (strength < kMinSpellStrength)
 			continue;
 		spellStats.detonations++;
@@ -481,8 +506,8 @@ void SnowDeformation::GatherSpellEmitters()
 		spellStats.lastRadius = radius;
 
 		SpellEmitter emitter{};
-		emitter.position = blast.position;
-		emitter.previous = blast.position;
+		emitter.position = markPosition;
+		emitter.previous = markPosition;
 		emitter.radius = radius;
 		emitter.strength = strength;
 		// A detonation is over inside a frame, so its mark arrives whole.

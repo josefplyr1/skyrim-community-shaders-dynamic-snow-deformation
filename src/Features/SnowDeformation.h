@@ -1426,7 +1426,10 @@ protected:
 	 */
 	struct PendingBlast
 	{
-		float2 position{};
+		/** @brief Last seen position, in full. A fast bolt dies between frames, so this sits short of where it actually struck. */
+		RE::NiPoint3 position{};
+		/** @brief Unit heading on that frame, used to find where the flight would have ended. */
+		RE::NiPoint3 direction{};
 		float heightAboveLand = 0.0f;
 		float radius = 0.0f;
 		SpellElement element = SpellElement::None;
