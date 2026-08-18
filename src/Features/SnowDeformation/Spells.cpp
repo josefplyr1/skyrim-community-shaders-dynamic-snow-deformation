@@ -6,8 +6,10 @@
 // How far along a stream to look for the ground it lands on. A held flame is
 // a cone from the hand, and what melts is where that cone LANDS - the
 // projectile's own altitude says nothing about whether the fire reaches snow.
-static constexpr float kSpellStreamReach = 700.0f;
-static constexpr int kSpellTraceSteps = 12;
+// Long enough for the master beams, which out-range everything else by a wide
+// margin; a short reach left Lightning Storm marking nothing at distance.
+static constexpr float kSpellStreamReach = 2400.0f;
+static constexpr int kSpellTraceSteps = 20;
 // Footprint where a stream meets the ground.
 static constexpr float kSpellContactRadius = 70.0f;
 // A source within this of the ground is resting on it and marks at full
@@ -74,6 +76,27 @@ static constexpr float kMinTrailDepth = 2.0f;
 static constexpr float kCloakCentreHeight = 70.0f;
 // Fallback lifetime for a cloak whose effect declares no duration.
 static constexpr float kCloakDefaultDuration = 60.0f;
+// Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
+// ignores the blast radius SCALE, which is tuned for how wide FIRE should
+// scar; a discharge answers to its own setting, and the authored size only
+// says how much bigger than a bolt it forks. With the blast scale at a third,
+// a rune was forking narrower than Sparks, which is backwards.
+static constexpr float kPitReferenceRadius = 90.0f;
+static constexpr float kPitScaleMin = 0.8f;
+static constexpr float kPitScaleMax = 2.2f;
+// A held stream pits tighter than a strike: a continuous arc onto one spot
+// rather than a discharge dumping into the ground.
+static constexpr float kStreamPitScale = 0.65f;
+// The corridor a bolt cuts on its way in is thinner still.
+static constexpr float kTrailPitScale = 0.5f;
+// A shock cloak arcs in BURSTS. A steady ring every frame raised a continuous
+// ridge that grew as the wearer walked - morphing mountains into existence -
+// where the arcs should leave scattered pocks popping up behind them instead.
+static constexpr float kCloakStrikeInterval = 0.14f;
+// Where a cloak's arcs land, as a fraction of its reach, and how small each is
+// next to the cloak that threw it.
+static constexpr float kCloakStrikeInner = 0.45f;
+static constexpr float kCloakStrikeScale = 0.32f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
@@ -253,6 +276,7 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest) * heightFade;
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
+	emitter.pitScale = std::clamp(baseRadius / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
 	spellEmitters.push_back(emitter);
 }
 
@@ -345,7 +369,7 @@ void SnowDeformation::RegisterSpellCastSink()
 	}
 }
 
-void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a_cloak)
+void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak, float a_deltaTime)
 {
 	if (spellEmitters.size() >= kMaxSpellEmitters || !a_actor)
 		return;
@@ -389,18 +413,48 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a
 	spellStats.lastRadius = radius;
 
 	SpellEmitter emitter{};
+	emitter.element = a_cloak.element;
+	emitter.mark = MarkForElement(a_cloak.element);
+
+	if (emitter.mark == SpellMark::Pit) {
+		// A shock cloak does not glow a steady ring; it ARCS, in bursts, to
+		// somewhere different each time. Marking a full ring every frame
+		// raised one continuous ridge that grew as the wearer walked, which
+		// read as ground morphing into hills rather than as lightning
+		// striking. So each cloak fires its own small discharges on a timer,
+		// scattered around its reach.
+		a_cloak.strikeTimer -= a_deltaTime;
+		if (a_cloak.strikeTimer > 0.0f)
+			return;
+		a_cloak.strikeTimer = kCloakStrikeInterval;
+
+		// Advanced per discharge, so successive arcs never stack on one spot.
+		// Hashed rather than sequential: an incrementing angle would walk
+		// steadily around the wearer like a clock hand.
+		const uint32_t seed = ++a_cloak.strikeSeed * 2654435761u;
+		const float angle = static_cast<float>(seed >> 8 & 0xFFFF) / 65535.0f * 6.2831853f;
+		const float spread = kCloakStrikeInner +
+		                     (1.0f - kCloakStrikeInner) * static_cast<float>(seed >> 3 & 0xFF) / 255.0f;
+		const float reach = std::max(settings.CloakRadius, 1.0f) * spread;
+
+		const float2 strike{ current.x + std::cos(angle) * reach, current.y + std::sin(angle) * reach };
+		emitter.position = strike;
+		// A discharge lands, it does not sweep - no capsule from the last one.
+		emitter.previous = strike;
+		emitter.radius = radius;
+		emitter.strength = strength;
+		emitter.rate = 0.0f;
+		emitter.pitScale = std::max(settings.CloakRadius, 1.0f) * kCloakStrikeScale /
+		                   std::max(settings.PitRadius, 4.0f);
+		spellEmitters.push_back(emitter);
+		return;
+	}
+
 	emitter.position = current;
 	emitter.previous = previous;
 	emitter.radius = radius;
 	emitter.strength = strength;
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale * heightFade;
-	emitter.element = a_cloak.element;
-	emitter.mark = MarkForElement(a_cloak.element);
-	// A shock cloak arcs off the body outward, so it pocks a RING at its reach
-	// rather than a bowl under the wearer, and its pocks are sized by the
-	// cloak rather than by a strike.
-	emitter.pitScale = std::max(settings.CloakRadius, 1.0f) / std::max(settings.PitRadius, 4.0f);
-	emitter.ringFraction = 0.72f;
 	spellEmitters.push_back(emitter);
 }
 
@@ -471,7 +525,7 @@ void SnowDeformation::GatherSpellEmitters()
 				continue;
 			}
 			if (cameraPosition.GetSquaredDistance(actor->GetPosition()) <= cullRadius * cullRadius)
-				ConsiderActorAuras(actor.get(), it->second);
+				ConsiderActorAuras(actor.get(), it->second, cloakDelta);
 			++it;
 		}
 	}
@@ -584,6 +638,7 @@ void SnowDeformation::GatherSpellEmitters()
 				                           std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax) :
 				                           kImpactRadiusDefault;
 				PendingBlast pending{};
+				pending.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
 				pending.position = position;
 				pending.direction = direction;
 				pending.heightAboveLand = position.z - blastGroundZ;
@@ -629,6 +684,7 @@ void SnowDeformation::GatherSpellEmitters()
 					emitter.rate = kTrailRate;
 					emitter.element = element;
 					emitter.mark = MarkForElement(element);
+					emitter.pitScale = kTrailPitScale;
 					spellEmitters.push_back(emitter);
 					spellStats.trails++;
 				}
@@ -692,6 +748,7 @@ void SnowDeformation::GatherSpellEmitters()
 		emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
 		emitter.element = element;
 		emitter.mark = MarkForElement(element);
+		emitter.pitScale = kStreamPitScale;
 		spellEmitters.push_back(emitter);
 	}
 
@@ -741,10 +798,8 @@ void SnowDeformation::GatherSpellEmitters()
 
 		ActiveBlast opened{};
 		opened.position = markPosition;
-		// A pit is sized by its own setting, not by a blast radius authored for
-		// damage - but a bigger blast should still fork wider, so the authored
-		// size scales the discharge rather than replacing it.
-		opened.pitScale = std::clamp(radius / 160.0f, 0.5f, 3.0f);
+		// Carried from the AUTHORED radius rather than the fire-scaled one.
+		opened.pitScale = blast.pitScale;
 		opened.radius = radius;
 		opened.strength = strength;
 		opened.rate = kExplosionRate;

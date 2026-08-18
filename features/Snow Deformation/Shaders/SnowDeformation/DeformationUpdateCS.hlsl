@@ -53,9 +53,12 @@
 #define PIT_LOBE_MIN 0.45
 #define PIT_LOBE_MAX 1.15
 #define PIT_LOBE_WIDTH 0.16
-// Cell size of the noise that breaks a pit into discrete pocks rather than a
-// continuous scar. Small: pocking is the point.
-#define PIT_POCK_CELL 14.0
+// The pock mask cuts a pit into fragments. Its cell is a FRACTION of the pit
+// rather than a fixed size: at a fixed size a small strike spans barely two
+// cells and the mask can erase the whole mark, which is exactly how a bolt
+// ends up not marking at all most of the time it lands.
+#define PIT_POCK_CELLS_ACROSS 4.5
+#define PIT_POCK_CELL_MIN 6.0
 // Refill multiplier at full supply and full wind; interior texels with a
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
@@ -259,8 +262,11 @@ float StampNoise(float2 p)
 
 				// Pocked, not scored: the mask cuts the shape into fragments so
 				// a strike reads as snow blasted apart rather than a drawn star.
-				float pock = StampNoise(worldPos / PIT_POCK_CELL);
-				shape *= smoothstep(0.35, 0.62, pock);
+				float pockCell = max(radius / PIT_POCK_CELLS_ACROSS, PIT_POCK_CELL_MIN);
+				float pock = StampNoise(worldPos / pockCell);
+				// Floored well below 1 so the mask always leaves something: a
+				// strike that lands must mark, even where the pocking thins.
+				shape *= max(smoothstep(0.30, 0.62, pock), 0.45);
 
 				// CARVE's model, not melt's: the throw is instantaneous, so it
 				// is max-blended to an instant depth. Accumulating instead

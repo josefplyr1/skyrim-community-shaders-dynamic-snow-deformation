@@ -1432,6 +1432,8 @@ protected:
 		RE::NiPoint3 direction{};
 		float heightAboveLand = 0.0f;
 		float radius = 0.0f;
+		/** @brief Pit sizing, taken from the AUTHORED blast radius before the fire-tuned blast scale touches it. */
+		float pitScale = 1.0f;
 		SpellElement element = SpellElement::None;
 	};
 	/** @brief Per live projectile (formID), rebuilt every frame. */
@@ -1508,6 +1510,10 @@ protected:
 		SpellElement element = SpellElement::None;
 		float rateScale = 1.0f;
 		float remaining = 0.0f;
+		/** @brief Seconds until this cloak's next discharge. A shock cloak arcs in bursts rather than glowing a steady ring. */
+		float strikeTimer = 0.0f;
+		/** @brief Advances per discharge so successive arcs land in different places. */
+		uint32_t strikeSeed = 0;
 	};
 	/** @brief Queued by the sink on the game thread, drained by the gather. */
 	std::vector<CloakState> queuedCloaks;
@@ -1523,7 +1529,7 @@ protected:
 	 * Reads the actor's POSITION and nothing else - the same read every stamp
 	 * in this feature already performs each frame.
 	 */
-	void ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a_cloak);
+	void ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak, float a_deltaTime);
 
 	std::mutex queuedCastLock;
 
