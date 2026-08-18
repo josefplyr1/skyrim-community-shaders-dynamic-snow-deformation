@@ -1455,6 +1455,10 @@ protected:
 		uint detonations = 0;
 		/** @brief Projectiles currently carrying a blast, waiting to die. A spell that never appears here was never recorded; one that sits here and never fires is being rejected at detonation. */
 		uint armed = 0;
+		/** @brief Projectiles whose effects name no element this feature knows. */
+		uint rejectedElement = 0;
+		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */
+		uint rejectedNoBlast = 0;
 		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
 		uint groundContacts = 0;
 		uint emitters = 0;

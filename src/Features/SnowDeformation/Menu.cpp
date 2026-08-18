@@ -348,6 +348,8 @@ void SnowDeformation::DrawSettings()
 			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.groundContacts);
 		ImGui::Text("blasts: armed %u | from detonations %u | from refs %u",
 			spellStats.armed, spellStats.detonations, spellStats.explosions);
+		ImGui::Text("rejected: no element %u | no blast form %u",
+			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
 

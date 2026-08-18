@@ -364,19 +364,47 @@ void SnowDeformation::GatherSpellEmitters()
 
 		auto& runtime = projectile->GetProjectileRuntimeData();
 
-		// The projectile carries its own effect, so element, delivery and
-		// casting type all come without walking the spell's effect list.
+		// The projectile usually carries its own effect, which answers element,
+		// delivery and casting type on its own.
 		const RE::EffectSetting* effect = runtime.avEffect;
 		const RE::Effect* costliest = runtime.spell ? runtime.spell->GetCostliestEffectItem() : nullptr;
 		if (!effect && costliest)
 			effect = costliest->baseEffect;
+		SpellElement element = ClassifyElement(effect);
+
+		// When it does not, walk the spell's whole effect list rather than
+		// trusting the costliest one. A spell that carries several effects
+		// need not have the elemental one rated costliest, and the effect that
+		// names the element is not always the one that names the explosion, so
+		// both are searched independently.
+		const RE::BGSExplosion* blast = runtime.explosion;
+		if (effect && effect->data.explosion && !blast)
+			blast = effect->data.explosion;
+		if ((element == SpellElement::None || !blast) && runtime.spell) {
+			for (auto* item : runtime.spell->effects) {
+				const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+				if (!base)
+					continue;
+				if (element == SpellElement::None) {
+					const SpellElement candidate = ClassifyElement(base);
+					if (candidate != SpellElement::None) {
+						element = candidate;
+						if (!effect)
+							effect = base;
+					}
+				}
+				if (!blast && base->data.explosion)
+					blast = base->data.explosion;
+			}
+		}
 		if (!effect)
 			continue;
 		spellStats.projectiles++;
 
-		const SpellElement element = ClassifyElement(effect);
-		if (element == SpellElement::None)
+		if (element == SpellElement::None) {
+			spellStats.rejectedElement++;
 			continue;
+		}
 
 		const RE::NiPoint3 position = projectile->GetPosition();
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
@@ -396,7 +424,8 @@ void SnowDeformation::GatherSpellEmitters()
 		// rejects. The element comes off its own effect, so a blast needs
 		// neither the explosion reference nor the explosion-to-element table.
 		{
-			const RE::BGSExplosion* blast = runtime.explosion ? runtime.explosion : effect->data.explosion;
+			if (!blast)
+				spellStats.rejectedNoBlast++;
 			if (blast) {
 				float blastGroundZ = position.z;
 				tes->GetLandHeight(position, blastGroundZ);
