@@ -267,7 +267,7 @@ public:
 		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
 		float CrustSpecular = 0.250f;
 		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
-		std::array<float, 3> CrustTint = { 0.392f, 0.784f, 1.000f };
+		std::array<float, 3> CrustTint = { 0.588f, 0.863f, 1.000f };
 		/** @brief Minutes a crust takes to thaw on its own, with no snowfall at all. Ice answers to temperature rather than to weather, so this runs even under a clear sky where the refill has stopped. */
 		float CrustThawMinutes = 4.0f;
 		/** @brief How completely carving through a crust destroys it, against how deep the cut went. At 1 a shallow print barely dulls the glaze; higher values let any cut break the skin properly, which is what stops a trench through ice reading as a groove in ice cream. */

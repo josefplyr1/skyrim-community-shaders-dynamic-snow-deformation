@@ -1357,7 +1357,7 @@
     "feature.snow_deformation.crust_print_depth": "Frost Print Depth",
     "feature.snow_deformation.crust_print_depth_tooltip": "How deep tracks still cut into fully crusted snow, against loose snow. Deliberately not zero: actors walk on the ground while the snow layer sits above them, so a crust nothing can mark buries feet inside what looks like solid ice.",
     "feature.snow_deformation.crust_radius": "Frost Crust Radius",
-    "feature.snow_deformation.crust_radius_tooltip": "How far a frost source glazes the ground around it.",
+    "feature.snow_deformation.crust_radius_tooltip": "Reach of a frost source that states none of its own - a cloak, or a held stream. A spell that authors its own area, like Blizzard, uses that instead and ignores this.",
     "feature.snow_deformation.crust_rate": "Frost Crust Rate",
     "feature.snow_deformation.crust_rate_tooltip": "How fast frost sets a crust, for a spell of Frostbite's strength. Like a melt this changes how quickly the glaze arrives, never how hard it ends up.",
     "feature.snow_deformation.crust_roughness": "Frost Ice Roughness",

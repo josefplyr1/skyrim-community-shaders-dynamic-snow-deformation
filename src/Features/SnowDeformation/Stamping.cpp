@@ -772,8 +772,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// its strength is the depth itself scaled by how much of the discharge
 		// reached the ground.
 		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) : emitter.strength;
+		// Crust uses the emitter's OWN reach, like every other mark. Forcing
+		// the crust radius here instead threw away whatever the source had
+		// worked out for itself - which is why Blizzard glazed 90 units after
+		// its record had said 840. The setting still governs the sources that
+		// have no reach of their own to state; a frost cloak takes it as its
+		// base reach before it ever becomes an emitter.
 		stamp.w = pits ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
-		                 (glazes ? std::max(settings.CrustRadius, 4.0f) : emitter.radius);
+		                 std::max(emitter.radius, 4.0f);
 		perFrameData.Stamps[stampCount] = stamp;
 		// Pits carry their ring fraction where a melt carries its rate: an
 		// instantaneous mark has no rate to give, and a cloak needs to say it
