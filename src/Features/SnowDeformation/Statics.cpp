@@ -73,6 +73,26 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 // whether the containment rule separates Windhelm's sheets from distant
 // scenery. Logs a handful of distinct outcomes, then goes quiet; this sits on
 // the per-geometry render path and must not become per-frame spam.
+// Samples the DIFFUSE path of LOD geometry the material gate drops, deduped by
+// path. DynDOLOD emits separate snow-projected and plain LOD batches, so a
+// PLAIN batch failing the gate is correct (it never wore projected snow in
+// vanilla either) while a SNOW-textured one failing is a bug - and only the
+// path tells the two apart. Same single-threaded assumption as
+// driftMaterialCache below.
+static void SampleMaterialReject(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
+{
+	static std::unordered_set<std::string> seen;
+	if (seen.size() >= 12)
+		return;
+	auto* textureSet = a_material ? a_material->textureSet.get() : nullptr;
+	const char* path = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+	if (!seen.insert(path ? path : "<no diffuse>").second)
+		return;
+	logger::info("[SNOW DEFORMATION] LOD dropped by material gate: '{}' ({})",
+		path ? path : "<no diffuse>",
+		a_geometry->name.empty() ? "<unnamed>" : a_geometry->name.c_str());
+}
+
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
 {
 	static std::atomic<uint32_t> logged{ 0 };
@@ -156,10 +176,24 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		if (!material)
 			return;
 
-		static std::unordered_map<const void*, bool> driftMaterialCache;
+		// Object LOD only. Terrain LOD (kLODLandscape) belongs to the shell and
+		// the horizon recolor, never to object snow.
+		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+
+		// Two independent path facts, cached per material: the base match, and
+		// the natural-feature match that only LOD is allowed to use. Caching
+		// the ACCEPT decision instead would be wrong - the same material can
+		// in principle reach here as both LOD and non-LOD, and the LOD path
+		// accepts more.
+		struct SnowPathMatch
+		{
+			bool base = false;
+			bool naturalFeature = false;
+		};
+		static std::unordered_map<const void*, SnowPathMatch> driftMaterialCache;
 		if (driftMaterialCache.size() > 4096)
 			driftMaterialCache.clear();
-		auto [it, inserted] = driftMaterialCache.try_emplace(material, false);
+		auto [it, inserted] = driftMaterialCache.try_emplace(material, SnowPathMatch{});
 		if (inserted) {
 			if (auto textureSet = material->textureSet.get()) {
 				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
@@ -169,13 +203,26 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					// Drifts wear plain LANDSCAPE snow textures (no "drift" in
 					// the path); requiring the landscape folder keeps frosted
 					// plants (plant/tree folders) out.
-					it->second = lowered.find("drift") != std::string::npos ||
-					             (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
+					it->second.base = lowered.find("drift") != std::string::npos ||
+					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
+					// LOD loses the kSnow/kProjectedUV flags its full mesh
+					// carries, so a glacier keeps its snow up close and drops it
+					// at range. The full mesh's own texture name is the only
+					// classification left, and these two families are the ones
+					// that wear projected snow as terrain-scale features.
+					// "ice" is deliberately NOT matched: three letters that hit
+					// lattice/office/service by accident, and "glacier" already
+					// covers the ice family we actually saw dropped.
+					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
+					                            lowered.find("mountain") != std::string::npos;
 				}
 			}
 		}
-		if (!it->second)
+		if (!(it->second.base || (isObjectLOD && it->second.naturalFeature))) {
+			if (isObjectLOD)
+				SampleMaterialReject(a_pass->geometry, material);
 			return;
+		}
 	}
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
