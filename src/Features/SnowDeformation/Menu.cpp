@@ -346,8 +346,8 @@ void SnowDeformation::DrawSettings()
 		// Diagnostics use plain text by existing convention (no i18n).
 		ImGui::Text("projectiles %u | streams %u | hazards %u | ground hits %u",
 			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.groundContacts);
-		ImGui::Text("blasts: from refs %u | from detonations %u",
-			spellStats.explosions, spellStats.detonations);
+		ImGui::Text("blasts: armed %u | from detonations %u | from refs %u",
+			spellStats.armed, spellStats.detonations, spellStats.explosions);
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
 

@@ -27,10 +27,10 @@ static constexpr float kHazardRadiusMax = 260.0f;
 // absurd radius would otherwise melt half the deformation window at once.
 static constexpr float kExplosionRadiusMin = 50.0f;
 static constexpr float kExplosionRadiusMax = 320.0f;
-// A detonation is over before the next frame, so its mark arrives whole rather
-// than growing into place. Any rate past a few hundred reaches the target
-// within one frame; the value is deliberately far past that.
-static constexpr float kExplosionRate = 1000.0f;
+// A detonation reaches its basin in about a quarter second: fast enough to
+// read as a blast rather than a melt, slow enough that the snow visibly gives
+// way instead of the crater simply existing on the next frame.
+static constexpr float kExplosionRate = 4.0f;
 // Effect magnitude mapping to the unscaled rate (vanilla Flames is 8/sec), and
 // the clamp either side of it. Modded spells run to absurd magnitudes; the
 // ceiling stops one of them melting a crater in a frame.
@@ -324,28 +324,37 @@ void SnowDeformation::GatherSpellEmitters()
 	std::vector<RE::NiPointer<RE::Projectile>> live;
 	{
 		RE::BSSpinLockGuard lock(manager->projectileLock);
-		live.reserve(manager->limited.size() + manager->unlimited.size());
-		for (auto& handle : manager->limited)
-			if (auto projectile = handle.get())
-				live.push_back(projectile);
-		for (auto& handle : manager->unlimited)
-			if (auto projectile = handle.get())
-				live.push_back(projectile);
+		live.reserve(manager->limited.size() + manager->unlimited.size() + manager->pending.size());
+		// All three lists. A projectile can sit in pending before the manager
+		// promotes it, and one missed on the frame it is recorded looks exactly
+		// like one that detonated.
+		for (auto* list : { &manager->limited, &manager->unlimited, &manager->pending })
+			for (auto& handle : *list)
+				if (auto projectile = handle.get())
+					live.push_back(projectile);
 	}
 
 	const RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
 
-	// Every projectile still in the manager, recorded before any culling or
+	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
 	// projectile that merely flew out of the window is still in here, so
 	// leaving is never mistaken for detonating.
+	//
+	// A projectile already flagged destroyed is treated as gone even while the
+	// manager still lists it: waiting for it to leave would strand its blast
+	// forever if the game keeps spent projectiles around.
 	std::unordered_set<uint32_t> stillAlive;
 	stillAlive.reserve(live.size());
-	for (auto& projectile : live)
-		if (projectile)
-			stillAlive.insert(projectile->formID);
+	for (auto& projectile : live) {
+		if (!projectile)
+			continue;
+		if (projectile->GetProjectileRuntimeData().flags.any(RE::Projectile::Flags::kDestroyed))
+			continue;
+		stillAlive.insert(projectile->formID);
+	}
 
 	for (auto& projectile : live) {
 		if (spellEmitters.size() >= kMaxSpellEmitters)
@@ -519,4 +528,5 @@ void SnowDeformation::GatherSpellEmitters()
 
 	spellPrevPositions = std::move(currentPositions);
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
+	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }
