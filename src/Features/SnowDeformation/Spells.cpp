@@ -67,6 +67,16 @@ static constexpr float kTrailRadius = 35.0f;
 static constexpr float kTrailRate = 100.0f;
 // Snow shallower than this has no column worth cutting through.
 static constexpr float kMinTrailDepth = 2.0f;
+// Reach of a cloak on the ground, matching the radius Josef tuned the test
+// emitter to when comparing it against Flame Cloak in game.
+static constexpr float kCloakRadius = 100.0f;
+// A cloak wraps the body, not the boots, so the aura is treated as riding at
+// roughly mid-chest. GroundMark then fades it exactly as it fades any other
+// source held above the snow, rather than scouring at full strength simply
+// because an actor's position sits at their feet.
+static constexpr float kCloakCentreHeight = 70.0f;
+// Fallback lifetime for a cloak whose effect declares no duration.
+static constexpr float kCloakDefaultDuration = 60.0f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
@@ -254,10 +264,30 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	// a second crater under the caster's own feet every time they threw one.
 	SpellElement element = SpellElement::None;
 	const RE::BGSExplosion* blast = nullptr;
+	SpellElement cloakElement = SpellElement::None;
+	float cloakRate = 1.0f;
+	float cloakDuration = 0.0f;
 	for (auto* item : spell->effects) {
 		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
 		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf)
 			continue;
+
+		// A cloak declares itself by ARCHETYPE, so it needs no guessing from
+		// delivery alone - which would sweep up every standing ability an
+		// actor carries. Everything the mark needs is on this record.
+		if (base->data.archetype == RE::EffectSetting::Archetype::kCloak) {
+			const SpellElement candidate = ClassifyElement(base);
+			if (candidate != SpellElement::None) {
+				cloakElement = candidate;
+				cloakRate = std::clamp(item->effectItem.magnitude / kSpellReferenceMagnitude,
+					kSpellMagnitudeMin, kSpellMagnitudeMax);
+				cloakDuration = item->effectItem.duration > 0 ?
+				                    static_cast<float>(item->effectItem.duration) :
+				                    kCloakDefaultDuration;
+			}
+			continue;
+		}
+
 		if (element == SpellElement::None)
 			element = ClassifyElement(base);
 		// The LARGEST explosion on the spell, not the first. A spell can carry
@@ -268,6 +298,19 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 			(!blast || base->data.explosion->data.radius > blast->data.radius))
 			blast = base->data.explosion;
 	}
+	if (cloakElement != SpellElement::None) {
+		if (auto* actor = a_event->object->As<RE::Actor>()) {
+			CloakState cloak{};
+			cloak.actor = actor->GetHandle();
+			cloak.element = cloakElement;
+			cloak.rateScale = cloakRate;
+			cloak.remaining = cloakDuration;
+			std::scoped_lock lock(feature.queuedCastLock);
+			if (feature.queuedCloaks.size() < kMaxSpellEmitters)
+				feature.queuedCloaks.push_back(cloak);
+		}
+	}
+
 	// An explosion is what separates a self-centred BLAST from a self buff.
 	if (element == SpellElement::None || !blast)
 		return RE::BSEventNotifyControl::kContinue;
@@ -293,6 +336,53 @@ void SnowDeformation::RegisterSpellCastSink()
 	}
 }
 
+void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a_cloak)
+{
+	if (spellEmitters.size() >= kMaxSpellEmitters || !a_actor)
+		return;
+	auto* tes = RE::TES::GetSingleton();
+	if (!tes)
+		return;
+
+	const RE::NiPoint3 position = a_actor->GetPosition();
+	float groundZ = position.z;
+	tes->GetLandHeight(position, groundZ);
+
+	float strength = 0.0f;
+	float radius = 0.0f;
+	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, kCloakRadius, strength, radius))
+		return;
+	if (strength < kMinSpellStrength)
+		return;
+	spellStats.auras++;
+
+	// Sweeps with the wearer, so a cloaked actor crossing snow leaves a band
+	// rather than a row of rings.
+	const float2 current{ position.x, position.y };
+	float2 previous = current;
+	const uint32_t formID = a_actor->formID;
+	if (auto it = spellAuraPrev.find(formID); it != spellAuraPrev.end()) {
+		const float dx = current.x - it->second.x;
+		const float dy = current.y - it->second.y;
+		if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
+			previous = it->second;
+	}
+	currentAuraPositions[formID] = current;
+
+	spellStats.lastStrength = strength;
+	spellStats.lastRadius = radius;
+
+	SpellEmitter emitter{};
+	emitter.position = current;
+	emitter.previous = previous;
+	emitter.radius = radius;
+	emitter.strength = strength;
+	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale;
+	emitter.element = a_cloak.element;
+	emitter.mark = MarkForElement(a_cloak.element);
+	spellEmitters.push_back(emitter);
+}
+
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -301,6 +391,8 @@ void SnowDeformation::GatherSpellEmitters()
 	if (!settings.EnableSpellIntegration) {
 		spellPrevPositions.clear();
 		spellTrailPrev.clear();
+		spellAuraPrev.clear();
+		activeCloaks.clear();
 		return;
 	}
 
@@ -334,6 +426,34 @@ void SnowDeformation::GatherSpellEmitters()
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
 	std::unordered_map<uint32_t, float2> currentTrailPositions;
+	currentAuraPositions.clear();
+
+	// Cloaks. Started by a cast, ended by their own declared duration, and
+	// never once read off a live actor - only the wearer's POSITION is touched
+	// here, which is the same read every stamp in this feature already makes.
+	{
+		std::vector<CloakState> arrived;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			arrived.swap(queuedCloaks);
+		}
+		for (auto& cloak : arrived)
+			if (auto actor = cloak.actor.get())
+				activeCloaks[actor->formID] = cloak;  // a re-cast refreshes
+
+		const float cloakDelta = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
+		for (auto it = activeCloaks.begin(); it != activeCloaks.end();) {
+			it->second.remaining -= cloakDelta;
+			auto actor = it->second.remaining > 0.0f ? it->second.actor.get() : RE::NiPointer<RE::Actor>();
+			if (!actor) {
+				it = activeCloaks.erase(it);
+				continue;
+			}
+			if (cameraPosition.GetSquaredDistance(actor->GetPosition()) <= cullRadius * cullRadius)
+				ConsiderActorAuras(actor.get(), it->second);
+			++it;
+		}
+	}
 
 	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
@@ -670,6 +790,7 @@ void SnowDeformation::GatherSpellEmitters()
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);
+	spellAuraPrev = std::move(currentAuraPositions);
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
 	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }

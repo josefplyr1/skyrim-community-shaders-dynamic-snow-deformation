@@ -1472,6 +1472,44 @@ protected:
 		SpellElement element = SpellElement::None;
 	};
 	std::vector<QueuedCast> queuedCasts;
+
+	/**
+	 * @brief A cloak, known from the cast that started it.
+	 *
+	 * Deliberately NOT read off the actor. Three attempts to walk an actor's
+	 * active effects crashed - the last inside GetActiveEffectList itself, on
+	 * a console-spawned actor, with a null vtable entry. The spell RECORD
+	 * carries everything needed (element, magnitude, duration) and is static
+	 * data, so the cast tells us what began and its own duration tells us when
+	 * it ends. Nothing here ever reaches into a live actor for state.
+	 *
+	 * The cost is honest: a cloak dispelled early keeps marking until its
+	 * timer runs out, and an innate aura that is never cast - an atronach's -
+	 * is not seen at all. Step 10 owns atronachs regardless.
+	 */
+	struct CloakState
+	{
+		RE::ActorHandle actor;
+		SpellElement element = SpellElement::None;
+		float rateScale = 1.0f;
+		float remaining = 0.0f;
+	};
+	/** @brief Queued by the sink on the game thread, drained by the gather. */
+	std::vector<CloakState> queuedCloaks;
+	/** @brief Live cloaks by wearer formID; a re-cast refreshes rather than stacks. */
+	std::unordered_map<uint32_t, CloakState> activeCloaks;
+	/** @brief Last XY per cloaked actor, so a moving aura sweeps a band rather than dotting it. */
+	std::unordered_map<uint32_t, float2> spellAuraPrev;
+	std::unordered_map<uint32_t, float2> currentAuraPositions;
+
+	/**
+	 * @brief Emits the mark for one cloaked actor.
+	 *
+	 * Reads the actor's POSITION and nothing else - the same read every stamp
+	 * in this feature already performs each frame.
+	 */
+	void ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a_cloak);
+
 	std::mutex queuedCastLock;
 
 	struct SpellStats
@@ -1489,6 +1527,8 @@ protected:
 		uint trails = 0;
 		/** @brief Self-centred area spells caught by the cast sink. */
 		uint casts = 0;
+		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
+		uint auras = 0;
 		/** @brief Projectiles whose effects name no element this feature knows. */
 		uint rejectedElement = 0;
 		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */
