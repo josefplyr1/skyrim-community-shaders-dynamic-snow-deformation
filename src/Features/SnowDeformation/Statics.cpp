@@ -69,6 +69,22 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 	return probe;
 }
 
+// One-shot samples of the object-LOD decision, so a single launch shows
+// whether the containment rule separates Windhelm's sheets from distant
+// scenery. Logs a handful of distinct outcomes, then goes quiet; this sits on
+// the per-geometry render path and must not become per-frame spam.
+static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
+{
+	static std::atomic<uint32_t> logged{ 0 };
+	if (logged.load(std::memory_order_relaxed) >= 8)
+		return;
+	if (logged.fetch_add(1, std::memory_order_relaxed) >= 8)
+		return;
+	logger::info("[SNOW DEFORMATION] object LOD {}: radius {:.0f}, cameraInside={}, '{}'",
+		a_rejected ? "REJECTED (merged sheet, camera inside)" : "kept",
+		a_radius, a_cameraInside ? "yes" : "no",
+		a_geometry->name.empty() ? "<unnamed>" : a_geometry->name.c_str());
+}
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
@@ -93,29 +109,47 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (flags.all(Flag::kTreeAnim))
 		return;
 	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
-	// reference comes close. Windhelm's merged quads measured 8700-11500.
+	// reference comes close. Windhelm's merged quads measured 8700-12608.
 	constexpr float kMergedLODRadius = 4096.0f;
 
-	// Object LOD needs DISCRIMINATING, not blanket rejection. A merged LOD
-	// trishape carries the same projected-snow flags as the meshes it stands in
-	// for but spans a quad, so a skin on one is a flat sheet at the LOD surface
-	// cutting through everything the real meshes build (the Windhelm sheet).
-	// Per-object LOD wears the same flags and is how Skyrim draws DISTANT real
-	// objects — rejecting it wholesale removed object snow past the LOD switch
-	// entirely. Discriminate by SPAN, which is the property the object probe
-	// actually measured; the ownership half of the test lives in the backstop
-	// below, which still catches merged LOD arriving without the flags.
-	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape)) {
-		const float lodRadius = a_pass->geometry->worldBound.radius;
-		const bool merged = lodRadius > kMergedLODRadius;
-		// One-shot per disposition: one launch then shows whether per-object
-		// LOD reaches this hook at all, instead of another blind round trip.
-		static std::atomic<bool> loggedKept{ false }, loggedRejected{ false };
-		if (!(merged ? loggedRejected : loggedKept).exchange(true))
-			logger::info("[SNOW DEFORMATION] object LOD {}: worldBound radius {:.0f}",
-				merged ? "REJECTED (merged quad)" : "kept (per-object)", lodRadius);
-		if (merged)
-			return;
+	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+
+	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
+	//
+	// Distant objects are drawn as merged LargeRef LOD batches - the SAME
+	// asset class as Windhelm's sheets (objSnow-LargeRef / objSnowHD-LargeRef)
+	// at the same sizes - so neither the LOD flags nor worldBound.radius can
+	// separate the two. Rejecting on either killed distant object snow
+	// outright (RenderDoc pixel history, 2026-08-17: a distant rock was
+	// written by objSnowHD-LargeRef DrawIndexed(60276) and NO event from our
+	// statics pass ever touched that pixel).
+	//
+	// What actually separates them is whether the LOD is REDUNDANT. Inside the
+	// loaded region the real meshes are drawn too, so a skin on the co-drawn
+	// LOD is a second surface at the LOD height cutting through them - the
+	// Windhelm sheet. Outside it, the LOD is the object's only representation
+	// and must be skinned or distant scenery has no snow. "Am I standing
+	// inside the thing" is the test; the unreferenced check stays as the
+	// second half, since merged LOD hangs off no TESObjectREFR while a real
+	// reference's geometry always has one.
+	{
+		const auto& wb = a_pass->geometry->worldBound;
+		const float bx = wb.center.x - eye.x;
+		const float by = wb.center.y - eye.y;
+		// Horizontal containment: these sheets are broad and flat, so the
+		// footprint is what matters, not the sphere's vertical reach.
+		const bool cameraInside = (bx * bx + by * by) < (wb.radius * wb.radius);
+		if (cameraInside && wb.radius > kMergedLODRadius) {
+			bool referenced = false;
+			for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
+				referenced = node->GetUserData() != nullptr;
+			if (!referenced) {
+				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
+				return;
+			}
+		}
+		if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
+			SampleLODDecision(a_pass->geometry, wb.radius, false, cameraInside);
 	}
 	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
@@ -146,24 +180,12 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
 	// everywhere in Skyrim; the skin only matters within the chosen range.
-	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
 	if (dx * dx + dy * dy > captureRange * captureRange)
 		return;
-
-	// Backstop for LOD geometry that reaches here without the flags: nothing
-	// belonging to a real reference spans a cell, and merged LOD trishapes
-	// hang off no reference at all.
-	if (a_pass->geometry->worldBound.radius > kMergedLODRadius) {
-		bool referenced = false;
-		for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
-			referenced = node->GetUserData() != nullptr;
-		if (!referenced)
-			return;
-	}
 
 	// The same geometry renders through multiple passes; capture once.
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
