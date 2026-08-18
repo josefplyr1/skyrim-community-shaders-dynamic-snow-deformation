@@ -10,13 +10,19 @@ static constexpr float kSpellStreamReach = 700.0f;
 static constexpr int kSpellTraceSteps = 12;
 // Footprint where a stream meets the ground.
 static constexpr float kSpellContactRadius = 70.0f;
-// Radiant heat: a flame passing ABOVE snow without landing on it still warms
+// A source within this of the ground is resting on it and marks at full
+// strength. Slack enough to cover the snow layer a hazard settles on top of.
+static constexpr float kSpellContactBand = 48.0f;
+// Radiant heat: a source passing ABOVE snow without landing on it still warms
 // what goes under. Fades out over this height, and spreads as it rises.
 static constexpr float kSpellRadiantBand = 300.0f;
-static constexpr float kSpellRadiantRadiusBase = 55.0f;
 static constexpr float kSpellRadiantRadiusPerUnit = 0.45f;
-// Radiant heat never melts as hard as direct contact.
+// Radiant heat never marks as hard as direct contact.
 static constexpr float kSpellRadiantScale = 0.55f;
+// Clamp on a hazard's authored radius: a rune's footprint and a wall segment's
+// differ by a lot, and a modded one can be anything at all.
+static constexpr float kHazardRadiusMin = 40.0f;
+static constexpr float kHazardRadiusMax = 260.0f;
 // Effect magnitude mapping to the unscaled rate (vanilla Flames is 8/sec), and
 // the clamp either side of it. Modded spells run to absurd magnitudes; the
 // ceiling stops one of them melting a crater in a frame.
@@ -48,6 +54,38 @@ SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectS
 	default:
 		return SpellElement::None;
 	}
+}
+
+SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_element)
+{
+	switch (a_element) {
+	case SpellElement::Frost:
+		return SpellMark::Crust;
+	case SpellElement::Shock:
+		return SpellMark::Pit;
+	default:
+		return SpellMark::Melt;
+	}
+}
+
+// Strength and footprint for a source at a_heightAbove over the land it marks.
+// Resting on the snow marks it fully; hovering above only warms what passes
+// beneath, weaker and broader the higher it runs. Shared deliberately: every
+// detector that marks the ground from an airborne source needs this, and the
+// first one to skip it produced marks so weak they were invisible.
+static bool GroundMark(float a_heightAbove, float a_contactRadius, float& a_strength, float& a_radius)
+{
+	a_heightAbove = std::max(a_heightAbove, 0.0f);
+	if (a_heightAbove <= kSpellContactBand) {
+		a_strength = 1.0f;
+		a_radius = a_contactRadius;
+		return true;
+	}
+	if (a_heightAbove > kSpellRadiantBand)
+		return false;
+	a_strength = (1.0f - a_heightAbove / kSpellRadiantBand) * kSpellRadiantScale;
+	a_radius = a_contactRadius + a_heightAbove * kSpellRadiantRadiusPerUnit;
+	return true;
 }
 
 // Where a ray from a_origin along a_direction first passes below the land.
@@ -98,6 +136,71 @@ static bool ShooterAim(const RE::ObjectRefHandle& a_shooter, RE::NiPoint3& a_dir
 	const float cosPitch = std::cos(pitch);
 	a_direction = { std::sin(yaw) * cosPitch, std::cos(yaw) * cosPitch, -std::sin(pitch) };
 	return true;
+}
+
+// Magnitude drives how fast a mark reaches its basin, never how deep it ends
+// up: a hotter source arrives sooner at the same shape.
+static float RateScaleOf(const RE::Effect* a_effect)
+{
+	if (!a_effect)
+		return 1.0f;
+	return std::clamp(a_effect->effectItem.magnitude / kSpellReferenceMagnitude,
+		kSpellMagnitudeMin, kSpellMagnitudeMax);
+}
+
+void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
+{
+	if (!settings.EnableSpellIntegration || spellEmitters.size() >= kMaxSpellEmitters)
+		return;
+	auto* hazard = a_ref ? a_ref->As<RE::Hazard>() : nullptr;
+	if (!hazard)
+		return;
+
+	auto& runtime = hazard->GetHazardRuntimeData();
+	auto* base = runtime.hazard;
+	if (!base)
+		return;
+	spellStats.hazards++;
+
+	// A placed hazard names no element of its own; the spell it applies does.
+	const RE::Effect* costliest = base->data.spell ? base->data.spell->GetCostliestEffectItem() : nullptr;
+	const RE::EffectSetting* effect = costliest ? costliest->baseEffect : nullptr;
+	const SpellElement element = ClassifyElement(effect);
+	if (element == SpellElement::None)
+		return;
+
+	auto* tes = RE::TES::GetSingleton();
+	if (!tes)
+		return;
+
+	const RE::NiPoint3 position = a_ref->GetPosition();
+	float groundZ = position.z;
+	tes->GetLandHeight(position, groundZ);
+
+	// The live radius while it burns, falling back to the authored one before
+	// the hazard has grown into it.
+	const float baseRadius = std::clamp(runtime.radius > 1.0f ? runtime.radius : base->data.radius,
+		kHazardRadiusMin, kHazardRadiusMax);
+
+	float strength = 0.0f;
+	float radius = 0.0f;
+	if (!GroundMark(position.z - groundZ, baseRadius, strength, radius))
+		return;
+	spellStats.lastStrength = strength;
+	spellStats.lastRadius = radius;
+	if (strength < kMinSpellStrength)
+		return;
+
+	SpellEmitter emitter{};
+	emitter.position = { position.x, position.y };
+	// A wall segment and a rune both stay put, so there is no sweep to carry.
+	emitter.previous = emitter.position;
+	emitter.radius = radius;
+	emitter.strength = strength;
+	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
+	emitter.element = element;
+	emitter.mark = MarkForElement(element);
+	spellEmitters.push_back(emitter);
 }
 
 void SnowDeformation::GatherSpellEmitters()
@@ -154,24 +257,19 @@ void SnowDeformation::GatherSpellEmitters()
 			continue;
 		spellStats.projectiles++;
 
-		if (ClassifyElement(effect) != SpellElement::Fire)
+		const SpellElement element = ClassifyElement(effect);
+		if (element == SpellElement::None)
 			continue;
-		// Concentration only for now: a held stream is the case the additive
-		// melt path exists for. Aimed one-shots arrive with the explosion
-		// detector, which is where their impact actually lives.
+		// Concentration only: a held stream is the case the additive melt path
+		// exists for. Aimed one-shots arrive with the explosion detector,
+		// which is where their impact actually lives.
 		if (effect->data.castingType != RE::MagicSystem::CastingType::kConcentration)
 			continue;
-		spellStats.fireStreams++;
+		spellStats.streams++;
 
 		const RE::NiPoint3 position = projectile->GetPosition();
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
 			continue;
-
-		float magnitudeScale = 1.0f;
-		if (costliest)
-			magnitudeScale = std::clamp(costliest->effectItem.magnitude / kSpellReferenceMagnitude,
-				kSpellMagnitudeMin, kSpellMagnitudeMax);
-		const float rate = std::max(settings.SpellMeltRate, 0.0f) * magnitudeScale;
 
 		// Where the stream lands. A flame held at hand height still melts what
 		// it is pointed at, so the mark belongs at the ground contact, not
@@ -194,18 +292,13 @@ void SnowDeformation::GatherSpellEmitters()
 			strength = 1.0f;
 			radius = kSpellContactRadius;
 		} else {
-			// The stream never meets the ground - played horizontally, or at
-			// an actor. Heat still radiates onto whatever passes beneath it,
-			// weaker and broader the higher the flame runs.
+			// The stream never meets the ground - played flat, or held on an
+			// actor. Heat still radiates onto whatever passes beneath it.
 			float groundZ = position.z;
 			tes->GetLandHeight(position, groundZ);
-			const float heightAbove = position.z - groundZ;
-			if (heightAbove < 0.0f || heightAbove > kSpellRadiantBand)
+			if (!GroundMark(position.z - groundZ, kSpellContactRadius, strength, radius))
 				continue;
-			const float reach = 1.0f - heightAbove / kSpellRadiantBand;
 			markPosition = { position.x, position.y, groundZ };
-			strength = reach * kSpellRadiantScale;
-			radius = kSpellRadiantRadiusBase + heightAbove * kSpellRadiantRadiusPerUnit;
 		}
 
 		spellStats.lastStrength = strength;
@@ -233,9 +326,9 @@ void SnowDeformation::GatherSpellEmitters()
 		emitter.strength = strength;
 		// Strength is NOT folded in here: the shader already scales both the
 		// melt target and its approach rate by the stamp's strength.
-		emitter.rate = rate;
-		emitter.element = SpellElement::Fire;
-		emitter.mark = SpellMark::Melt;
+		emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
+		emitter.element = element;
+		emitter.mark = MarkForElement(element);
 		spellEmitters.push_back(emitter);
 	}
 

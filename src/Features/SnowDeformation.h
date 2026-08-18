@@ -1366,6 +1366,9 @@ protected:
 	/** @brief Behaviour table for an effect, from its resist variable. Implemented in SnowDeformation/Spells.cpp. */
 	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
 
+	/** @brief What an element does to snow, per SPELL-INTEGRATION.md section 4. Only Melt is wired up; the rest ride the emitter so the detectors need no revisiting when their marks land. */
+	static SpellMark MarkForElement(SpellElement a_element);
+
 	/**
 	 * @brief Rebuilds spellEmitters from the live projectile list.
 	 *
@@ -1376,14 +1379,29 @@ protected:
 	 */
 	void GatherSpellEmitters();
 
+	/**
+	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
+	 *
+	 * Called from the reference scan GatherStamps already runs for props
+	 * rather than from a scan of its own: a hazard is an ordinary reference,
+	 * and that pass covers the right radius every frame. Explosions will join
+	 * it the same way.
+	 */
+	void ConsiderHazard(RE::TESObjectREFR* a_ref);
+
 	struct SpellStats
 	{
 		uint projectiles = 0;
-		uint fireStreams = 0;
+		/** @brief Concentration streams of any element. */
+		uint streams = 0;
+		/** @brief Placed hazards seen: spell walls, runes. */
+		uint hazards = 0;
 		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
 		uint groundContacts = 0;
 		uint emitters = 0;
-		/** @brief Last emitter's target-depth multiplier and footprint, so a stream that marks nothing can be told from one marking invisibly. */
+		/** @brief Emitters detected and classified whose mark is not implemented yet (pitting, crust). Not a fault: those arrive with their own steps. */
+		uint pending = 0;
+		/** @brief Last emitter's target-depth multiplier and footprint, so a source that marks nothing can be told from one marking invisibly. */
 		float lastStrength = 0.0f;
 		float lastRadius = 0.0f;
 	};

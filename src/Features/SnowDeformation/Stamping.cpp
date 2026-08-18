@@ -590,6 +590,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		tes->ForEachReferenceInRange(playerRef, 0.5f * deformWorldSize, [&](RE::TESObjectREFR* a_ref) {
 			if (!a_ref || a_ref->As<RE::Actor>())
 				return RE::BSContainer::ForEachResult::kContinue;
+			// Spell walls and runes ride this scan instead of adding one of
+			// their own: they are ordinary references and this pass already
+			// runs every frame at the right radius. Note the form type is
+			// PlacedHazard - Hazard is the base form, and filtering on that
+			// silently matches nothing.
+			if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
+				ConsiderHazard(a_ref);
+				return RE::BSContainer::ForEachResult::kContinue;
+			}
 			auto* base = a_ref->GetBaseObject();
 			if (!base)
 				return RE::BSContainer::ForEachResult::kContinue;
@@ -734,6 +743,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	for (const auto& emitter : spellEmitters) {
 		if (stampCount >= kMaxStamps)
 			break;
+		// Frost and shock sources are detected and carry their element, but
+		// crust and pitting do not exist yet, so they mark nothing until
+		// their own steps land. Splitting detection from effect is exactly
+		// what the emitter list is for.
+		if (emitter.mark != SpellMark::Melt) {
+			spellStats.pending++;
+			continue;
+		}
 		float4 stamp{};
 		stamp.x = emitter.position.x;
 		stamp.y = emitter.position.y;
