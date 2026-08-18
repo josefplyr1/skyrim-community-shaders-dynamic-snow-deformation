@@ -41,6 +41,9 @@
 	X(CrustPrintDepth) \
 	X(CrustGloss) \
 	X(CrustRoughness) \
+	X(CrustNormalFlatten) \
+	X(CrustSpecular) \
+	X(CrustTint) \
 	X(CrustBreakRadius) \
 	X(ScorchStrength) \
 	X(SnowClassDepths) \

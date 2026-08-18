@@ -259,7 +259,13 @@ public:
 		/** @brief How icy crusted snow shades: 0 leaves it looking like powder, 1 gives the full polish. */
 		float CrustGloss = 1.0f;
 		/** @brief Roughness of fully crusted snow. Lower is glassier; snow sits near 0.6. */
-		float CrustRoughness = 0.22f;
+		float CrustRoughness = 0.18f;
+		/** @brief How far a crust flattens the snow's own normal map. The strongest of the ice cues by a distance: powder reads as grain and ice reads as a sheet, so smoothing the surface says "frozen over" louder than reflectance or colour can. */
+		float CrustNormalFlatten = 0.80f;
+		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
+		float CrustSpecular = 0.14f;
+		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
+		std::array<float, 3> CrustTint = { 0.88f, 0.92f, 1.00f };
 		/** @brief Stamp radius past which a shape counts as heavy enough to break a crust rather than print on it. A human foot sits well under this; a mammoth or a landing dragon well over. */
 		float CrustBreakRadius = 30.0f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
@@ -601,8 +607,10 @@ public:
 		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w = coarse march steps. */
 		float4 SnowParallax;
 
-		/** @brief x = how dark a shock discharge burns the snow it struck (0 disables). Appended LAST and mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
+		/** @brief x = how dark a shock discharge burns the snow it struck, y = crust shading strength, z = crust roughness, w = how far crust flattens the snow normal map. Mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
 		float4 SpellShading;
+		/** @brief x = reflectance of fully crusted snow, yzw = its colour cast. Appended LAST; mirror any change in SnowShell.hlsl. */
+		float4 CrustLook;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

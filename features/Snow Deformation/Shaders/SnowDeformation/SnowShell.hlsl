@@ -164,8 +164,12 @@ cbuffer ShellCB : register(b0)
 	float4 SnowParallax;
 
 	// x = scorch darkening strength, y = crust shading strength,
-	// z = roughness of fully crusted snow.
+	// z = roughness of fully crusted snow, w = how far crust flattens the
+	// snow normal map.
 	float4 SpellShading;
+
+	// x = reflectance of fully crusted snow, yzw = its colour cast.
+	float4 CrustLook;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1378,6 +1382,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// agrees on the same anti-tiling offsets. Micro-relief fades with
 	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
+
+	// Crust, sampled once and used three times. Flattening the normal map is
+	// the strongest of the three by a distance: powder reads as grain, and ice
+	// reads as a SHEET, so smoothing the surface says "frozen over" far louder
+	// than any change to reflectance or colour can. Roughness and specular
+	// alone were nearly invisible without it.
+	float crustAmount = saturate(SampleCrust(gridLocal) * SpellShading.y);
+	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
 	// Uniform flow: the parallax shadow branch below is divergent, and
@@ -1482,20 +1494,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float kSnowRoughness = 0.6;
 	float3 kSnowF0 = float3(0.028, 0.028, 0.028);
 
-	// Crust: snow that melted and refroze is ice, not powder. Polished rather
-	// than recoloured - it is still white - so the read comes from the
-	// highlight tightening and the reflectance lifting, which is what separates
-	// a glazed sheet from fresh snow at a glance.
+	// Crust: snow that melted and refroze is ice, not powder. The normal map
+	// was already flattened above; here the highlight tightens, the surface
+	// picks up reflectance, and a colour cast is applied - all three on
+	// sliders, because how icy this should read is a matter of taste and the
+	// physically honest values were far too subtle to see.
+	[branch] if (crustAmount > 0.001)
 	{
-		float crust = SampleCrust(gridLocal) * SpellShading.y;
-		[branch] if (crust > 0.001)
-		{
-			kSnowRoughness = lerp(kSnowRoughness, SpellShading.z, saturate(crust));
-			kSnowF0 = lerp(kSnowF0, float3(0.055, 0.058, 0.062), saturate(crust));
-			// A faint blue-grey cast: refrozen snow reads colder than the
-			// powder beside it without ceasing to be snow.
-			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.94, 0.97, 1.02), saturate(crust));
-		}
+		kSnowRoughness = lerp(kSnowRoughness, SpellShading.z, crustAmount);
+		kSnowF0 = lerp(kSnowF0, CrustLook.xxx, crustAmount);
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * CrustLook.yzw, crustAmount);
 	}
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
