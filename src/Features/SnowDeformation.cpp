@@ -19,6 +19,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	MeltPersistence,
 	MeltBowlFloor,
 	MeltEdgeIrregularity,
+	EnableSpellIntegration,
+	SpellMeltRate,
 	SnowClassDepths,
 	TextureDepths,
 	ObjectsSnowDepth,

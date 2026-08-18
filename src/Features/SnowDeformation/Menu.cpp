@@ -304,7 +304,14 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSpell = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_integration_tooltip"), "How magic marks the snow. Fire melts it into soft basins, and unlike a footprint a melt deepens for as long as the heat stands there."));
 
+		ImGui::Checkbox(T(TKEY("spell_enable"), "Enable Spell Integration"), &settings.EnableSpellIntegration);
+		if (auto _ttSpellEnable = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_enable_tooltip"), "Lets cast magic mark the snow. Off, the melt machinery still serves campfire clearings and the test emitter below."));
+
 		ImGui::SeparatorText(T(TKEY("spell_cat_melt"), "Melt"));
+		ImGui::SliderFloat(T(TKEY("spell_melt_rate"), "Fire Melt Rate"), &settings.SpellMeltRate, 0.0f, 3.0f, "%.2f /s");
+		if (auto _ttSpellRate = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_melt_rate_tooltip"), "How fast a fire stream melts down to its basin, for a spell of Flames' strength; stronger spells scale up from here. This changes how quickly the basin appears, never how deep it ends up - depth is the melt shape below."));
 		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_persistence_tooltip"), "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate."));
@@ -334,6 +341,11 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
 		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
+		// Diagnostics use plain text by existing convention (no i18n).
+		ImGui::Text("projectiles %u | fire streams %u | emitters %u",
+			spellStats.projectiles, spellStats.fireStreams, spellStats.emitters);
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_ab"), "Comparison"));
 		ImGui::Checkbox(T(TKEY("melt_rate_model_ab"), "A/B: Rate-Shaped Melt"), &meltRateModelAB);

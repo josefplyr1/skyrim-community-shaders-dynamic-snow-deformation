@@ -191,6 +191,8 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
+	GatherSpellEmitters();
+
 	uint stampCount = 0;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
@@ -726,8 +728,26 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	}
 	propPrevPositions = std::move(currentPropPositions);
 
+	// Spell emitters melt rather than displace. Appended AFTER actors and
+	// props on purpose: a busy fight must not starve foot prints out of the
+	// stamp budget, and prints are the marks players read first.
+	for (const auto& emitter : spellEmitters) {
+		if (stampCount >= kMaxStamps)
+			break;
+		float4 stamp{};
+		stamp.x = emitter.position.x;
+		stamp.y = emitter.position.y;
+		stamp.z = emitter.strength;
+		stamp.w = emitter.radius;
+		perFrameData.Stamps[stampCount] = stamp;
+		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
+			kStampModeMelt, emitter.rate };
+		stampCount++;
+		stampStats.spells++;
+	}
+
 	// Debug melt emitter: a stationary heat source, so the additive stamp path
-	// and the headroom decay can be watched without any spell detection.
+	// can be watched against a known shape with no spell involved.
 	if (debugMeltEmitterActive && stampCount < kMaxStamps) {
 		float4 stamp{};
 		stamp.x = debugMeltEmitterPos.x;

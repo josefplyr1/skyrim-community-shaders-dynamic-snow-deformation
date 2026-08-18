@@ -35,6 +35,8 @@ public:
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeCarve = 0.0f;
 	static constexpr float kStampModeMelt = 1.0f;
+	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
+	static constexpr size_t kMaxSpellEmitters = 64;
 
 	/** @brief Skyrim world units per meter (1 unit â‰ˆ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -232,6 +234,10 @@ public:
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.15f;
+		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
+		bool EnableSpellIntegration = true;
+		/** @brief Depth per second a reference-magnitude fire stream melts at its core. Effect magnitude scales it, so a stronger spell melts faster without reaching any deeper. */
+		float SpellMeltRate = 0.8f;
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
 		float MeltEdgeIrregularity = 0.15f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
@@ -1310,6 +1316,74 @@ protected:
 	std::unordered_map<uint32_t, StampBones> stampBoneCache;
 
 	/** @brief Per-frame stamp diagnostics for the menu (rebuilt in GatherStamps). */
+	/** @brief Which behaviour table a spell effect falls under, read off the effect's resist variable. No spell is ever named. */
+	enum class SpellElement
+	{
+		None,
+		Fire,
+		Frost,
+		Shock
+	};
+
+	/** @brief What an emitter does to the snow. Only Melt is wired up so far; the rest name the per-element behaviours in SPELL-INTEGRATION.md section 4. */
+	enum class SpellMark
+	{
+		Melt,
+		Carve,
+		Pit,
+		Crust
+	};
+
+	/**
+	 * @brief One spell-driven mark, gathered fresh each frame.
+	 *
+	 * Decoupling detection from effect is the point: several detectors
+	 * (projectiles, hazards, explosions, actor auras) fill this list, and one
+	 * consumer turns it into stamps. Positions are already ground-projected -
+	 * the deformation map is 2D, so an emitter must carry where it marks the
+	 * GROUND, not where the source happens to float.
+	 */
+	struct SpellEmitter
+	{
+		float2 position{};
+		/** @brief Previous position, so a swept source marks a continuous band instead of a row of dots. */
+		float2 previous{};
+		float radius = 0.0f;
+		/** @brief Target-depth multiplier, 0-1. Fades with the source's height above the ground it marks. */
+		float strength = 0.0f;
+		/** @brief Depth units per second the mark approaches its target at. */
+		float rate = 0.0f;
+		SpellElement element = SpellElement::None;
+		SpellMark mark = SpellMark::Melt;
+	};
+
+	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
+	std::vector<SpellEmitter> spellEmitters;
+
+	/** @brief Last XY per projectile (formID), for the capsule sweep. */
+	std::unordered_map<uint32_t, float2> spellPrevPositions;
+
+	/** @brief Behaviour table for an effect, from its resist variable. Implemented in SnowDeformation/Spells.cpp. */
+	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
+
+	/**
+	 * @brief Rebuilds spellEmitters from the live projectile list.
+	 *
+	 * Projectiles come from Projectile::Manager rather than a reference scan:
+	 * it is global rather than cell-limited and costs one locked snapshot.
+	 * Hazards and explosions are references and will piggyback the per-frame
+	 * scan already running in GatherStamps instead of adding another.
+	 */
+	void GatherSpellEmitters();
+
+	struct SpellStats
+	{
+		uint projectiles = 0;
+		uint fireStreams = 0;
+		uint emitters = 0;
+	};
+	SpellStats spellStats;
+
 	struct StampStats
 	{
 		uint feet = 0;
@@ -1318,6 +1392,7 @@ protected:
 		uint props = 0;
 		uint propRefs = 0;
 		uint propMovers = 0;
+		uint spells = 0;
 	};
 	StampStats stampStats;
 
