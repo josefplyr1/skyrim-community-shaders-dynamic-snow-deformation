@@ -103,15 +103,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("refill_rate"), "Snow Refill Rate"), &settings.RefillRateMultiplier, 0.0f, 10.0f, "%.1fx");
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
-		ImGui::SliderFloat(T(TKEY("melt_headroom"), "Melt Persistence"), &settings.MeltHeadroom, 0.0f, 4.0f, "%.1f");
-		if (auto _ttHeadroom = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_headroom_tooltip"), "How much longer melted ground stays bare than trampled ground. Heat keeps melting after the snow is gone; that extra depth is invisible, but the refill has to burn it off before snow returns. 0 = melted ground recovers as fast as a footprint."));
-		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
-		if (auto _ttBowl = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));
-		ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
-		if (auto _ttMeltEdge = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards, unlike a trampled trail edge, which the separate Trail Irregularity setting churns."));
 		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 		if (auto _ttSteep = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
@@ -309,6 +300,43 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
+	if (ImGui::TreeNodeEx(T(TKEY("spell_integration"), "Spell Integration"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttSpell = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_integration_tooltip"), "How magic marks the snow. Fire melts it into soft basins, and unlike a footprint a melt deepens for as long as the heat stands there."));
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_melt"), "Melt"));
+		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
+		if (auto _ttPersist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_persistence_tooltip"), "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate."));
+		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
+		if (auto _ttBowl = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));
+		ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
+		if (auto _ttMeltEdge = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards, unlike a trampled trail edge, which the separate Trail Irregularity setting churns."));
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_emitter"), "Test Emitter"));
+		if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_cat_emitter_tooltip"), "A stand-in heat source for tuning the melt look before spells are wired up. Nothing here reads a spell."));
+		if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
+			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+				debugMeltEmitterPos = player->GetPosition();
+				debugMeltEmitterActive = true;
+			}
+		}
+		ImGui::SameLine();
+		if (ImGui::Button(T(TKEY("melt_emitter_remove"), "Remove")))
+			debugMeltEmitterActive = false;
+		ImGui::Text("%s", debugMeltEmitterActive ?
+							  T(TKEY("melt_emitter_active"), "Emitter: active") :
+							  T(TKEY("melt_emitter_off"), "Emitter: off"));
+		ImGui::SliderFloat(T(TKEY("melt_emitter_radius"), "Emitter Radius"), &debugMeltEmitterRadius, 40.0f, 600.0f, "%.0f");
+		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
+		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
+		ImGui::TreePop();
+	}
+
 	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
 		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
@@ -319,26 +347,6 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
 			clearRequested = true;
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));
-		if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
-			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-				debugMeltEmitterPos = player->GetPosition();
-				debugMeltEmitterActive = true;
-			}
-		}
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("melt_emitter_remove"), "Remove")))
-			debugMeltEmitterActive = false;
-		if (auto _ttMeltEmitter = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_emitter_tooltip"), "Drops a stationary heat source at your feet that melts snow the way a fire spell will: additive and time-based, so the bowl keeps DEEPENING the longer it stands, instead of stamping to a fixed depth like a footprint. It also melts past full depth into invisible headroom, which the refill must burn off before snow returns. No spell detection is involved - this is a test aid for the melt path itself."));
-		ImGui::Text("%s", debugMeltEmitterActive ?
-							  T(TKEY("melt_emitter_active"), "Emitter: active") :
-							  T(TKEY("melt_emitter_off"), "Emitter: off"));
-		ImGui::SliderFloat(T(TKEY("melt_emitter_radius"), "Emitter Radius"), &debugMeltEmitterRadius, 40.0f, 600.0f, "%.0f");
-		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
-		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_shell"), "Shell & Terrain Data"));
 		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);

@@ -16,7 +16,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	TrailIrregularity,
 	RefillRateMultiplier,
 	RefillOnlyWhenSnowing,
-	MeltHeadroom,
+	MeltPersistence,
 	MeltBowlFloor,
 	MeltEdgeIrregularity,
 	SnowClassDepths,
@@ -418,12 +418,11 @@ void SnowDeformation::Prepass()
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
 	perFrameData.RefillAmount = deltaTime / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
 
-	// Melt stamps accumulate per second, and may run past full depth into
-	// headroom the shells never show. That excess decays through the refill
-	// above before coverage returns, which is what keeps a melted bowl clear
-	// longer than a footprint.
+	// Melt stamps accumulate per second. Persistence is a refill slowdown on
+	// melted ground rather than banked depth, so the bowl profile survives the
+	// readers' saturation intact.
 	perFrameData.DeltaTime = deltaTime;
-	perFrameData.MeltCeiling = 1.0f + std::max(settings.MeltHeadroom, 0.0f);
+	perFrameData.MeltPersistence = std::clamp(settings.MeltPersistence, 0.0f, 1.0f);
 	// Clamped just below the degenerate smoothstep(1, 1, x) edge, as the
 	// trench sharpness slider is.
 	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);

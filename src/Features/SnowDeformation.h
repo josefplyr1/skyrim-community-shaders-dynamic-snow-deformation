@@ -228,8 +228,8 @@ public:
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
-		/** @brief Extra depth beyond full melt that a heat source may accumulate. Invisible - every consumer saturates at 1.0 - so it is a persistence budget the refill must burn off before ground starts covering again: melted ground stays clear longer than a footprint, and heat lingers after the source is gone. 0 = no headroom. */
-		float MeltHeadroom = 1.5f;
+		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
+		float MeltPersistence = 0.6f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.15f;
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
@@ -289,13 +289,13 @@ public:
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.35f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
-		float ChurnHeight = 5.0f;
+		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
 		/** @brief Frequency multiplier of the fine-grain normal layer on disturbed snow. */
-		float CrispScale = 6.0f;
+		float CrispScale = 4.0f;
 		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
-		float CrispStrength = 1.8f;
+		float CrispStrength = 1.5f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
 		float ObjBermHeight = 0.35f;
 		float ObjChurnHeight = 5.0f;
@@ -373,8 +373,8 @@ public:
 
 		/** @brief Seconds this frame. Melt accumulates per second, not per frame, so the bowl a heat source digs does not depend on framerate. */
 		float DeltaTime;
-		/** @brief Ceiling on the accumulated depth, 1.0 + MeltHeadroom. Exactly 1.0 disables the headroom and melt then behaves like a saturating carve. */
-		float MeltCeiling;
+		/** @brief Settings::MeltPersistence, the refill slowdown on melted ground. */
+		float MeltPersistence;
 		/** @brief Settings::MeltBowlFloor, the smoothstep start of the melt flank. */
 		float MeltFloorStart;
 		/** @brief Settings::MeltEdgeIrregularity, the fraction the melt radius wobbles by. */

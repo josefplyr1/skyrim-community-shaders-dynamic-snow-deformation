@@ -373,10 +373,12 @@ float SampleDeformation(float2 gridLocal)
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
 }
 
-// Melted fraction of the local depression, 0 = all dug, 1 = all melted.
-// Displaced snow piles along the rim; melted snow leaves no spoil to pile,
-// so this scales the berm away under fires, spells and other heat.
-float SampleMeltFraction(float2 gridLocal)
+// DISPLACED depth at a point: total minus the melted portion. A berm is snow
+// that had to go somewhere, and melted snow leaves no spoil, so the berm
+// field is built from this rather than from total depth. Doing it here rather
+// than scaling the finished berm down means a boot print through a melt basin
+// still throws its own ridge.
+float SampleDisplacedFast(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	if (any(uv < 0.0) || any(uv > 1.0))
@@ -394,7 +396,7 @@ float SampleMeltFraction(float2 gridLocal)
 	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	return saturate(v.y / max(v.x, 1e-4));
+	return saturate(v.x - v.y);
 }
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
@@ -609,9 +611,9 @@ static const float2 kBermTaps[16] = {
 
 float BermFieldTapped(float2 gridLocal)
 {
-	float b = SampleDeformationFast(gridLocal);
+	float b = SampleDisplacedFast(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += SampleDeformationFast(gridLocal + kBermTaps[i]);
+		b += SampleDisplacedFast(gridLocal + kBermTaps[i]);
 	return saturate(b / 17.0);
 }
 
@@ -860,8 +862,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float deformation = saturate(SampleDeformation(gridLocal));
 			float bermD = BermField(gridLocal);
 			float uncarved = depth;
-			depth = CarveProfile(deformation, uncarved) +
-			        BermShape(bermD) * uncarved * BermHeightAmp * (1.0 - SampleMeltFraction(gridLocal));
+			depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -1294,10 +1295,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) - BermShape(bermXN),
 		BermShape(bermYP) - BermShape(bermYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	// Same melt suppression the surface applied, so shading agrees with the
-	// geometry it is shading.
-	float bermMelt = 1.0 - SampleMeltFraction(gridLocal);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp * bermMelt;
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;

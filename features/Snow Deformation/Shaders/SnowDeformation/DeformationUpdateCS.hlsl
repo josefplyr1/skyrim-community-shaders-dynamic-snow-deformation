@@ -10,10 +10,13 @@
 //               standing in a trench does not deepen it.
 //   MELT  (1) - a heat source removes snow while it stands there. Additive
 //               and dt-scaled, so DWELL TIME is what deepens the bowl.
-// Melt may drive a texel past 1.0 into MeltCeiling headroom. Every consumer
-// saturates, so that excess is invisible depth which must decay through the
-// refill before ground starts covering again - melted ground stays clear
-// longer than a footprint, and heat lingers after the source is gone.
+// Melted ground stays bare longer than trampled ground, because the ground
+// under a fire is warm and wet after the flame is gone. That is applied as a
+// SLOWER REFILL on melted texels, not as extra depth: depth is capped at 1.0
+// so the bowl profile below survives intact. Banking the persistence as
+// over-depth instead would flatten it - every consumer saturates at 1.0, so
+// the whole over-melted core collapses onto one plateau and the bowl becomes
+// a flat-floored pit with walls.
 //
 // Channels: .x = total depression depth, .y = the portion of it that was
 // MELTED rather than displaced. Displaced snow has to go somewhere and piles
@@ -59,9 +62,9 @@ cbuffer PerFrame : register(b0)
 
 	// Seconds this frame; melt accumulates per second, not per frame.
 	float DeltaTime;
-	// Ceiling on the accumulated value, 1.0 + headroom. Exactly 1.0 disables
-	// the headroom and melt then behaves like a saturating carve.
-	float MeltCeiling;
+	// How much slower melted ground refills, 0-1. 0 = it recovers exactly as
+	// fast as a footprint.
+	float MeltPersistence;
 	// Fraction of the radius held at full melt before the flank starts.
 	// 0 = a pure bowl curving from the centre; high = a flat floor with walls.
 	float MeltFloorStart;
@@ -136,9 +139,13 @@ float StampNoise(float2 p)
 			}
 			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
 		}
+		// Warm wet ground takes its time. Scaled by how much of this texel's
+		// depression was melted rather than dug, so a boot print through a
+		// melt basin still recovers at the boot print rate.
+		refill *= lerp(1.0, 1.0 - saturate(MeltPersistence), saturate(melted / max(deformation, 1e-4)));
+
 		deformation = max(deformation - refill, 0.0);
-		// The melted portion refills at the same rate, and can never exceed
-		// the depression it is a portion of.
+		// The melted portion can never exceed the depression it is part of.
 		melted = min(max(melted - refill, 0.0), deformation);
 	}
 
@@ -202,6 +209,6 @@ float StampNoise(float2 p)
 		}
 	}
 
-	float total = min(carve + melt, MeltCeiling);
+	float total = min(carve + melt, 1.0);
 	CurrentDeformation[pixel] = float2(total, min(melted + melt, total));
 }

@@ -33,7 +33,7 @@ cbuffer PerFrame : register(b0)
 	float2 WindBias;
 
 	float DeltaTime;
-	float MeltCeiling;
+	float MeltPersistence;
 	float MeltFloorStart;
 	float MeltEdgeNoise;
 }
@@ -46,6 +46,12 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
+// Displaced (dug) depth of a map texel: total minus the melted portion.
+float Displaced(float2 texel)
+{
+	return saturate(texel.x - texel.y);
+}
+
 // Bilinear tap in texel coordinates, clamped to the edge - the Load-based
 // filtering SampleDeformationBilinear performs in the shells.
 float TapBilinear(float2 t, float2 dims)
@@ -55,14 +61,16 @@ float TapBilinear(float2 t, float2 dims)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
+	// DISPLACED depth only (total minus the melted portion). A berm is snow
+	// that had to go somewhere; melted snow leaves no spoil, so it must not
+	// reach the field at all. Subtracting here rather than scaling the berm
+	// down afterwards also keeps a boot print through a melt basin throwing
+	// its own proper ridge.
+	float s00 = Displaced(DeformationMap.Load(int3(t0.x, t0.y, 0)));
+	float s10 = Displaced(DeformationMap.Load(int3(t1.x, t0.y, 0)));
+	float s01 = Displaced(DeformationMap.Load(int3(t0.x, t1.y, 0)));
+	float s11 = Displaced(DeformationMap.Load(int3(t1.x, t1.y, 0)));
 
-	// Saturated: melt writes past 1.0 into the refill headroom, and a berm
-	// averaged over raw over-melt values would throw a ridge proportional to
-	// invisible depth.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
