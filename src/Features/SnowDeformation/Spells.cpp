@@ -319,12 +319,20 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 		// A cloak declares itself by ARCHETYPE. A self-centred AREA spell -
 		// Blizzard and its like - does not, but behaves the same way for our
 		// purposes: it sits on the caster and works the ground around them for
-		// a duration. Its authored AREA is what separates it from an ordinary
-		// self buff, which has none, so no standing ability gets swept up.
-		const bool selfArea = item->effectItem.area > 0;
+		// a duration.
+		//
+		// DURATION is what makes it cloak-like, and area alone is not enough.
+		// Firestorm is self-delivered over an area of 100 and lasts no time at
+		// all: it is a detonation, and treating it as a cloak both invented a
+		// minute-long aura and skipped past the explosion collection below, so
+		// its blast stopped being queued entirely. Blizzard authors 40 over ten
+		// seconds and is the real thing.
+		const bool selfArea = item->effectItem.area > 0 && item->effectItem.duration > 0;
 		if (base->data.archetype == RE::EffectSetting::Archetype::kCloak || selfArea) {
 			const SpellElement candidate = ClassifyElement(base);
-			if (candidate != SpellElement::None) {
+			// First qualifying effect wins: a spell can carry several, and
+			// Blizzard's paralysis rider should not displace its frost.
+			if (candidate != SpellElement::None && cloakElement == SpellElement::None) {
 				cloakElement = candidate;
 				cloakRate = std::clamp(item->effectItem.magnitude / kSpellReferenceMagnitude,
 					kSpellMagnitudeMin, kSpellMagnitudeMax);
