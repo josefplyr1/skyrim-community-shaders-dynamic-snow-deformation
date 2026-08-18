@@ -236,6 +236,8 @@ public:
 		float MeltBowlFloor = 0.15f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
+		/** @brief Raise runes and other ground-planted projectiles onto the snow surface instead of leaving them buried under it. Off restores the game's own placement, where a rune on deep snow is invisible. */
+		bool LiftRunesAboveSnow = true;
 		/** @brief Depth per second a reference-magnitude fire stream melts at its core. Effect magnitude scales it, so a stronger spell melts faster without reaching any deeper. */
 		float SpellMeltRate = 0.8f;
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
@@ -1410,6 +1412,26 @@ protected:
 	 */
 	void BuildExplosionElements();
 
+	/**
+	 * @brief Raises a ground-planted projectile onto the snow surface.
+	 *
+	 * The general "spawned during play and then buried" fix: anything the game
+	 * places at terrain height disappears under a 30 cm shell. A rune is the
+	 * case that matters first - a player needs to see where their own rune
+	 * went, and the stealth argument for hiding it is theoretical when NPCs do
+	 * not detect runes anyway.
+	 *
+	 * Applied ONCE per projectile and remembered, because the offset is added
+	 * to the node's own transform: re-applying it every frame would walk the
+	 * rune into the sky.
+	 */
+	void LiftPlantedProjectile(RE::Projectile* a_projectile, float a_heightAboveLand);
+
+	/** @brief Projectiles already raised (formID -> the lift applied), pruned against what is still live. */
+	std::unordered_map<uint32_t, float> liftedProjectiles;
+	/** @brief Planted projectiles seen this frame. */
+	std::unordered_set<uint32_t> liftedProjectilesLive;
+
 	/** @brief BGSExplosion -> element, inverted from the effect records. */
 	std::unordered_map<const RE::BGSExplosion*, SpellElement> explosionElements;
 	bool explosionElementsBuilt = false;
@@ -1428,6 +1450,8 @@ protected:
 		uint hazards = 0;
 		/** @brief Detonating explosions seen this frame (marked or not). */
 		uint explosions = 0;
+		/** @brief Ground-planted projectiles currently raised onto the snow. */
+		uint lifted = 0;
 		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
 		uint groundContacts = 0;
 		uint emitters = 0;
