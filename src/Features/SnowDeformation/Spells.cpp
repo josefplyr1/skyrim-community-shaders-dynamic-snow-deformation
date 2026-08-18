@@ -26,9 +26,13 @@ static constexpr float kHazardRadiusMax = 260.0f;
 // Same for a blast. The ceiling matters more here: a modded explosion with an
 // absurd radius would otherwise melt half the deformation window at once.
 static constexpr float kExplosionRadiusMin = 50.0f;
-// Raised so the master-tier area spells stay bigger than a bolt's burst
-// instead of all flattening onto the same ceiling.
-static constexpr float kExplosionRadiusMax = 600.0f;
+// High enough to pass the largest thing Skyrim actually authors. Read off the
+// records rather than guessed: FireStormExplosion is 2100 units, where Fireball
+// and every rune are 320 and an expert firebolt is 100. A tighter ceiling
+// silently flattened the master-tier spells onto the same crater as a bolt,
+// which is the opposite of what those 2100 units are saying. Still a ceiling,
+// because a modded explosion can name any number at all.
+static constexpr float kExplosionRadiusMax = 2400.0f;
 // A bolt that carries no explosion at all still strikes the snow. Without this
 // the smaller single-target spells mark nothing, while their master-tier
 // versions - which do author an explosion - leave craters.
@@ -257,7 +261,12 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 			continue;
 		if (element == SpellElement::None)
 			element = ClassifyElement(base);
-		if (!blast && base->data.explosion)
+		// The LARGEST explosion on the spell, not the first. A spell can carry
+		// several, and the first need not be the one that defines its reach -
+		// Fire Storm authors its 2100 unit blast alongside a companion of
+		// radius zero, which would otherwise win and clamp down to nothing.
+		if (base->data.explosion &&
+			(!blast || base->data.explosion->data.radius > blast->data.radius))
 			blast = base->data.explosion;
 	}
 	// An explosion is what separates a self-centred BLAST from a self buff.
