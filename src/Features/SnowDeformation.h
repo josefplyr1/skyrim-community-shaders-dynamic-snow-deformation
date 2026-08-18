@@ -1380,7 +1380,12 @@ protected:
 	{
 		uint projectiles = 0;
 		uint fireStreams = 0;
+		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
+		uint groundContacts = 0;
 		uint emitters = 0;
+		/** @brief Last emitter's target-depth multiplier and footprint, so a stream that marks nothing can be told from one marking invisibly. */
+		float lastStrength = 0.0f;
+		float lastRadius = 0.0f;
 	};
 	SpellStats spellStats;
 

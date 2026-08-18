@@ -344,8 +344,10 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
 		// Diagnostics use plain text by existing convention (no i18n).
-		ImGui::Text("projectiles %u | fire streams %u | emitters %u",
-			spellStats.projectiles, spellStats.fireStreams, spellStats.emitters);
+		ImGui::Text("projectiles %u | fire streams %u | ground hits %u | emitters %u",
+			spellStats.projectiles, spellStats.fireStreams, spellStats.groundContacts, spellStats.emitters);
+		ImGui::Text("last mark: strength %.2f | radius %.0f",
+			spellStats.lastStrength, spellStats.lastRadius);
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_ab"), "Comparison"));
 		ImGui::Checkbox(T(TKEY("melt_rate_model_ab"), "A/B: Rate-Shaped Melt"), &meltRateModelAB);
