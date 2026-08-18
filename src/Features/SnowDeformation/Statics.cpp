@@ -189,6 +189,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		{
 			bool base = false;
 			bool naturalFeature = false;
+			bool mergedAtlas = false;
 		};
 		static std::unordered_map<const void*, SnowPathMatch> driftMaterialCache;
 		if (driftMaterialCache.size() > 4096)
@@ -215,10 +216,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					// covers the ice family we actually saw dropped.
 					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
 					                            lowered.find("mountain") != std::string::npos;
+					// A merged DynDOLOD batch wears a generic atlas packing many
+					// objects together, so the path says nothing about whether
+					// any one of them is snowy. Gated behind the experiment
+					// toggle: accepting these skins the WHOLE batch or none of
+					// it, so if the batch is mixed it puts snow on ship hulls.
+					it->second.mergedAtlas = lowered.find("dyndolod") != std::string::npos;
 				}
 			}
 		}
-		if (!(it->second.base || (isObjectLOD && it->second.naturalFeature))) {
+		const bool lodAccept = isObjectLOD &&
+		                       (it->second.naturalFeature ||
+								   (settings.SkinMergedLODAtlases && it->second.mergedAtlas));
+		if (!(it->second.base || lodAccept)) {
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
 			return;

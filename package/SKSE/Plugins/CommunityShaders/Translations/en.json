@@ -1442,6 +1442,8 @@
     "feature.snow_deformation.show_debug": "Show Deformation Map",
     "feature.snow_deformation.skin_distant_bareness": "Distant Bare Rock",
     "feature.snow_deformation.skin_distant_bareness_tooltip": "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour.",
+    "feature.snow_deformation.skin_merged_lod_atlases": "Snow on Merged Distant Objects",
+    "feature.snow_deformation.skin_merged_lod_atlases_tooltip": "DynDOLOD merges many distant objects into single batches wearing a shared atlas texture, whose name gives no clue whether any object in it is snowy. Off, those batches are skipped and the objects inside them carry no distant snow. On, they are covered anyway - measured at +53 objects for +0.05 ms. A merged batch is one mesh, so this is all-or-nothing per batch: turn it off if you ever see snow land on something that should stay bare, such as a shipwreck hull.",
     "feature.snow_deformation.snow_borders": "Snow Borders",
     "feature.snow_deformation.snow_borders_tooltip": "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...).",
     "feature.snow_deformation.snow_meshes_depth": "Round Objects",
