@@ -29,8 +29,10 @@ static constexpr float kExplosionRadiusMin = 50.0f;
 static constexpr float kExplosionRadiusMax = 320.0f;
 // A detonation reaches its basin in about a quarter second: fast enough to
 // read as a blast rather than a melt, slow enough that the snow visibly gives
-// way instead of the crater simply existing on the next frame.
+// way instead of the crater simply existing on the next frame. The mark has to
+// be HELD for that long to get there - see ActiveBlast.
 static constexpr float kExplosionRate = 4.0f;
+static constexpr float kBlastDuration = 0.35f;
 // Effect magnitude mapping to the unscaled rate (vanilla Flames is 8/sec), and
 // the clamp either side of it. Modded spells run to absurd magnitudes; the
 // ceiling stops one of them melting a crater in a frame.
@@ -380,6 +382,13 @@ void SnowDeformation::GatherSpellEmitters()
 		const RE::BGSExplosion* blast = runtime.explosion;
 		if (effect && effect->data.explosion && !blast)
 			blast = effect->data.explosion;
+		// An aimed bolt keeps its explosion on the PROJECTILE record, not on
+		// any effect: the effect says what the magic does, the projectile says
+		// what the thing in flight does when it stops.
+		if (!blast)
+			if (auto* base = projectile->GetBaseObject())
+				if (auto* projectileBase = base->As<RE::BGSProjectile>())
+					blast = projectileBase->data.explosionType;
 		if ((element == SpellElement::None || !blast) && runtime.spell) {
 			for (auto* item : runtime.spell->effects) {
 				const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
@@ -537,22 +546,43 @@ void SnowDeformation::GatherSpellEmitters()
 		if (strength < kMinSpellStrength)
 			continue;
 		spellStats.detonations++;
-		if (spellEmitters.size() >= kMaxSpellEmitters)
+		if (activeBlasts.size() >= kMaxSpellEmitters)
 			continue;
 
 		spellStats.lastStrength = strength;
 		spellStats.lastRadius = radius;
 
-		SpellEmitter emitter{};
-		emitter.position = markPosition;
-		emitter.previous = markPosition;
-		emitter.radius = radius;
-		emitter.strength = strength;
-		// A detonation is over inside a frame, so its mark arrives whole.
-		emitter.rate = kExplosionRate;
-		emitter.element = blast.element;
-		emitter.mark = MarkForElement(blast.element);
-		spellEmitters.push_back(emitter);
+		ActiveBlast opened{};
+		opened.position = markPosition;
+		opened.radius = radius;
+		opened.strength = strength;
+		opened.rate = kExplosionRate;
+		opened.remaining = kBlastDuration;
+		opened.element = blast.element;
+		opened.mark = MarkForElement(blast.element);
+		activeBlasts.push_back(opened);
+	}
+
+	// Every blast still opening marks again this frame. Without this a
+	// detonation would be one frame of melt and therefore invisible unless its
+	// rate were made absurd.
+	{
+		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
+		for (auto it = activeBlasts.begin(); it != activeBlasts.end();) {
+			if (spellEmitters.size() < kMaxSpellEmitters) {
+				SpellEmitter emitter{};
+				emitter.position = it->position;
+				emitter.previous = it->position;
+				emitter.radius = it->radius;
+				emitter.strength = it->strength;
+				emitter.rate = it->rate;
+				emitter.element = it->element;
+				emitter.mark = it->mark;
+				spellEmitters.push_back(emitter);
+			}
+			it->remaining -= deltaTime;
+			it = it->remaining > 0.0f ? it + 1 : activeBlasts.erase(it);
+		}
 	}
 
 	spellPrevPositions = std::move(currentPositions);

@@ -1437,6 +1437,28 @@ protected:
 	/** @brief Per live projectile (formID), rebuilt every frame. */
 	std::unordered_map<uint32_t, PendingBlast> projectileBlasts;
 
+	/**
+	 * @brief A detonation's mark, held open for a fraction of a second.
+	 *
+	 * A blast is one instant, but a stamp only deepens while its emitter
+	 * exists, so a single frame of any sane rate is a single frame of melt and
+	 * therefore nothing. Either the rate is made effectively infinite and the
+	 * crater simply appears, or the emitter is held for a moment and the snow
+	 * is seen to give way. This is the second.
+	 */
+	struct ActiveBlast
+	{
+		float2 position{};
+		float radius = 0.0f;
+		float strength = 0.0f;
+		float rate = 0.0f;
+		/** @brief Seconds left before the mark stops deepening. */
+		float remaining = 0.0f;
+		SpellElement element = SpellElement::None;
+		SpellMark mark = SpellMark::Melt;
+	};
+	std::vector<ActiveBlast> activeBlasts;
+
 	/** @brief Explosions already marked, so a multi-frame blast marks once. Pruned each frame against what is still live. */
 	std::unordered_set<uint32_t> explosionsStamped;
 	/** @brief Explosions seen this frame, rebuilt by the reference scan. */
