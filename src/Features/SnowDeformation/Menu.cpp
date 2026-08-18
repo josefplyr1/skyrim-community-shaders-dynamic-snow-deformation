@@ -315,6 +315,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_persistence_tooltip"), "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate."));
+		ImGui::SliderFloat(T(TKEY("blast_radius_scale"), "Blast Radius"), &settings.BlastRadiusScale, 0.1f, 2.0f, "%.2fx");
+		if (auto _ttBlast = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar, so the default halves them."));
 		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
 		if (auto _ttBowl = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));

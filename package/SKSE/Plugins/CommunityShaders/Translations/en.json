@@ -1323,6 +1323,8 @@
     "feature.skylighting.specular_min_visibility": "Specular Min Visibility",
     "feature.snow_deformation.berm_height": "Berm Height",
     "feature.snow_deformation.berm_height_tooltip": "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm.",
+    "feature.snow_deformation.blast_radius_scale": "Blast Radius",
+    "feature.snow_deformation.blast_radius_scale_tooltip": "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar, so the default halves them.",
     "feature.snow_deformation.border_noise": "Border Noise",
     "feature.snow_deformation.border_noise_tooltip": "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam.",
     "feature.snow_deformation.border_smoothness": "Border Smoothness",

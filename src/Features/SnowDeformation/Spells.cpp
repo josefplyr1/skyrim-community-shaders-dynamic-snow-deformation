@@ -27,6 +27,10 @@ static constexpr float kHazardRadiusMax = 260.0f;
 // absurd radius would otherwise melt half the deformation window at once.
 static constexpr float kExplosionRadiusMin = 50.0f;
 static constexpr float kExplosionRadiusMax = 320.0f;
+// A bolt that carries no explosion at all still strikes the snow. Without this
+// the smaller single-target spells mark nothing, while their master-tier
+// versions - which do author an explosion - leave craters.
+static constexpr float kImpactRadiusDefault = 90.0f;
 // A detonation reaches its basin in about a quarter second: fast enough to
 // read as a blast rather than a melt, slow enough that the snow visibly gives
 // way instead of the crater simply existing on the next frame. The mark has to
@@ -433,16 +437,23 @@ void SnowDeformation::GatherSpellEmitters()
 		// rejects. The element comes off its own effect, so a blast needs
 		// neither the explosion reference nor the explosion-to-element table.
 		{
-			if (!blast)
+			// A held stream marks continuously through the contact trace below
+			// and must NOT also leave a crater every time one of its short
+			// lived projectiles expires. Everything else marks by striking.
+			const bool strikes = effect->data.castingType != RE::MagicSystem::CastingType::kConcentration;
+			if (!blast && !strikes)
 				spellStats.rejectedNoBlast++;
-			if (blast) {
+			if (strikes || blast) {
 				float blastGroundZ = position.z;
 				tes->GetLandHeight(position, blastGroundZ);
+				const float authored = blast ?
+				                           std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax) :
+				                           kImpactRadiusDefault;
 				PendingBlast pending{};
 				pending.position = position;
 				pending.direction = direction;
 				pending.heightAboveLand = position.z - blastGroundZ;
-				pending.radius = std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
+				pending.radius = authored * std::max(settings.BlastRadiusScale, 0.0f);
 				pending.element = element;
 				projectileBlasts[projectile->formID] = pending;
 			}
