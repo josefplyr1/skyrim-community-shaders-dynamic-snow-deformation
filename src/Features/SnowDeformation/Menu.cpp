@@ -308,10 +308,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSpellEnable = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_enable_tooltip"), "Lets cast magic mark the snow. Off, the melt machinery still serves campfire clearings and the test emitter below."));
 
-		ImGui::Checkbox(T(TKEY("lift_runes"), "Lift Runes Onto Snow"), &settings.LiftRunesAboveSnow);
-		if (auto _ttLift = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("lift_runes_tooltip"), "Raises runes to sit on the snow surface rather than on the ground beneath it, where deep snow swallows them completely. Hiding a rune only matters against something that can spot it, and nothing in Skyrim does - so this is for you, to see where your own rune went."));
-
 		ImGui::SeparatorText(T(TKEY("spell_cat_melt"), "Melt"));
 		ImGui::SliderFloat(T(TKEY("spell_melt_rate"), "Fire Melt Rate"), &settings.SpellMeltRate, 0.0f, 3.0f, "%.2f /s");
 		if (auto _ttSpellRate = Util::HoverTooltipWrapper())
@@ -351,10 +347,8 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("projectiles %u | streams %u | hazards %u | blasts %u | ground hits %u",
 			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.explosions,
 			spellStats.groundContacts);
-		ImGui::Text("emitters %u | awaiting their step %u | lifted %u",
-			spellStats.emitters, spellStats.pending, spellStats.lifted);
-		ImGui::Text("last mark: strength %.2f | radius %.0f",
-			spellStats.lastStrength, spellStats.lastRadius);
+		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
+			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_ab"), "Comparison"));
 		ImGui::Checkbox(T(TKEY("melt_rate_model_ab"), "A/B: Rate-Shaped Melt"), &meltRateModelAB);

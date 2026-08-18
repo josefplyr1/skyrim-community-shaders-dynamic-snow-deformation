@@ -43,14 +43,8 @@ static constexpr float kSpellTrailBreak = 512.0f;
 // Below this the emitter is invisible and not worth a stamp slot.
 static constexpr float kMinSpellStrength = 0.04f;
 // A velocity shorter than this carries no usable direction, so the aim comes
-// off the caster instead. Doubles as the stationary test for a planted rune.
+// off the caster instead.
 static constexpr float kMinSpellSpeed = 1.0f;
-// A planted projectile further than this above the land is stuck to a wall or
-// a ledge, not lying on the ground, and the ground's snow depth says nothing
-// about how far it should rise.
-static constexpr float kPlantedGroundBand = 40.0f;
-// Snow shallower than this is not worth raising anything out of.
-static constexpr float kMinLiftDepth = 1.0f;
 
 SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectSetting* a_effect)
 {
@@ -302,39 +296,6 @@ void SnowDeformation::ConsiderExplosion(RE::TESObjectREFR* a_ref)
 	spellEmitters.push_back(emitter);
 }
 
-void SnowDeformation::LiftPlantedProjectile(RE::Projectile* a_projectile, float a_heightAboveLand)
-{
-	if (!settings.LiftRunesAboveSnow || !a_projectile)
-		return;
-
-	const uint32_t formID = a_projectile->formID;
-	liftedProjectilesLive.insert(formID);
-	// The offset goes onto the node's own transform, so applying it twice
-	// would walk the rune into the sky.
-	if (liftedProjectiles.contains(formID))
-		return;
-
-	auto* root = a_projectile->Get3D();
-	if (!root)
-		return;
-
-	const RE::NiPoint3 position = a_projectile->GetPosition();
-	const float depth = GetNominalSnowDepthAt(position.x, position.y, 0.0f);
-	if (depth <= kMinLiftDepth)
-		return;
-
-	// The shell surface sits at land + depth; the rune is already
-	// a_heightAboveLand up, so it only needs the remainder.
-	const float lift = depth - a_heightAboveLand;
-	if (lift <= 0.5f)
-		return;
-
-	root->local.translate.z += lift;
-	RE::NiUpdateData updateData{};
-	root->Update(updateData);
-	liftedProjectiles.emplace(formID, lift);
-}
-
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -403,24 +364,6 @@ void SnowDeformation::GatherSpellEmitters()
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
 			continue;
 
-		// A projectile that has stopped and planted itself on the ground is a
-		// rune, whatever spell made it. Lifting it is correct for anything
-		// that lands this way, so the test describes the state rather than
-		// naming the spell.
-		{
-			const float projectileSpeed = runtime.velocity.Length();
-			const bool planted = runtime.flags.any(RE::Projectile::Flags::kAddedVisualEffectOnGround) ||
-			                     (projectileSpeed < kMinSpellSpeed &&
-									 effect->data.delivery == RE::MagicSystem::Delivery::kTargetLocation);
-			if (planted) {
-				float plantedGroundZ = position.z;
-				tes->GetLandHeight(position, plantedGroundZ);
-				const float heightAboveLand = position.z - plantedGroundZ;
-				if (heightAboveLand >= 0.0f && heightAboveLand <= kPlantedGroundBand)
-					LiftPlantedProjectile(projectile.get(), heightAboveLand);
-			}
-		}
-
 		// Where the stream lands. A flame held at hand height still melts what
 		// it is pointed at, so the mark belongs at the ground contact, not
 		// under the projectile.
@@ -483,13 +426,5 @@ void SnowDeformation::GatherSpellEmitters()
 	}
 
 	spellPrevPositions = std::move(currentPositions);
-	// Forget projectiles that have gone, so a form ID the game recycles is not
-	// treated as already raised.
-	std::erase_if(liftedProjectiles, [&](const auto& a_entry) {
-		return !liftedProjectilesLive.contains(a_entry.first);
-	});
-	liftedProjectilesLive.clear();
-
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
-	spellStats.lifted = static_cast<uint>(liftedProjectiles.size());
 }

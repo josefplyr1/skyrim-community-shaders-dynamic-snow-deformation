@@ -1375,8 +1375,6 @@
     "feature.snow_deformation.key_feature_2": "Trails carved by the player, NPCs and creatures",
     "feature.snow_deformation.key_feature_3": "Snowfall-driven snow refill",
     "feature.snow_deformation.key_feature_4": "Compute-shader based, low performance impact",
-    "feature.snow_deformation.lift_runes": "Lift Runes Onto Snow",
-    "feature.snow_deformation.lift_runes_tooltip": "Raises runes to sit on the snow surface rather than on the ground beneath it, where deep snow swallows them completely. Hiding a rune only matters against something that can spot it, and nothing in Skyrim does - so this is for you, to see where your own rune went.",
     "feature.snow_deformation.lod_debug_heatmap": "Depth Delta Heatmap",
     "feature.snow_deformation.lod_debug_off": "Off",
     "feature.snow_deformation.lod_debug_provenance": "Terrain Data Provenance",
