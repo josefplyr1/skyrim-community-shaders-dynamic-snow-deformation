@@ -114,6 +114,14 @@ SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_elemen
 // beneath, weaker and broader the higher it runs. Shared deliberately: every
 // detector that marks the ground from an airborne source needs this, and the
 // first one to skip it produced marks so weak they were invisible.
+//
+// What the returned strength MEANS depends on how long the source lasts, and
+// getting that backwards leaves a mark that can never deepen:
+//   INSTANTANEOUS (a blast) - fade the TARGET. It has no time to dig, so a
+//     detonation high above the snow leaves a shallow scorch and that is that.
+//   SUSTAINED (a cloak, a wall) - fade the RATE and keep the target full. Heat
+//     held near snow melts through eventually however far above it sits; being
+//     further away makes it slower, not permanently shallower.
 static bool GroundMark(float a_heightAbove, float a_contactRadius, float& a_strength, float& a_radius)
 {
 	a_heightAbove = std::max(a_heightAbove, 0.0f);
@@ -223,14 +231,18 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	const float baseRadius = std::clamp(runtime.radius > 1.0f ? runtime.radius : base->data.radius,
 		kHazardRadiusMin, kHazardRadiusMax);
 
-	float strength = 0.0f;
+	float heightFade = 0.0f;
 	float radius = 0.0f;
-	if (!GroundMark(position.z - groundZ, baseRadius, strength, radius))
+	if (!GroundMark(position.z - groundZ, baseRadius, heightFade, radius))
 		return;
+	if (heightFade < kMinSpellStrength)
+		return;
+	// A wall burns for seconds, so it is sustained too: height slows it rather
+	// than capping how deep it can ever get. Most hazards drop to the ground
+	// and fade by nothing at all, but one left on a ledge behaves sensibly.
+	const float strength = 1.0f;
 	spellStats.lastStrength = strength;
 	spellStats.lastRadius = radius;
-	if (strength < kMinSpellStrength)
-		return;
 
 	SpellEmitter emitter{};
 	emitter.position = { position.x, position.y };
@@ -238,7 +250,7 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	emitter.previous = emitter.position;
 	emitter.radius = radius;
 	emitter.strength = strength;
-	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
+	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest) * heightFade;
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
 	spellEmitters.push_back(emitter);
@@ -345,14 +357,20 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a
 	float groundZ = position.z;
 	tes->GetLandHeight(position, groundZ);
 
-	float strength = 0.0f;
+	float heightFade = 0.0f;
 	float radius = 0.0f;
 	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, std::max(settings.CloakRadius, 1.0f),
-			strength, radius))
+			heightFade, radius))
 		return;
-	if (strength < kMinSpellStrength)
+	if (heightFade < kMinSpellStrength)
 		return;
 	spellStats.auras++;
+
+	// SUSTAINED, so the height fade slows the melt rather than capping it. The
+	// bowl therefore reaches full depth at its core and takes its shape from
+	// the falloff, which is what makes a wider cloak dig deeper as well as
+	// further instead of spreading one shallow dish.
+	const float strength = 1.0f;
 
 	// Sweeps with the wearer, so a cloaked actor crossing snow leaves a band
 	// rather than a row of rings.
@@ -375,7 +393,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a
 	emitter.previous = previous;
 	emitter.radius = radius;
 	emitter.strength = strength;
-	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale;
+	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale * heightFade;
 	emitter.element = a_cloak.element;
 	emitter.mark = MarkForElement(a_cloak.element);
 	spellEmitters.push_back(emitter);
