@@ -343,7 +343,17 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards, unlike a trampled trail edge, which the separate Trail Irregularity setting churns."));
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_lightning"), "Lightning"));
-		ImGui::TextDisabled("%s", T(TKEY("spell_cat_lightning_pending"), "Detected already; its pitting arrives with the shock profile."));
+		if (auto _ttShock = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_cat_lightning_tooltip"), "Lightning does not melt snow, it throws it aside and burns what is left. A discharge pocks a small core with arc legs forking off it, and unlike a melt the displaced snow still piles into a rim."));
+		ImGui::SliderFloat(T(TKEY("pit_depth"), "Lightning Pit Depth"), &settings.PitDepth, 0.0f, 1.0f, "%.2f");
+		if (auto _ttPitDepth = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("pit_depth_tooltip"), "How deep a discharge pocks the snow, as a fraction of the layer. Lightning scatters snow rather than boring into it, so this sits below a footprint - and unlike a melt it does not deepen with time, however long a cloak crackles over one spot."));
+		ImGui::SliderFloat(T(TKEY("pit_radius"), "Lightning Pit Radius"), &settings.PitRadius, 20.0f, 200.0f, "%.0f");
+		if (auto _ttPitRadius = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("pit_radius_tooltip"), "Reach of a single discharge before its arc legs, which fork out past it. Bigger spells scale up from here."));
+		ImGui::SliderFloat(T(TKEY("scorch_strength"), "Lightning Scorch"), &settings.ScorchStrength, 0.0f, 1.0f, "%.2f");
+		if (auto _ttScorch = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("scorch_strength_tooltip"), "How dark a discharge burns the snow it struck. 0 leaves the pocking alone and removes the blackening entirely."));
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_frost"), "Frost"));
 		ImGui::TextDisabled("%s", T(TKEY("spell_cat_frost_pending"), "Detected already; its crust arrives with the frost step."));

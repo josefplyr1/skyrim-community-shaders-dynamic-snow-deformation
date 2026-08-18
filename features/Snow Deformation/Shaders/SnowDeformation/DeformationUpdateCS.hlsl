@@ -5,11 +5,16 @@
 // refill is applied, and this frame's stamps are blended in.
 // Texel value = normalized depression depth (0 = untouched, 1 = ground).
 //
-// Two stamp classes share the buffer, selected per stamp by StampEnds[i].z:
+// Three stamp classes share the buffer, selected per stamp by StampEnds[i].z:
 //   CARVE (0) - a shape displaces snow. Instantaneous depth, max-blended:
 //               standing in a trench does not deepen it.
 //   MELT  (1) - a heat source removes snow while it stands there. Additive
 //               and dt-scaled, so DWELL TIME is what deepens the bowl.
+//   PIT   (2) - a discharge throws snow aside. Follows CARVE, not melt: the
+//               displacement is instantaneous, so a lightning cloak standing
+//               over one spot pocks it once rather than boring downward. It
+//               also SCORCHES, and scorched snow is displaced snow - it keeps
+//               its berm, where melted snow has none.
 // Melted ground stays bare longer than trampled ground, because the ground
 // under a fire is warm and wet after the flame is gone. That is applied as a
 // SLOWER REFILL on melted texels, not as extra depth: depth is capped at 1.0
@@ -18,10 +23,14 @@
 // the whole over-melted core collapses onto one plateau and the bowl becomes
 // a flat-floored pit with walls.
 //
-// Channels: .x = total depression depth, .y = the portion of it that was
-// MELTED rather than displaced. Displaced snow has to go somewhere and piles
-// into a berm along the rim; melted snow leaves no spoil at all, so the
-// shells divide .y by .x and scale the berm away by the result.
+// Channels: .x = total depression depth. .y is SIGNED surface state, because
+// the two things worth recording are mutually exclusive - snow that melted
+// away cannot also be scorched solid:
+//   .y > 0  the portion of .x that was MELTED rather than displaced. Melted
+//           snow leaves no spoil, so the berm field subtracts it.
+//   .y < 0  SCORCH, from a shock discharge. Displaced, so it keeps its full
+//           berm, and its magnitude darkens the shell.
+// Berm therefore reads x - max(y, 0), and scorch reads max(-y, 0).
 
 #define MAX_STAMPS 256
 
@@ -37,6 +46,16 @@
 // third of the finer cell here, which is what churns a footprint edge.
 #define MELT_NOISE_COARSE 80.0
 #define MELT_NOISE_FINE 24.0
+// Arc branches thrown off a strike. Lightning does not dig a hole, it forks,
+// so the mark is a small core with a handful of thin legs radiating out.
+#define PIT_LOBES 5
+// Lobe geometry as fractions of the stamp radius.
+#define PIT_LOBE_MIN 0.45
+#define PIT_LOBE_MAX 1.15
+#define PIT_LOBE_WIDTH 0.16
+// Cell size of the noise that breaks a pit into discrete pocks rather than a
+// continuous scar. Small: pocking is the point.
+#define PIT_POCK_CELL 14.0
 // Refill multiplier at full supply and full wind; interior texels with a
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
@@ -141,18 +160,22 @@ float StampNoise(float2 p)
 		}
 		// Warm wet ground takes its time. Scaled by how much of this texel's
 		// depression was melted rather than dug, so a boot print through a
-		// melt basin still recovers at the boot print rate.
-		refill *= lerp(1.0, 1.0 - saturate(MeltPersistence), saturate(melted / max(deformation, 1e-4)));
+		// melt basin still recovers at the boot print rate. Scorch (negative)
+		// gets none of this: burnt snow is still snow, and refills normally.
+		refill *= lerp(1.0, 1.0 - saturate(MeltPersistence), saturate(max(melted, 0.0) / max(deformation, 1e-4)));
 
 		deformation = max(deformation - refill, 0.0);
-		// The melted portion can never exceed the depression it is part of.
-		melted = min(max(melted - refill, 0.0), deformation);
+		// Both states fade with the snow they describe: the melted portion can
+		// never exceed the depression it is part of, and scorch fades toward
+		// zero from the other side.
+		melted = melted >= 0.0 ? min(max(melted - refill, 0.0), deformation) :
+		                         min(melted + refill, 0.0);
 	}
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
-	// Carve and melt accumulate separately so the result cannot depend on the
-	// order stamps happen to sit in the buffer.
+	// Carve, melt and scorch accumulate separately so the result cannot depend
+	// on the order stamps happen to sit in the buffer.
 	//
 	// Melt follows the campfire basins in SnowExclusions.hlsli, where the
 	// falloff IS the depth at a point rather than a speed toward one. That
@@ -165,6 +188,7 @@ float StampNoise(float2 p)
 	float carve = deformation;
 	float meltTarget = 0.0;
 	float meltRate = 0.0;
+	float scorch = max(-melted, 0.0);
 
 	for (uint i = 0; i < StampCount; i++) {
 		// Capsule stamp: distance to the segment from the actor's previous
@@ -180,7 +204,9 @@ float StampNoise(float2 p)
 
 		// Either edge treatment can push the falloff outward, so the gate
 		// widens by whichever reaches further.
-		float gateRadius = radius * (1.0 + max(0.5 * StampNoiseAmp, MeltEdgeNoise));
+		// Pits reach furthest of all - their arc legs run past the radius.
+		float gateRadius = radius * max(PIT_LOBE_MAX + PIT_LOBE_WIDTH,
+									 1.0 + max(0.5 * StampNoiseAmp, MeltEdgeNoise));
 		[branch] if (distSq < gateRadius * gateRadius)
 		{
 			float dist = sqrt(distSq);
@@ -198,6 +224,50 @@ float StampNoise(float2 p)
 				// high values hold full depth almost to the edge.
 				float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
 				carve = max(carve, Stamps[i].z * falloff);
+			}
+			else if (StampEnds[i].z > 1.5)
+			{
+				// Pit: a core with arc legs, all of it pocked. Everything is
+				// seeded from the stamp's own centre rather than from time, so
+				// a strike keeps the same shape frame after frame instead of
+				// boiling, and two strikes never share one.
+				float2 centre = Stamps[i].xy;
+				float ringFrac = StampEnds[i].w;
+
+				// A cloak pocks a RING at its reach rather than a bowl at its
+				// feet, so the core distance folds around the ring radius.
+				float coreDist = ringFrac > 0.001 ?
+				                     abs(dist - radius * ringFrac) / max(radius * (1.0 - ringFrac), 1e-3) :
+				                     dist / radius;
+				float shape = 1.0 - smoothstep(0.15, 1.0, coreDist);
+
+				[unroll] for (int lobe = 0; lobe < PIT_LOBES; lobe++) {
+					float2 seed = centre * 0.05 + float2(lobe * 7.3, lobe * 3.1);
+					float angle = StampNoiseHash(floor(seed)) * 6.2831853;
+					float legLength = radius * lerp(PIT_LOBE_MIN, PIT_LOBE_MAX,
+						StampNoiseHash(floor(seed + 31.7)));
+					float2 tip = centre + float2(cos(angle), sin(angle)) * legLength;
+
+					// Distance to the leg, which tapers to nothing at the tip.
+					float2 legVec = tip - centre;
+					float legLenSq = max(dot(legVec, legVec), 1e-4);
+					float legT = saturate(dot(worldPos - centre, legVec) / legLenSq);
+					float2 legDelta = worldPos - (centre + legVec * legT);
+					float legWidth = radius * PIT_LOBE_WIDTH * (1.0 - 0.75 * legT);
+					shape = max(shape, 1.0 - smoothstep(0.2, 1.0, length(legDelta) / max(legWidth, 1e-3)));
+				}
+
+				// Pocked, not scored: the mask cuts the shape into fragments so
+				// a strike reads as snow blasted apart rather than a drawn star.
+				float pock = StampNoise(worldPos / PIT_POCK_CELL);
+				shape *= smoothstep(0.35, 0.62, pock);
+
+				// CARVE's model, not melt's: the throw is instantaneous, so it
+				// is max-blended to an instant depth. Accumulating instead
+				// would let a standing lightning cloak bore a shaft.
+				float pitDepth = Stamps[i].z * shape;
+				carve = max(carve, pitDepth);
+				scorch = max(scorch, pitDepth);
 			}
 			else
 			{
@@ -229,7 +299,10 @@ float StampNoise(float2 p)
 		total = min(total + meltRate * DeltaTime, meltTarget);
 	total = min(total, 1.0);
 
-	// Whatever the melt just added is melt-origin depth, and the berm field
-	// subtracts it: melted snow leaves no spoil to pile along a rim.
-	CurrentDeformation[pixel] = float2(total, min(melted + max(total - carve, 0.0), total));
+	// Melt-origin depth is recorded positive so the berm field can subtract it;
+	// scorch is recorded negative so it keeps its berm and can darken the
+	// shell. Melt wins the channel where both somehow land, since snow that
+	// has gone cannot also be burnt.
+	float meltedNow = min(melted + max(total - carve, 0.0), total);
+	CurrentDeformation[pixel] = float2(total, meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0));
 }

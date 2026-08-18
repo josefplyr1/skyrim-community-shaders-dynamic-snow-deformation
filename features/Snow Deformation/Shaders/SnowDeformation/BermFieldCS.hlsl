@@ -46,10 +46,12 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
-// Displaced (dug) depth of a map texel: total minus the melted portion.
+// Displaced (dug) depth of a map texel: total minus the MELTED portion only.
+// Channel y is signed - negative is scorch - and scorched snow was thrown
+// aside rather than removed, so it keeps every bit of its berm.
 float Displaced(float2 texel)
 {
-	return saturate(texel.x - texel.y);
+	return saturate(texel.x - max(texel.y, 0.0));
 }
 
 // Bilinear tap in texel coordinates, clamped to the edge - the Load-based

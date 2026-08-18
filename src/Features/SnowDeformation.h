@@ -35,6 +35,8 @@ public:
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeCarve = 0.0f;
 	static constexpr float kStampModeMelt = 1.0f;
+	/** @brief A discharge throwing snow aside: max-blended like a carve, because the throw is instantaneous, and scorching as it goes. */
+	static constexpr float kStampModePit = 2.0f;
 	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 
@@ -234,6 +236,12 @@ public:
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.11f;
+		/** @brief Depth a shock discharge pocks the snow to, as a fraction of the layer. Lightning throws snow aside rather than boring into it, so this stays well under a footprint's carve. */
+		float PitDepth = 0.55f;
+		/** @brief Reach of a single discharge mark, in world units, before its arc legs. */
+		float PitRadius = 70.0f;
+		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
+		float ScorchStrength = 0.85f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
 		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
@@ -569,6 +577,9 @@ public:
 
 		/** @brief Parallax on the shells: x = HeightScale (the PBR JSON displacementScale, 1:1 with landscape now that kSnowUVTile matches), y = self-shadow strength (0 disables the taps), z = occlusion depth multiplier (0 disables the march, landscape shell only), w = coarse march steps. */
 		float4 SnowParallax;
+
+		/** @brief x = how dark a shock discharge burns the snow it struck (0 disables). Appended LAST and mirrored in SnowShell.hlsl's ShellCB - see CLAUDE.md on constant buffers being the silent collision. */
+		float4 SpellShading;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -1355,6 +1366,10 @@ protected:
 		float rate = 0.0f;
 		SpellElement element = SpellElement::None;
 		SpellMark mark = SpellMark::Melt;
+		/** @brief Pits only: multiplier on the discharge radius, so a big blast forks wider than a bolt. */
+		float pitScale = 1.0f;
+		/** @brief Pits only: 0 marks a pocked disc, >0 marks a pocked RING at that fraction of the radius - a cloak crackles around its wearer rather than under them. */
+		float ringFraction = 0.0f;
 	};
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
@@ -1439,6 +1454,8 @@ protected:
 		float rate = 0.0f;
 		/** @brief Seconds left before the mark stops deepening. */
 		float remaining = 0.0f;
+		/** @brief Pits only: how much wider than a bolt this discharge forks. */
+		float pitScale = 1.0f;
 		SpellElement element = SpellElement::None;
 		SpellMark mark = SpellMark::Melt;
 	};

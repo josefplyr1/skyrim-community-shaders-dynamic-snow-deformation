@@ -743,22 +743,29 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	for (const auto& emitter : spellEmitters) {
 		if (stampCount >= kMaxStamps)
 			break;
-		// Frost and shock sources are detected and carry their element, but
-		// crust and pitting do not exist yet, so they mark nothing until
-		// their own steps land. Splitting detection from effect is exactly
-		// what the emitter list is for.
-		if (emitter.mark != SpellMark::Melt) {
+		// Frost is detected and carries its element, but crust does not exist
+		// yet, so it marks nothing until its own step lands. Splitting
+		// detection from effect is exactly what the emitter list is for.
+		if (emitter.mark != SpellMark::Melt && emitter.mark != SpellMark::Pit) {
 			spellStats.pending++;
 			continue;
 		}
+		const bool pits = emitter.mark == SpellMark::Pit;
 		float4 stamp{};
 		stamp.x = emitter.position.x;
 		stamp.y = emitter.position.y;
-		stamp.z = emitter.strength;
-		stamp.w = emitter.radius;
+		// A pit is thrown to a fixed depth rather than melted toward one, so
+		// its strength is the depth itself scaled by how much of the discharge
+		// reached the ground.
+		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) : emitter.strength;
+		stamp.w = pits ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale : emitter.radius;
 		perFrameData.Stamps[stampCount] = stamp;
+		// Pits carry their ring fraction where a melt carries its rate: an
+		// instantaneous mark has no rate to give, and a cloak needs to say it
+		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			kStampModeMelt, emitter.rate };
+			pits ? kStampModePit : kStampModeMelt,
+			pits ? emitter.ringFraction : emitter.rate };
 		stampCount++;
 		stampStats.spells++;
 	}

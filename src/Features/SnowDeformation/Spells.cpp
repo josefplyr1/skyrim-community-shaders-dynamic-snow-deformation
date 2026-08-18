@@ -396,6 +396,11 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, const CloakState& a
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale * heightFade;
 	emitter.element = a_cloak.element;
 	emitter.mark = MarkForElement(a_cloak.element);
+	// A shock cloak arcs off the body outward, so it pocks a RING at its reach
+	// rather than a bowl under the wearer, and its pocks are sized by the
+	// cloak rather than by a strike.
+	emitter.pitScale = std::max(settings.CloakRadius, 1.0f) / std::max(settings.PitRadius, 4.0f);
+	emitter.ringFraction = 0.72f;
 	spellEmitters.push_back(emitter);
 }
 
@@ -736,6 +741,10 @@ void SnowDeformation::GatherSpellEmitters()
 
 		ActiveBlast opened{};
 		opened.position = markPosition;
+		// A pit is sized by its own setting, not by a blast radius authored for
+		// damage - but a bigger blast should still fork wider, so the authored
+		// size scales the discharge rather than replacing it.
+		opened.pitScale = std::clamp(radius / 160.0f, 0.5f, 3.0f);
 		opened.radius = radius;
 		opened.strength = strength;
 		opened.rate = kExplosionRate;
@@ -797,6 +806,7 @@ void SnowDeformation::GatherSpellEmitters()
 				emitter.rate = it->rate;
 				emitter.element = it->element;
 				emitter.mark = it->mark;
+				emitter.pitScale = it->pitScale;
 				spellEmitters.push_back(emitter);
 			}
 			it->remaining -= deltaTime;

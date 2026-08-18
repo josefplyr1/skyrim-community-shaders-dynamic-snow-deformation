@@ -346,6 +346,7 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
 		(float)std::clamp(settings.ParallaxSteps, 4, 16)
 	};
+	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f), 0.0f, 0.0f, 0.0f };
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);

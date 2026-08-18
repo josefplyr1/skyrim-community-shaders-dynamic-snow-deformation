@@ -162,6 +162,9 @@ cbuffer ShellCB : register(b0)
 	// strength (0 disables), z = occlusion depth multiplier (0 disables the
 	// march), w = coarse march steps.
 	float4 SnowParallax;
+
+	// x = scorch darkening strength (0 disables).
+	float4 SpellShading;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -396,7 +399,32 @@ float SampleDisplacedFast(float2 gridLocal)
 	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
 	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
 	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	return saturate(v.x - v.y);
+	// Only MELTED depth is spoil-free. Channel y is signed and negative means
+	// scorch, which was displaced and keeps its berm.
+	return saturate(v.x - max(v.y, 0.0));
+}
+
+// Scorch at a point: burnt snow left by a shock discharge, read out of the
+// negative half of the map's surface-state channel.
+float SampleScorch(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float2 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float2 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(-v.y);
 }
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
@@ -1414,6 +1442,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// in the pipeline's gamma space. Auto-enabled when the PBR set resolved.
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
+	}
+	// Scorch: a shock discharge leaves the snow burnt where it struck. Darkened
+	// rather than recoloured, and biased slightly warm, so it reads as fouled
+	// snow instead of a grey decal painted over it.
+	{
+		float scorch = SampleScorch(gridLocal) * SpellShading.x;
+		[branch] if (scorch > 0.001)
+			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
