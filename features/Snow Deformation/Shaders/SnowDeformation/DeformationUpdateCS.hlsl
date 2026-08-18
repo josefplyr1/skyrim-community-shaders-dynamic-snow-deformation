@@ -71,6 +71,10 @@ cbuffer PerFrame : register(b0)
 	// Fraction the melt radius wobbles by, on the coarse cells above.
 	float MeltEdgeNoise;
 
+	// A/B: 1 = the old rate-shaped melt, 0 = the target-shaped melt below.
+	float MeltRateModel;
+	float3 perFramePad;
+
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 }
@@ -153,8 +157,18 @@ float StampNoise(float2 p)
 
 	// Carve and melt accumulate separately so the result cannot depend on the
 	// order stamps happen to sit in the buffer.
+	//
+	// Melt follows the campfire basins in SnowExclusions.hlsli, where the
+	// falloff IS the depth at a point rather than a speed toward one. That
+	// distinction is the whole shape: scaling the RATE lets every texel under
+	// the stamp keep deepening until it saturates - the rim merely arrives
+	// late - so a source left standing converges on a flat-floored cylinder.
+	// Scaling the TARGET gives each texel its own ceiling, so the bowl is
+	// permanent and a hotter source reaches the same bowl sooner instead of
+	// digging a deeper one.
 	float carve = deformation;
-	float melt = 0.0;
+	float meltTarget = 0.0;
+	float meltRate = 0.0;
 
 	for (uint i = 0; i < StampCount; i++) {
 		// Capsule stamp: distance to the segment from the actor's previous
@@ -204,11 +218,32 @@ float StampNoise(float2 p)
 					meltRadius *= 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
 				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, dist / max(meltRadius, 1e-3));
-				melt += Stamps[i].z * StampEnds[i].w * DeltaTime * falloff;
+				// Depth this texel melts TO, and how fast it gets there. The
+				// rate carries the same falloff, so the whole basin reaches
+				// its profile together and the bowl is visible from the first
+				// second instead of opening outward from the middle.
+				meltTarget = max(meltTarget, Stamps[i].z * falloff);
+				meltRate += Stamps[i].z * StampEnds[i].w * falloff;
 			}
 		}
 	}
 
-	float total = min(carve + melt, 1.0);
-	CurrentDeformation[pixel] = float2(total, min(melted + melt, total));
+	float total = carve;
+	[branch] if (MeltRateModel > 0.5)
+	{
+		// A/B reference: falloff scales the rate, with nothing but the 1.0
+		// clamp to stop it. Kept so the canyon this produces can be compared
+		// against the basin below.
+		total = carve + meltRate * DeltaTime;
+	}
+	else
+	{
+		[flatten] if (meltTarget > total)
+			total = min(total + meltRate * DeltaTime, meltTarget);
+	}
+	total = min(total, 1.0);
+
+	// Whatever the melt just added is melt-origin depth, and the berm field
+	// subtracts it: melted snow leaves no spoil to pile along a rim.
+	CurrentDeformation[pixel] = float2(total, min(melted + max(total - carve, 0.0), total));
 }

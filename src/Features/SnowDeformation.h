@@ -229,7 +229,7 @@ public:
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
-		float MeltPersistence = 0.6f;
+		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
 		float MeltBowlFloor = 0.15f;
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
@@ -287,7 +287,7 @@ public:
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
-		float BermHeight = 0.35f;
+		float BermHeight = 0.50f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -379,6 +379,9 @@ public:
 		float MeltFloorStart;
 		/** @brief Settings::MeltEdgeIrregularity, the fraction the melt radius wobbles by. */
 		float MeltEdgeNoise;
+		/** @brief A/B: 1 = the old rate-shaped melt (falloff scales speed, so a standing source digs a cylinder), 0 = target-shaped melt (falloff is the depth, as the campfire exclusions do it). */
+		float MeltRateModel;
+		float3 perFramePad;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1253,6 +1256,8 @@ public:
 	float debugMeltEmitterRadius = 100.0f;
 	/** @brief Emitter accumulation rate in depth units per second at the core. */
 	float debugMeltEmitterRate = 0.50f;
+	/** @brief A/B aid: melt back on the rate-shaped model, where the falloff sets how fast a texel deepens rather than how deep it ends up. Runtime-only. */
+	bool meltRateModelAB = false;
 	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
 	bool debugTilingRuler = false;
 

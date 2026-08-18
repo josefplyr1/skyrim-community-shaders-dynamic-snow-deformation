@@ -427,6 +427,7 @@ void SnowDeformation::Prepass()
 	// trench sharpness slider is.
 	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
 	perFrameData.MeltEdgeNoise = std::max(settings.MeltEdgeIrregularity, 0.0f);
+	perFrameData.MeltRateModel = meltRateModelAB ? 1.0f : 0.0f;
 
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.

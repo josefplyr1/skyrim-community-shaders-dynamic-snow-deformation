@@ -334,6 +334,11 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
 		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_ab"), "Comparison"));
+		ImGui::Checkbox(T(TKEY("melt_rate_model_ab"), "A/B: Rate-Shaped Melt"), &meltRateModelAB);
+		if (auto _ttAB = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_rate_model_ab_tooltip"), "Comparison aid. Off, the melt falloff sets how DEEP each point ends up, the way campfire clearings work, so the basin holds its bowl however long the heat stands. On, it sets how FAST each point deepens instead, with only full depth to stop it - the rim just arrives later than the middle, and a source left standing sinks a flat-floored canyon. Turn it on with the emitter running to watch the bowl straighten out."));
 		ImGui::TreePop();
 	}
 
