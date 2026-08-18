@@ -15,6 +15,10 @@
 //               over one spot pocks it once rather than boring downward. It
 //               also SCORCHES, and scorched snow is displaced snow - it keeps
 //               its berm, where melted snow has none.
+//   CRUST (3) - frost refreezes the surface. Sustained, so it follows MELT:
+//               approaches a target at a rate, and a wall glazing for ten
+//               seconds sets harder than one that flickered. It moves no snow
+//               at all - depth is untouched - it only hardens what is there.
 // Melted ground stays bare longer than trampled ground, because the ground
 // under a fire is warm and wet after the flame is gone. That is applied as a
 // SLOWER REFILL on melted texels, not as extra depth: depth is capped at 1.0
@@ -23,14 +27,21 @@
 // the whole over-melted core collapses onto one plateau and the bowl becomes
 // a flat-floored pit with walls.
 //
-// Channels: .x = total depression depth. .y is SIGNED surface state, because
-// the two things worth recording are mutually exclusive - snow that melted
-// away cannot also be scorched solid:
-//   .y > 0  the portion of .x that was MELTED rather than displaced. Melted
-//           snow leaves no spoil, so the berm field subtracts it.
-//   .y < 0  SCORCH, from a shock discharge. Displaced, so it keeps its full
-//           berm, and its magnitude darkens the shell.
-// Berm therefore reads x - max(y, 0), and scorch reads max(-y, 0).
+// Channels:
+//   .x  total depression depth.
+//   .y  SIGNED surface state, because the two things it records are mutually
+//       exclusive - snow that melted away cannot also be scorched solid:
+//         > 0  the portion of .x that was MELTED rather than displaced. Melted
+//              snow leaves no spoil, so the berm field subtracts it.
+//         < 0  SCORCH, from a shock discharge. Displaced, so it keeps its full
+//              berm, and its magnitude darkens the shell.
+//       Berm reads x - max(y, 0); scorch reads max(-y, 0).
+//   .z  CRUST: refrozen snow. Resists being carved and shades as ice. Frost
+//       neither removes snow nor throws it, so it is neither of the above and
+//       needed a channel of its own.
+//   .w  unused. Kept deliberately: BLOOD-DESIGN.md needs exactly this kind of
+//       per-texel surface value, and widening again later would cost another
+//       33 MB for one field.
 
 #define MAX_STAMPS 256
 
@@ -93,12 +104,19 @@ cbuffer PerFrame : register(b0)
 	// Fraction the melt radius wobbles by, on the coarse cells above.
 	float MeltEdgeNoise;
 
+	// Depth a boot still prints on fully crusted snow, as a fraction of what it
+	// would print on loose snow. NOT zero: actors stand on the terrain while
+	// the shell floats above them, so a crust that refuses to take a print at
+	// all puts feet inside apparently solid ice.
+	float CrustPrintDepth;
+	float3 perFramePad;
+
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 }
 
-Texture2D<float2> PreviousDeformation : register(t0);
-RWTexture2D<float2> CurrentDeformation : register(u0);
+Texture2D<float4> PreviousDeformation : register(t0);
+RWTexture2D<float4> CurrentDeformation : register(u0);
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
 // stamp's falloff distance, so trail edges read as churned snow instead of
@@ -131,6 +149,7 @@ float StampNoise(float2 p)
 	// Melted portion of `deformation`, carried so the shells can tell a
 	// melt basin from a dug trench.
 	float melted = 0.0;
+	float crust = 0.0;
 
 	if (!ClearMap) {
 		int2 sourcePixel = int2(pixel) + ScrollDelta;
@@ -140,9 +159,10 @@ float StampNoise(float2 p)
 
 		[branch] if (all(sourcePixel >= 0) && all(sourcePixel < int2(dims)))
 		{
-			float2 previous = PreviousDeformation[uint2(sourcePixel)];
+			float4 previous = PreviousDeformation[uint2(sourcePixel)];
 			deformation = previous.x;
 			melted = previous.y;
+			crust = previous.z;
 		}
 
 		// Wind-biased refill: recovery scales with the intact snow a few
@@ -173,6 +193,8 @@ float StampNoise(float2 p)
 		// zero from the other side.
 		melted = melted >= 0.0 ? min(max(melted - refill, 0.0), deformation) :
 		                         min(melted + refill, 0.0);
+		// Fresh snow buries a crust as readily as it fills a trench.
+		crust = max(crust - refill, 0.0);
 	}
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
@@ -192,6 +214,13 @@ float StampNoise(float2 p)
 	float meltTarget = 0.0;
 	float meltRate = 0.0;
 	float scorch = max(-melted, 0.0);
+	float crustTarget = 0.0;
+	float crustRate = 0.0;
+	// How much of the standing crust gets smashed through this frame.
+	float crustBreak = 0.0;
+	// Crust as it stands BEFORE this frame's stamps, which is what a boot
+	// landing on it has to get through.
+	const float standingCrust = crust;
 
 	for (uint i = 0; i < StampCount; i++) {
 		// Capsule stamp: distance to the segment from the actor's previous
@@ -226,7 +255,32 @@ float StampNoise(float2 p)
 				// wide edge band coarser consumers of the map can still represent,
 				// high values hold full depth almost to the edge.
 				float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
-				carve = max(carve, Stamps[i].z * falloff);
+
+				// Crusted snow bears weight. A print on it is shallow rather
+				// than absent, and something heavy enough breaks through and
+				// takes the crust with it - StampEnds[i].w carries how much
+				// weight this shape puts through, unused by carves otherwise.
+				float force = saturate(StampEnds[i].w);
+				float resist = standingCrust * (1.0 - force);
+				carve = max(carve, Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist));
+				crustBreak = max(crustBreak, force * falloff);
+			}
+			else if (StampEnds[i].z > 2.5)
+			{
+				// Crust: frost hardens the surface without moving any snow, so
+				// depth is left entirely alone. Sustained, so it approaches a
+				// target at a rate exactly as melt does - a wall glazing for
+				// ten seconds sets harder than one that flickered.
+				float glazeRadius = radius;
+				[branch] if (MeltEdgeNoise > 0.001)
+				{
+					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
+					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
+					glazeRadius *= 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
+				}
+				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, dist / max(glazeRadius, 1e-3));
+				crustTarget = max(crustTarget, Stamps[i].z * falloff);
+				crustRate += Stamps[i].z * StampEnds[i].w * falloff;
 			}
 			else if (StampEnds[i].z > 1.5)
 			{
@@ -310,5 +364,14 @@ float StampNoise(float2 p)
 	// shell. Melt wins the channel where both somehow land, since snow that
 	// has gone cannot also be burnt.
 	float meltedNow = min(melted + max(total - carve, 0.0), total);
-	CurrentDeformation[pixel] = float2(total, meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0));
+
+	// Crust grows toward its target, then whatever broke through is taken off
+	// it: snow that has just been smashed is not still frozen solid.
+	float crustNow = crust;
+	[flatten] if (crustTarget > crustNow)
+		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
+	crustNow = saturate(crustNow * (1.0 - crustBreak));
+
+	CurrentDeformation[pixel] = float4(total,
+		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, 0.0);
 }

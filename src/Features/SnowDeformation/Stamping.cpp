@@ -189,6 +189,16 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 		CollectStampBones(child.get(), a_ancestor, a_ancestorRadius, a_out);
 }
 
+// Weight a shape puts through a crust, from its size. Crust bears a boot and
+// gives under a mammoth, and the shapes a heavy skeleton carries are simply
+// bigger - there is no mass to read off a collision shape, but this tracks it
+// closely enough that the exceptions do not matter.
+float SnowDeformation::CrustBreakForce(float a_radius) const
+{
+	const float threshold = std::max(settings.CrustBreakRadius, 1.0f);
+	return std::clamp((a_radius - threshold) / threshold, 0.0f, 1.0f);
+}
+
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
 	GatherSpellEmitters();
@@ -375,7 +385,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.z = 1.0f;
 					stamp.w = radius;
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f, 0.0f };
+					// StampEnds.w on a carve is the weight it puts through a
+					// crust: a boot prints shallow on ice, a mammoth goes
+					// through it. Radius stands in for mass - the shapes a
+					// heavy skeleton carries are simply bigger.
+					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, 0.0f,
+						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.feet++;
 				}
@@ -410,7 +425,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stamp.z = carve;
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
+					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.limbs++;
 			}
@@ -486,7 +502,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stamp.z = carve;
 				stamp.w = radius;
 				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f, 0.0f };
+				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, 0.0f,
+					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.limbs++;
 			}
@@ -554,7 +571,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// StampRadius scales the shape's own radius.
 					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.shapes++;
 				}
@@ -697,7 +715,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.z = 1.0f;
 					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.props++;
 				}
@@ -727,7 +746,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.z = 1.0f;
 					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f, 0.0f };
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.props++;
 				}
@@ -743,14 +763,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	for (const auto& emitter : spellEmitters) {
 		if (stampCount >= kMaxStamps)
 			break;
-		// Frost is detected and carries its element, but crust does not exist
-		// yet, so it marks nothing until its own step lands. Splitting
-		// detection from effect is exactly what the emitter list is for.
-		if (emitter.mark != SpellMark::Melt && emitter.mark != SpellMark::Pit) {
-			spellStats.pending++;
-			continue;
-		}
 		const bool pits = emitter.mark == SpellMark::Pit;
+		const bool glazes = emitter.mark == SpellMark::Crust;
 		float4 stamp{};
 		stamp.x = emitter.position.x;
 		stamp.y = emitter.position.y;
@@ -758,14 +772,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// its strength is the depth itself scaled by how much of the discharge
 		// reached the ground.
 		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) : emitter.strength;
-		stamp.w = pits ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale : emitter.radius;
+		stamp.w = pits ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
+		                 (glazes ? std::max(settings.CrustRadius, 4.0f) : emitter.radius);
 		perFrameData.Stamps[stampCount] = stamp;
 		// Pits carry their ring fraction where a melt carries its rate: an
 		// instantaneous mark has no rate to give, and a cloak needs to say it
 		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			pits ? kStampModePit : kStampModeMelt,
-			pits ? emitter.ringFraction : emitter.rate };
+			pits ? kStampModePit : (glazes ? kStampModeCrust : kStampModeMelt),
+			pits ? emitter.ringFraction :
+				   (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate) };
 		stampCount++;
 		stampStats.spells++;
 	}

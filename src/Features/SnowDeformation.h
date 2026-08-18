@@ -37,6 +37,8 @@ public:
 	static constexpr float kStampModeMelt = 1.0f;
 	/** @brief A discharge throwing snow aside: max-blended like a carve, because the throw is instantaneous, and scorching as it goes. */
 	static constexpr float kStampModePit = 2.0f;
+	/** @brief Frost refreezing the surface: sustained like a melt, but moving no snow at all - it only hardens what is already there. */
+	static constexpr float kStampModeCrust = 3.0f;
 	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 
@@ -248,6 +250,18 @@ public:
 		float ShockCloakStrikeScale = 0.25f;
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
+		/** @brief How fast frost sets a crust, for a spell of Frostbite's strength. */
+		float CrustRate = 0.6f;
+		/** @brief Reach of a frost mark on the ground, in world units. */
+		float CrustRadius = 90.0f;
+		/** @brief Depth a boot still prints on fully crusted snow, as a fraction of loose snow. NOT zero: actors stand on terrain while the shell floats above them, so a crust that takes no print at all buries feet inside apparent ice. */
+		float CrustPrintDepth = 0.20f;
+		/** @brief How icy crusted snow shades: 0 leaves it looking like powder, 1 gives the full polish. */
+		float CrustGloss = 1.0f;
+		/** @brief Roughness of fully crusted snow. Lower is glassier; snow sits near 0.6. */
+		float CrustRoughness = 0.22f;
+		/** @brief Stamp radius past which a shape counts as heavy enough to break a crust rather than print on it. A human foot sits well under this; a mammoth or a landing dragon well over. */
+		float CrustBreakRadius = 30.0f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
 		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
@@ -403,6 +417,9 @@ public:
 		float MeltFloorStart;
 		/** @brief Settings::MeltEdgeIrregularity, the fraction the melt radius wobbles by. */
 		float MeltEdgeNoise;
+		/** @brief Settings::CrustPrintDepth, how deep a boot still prints on fully crusted snow. */
+		float CrustPrintDepth;
+		float3 perFramePad;
 
 
 		float4 Stamps[kMaxStamps];
@@ -1376,6 +1393,8 @@ protected:
 		float pitScale = 1.0f;
 		/** @brief Pits only: 0 marks a pocked disc, >0 marks a pocked RING at that fraction of the radius - a cloak crackles around its wearer rather than under them. */
 		float ringFraction = 0.0f;
+		/** @brief Crust only: multiplier on the glazing rate, carrying the source's magnitude and how far above the snow it sits. */
+		float rateScale = 1.0f;
 	};
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
@@ -1408,6 +1427,9 @@ protected:
 	 * scan already running in GatherStamps instead of adding another.
 	 */
 	void GatherSpellEmitters();
+
+	/** @brief Weight a stamped shape puts through a crust, from its radius. Implemented in SnowDeformation/Stamping.cpp. */
+	float CrustBreakForce(float a_radius) const;
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.

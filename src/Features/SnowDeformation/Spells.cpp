@@ -279,6 +279,7 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
 	emitter.pitScale = std::clamp(baseRadius / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
+	emitter.rateScale = RateScaleOf(costliest) * heightFade;
 	spellEmitters.push_back(emitter);
 }
 
@@ -460,6 +461,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	emitter.radius = radius;
 	emitter.strength = strength;
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * a_cloak.rateScale * heightFade;
+	emitter.rateScale = a_cloak.rateScale * heightFade;
 	spellEmitters.push_back(emitter);
 }
 
@@ -771,6 +773,7 @@ void SnowDeformation::GatherSpellEmitters()
 		emitter.element = element;
 		emitter.mark = MarkForElement(element);
 		emitter.pitScale = kStreamPitScale;
+		emitter.rateScale = RateScaleOf(costliest) * strength;
 		spellEmitters.push_back(emitter);
 	}
 

@@ -13,7 +13,7 @@
 // bilinear filtering stands in for the 17-way average, which is already
 // smooth at a far coarser scale than one texel.
 
-Texture2D<float2> DeformationMap : register(t0);
+Texture2D<float4> DeformationMap : register(t0);
 RWTexture2D<float> OutBermField : register(u0);
 
 // Shares DeformationUpdateCS's PerFrame buffer; only TexelSize is read, but
@@ -49,7 +49,7 @@ static const float2 kBermTaps[16] = {
 // Displaced (dug) depth of a map texel: total minus the MELTED portion only.
 // Channel y is signed - negative is scorch - and scorched snow was thrown
 // aside rather than removed, so it keeps every bit of its berm.
-float Displaced(float2 texel)
+float Displaced(float4 texel)
 {
 	return saturate(texel.x - max(texel.y, 0.0));
 }

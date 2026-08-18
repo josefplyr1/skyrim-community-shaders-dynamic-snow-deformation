@@ -163,12 +163,13 @@ cbuffer ShellCB : register(b0)
 	// march), w = coarse march steps.
 	float4 SnowParallax;
 
-	// x = scorch darkening strength (0 disables).
+	// x = scorch darkening strength, y = crust shading strength,
+	// z = roughness of fully crusted snow.
 	float4 SpellShading;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
-Texture2D<float2> DeformationMap : register(t1);
+Texture2D<float4> DeformationMap : register(t1);
 Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
@@ -394,11 +395,11 @@ float SampleDisplacedFast(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float2 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float2 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
-	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	// Only MELTED depth is spoil-free. Channel y is signed and negative means
 	// scorch, which was displaced and keeps its berm.
 	return saturate(v.x - max(v.y, 0.0));
@@ -419,12 +420,33 @@ float SampleScorch(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float2 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float2 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
-	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	return saturate(-v.y);
+}
+
+// Crust at a point: refrozen snow, from the map's third channel.
+float SampleCrust(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float c00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).z;
+	float c10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).z;
+	float c01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).z;
+	float c11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).z;
+	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
 }
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
@@ -1457,8 +1479,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Lambert 1/pi on diffuse); the indirect specular lobe goes to the
 	// Reflectance RT where the composite applies cubemap and ambient
 	// specular like any TruePBR surface.
-	static const float kSnowRoughness = 0.6;
-	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
+	float kSnowRoughness = 0.6;
+	float3 kSnowF0 = float3(0.028, 0.028, 0.028);
+
+	// Crust: snow that melted and refroze is ice, not powder. Polished rather
+	// than recoloured - it is still white - so the read comes from the
+	// highlight tightening and the reflectance lifting, which is what separates
+	// a glazed sheet from fresh snow at a glance.
+	{
+		float crust = SampleCrust(gridLocal) * SpellShading.y;
+		[branch] if (crust > 0.001)
+		{
+			kSnowRoughness = lerp(kSnowRoughness, SpellShading.z, saturate(crust));
+			kSnowF0 = lerp(kSnowF0, float3(0.055, 0.058, 0.062), saturate(crust));
+			// A faint blue-grey cast: refrozen snow reads colder than the
+			// powder beside it without ceasing to be snow.
+			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.94, 0.97, 1.02), saturate(crust));
+		}
+	}
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape

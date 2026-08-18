@@ -186,7 +186,7 @@ cbuffer StaticCB : register(b1)
 	float3 padStatics;
 }
 
-Texture2D<float2> DeformationMap : register(t1);
+Texture2D<float4> DeformationMap : register(t1);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);

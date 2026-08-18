@@ -36,6 +36,12 @@
 	X(ShockCloakRadius) \
 	X(ShockCloakInterval) \
 	X(ShockCloakStrikeScale) \
+	X(CrustRate) \
+	X(CrustRadius) \
+	X(CrustPrintDepth) \
+	X(CrustGloss) \
+	X(CrustRoughness) \
+	X(CrustBreakRadius) \
 	X(ScorchStrength) \
 	X(SnowClassDepths) \
 	X(TextureDepths) \
@@ -113,10 +119,13 @@ void SnowDeformation::CreateDeformationTextures()
 		.Height = deformMapDim,
 		.MipLevels = 1,
 		.ArraySize = 1,
-		// Two channels: total depression depth, and the melted portion of it.
-		// Melted snow leaves no spoil, so the shells need to tell the two
-		// apart to know whether a rim should carry a berm.
-		.Format = DXGI_FORMAT_R16G16_FLOAT,
+		// Four channels: depth, signed surface state (melt positive, scorch
+		// negative), crust, and one spare. Widened rather than given a field of
+		// its own because crust PERSISTS after the frost that made it - a wall
+		// glazes ground and then expires - so a separate field would have had
+		// to duplicate this map's ping-pong, scrolling and decay rather than
+		// deriving itself each frame the way the exclusion field does.
+		.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 		.SampleDesc = { .Count = 1 },
 		.Usage = D3D11_USAGE_DEFAULT,
 		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
@@ -462,6 +471,7 @@ void SnowDeformation::Prepass()
 	// trench sharpness slider is.
 	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
 	perFrameData.MeltEdgeNoise = std::max(settings.MeltEdgeIrregularity, 0.0f);
+	perFrameData.CrustPrintDepth = std::clamp(settings.CrustPrintDepth, 0.0f, 1.0f);
 
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.
