@@ -302,35 +302,68 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("spell_integration"), "Spell Integration"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttSpell = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_integration_tooltip"), "How magic marks the snow. Fire melts it into soft basins, and unlike a footprint a melt deepens for as long as the heat stands there."));
+			ImGui::Text("%s", T(TKEY("spell_integration_tooltip"), "How magic marks the snow. Each school marks it differently: fire melts basins, and the others arrive with their own steps."));
 
 		ImGui::Checkbox(T(TKEY("spell_enable"), "Enable Spell Integration"), &settings.EnableSpellIntegration);
 		if (auto _ttSpellEnable = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_enable_tooltip"), "Lets cast magic mark the snow. Off, the melt machinery still serves campfire clearings and the test emitter below."));
+			ImGui::Text("%s", T(TKEY("spell_enable_tooltip"), "Lets cast magic mark the snow. Off, the melt machinery still serves campfire clearings."));
 
-		ImGui::SeparatorText(T(TKEY("spell_cat_melt"), "Melt"));
+		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
+		// Diagnostics use plain text by existing convention (no i18n).
+		ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
+			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
+			spellStats.groundContacts, spellStats.trails);
+		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u",
+			spellStats.armed, spellStats.detonations, spellStats.casts);
+		ImGui::Text("rejected: no element %u | no blast form %u",
+			spellStats.rejectedElement, spellStats.rejectedNoBlast);
+		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
+			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_fire"), "Fire"));
+		if (auto _ttFire = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_cat_fire_tooltip"), "Fire melts snow into soft basins. Unlike a footprint, a melt keeps deepening for as long as the heat stands over it."));
 		ImGui::SliderFloat(T(TKEY("spell_melt_rate"), "Fire Melt Rate"), &settings.SpellMeltRate, 0.0f, 3.0f, "%.2f /s");
 		if (auto _ttSpellRate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_melt_rate_tooltip"), "How fast a fire stream melts down to its basin, for a spell of Flames' strength; stronger spells scale up from here. This changes how quickly the basin appears, never how deep it ends up - depth is the melt shape below."));
-		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
+			ImGui::Text("%s", T(TKEY("spell_melt_rate_tooltip"), "How fast a fire stream melts down to its basin, for a spell of Flames' strength; stronger spells scale up from here. This changes how quickly the basin appears, never how deep it ends up - depth is the bowl shape below."));
+		ImGui::SliderFloat(T(TKEY("melt_persistence"), "Fire Melt Persistence"), &settings.MeltPersistence, 0.0f, 1.0f, "%.2f");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_persistence_tooltip"), "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate."));
-		ImGui::SliderFloat(T(TKEY("cloak_radius"), "Cloak Radius"), &settings.CloakRadius, 60.0f, 400.0f, "%.0f");
+		ImGui::SliderFloat(T(TKEY("cloak_radius"), "Fire Cloak Radius"), &settings.CloakRadius, 60.0f, 400.0f, "%.0f");
 		if (auto _ttCloak = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cloak_radius_tooltip"), "How far a cloak marks the ground its wearer walks over. A cloak wraps the body rather than resting on the snow, so its mark is softer than a flame played directly onto the ground - widen this if the ring reads too tight around the feet."));
-		ImGui::SliderFloat(T(TKEY("blast_radius_scale"), "Blast Radius"), &settings.BlastRadiusScale, 0.1f, 2.0f, "%.2fx");
+			ImGui::Text("%s", T(TKEY("cloak_radius_tooltip"), "How far a cloak marks the ground its wearer walks over. A cloak wraps the body rather than resting on the snow, so it digs more slowly than a flame played straight onto the ground - but it still reaches the floor if worn long enough."));
+		ImGui::SliderFloat(T(TKEY("blast_radius_scale"), "Fire Blast Radius"), &settings.BlastRadiusScale, 0.1f, 2.0f, "%.2fx");
 		if (auto _ttBlast = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar, so the default halves them."));
-		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
+			ImGui::Text("%s", T(TKEY("blast_radius_scale_tooltip"), "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar."));
+		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Fire Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
 		if (auto _ttBowl = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));
-		ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
+		ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Fire Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
 		if (auto _ttMeltEdge = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards, unlike a trampled trail edge, which the separate Trail Irregularity setting churns."));
 
-		ImGui::SeparatorText(T(TKEY("spell_cat_emitter"), "Test Emitter"));
+		ImGui::SeparatorText(T(TKEY("spell_cat_lightning"), "Lightning"));
+		ImGui::TextDisabled("%s", T(TKEY("spell_cat_lightning_pending"), "Detected already; its pitting arrives with the shock profile."));
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_frost"), "Frost"));
+		ImGui::TextDisabled("%s", T(TKEY("spell_cat_frost_pending"), "Detected already; its crust arrives with the frost step."));
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
+		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
+		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
+		if (settings.ShowDebugTexture) {
+			ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
+			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+		}
+
+		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
+			clearRequested = true;
+
+		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));
 		if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("spell_cat_emitter_tooltip"), "A stand-in heat source for tuning the melt look before spells are wired up. Nothing here reads a spell."));
+			ImGui::Text("%s", T(TKEY("debug_cat_melt_emitter_tooltip"), "A stand-in heat source that answers to no spell at all. Kept for testing a mark on its own: when a school stops marking, this says whether the fault is in the detector or in the mark itself."));
 		if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
 			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 				debugMeltEmitterPos = player->GetPosition();
@@ -347,36 +380,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
 		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
-
-		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
-		// Diagnostics use plain text by existing convention (no i18n).
-		ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
-			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
-			spellStats.groundContacts, spellStats.trails);
-		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u",
-			spellStats.armed, spellStats.detonations, spellStats.casts);
-		ImGui::Text("rejected: no element %u | no blast form %u",
-			spellStats.rejectedElement, spellStats.rejectedNoBlast);
-		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
-			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
-
-		ImGui::SeparatorText(T(TKEY("spell_cat_ab"), "Comparison"));
-		ImGui::Checkbox(T(TKEY("melt_rate_model_ab"), "A/B: Rate-Shaped Melt"), &meltRateModelAB);
-		if (auto _ttAB = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_rate_model_ab_tooltip"), "Comparison aid. Off, the melt falloff sets how DEEP each point ends up, the way campfire clearings work, so the basin holds its bowl however long the heat stands. On, it sets how FAST each point deepens instead, with only full depth to stop it - the rim just arrives later than the middle, and a source left standing sinks a flat-floored canyon. Turn it on with the emitter running to watch the bowl straighten out."));
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
-		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
-		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
-		if (settings.ShowDebugTexture) {
-			ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
-			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
-		}
-
-		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
-			clearRequested = true;
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_shell"), "Shell & Terrain Data"));
 		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);

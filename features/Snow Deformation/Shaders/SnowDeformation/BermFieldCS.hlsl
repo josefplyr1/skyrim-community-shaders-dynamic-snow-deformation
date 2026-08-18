@@ -36,9 +36,6 @@ cbuffer PerFrame : register(b0)
 	float MeltPersistence;
 	float MeltFloorStart;
 	float MeltEdgeNoise;
-
-	float MeltRateModel;
-	float3 perFramePad;
 }
 
 // Must match kBermTaps in SnowShell.hlsl / SnowStaticsShell.hlsl.

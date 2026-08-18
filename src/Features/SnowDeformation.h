@@ -237,7 +237,7 @@ public:
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
 		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
-		float CloakRadius = 160.0f;
+		float CloakRadius = 100.0f;
 		/** @brief Scale on the crater a detonation leaves, against the radius the explosion record authors. Bethesda's blast radii are tuned for damage, not for how far the ground should be scarred, and read far too wide on snow at 1.0. */
 		float BlastRadiusScale = 0.33f;
 		/** @brief Depth per second a reference-magnitude fire stream melts at its core. Effect magnitude scales it, so a stronger spell melts faster without reaching any deeper. */
@@ -389,9 +389,7 @@ public:
 		float MeltFloorStart;
 		/** @brief Settings::MeltEdgeIrregularity, the fraction the melt radius wobbles by. */
 		float MeltEdgeNoise;
-		/** @brief A/B: 1 = the old rate-shaped melt (falloff scales speed, so a standing source digs a cylinder), 0 = target-shaped melt (falloff is the depth, as the campfire exclusions do it). */
-		float MeltRateModel;
-		float3 perFramePad;
+
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1266,8 +1264,6 @@ public:
 	float debugMeltEmitterRadius = 100.0f;
 	/** @brief Emitter accumulation rate in depth units per second at the core. */
 	float debugMeltEmitterRate = 0.50f;
-	/** @brief A/B aid: melt back on the rate-shaped model, where the falloff sets how fast a texel deepens rather than how deep it ends up. Runtime-only. */
-	bool meltRateModelAB = false;
 	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
 	bool debugTilingRuler = false;
 

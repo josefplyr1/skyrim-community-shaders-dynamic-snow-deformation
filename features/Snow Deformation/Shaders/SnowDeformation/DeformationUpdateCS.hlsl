@@ -71,10 +71,6 @@ cbuffer PerFrame : register(b0)
 	// Fraction the melt radius wobbles by, on the coarse cells above.
 	float MeltEdgeNoise;
 
-	// A/B: 1 = the old rate-shaped melt, 0 = the target-shaped melt below.
-	float MeltRateModel;
-	float3 perFramePad;
-
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 }
@@ -229,18 +225,8 @@ float StampNoise(float2 p)
 	}
 
 	float total = carve;
-	[branch] if (MeltRateModel > 0.5)
-	{
-		// A/B reference: falloff scales the rate, with nothing but the 1.0
-		// clamp to stop it. Kept so the canyon this produces can be compared
-		// against the basin below.
-		total = carve + meltRate * DeltaTime;
-	}
-	else
-	{
-		[flatten] if (meltTarget > total)
-			total = min(total + meltRate * DeltaTime, meltTarget);
-	}
+	[flatten] if (meltTarget > total)
+		total = min(total + meltRate * DeltaTime, meltTarget);
 	total = min(total, 1.0);
 
 	// Whatever the melt just added is melt-origin depth, and the berm field
