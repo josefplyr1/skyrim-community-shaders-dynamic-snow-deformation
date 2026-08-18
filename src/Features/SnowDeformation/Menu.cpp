@@ -106,6 +106,12 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("melt_headroom"), "Melt Persistence"), &settings.MeltHeadroom, 0.0f, 4.0f, "%.1f");
 		if (auto _ttHeadroom = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("melt_headroom_tooltip"), "How much longer melted ground stays bare than trampled ground. Heat keeps melting after the snow is gone; that extra depth is invisible, but the refill has to burn it off before snow returns. 0 = melted ground recovers as fast as a footprint."));
+		ImGui::SliderFloat(T(TKEY("melt_bowl_floor"), "Melt Bowl Floor"), &settings.MeltBowlFloor, 0.0f, 0.9f, "%.2f");
+		if (auto _ttBowl = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_bowl_floor_tooltip"), "Shape of a melted hollow. 0 curves from the centre like a bowl, which is how heat actually spreads; higher values hold a flat floor and stand the sides up into walls, which reads as blasted rather than melted."));
+		ImGui::SliderFloat(T(TKEY("melt_edge_irregularity"), "Melt Edge Irregularity"), &settings.MeltEdgeIrregularity, 0.0f, 0.6f, "%.2f");
+		if (auto _ttMeltEdge = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("melt_edge_irregularity_tooltip"), "How far a melted rim wanders off a perfect circle. This moves the outline only and leaves the surface smooth - a melt basin has a wandering edge but no jagged shards, unlike a trampled trail edge, which the separate Trail Irregularity setting churns."));
 		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 		if (auto _ttSteep = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));

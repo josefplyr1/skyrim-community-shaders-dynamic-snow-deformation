@@ -13,7 +13,7 @@
 // bilinear filtering stands in for the 17-way average, which is already
 // smooth at a far coarser scale than one texel.
 
-Texture2D<float> DeformationMap : register(t0);
+Texture2D<float2> DeformationMap : register(t0);
 RWTexture2D<float> OutBermField : register(u0);
 
 // Shares DeformationUpdateCS's PerFrame buffer; only TexelSize is read, but
@@ -34,7 +34,8 @@ cbuffer PerFrame : register(b0)
 
 	float DeltaTime;
 	float MeltCeiling;
-	float2 perFramePad;
+	float MeltFloorStart;
+	float MeltEdgeNoise;
 }
 
 // Must match kBermTaps in SnowShell.hlsl / SnowStaticsShell.hlsl.
@@ -54,10 +55,10 @@ float TapBilinear(float2 t, float2 dims)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
 
 	// Saturated: melt writes past 1.0 into the refill headroom, and a berm
 	// averaged over raw over-melt values would throw a ridge proportional to

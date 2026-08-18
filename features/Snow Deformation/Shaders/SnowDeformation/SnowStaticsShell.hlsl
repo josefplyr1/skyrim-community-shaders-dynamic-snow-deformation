@@ -186,7 +186,7 @@ cbuffer StaticCB : register(b1)
 	float3 padStatics;
 }
 
-Texture2D<float> DeformationMap : register(t1);
+Texture2D<float2> DeformationMap : register(t1);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -256,10 +256,10 @@ float SampleDeformation(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
 
 	// Saturated: melt writes past 1.0 into the refill headroom.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
@@ -364,10 +364,10 @@ float PatchDeformBilinear(float2 t, float2 dims)
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
 	// Saturated: melt writes past 1.0 into the refill headroom.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }

@@ -230,6 +230,10 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Extra depth beyond full melt that a heat source may accumulate. Invisible - every consumer saturates at 1.0 - so it is a persistence budget the refill must burn off before ground starts covering again: melted ground stays clear longer than a footprint, and heat lingers after the source is gone. 0 = no headroom. */
 		float MeltHeadroom = 1.5f;
+		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
+		float MeltBowlFloor = 0.15f;
+		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
+		float MeltEdgeIrregularity = 0.15f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
@@ -371,7 +375,10 @@ public:
 		float DeltaTime;
 		/** @brief Ceiling on the accumulated depth, 1.0 + MeltHeadroom. Exactly 1.0 disables the headroom and melt then behaves like a saturating carve. */
 		float MeltCeiling;
-		float2 perFramePad;
+		/** @brief Settings::MeltBowlFloor, the smoothstep start of the melt flank. */
+		float MeltFloorStart;
+		/** @brief Settings::MeltEdgeIrregularity, the fraction the melt radius wobbles by. */
+		float MeltEdgeNoise;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1243,9 +1250,9 @@ public:
 	/** @brief World position of the dropped emitter. */
 	RE::NiPoint3 debugMeltEmitterPos{};
 	/** @brief Emitter radius in world units (300 = kFireClearRadius, the campfire benchmark). */
-	float debugMeltEmitterRadius = 300.0f;
+	float debugMeltEmitterRadius = 100.0f;
 	/** @brief Emitter accumulation rate in depth units per second at the core. */
-	float debugMeltEmitterRate = 0.35f;
+	float debugMeltEmitterRate = 0.50f;
 	/** @brief Runtime-only: land-UV / 256-unit / cell gridlines on terrain, for measuring the landscape texture's world-space repeat against kSnowUVTile. */
 	bool debugTilingRuler = false;
 

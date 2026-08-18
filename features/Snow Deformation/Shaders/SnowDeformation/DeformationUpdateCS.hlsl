@@ -14,6 +14,11 @@
 // saturates, so that excess is invisible depth which must decay through the
 // refill before ground starts covering again - melted ground stays clear
 // longer than a footprint, and heat lingers after the source is gone.
+//
+// Channels: .x = total depression depth, .y = the portion of it that was
+// MELTED rather than displaced. Displaced snow has to go somewhere and piles
+// into a berm along the rim; melted snow leaves no spoil at all, so the
+// shells divide .y by .x and scale the berm away by the result.
 
 #define MAX_STAMPS 256
 
@@ -23,7 +28,12 @@
 // long way, matching the campfire basins in SnowExclusions.hlsli. Carve uses
 // the much steeper StampFalloffStart instead: a trench has walls, a melt bowl
 // has shoulders.
-#define MELT_FALLOFF_START 0.35
+// Melt edge irregularity runs on these world-unit cells. Deliberately coarse:
+// a melt basin has a wandering OUTLINE and a smooth CROSS-SECTION, so the
+// noise must move the rim without chipping the surface. The trail noise is a
+// third of the finer cell here, which is what churns a footprint edge.
+#define MELT_NOISE_COARSE 80.0
+#define MELT_NOISE_FINE 24.0
 // Refill multiplier at full supply and full wind; interior texels with a
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
@@ -52,14 +62,18 @@ cbuffer PerFrame : register(b0)
 	// Ceiling on the accumulated value, 1.0 + headroom. Exactly 1.0 disables
 	// the headroom and melt then behaves like a saturating carve.
 	float MeltCeiling;
-	float2 perFramePad;
+	// Fraction of the radius held at full melt before the flank starts.
+	// 0 = a pure bowl curving from the centre; high = a flat floor with walls.
+	float MeltFloorStart;
+	// Fraction the melt radius wobbles by, on the coarse cells above.
+	float MeltEdgeNoise;
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 }
 
-Texture2D<float> PreviousDeformation : register(t0);
-RWTexture2D<float> CurrentDeformation : register(u0);
+Texture2D<float2> PreviousDeformation : register(t0);
+RWTexture2D<float2> CurrentDeformation : register(u0);
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
 // stamp's falloff distance, so trail edges read as churned snow instead of
@@ -89,6 +103,9 @@ float StampNoise(float2 p)
 	uint2 pixel = DTid.xy;
 
 	float deformation = 0.0;
+	// Melted portion of `deformation`, carried so the shells can tell a
+	// melt basin from a dug trench.
+	float melted = 0.0;
 
 	if (!ClearMap) {
 		int2 sourcePixel = int2(pixel) + ScrollDelta;
@@ -98,7 +115,9 @@ float StampNoise(float2 p)
 
 		[branch] if (all(sourcePixel >= 0) && all(sourcePixel < int2(dims)))
 		{
-			deformation = PreviousDeformation[uint2(sourcePixel)];
+			float2 previous = PreviousDeformation[uint2(sourcePixel)];
+			deformation = previous.x;
+			melted = previous.y;
 		}
 
 		// Wind-biased refill: recovery scales with the intact snow a few
@@ -113,11 +132,14 @@ float StampNoise(float2 p)
 			float upwindDeformation = deformation;
 			[branch] if (all(upwindPixel >= 0) && all(upwindPixel < int2(dims)))
 			{
-				upwindDeformation = PreviousDeformation[uint2(upwindPixel)];
+				upwindDeformation = PreviousDeformation[uint2(upwindPixel)].x;
 			}
 			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
 		}
 		deformation = max(deformation - refill, 0.0);
+		// The melted portion refills at the same rate, and can never exceed
+		// the depression it is a portion of.
+		melted = min(max(melted - refill, 0.0), deformation);
 	}
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
@@ -139,17 +161,21 @@ float StampNoise(float2 p)
 		float distSq = dot(delta, delta);
 		float radius = Stamps[i].w;
 
-		// Edge noise can push the falloff outward, so the gate widens with it.
-		float gateRadius = radius * (1.0 + 0.5 * StampNoiseAmp);
+		// Either edge treatment can push the falloff outward, so the gate
+		// widens by whichever reaches further.
+		float gateRadius = radius * (1.0 + max(0.5 * StampNoiseAmp, MeltEdgeNoise));
 		[branch] if (distSq < gateRadius * gateRadius)
 		{
-			float edgeDist = sqrt(distSq) / radius;
-			[branch] if (StampNoiseAmp > 0.001)
-			{
-				edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
-			}
+			float dist = sqrt(distSq);
 			[branch] if (StampEnds[i].z < 0.5)
 			{
+				// Carve: high-frequency noise ON the falloff distance, which
+				// churns the edge the way a boot breaks snow.
+				float edgeDist = dist / radius;
+				[branch] if (StampNoiseAmp > 0.001)
+				{
+					edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
+				}
 				// Falloff from StampFalloffStart of the radius: low values keep a
 				// wide edge band coarser consumers of the map can still represent,
 				// high values hold full depth almost to the edge.
@@ -158,11 +184,24 @@ float StampNoise(float2 p)
 			}
 			else
 			{
-				float falloff = 1.0 - smoothstep(MELT_FALLOFF_START, 1.0, edgeDist);
+				// Melt: the noise scales the RADIUS instead, so the rim
+				// wanders while the profile stays a smooth bowl. Perturbing
+				// the falloff distance here instead would pit the floor,
+				// because noise inside the flat core drags samples past the
+				// start of the flank.
+				float meltRadius = radius;
+				[branch] if (MeltEdgeNoise > 0.001)
+				{
+					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
+					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
+					meltRadius *= 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
+				}
+				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, dist / max(meltRadius, 1e-3));
 				melt += Stamps[i].z * StampEnds[i].w * DeltaTime * falloff;
 			}
 		}
 	}
 
-	CurrentDeformation[pixel] = min(carve + melt, MeltCeiling);
+	float total = min(carve + melt, MeltCeiling);
+	CurrentDeformation[pixel] = float2(total, min(melted + melt, total));
 }

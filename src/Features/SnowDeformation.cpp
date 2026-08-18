@@ -17,6 +17,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	RefillRateMultiplier,
 	RefillOnlyWhenSnowing,
 	MeltHeadroom,
+	MeltBowlFloor,
+	MeltEdgeIrregularity,
 	SnowClassDepths,
 	TextureDepths,
 	ObjectsSnowDepth,
@@ -76,7 +78,10 @@ void SnowDeformation::CreateDeformationTextures()
 		.Height = deformMapDim,
 		.MipLevels = 1,
 		.ArraySize = 1,
-		.Format = DXGI_FORMAT_R16_FLOAT,
+		// Two channels: total depression depth, and the melted portion of it.
+		// Melted snow leaves no spoil, so the shells need to tell the two
+		// apart to know whether a rim should carry a berm.
+		.Format = DXGI_FORMAT_R16G16_FLOAT,
 		.SampleDesc = { .Count = 1 },
 		.Usage = D3D11_USAGE_DEFAULT,
 		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
@@ -419,6 +424,10 @@ void SnowDeformation::Prepass()
 	// longer than a footprint.
 	perFrameData.DeltaTime = deltaTime;
 	perFrameData.MeltCeiling = 1.0f + std::max(settings.MeltHeadroom, 0.0f);
+	// Clamped just below the degenerate smoothstep(1, 1, x) edge, as the
+	// trench sharpness slider is.
+	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
+	perFrameData.MeltEdgeNoise = std::max(settings.MeltEdgeIrregularity, 0.0f);
 
 	// Wind bias for the refill: the engine's live blended wind (derived from
 	// the weather records), so drifting accumulation tracks transitions.

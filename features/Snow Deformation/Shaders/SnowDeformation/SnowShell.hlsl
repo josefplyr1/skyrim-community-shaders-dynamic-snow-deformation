@@ -165,7 +165,7 @@ cbuffer ShellCB : register(b0)
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
-Texture2D<float> DeformationMap : register(t1);
+Texture2D<float2> DeformationMap : register(t1);
 Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
@@ -324,10 +324,10 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
 
 	// Clamped here rather than at each call site: melt writes past 1.0 into
 	// the refill headroom, and this is the single tap every consumer goes
@@ -371,6 +371,30 @@ float SampleDeformation(float2 gridLocal)
 	float v11 = SampleDeformationBilinear(float2(h1.x, h1.y), dims);
 
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
+}
+
+// Melted fraction of the local depression, 0 = all dug, 1 = all melted.
+// Displaced snow piles along the rim; melted snow leaves no spoil to pile,
+// so this scales the berm away under fires, spells and other heat.
+float SampleMeltFraction(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float2 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float2 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float2 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float2 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(v.y / max(v.x, 1e-4));
 }
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
@@ -836,7 +860,8 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float deformation = saturate(SampleDeformation(gridLocal));
 			float bermD = BermField(gridLocal);
 			float uncarved = depth;
-			depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
+			depth = CarveProfile(deformation, uncarved) +
+			        BermShape(bermD) * uncarved * BermHeightAmp * (1.0 - SampleMeltFraction(gridLocal));
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -1269,7 +1294,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) - BermShape(bermXN),
 		BermShape(bermYP) - BermShape(bermYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp;
+	// Same melt suppression the surface applied, so shading agrees with the
+	// geometry it is shading.
+	float bermMelt = 1.0 - SampleMeltFraction(gridLocal);
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp * bermMelt;
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;

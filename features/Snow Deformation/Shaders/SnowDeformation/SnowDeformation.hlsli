@@ -6,7 +6,7 @@
 
 namespace SnowDeformation
 {
-	Texture2D<float> DeformationMap : register(t101);
+	Texture2D<float2> DeformationMap : register(t101);
 	// Shell snow albedo + tangent normals for the horizon LOD-terrain recolor.
 	Texture2D<float4> HorizonSnowAlbedo : register(t102);
 	Texture2D<float4> HorizonSnowNormal : register(t103);
@@ -64,10 +64,10 @@ namespace SnowDeformation
 			float2 h0 = (i + 0.5 - 1.0 + w1 / g0) / MapDim;
 			float2 h1 = (i + 0.5 + 1.0 + w3 / g1) / MapDim;
 
-			float s00 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h0.y), 0);
-			float s10 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h0.y), 0);
-			float s01 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h1.y), 0);
-			float s11 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h1.y), 0);
+			float s00 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h0.y), 0).x;
+			float s10 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h0.y), 0).x;
+			float s01 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h1.y), 0).x;
+			float s11 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h1.y), 0).x;
 
 			// Saturated before the border fade: melt writes past 1.0 into the
 			// refill headroom and only the visible 0-1 range shades.
