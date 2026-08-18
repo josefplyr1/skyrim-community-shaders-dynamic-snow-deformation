@@ -599,12 +599,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				ConsiderHazard(a_ref);
 				return RE::BSContainer::ForEachResult::kContinue;
 			}
-			// Detonations ride it too. A rune is a projectile while it waits,
-			// so what marks the snow is the explosion it becomes.
-			if (a_ref->GetFormType() == RE::FormType::Explosion) {
-				ConsiderExplosion(a_ref);
-				return RE::BSContainer::ForEachResult::kContinue;
-			}
 			auto* base = a_ref->GetBaseObject();
 			if (!base)
 				return RE::BSContainer::ForEachResult::kContinue;
@@ -741,11 +735,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return RE::BSContainer::ForEachResult::kContinue;
 		});
 	}
-	// Forget explosions that have finished, so a form ID the game reuses
-	// later is not mistaken for one already marked.
-	std::erase_if(explosionsStamped, [&](uint32_t a_id) { return !explosionsLive.contains(a_id); });
-	explosionsLive.clear();
-
 	propPrevPositions = std::move(currentPropPositions);
 
 	// Spell emitters melt rather than displace. Appended AFTER actors and

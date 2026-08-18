@@ -67,6 +67,14 @@ static constexpr float kTrailRadius = 35.0f;
 static constexpr float kTrailRate = 100.0f;
 // Snow shallower than this has no column worth cutting through.
 static constexpr float kMinTrailDepth = 2.0f;
+// Reach of a cloak on the ground, matching the radius Josef tuned the test
+// emitter to when comparing it against Flame Cloak in game.
+static constexpr float kCloakRadius = 100.0f;
+// A cloak wraps the body, not the boots, so the aura is treated as sitting at
+// roughly mid-chest. GroundMark then fades it exactly as it fades any other
+// source held above the snow, rather than a cloak scouring at full strength
+// simply because an actor's position happens to sit at their feet.
+static constexpr float kCloakCentreHeight = 70.0f;
 // How near the last sighting a traced landing has to be to count as where the
 // bolt actually struck. Further than this and the flight was stopped by
 // something else - an actor, a wall - so the ground below only gets the weaker
@@ -294,86 +302,82 @@ void SnowDeformation::RegisterSpellCastSink()
 	}
 }
 
-void SnowDeformation::BuildExplosionElements()
+void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor)
 {
-	explosionElementsBuilt = true;
-	auto* handler = RE::TESDataHandler::GetSingleton();
-	if (!handler)
+	if (spellEmitters.size() >= kMaxSpellEmitters || !a_actor || !a_actor->Is3DLoaded())
 		return;
-	// Inverted out of the effect records: an explosion record has no element,
-	// but every effect that spawns one names both. Walked once, and it covers
-	// modded content for free because a mod's effect declares its explosion
-	// exactly the same way.
-	for (auto* effect : handler->GetFormArray<RE::EffectSetting>()) {
-		if (!effect || !effect->data.explosion)
-			continue;
-		const SpellElement element = ClassifyElement(effect);
-		if (element == SpellElement::None)
-			continue;
-		explosionElements.emplace(effect->data.explosion, element);
-	}
-	logger::debug("SnowDeformation: mapped {} explosions to elements", explosionElements.size());
-}
-
-void SnowDeformation::ConsiderExplosion(RE::TESObjectREFR* a_ref)
-{
-	if (!settings.EnableSpellIntegration || !a_ref)
-		return;
-
-	const uint32_t formID = a_ref->formID;
-	explosionsLive.insert(formID);
-	spellStats.explosions++;
-	// Marked on first sight only. A blast persists for several frames and its
-	// runtime radius grows across them, so marking every frame would sink a
-	// crater in proportion to how long the animation ran.
-	if (explosionsStamped.contains(formID))
-		return;
-
-	auto* base = a_ref->GetBaseObject();
-	auto* explosion = base ? base->As<RE::BGSExplosion>() : nullptr;
-	if (!explosion)
-		return;
-
-	if (!explosionElementsBuilt)
-		BuildExplosionElements();
-	const auto found = explosionElements.find(explosion);
-	if (found == explosionElements.end())
-		return;
-	const SpellElement element = found->second;
-
 	auto* tes = RE::TES::GetSingleton();
 	if (!tes)
 		return;
 
-	const RE::NiPoint3 position = a_ref->GetPosition();
+	const RE::NiPoint3 position = a_actor->GetPosition();
+
+	// Strongest cloak wins rather than one emitter per effect: two cloaks at
+	// once should not melt twice as fast in the same ring.
+	SpellElement element = SpellElement::None;
+	float rateScale = 0.0f;
+	a_actor->VisitActiveEffects([&](RE::ActiveEffect* a_effect) {
+		const RE::EffectSetting* base = a_effect ? a_effect->GetBaseObject() : nullptr;
+		if (!base)
+			return RE::BSContainer::ForEachResult::kContinue;
+		// The archetype IS the discriminator. A cloak is its own archetype, so
+		// there is no need to guess from delivery alone - which would sweep up
+		// every racial resistance and standing ability an actor carries.
+		if (base->data.archetype != RE::EffectSetting::Archetype::kCloak)
+			return RE::BSContainer::ForEachResult::kContinue;
+		if (base->data.delivery != RE::MagicSystem::Delivery::kSelf)
+			return RE::BSContainer::ForEachResult::kContinue;
+
+		const SpellElement candidate = ClassifyElement(base);
+		if (candidate == SpellElement::None)
+			return RE::BSContainer::ForEachResult::kContinue;
+
+		const float candidateRate = a_effect->effect ?
+		                                std::clamp(a_effect->effect->effectItem.magnitude / kSpellReferenceMagnitude,
+													kSpellMagnitudeMin, kSpellMagnitudeMax) :
+		                                1.0f;
+		if (candidateRate > rateScale) {
+			rateScale = candidateRate;
+			element = candidate;
+		}
+		return RE::BSContainer::ForEachResult::kContinue;
+	});
+
+	if (element == SpellElement::None)
+		return;
+	spellStats.auras++;
+
 	float groundZ = position.z;
 	tes->GetLandHeight(position, groundZ);
-
-	// The AUTHORED radius, not the live one: the live value is mid-expansion
-	// on the frame we catch it, and the mark wants the blast's final size.
-	const float baseRadius = std::clamp(explosion->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
-
 	float strength = 0.0f;
 	float radius = 0.0f;
-	// A bolt that detonates against a chest marks weakly and broadly below it,
-	// not sharply at the height it went off.
-	if (!GroundMark(position.z - groundZ, baseRadius, strength, radius))
+	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, kCloakRadius, strength, radius))
 		return;
-	spellStats.lastStrength = strength;
-	spellStats.lastRadius = radius;
 	if (strength < kMinSpellStrength)
 		return;
 
-	explosionsStamped.insert(formID);
-	if (spellEmitters.size() >= kMaxSpellEmitters)
-		return;
+	// Sweeps with the wearer, so a cloaked actor walking across snow leaves a
+	// band rather than a row of rings.
+	const float2 current{ position.x, position.y };
+	float2 previous = current;
+	const uint32_t formID = a_actor->formID;
+	if (auto it = spellAuraPrev.find(formID); it != spellAuraPrev.end()) {
+		const float dx = current.x - it->second.x;
+		const float dy = current.y - it->second.y;
+		if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
+			previous = it->second;
+	}
+	currentAuraPositions[formID] = current;
+
+	spellStats.lastStrength = strength;
+	spellStats.lastRadius = radius;
 
 	SpellEmitter emitter{};
-	emitter.position = { position.x, position.y };
-	emitter.previous = emitter.position;
+	emitter.position = current;
+	emitter.previous = previous;
 	emitter.radius = radius;
 	emitter.strength = strength;
-	emitter.rate = kExplosionRate;
+	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * rateScale;
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
 	spellEmitters.push_back(emitter);
@@ -387,6 +391,7 @@ void SnowDeformation::GatherSpellEmitters()
 	if (!settings.EnableSpellIntegration) {
 		spellPrevPositions.clear();
 		spellTrailPrev.clear();
+		spellAuraPrev.clear();
 		return;
 	}
 
@@ -420,6 +425,26 @@ void SnowDeformation::GatherSpellEmitters()
 	const float cullRadius = 0.5f * deformWorldSize;
 	std::unordered_map<uint32_t, float2> currentPositions;
 	std::unordered_map<uint32_t, float2> currentTrailPositions;
+	currentAuraPositions.clear();
+
+	// Cloaks, before the projectiles. Actors are walked here rather than from
+	// the stamp loop because that loop's gates are about CARVING - airborne,
+	// elevated, settled - and none of them should decide whether a cloak on a
+	// living actor warms the ground it is standing over.
+	{
+		if (auto* player = RE::PlayerCharacter::GetSingleton())
+			ConsiderActorAuras(player);
+		if (auto* processLists = RE::ProcessLists::GetSingleton()) {
+			for (auto& handle : processLists->highActorHandles) {
+				auto actor = handle.get();
+				if (!actor)
+					continue;
+				if (cameraPosition.GetSquaredDistance(actor->GetPosition()) > cullRadius * cullRadius)
+					continue;
+				ConsiderActorAuras(actor.get());
+			}
+		}
+	}
 
 	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
@@ -756,6 +781,7 @@ void SnowDeformation::GatherSpellEmitters()
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);
+	spellAuraPrev = std::move(currentAuraPositions);
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
 	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }

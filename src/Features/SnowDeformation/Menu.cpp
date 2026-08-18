@@ -347,11 +347,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
 		// Diagnostics use plain text by existing convention (no i18n).
-		ImGui::Text("projectiles %u | streams %u | hazards %u | ground hits %u | trails %u",
-			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.groundContacts,
-			spellStats.trails);
-		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u | from refs %u",
-			spellStats.armed, spellStats.detonations, spellStats.casts, spellStats.explosions);
+		ImGui::Text("projectiles %u | streams %u | hazards %u | auras %u | ground hits %u | trails %u",
+			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
+			spellStats.groundContacts, spellStats.trails);
+		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u",
+			spellStats.armed, spellStats.detonations, spellStats.casts);
 		ImGui::Text("rejected: no element %u | no blast form %u",
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
