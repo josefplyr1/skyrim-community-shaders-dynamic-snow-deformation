@@ -26,7 +26,9 @@ static constexpr float kHazardRadiusMax = 260.0f;
 // Same for a blast. The ceiling matters more here: a modded explosion with an
 // absurd radius would otherwise melt half the deformation window at once.
 static constexpr float kExplosionRadiusMin = 50.0f;
-static constexpr float kExplosionRadiusMax = 320.0f;
+// Raised so the master-tier area spells stay bigger than a bolt's burst
+// instead of all flattening onto the same ceiling.
+static constexpr float kExplosionRadiusMax = 600.0f;
 // A bolt that carries no explosion at all still strikes the snow. Without this
 // the smaller single-target spells mark nothing, while their master-tier
 // versions - which do author an explosion - leave craters.
@@ -232,6 +234,57 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	spellEmitters.push_back(emitter);
 }
 
+RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
+	const RE::TESSpellCastEvent* a_event, RE::BSTEventSource<RE::TESSpellCastEvent>*)
+{
+	auto& feature = globals::features::snowDeformation;
+	if (!a_event || !a_event->object || !feature.settings.EnableSpellIntegration)
+		return RE::BSEventNotifyControl::kContinue;
+
+	auto* form = RE::TESForm::LookupByID(a_event->spell);
+	auto* spell = form ? form->As<RE::MagicItem>() : nullptr;
+	if (!spell)
+		return RE::BSEventNotifyControl::kContinue;
+
+	// Self-delivered effects ONLY. Anything aimed or placed already has a
+	// projectile or a hazard to follow, and marking it here as well would drop
+	// a second crater under the caster's own feet every time they threw one.
+	SpellElement element = SpellElement::None;
+	const RE::BGSExplosion* blast = nullptr;
+	for (auto* item : spell->effects) {
+		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf)
+			continue;
+		if (element == SpellElement::None)
+			element = ClassifyElement(base);
+		if (!blast && base->data.explosion)
+			blast = base->data.explosion;
+	}
+	// An explosion is what separates a self-centred BLAST from a self buff.
+	if (element == SpellElement::None || !blast)
+		return RE::BSEventNotifyControl::kContinue;
+
+	QueuedCast queued{};
+	queued.position = a_event->object->GetPosition();
+	queued.radius = std::clamp(blast->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
+	queued.element = element;
+	{
+		std::scoped_lock lock(feature.queuedCastLock);
+		if (feature.queuedCasts.size() < kMaxSpellEmitters)
+			feature.queuedCasts.push_back(queued);
+	}
+	return RE::BSEventNotifyControl::kContinue;
+}
+
+void SnowDeformation::RegisterSpellCastSink()
+{
+	spellCastSinkRegistered = true;
+	if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+		holder->AddEventSink<RE::TESSpellCastEvent>(&spellCastSink);
+		logger::debug("SnowDeformation: spell cast sink registered");
+	}
+}
+
 void SnowDeformation::BuildExplosionElements()
 {
 	explosionElementsBuilt = true;
@@ -327,6 +380,9 @@ void SnowDeformation::GatherSpellEmitters()
 		spellTrailPrev.clear();
 		return;
 	}
+
+	if (!spellCastSinkRegistered)
+		RegisterSpellCastSink();
 
 	auto* manager = RE::Projectile::Manager::GetSingleton();
 	auto* tes = RE::TES::GetSingleton();
@@ -628,6 +684,43 @@ void SnowDeformation::GatherSpellEmitters()
 		opened.element = blast.element;
 		opened.mark = MarkForElement(blast.element);
 		activeBlasts.push_back(opened);
+	}
+
+	// Self-centred area spells enter here: the sink queued them on the game
+	// thread because there is no object anywhere to watch.
+	{
+		std::vector<QueuedCast> drained;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			drained.swap(queuedCasts);
+		}
+		for (const auto& cast : drained) {
+			float castGroundZ = cast.position.z;
+			tes->GetLandHeight(cast.position, castGroundZ);
+			const float scaled = cast.radius * std::max(settings.BlastRadiusScale, 0.0f);
+			float strength = 0.0f;
+			float radius = 0.0f;
+			if (!GroundMark(cast.position.z - castGroundZ, scaled, strength, radius))
+				continue;
+			if (strength < kMinSpellStrength)
+				continue;
+			spellStats.casts++;
+			if (activeBlasts.size() >= kMaxSpellEmitters)
+				continue;
+
+			spellStats.lastStrength = strength;
+			spellStats.lastRadius = radius;
+
+			ActiveBlast opened{};
+			opened.position = { cast.position.x, cast.position.y };
+			opened.radius = radius;
+			opened.strength = strength;
+			opened.rate = kExplosionRate;
+			opened.remaining = kBlastDuration;
+			opened.element = cast.element;
+			opened.mark = MarkForElement(cast.element);
+			activeBlasts.push_back(opened);
+		}
 	}
 
 	// Every blast still opening marks again this frame. Without this a

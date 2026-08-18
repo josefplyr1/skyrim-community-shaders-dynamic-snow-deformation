@@ -1470,6 +1470,34 @@ protected:
 	};
 	std::vector<ActiveBlast> activeBlasts;
 
+	/**
+	 * @brief Cast-event sink, for spells that leave nothing to follow.
+	 *
+	 * A self-centred area spell has no projectile, no hazard and no explosion
+	 * reference: the blast simply happens on the caster. Every other detector
+	 * watches an object; this one watches the act of casting.
+	 */
+	class SpellCastSink : public RE::BSTEventSink<RE::TESSpellCastEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESSpellCastEvent* a_event,
+			RE::BSTEventSource<RE::TESSpellCastEvent>* a_source) override;
+	};
+	SpellCastSink spellCastSink;
+	bool spellCastSinkRegistered = false;
+	/** @brief Registered lazily on the first gather, so the event holder is certainly up. */
+	void RegisterSpellCastSink();
+
+	/** @brief Queued by the sink on the GAME thread and drained by the gather on the render thread, hence the lock. */
+	struct QueuedCast
+	{
+		RE::NiPoint3 position{};
+		float radius = 0.0f;
+		SpellElement element = SpellElement::None;
+	};
+	std::vector<QueuedCast> queuedCasts;
+	std::mutex queuedCastLock;
+
 	/** @brief Explosions already marked, so a multi-frame blast marks once. Pruned each frame against what is still live. */
 	std::unordered_set<uint32_t> explosionsStamped;
 	/** @brief Explosions seen this frame, rebuilt by the reference scan. */
@@ -1490,6 +1518,8 @@ protected:
 		uint armed = 0;
 		/** @brief Sub-surface corridors marked this frame: projectiles cutting through the snow layer. */
 		uint trails = 0;
+		/** @brief Self-centred area spells caught by the cast sink. */
+		uint casts = 0;
 		/** @brief Projectiles whose effects name no element this feature knows. */
 		uint rejectedElement = 0;
 		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */
