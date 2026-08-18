@@ -1389,6 +1389,36 @@ protected:
 	 */
 	void ConsiderHazard(RE::TESObjectREFR* a_ref);
 
+	/**
+	 * @brief Adds a detonating explosion to this frame's emitters, once.
+	 *
+	 * Rides the same reference scan as hazards. An explosion is stamped on
+	 * FIRST SIGHT and never again: it lives several frames and its runtime
+	 * radius GROWS across them, so marking every frame would sink a crater
+	 * proportional to how long the animation ran.
+	 */
+	void ConsiderExplosion(RE::TESObjectREFR* a_ref);
+
+	/**
+	 * @brief Builds the explosion-to-element table, once.
+	 *
+	 * An explosion record carries no element of its own - BGSExplosionData has
+	 * no spell link at all. The effects DO point at their explosion
+	 * (EffectSetting::data.explosion), so the table is inverted out of the
+	 * effect records themselves. Still no spell is named: modded content maps
+	 * itself the moment its effect declares an explosion.
+	 */
+	void BuildExplosionElements();
+
+	/** @brief BGSExplosion -> element, inverted from the effect records. */
+	std::unordered_map<const RE::BGSExplosion*, SpellElement> explosionElements;
+	bool explosionElementsBuilt = false;
+
+	/** @brief Explosions already marked, so a multi-frame blast marks once. Pruned each frame against what is still live. */
+	std::unordered_set<uint32_t> explosionsStamped;
+	/** @brief Explosions seen this frame, rebuilt by the reference scan. */
+	std::unordered_set<uint32_t> explosionsLive;
+
 	struct SpellStats
 	{
 		uint projectiles = 0;
@@ -1396,6 +1426,8 @@ protected:
 		uint streams = 0;
 		/** @brief Placed hazards seen: spell walls, runes. */
 		uint hazards = 0;
+		/** @brief Detonating explosions seen this frame (marked or not). */
+		uint explosions = 0;
 		/** @brief Streams whose aim actually met the ground; the rest fall back to radiant heat. */
 		uint groundContacts = 0;
 		uint emitters = 0;

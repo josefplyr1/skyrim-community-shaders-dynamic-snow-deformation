@@ -23,6 +23,14 @@ static constexpr float kSpellRadiantScale = 0.55f;
 // differ by a lot, and a modded one can be anything at all.
 static constexpr float kHazardRadiusMin = 40.0f;
 static constexpr float kHazardRadiusMax = 260.0f;
+// Same for a blast. The ceiling matters more here: a modded explosion with an
+// absurd radius would otherwise melt half the deformation window at once.
+static constexpr float kExplosionRadiusMin = 50.0f;
+static constexpr float kExplosionRadiusMax = 320.0f;
+// A detonation is over before the next frame, so its mark arrives whole rather
+// than growing into place. Any rate past a few hundred reaches the target
+// within one frame; the value is deliberately far past that.
+static constexpr float kExplosionRate = 1000.0f;
 // Effect magnitude mapping to the unscaled rate (vanilla Flames is 8/sec), and
 // the clamp either side of it. Modded spells run to absurd magnitudes; the
 // ceiling stops one of them melting a crater in a frame.
@@ -198,6 +206,91 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	emitter.radius = radius;
 	emitter.strength = strength;
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest);
+	emitter.element = element;
+	emitter.mark = MarkForElement(element);
+	spellEmitters.push_back(emitter);
+}
+
+void SnowDeformation::BuildExplosionElements()
+{
+	explosionElementsBuilt = true;
+	auto* handler = RE::TESDataHandler::GetSingleton();
+	if (!handler)
+		return;
+	// Inverted out of the effect records: an explosion record has no element,
+	// but every effect that spawns one names both. Walked once, and it covers
+	// modded content for free because a mod's effect declares its explosion
+	// exactly the same way.
+	for (auto* effect : handler->GetFormArray<RE::EffectSetting>()) {
+		if (!effect || !effect->data.explosion)
+			continue;
+		const SpellElement element = ClassifyElement(effect);
+		if (element == SpellElement::None)
+			continue;
+		explosionElements.emplace(effect->data.explosion, element);
+	}
+	logger::debug("SnowDeformation: mapped {} explosions to elements", explosionElements.size());
+}
+
+void SnowDeformation::ConsiderExplosion(RE::TESObjectREFR* a_ref)
+{
+	if (!settings.EnableSpellIntegration || !a_ref)
+		return;
+
+	const uint32_t formID = a_ref->formID;
+	explosionsLive.insert(formID);
+	spellStats.explosions++;
+	// Marked on first sight only. A blast persists for several frames and its
+	// runtime radius grows across them, so marking every frame would sink a
+	// crater in proportion to how long the animation ran.
+	if (explosionsStamped.contains(formID))
+		return;
+
+	auto* base = a_ref->GetBaseObject();
+	auto* explosion = base ? base->As<RE::BGSExplosion>() : nullptr;
+	if (!explosion)
+		return;
+
+	if (!explosionElementsBuilt)
+		BuildExplosionElements();
+	const auto found = explosionElements.find(explosion);
+	if (found == explosionElements.end())
+		return;
+	const SpellElement element = found->second;
+
+	auto* tes = RE::TES::GetSingleton();
+	if (!tes)
+		return;
+
+	const RE::NiPoint3 position = a_ref->GetPosition();
+	float groundZ = position.z;
+	tes->GetLandHeight(position, groundZ);
+
+	// The AUTHORED radius, not the live one: the live value is mid-expansion
+	// on the frame we catch it, and the mark wants the blast's final size.
+	const float baseRadius = std::clamp(explosion->data.radius, kExplosionRadiusMin, kExplosionRadiusMax);
+
+	float strength = 0.0f;
+	float radius = 0.0f;
+	// A bolt that detonates against a chest marks weakly and broadly below it,
+	// not sharply at the height it went off.
+	if (!GroundMark(position.z - groundZ, baseRadius, strength, radius))
+		return;
+	spellStats.lastStrength = strength;
+	spellStats.lastRadius = radius;
+	if (strength < kMinSpellStrength)
+		return;
+
+	explosionsStamped.insert(formID);
+	if (spellEmitters.size() >= kMaxSpellEmitters)
+		return;
+
+	SpellEmitter emitter{};
+	emitter.position = { position.x, position.y };
+	emitter.previous = emitter.position;
+	emitter.radius = radius;
+	emitter.strength = strength;
+	emitter.rate = kExplosionRate;
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
 	spellEmitters.push_back(emitter);
