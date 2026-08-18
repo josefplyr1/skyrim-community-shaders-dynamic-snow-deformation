@@ -317,32 +317,41 @@ void SnowDeformation::SampleActorAuras()
 		// once should not melt twice as fast in the same ring.
 		ActorAura best{};
 		best.rateScale = 0.0f;
-		a_actor->VisitActiveEffects([&](RE::ActiveEffect* a_effect) {
-			const RE::EffectSetting* base = a_effect ? a_effect->GetBaseObject() : nullptr;
+		// GetActiveEffectList, NOT VisitActiveEffects. The visitor helpers in
+		// MagicTarget.h live inside an ENABLE_SKYRIM_VR block and reach the
+		// game through a hardcoded VR address (REL::ID 33756); the ALL preset
+		// compiles VR support, so that path builds happily and then calls a
+		// completely unrelated function on SE/AE. GetActiveEffectList is
+		// declared in BOTH branches - a native virtual here, a shim on VR - so
+		// it is the portable one.
+		auto* effects = a_actor->GetActiveEffectList();
+		if (!effects)
+			return;
+		for (auto* activeEffect : *effects) {
+			const RE::EffectSetting* base = activeEffect ? activeEffect->GetBaseObject() : nullptr;
 			if (!base)
-				return RE::BSContainer::ForEachResult::kContinue;
+				continue;
 			// The archetype IS the discriminator. A cloak declares itself as
 			// one, so there is no guessing from delivery, which alone would
 			// sweep up every racial resistance an actor carries.
 			if (base->data.archetype != RE::EffectSetting::Archetype::kCloak)
-				return RE::BSContainer::ForEachResult::kContinue;
+				continue;
 			if (base->data.delivery != RE::MagicSystem::Delivery::kSelf)
-				return RE::BSContainer::ForEachResult::kContinue;
+				continue;
 
 			const SpellElement candidate = ClassifyElement(base);
 			if (candidate == SpellElement::None)
-				return RE::BSContainer::ForEachResult::kContinue;
+				continue;
 
-			const float candidateRate = a_effect->effect ?
-			                                std::clamp(a_effect->effect->effectItem.magnitude / kSpellReferenceMagnitude,
+			const float candidateRate = activeEffect->effect ?
+			                                std::clamp(activeEffect->effect->effectItem.magnitude / kSpellReferenceMagnitude,
 												kSpellMagnitudeMin, kSpellMagnitudeMax) :
 			                                1.0f;
 			if (candidateRate > best.rateScale) {
 				best.rateScale = candidateRate;
 				best.element = candidate;
 			}
-			return RE::BSContainer::ForEachResult::kContinue;
-		});
+		}
 		if (best.element != SpellElement::None)
 			sampled[a_actor->formID] = best;
 	};
