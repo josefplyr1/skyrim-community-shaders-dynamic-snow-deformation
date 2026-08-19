@@ -490,9 +490,28 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const bool floating = !isDead && ActorIsFloating(actor.get(), root, bones, groundZ, &floatingGap);
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
+		// A thing MADE of an element has a body, however much light passes
+		// through it. Ice is see-through; a ghost is see-through because there
+		// is nothing there, and the translucency test cannot tell those apart -
+		// a Frost Atronach reads 0.75 and carved nothing.
+		//
+		// The separation is already sitting in the records this feature reads:
+		// an actor whose RACE carries an elemental affinity (an aura cloak, or
+		// near-immunity to one element paired with a weakness to another) is
+		// made of that element. Atronachs and ice wraiths have it; wisps,
+		// wispmothers, witchlights and every ghost in the game do not. So the
+		// exemption is derived rather than named, and it reuses the per-race
+		// cache the innate auras already fill.
+		//
+		// NOT the kIsGhost record flag, which was the obvious pairing and is
+		// useless here: 72 of the 90 ghost-named actors in Skyrim.esm do not
+		// set it, including every Ysgramor's Tomb, Halldir's, Forelhost,
+		// Yngvild and Rannveig ghost. The flag means invulnerable.
+		const bool elemental = ResolveInnateAura(actor.get()) != nullptr;
 		// Corpses are exempt from BOTH gates: a body that has fallen is lying
 		// in the snow whatever it was in life.
-		const bool incorporeal = !isDead && ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
+		const bool incorporeal = !isDead && !elemental &&
+		                         ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
 
 		// Diagnostics for the nearest creature, so the clearance band can be
 		// read off a real wisp or ghost rather than guessed at. The gap to the
