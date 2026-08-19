@@ -282,6 +282,14 @@ public:
 		float ShockCloakInterval = 1.50f;
 		/** @brief Size of one cloak arc against the cloak's own reach. */
 		float ShockCloakStrikeScale = 0.25f;
+		/** @brief Draw the arc that justifies the pock. The snow already marks where a cloak discharges; without something reaching the spot, the hole reads as a glitch rather than as lightning. Visual only - nothing is spawned into the world. */
+		bool EnableLightningArcs = true;
+		float LightningArcWidth = 9.0f;
+		float LightningArcBrightness = 6.0f;
+		float LightningArcLife = 0.16f;
+		std::array<float, 3> LightningArcTint = { 0.62f, 0.78f, 1.0f };
+		/** @brief Optional DDS for the bolt, relative to Data. EMPTY by default and deliberately so: the shader draws a real core-and-falloff channel on its own, and a guessed vanilla path that resolves to nothing would leave a black band in the air. */
+		std::string LightningArcTexturePath = "";
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
 		/** @brief How fast frost sets a crust, for a spell of Frostbite's strength. */
@@ -787,6 +795,57 @@ public:
 	ID3D11DomainShader* shellDS = nullptr;
 
 	ConstantBuffer* shellCB = nullptr;
+
+	/** @brief One live arc: where it came from, where it struck, and how far through its life it is. */
+	struct LightningArc
+	{
+		RE::NiPoint3 from;
+		RE::NiPoint3 to;
+		float age = 0.0f;
+		float life = 0.16f;
+		float seed = 0.0f;
+	};
+	/** @brief Bounded hard. Arcs are cosmetic, so a barrage drops the excess rather than growing a list on the render thread. */
+	static constexpr size_t kMaxLightningArcs = 24;
+	/** @brief Quads along one bolt. Must match ARC_SEGMENTS in LightningArc.hlsl. */
+	static constexpr uint kLightningArcSegments = 12;
+	std::vector<LightningArc> lightningArcs;
+	uint32_t lightningArcSeed = 0;
+
+	/** @brief Layout must match ArcCB in LightningArc.hlsl. Its own buffer, NOT part of ShellCB, which is hand-mirrored across two shaders and must not grow for a cosmetic pass. */
+	struct ArcCB
+	{
+		Matrix CameraViewProj;
+		float4 ArcCameraPosAdjust;
+		float4 ArcFrom;
+		float4 ArcTo;
+		float4 ArcParams;
+		float4 ArcTint;
+	};
+	ConstantBuffer* arcCB = nullptr;
+	ID3D11VertexShader* arcVS = nullptr;
+	ID3D11PixelShader* arcPS = nullptr;
+	winrt::com_ptr<ID3D11ShaderResourceView> arcTextureSRV;
+	winrt::com_ptr<ID3D11BlendState> arcBlendState;
+	winrt::com_ptr<ID3D11DepthStencilState> arcDepthState;
+	winrt::com_ptr<ID3D11RasterizerState> arcRasterState;
+	winrt::com_ptr<ID3D11SamplerState> arcSampler;
+	bool arcTextureAttempted = false;
+	std::string arcTextureLoaded;
+
+	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow, frost and arc textures - a second copy would drift. */
+	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
+	ID3D11VertexShader* GetLightningArcVS();
+	ID3D11PixelShader* GetLightningArcPS();
+	bool EnsureLightningArcResources();
+	void EnsureLightningArcTexture();
+
+	/** @brief Records an arc for this frame's draw. Called from the shock cloak's own discharge, which already knows both ends. */
+	void EmitLightningArc(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
+	/** @brief Ages the live arcs and drops the spent ones. */
+	void UpdateLightningArcs(float a_deltaTime);
+	/** @brief Draws the live arcs. Called AFTER the deferred composite - an emissive overlay lit by nothing, which is what a bolt is. */
+	void DrawLightningArcs();
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
 

@@ -588,8 +588,32 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttScorch = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("scorch_strength_tooltip"), "How dark a discharge burns the snow it struck. 0 leaves the pocking alone and removes the blackening entirely."));
 
+		ImGui::Checkbox(T(TKEY("lightning_arcs"), "Draw Lightning Arcs"), &settings.EnableLightningArcs);
+		if (auto _ttArc = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lightning_arcs_tooltip"), "Draws the bolt between a lightning cloak's wearer and the ground it just struck. Without it the snow pocks with nothing reaching the spot, which reads as a glitch rather than as lightning. Purely visual - nothing is spawned into the world, no damage, no sound."));
+
 		ImGui::PushID("spell_cat_lightning");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
+			ImGui::SliderFloat(T(TKEY("arc_width"), "Arc Thickness"), &settings.LightningArcWidth, 1.0f, 40.0f, "%.0f units");
+			if (auto _ttArcW = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_width_tooltip"), "How thick the bolt is at its middle. It tapers to nothing at both ends whatever this is set to, so the hand and the ground never show a join."));
+
+			ImGui::SliderFloat(T(TKEY("arc_brightness"), "Arc Brightness"), &settings.LightningArcBrightness, 0.0f, 20.0f, "%.1f");
+			if (auto _ttArcB = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_brightness_tooltip"), "Light added to the scene where the bolt is. It is additive, so this reads differently against night snow than against a sunlit slope."));
+
+			ImGui::SliderFloat(T(TKEY("arc_life"), "Arc Duration"), &settings.LightningArcLife, 0.04f, 0.6f, "%.2f s");
+			if (auto _ttArcL = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_life_tooltip"), "How long one bolt lasts. It flares in over the first fraction and fades out across the rest, because a strike does not fade UP."));
+
+			ImGui::ColorEdit3(T(TKEY("arc_tint"), "Arc Colour"), settings.LightningArcTint.data());
+			if (auto _ttArcC = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_tint_tooltip"), "Colour of the discharge."));
+
+			ImGui::InputText(T(TKEY("arc_texture_path"), "Arc Texture"), &settings.LightningArcTexturePath);
+			if (auto _ttArcT = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_texture_path_tooltip"), "Optional DDS path relative to Data. EMPTY by default and deliberately so: the bolt is drawn as a real core-and-falloff channel that stands on its own, and a guessed vanilla path that resolves to nothing would leave a dark band hanging in the air. Supply one to shape the channel; it modulates rather than replaces."));
+
 			ImGui::SliderFloat(T(TKEY("shock_cloak_radius"), "Lightning Cloak Radius"), &settings.ShockCloakRadius, 30.0f, 300.0f, "%.0f");
 			if (auto _ttShockCloak = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shock_cloak_radius_tooltip"), "How far a lightning cloak throws its arcs. Kept separate from the fire cloak's reach because the two behave differently: heat wraps the body, arcs jump clear of it."));

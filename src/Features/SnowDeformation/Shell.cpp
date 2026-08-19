@@ -83,7 +83,7 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
  * AND archives, and a modlist's override still wins exactly as it does in
  * game. The filesystem path stays as a fallback for anything outside Data.
  */
-static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
+bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
 {
 	a_srv = nullptr;
 	if (a_dataRelativePath.empty())

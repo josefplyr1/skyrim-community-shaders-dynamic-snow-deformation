@@ -63,7 +63,7 @@
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
 	X(FrostTexturePath) \
-	X(FrostPatternStrength) \
+	X(EnableLightningArcs) 	X(LightningArcWidth) 	X(LightningArcBrightness) 	X(LightningArcLife) 	X(LightningArcTint) 	X(LightningArcTexturePath) 	X(FrostPatternStrength) \
 	X(FrostPatternScale) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
@@ -522,6 +522,8 @@ void SnowDeformation::Prepass()
 	// half that grew: the spell branch walks the projectile manager, resolves
 	// records and queries land height per source, all on the render thread.
 	// Sequential rather than nested - the profiler tracks one current pass.
+	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
+
 	globals::profiler->BeginPass("SnowDeformation::GatherSpells");
 	GatherSpellEmitters();
 	globals::profiler->EndPass();

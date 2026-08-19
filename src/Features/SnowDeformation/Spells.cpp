@@ -954,6 +954,19 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 
 		const float2 strike{ current.x + std::cos(angle) * reach, current.y + std::sin(angle) * reach };
 
+		// The bolt that justifies the pock. Snow opening up with nothing
+		// reaching it reads as a glitch; the arc is what makes it lightning.
+		// Both ends are already in hand - the wearer is standing right here and
+		// the discharge has just chosen where it lands - so this costs a land
+		// height and nothing else. Purely visual: see LightningArc.cpp for why
+		// a real projectile would feed our own blast detector.
+		if (settings.EnableLightningArcs) {
+			float strikeZ = position.z;
+			tes->GetLandHeight(RE::NiPoint3{ strike.x, strike.y, position.z }, strikeZ);
+			EmitLightningArc(RE::NiPoint3{ position.x, position.y, position.z + kCloakCentreHeight },
+				RE::NiPoint3{ strike.x, strike.y, strikeZ });
+		}
+
 		// Opened as a BLAST rather than pushed straight out as an emitter. An
 		// arc off a cloak is a discharge exactly as a bolt's strike is, so it
 		// belongs on the same path - which is also what gives it the ramp, so
