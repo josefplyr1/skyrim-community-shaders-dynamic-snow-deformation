@@ -157,6 +157,11 @@ static constexpr float kShoutCarrierForce = 50.0f;
 // man, which is the honest way to say it: anything a person could keep pace
 // with is an object moving over the ground, not a blast leaving it.
 static constexpr float kForceTrackSpeed = 800.0f;
+// Impact force past which a shove is a vortex rather than a blast, whatever
+// its speed says. A second and independent reading of the same fact: no
+// shockwave in either master authors above 85, and a cyclone authors 1000. Two
+// numbers have to agree that a thing is a shockwave before it gets a wedge.
+static constexpr float kVortexForce = 200.0f;
 // A shout's reach if its projectile names none.
 static constexpr float kShoutDefaultRange = 1000.0f;
 static constexpr float kShoutRangeMax = 12000.0f;
@@ -619,6 +624,14 @@ RE::BSEventNotifyControl SnowDeformation::MagicApplySink::ProcessEvent(
 	return RE::BSEventNotifyControl::kContinue;
 }
 
+bool SnowDeformation::IsTravellingShove(const RE::BGSProjectile* a_projectile, float a_force)
+{
+	if (a_force > kVortexForce)
+		return true;
+	return a_projectile && a_projectile->data.speed > 0.0f &&
+	       a_projectile->data.speed <= kForceTrackSpeed;
+}
+
 bool SnowDeformation::SpellShoves(const RE::MagicItem* a_spell, float& a_force)
 {
 	a_force = 0.0f;
@@ -679,16 +692,32 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	// projectile that hits far harder than the shared carrier ever does.
 	if (element == SpellElement::None && (shoves || shoveForce > kShoutCarrierForce))
 		element = SpellElement::Force;
+
+	// Whatever happens next, say what was read. A wedge that should have been a
+	// track is otherwise only arguable, and this turns it into a number.
+	spellStats.lastShoutElement = static_cast<uint>(element);
+	spellStats.lastShoutSpeed = projectile ? projectile->data.speed : 0.0f;
+	spellStats.lastShoutForce = shoveForce;
+	spellStats.lastShoutVerdict = 3;
+
 	if (element == SpellElement::None)
 		return;
 
-	// A slow shove is not a shockwave and gets no wedge. It is an object making
-	// its way across the ground, and what it leaves is the line it took - which
-	// the projectile route below follows for real, so it need not be guessed at
-	// from the caster's facing here.
-	if (element == SpellElement::Force && projectile && projectile->data.speed > 0.0f &&
-		projectile->data.speed <= kForceTrackSpeed)
+	// A shove that TRAVELS is not a shockwave and gets no wedge. It is an
+	// object making its way across the ground, and what it leaves is the line
+	// it took - which the projectile route follows for real, so it need not be
+	// guessed at from the caster's facing here.
+	//
+	// Two independent readings, and either is enough, because they are two
+	// ways of noticing the same thing and one of them failing quietly would
+	// hand a cyclone a wedge. Speed: every shockwave crosses its reach in about
+	// a second, a cyclone crawls for four. Impact force: no shockwave in either
+	// master authors above 85, and a cyclone authors 1000.
+	if (element == SpellElement::Force && IsTravellingShove(projectile, shoveForce)) {
+		spellStats.lastShoutVerdict = 2;
 		return;
+	}
+	spellStats.lastShoutVerdict = 1;
 
 	// Reach off the projectile's own record. The effects author no AREA at all
 	// for any shout in the game, so there is nothing else to read - and the
@@ -1619,8 +1648,8 @@ void SnowDeformation::GatherSpellEmitters()
 			float shoveForce = 0.0f;
 			if (auto* baseForm = projectile->GetBaseObject())
 				if (auto* projectileBase = baseForm->As<RE::BGSProjectile>())
-					if (projectileBase->data.speed > 0.0f && projectileBase->data.speed <= kForceTrackSpeed &&
-						SpellShoves(runtime.spell, shoveForce)) {
+					if (SpellShoves(runtime.spell, shoveForce) &&
+						IsTravellingShove(projectileBase, shoveForce)) {
 						element = SpellElement::Force;
 						tracks = true;
 					}

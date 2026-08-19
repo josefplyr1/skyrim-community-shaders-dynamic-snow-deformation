@@ -345,6 +345,14 @@ void SnowDeformation::DrawSettings()
 			spellStats.shouts, spellStats.shoutDiscs);
 		ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u",
 			spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks);
+		if (spellStats.lastShoutVerdict) {
+			static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
+			static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
+			ImGui::Text("last shout: %s | proj speed %.0f | impact force %.0f | %s",
+				spellStats.lastShoutElement < IM_ARRAYSIZE(kElem) ? kElem[spellStats.lastShoutElement] : "?",
+				spellStats.lastShoutSpeed, spellStats.lastShoutForce,
+				spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
+		}
 		ImGui::Text("rejected: no element %u | no blast form %u",
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating actors not carving %u",

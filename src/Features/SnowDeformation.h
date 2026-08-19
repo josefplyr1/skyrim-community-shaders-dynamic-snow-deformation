@@ -1722,6 +1722,9 @@ protected:
 	/** @brief True when this spell shoves rather than merely staggering or damaging, and how hard its projectile hits. Shared by the shout cone and the travelling-track route so the two can never disagree about what force is. */
 	static bool SpellShoves(const RE::MagicItem* a_spell, float& a_force);
 
+	/** @brief True when a shove TRAVELS rather than blasting - slow enough to watch, or hitting far harder than any shockwave is authored to. Either reading is enough; they are two ways of noticing the same thing. */
+	static bool IsTravellingShove(const RE::BGSProjectile* a_projectile, float a_force);
+
 	/** @brief Classifies a shout off its records and queues its cone. Called from the cast sink on the game thread; reads only static forms and the caster's own position and facing. */
 	void ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster);
 
@@ -1912,6 +1915,12 @@ protected:
 		uint dashGouges = 0;
 		/** @brief Slow shoves tracking across the ground, leaving the line they took. */
 		uint forceTracks = 0;
+		/** @brief What the last shout classified as, so a wedge that should have been a track can be read rather than argued about. */
+		uint lastShoutElement = 0;
+		float lastShoutSpeed = 0.0f;
+		float lastShoutForce = 0.0f;
+		/** @brief 0 nothing, 1 wedge, 2 track, 3 rejected. */
+		uint lastShoutVerdict = 0;
 		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
 		uint auras = 0;
 		/** @brief Innate auras seen this frame: atronachs and anything else whose records give it one without a cast. */
