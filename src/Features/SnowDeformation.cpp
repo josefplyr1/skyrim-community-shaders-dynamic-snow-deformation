@@ -517,7 +517,18 @@ void SnowDeformation::Prepass()
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
+	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
+	// this feature was already timed and neither of these was, which is the
+	// half that grew: the spell branch walks the projectile manager, resolves
+	// records and queries land height per source, all on the render thread.
+	// Sequential rather than nested - the profiler tracks one current pass.
+	globals::profiler->BeginPass("SnowDeformation::GatherSpells");
+	GatherSpellEmitters();
+	globals::profiler->EndPass();
+
+	globals::profiler->BeginPass("SnowDeformation::GatherStamps");
 	GatherStamps(perFrameData);
+	globals::profiler->EndPass();
 
 	perFrame->Update(perFrameData);
 

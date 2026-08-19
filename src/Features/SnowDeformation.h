@@ -43,8 +43,30 @@ public:
 	static constexpr float kStampModeCone = 10.0f;
 	/** @brief Added to a stamp's mode to give a carve a BOWL cross-section rather than a trench's flat floor and standing walls. Mirrored by STAMP_MODE_BOWL in DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeBowl = 20.0f;
-	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
+	/** @brief Cap on spell emitters STAMPED per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
+	/**
+	 * @brief How many emitters may be GATHERED before the distance sort trims to kMaxSpellEmitters.
+	 *
+	 * Producers run in a fixed order - cloaks, then projectiles, then hazards,
+	 * then blasts - so a cap enforced while gathering drops whatever happens to
+	 * run last, wherever it is. A firewall burning across the valley outranks
+	 * the bolt landing at your feet purely because cloaks are read first.
+	 * Gather wide, then keep the nearest, which is what the exclusion field
+	 * already does when it overflows.
+	 */
+	static constexpr size_t kSpellEmitterCeiling = 192;
+	/**
+	 * @brief Slots of kMaxStamps that only spells may take.
+	 *
+	 * Actors and props are gathered first and in engine order, so a mass
+	 * ragdoll - a dozen bodies each stamping every limb - can fill all 256
+	 * before one emitter is read, and a fireball at the player's feet then
+	 * leaves nothing at all. Small enough that giving it up costs a few limb
+	 * prints inside a pile nobody is looking at; large enough that every
+	 * school still marks during the fight that caused the pile.
+	 */
+	static constexpr uint kSpellStampReserve = 48;
 
 	/** @brief Skyrim world units per meter (1 unit â‰ˆ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -1997,6 +2019,8 @@ protected:
 		uint innate = 0;
 		/** @brief Dead innate-aura bodies still burning the ground they fell on. */
 		uint burning = 0;
+		/** @brief Emitters gathered past kMaxSpellEmitters and dropped by the distance sort. Non-zero means the frame carried more spell sources than the budget and the ones kept are the nearest. */
+		uint emittersCulled = 0;
 		/** @brief Death events received for an actor carrying an innate aura. If this stays 0 while atronachs die in front of you, the event is not the route. */
 		uint deathsSeen = 0;
 		/** @brief Death blasts actually opened. Against deathsSeen this says whether the event fired and the mark was rejected, or the event never came. */
@@ -2027,6 +2051,8 @@ protected:
 		uint propRefs = 0;
 		uint propMovers = 0;
 		uint spells = 0;
+		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
+		uint beforeSpells = 0;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
 		uint floating = 0;
 		/** @brief Nearest non-player actor's measurements, so the floating gate can be read against a real creature instead of guessed at. */

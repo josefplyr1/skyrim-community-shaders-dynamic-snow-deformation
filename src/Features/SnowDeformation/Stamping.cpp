@@ -363,9 +363,13 @@ float SnowDeformation::CrustBreakForce(float a_radius) const
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
-	GatherSpellEmitters();
-
 	uint stampCount = 0;
+	// Actors and props stop short of the pool so spells always have somewhere
+	// to land. They are read first and in engine order, so without this a
+	// ragdoll pile fills all 256 and the fight that caused the pile marks
+	// nothing. The slots go unused when no spell is active, which costs a few
+	// limb prints inside a heap nobody is reading.
+	const uint actorCeiling = kMaxStamps - kSpellStampReserve;
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
@@ -377,7 +381,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// and props stamp their Havok collision shapes (Util::GetShapeBound over
 	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
 	auto addStamps = [&](RE::ActorHandle a_handle) {
-		if (stampCount >= kMaxStamps)
+		if (stampCount >= actorCeiling)
 			return;
 		auto actor = a_handle.get();
 		if (!actor || !actor->Is3DLoaded())
@@ -539,7 +543,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				uint32_t footIndex = 0;
 				for (const auto& foot : bones->feet) {
 					const uint32_t thisIndex = footIndex++;
-					if (stampCount >= kMaxStamps)
+					if (stampCount >= actorCeiling)
 						break;
 					auto* footNode = foot.node.get();
 					if (!footNode)
@@ -618,7 +622,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// deep snow, shallow snow keeps prints discrete. No trail latch:
 			// per-frame segment stamps stay continuous at any speed.
 			for (auto& limb : bones->limbs) {
-				if (stampCount >= kMaxStamps)
+				if (stampCount >= actorCeiling)
 					break;
 				auto* nodeA = limb.a.get();
 				auto* nodeB = limb.b.get();
@@ -672,7 +676,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			uint32_t limbIndex = 0;
 			for (auto& limb : bones->limbs) {
 				const uint32_t thisIndex = limbIndex++;
-				if (stampCount >= kMaxStamps)
+				if (stampCount >= actorCeiling)
 					break;
 				auto* nodeA = limb.a.get();
 				auto* nodeB = limb.b.get();
@@ -742,7 +746,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (Util::GetShapeBound(a_object, centerPos, radius)) {
 					// Stable per-skeleton traversal order keys the trail history.
 					const uint32_t thisIndex = shapeIndex++;
-					if (stampCount >= kMaxStamps)
+					if (stampCount >= actorCeiling)
 						return RE::BSVisit::BSVisitControl::kStop;
 					if (centerPos.z - radius > bandRefZ + kStampSurfaceBand)
 						return RE::BSVisit::BSVisitControl::kContinue;
@@ -884,7 +888,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.propMovers++;
 			if (!propMoved)
 				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
-			if (stampCount >= kMaxStamps)
+			if (stampCount >= actorCeiling)
 				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors
 
 			// Fast-falling props must not carve under their arc; supported
@@ -916,7 +920,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				float radius;
 				if (Util::GetShapeBound(a_object, centerPos, radius)) {
 					const uint32_t thisIndex = shapeIndex++;
-					if (stampCount >= kMaxStamps)
+					if (stampCount >= actorCeiling)
 						return RE::BSVisit::BSVisitControl::kStop;
 					if (centerPos.z - radius > supportZ + kStampSurfaceBand)
 						return RE::BSVisit::BSVisitControl::kContinue;
@@ -954,7 +958,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 			// Shape types with no bound extractor (MOPP/list): one stamp from
 			// the root's bound sphere.
-			if (shapeIndex == 0 && stampCount < kMaxStamps) {
+			if (shapeIndex == 0 && stampCount < actorCeiling) {
 				const auto& bound = root->worldBound;
 				float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
 				if (bound.center.z - radius <= supportZ + kStampSurfaceBand) {
@@ -989,6 +993,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// Spell emitters melt rather than displace. Appended AFTER actors and
 	// props on purpose: a busy fight must not starve foot prints out of the
 	// stamp budget, and prints are the marks players read first.
+	stampStats.beforeSpells = stampCount;
+
+	// Overflow: keep the sources nearest the camera. The producers above run in
+	// a fixed order, so a cap enforced while gathering drops whichever ran last
+	// rather than whichever is furthest away. Sorted here rather than at the end
+	// of GatherSpellEmitters because hazards join during the prop scan above.
+	if (spellEmitters.size() > kMaxSpellEmitters) {
+		spellStats.emittersCulled = static_cast<uint>(spellEmitters.size() - kMaxSpellEmitters);
+		std::partial_sort(spellEmitters.begin(), spellEmitters.begin() + kMaxSpellEmitters, spellEmitters.end(),
+			[&](const SpellEmitter& a_lhs, const SpellEmitter& a_rhs) {
+				const float lhsDx = a_lhs.position.x - cameraPosition.x, lhsDy = a_lhs.position.y - cameraPosition.y;
+				const float rhsDx = a_rhs.position.x - cameraPosition.x, rhsDy = a_rhs.position.y - cameraPosition.y;
+				return lhsDx * lhsDx + lhsDy * lhsDy < rhsDx * rhsDx + rhsDy * rhsDy;
+			});
+		spellEmitters.resize(kMaxSpellEmitters);
+	}
+
 	for (const auto& emitter : spellEmitters) {
 		if (stampCount >= kMaxStamps)
 			break;

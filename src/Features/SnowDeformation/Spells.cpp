@@ -390,7 +390,7 @@ void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift)
 
 void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 {
-	if (!settings.EnableSpellIntegration || spellEmitters.size() >= kMaxSpellEmitters)
+	if (!settings.EnableSpellIntegration || spellEmitters.size() >= kSpellEmitterCeiling)
 		return;
 	auto* hazard = a_ref ? a_ref->As<RE::Hazard>() : nullptr;
 	if (!hazard)
@@ -868,7 +868,7 @@ void SnowDeformation::RegisterSpellCastSink()
 
 void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak, float a_deltaTime)
 {
-	if (spellEmitters.size() >= kMaxSpellEmitters || !a_actor)
+	if (spellEmitters.size() >= kSpellEmitterCeiling || !a_actor)
 		return;
 	auto* tes = RE::TES::GetSingleton();
 	if (!tes)
@@ -1404,7 +1404,7 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 		it->hasPrevious = true;
 		++it;
 
-		if (!had || spellEmitters.size() >= kMaxSpellEmitters)
+		if (!had || spellEmitters.size() >= kSpellEmitterCeiling)
 			continue;
 		if (a_cameraPosition.GetSquaredDistance(position) > a_cullRadius * a_cullRadius)
 			continue;
@@ -1681,7 +1681,7 @@ void SnowDeformation::GatherSpellEmitters()
 	}
 
 	for (auto& projectile : live) {
-		if (spellEmitters.size() >= kMaxSpellEmitters)
+		if (spellEmitters.size() >= kSpellEmitterCeiling)
 			break;
 		if (!projectile || !projectile->Is3DLoaded())
 			continue;
@@ -1768,7 +1768,7 @@ void SnowDeformation::GatherSpellEmitters()
 			if (!GroundMark(position.z - trackGroundZ, std::max(settings.ForceTrackWidth, 4.0f),
 					trackStrength, trackRadius))
 				continue;
-			if (trackStrength < kMinSpellStrength || spellEmitters.size() >= kMaxSpellEmitters)
+			if (trackStrength < kMinSpellStrength || spellEmitters.size() >= kSpellEmitterCeiling)
 				continue;
 
 			const float2 currentTrack{ position.x, position.y };
@@ -1907,7 +1907,7 @@ void SnowDeformation::GatherSpellEmitters()
 
 			if (columnDepth > kMinTrailDepth && heightAboveLand >= 0.0f && heightAboveLand < columnDepth) {
 				const float cut = 1.0f - heightAboveLand / columnDepth;
-				if (cut >= kMinSpellStrength && spellEmitters.size() < kMaxSpellEmitters) {
+				if (cut >= kMinSpellStrength && spellEmitters.size() < kSpellEmitterCeiling) {
 					SpellEmitter emitter{};
 					emitter.position = currentTrail;
 					emitter.previous = previousTrail;
@@ -2053,7 +2053,7 @@ void SnowDeformation::GatherSpellEmitters()
 	{
 		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
 		for (auto it = activeBlasts.begin(); it != activeBlasts.end();) {
-			if (spellEmitters.size() < kMaxSpellEmitters) {
+			if (spellEmitters.size() < kSpellEmitterCeiling) {
 				// A mark forms over a moment rather than at once. Melt already
 				// ramps, because it integrates - a PIT does not, since it
 				// follows carve, so a discharge would otherwise simply exist

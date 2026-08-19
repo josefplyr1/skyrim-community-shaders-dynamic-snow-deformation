@@ -480,6 +480,9 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
+			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u",
+				stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
+				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled);
 			ImGui::TreePop();
 		}
 
