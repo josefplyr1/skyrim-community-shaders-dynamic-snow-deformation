@@ -308,6 +308,8 @@ public:
 		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
+		/** @brief Width of the furrow a dash shout ploughs, against the dasher's own size. A dragon hurling itself forward cuts a wider one than a man. */
+		float DashGougeScale = 1.0f;
 		/** @brief Depth a full-strength shove carves, as a fraction of the layer. Force is the only school that DISPLACES snow rather than changing it, so it is also the only one that raises a berm at the far lip - which is what makes Unrelenting Force read as pushed rather than deleted. */
 		float ForceCarveDepth = 1.0f;
 		/** @brief Let a body that is still burning, crackling or frozen over go on marking the snow beneath it. The element comes from the last one that struck the actor before it died, so it needs no reading of the corpse itself. */
@@ -1678,8 +1680,38 @@ protected:
 	};
 	std::vector<QueuedCone> queuedCones;
 
-	/** @brief Lays one shout down as a row of discs along its axis. */
+	/** @brief Lays one shout down as a wedge along its axis. */
 	void OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes);
+
+	/**
+	 * @brief A shout that moves its own caster, watched rather than classified.
+	 *
+	 * Whirlwind Sprint and Storm Call cannot be told apart by their records:
+	 * both are voice powers, both self-delivered, both carry a script effect
+	 * and a projectile, and Storm Call carries the stagger besides. Impact
+	 * force is no better - Marked for Death throws the very same 50-force push
+	 * projectile Unrelenting Force does.
+	 *
+	 * So the question is not asked of the records at all. A self-delivered
+	 * shout opens a short watch on its caster, and what marks the snow is the
+	 * caster MOVING faster than anything on foot can. Storm Call leaves them
+	 * standing and so marks nothing, without ever being named or excluded; a
+	 * modded dash shout works for the same reason.
+	 */
+	struct DashWatch
+	{
+		RE::ActorHandle actor;
+		float remaining = 0.0f;
+		float2 previous{};
+		bool hasPrevious = false;
+	};
+	/** @brief Queued by the cast sink on the game thread, drained by the gather. */
+	std::vector<DashWatch> queuedDashes;
+	/** @brief Live dash watches. Short-lived, so a vector rather than a map. */
+	std::vector<DashWatch> dashWatches;
+
+	/** @brief Runs every live dash watch, cutting a furrow behind anything moving fast enough to be dashing. */
+	void GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 
 	/** @brief Classifies a shout off its records and queues its cone. Called from the cast sink on the game thread; reads only static forms and the caster's own position and facing. */
 	void ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster);
@@ -1866,6 +1898,9 @@ protected:
 		/** @brief Shout cones laid down, and the discs they cost. */
 		uint shouts = 0;
 		uint shoutDiscs = 0;
+		/** @brief Dash watches running, and how many are actually cutting a furrow this frame. */
+		uint dashWatches = 0;
+		uint dashGouges = 0;
 		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
 		uint auras = 0;
 		/** @brief Innate auras seen this frame: atronachs and anything else whose records give it one without a cast. */

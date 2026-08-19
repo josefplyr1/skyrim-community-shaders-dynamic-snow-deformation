@@ -151,6 +151,21 @@ static constexpr float kShoutDefaultSpeed = 1400.0f;
 // which is why Frost Breath was all but invisible while Fire Breath cut to the
 // floor. A blast has one moment, so it has to arrive within it.
 static constexpr float kBlastCrustRate = 4.0f;
+// How long a self-delivered shout is watched for a dash. The dash itself is
+// over well inside this; the window only has to outlast the wind-up.
+static constexpr float kDashWindow = 1.5f;
+// Speed past which an actor is being THROWN rather than running. Skyrim's run
+// is about 350 units a second and its sprint about 500; Whirlwind Sprint
+// crosses a thousand units in well under one, so there is a wide gap to sit in.
+static constexpr float kDashSpeedGate = 800.0f;
+// Beyond this in a frame it was not a dash but a teleport or a cell change,
+// and a capsule across it would comb a line over the whole world.
+static constexpr float kDashBreak = 700.0f;
+// Half-width of the furrow, against the dasher's own bounding sphere. Half,
+// because a body ploughs a channel about as wide as itself rather than twice.
+static constexpr float kDashWidthOfBound = 0.5f;
+static constexpr float kDashWidthMin = 16.0f;
+static constexpr float kDashWidthMax = 220.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -396,8 +411,34 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	// which are self-delivered and already work through other routes.
 	if (feature.settings.EnableShoutCones)
 		if (auto* spellItem = spell->As<RE::SpellItem>();
-			spellItem && spellItem->data.spellType == RE::MagicSystem::SpellType::kVoicePower)
+			spellItem && spellItem->data.spellType == RE::MagicSystem::SpellType::kVoicePower) {
 			feature.ConsiderShout(spellItem, a_event->object.get());
+
+			// And a watch, in case this is a shout that throws its caster.
+			// Opened for every self-delivered one, because no reading of the
+			// records can tell those apart - see DashWatch. What separates them
+			// is whether the caster then MOVES, which costs nothing to watch.
+			bool selfDelivered = false;
+			bool elemental = false;
+			for (const auto* item : spellItem->effects) {
+				const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+				if (!base)
+					continue;
+				if (base->data.delivery == RE::MagicSystem::Delivery::kSelf)
+					selfDelivered = true;
+				if (ClassifyElement(base) != SpellElement::None)
+					elemental = true;
+			}
+			if (selfDelivered && !elemental)
+				if (auto* actor = a_event->object->As<RE::Actor>()) {
+					DashWatch watch{};
+					watch.actor = actor->GetHandle();
+					watch.remaining = kDashWindow;
+					std::scoped_lock lock(feature.queuedCastLock);
+					if (feature.queuedDashes.size() < kMaxSpellEmitters)
+						feature.queuedDashes.push_back(watch);
+				}
+		}
 
 	// Self-delivered effects ONLY. Anything aimed or placed already has a
 	// projectile or a hazard to follow, and marking it here as well would drop
@@ -1142,6 +1183,77 @@ void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_
 	}
 }
 
+void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
+{
+	{
+		std::vector<DashWatch> arrived;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			arrived.swap(queuedDashes);
+		}
+		for (auto& watch : arrived) {
+			// A re-cast restarts the window rather than stacking a watch.
+			auto existing = std::find_if(dashWatches.begin(), dashWatches.end(),
+				[&](const DashWatch& a_other) { return a_other.actor == watch.actor; });
+			if (existing != dashWatches.end())
+				existing->remaining = watch.remaining;
+			else
+				dashWatches.push_back(watch);
+		}
+	}
+
+	for (auto it = dashWatches.begin(); it != dashWatches.end();) {
+		it->remaining -= a_deltaTime;
+		auto actor = it->remaining > 0.0f ? it->actor.get() : RE::NiPointer<RE::Actor>();
+		if (!actor) {
+			it = dashWatches.erase(it);
+			continue;
+		}
+		spellStats.dashWatches++;
+
+		const RE::NiPoint3 position = actor->GetPosition();
+		const float2 current{ position.x, position.y };
+		const float2 last = it->previous;
+		const bool had = it->hasPrevious;
+		it->previous = current;
+		it->hasPrevious = true;
+		++it;
+
+		if (!had || spellEmitters.size() >= kMaxSpellEmitters)
+			continue;
+		if (a_cameraPosition.GetSquaredDistance(position) > a_cullRadius * a_cullRadius)
+			continue;
+
+		const float dx = current.x - last.x;
+		const float dy = current.y - last.y;
+		const float travelled = std::sqrt(dx * dx + dy * dy);
+		if (travelled > kDashBreak)
+			continue;
+		// THE test. Running does not reach this, being hurled does.
+		if (travelled / std::max(a_deltaTime, 1e-4f) < kDashSpeedGate)
+			continue;
+
+		// Sized to the dasher, so a dragon cuts a wider furrow than a man.
+		float halfWidth = kDashWidthMin;
+		if (auto* root = actor->Get3D(false))
+			halfWidth = root->worldBound.radius * kDashWidthOfBound;
+		halfWidth = std::clamp(halfWidth * std::max(settings.DashGougeScale, 0.05f),
+			kDashWidthMin, kDashWidthMax);
+
+		SpellEmitter emitter{};
+		// A capsule, which is what the map has always drawn a swept body as -
+		// the furrow is the dasher's own path, not a shape thrown ahead of it.
+		emitter.position = current;
+		emitter.previous = last;
+		emitter.radius = halfWidth;
+		emitter.strength = 1.0f;
+		emitter.element = SpellElement::Force;
+		emitter.mark = SpellMark::Carve;
+		spellEmitters.push_back(emitter);
+		spellStats.dashGouges++;
+	}
+}
+
 void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 {
 	if (!a_tes || a_cone.element == SpellElement::None || a_cone.length <= 1.0f)
@@ -1262,11 +1374,13 @@ void SnowDeformation::GatherSpellEmitters()
 		innateAuras.clear();
 		corpseEffects.clear();
 		lastElementalHit.clear();
+		dashWatches.clear();
 		{
 			std::scoped_lock lock(queuedCastLock);
 			queuedDeaths.clear();
 			queuedHits.clear();
 			queuedCones.clear();
+			queuedDashes.clear();
 		}
 		return;
 	}
@@ -1333,6 +1447,7 @@ void SnowDeformation::GatherSpellEmitters()
 		// the same melt path - only their lifecycle differs, so they keep
 		// their own map rather than a flag in that one.
 		GatherActorMarks(cloakDelta, cameraPosition, cullRadius);
+		GatherDashGouges(cloakDelta, cameraPosition, cullRadius);
 	}
 
 	// Every projectile still flying, recorded before any culling or
