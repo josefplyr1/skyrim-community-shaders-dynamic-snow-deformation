@@ -1422,6 +1422,8 @@
     "feature.snow_deformation.footprint_width_tooltip": "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best.",
     "feature.snow_deformation.force_carve_depth": "Force Carve Depth",
     "feature.snow_deformation.force_carve_depth_tooltip": "How deep a full-strength shove ploughs, as a fraction of the layer. Each shout scales down from here by the impact force its own record carries, so a dragon's shout bites harder than a breath's shove without either being named.",
+    "feature.snow_deformation.force_track": "Travelling Shove Track",
+    "feature.snow_deformation.force_track_tooltip": "Width of the trail left by a shove slow enough to watch travel - a cyclone rather than a shockwave. Those are told apart by speed alone: every shout blast crosses its own reach in about a second, while a cyclone crawls at barely above a sprint and takes four, so it leaves the line it took instead of a wedge. Nothing authors a width for it any more than for a cone, so this is taste.",
     "feature.snow_deformation.general_settings": "General Settings",
     "feature.snow_deformation.horizon_snow": "Horizon Snow",
     "feature.snow_deformation.horizon_snow_tooltip": "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world.",

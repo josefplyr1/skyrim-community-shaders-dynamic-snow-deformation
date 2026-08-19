@@ -148,6 +148,15 @@ static constexpr float kStaggerFraction = 1.0f;
 // nothing. Above it the author chose a bigger number on purpose: a dragon's
 // push is 85 and Cyclone's is 1000.
 static constexpr float kShoutCarrierForce = 50.0f;
+// Speed below which a shove is a THING TRAVELLING rather than a shockwave, and
+// so leaves the line it took instead of a wedge from the mouth. Every real
+// shout blast crosses its own reach in about a second - Unrelenting Force at
+// 1536 units a second, the breaths at 1200, Disarm at 1024. Cyclone crawls at
+// 512, barely above a sprint, and takes four seconds to cross its 2048; you
+// watch it go. The bar sits well clear of both, and well clear of a running
+// man, which is the honest way to say it: anything a person could keep pace
+// with is an object moving over the ground, not a blast leaving it.
+static constexpr float kForceTrackSpeed = 800.0f;
 // A shout's reach if its projectile names none.
 static constexpr float kShoutDefaultRange = 1000.0f;
 static constexpr float kShoutRangeMax = 12000.0f;
@@ -610,6 +619,27 @@ RE::BSEventNotifyControl SnowDeformation::MagicApplySink::ProcessEvent(
 	return RE::BSEventNotifyControl::kContinue;
 }
 
+bool SnowDeformation::SpellShoves(const RE::MagicItem* a_spell, float& a_force)
+{
+	a_force = 0.0f;
+	if (!a_spell)
+		return false;
+	bool shoves = false;
+	for (const auto* item : a_spell->effects) {
+		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kAimed)
+			continue;
+		if (ClassifyElement(base) != SpellElement::None)
+			return false;  // an element outranks a shove, always
+		if (base->data.archetype == RE::EffectSetting::Archetype::kStagger &&
+			item->effectItem.magnitude <= kStaggerFraction)
+			shoves = true;
+		if (base->data.projectileBase)
+			a_force = std::max(a_force, base->data.projectileBase->data.force);
+	}
+	return shoves || a_force > kShoutCarrierForce;
+}
+
 void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster)
 {
 	if (!a_spell || !a_caster)
@@ -650,6 +680,14 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	if (element == SpellElement::None && (shoves || shoveForce > kShoutCarrierForce))
 		element = SpellElement::Force;
 	if (element == SpellElement::None)
+		return;
+
+	// A slow shove is not a shockwave and gets no wedge. It is an object making
+	// its way across the ground, and what it leaves is the line it took - which
+	// the projectile route below follows for real, so it need not be guessed at
+	// from the caster's facing here.
+	if (element == SpellElement::Force && projectile && projectile->data.speed > 0.0f &&
+		projectile->data.speed <= kForceTrackSpeed)
 		return;
 
 	// Reach off the projectile's own record. The effects author no AREA at all
@@ -1573,6 +1611,21 @@ void SnowDeformation::GatherSpellEmitters()
 			continue;
 		spellStats.projectiles++;
 
+		// A SLOW shove leaves the ground it crosses. Deliberately narrow: only
+		// the slow ones are given a force element here, so a shockwave keeps
+		// being rejected and its cone stays the one mark it makes.
+		bool tracks = false;
+		if (element == SpellElement::None) {
+			float shoveForce = 0.0f;
+			if (auto* baseForm = projectile->GetBaseObject())
+				if (auto* projectileBase = baseForm->As<RE::BGSProjectile>())
+					if (projectileBase->data.speed > 0.0f && projectileBase->data.speed <= kForceTrackSpeed &&
+						SpellShoves(runtime.spell, shoveForce)) {
+						element = SpellElement::Force;
+						tracks = true;
+					}
+		}
+
 		if (element == SpellElement::None) {
 			spellStats.rejectedElement++;
 			continue;
@@ -1581,6 +1634,45 @@ void SnowDeformation::GatherSpellEmitters()
 		const RE::NiPoint3 position = projectile->GetPosition();
 		if (cameraPosition.GetSquaredDistance(position) > cullRadius * cullRadius)
 			continue;
+
+		if (tracks) {
+			// The ground under it, swept from where it was - the same capsule
+			// every moving source in this feature draws, and it follows the
+			// real flight, so a cyclone rounding a slope or stopping at a wall
+			// marks where it actually went rather than where it was aimed.
+			float trackGroundZ = position.z;
+			tes->GetLandHeight(position, trackGroundZ);
+			float trackStrength = 0.0f;
+			float trackRadius = 0.0f;
+			if (!GroundMark(position.z - trackGroundZ, std::max(settings.ForceTrackWidth, 4.0f),
+					trackStrength, trackRadius))
+				continue;
+			if (trackStrength < kMinSpellStrength || spellEmitters.size() >= kMaxSpellEmitters)
+				continue;
+
+			const float2 currentTrack{ position.x, position.y };
+			float2 previousTrack = currentTrack;
+			if (auto it = spellPrevPositions.find(projectile->formID); it != spellPrevPositions.end()) {
+				const float dx = currentTrack.x - it->second.x;
+				const float dy = currentTrack.y - it->second.y;
+				if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
+					previousTrack = it->second;
+			}
+			currentPositions[projectile->formID] = currentTrack;
+
+			SpellEmitter emitter{};
+			emitter.position = currentTrack;
+			emitter.previous = previousTrack;
+			emitter.radius = trackRadius;
+			emitter.strength = trackStrength;
+			emitter.element = SpellElement::Force;
+			emitter.mark = SpellMark::Carve;
+			// A vortex scours a rounded gouge; nothing about it presses a slot.
+			emitter.bowl = true;
+			spellEmitters.push_back(emitter);
+			spellStats.forceTracks++;
+			continue;
+		}
 
 		// Heading, shared by the stream trace and the blast below.
 		RE::NiPoint3 direction = runtime.velocity;

@@ -343,7 +343,8 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u | shouts %u (%u discs)",
 			spellStats.armed, spellStats.detonations, spellStats.casts,
 			spellStats.shouts, spellStats.shoutDiscs);
-		ImGui::Text("dash watches %u | furrows cut %u", spellStats.dashWatches, spellStats.dashGouges);
+		ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u",
+			spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks);
 		ImGui::Text("rejected: no element %u | no blast form %u",
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating actors not carving %u",
@@ -376,6 +377,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("shout_length"), "Shout Cone Reach"), &settings.ShoutConeLength, 0.1f, 3.0f, "%.2fx");
 		if (auto _ttLen = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shout_length_tooltip"), "Multiplier on the reach each shout's own projectile authors. At 1.0 you get exactly what the game says - about 1000 units for Unrelenting Force, 1200 for the breaths, and far more for a dragon. Aiming upward shortens it; aiming at the sky throws it away, since the snow layer cannot hold a mark in the air."));
+		ImGui::SliderFloat(T(TKEY("force_track"), "Travelling Shove Track"), &settings.ForceTrackWidth, 10.0f, 300.0f, "%.0f");
+		if (auto _ttTrack = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("force_track_tooltip"), "Width of the trail left by a shove slow enough to watch travel - a cyclone rather than a shockwave. Those are told apart by speed alone: every shout blast crosses its own reach in about a second, while a cyclone crawls at barely above a sprint and takes four, so it leaves the line it took instead of a wedge. Nothing authors a width for it any more than for a cone, so this is taste."));
 		ImGui::SliderFloat(T(TKEY("dash_gouge"), "Dash Furrow Width"), &settings.DashGougeScale, 0.1f, 3.0f, "%.2fx");
 		if (auto _ttDash = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("dash_gouge_tooltip"), "Width of the furrow a shout ploughs when it throws its own caster forward, against the size of whatever is being thrown - so a dragon cuts a wider one than a man. Nothing is named here either: a self-delivered shout is simply watched for a moment, and what marks the snow is the caster moving faster than anything on foot can. A shout that leaves them standing marks nothing."));

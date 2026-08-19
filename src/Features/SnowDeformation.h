@@ -310,6 +310,8 @@ public:
 		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
+		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
+		float ForceTrackWidth = 80.0f;
 		/** @brief Width of the furrow a dash shout ploughs, against the dasher's own size. A dragon hurling itself forward cuts a wider one than a man. */
 		float DashGougeScale = 1.0f;
 		/** @brief Depth a full-strength shove carves, as a fraction of the layer. Force is the only school that DISPLACES snow rather than changing it, so it is also the only one that raises a berm at the far lip - which is what makes Unrelenting Force read as pushed rather than deleted. */
@@ -1717,6 +1719,9 @@ protected:
 	/** @brief Runs every live dash watch, cutting a furrow behind anything moving fast enough to be dashing. */
 	void GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 
+	/** @brief True when this spell shoves rather than merely staggering or damaging, and how hard its projectile hits. Shared by the shout cone and the travelling-track route so the two can never disagree about what force is. */
+	static bool SpellShoves(const RE::MagicItem* a_spell, float& a_force);
+
 	/** @brief Classifies a shout off its records and queues its cone. Called from the cast sink on the game thread; reads only static forms and the caster's own position and facing. */
 	void ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster);
 
@@ -1905,6 +1910,8 @@ protected:
 		/** @brief Dash watches running, and how many are actually cutting a furrow this frame. */
 		uint dashWatches = 0;
 		uint dashGouges = 0;
+		/** @brief Slow shoves tracking across the ground, leaving the line they took. */
+		uint forceTracks = 0;
 		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
 		uint auras = 0;
 		/** @brief Innate auras seen this frame: atronachs and anything else whose records give it one without a cast. */

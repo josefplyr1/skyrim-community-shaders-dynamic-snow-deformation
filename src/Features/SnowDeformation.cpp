@@ -59,6 +59,7 @@
 	X(ShoutConeLength) \
 	X(ForceCarveDepth) \
 	X(DashGougeScale) \
+	X(ForceTrackWidth) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \
