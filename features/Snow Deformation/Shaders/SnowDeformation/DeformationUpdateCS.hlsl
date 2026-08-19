@@ -58,8 +58,10 @@
 // SnowDeformation.h.
 #define STAMP_MODE_CONE 10.0
 // Half-width at the mouth of a cone, as a fraction of its width at the far
-// end. A shout leaves the throat already a body wide rather than as a point.
-#define CONE_MOUTH 0.06
+// end. Very nearly a point: a shout leaves the throat and OPENS, so anything
+// wider here reads as a canyon that starts at full width under the shouter's
+// own feet. Not zero only because the width divides.
+#define CONE_MOUTH 0.015
 // Where the far end starts fading, along the axis. Without it the wedge stops
 // at a wall, which reads as a cut rather than as a shockwave running out.
 #define CONE_END_FADE 0.75

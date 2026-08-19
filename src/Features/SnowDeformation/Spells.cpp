@@ -120,9 +120,11 @@ static constexpr float kElementalMemory = 6.0f;
 // continuous wedge rather than a row of circles, few enough that a shout
 // cannot swallow the stamp pool on its own.
 static constexpr int kShoutConeDiscs = 10;
-// Where the cone starts, as a fraction of its length: a shout leaves the mouth
-// already a body wide, not as a point.
-static constexpr float kShoutConeStart = 0.06f;
+// How far in front of the shouter the wedge begins, in world units. A shout
+// comes out of a MOUTH, so the ground the shouter is standing on is not in it -
+// roughly a body's width plus half a metre at Skyrim's scale, where a metre is
+// about 70 units. Without this the cone opened from between their feet.
+static constexpr float kShoutMouthOffset = 60.0f;
 // Authored impact force of Unrelenting Force's own projectile, which every
 // other shout is measured against. Read off the records rather than invented:
 // the player's push is 50, a dragon's 85, the breaths 10.
@@ -1144,8 +1146,12 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	// Not named 'far': that is a legacy Windows macro and expands to nothing,
 	// which turns the declaration below into a syntax error a long way from here.
 	const RE::NiPoint3 tip = a_cone.position + a_cone.direction * a_cone.length;
+	// The apex stands off in front of the shouter, so the snow they are
+	// standing in is left alone and the wedge opens from the mouth outward.
+	const float standoff = std::min(kShoutMouthOffset, a_cone.length * 0.5f);
+	const RE::NiPoint3 apex = a_cone.position + a_cone.direction * standoff;
 	// Measured at the middle of the wedge rather than at either end: the apex
-	// sits at the shouter's own feet, and the far end may be over a cliff.
+	// is beside the shouter, and the far end may be over a cliff.
 	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
 	float groundZ = mid.z;
 	a_tes->GetLandHeight(mid, groundZ);
@@ -1159,7 +1165,7 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 
 	ActiveBlast opened{};
 	opened.cone = true;
-	opened.apex = { a_cone.position.x, a_cone.position.y };
+	opened.apex = { apex.x, apex.y };
 	opened.position = { tip.x, tip.y };
 	opened.radius = farHalfWidth;
 	opened.strength = strength;
