@@ -220,7 +220,57 @@ Texture2D<float2> ExclusionFieldMap : register(t15);
 // The game's own frost impact art, painted onto crusted snow.
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
+
 SamplerState SnowSampler : register(s0);
+
+// Frost pattern taps, shared by the normal, the albedo and the polish so the
+// texture is fetched once and the three always agree about where a crystal is.
+struct FrostTaps
+{
+	float3 normal;   // tangent-space, already flipped for our v direction
+	float crystal;   // 0 in the gaps, 1 on the crystal
+	bool valid;
+};
+
+// The lattice the stochastic sampler scatters over, kept inside float
+// precision. ComputeStochasticOffsets multiplies by WORLD_SCALE (332.54) and
+// the hash then multiplies by another 1271, both tuned for landscape UVs that
+// live in 0-1. World coordinates are five digits, so the product lands past
+// 1e8 - far beyond the ~1.6e7 where a float32 still has a fraction to take -
+// and frac() returns the same number across whole regions, which is a
+// stochastic sampler that has quietly stopped scattering.
+//
+// So the tile index is wrapped before it ever reaches the hash. The scatter
+// pattern then repeats every WRAP tiles, which at any sane crystal size is
+// tens of thousands of units away. DeformationUpdateCS guards its own noise
+// the same way and for the same reason.
+#define FROST_LATTICE_WRAP 512.0
+
+FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
+{
+	FrostTaps taps;
+	taps.normal = float3(0.0, 0.0, 1.0);
+	taps.crystal = 0.0;
+	taps.valid = false;
+
+	float2 tileUV = worldXY / max(tileSize, 4.0);
+	// Derivatives from the UNWRAPPED coordinate: the wrap below is a cliff one
+	// pixel wide, and a mip level chosen across it would band there.
+	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(tileUV);
+	float2 wrapped = tileUV - FROST_LATTICE_WRAP * floor(tileUV / FROST_LATTICE_WRAP);
+
+	// Divided back out because the sampler expects a landscape UV and converts
+	// it to lattice cells itself; this hands it one cell per texture tile.
+	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
+	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
+	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
+	n.y = -n.y;  // DDS v grows down; our uv v grows with world +Y
+	taps.normal = n;
+	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
+	taps.valid = true;
+	return taps;
+}
+
 
 // The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
 // measured in-game 2026-08-17 (tiling ruler). Same texture at the same world
@@ -1468,20 +1518,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Frost crystal, laid ON TOP of the flattened powder grain rather than
 	// instead of it. The flattening above is still what says "frozen over" -
 	// powder is grain and ice is a sheet - and this puts the rime back as its
-	// own structure, which is a different thing at a different scale. The
-	// polish, colour and sheen further down are untouched, so the reflective
-	// ice look survives intact.
-	[branch] if (crustAmount > 0.001 && CrustLook2.w > 0.5 && CrustLook2.y > 0.001)
+	// own structure, which is a different thing at a different scale.
+	//
+	// Fetched ONCE here and used three times below: the normal, the albedo and
+	// the polish. They have to agree about where a crystal is, and the polish
+	// especially - see the roughness block.
+	FrostTaps frost;
+	frost.normal = float3(0.0, 0.0, 1.0);
+	frost.crystal = 0.0;
+	frost.valid = false;
+	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
+	[branch] if (frostAmount > 0.001)
 	{
-		float2 frostUV = worldXYPS / max(CrustLook2.z, 4.0);
-		// Stochastic, because a frost sheet from Blizzard or a breath covers
-		// hundreds of units at once and a plain tile would grid the whole of it.
-		g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(frostUV);
-		StochasticOffsets frostOffsets = ComputeStochasticOffsets(frostUV);
-		float3 frostN = StochasticEffect(FrostPatternNormal, SnowSampler, frostUV, frostOffsets).xyz * 2.0 - 1.0;
-		frostN.y = -frostN.y;
+		frost = SampleFrostPattern(worldXYPS, CrustLook2.z);
 		normalWS = normalize(normalWS +
-							 (bumpT * frostN.x + bumpB * frostN.y) * crustAmount * CrustLook2.y * bumpFadeRaw);
+							 (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
 	}
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 	{
@@ -1548,14 +1599,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// where nothing is catching a highlight. Kept faint on purpose: snow is
 	// already near white, so this can only ever darken the gaps between
 	// crystals rather than brighten the crystals themselves.
-	[branch] if (crustAmount > 0.001 && CrustLook2.w > 0.5 && CrustLook2.y > 0.001)
-	{
-		float2 frostUV = worldXYPS / max(CrustLook2.z, 4.0);
-		g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(frostUV);
-		StochasticOffsets frostOffsets = ComputeStochasticOffsets(frostUV);
-		float frostLum = StochasticEffect(FrostPatternDiffuse, SnowSampler, frostUV, frostOffsets).x;
-		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frostLum), crustAmount * saturate(CrustLook2.y));
-	}
+	[branch] if (frost.valid)
+		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape
@@ -1578,6 +1623,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
+	}
+
+	// The crystal has to be the part that SHINES, and adding a normal map is
+	// what stops it: tilting a facet away from the light moves the highlight
+	// off the crystal and onto the flat gaps between them, so the pattern came
+	// out inside-out - matte structure on glossy ground. The polish is
+	// therefore modulated by the same tap that shaped the normal, so a facet is
+	// smoother and more reflective than the ground it stands on, and the
+	// highlight lands where the ice actually is.
+	[branch] if (frost.valid)
+	{
+		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
+		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
