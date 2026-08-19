@@ -264,6 +264,20 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("floating_band"), "Floating Actor Clearance"), &settings.FloatingActorBand, 4.0f, 80.0f, "%.0f units");
 		if (auto _ttFloatBand = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected line under Spell Integration counts what each value is skipping."));
+		{
+			std::string incorporealModes;
+			incorporealModes += T(TKEY("incorporeal_off"), "Off");
+			incorporealModes += '\0';
+			incorporealModes += T(TKEY("incorporeal_translucent"), "See-through bodies");
+			incorporealModes += '\0';
+			incorporealModes += T(TKEY("incorporeal_flag"), "Actors marked Ghost");
+			incorporealModes += '\0';
+			incorporealModes += T(TKEY("incorporeal_either"), "Either");
+			incorporealModes += '\0';
+			ImGui::Combo(T(TKEY("incorporeal_mode"), "Ghosts Leave No Trench"), &settings.IncorporealMode, incorporealModes.c_str());
+		}
+		if (auto _ttIncorp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal. The Detected line under Spell Integration reports what the nearest actor scores under both."));
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on - Relief Depth only sets how far the extra vertices are then displaced on untrampled snow. Off costs nothing but leaves every trench as angular as the grid beneath it."));
@@ -332,6 +346,9 @@ void SnowDeformation::DrawSettings()
 				stampStats.nearestFloating ? "FLOATING" : "touching",
 				stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
 				state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
+			ImGui::Text("             body alpha %.2f | marked Ghost %s | verdict %s",
+				stampStats.nearestBodyAlpha, stampStats.nearestGhostFlag ? "yes" : "no",
+				stampStats.nearestIncorporeal ? "INCORPOREAL" : "solid");
 		}
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);

@@ -91,6 +91,15 @@ static constexpr float kLimbStretchFloor = 24.0f;
 // where bones really are long, and tight on the small skeletons where a comb
 // across the snow is most visible.
 static constexpr float kLimbAspectGate = 10.0f;
+// Material alpha below which a skinned body counts as drawn see-through. Kept
+// well clear of 1 rather than near it: an ordinary body is authored at exactly
+// 1.0, and Skyrim's ghost shader sits far below this, so the gap between the
+// two cases is wide and nothing needs tuning in between.
+static constexpr float kIncorporealAlpha = 0.95f;
+// Frames between re-measurements of a body's alpha. The look can arrive after
+// the 3D does, so one early opaque reading must not stand for ever - but it
+// changes rarely enough that measuring every frame would be waste.
+static constexpr uint16_t kBodyAlphaRecheckFrames = 30;
 // Runaway-skeleton caps on the bone cache.
 static constexpr size_t kMaxCachedFeet = 8;
 static constexpr size_t kMaxCachedLimbs = 32;
@@ -225,6 +234,82 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 // gives under a mammoth, and the shapes a heavy skeleton carries are simply
 // bigger - there is no mass to read off a collision shape, but this tracks it
 // closely enough that the exceptions do not matter.
+bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root,
+	StampBones* a_bones, float* a_alphaOut, bool* a_flagOut) const
+{
+	if (a_alphaOut)
+		*a_alphaOut = 1.0f;
+	if (a_flagOut)
+		*a_flagOut = false;
+	if (!a_actor)
+		return false;
+	const int mode = settings.IncorporealMode;
+
+	// The record flag. A static read of the base, so no relocation and no
+	// live-actor state - Bethesda's "Is Ghost" means invulnerable rather than
+	// incorporeal, so it catches more than ghosts, but it never misses one.
+	bool flagged = false;
+	if (const auto* base = a_actor->GetActorBase())
+		flagged = base->actorData.actorBaseFlags.all(RE::ACTOR_BASE_DATA::Flag::kIsGhost);
+	if (a_flagOut)
+		*a_flagOut = flagged;
+
+	// Translucency, through Community Shaders' own test for a see-through
+	// surface. Cached with the bones, which are already keyed by the 3D root,
+	// and re-measured on a slow timer because the shader can be applied after
+	// the model loads.
+	float alpha = a_bones ? a_bones->bodyAlpha : -1.0f;
+	const bool wantAlpha = mode == 1 || mode == 3;
+	if (wantAlpha && a_root) {
+		bool stale = alpha < 0.0f;
+		if (a_bones) {
+			if (a_bones->alphaRecheck > 0)
+				a_bones->alphaRecheck--;
+			else
+				stale = true;
+		} else {
+			stale = true;
+		}
+		if (stale) {
+			float lowest = 1.0f;
+			RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+				auto& runtime = a_geometry->GetGeometryRuntimeData();
+				// SKINNED only. Plain alpha blending is no use on its own -
+				// every NPC's hair and eyes blend - so what is read is the
+				// body's own material alpha, which an ordinary actor authors
+				// at exactly 1.
+				if (!runtime.skinInstance)
+					return RE::BSVisit::BSVisitControl::kContinue;
+				auto& property = runtime.shaderProperty;
+				if (property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get())
+					lowest = std::min(lowest, static_cast<RE::BSLightingShaderProperty*>(property.get())->alpha);
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+			alpha = lowest;
+			if (a_bones) {
+				a_bones->bodyAlpha = lowest;
+				a_bones->alphaRecheck = kBodyAlphaRecheckFrames;
+			}
+		}
+	}
+	if (alpha < 0.0f)
+		alpha = 1.0f;
+	if (a_alphaOut)
+		*a_alphaOut = alpha;
+
+	const bool translucent = alpha < kIncorporealAlpha;
+	switch (mode) {
+	case 1:
+		return translucent;
+	case 2:
+		return flagged;
+	case 3:
+		return translucent || flagged;
+	default:
+		return false;
+	}
+}
+
 bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root,
 	const StampBones* a_bones, float a_groundZ, float* a_gapOut) const
 {
@@ -399,6 +484,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// in the snow, and its dent is correct.
 		float floatingGap = 0.0f;
 		const bool floating = !isDead && ActorIsFloating(actor.get(), root, bones, groundZ, &floatingGap);
+		float bodyAlpha = 1.0f;
+		bool ghostFlag = false;
+		// Corpses are exempt from BOTH gates: a body that has fallen is lying
+		// in the snow whatever it was in life.
+		const bool incorporeal = !isDead && ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
 
 		// Diagnostics for the nearest creature, so the clearance band can be
 		// read off a real wisp or ghost rather than guessed at. The gap to the
@@ -416,6 +506,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestGapToRoot = floatingGap;
 				stampStats.nearestGapToLand = position.z - landZ;
 				stampStats.nearestFloating = floating;
+				stampStats.nearestBodyAlpha = bodyAlpha;
+				stampStats.nearestGhostFlag = ghostFlag;
+				stampStats.nearestIncorporeal = incorporeal;
 				auto* controller = actor->GetCharController();
 				stampStats.nearestState = controller ?
 				                              static_cast<uint>(controller->context.currentState) :
@@ -423,7 +516,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		if (floating && settings.NoCarveFloatingActors) {
+		if ((floating && settings.NoCarveFloatingActors) || incorporeal) {
 			stampStats.floating++;
 			return;
 		}

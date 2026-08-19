@@ -218,6 +218,10 @@ public:
 			float restLength = -1.0f;
 		};
 		std::vector<Limb> limbs;
+		/** @brief Lowest material alpha found on a skinned body geometry, or -1 until measured. A ghost is drawn see-through, which is the only thing that separates it from the ordinary NPC it otherwise is. */
+		float bodyAlpha = -1.0f;
+		/** @brief Frames until the alpha is measured again. A ghost's shader can arrive after its 3D does, so one early look at an opaque body must not stand for the actor's whole life. */
+		uint16_t alphaRecheck = 0;
 	};
 
 	struct Settings
@@ -282,6 +286,20 @@ public:
 		bool NoCarveFloatingActors = true;
 		/** @brief How far an actor's lowest contact may sit above its footing and still count as standing on it, in world units. Above this it carves nothing. Generous enough to cover a walker's stride and the slack in a creature skeleton's lowest bone. */
 		float FloatingActorBand = 20.0f;
+		/**
+		 * @brief How an actor with no substance is recognised, so it stops carving. 0 off, 1 by translucency, 2 by the record flag, 3 either.
+		 *
+		 * Separate from the floating gate because it is a different question.
+		 * A ghost is not hovering - measured in game it stands with a 7 unit
+		 * gap to its own footing, feet on the ground like any Nord, because
+		 * that is exactly what it is. No measurement will ever catch one.
+		 *
+		 * Translucency is the honest test: a ghost is drawn see-through, and
+		 * that is the whole of what makes it a ghost. It also needs no list.
+		 * The record flag is the fallback - broader than it sounds, since
+		 * Bethesda's "Is Ghost" means invulnerable rather than incorporeal.
+		 */
+		int IncorporealMode = 1;
 		/** @brief Reach of a FIRE atronach's innate aura, against the fire cloak reach. An atronach's whole body burns, so it works a wider circle than a cloak wrapped round a mage. */
 		float AtronachFireReach = 0.50f;
 		/** @brief Radius of the blast a fire atronach leaves when it dies, in world units. Seeded from the record the game authors for that explosion (400), then scaled like any other blast. */
@@ -1488,6 +1506,24 @@ protected:
 	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ, float* a_gapOut = nullptr) const;
 
 	/**
+	 * @brief True when this actor has no substance, so nothing it does should cut snow.
+	 *
+	 * A separate axis from floating, and it has to be: a ghost walks with its
+	 * feet on the ground, so no gap measurement can see one.
+	 *
+	 * Translucency routes through Community Shaders' own definition of a
+	 * see-through surface - the pair of tests ExtendedTranslucency runs on
+	 * every geometry it shades - rather than inventing a second one. Narrowed
+	 * to SKINNED geometry with a material alpha below full, because plain
+	 * alpha BLENDING catches every NPC's hair and eyes.
+	 *
+	 * The record flag is a static read of the actor's base, not the runtime
+	 * call: the same answer without a relocation.
+	 */
+	bool ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root, StampBones* a_bones,
+		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
+
+	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
 	 *
 	 * Called from the reference scan GatherStamps already runs for props
@@ -1723,6 +1759,10 @@ protected:
 		uint nearestState = 0;
 		bool nearestFloating = false;
 		bool nearestValid = false;
+		/** @brief Lowest skinned-body alpha on the nearest actor, so the translucency test can be read against a real ghost rather than guessed at. */
+		float nearestBodyAlpha = 1.0f;
+		bool nearestGhostFlag = false;
+		bool nearestIncorporeal = false;
 	};
 	StampStats stampStats;
 

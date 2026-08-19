@@ -51,6 +51,7 @@
 	X(ScorchStrength) \
 	X(NoCarveFloatingActors) \
 	X(FloatingActorBand) \
+	X(IncorporealMode) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \
