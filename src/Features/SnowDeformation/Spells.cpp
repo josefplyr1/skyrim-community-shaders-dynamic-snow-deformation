@@ -1693,7 +1693,10 @@ void SnowDeformation::GatherSpellEmitters()
 			emitter.position = currentTrack;
 			emitter.previous = previousTrack;
 			emitter.radius = trackRadius;
-			emitter.strength = trackStrength;
+			// Scoured, not excavated. Depth is what the berm field reads, so
+			// this is the same dial that decides whether the rim piles into
+			// the two parallel ridges that make any wide cut read as a trench.
+			emitter.strength = trackStrength * std::clamp(settings.ForceTrackDepth, 0.0f, 1.0f);
 			emitter.element = SpellElement::Force;
 			emitter.mark = SpellMark::Carve;
 			// A vortex scours a rounded gouge; nothing about it presses a slot.

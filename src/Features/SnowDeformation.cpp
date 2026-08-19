@@ -60,6 +60,7 @@
 	X(ForceCarveDepth) \
 	X(DashGougeScale) \
 	X(ForceTrackWidth) \
+	X(ForceTrackDepth) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \

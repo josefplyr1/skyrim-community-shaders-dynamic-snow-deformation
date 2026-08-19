@@ -62,6 +62,11 @@
 // floor setting, because that is already the shape of a hollow scooped out
 // rather than cut. Mirrored by kStampModeBowl in SnowDeformation.h.
 #define STAMP_MODE_BOWL 20.0
+// Where a bowl carve stops holding full depth, as a fraction of its radius.
+// Zero: a scoured hollow has no floor at all, it curves from the middle. Its
+// own number rather than the melt bowl's, because that one is a FIRE knob and
+// a cyclone's gouge has no business changing shape when fire is retuned.
+#define CARVE_BOWL_FLOOR 0.0
 // A cone's width is a fixed SLOPE from its apex, never a fraction of how far it
 // has got so far. That distinction is the whole of why it can grow: both the
 // stamp's radius and its axis scale together as the front advances, so the
@@ -327,7 +332,7 @@ float StampNoise(float2 p)
 				// takes the melt bowl's floor instead, which begins falling away
 				// almost at the centre - so the cross-section curves the whole
 				// way rather than standing walls up around a flat floor.
-				float falloff = 1.0 - smoothstep(isBowl ? MeltFloorStart : StampFalloffStart, 1.0, edgeDist);
+				float falloff = 1.0 - smoothstep(isBowl ? CARVE_BOWL_FLOOR : StampFalloffStart, 1.0, edgeDist);
 
 				// Crusted snow bears weight. A print on it is shallow rather
 				// than absent, and something heavy enough breaks through and
