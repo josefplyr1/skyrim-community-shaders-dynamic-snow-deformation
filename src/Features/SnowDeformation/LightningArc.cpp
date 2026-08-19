@@ -121,8 +121,12 @@ bool SnowDeformation::EnsureLightningArcResources()
 		D3D11_DEPTH_STENCIL_DESC desc{};
 		desc.DepthEnable = TRUE;
 		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		// Reversed depth, as the rest of this feature's passes use.
-		desc.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
+		// LESS_EQUAL, matching shellDepthState in the same depth buffer. This
+		// was GREATER_EQUAL on the assumption that the depth here is reversed;
+		// it is not, and the assumption inverted the whole test - the bolt
+		// showed where it was BEHIND the world and hid where it was in front,
+		// which reads as flickering in and out rather than as a wrong compare.
+		desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		desc.StencilEnable = FALSE;
 		if (FAILED(device->CreateDepthStencilState(&desc, arcDepthState.put())))
 			return false;

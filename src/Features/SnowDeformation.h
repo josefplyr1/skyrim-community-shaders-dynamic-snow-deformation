@@ -288,8 +288,8 @@ public:
 		float LightningArcBrightness = 10.0f;
 		float LightningArcLife = 0.30f;
 		std::array<float, 3> LightningArcTint = { 0.698f, 0.620f, 1.0f };
-		/** @brief Optional DDS for the bolt, relative to Data. EMPTY by default and deliberately so: the shader draws a real core-and-falloff channel on its own, and a guessed vanilla path that resolves to nothing would leave a black band in the air. */
-		std::string LightningArcTexturePath = "";
+		/** @brief DDS for the bolt, relative to Data. The shader draws a real core-and-falloff channel on its own, so a path that fails to resolve costs detail rather than leaving a black band in the air - which is why a default can be shipped at all. Verified present in Skyrim's own effects set. */
+		std::string LightningArcTexturePath = "Textures\\Effects\\fxlightningbolt01.dds";
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
 		/** @brief How fast frost sets a crust, for a spell of Frostbite's strength. */
