@@ -310,6 +310,22 @@ public:
 		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
+		/**
+		 * @brief DDS the frost pattern is drawn from, relative to Data.
+		 *
+		 * Must be a TILEABLE surface, which is why it defaults to a LANDSCAPE
+		 * texture. The first attempt used the game's own frost impact decal and
+		 * that was the wrong kind of image entirely: a decal has its content in
+		 * the middle and nothing at the edges because it is printed once, so
+		 * blending two offset copies of it can only ever give clumps with gaps
+		 * between them. Landscape textures are authored to meet themselves on
+		 * every side, which is exactly what the stochastic sampler assumes.
+		 *
+		 * Editable for the same reason the shell's snow texture is: every
+		 * modlist has different ice, and this should match the one in front of
+		 * you. The `_n` companion beside it carries the crystal structure.
+		 */
+		std::string FrostTexturePath = "Textures\\Landscape\\frozenmarshice01.dds";
 		/** @brief How strongly the frost pattern shows on crusted snow. This is the CRYSTAL detail; the polish, colour and sheen that make it read as ice are the knobs below and are untouched by it. */
 		float FrostPatternStrength = 1.0f;
 		/** @brief World units across one tile of the frost pattern. Sampled stochastically, so this sets the size of the crystal detail rather than the size of a repeat - there is no repeat. */

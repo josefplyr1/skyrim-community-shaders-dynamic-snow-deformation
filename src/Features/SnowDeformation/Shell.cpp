@@ -73,19 +73,35 @@ void SnowDeformation::EnsureFrostPatternTextures()
 		return;
 	frostPatternAttempted = true;
 
-	// The game's OWN frost impact art, so crusted snow matches the spell
-	// effects landing on it rather than inventing a second look. Found by
-	// reading the records: every frost effect in the game routes its impact
-	// through a texture set pointing at these two files.
-	auto tryLoadDDS = [](const char* a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
+	// A TILEABLE surface, not a decal. The first attempt reached for the game's
+	// own frost impact art, which was the wrong kind of image: a decal carries
+	// its content in the middle and nothing at the edges, because it is printed
+	// once. Two offset copies of that blended together give clumps with gaps,
+	// which is precisely what it looked like. A landscape texture meets itself
+	// on every side, which is the thing the stochastic sampler assumes.
+	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
 		a_srv = nullptr;
-		const std::string path = std::string("Data\\") + a_path;
+		if (a_path.empty())
+			return false;
+		const std::string path = "Data\\" + a_path;
 		const std::wstring wide(path.begin(), path.end());
 		return SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()));
 	};
-	if (!tryLoadDDS("Textures\\ImpactDecals\\DecalFrostImpact01_n.dds", frostPatternNormalSRV))
-		logger::debug("SnowDeformation: no frost pattern normal map; crust keeps its smooth glaze");
-	tryLoadDDS("Textures\\ImpactDecals\\DecalFrostImpact01.dds", frostPatternDiffuseSRV);
+
+	std::string chosen = settings.FrostTexturePath;
+	for (auto& pathChar : chosen)
+		if (pathChar == '/')
+			pathChar = '\\';
+	const std::string base = chosen.size() > 4 ? chosen.substr(0, chosen.size() - 4) : chosen;
+
+	// The normal is what actually matters - it carries the crystal - so the
+	// pattern counts as absent without one and the crust falls back to the
+	// smooth glaze it had before any of this.
+	if (!tryLoadDDS(base + "_n.dds", frostPatternNormalSRV)) {
+		logger::debug("SnowDeformation: no frost pattern normal at {}_n.dds; crust keeps its smooth glaze", base);
+		return;
+	}
+	tryLoadDDS(chosen, frostPatternDiffuseSRV);
 }
 
 void SnowDeformation::EnsureShellSnowTextures()

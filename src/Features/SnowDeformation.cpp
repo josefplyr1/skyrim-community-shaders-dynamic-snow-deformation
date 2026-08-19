@@ -62,6 +62,7 @@
 	X(ForceTrackWidth) \
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
+	X(FrostTexturePath) \
 	X(FrostPatternStrength) \
 	X(FrostPatternScale) \
 	X(AtronachFireReach) \
