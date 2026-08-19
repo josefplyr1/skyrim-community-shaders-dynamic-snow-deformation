@@ -495,10 +495,8 @@ void SnowDeformation::DrawSettings()
 			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals" };
 			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
 			if (auto _ttSdv = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Edge taper: red = height the slump allows, green = up-facing, blue = no height data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends."));
+				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth. The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class."));
 		}
-		if (auto _ttSdv = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled. Trench patch: red = trample, green = skin depth. Skins: teal, brightness = up-facing coverage. Missing pixels mean the geometry itself is absent."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"));
 		{
