@@ -310,6 +310,10 @@ public:
 		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
+		/** @brief How strongly the frost pattern shows on crusted snow. This is the CRYSTAL detail; the polish, colour and sheen that make it read as ice are the knobs below and are untouched by it. */
+		float FrostPatternStrength = 1.0f;
+		/** @brief World units across one tile of the frost pattern. Sampled stochastically, so this sets the size of the crystal detail rather than the size of a repeat - there is no repeat. */
+		float FrostPatternScale = 96.0f;
 		/**
 		 * @brief Raise buried frost effects onto the snow surface instead of leaving them under it.
 		 *
@@ -1578,6 +1582,13 @@ protected:
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
+
+	/** @brief The game's own frost impact pattern, painted onto crusted snow. Its normal map carries the crystal detail; the albedo is a faint whitening on top of it. */
+	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternNormalSRV;
+	winrt::com_ptr<ID3D11ShaderResourceView> frostPatternDiffuseSRV;
+	bool frostPatternAttempted = false;
+	/** @brief Loads the frost pattern once, from the game's own impact decal art. */
+	void EnsureFrostPatternTextures();
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.

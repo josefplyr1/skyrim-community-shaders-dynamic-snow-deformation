@@ -62,6 +62,8 @@
 	X(ForceTrackWidth) \
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
+	X(FrostPatternStrength) \
+	X(FrostPatternScale) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \

@@ -33,7 +33,12 @@ static constexpr float kSpellRadiantScale = 0.55f;
 static constexpr float kHazardPieceRadius = 6.0f;
 // Never raise by more than this, whatever the snow says. A lift is a lie told
 // to hide a burial, and a big one starts reading as the effect floating.
+static constexpr float kLiftFraction = 0.5f;
 static constexpr float kMaxLiftHeight = 60.0f;
+// And only HALF way up, per Josef after seeing it in game. A wall standing on
+// top of the snow reads as balanced on it; half sunk it reads as standing IN
+// it, which is what a wall of frost should look like - and the crust pattern
+// laid around its feet closes the join.
 static constexpr float kHazardRadiusMin = 40.0f;
 static constexpr float kHazardRadiusMax = 260.0f;
 // Same for a blast. The ceiling matters more here: a modded explosion with an
@@ -422,7 +427,8 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 		if (liftedRefs.size() > 512)
 			liftedRefs.clear();
 		liftedRefs.insert(a_ref->formID);
-		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f), kMaxLiftHeight);
+		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f) * kLiftFraction,
+			kMaxLiftHeight);
 		if (lift >= 1.0f) {
 			LiftRefOntoSnow(a_ref, lift);
 			spellStats.lifted++;

@@ -67,6 +67,27 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
  * modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture
  * basename) supplies the authored glint/roughness/specular values.
  */
+void SnowDeformation::EnsureFrostPatternTextures()
+{
+	if (frostPatternAttempted)
+		return;
+	frostPatternAttempted = true;
+
+	// The game's OWN frost impact art, so crusted snow matches the spell
+	// effects landing on it rather than inventing a second look. Found by
+	// reading the records: every frost effect in the game routes its impact
+	// through a texture set pointing at these two files.
+	auto tryLoadDDS = [](const char* a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
+		a_srv = nullptr;
+		const std::string path = std::string("Data\\") + a_path;
+		const std::wstring wide(path.begin(), path.end());
+		return SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()));
+	};
+	if (!tryLoadDDS("Textures\\ImpactDecals\\DecalFrostImpact01_n.dds", frostPatternNormalSRV))
+		logger::debug("SnowDeformation: no frost pattern normal map; crust keeps its smooth glaze");
+	tryLoadDDS("Textures\\ImpactDecals\\DecalFrostImpact01.dds", frostPatternDiffuseSRV);
+}
+
 void SnowDeformation::EnsureShellSnowTextures()
 {
 	if (shellSnowTextureAttempted)
@@ -353,7 +374,13 @@ void SnowDeformation::DrawShell()
 	cbData.CrustLook = { std::clamp(settings.CrustSpecular, 0.0f, 0.5f),
 		settings.CrustTint[0], settings.CrustTint[1],
 		std::max(settings.CrustSheen, 0.0f) };
-	cbData.CrustLook2 = { settings.CrustTint[2], 0.0f, 0.0f, 0.0f };
+	// yzw ride spare room already in this row rather than growing the shared
+	// constant buffer, which is hand-mirrored across two shaders and is the
+	// silent collision CLAUDE.md warns about.
+	cbData.CrustLook2 = { settings.CrustTint[2],
+		std::max(settings.FrostPatternStrength, 0.0f),
+		std::max(settings.FrostPatternScale, 4.0f),
+		frostPatternNormalSRV ? 1.0f : 0.0f };
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
@@ -543,6 +570,10 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
+
+	EnsureFrostPatternTextures();
+	ID3D11ShaderResourceView* frostSRVs[] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
+	context->PSSetShaderResources(16, ARRAYSIZE(frostSRVs), frostSRVs);
 	// Wide exclusion field (t15): read by the surface evaluation and by the
 	// pixel-side melt overrides, so the same stages as the berm.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();

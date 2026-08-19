@@ -16,6 +16,10 @@
 #include "Common/GBuffer.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+// Deliot & Heitz tiling-and-blending, already implemented for the landscape.
+// Reused rather than rewritten: a frost sheet laid by Blizzard or a breath
+// covers hundreds of units, and a plain tiled normal map would grid it.
+#include "TerrainVariation/TerrainVariation.hlsli"
 
 #ifdef PSHADER
 // TruePBR's procedural glint NDF (Deliot & Chermain 2023) for snow sparkle.
@@ -173,7 +177,9 @@ cbuffer ShellCB : register(b0)
 	// not needed - see CrustTintBlue below.
 	float4 CrustLook;
 	// x = blue of the crust colour cast. Its own row rather than crowding
-	// CrustLook, which the sheen took.
+	// CrustLook, which the sheen took. y = frost pattern strength, z = its
+	// world tile size, w = whether the pattern loaded at all. Those three ride
+	// spare room here rather than growing a buffer mirrored across two shaders.
 	float4 CrustLook2;
 }
 
@@ -210,6 +216,10 @@ Texture2D<float> BermFieldMap : register(t14);
 // a window that reaches the shell's own extent. The near mask at t5 still owns
 // the SHELTER term, which needs geometry and so cannot travel this far.
 Texture2D<float2> ExclusionFieldMap : register(t15);
+
+// The game's own frost impact art, painted onto crusted snow.
+Texture2D<float4> FrostPatternNormal : register(t16);
+Texture2D<float4> FrostPatternDiffuse : register(t17);
 SamplerState SnowSampler : register(s0);
 
 // The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
@@ -1387,6 +1397,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// agrees on the same anti-tiling offsets. Micro-relief fades with
 	// distance, where the grain frequency aliases instead of detailing.
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
+	// The distance fade WITHOUT the crust flattening applied. The flattening
+	// exists to take the powder grain away; the frost crystal replacing it
+	// must not be taken away by the same term.
+	const float bumpFadeRaw = bumpFade;
 
 	// Crust, sampled once and used three times. Flattening the normal map is
 	// the strongest of the three by a distance: powder reads as grain, and ice
@@ -1450,6 +1464,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
 	}
+
+	// Frost crystal, laid ON TOP of the flattened powder grain rather than
+	// instead of it. The flattening above is still what says "frozen over" -
+	// powder is grain and ice is a sheet - and this puts the rime back as its
+	// own structure, which is a different thing at a different scale. The
+	// polish, colour and sheen further down are untouched, so the reflective
+	// ice look survives intact.
+	[branch] if (crustAmount > 0.001 && CrustLook2.w > 0.5 && CrustLook2.y > 0.001)
+	{
+		float2 frostUV = worldXYPS / max(CrustLook2.z, 4.0);
+		// Stochastic, because a frost sheet from Blizzard or a breath covers
+		// hundreds of units at once and a plain tile would grid the whole of it.
+		g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(frostUV);
+		StochasticOffsets frostOffsets = ComputeStochasticOffsets(frostUV);
+		float3 frostN = StochasticEffect(FrostPatternNormal, SnowSampler, frostUV, frostOffsets).xyz * 2.0 - 1.0;
+		frostN.y = -frostN.y;
+		normalWS = normalize(normalWS +
+							 (bumpT * frostN.x + bumpB * frostN.y) * crustAmount * CrustLook2.y * bumpFadeRaw);
+	}
 	else if (HasSnowTexture != 0 && bumpFade > 0.001)
 	{
 		const float kBumpTile = 64.0;
@@ -1511,6 +1544,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// crust knobs that did anything.
 	[branch] if (crustAmount > 0.001)
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
+	// A whisper of the pattern in the albedo too, so the crystal reads even
+	// where nothing is catching a highlight. Kept faint on purpose: snow is
+	// already near white, so this can only ever darken the gaps between
+	// crystals rather than brighten the crystals themselves.
+	[branch] if (crustAmount > 0.001 && CrustLook2.w > 0.5 && CrustLook2.y > 0.001)
+	{
+		float2 frostUV = worldXYPS / max(CrustLook2.z, 4.0);
+		g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(frostUV);
+		StochasticOffsets frostOffsets = ComputeStochasticOffsets(frostUV);
+		float frostLum = StochasticEffect(FrostPatternDiffuse, SnowSampler, frostUV, frostOffsets).x;
+		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frostLum), crustAmount * saturate(CrustLook2.y));
+	}
 
 	// Per-pixel PBR response from the RMAOS map (TruePBR channel layout:
 	// roughness / metallic / AO / specular level), with the landscape
