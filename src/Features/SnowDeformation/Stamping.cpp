@@ -100,6 +100,18 @@ static constexpr float kIncorporealAlpha = 0.95f;
 // the 3D does, so one early opaque reading must not stand for ever - but it
 // changes rarely enough that measuring every frame would be waste.
 static constexpr uint16_t kBodyAlphaRecheckFrames = 30;
+/**
+ * @brief Early re-reads of an actor's body alpha, and how far apart.
+ *
+ * A ghost's see-through shader is applied AFTER its model loads, so the first
+ * measurement of a freshly spawned one reads a solid 1.0 and it carves trenches
+ * until the next check comes round - half a second of tracks no ghost should
+ * leave. Cell loading races the same way, so this is not only a console-spawn
+ * artefact. Twelve reads five frames apart covers the first second; after that
+ * the answer is settled and the slow cadence is enough.
+ */
+static constexpr uint16_t kBodyAlphaSettleReads = 12;
+static constexpr uint16_t kBodyAlphaSettleFrames = 5;
 // Runaway-skeleton caps on the bone cache.
 static constexpr size_t kMaxCachedFeet = 8;
 static constexpr size_t kMaxCachedLimbs = 32;
@@ -288,7 +300,10 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 			alpha = lowest;
 			if (a_bones) {
 				a_bones->bodyAlpha = lowest;
-				a_bones->alphaRecheck = kBodyAlphaRecheckFrames;
+				const bool settling = a_bones->alphaSettle < kBodyAlphaSettleReads;
+				a_bones->alphaRecheck = settling ? kBodyAlphaSettleFrames : kBodyAlphaRecheckFrames;
+				if (settling)
+					a_bones->alphaSettle++;
 			}
 		}
 	}

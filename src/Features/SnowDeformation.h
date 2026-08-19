@@ -248,6 +248,8 @@ public:
 		float bodyAlpha = -1.0f;
 		/** @brief Frames until the alpha is measured again. A ghost's shader can arrive after its 3D does, so one early look at an opaque body must not stand for the actor's whole life. */
 		uint16_t alphaRecheck = 0;
+		/** @brief How many times the body alpha has been read. The first reads of a freshly spawned actor cannot be trusted, so they are taken quickly and often before the cadence drops to kBodyAlphaRecheckFrames. */
+		uint16_t alphaSettle = 0;
 	};
 
 	struct Settings
