@@ -895,6 +895,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 			float groundZ = position.z;
 			tes->GetLandHeight(position, groundZ);
+			// Props on ELEVATED surfaces, or simply hanging in the air, do not
+			// carve - the same gate the living have obeyed since the walkway
+			// rounds, and for the same reason. The band below measures against
+			// the prop's own root, so it can never find the prop too high;
+			// something dropped on a table or still falling therefore cut the
+			// ground a storey beneath it at full depth.
+			if (position.z - groundZ > kElevatedStampCutoff)
+				return RE::BSContainer::ForEachResult::kContinue;
 			// Band reference: whichever is higher, the land or the prop's own
 			// root — elevated resting surfaces keep their stamps.
 			const float supportZ = std::max(groundZ, position.z);
@@ -1016,7 +1024,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
 			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve : kStampModeMelt))) +
-				(emitter.cone ? kStampModeCone : 0.0f),
+				(emitter.cone ? kStampModeCone : 0.0f) + (emitter.bowl ? kStampModeBowl : 0.0f),
 			// A carve reads this as the weight it puts through a crust. A
 			// shout goes through: nothing survives being shoved that hard.
 			shoves ? 1.0f :

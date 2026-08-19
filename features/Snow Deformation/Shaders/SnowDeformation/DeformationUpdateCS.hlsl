@@ -57,6 +57,11 @@
 // Added to a stamp's mode to mark it a cone. Mirrored by kStampModeCone in
 // SnowDeformation.h.
 #define STAMP_MODE_CONE 10.0
+// Added to a stamp's mode to give a carve a BOWL cross-section instead of the
+// flat floor and standing walls a trench has. It reuses the melt bowl's own
+// floor setting, because that is already the shape of a hollow scooped out
+// rather than cut. Mirrored by kStampModeBowl in SnowDeformation.h.
+#define STAMP_MODE_BOWL 20.0
 // A cone's width is a fixed SLOPE from its apex, never a fraction of how far it
 // has got so far. That distinction is the whole of why it can grow: both the
 // stamp's radius and its axis scale together as the front advances, so the
@@ -269,8 +274,10 @@ float StampNoise(float2 p)
 		// axis, so the gate below needs no change at all - only the falloff
 		// coordinate inside it does.
 		float modeRaw = StampEnds[i].z;
-		bool isCone = modeRaw > STAMP_MODE_CONE - 0.5;
-		float mode = isCone ? modeRaw - STAMP_MODE_CONE : modeRaw;
+		bool isBowl = modeRaw > STAMP_MODE_BOWL - 0.5;
+		float modeNoBowl = isBowl ? modeRaw - STAMP_MODE_BOWL : modeRaw;
+		bool isCone = modeNoBowl > STAMP_MODE_CONE - 0.5;
+		float mode = isCone ? modeNoBowl - STAMP_MODE_CONE : modeNoBowl;
 
 		// Either edge treatment can push the falloff outward, so the gate
 		// widens by whichever reaches further.
@@ -316,8 +323,11 @@ float StampNoise(float2 p)
 				}
 				// Falloff from StampFalloffStart of the radius: low values keep a
 				// wide edge band coarser consumers of the map can still represent,
-				// high values hold full depth almost to the edge.
-				float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeDist);
+				// high values hold full depth almost to the edge. A BOWL carve
+				// takes the melt bowl's floor instead, which begins falling away
+				// almost at the centre - so the cross-section curves the whole
+				// way rather than standing walls up around a flat floor.
+				float falloff = 1.0 - smoothstep(isBowl ? MeltFloorStart : StampFalloffStart, 1.0, edgeDist);
 
 				// Crusted snow bears weight. A print on it is shallow rather
 				// than absent, and something heavy enough breaks through and

@@ -135,6 +135,19 @@ static constexpr float kShoutForceMax = 1.5f;
 // are shockwaves along the ground, so pitch shortens the reach rather than
 // tilting the mark - the map is 2D and has no way to hold a raised one.
 static constexpr float kShoutMaxPitchDeg = 40.0f;
+// A stagger's magnitude is a FRACTION in Skyrim - how much of a stagger, 0 to
+// 1. Unrelenting Force authors 0.75 and Bend Will the same. Anything far above
+// that is not a stagger amount at all; the archetype is being borrowed for
+// something else, and it always turns out to be sound rather than shove -
+// Dismay and Dragonrend author 25, and a werewolf's howl 5. Josef put it
+// better: a howl is sound, not power.
+static constexpr float kStaggerFraction = 1.0f;
+// Impact force that the shared push projectile carries no matter what the
+// shout does with it. VoicePushProjectile01 is 50 and is thrown by Unrelenting
+// Force, Marked for Death and the werewolf howl alike, so 50 is evidence of
+// nothing. Above it the author chose a bigger number on purpose: a dragon's
+// push is 85 and Cyclone's is 1000.
+static constexpr float kShoutCarrierForce = 50.0f;
 // A shout's reach if its projectile names none.
 static constexpr float kShoutDefaultRange = 1000.0f;
 static constexpr float kShoutRangeMax = 12000.0f;
@@ -163,9 +176,13 @@ static constexpr float kDashSpeedGate = 800.0f;
 static constexpr float kDashBreak = 700.0f;
 // Half-width of the furrow, against the dasher's own bounding sphere. Half,
 // because a body ploughs a channel about as wide as itself rather than twice.
-static constexpr float kDashWidthOfBound = 0.5f;
-static constexpr float kDashWidthMin = 16.0f;
+static constexpr float kDashWidthOfBound = 0.22f;
+static constexpr float kDashWidthMin = 10.0f;
 static constexpr float kDashWidthMax = 220.0f;
+// A dasher clear of the ground by more than this is passing OVER the snow, not
+// through it. Whirlwind Sprint off a ledge carries you well clear, and the map
+// is 2D - it cannot hold a furrow in the air, so it must not cut one below.
+static constexpr float kDashGroundBand = 45.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -603,7 +620,8 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	// stagger cannot be read as force wherever the spell already names an
 	// element, or the breaths would carve as well as burn.
 	SpellElement element = SpellElement::None;
-	bool staggers = false;
+	bool shoves = false;
+	float shoveForce = 0.0f;
 	const RE::BGSProjectile* projectile = nullptr;
 	for (const auto* item : a_spell->effects) {
 		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
@@ -614,14 +632,22 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 			continue;
 		if (element == SpellElement::None)
 			element = ClassifyElement(base);
-		if (base->data.archetype == RE::EffectSetting::Archetype::kStagger)
-			staggers = true;
-		// The longest reach any of its effects throws.
-		if (base->data.projectileBase &&
-			(!projectile || base->data.projectileBase->data.range > projectile->data.range))
-			projectile = base->data.projectileBase;
+		if (base->data.archetype == RE::EffectSetting::Archetype::kStagger &&
+			item->effectItem.magnitude <= kStaggerFraction)
+			shoves = true;
+		// The longest reach any of its effects throws, and separately the
+		// hardest it hits - a spell can carry several and they need not agree.
+		if (base->data.projectileBase) {
+			shoveForce = std::max(shoveForce, base->data.projectileBase->data.force);
+			if (!projectile || base->data.projectileBase->data.range > projectile->data.range)
+				projectile = base->data.projectileBase;
+		}
 	}
-	if (element == SpellElement::None && staggers)
+	// Two ways to be a shove, because one is not enough. A real stagger says so
+	// outright; but a dragon's Unrelenting Force carries only a script effect
+	// and Cyclone only damage, and both announce themselves instead through a
+	// projectile that hits far harder than the shared carrier ever does.
+	if (element == SpellElement::None && (shoves || shoveForce > kShoutCarrierForce))
 		element = SpellElement::Force;
 	if (element == SpellElement::None)
 		return;
@@ -1224,6 +1250,20 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 		if (a_cameraPosition.GetSquaredDistance(position) > a_cullRadius * a_cullRadius)
 			continue;
 
+		// Airborne dashers cut nothing. The controller's own word first, since
+		// it is the engine's, and the height above land behind it for the case
+		// of dashing along a ledge with the controller still reporting ground.
+		if (auto* controller = actor->GetCharController();
+			controller && (controller->context.currentState == RE::hkpCharacterStateType::kInAir ||
+							  controller->context.currentState == RE::hkpCharacterStateType::kFlying))
+			continue;
+		if (auto* tes = RE::TES::GetSingleton()) {
+			float landZ = position.z;
+			tes->GetLandHeight(position, landZ);
+			if (position.z - landZ > kDashGroundBand)
+				continue;
+		}
+
 		const float dx = current.x - last.x;
 		const float dy = current.y - last.y;
 		const float travelled = std::sqrt(dx * dx + dy * dy);
@@ -1249,6 +1289,10 @@ void SnowDeformation::GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_
 		emitter.strength = 1.0f;
 		emitter.element = SpellElement::Force;
 		emitter.mark = SpellMark::Carve;
+		// Scooped, not cut. A body hurled through snow leaves a furrow with
+		// sloped sides; the walled slot a trench profile gives is what a boot
+		// pressing down makes, and this is nothing like that.
+		emitter.bowl = true;
 		spellEmitters.push_back(emitter);
 		spellStats.dashGouges++;
 	}

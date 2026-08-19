@@ -41,6 +41,8 @@ public:
 	static constexpr float kStampModeCrust = 3.0f;
 	/** @brief Added to a stamp's mode to make it a CONE rather than a capsule. Needs no extra fields: a capsule is already two points and a radius, and a cone is the same three read differently - apex at the segment start, axis to its end, radius = the half-width it has opened to by then. Mirrored by STAMP_MODE_CONE in DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeCone = 10.0f;
+	/** @brief Added to a stamp's mode to give a carve a BOWL cross-section rather than a trench's flat floor and standing walls. Mirrored by STAMP_MODE_BOWL in DeformationUpdateCS.hlsl. */
+	static constexpr float kStampModeBowl = 20.0f;
 	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 
@@ -1470,6 +1472,8 @@ protected:
 		float ringFraction = 0.0f;
 		/** @brief Crust only: multiplier on the glazing rate, carrying the source's magnitude and how far above the snow it sits. */
 		float rateScale = 1.0f;
+		/** @brief Carve a scooped hollow rather than a walled trench. A body hurled through snow leaves a furrow with sloped sides, not a slot. */
+		bool bowl = false;
 		/** @brief Read the pair of points as a WEDGE instead of a capsule: previous is the apex, position the far centre, radius the half-width there. Only shouts set it - a row of discs cannot stand in for a cone, because every stamp holds full depth across only the inner tenth of its radius and so reads as a row of craters. */
 		bool cone = false;
 	};
