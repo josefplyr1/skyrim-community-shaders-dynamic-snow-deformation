@@ -1006,14 +1006,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// its record had said 840. The setting still governs the sources that
 		// have no reach of their own to state; a frost cloak takes it as its
 		// base reach before it ever becomes an emitter.
-		stamp.w = pits ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
-		                 std::max(emitter.radius, 4.0f);
+		// A cone states its own half-width; the pit radius is for discharges
+		// that land at a point.
+		stamp.w = (pits && !emitter.cone) ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
+		                                    std::max(emitter.radius, 4.0f);
 		perFrameData.Stamps[stampCount] = stamp;
 		// Pits carry their ring fraction where a melt carries its rate: an
 		// instantaneous mark has no rate to give, and a cloak needs to say it
 		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve : kStampModeMelt)),
+			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve : kStampModeMelt))) +
+				(emitter.cone ? kStampModeCone : 0.0f),
 			// A carve reads this as the weight it puts through a crust. A
 			// shout goes through: nothing survives being shoved that hard.
 			shoves ? 1.0f :

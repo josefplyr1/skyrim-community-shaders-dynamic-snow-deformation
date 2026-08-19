@@ -15,6 +15,15 @@
 //               over one spot pocks it once rather than boring downward. It
 //               also SCORCHES, and scorched snow is displaced snow - it keeps
 //               its berm, where melted snow has none.
+// A stamp may also be a CONE rather than a capsule, flagged by adding
+// STAMP_MODE_CONE to its mode. It needs no extra fields: a capsule is already
+// two points and a radius, and a cone is the same three read differently -
+// apex at the segment start, axis to the segment end, radius = the half-width
+// it has opened to by the far end. Only shouts use it, because a shout is the
+// one source whose footprint is a wedge, and a row of overlapping discs cannot
+// stand in for one: every stamp holds full depth only across the inner tenth
+// of its radius, so ten discs read as ten craters with shallow gaps.
+//
 //   CRUST (3) - frost refreezes the surface. Sustained, so it follows MELT:
 //               approaches a target at a rate, and a wall glazing for ten
 //               seconds sets harder than one that flickered. It moves no snow
@@ -44,6 +53,16 @@
 //       33 MB for one field.
 
 #define MAX_STAMPS 256
+
+// Added to a stamp's mode to mark it a cone. Mirrored by kStampModeCone in
+// SnowDeformation.h.
+#define STAMP_MODE_CONE 10.0
+// Half-width at the mouth of a cone, as a fraction of its width at the far
+// end. A shout leaves the throat already a body wide rather than as a point.
+#define CONE_MOUTH 0.06
+// Where the far end starts fading, along the axis. Without it the wedge stops
+// at a wall, which reads as a cut rather than as a shockwave running out.
+#define CONE_END_FADE 0.75
 
 // Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
@@ -244,6 +263,13 @@ float StampNoise(float2 p)
 		float distSq = dot(delta, delta);
 		float radius = Stamps[i].w;
 
+		// A cone is contained in the capsule of the same radius about the same
+		// axis, so the gate below needs no change at all - only the falloff
+		// coordinate inside it does.
+		float modeRaw = StampEnds[i].z;
+		bool isCone = modeRaw > STAMP_MODE_CONE - 0.5;
+		float mode = isCone ? modeRaw - STAMP_MODE_CONE : modeRaw;
+
 		// Either edge treatment can push the falloff outward, so the gate
 		// widens by whichever reaches further.
 		// Pits reach furthest of all - their arc legs run past the radius.
@@ -252,11 +278,35 @@ float StampNoise(float2 p)
 		[branch] if (distSq < gateRadius * gateRadius)
 		{
 			float dist = sqrt(distSq);
-			[branch] if (StampEnds[i].z < 0.5)
+
+			// Normalised distance to the edge of the shape: 0 on the axis, 1
+			// at the rim. Everything below shapes its falloff from this, so a
+			// cone and a capsule share every profile they have.
+			float edgeCoord = dist / max(radius, 1e-3);
+			[branch] if (isCone)
+			{
+				float axisLen = sqrt(segLenSq);
+				float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
+				float2 rel = worldPos - p0;
+				float along = dot(rel, axis);
+				// Perpendicular offset, via the 2D cross product.
+				float perp = abs(rel.x * axis.y - rel.y * axis.x);
+				float axisT = saturate(along / max(axisLen, 1e-3));
+				// Widens linearly from the mouth, so the rim is a straight
+				// line rather than the bulge a row of discs makes.
+				float halfWidth = radius * max(CONE_MOUTH + (1.0 - CONE_MOUTH) * axisT, 1e-3);
+				edgeCoord = perp / halfWidth;
+				// Behind the apex is outside the shape entirely.
+				edgeCoord = along < 0.0 ? 1e6 : edgeCoord;
+				// And the far end runs out rather than stopping at a wall.
+				edgeCoord = max(edgeCoord, smoothstep(CONE_END_FADE, 1.0, axisT));
+			}
+
+			[branch] if (mode < 0.5)
 			{
 				// Carve: high-frequency noise ON the falloff distance, which
 				// churns the edge the way a boot breaks snow.
-				float edgeDist = dist / radius;
+				float edgeDist = edgeCoord;
 				[branch] if (StampNoiseAmp > 0.001)
 				{
 					edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
@@ -282,24 +332,24 @@ float StampNoise(float2 p)
 				// a groove ploughed through ice cream.
 				crustBreak = max(crustBreak, saturate(max(force, printed * CrustBreakOnCarve) * falloff));
 			}
-			else if (StampEnds[i].z > 2.5)
+			else if (mode > 2.5)
 			{
 				// Crust: frost hardens the surface without moving any snow, so
 				// depth is left entirely alone. Sustained, so it approaches a
 				// target at a rate exactly as melt does - a wall glazing for
 				// ten seconds sets harder than one that flickered.
-				float glazeRadius = radius;
+				float glazeWobble = 1.0;
 				[branch] if (MeltEdgeNoise > 0.001)
 				{
 					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
 					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
-					glazeRadius *= 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
+					glazeWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
-				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, dist / max(glazeRadius, 1e-3));
+				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(glazeWobble, 1e-3));
 				crustTarget = max(crustTarget, Stamps[i].z * falloff);
 				crustRate += Stamps[i].z * StampEnds[i].w * falloff;
 			}
-			else if (StampEnds[i].z > 1.5)
+			else if (mode > 1.5)
 			{
 				// Pit: a core with arc legs, all of it pocked. Everything is
 				// seeded from the stamp's own centre rather than from time, so
@@ -312,9 +362,15 @@ float StampNoise(float2 p)
 				// feet, so the core distance folds around the ring radius.
 				float coreDist = ringFrac > 0.001 ?
 				                     abs(dist - radius * ringFrac) / max(radius * (1.0 - ringFrac), 1e-3) :
-				                     dist / radius;
+				                     edgeCoord;
 				float shape = 1.0 - smoothstep(0.15, 1.0, coreDist);
 
+				// Arc legs fork from a POINT of discharge, so they mean nothing
+				// on a wedge - and their seed is the stamp centre, which for a
+				// cone is its far end rather than anywhere it struck. Branched
+				// around rather than given a loop count of zero: an unrolled
+				// loop needs a bound the compiler can see.
+				[branch] if (!isCone)
 				[unroll] for (int lobe = 0; lobe < PIT_LOBES; lobe++) {
 					float2 seed = centre * 0.05 + float2(lobe * 7.3, lobe * 3.1);
 					float angle = StampNoiseHash(floor(seed)) * 6.2831853;
@@ -353,14 +409,14 @@ float StampNoise(float2 p)
 				// the falloff distance here instead would pit the floor,
 				// because noise inside the flat core drags samples past the
 				// start of the flank.
-				float meltRadius = radius;
+				float meltWobble = 1.0;
 				[branch] if (MeltEdgeNoise > 0.001)
 				{
 					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
 					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
-					meltRadius *= 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
+					meltWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
-				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, dist / max(meltRadius, 1e-3));
+				float falloff = 1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(meltWobble, 1e-3));
 				// Depth this texel melts TO, and how fast it gets there. The
 				// rate carries the same falloff, so the whole basin reaches
 				// its profile together and the bowl is visible from the first

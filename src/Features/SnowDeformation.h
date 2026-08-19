@@ -39,6 +39,8 @@ public:
 	static constexpr float kStampModePit = 2.0f;
 	/** @brief Frost refreezing the surface: sustained like a melt, but moving no snow at all - it only hardens what is already there. */
 	static constexpr float kStampModeCrust = 3.0f;
+	/** @brief Added to a stamp's mode to make it a CONE rather than a capsule. Needs no extra fields: a capsule is already two points and a radius, and a cone is the same three read differently - apex at the segment start, axis to its end, radius = the half-width it has opened to by then. Mirrored by STAMP_MODE_CONE in DeformationUpdateCS.hlsl. */
+	static constexpr float kStampModeCone = 10.0f;
 	/** @brief Cap on spell emitters gathered per frame. Well under kMaxStamps: emitters are appended after actors and props, so a barrage cannot starve foot prints out of the budget. */
 	static constexpr size_t kMaxSpellEmitters = 64;
 
@@ -1466,6 +1468,8 @@ protected:
 		float ringFraction = 0.0f;
 		/** @brief Crust only: multiplier on the glazing rate, carrying the source's magnitude and how far above the snow it sits. */
 		float rateScale = 1.0f;
+		/** @brief Read the pair of points as a WEDGE instead of a capsule: previous is the apex, position the far centre, radius the half-width there. Only shouts set it - a row of discs cannot stand in for a cone, because every stamp holds full depth across only the inner tenth of its radius and so reads as a row of craters. */
+		bool cone = false;
 	};
 
 	/** @brief This frame's emitters, rebuilt by GatherSpellEmitters and consumed by GatherStamps. */
@@ -1602,6 +1606,10 @@ protected:
 		float pitScale = 1.0f;
 		SpellElement element = SpellElement::None;
 		SpellMark mark = SpellMark::Melt;
+		/** @brief Laid as a wedge from apex to position. Shouts only. */
+		bool cone = false;
+		/** @brief Cone only: the apex, which the emitter carries as its previous position. */
+		float2 apex{};
 	};
 	std::vector<ActiveBlast> activeBlasts;
 

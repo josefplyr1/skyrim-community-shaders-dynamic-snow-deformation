@@ -577,11 +577,16 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	float range = projectile && projectile->data.range > 1.0f ? projectile->data.range : kShoutDefaultRange;
 	range = std::clamp(range * std::max(settings.ShoutConeLength, 0.0f), 0.0f, kShoutRangeMax);
 
-	// Strength off the projectile's authored impact force, against the one
-	// Unrelenting Force itself throws.
+	// Impact force says how hard a shout SHOVES, so it scales a shove and
+	// nothing else. Reading it as a depth for the breaths was wrong and showed
+	// it: Fire Breath authors 10 against Unrelenting Force's 50, so its cone
+	// arrived at a fifth strength and barely marked. What a flame does to snow
+	// is the melt rate's business, exactly as it is for every other fire source.
 	const float force = projectile && projectile->data.force > 0.0f ? projectile->data.force :
 	                                                                  kShoutReferenceForce;
-	const float strength = std::clamp(force / kShoutReferenceForce, kShoutForceMin, kShoutForceMax);
+	const float strength = element == SpellElement::Force ?
+	                           std::clamp(force / kShoutReferenceForce, kShoutForceMin, kShoutForceMax) :
+	                           1.0f;
 
 	// Flattened heading. A shout is a shockwave along the ground, and the
 	// deformation map is 2D - it has no way to hold a mark up in the air - so
@@ -1125,47 +1130,47 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 {
 	if (!a_tes || a_cone.element == SpellElement::None || a_cone.length <= 1.0f)
 		return;
+	if (activeBlasts.size() >= kMaxSpellEmitters)
+		return;
 
+	// ONE wedge. It was ten discs along the axis, and that could never work:
+	// a stamp holds full depth across only the inner tenth of its radius and
+	// tapers over all the rest, so overlapping discs read as a row of craters
+	// with shallow gaps rather than as a widening mouth. The shape has to be
+	// the shape.
 	const float halfSpread = std::clamp(settings.ShoutConeSpread, 1.0f, 170.0f) * 0.5f;
-	const float farHalfWidth = a_cone.length * std::tan(halfSpread * 0.0174532925f);
-	const SpellMark mark = MarkForElement(a_cone.element);
+	const float farHalfWidth = std::max(a_cone.length * std::tan(halfSpread * 0.0174532925f), 8.0f);
 
+	// Not named 'far': that is a legacy Windows macro and expands to nothing,
+	// which turns the declaration below into a syntax error a long way from here.
+	const RE::NiPoint3 tip = a_cone.position + a_cone.direction * a_cone.length;
+	// Measured at the middle of the wedge rather than at either end: the apex
+	// sits at the shouter's own feet, and the far end may be over a cliff.
+	const RE::NiPoint3 mid = a_cone.position + a_cone.direction * (a_cone.length * 0.5f);
+	float groundZ = mid.z;
+	a_tes->GetLandHeight(mid, groundZ);
+	float strength = 0.0f;
+	float reachOut = 0.0f;
+	if (!GroundMark(mid.z - groundZ, farHalfWidth, strength, reachOut))
+		return;
+	strength *= a_cone.strength;
+	if (strength < kMinSpellStrength)
+		return;
+
+	ActiveBlast opened{};
+	opened.cone = true;
+	opened.apex = { a_cone.position.x, a_cone.position.y };
+	opened.position = { tip.x, tip.y };
+	opened.radius = farHalfWidth;
+	opened.strength = strength;
+	opened.rate = kExplosionRate;
+	opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+	opened.element = a_cone.element;
+	opened.mark = MarkForElement(a_cone.element);
+	opened.pitScale = 1.0f;
+	activeBlasts.push_back(opened);
 	spellStats.shouts++;
-	for (int i = 0; i < kShoutConeDiscs; i++) {
-		if (activeBlasts.size() >= kMaxSpellEmitters)
-			break;
-		// Evenly along the axis, each disc as wide as the cone is at its own
-		// distance, so the discs overlap into a wedge instead of beading.
-		const float t = (static_cast<float>(i) + 0.5f) / kShoutConeDiscs;
-		const float reach = a_cone.length * t;
-		const RE::NiPoint3 at = a_cone.position + a_cone.direction * reach;
-		const float radius = std::max(farHalfWidth * (kShoutConeStart + (1.0f - kShoutConeStart) * t), 8.0f);
-
-		// Each disc sits on the ground under it, not on the ground the shouter
-		// is standing on: a shout down a slope should follow the slope.
-		float groundZ = at.z;
-		a_tes->GetLandHeight(at, groundZ);
-		float strength = 0.0f;
-		float marked = 0.0f;
-		if (!GroundMark(at.z - groundZ, radius, strength, marked))
-			continue;
-		strength *= a_cone.strength;
-		if (strength < kMinSpellStrength)
-			continue;
-
-		ActiveBlast opened{};
-		opened.position = { at.x, at.y };
-		opened.radius = marked;
-		opened.strength = strength;
-		opened.rate = kExplosionRate;
-		opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
-		opened.element = a_cone.element;
-		opened.mark = mark;
-		// A shove is sized by the cone, not by any blast radius of its own.
-		opened.pitScale = std::clamp(radius / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
-		activeBlasts.push_back(opened);
-		spellStats.shoutDiscs++;
-	}
+	spellStats.shoutDiscs++;
 }
 
 void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* a_tes)
@@ -1646,7 +1651,10 @@ void SnowDeformation::GatherSpellEmitters()
 				const float ramp = std::clamp(it->age / std::max(kBlastRampSeconds, 1e-3f), 0.0f, 1.0f);
 				SpellEmitter emitter{};
 				emitter.position = it->position;
-				emitter.previous = it->position;
+				// A wedge sweeps from its apex; everything else marks where it
+				// stands and has no second point to give.
+				emitter.previous = it->cone ? it->apex : it->position;
+				emitter.cone = it->cone;
 				emitter.radius = it->radius;
 				emitter.strength = it->strength * ramp;
 				emitter.rate = it->rate;
