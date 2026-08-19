@@ -1033,6 +1033,17 @@ bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAu
 		const RE::SpellItem* spell = effects->spells[i];
 		if (!spell)
 			continue;
+		// A plain spell only. A race list carries POWERS as well as abilities,
+		// and a power is something the actor USES rather than something it is:
+		// the Dunmer's Ancestor's Wrath is a genuine fire cloak owned by
+		// DarkElfRace, so reading it as innate made every Dark Elf in the game
+		// radiate fire permanently, vampire variants included.
+		//
+		// Checked across all 159 races in Skyrim, Dawnguard and Dragonborn
+		// rather than inferred from the one that broke: every genuine innate
+		// aura is authored kSpell, and Ancestor's Wrath is the lone kDisease.
+		if (spell->data.spellType != RE::MagicSystem::SpellType::kSpell)
+			continue;
 		for (const auto* item : spell->effects) {
 			const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
 			if (!base)
