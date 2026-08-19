@@ -624,6 +624,44 @@ RE::BSEventNotifyControl SnowDeformation::MagicApplySink::ProcessEvent(
 	return RE::BSEventNotifyControl::kContinue;
 }
 
+bool SnowDeformation::ShoutLaysCone(const RE::MagicItem* a_spell) const
+{
+	if (!settings.EnableShoutCones)
+		return false;
+	auto* spellItem = a_spell ? a_spell->As<RE::SpellItem>() : nullptr;
+	if (!spellItem || spellItem->data.spellType != RE::MagicSystem::SpellType::kVoicePower)
+		return false;
+
+	// The same reading ConsiderShout makes, so the two can never disagree about
+	// which shouts wedge.
+	SpellElement element = SpellElement::None;
+	bool shoves = false;
+	float shoveForce = 0.0f;
+	const RE::BGSProjectile* projectile = nullptr;
+	for (const auto* item : spellItem->effects) {
+		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kAimed)
+			continue;
+		if (element == SpellElement::None)
+			element = ClassifyElement(base);
+		if (base->data.archetype == RE::EffectSetting::Archetype::kStagger &&
+			item->effectItem.magnitude <= kStaggerFraction)
+			shoves = true;
+		if (base->data.projectileBase) {
+			shoveForce = std::max(shoveForce, base->data.projectileBase->data.force);
+			if (!projectile || base->data.projectileBase->data.range > projectile->data.range)
+				projectile = base->data.projectileBase;
+		}
+	}
+	if (element == SpellElement::None && (shoves || shoveForce > kShoutCarrierForce))
+		element = SpellElement::Force;
+	if (element == SpellElement::None)
+		return false;
+	// A travelling shove lays no wedge - the projectile route IS its mark, so
+	// this must not silence the very thing that draws it.
+	return !(element == SpellElement::Force && IsTravellingShove(projectile, shoveForce));
+}
+
 bool SnowDeformation::IsTravellingShove(const RE::BGSProjectile* a_projectile, float a_force)
 {
 	if (a_force > kVortexForce)
@@ -1736,10 +1774,18 @@ void SnowDeformation::GatherSpellEmitters()
 		// marks by striking.
 		const bool strikes = effect->data.castingType != RE::MagicSystem::CastingType::kConcentration;
 
+		// A shout that already ploughs a wedge must not ALSO mark through the
+		// projectile it throws. Aim a breath at your own feet and the wedge
+		// covers the ground anyway, while the projectile's own crater punched a
+		// little hole in the middle of it. Only the blast and the corridor are
+		// silenced: a held stream still marks where it sweeps, which a single
+		// wedge laid at the moment of casting cannot follow.
+		const bool wedged = ShoutLaysCone(runtime.spell);
+
 		{
 			if (!blast && !strikes)
 				spellStats.rejectedNoBlast++;
-			if (strikes || blast) {
+			if (!wedged && (strikes || blast)) {
 				float blastGroundZ = position.z;
 				tes->GetLandHeight(position, blastGroundZ);
 				const float authored = blast ?
@@ -1789,7 +1835,7 @@ void SnowDeformation::GatherSpellEmitters()
 		// skimming the surface scores a shallow groove and one deep in the
 		// snow melts nearly to the ground - which is also why this reads
 		// correctly on a slope, where entry and impact are at different depths.
-		if (strikes) {
+		if (strikes && !wedged) {
 			const float columnDepth = GetNominalSnowDepthAt(position.x, position.y, 0.0f);
 			float trailGroundZ = position.z;
 			tes->GetLandHeight(position, trailGroundZ);

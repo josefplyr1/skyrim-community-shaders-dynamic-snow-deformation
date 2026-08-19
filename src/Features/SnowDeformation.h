@@ -1724,6 +1724,16 @@ protected:
 	/** @brief True when this spell shoves rather than merely staggering or damaging, and how hard its projectile hits. Shared by the shout cone and the travelling-track route so the two can never disagree about what force is. */
 	static bool SpellShoves(const RE::MagicItem* a_spell, float& a_force);
 
+	/**
+	 * @brief True when this spell already lays a shout WEDGE, so its projectile must not mark as well.
+	 *
+	 * Asked of the spell record rather than remembered from the cast, because
+	 * it is a property of the record: a shout either cones or it does not. That
+	 * also means the two routes cannot fall out of step - the same classifier
+	 * answers both.
+	 */
+	bool ShoutLaysCone(const RE::MagicItem* a_spell) const;
+
 	/** @brief True when a shove TRAVELS rather than blasting - slow enough to watch, or hitting far harder than any shockwave is authored to. Either reading is enough; they are two ways of noticing the same thing. */
 	static bool IsTravellingShove(const RE::BGSProjectile* a_projectile, float a_force);
 
