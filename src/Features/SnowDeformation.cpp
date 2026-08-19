@@ -61,6 +61,7 @@
 	X(DashGougeScale) \
 	X(ForceTrackWidth) \
 	X(ForceTrackDepth) \
+	X(LiftFrostEffects) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \

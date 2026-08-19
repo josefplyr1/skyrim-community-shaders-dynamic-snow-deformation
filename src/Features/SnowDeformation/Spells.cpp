@@ -26,6 +26,14 @@ static constexpr float kSpellRadiantRadiusPerUnit = 0.45f;
 static constexpr float kSpellRadiantScale = 0.55f;
 // Clamp on a hazard's authored radius: a rune's footprint and a wall segment's
 // differ by a lot, and a modded one can be anything at all.
+// Authored radius up to which a placed hazard is one PIECE of something - a
+// wall is laid down as a row of tiny hazards, and a frost barrier segment is
+// 3.5 where a blizzard is 20 to 40. Only the small ones are objects standing
+// on the ground that the snow can bury; an area effect has no mesh to swallow.
+static constexpr float kHazardPieceRadius = 6.0f;
+// Never raise by more than this, whatever the snow says. A lift is a lie told
+// to hide a burial, and a big one starts reading as the effect floating.
+static constexpr float kMaxLiftHeight = 60.0f;
 static constexpr float kHazardRadiusMin = 40.0f;
 static constexpr float kHazardRadiusMax = 260.0f;
 // Same for a blast. The ceiling matters more here: a modded explosion with an
@@ -352,6 +360,29 @@ static float RateScaleOf(const RE::Effect* a_effect)
 		kSpellMagnitudeMin, kSpellMagnitudeMax);
 }
 
+void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift)
+{
+	if (!a_ref || a_lift < 1.0f)
+		return;
+	auto* taskInterface = SKSE::GetTaskInterface();
+	if (!taskInterface)
+		return;
+	// A handle, not the pointer: by the time the task runs the reference may
+	// have gone, and a hazard's whole life is measured in seconds.
+	const RE::ObjectRefHandle handle = a_ref->CreateRefHandle();
+	taskInterface->AddTask([handle, a_lift]() {
+		auto ref = handle.get();
+		if (!ref)
+			return;
+		auto* root = ref->Get3D(false);
+		if (!root)
+			return;
+		root->local.translate.z += a_lift;
+		RE::NiUpdateData data{};
+		root->UpdateWorldData(&data);
+	});
+}
+
 void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 {
 	if (!settings.EnableSpellIntegration || spellEmitters.size() >= kMaxSpellEmitters)
@@ -380,6 +411,23 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	const RE::NiPoint3 position = a_ref->GetPosition();
 	float groundZ = position.z;
 	tes->GetLandHeight(position, groundZ);
+
+	// Raise a buried frost effect onto the snow standing over it. Frost only:
+	// fire melts its own hole and lightning pits one, so those effects already
+	// sit in snow they removed, while frost hardens what is there and leaves
+	// the layer at full height on top of itself. And only the small PIECES -
+	// a wall is a row of them - because an area hazard has no mesh to bury.
+	if (settings.LiftFrostEffects && element == SpellElement::Frost &&
+		base->data.radius <= kHazardPieceRadius && !liftedRefs.contains(a_ref->formID)) {
+		if (liftedRefs.size() > 512)
+			liftedRefs.clear();
+		liftedRefs.insert(a_ref->formID);
+		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f), kMaxLiftHeight);
+		if (lift >= 1.0f) {
+			LiftRefOntoSnow(a_ref, lift);
+			spellStats.lifted++;
+		}
+	}
 
 	// The live radius while it burns, falling back to the authored one before
 	// the hazard has grown into it.

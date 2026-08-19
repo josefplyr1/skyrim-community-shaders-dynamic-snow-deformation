@@ -343,8 +343,8 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u | shouts %u (%u discs)",
 			spellStats.armed, spellStats.detonations, spellStats.casts,
 			spellStats.shouts, spellStats.shoutDiscs);
-		ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u",
-			spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks);
+		ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
+			spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks, spellStats.lifted);
 		if (spellStats.lastShoutVerdict) {
 			static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
 			static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
@@ -460,6 +460,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("spell_cat_frost"), "Frost"));
 		if (auto _ttFrost = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_cat_frost_tooltip"), "Frost neither removes snow nor throws it aside - it refreezes what is there. Crusted snow bears weight, so tracks across it barely print, and it shades as ice rather than powder. Something heavy enough still breaks through."));
+		ImGui::Checkbox(T(TKEY("lift_frost"), "Raise Buried Frost Effects"), &settings.LiftFrostEffects);
+		if (auto _ttLift = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lift_frost_tooltip"), "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch."));
 		ImGui::SliderFloat(T(TKEY("crust_rate"), "Frost Crust Rate"), &settings.CrustRate, 0.0f, 3.0f, "%.2f /s");
 		if (auto _ttCrustRate = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("crust_rate_tooltip"), "How fast frost sets a crust, for a spell of Frostbite's strength. Like a melt this changes how quickly the glaze arrives, never how hard it ends up."));

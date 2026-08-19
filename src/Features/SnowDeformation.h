@@ -310,6 +310,20 @@ public:
 		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
+		/**
+		 * @brief Raise buried frost effects onto the snow surface instead of leaving them under it.
+		 *
+		 * Anything the game places at terrain height is swallowed by the shell
+		 * floating above it. FROST is the only school where that matters: fire
+		 * melts its own hole and lightning pits one, so those effects sit in
+		 * snow they have already removed, while frost only hardens what is
+		 * there and leaves the layer at full height on top of itself.
+		 *
+		 * The ONLY thing in the feature that moves a game object. Everything
+		 * else reads game state and writes nothing but its own textures, so
+		 * this is deliberately narrow and deliberately switchable.
+		 */
+		bool LiftFrostEffects = true;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
 		float ForceTrackDepth = 0.45f;
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
@@ -1551,6 +1565,21 @@ protected:
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
 
 	/**
+	 * @brief Raises one buried effect onto the snow above it, on the GAME thread.
+	 *
+	 * The detection runs where every other detector runs - the per-frame
+	 * reference scan, on the render thread - but the write does not. Moving a
+	 * node in the game's scene graph from a render pass is precisely the shape
+	 * of thing that crashed this feature three times in Step 7, and that was
+	 * only READING. So the lift is handed to the SKSE task interface, which is
+	 * how the rest of this codebase mutates a reference.
+	 */
+	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift);
+
+	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
+	std::unordered_set<uint32_t> liftedRefs;
+
+	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
 	 *
 	 * Called from the reference scan GatherStamps already runs for props
@@ -1927,6 +1956,8 @@ protected:
 		uint dashGouges = 0;
 		/** @brief Slow shoves tracking across the ground, leaving the line they took. */
 		uint forceTracks = 0;
+		/** @brief Buried frost effects raised onto the snow. */
+		uint lifted = 0;
 		/** @brief What the last shout classified as, so a wedge that should have been a track can be read rather than argued about. */
 		uint lastShoutElement = 0;
 		float lastShoutSpeed = 0.0f;
