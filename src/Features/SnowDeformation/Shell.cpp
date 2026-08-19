@@ -67,6 +67,60 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
  * modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture
  * basename) supplies the authored glint/roughness/specular values.
  */
+
+/**
+ * @brief Loads a DDS through the GAME's resource system rather than the filesystem.
+ *
+ * A plain file open sees only loose files. That is half the game: Bethesda
+ * ships almost every texture inside a BSA, so a path that is perfectly valid -
+ * and that the game itself renders every day - resolves to nothing unless some
+ * mod happens to have unpacked it. The snow shell had that hole from the start
+ * and never showed it, because anyone running this feature is also running a
+ * snow retexture with loose files. The frost pattern found it immediately: its
+ * default is a vanilla landscape texture that lives in Skyrim - Textures5.bsa.
+ *
+ * BSResourceNiBinaryStream is the game's own lookup, so it reads loose files
+ * AND archives, and a modlist's override still wins exactly as it does in
+ * game. The filesystem path stays as a fallback for anything outside Data.
+ */
+static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
+{
+	a_srv = nullptr;
+	if (a_dataRelativePath.empty())
+		return false;
+
+	RE::BSResourceNiBinaryStream stream(a_dataRelativePath);
+	if (stream.good() && stream.stream) {
+		// The stream reports the size the CONSUMER sees, so a compressed BSA
+		// entry gives its uncompressed length here and decompresses as it is
+		// read. binary_read is protected; the templated read is the way in.
+		const uint32_t total = stream.stream->totalSize;
+		if (total > 0) {
+			std::vector<uint8_t> bytes(total);
+			if (stream.read(reinterpret_cast<char*>(bytes.data()), total) &&
+				SUCCEEDED(DirectX::CreateDDSTextureFromMemory(globals::d3d::device, bytes.data(), bytes.size(),
+					nullptr, a_srv.put()))) {
+				logger::debug("SnowDeformation: loaded {} through the game ({} bytes)", a_dataRelativePath, total);
+				return true;
+			}
+		}
+		a_srv = nullptr;
+	}
+
+	// Fallback: a real path on disk, for anything the resource system does not
+	// own. Loose files already came back above, so this is only ever the
+	// unusual case.
+	const std::string path = "Data\\" + a_dataRelativePath;
+	const std::wstring wide(path.begin(), path.end());
+	if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()))) {
+		logger::debug("SnowDeformation: loaded {} off disk", path);
+		return true;
+	}
+	a_srv = nullptr;
+	logger::debug("SnowDeformation: could not load {} from archives or disk", a_dataRelativePath);
+	return false;
+}
+
 void SnowDeformation::EnsureFrostPatternTextures()
 {
 	if (frostPatternAttempted)
@@ -79,15 +133,6 @@ void SnowDeformation::EnsureFrostPatternTextures()
 	// once. Two offset copies of that blended together give clumps with gaps,
 	// which is precisely what it looked like. A landscape texture meets itself
 	// on every side, which is the thing the stochastic sampler assumes.
-	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
-		a_srv = nullptr;
-		if (a_path.empty())
-			return false;
-		const std::string path = "Data\\" + a_path;
-		const std::wstring wide(path.begin(), path.end());
-		return SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()));
-	};
-
 	std::string chosen = settings.FrostTexturePath;
 	for (auto& pathChar : chosen)
 		if (pathChar == '/')
@@ -97,11 +142,11 @@ void SnowDeformation::EnsureFrostPatternTextures()
 	// The normal is what actually matters - it carries the crystal - so the
 	// pattern counts as absent without one and the crust falls back to the
 	// smooth glaze it had before any of this.
-	if (!tryLoadDDS(base + "_n.dds", frostPatternNormalSRV)) {
+	if (!LoadGameDDS(base + "_n.dds", frostPatternNormalSRV)) {
 		logger::debug("SnowDeformation: no frost pattern normal at {}_n.dds; crust keeps its smooth glaze", base);
 		return;
 	}
-	tryLoadDDS(chosen, frostPatternDiffuseSRV);
+	LoadGameDDS(chosen, frostPatternDiffuseSRV);
 }
 
 void SnowDeformation::EnsureShellSnowTextures()
@@ -115,10 +160,12 @@ void SnowDeformation::EnsureShellSnowTextures()
 	shellSnowHeightSRV = nullptr;
 	shellSnowTextureIsPBR = false;
 
+	// Through the game's own lookup, so a snow texture that lives only in a BSA
+	// loads like any other. This path had the same hole the frost pattern
+	// exposed; it simply never showed, because a modlist that wants deep snow
+	// invariably ships a loose snow retexture on top of the vanilla one.
 	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
-		a_srv = nullptr;
-		std::wstring wide = L"Data\\" + std::wstring(a_path.begin(), a_path.end());
-		return SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()));
+		return LoadGameDDS(a_path, a_srv);
 	};
 
 	std::string chosenPath = settings.SnowTexturePath.empty() ? "Textures\\Landscape\\snow01.dds" : settings.SnowTexturePath;
