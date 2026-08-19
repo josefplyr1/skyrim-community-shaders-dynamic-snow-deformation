@@ -1102,10 +1102,24 @@ bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord&
 	auto* race = a_actor ? a_actor->GetRace() : nullptr;
 	if (!race)
 		return false;
-	// The race first, which is where every vanilla atronach carries it; then
-	// the actor's base, because a mod is free to put the ability on the NPC
-	// record instead and reuse a stock race.
-	return AuraFromSpellList(race, a_out) || AuraFromSpellList(a_actor->GetActorBase(), a_out);
+	// The RACE only, and deliberately.
+	//
+	// A race's spell list is abilities: things that are always on. An NPC's is
+	// a LOADOUT - the spells that actor can cast - and the two are the same
+	// field with opposite meanings. Nothing in the record separates them:
+	// every atronach ability and every cloak an NPC merely knows is authored
+	// kSpell, so spell type cannot be the discriminator, and 193 vanilla NPCs
+	// carry a cloak they have not cast.
+	//
+	// Reading the NPC list also poisoned the cache below, which is keyed by
+	// RACE: one Ice Warlock made every Nord in the game radiate frost, one
+	// Storm Warlock every High Elf and Breton, and GuardWinterholdCollege -
+	// authored on FoxRace - every fox.
+	//
+	// A mage that ACTUALLY casts a cloak still marks the ground. That is the
+	// cast sink's job and has been since Step 7; this path is only for the
+	// ones that radiate without ever casting.
+	return AuraFromSpellList(race, a_out);
 }
 
 const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
