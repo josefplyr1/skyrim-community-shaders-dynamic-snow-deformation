@@ -54,6 +54,10 @@
 	X(IncorporealMode) \
 	X(CorpseElementalMarks) \
 	X(CorpseEffectSeconds) \
+	X(EnableShoutCones) \
+	X(ShoutConeSpread) \
+	X(ShoutConeLength) \
+	X(ForceCarveDepth) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \

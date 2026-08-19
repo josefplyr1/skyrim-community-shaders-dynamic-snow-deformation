@@ -340,8 +340,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
 			spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
 			spellStats.groundContacts, spellStats.trails);
-		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u",
-			spellStats.armed, spellStats.detonations, spellStats.casts);
+		ImGui::Text("blasts: armed %u | from detonations %u | from casts %u | shouts %u (%u discs)",
+			spellStats.armed, spellStats.detonations, spellStats.casts,
+			spellStats.shouts, spellStats.shoutDiscs);
 		ImGui::Text("rejected: no element %u | no blast form %u",
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating actors not carving %u",
@@ -361,6 +362,22 @@ void SnowDeformation::DrawSettings()
 		}
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
+
+		ImGui::SeparatorText(T(TKEY("spell_cat_force"), "Force (Shouts)"));
+		if (auto _ttForce = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("spell_cat_force_tooltip"), "Force is the one school that moves snow without changing it. Everything else removes it, burns it or freezes it; a shove pushes it aside, so it is also the only one that piles a ridge at the far lip - and that ridge is what makes Unrelenting Force read as pushed rather than deleted."));
+		ImGui::Checkbox(T(TKEY("shout_cones"), "Shouts Plough The Snow"), &settings.EnableShoutCones);
+		if (auto _ttShout = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_cones_tooltip"), "Lets a shout work the whole wedge of ground in front of the shouter rather than only the spot its projectile happens to strike. Each shout takes its reach from its own record, so a dragon's breath carries ten times a Greybeard's without anything being named. Off, shouts still mark through whatever they throw."));
+		ImGui::SliderFloat(T(TKEY("shout_spread"), "Shout Cone Spread"), &settings.ShoutConeSpread, 5.0f, 150.0f, "%.0f deg");
+		if (auto _ttSpread = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_spread_tooltip"), "How wide the wedge opens. The records author a shout's REACH but never its width, so this is the one thing about a shout's shape that has to be taste rather than a reading."));
+		ImGui::SliderFloat(T(TKEY("shout_length"), "Shout Cone Reach"), &settings.ShoutConeLength, 0.1f, 3.0f, "%.2fx");
+		if (auto _ttLen = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shout_length_tooltip"), "Multiplier on the reach each shout's own projectile authors. At 1.0 you get exactly what the game says - about 1000 units for Unrelenting Force, 1200 for the breaths, and far more for a dragon. Aiming upward shortens it; aiming at the sky throws it away, since the snow layer cannot hold a mark in the air."));
+		ImGui::SliderFloat(T(TKEY("force_carve_depth"), "Force Carve Depth"), &settings.ForceCarveDepth, 0.0f, 1.0f, "%.2f");
+		if (auto _ttForceDepth = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("force_carve_depth_tooltip"), "How deep a full-strength shove ploughs, as a fraction of the layer. Each shout scales down from here by the impact force its own record carries, so a dragon's shout bites harder than a breath's shove without either being named."));
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_fire"), "Fire"));
 		if (auto _ttFire = Util::HoverTooltipWrapper())

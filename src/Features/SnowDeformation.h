@@ -300,6 +300,14 @@ public:
 		 * Bethesda's "Is Ghost" means invulnerable rather than incorporeal.
 		 */
 		int IncorporealMode = 1;
+		/** @brief Let shouts plough the snow in front of the shouter. Off, a shout still marks through whatever projectile it throws, which is why the breaths already made a mark or two before this existed. */
+		bool EnableShoutCones = true;
+		/** @brief Total spread of a shout's cone, in degrees. The records author no width - only a reach - so this is the one number about a shout's shape that has to be taste. */
+		float ShoutConeSpread = 45.0f;
+		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
+		float ShoutConeLength = 1.0f;
+		/** @brief Depth a full-strength shove carves, as a fraction of the layer. Force is the only school that DISPLACES snow rather than changing it, so it is also the only one that raises a berm at the far lip - which is what makes Unrelenting Force read as pushed rather than deleted. */
+		float ForceCarveDepth = 1.0f;
 		/** @brief Let a body that is still burning, crackling or frozen over go on marking the snow beneath it. The element comes from the last one that struck the actor before it died, so it needs no reading of the corpse itself. */
 		bool CorpseElementalMarks = true;
 		/** @brief Seconds a body goes on marking after it dies. Mods that keep a corpse visibly alight or frozen (Frozen Electrocuted Combusted and its like) run far longer than vanilla, so this is taste rather than physics. */
@@ -1417,7 +1425,9 @@ protected:
 		None,
 		Fire,
 		Frost,
-		Shock
+		Shock,
+		/** @brief Not an element the resist variable knows: nothing resists being SHOVED. Force is recognised by a stagger archetype on a spell that names no element, and it is the only one that displaces snow without changing it. Appended rather than inserted - AuraFromSpellList maps slots 1-3 onto the three resist values by cast. */
+		Force
 	};
 
 	/** @brief What an emitter does to the snow. Only Melt is wired up so far; the rest name the per-element behaviours in SPELL-INTEGRATION.md section 4. */
@@ -1631,6 +1641,33 @@ protected:
 	};
 	DeathSink deathSink;
 
+	/**
+	 * @brief A shout, queued by the cast sink for the gather to lay down.
+	 *
+	 * Shouts are the one source whose shape the deformation map cannot express
+	 * as a single stamp: a cone is not a capsule. It is laid down as a row of
+	 * discs of growing radius along the shout's axis instead, which needs no
+	 * new stamp mode, no shader change and no constant-buffer field - the
+	 * thing this project would otherwise have had to grow for one spell.
+	 */
+	struct QueuedCone
+	{
+		RE::NiPoint3 position{};
+		/** @brief Unit heading, already flattened: a shockwave runs along the ground rather than following the crosshair into the sky. */
+		RE::NiPoint3 direction{};
+		float length = 0.0f;
+		/** @brief 0-1, from the projectile's authored impact force against Unrelenting Force's own. */
+		float strength = 1.0f;
+		SpellElement element = SpellElement::None;
+	};
+	std::vector<QueuedCone> queuedCones;
+
+	/** @brief Lays one shout down as a row of discs along its axis. */
+	void OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes);
+
+	/** @brief Classifies a shout off its records and queues its cone. Called from the cast sink on the game thread; reads only static forms and the caster's own position and facing. */
+	void ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster);
+
 	/** @brief Queued by the death sink on the game thread, drained by the gather. */
 	struct QueuedDeath
 	{
@@ -1810,6 +1847,9 @@ protected:
 		uint trails = 0;
 		/** @brief Self-centred area spells caught by the cast sink. */
 		uint casts = 0;
+		/** @brief Shout cones laid down, and the discs they cost. */
+		uint shouts = 0;
+		uint shoutDiscs = 0;
 		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
 		uint auras = 0;
 		/** @brief Innate auras seen this frame: atronachs and anything else whose records give it one without a cast. */

@@ -986,13 +986,20 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			break;
 		const bool pits = emitter.mark == SpellMark::Pit;
 		const bool glazes = emitter.mark == SpellMark::Crust;
+		// Force. The only school that DISPLACES snow, so it is the only one
+		// that takes the trench path a boot takes - max-blended to a depth
+		// rather than approached at a rate - and the only one the berm field
+		// answers, since a carve never touches the melted channel it subtracts.
+		const bool shoves = emitter.mark == SpellMark::Carve;
 		float4 stamp{};
 		stamp.x = emitter.position.x;
 		stamp.y = emitter.position.y;
 		// A pit is thrown to a fixed depth rather than melted toward one, so
 		// its strength is the depth itself scaled by how much of the discharge
 		// reached the ground.
-		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) : emitter.strength;
+		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) :
+		                 (shoves ? emitter.strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f) :
+								   emitter.strength);
 		// Crust uses the emitter's OWN reach, like every other mark. Forcing
 		// the crust radius here instead threw away whatever the source had
 		// worked out for itself - which is why Blizzard glazed 90 units after
@@ -1006,9 +1013,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// instantaneous mark has no rate to give, and a cloak needs to say it
 		// pocks a ring at its reach rather than a bowl at its feet.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			pits ? kStampModePit : (glazes ? kStampModeCrust : kStampModeMelt),
-			pits ? emitter.ringFraction :
-				   (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate) };
+			pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve : kStampModeMelt)),
+			// A carve reads this as the weight it puts through a crust. A
+			// shout goes through: nothing survives being shoved that hard.
+			shoves ? 1.0f :
+					 (pits ? emitter.ringFraction :
+							 (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate)) };
 		stampCount++;
 		stampStats.spells++;
 	}

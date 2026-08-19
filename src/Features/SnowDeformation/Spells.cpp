@@ -116,6 +116,26 @@ static constexpr float kBlastRampSeconds = 0.09f;
 // with is whatever struck it moments before it fell - not something from a
 // fight two rooms back.
 static constexpr float kElementalMemory = 6.0f;
+// Discs laid along a shout's axis. Enough that their overlap reads as one
+// continuous wedge rather than a row of circles, few enough that a shout
+// cannot swallow the stamp pool on its own.
+static constexpr int kShoutConeDiscs = 10;
+// Where the cone starts, as a fraction of its length: a shout leaves the mouth
+// already a body wide, not as a point.
+static constexpr float kShoutConeStart = 0.06f;
+// Authored impact force of Unrelenting Force's own projectile, which every
+// other shout is measured against. Read off the records rather than invented:
+// the player's push is 50, a dragon's 85, the breaths 10.
+static constexpr float kShoutReferenceForce = 50.0f;
+static constexpr float kShoutForceMin = 0.25f;
+static constexpr float kShoutForceMax = 1.5f;
+// Aim this far above horizontal and the shout passes over everything. Shouts
+// are shockwaves along the ground, so pitch shortens the reach rather than
+// tilting the mark - the map is 2D and has no way to hold a raised one.
+static constexpr float kShoutMaxPitchDeg = 40.0f;
+// A shout's reach if its projectile names none.
+static constexpr float kShoutDefaultRange = 1000.0f;
+static constexpr float kShoutRangeMax = 12000.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -173,6 +193,11 @@ SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_elemen
 		return SpellMark::Crust;
 	case SpellElement::Shock:
 		return SpellMark::Pit;
+	case SpellElement::Force:
+		// The only school that DISPLACES snow instead of changing it, which is
+		// also the only one the berm field answers - a carve keeps its full
+		// rim, and that rim is what reads as pushed rather than deleted.
+		return SpellMark::Carve;
 	default:
 		return SpellMark::Melt;
 	}
@@ -348,6 +373,17 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	if (!spell)
 		return RE::BSEventNotifyControl::kContinue;
 
+	// A SHOUT ploughs the ground in front of the shouter, and nothing else in
+	// the feature can express that: a cone is not a capsule, and the breaths
+	// were leaving the two marks their projectile happened to make. Voice
+	// power is the discriminator the design named, and AIMED is what separates
+	// the ones that point somewhere from Storm Call and Whirlwind Sprint,
+	// which are self-delivered and already work through other routes.
+	if (feature.settings.EnableShoutCones)
+		if (auto* spellItem = spell->As<RE::SpellItem>();
+			spellItem && spellItem->data.spellType == RE::MagicSystem::SpellType::kVoicePower)
+			feature.ConsiderShout(spellItem, a_event->object.get());
+
 	// Self-delivered effects ONLY. Anything aimed or placed already has a
 	// projectile or a hazard to follow, and marking it here as well would drop
 	// a second crater under the caster's own feet every time they threw one.
@@ -499,6 +535,77 @@ RE::BSEventNotifyControl SnowDeformation::MagicApplySink::ProcessEvent(
 			feature.queuedHits.push_back(queued);
 	}
 	return RE::BSEventNotifyControl::kContinue;
+}
+
+void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster)
+{
+	if (!a_spell || !a_caster)
+		return;
+
+	// Element first, force second. Every breath carries a small stagger of its
+	// own - Fire Breath's is 0.05 against Unrelenting Force's 0.75 - so a
+	// stagger cannot be read as force wherever the spell already names an
+	// element, or the breaths would carve as well as burn.
+	SpellElement element = SpellElement::None;
+	bool staggers = false;
+	const RE::BGSProjectile* projectile = nullptr;
+	for (const auto* item : a_spell->effects) {
+		const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+		// AIMED only. Storm Call and Whirlwind Sprint are self-delivered: the
+		// first already pocks the snow through the strikes it calls down, and
+		// the second is a dash rather than anything thrown forward.
+		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kAimed)
+			continue;
+		if (element == SpellElement::None)
+			element = ClassifyElement(base);
+		if (base->data.archetype == RE::EffectSetting::Archetype::kStagger)
+			staggers = true;
+		// The longest reach any of its effects throws.
+		if (base->data.projectileBase &&
+			(!projectile || base->data.projectileBase->data.range > projectile->data.range))
+			projectile = base->data.projectileBase;
+	}
+	if (element == SpellElement::None && staggers)
+		element = SpellElement::Force;
+	if (element == SpellElement::None)
+		return;
+
+	// Reach off the projectile's own record. The effects author no AREA at all
+	// for any shout in the game, so there is nothing else to read - and the
+	// ranges differ by ten times across them, from a dragon's 10000 down to
+	// Dismay's 768, which no single constant could have covered.
+	float range = projectile && projectile->data.range > 1.0f ? projectile->data.range : kShoutDefaultRange;
+	range = std::clamp(range * std::max(settings.ShoutConeLength, 0.0f), 0.0f, kShoutRangeMax);
+
+	// Strength off the projectile's authored impact force, against the one
+	// Unrelenting Force itself throws.
+	const float force = projectile && projectile->data.force > 0.0f ? projectile->data.force :
+	                                                                  kShoutReferenceForce;
+	const float strength = std::clamp(force / kShoutReferenceForce, kShoutForceMin, kShoutForceMax);
+
+	// Flattened heading. A shout is a shockwave along the ground, and the
+	// deformation map is 2D - it has no way to hold a mark up in the air - so
+	// aiming up shortens the reach rather than tilting the cone, and aiming at
+	// the sky throws it away entirely.
+	const float pitch = a_caster->data.angle.x;
+	const float pitchDeg = -pitch * 57.2957795f;
+	if (pitchDeg > kShoutMaxPitchDeg)
+		return;
+	if (pitchDeg > 0.0f)
+		range *= std::max(1.0f - pitchDeg / kShoutMaxPitchDeg, 0.0f);
+
+	const float yaw = a_caster->data.angle.z;
+	QueuedCone cone{};
+	cone.position = a_caster->GetPosition();
+	cone.direction = { std::sin(yaw), std::cos(yaw), 0.0f };
+	cone.length = range;
+	cone.strength = strength;
+	cone.element = element;
+	{
+		std::scoped_lock lock(queuedCastLock);
+		if (queuedCones.size() < kMaxSpellEmitters)
+			queuedCones.push_back(cone);
+	}
 }
 
 void SnowDeformation::RegisterSpellCastSink()
@@ -1014,6 +1121,53 @@ void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_
 	}
 }
 
+void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
+{
+	if (!a_tes || a_cone.element == SpellElement::None || a_cone.length <= 1.0f)
+		return;
+
+	const float halfSpread = std::clamp(settings.ShoutConeSpread, 1.0f, 170.0f) * 0.5f;
+	const float farHalfWidth = a_cone.length * std::tan(halfSpread * 0.0174532925f);
+	const SpellMark mark = MarkForElement(a_cone.element);
+
+	spellStats.shouts++;
+	for (int i = 0; i < kShoutConeDiscs; i++) {
+		if (activeBlasts.size() >= kMaxSpellEmitters)
+			break;
+		// Evenly along the axis, each disc as wide as the cone is at its own
+		// distance, so the discs overlap into a wedge instead of beading.
+		const float t = (static_cast<float>(i) + 0.5f) / kShoutConeDiscs;
+		const float reach = a_cone.length * t;
+		const RE::NiPoint3 at = a_cone.position + a_cone.direction * reach;
+		const float radius = std::max(farHalfWidth * (kShoutConeStart + (1.0f - kShoutConeStart) * t), 8.0f);
+
+		// Each disc sits on the ground under it, not on the ground the shouter
+		// is standing on: a shout down a slope should follow the slope.
+		float groundZ = at.z;
+		a_tes->GetLandHeight(at, groundZ);
+		float strength = 0.0f;
+		float marked = 0.0f;
+		if (!GroundMark(at.z - groundZ, radius, strength, marked))
+			continue;
+		strength *= a_cone.strength;
+		if (strength < kMinSpellStrength)
+			continue;
+
+		ActiveBlast opened{};
+		opened.position = { at.x, at.y };
+		opened.radius = marked;
+		opened.strength = strength;
+		opened.rate = kExplosionRate;
+		opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+		opened.element = a_cone.element;
+		opened.mark = mark;
+		// A shove is sized by the cone, not by any blast radius of its own.
+		opened.pitScale = std::clamp(radius / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
+		activeBlasts.push_back(opened);
+		spellStats.shoutDiscs++;
+	}
+}
+
 void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* a_tes)
 {
 	if (a_blast.element == SpellElement::None || !a_tes)
@@ -1080,6 +1234,7 @@ void SnowDeformation::GatherSpellEmitters()
 			std::scoped_lock lock(queuedCastLock);
 			queuedDeaths.clear();
 			queuedHits.clear();
+			queuedCones.clear();
 		}
 		return;
 	}
@@ -1426,6 +1581,18 @@ void SnowDeformation::GatherSpellEmitters()
 		const PendingBlast blast = it->second;
 		it = projectileBlasts.erase(it);
 		OpenProjectileBlast(blast, tes);
+	}
+
+	// Shouts, laid down as a wedge of discs. Drained before the self-centred
+	// blasts because a shout is the bigger claim on the blast budget.
+	{
+		std::vector<QueuedCone> cones;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			cones.swap(queuedCones);
+		}
+		for (const auto& cone : cones)
+			OpenShoutCone(cone, tes);
 	}
 
 	// Self-centred area spells enter here: the sink queued them on the game
