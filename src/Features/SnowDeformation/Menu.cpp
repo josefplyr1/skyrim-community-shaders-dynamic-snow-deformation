@@ -22,6 +22,7 @@ void SnowDeformation::DrawSettings()
 			shellSnowRmaosSRV = nullptr;
 			shellSnowTextureIsPBR = false;
 			shellSnowTextureAttempted = false;
+		}
 
 		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 		if (auto _ttStamp = Util::HoverTooltipWrapper())
@@ -48,7 +49,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
-		}
+
 		ImGui::TreePop();
 	}
 
@@ -287,6 +288,7 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::PopID();
 		}
+
 		ImGui::TreePop();
 	}
 
@@ -627,6 +629,7 @@ void SnowDeformation::DrawSettings()
 			frostPatternNormalSRV = nullptr;
 			frostPatternDiffuseSRV = nullptr;
 			frostPatternAttempted = false;
+		}
 
 		ImGui::SliderFloat(T(TKEY("frost_pattern"), "Frost Crystal Detail"), &settings.FrostPatternStrength, 0.0f, 2.0f, "%.2f");
 		if (auto _ttFrostPat = Util::HoverTooltipWrapper())
@@ -689,7 +692,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
-		}
+
 		ImGui::TreePop();
 	}
 
