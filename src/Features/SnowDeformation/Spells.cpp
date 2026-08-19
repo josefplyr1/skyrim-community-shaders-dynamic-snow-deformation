@@ -85,6 +85,15 @@ static constexpr float kCloakDefaultDuration = 60.0f;
 // at chest height - and it works a wider circle than the living one did,
 // because the whole body is lying in the snow instead of passing over it.
 static constexpr float kDeathAuraReach = 1.35f;
+// A corpse works a tighter circle than a living source of the same school: it
+// is one body lying still, not something walking about radiating.
+static constexpr float kCorpseReachScale = 0.5f;
+// Bound radius of a human-sized actor, which the corpse reach is measured
+// against. A mammoth lying in the snow should mark more of it than a mudcrab,
+// and neither should take a number meant for a man.
+static constexpr float kCorpseReferenceBound = 80.0f;
+static constexpr float kCorpseSizeMin = 0.4f;
+static constexpr float kCorpseSizeMax = 2.5f;
 // How fast the blast a dying atronach throws reaches its basin. Same shape as
 // any other detonation: held open for a moment rather than applied in a frame.
 static constexpr float kAtronachDeathRate = 4.0f;
@@ -97,10 +106,12 @@ static constexpr float kInnateDeathWindow = 0.5f;
 // of that element. Deliberately near-total: the playable races and the cold
 // animals all sit at 50, and every elemental creature in the game sits at 100.
 static constexpr float kElementalImmunity = 90.0f;
-// How long a blast takes to reach its full mark. A pit follows CARVE, which is
+// How long a mark takes to reach full depth. A pit follows CARVE, which is
 // instantaneous, so a discharge otherwise simply EXISTS on the frame it lands -
-// snow that was never seen to move. Short enough to still read as a strike.
-static constexpr float kBlastRampSeconds = 0.18f;
+// snow that was never seen to move. ONE number for every discharge in the
+// feature: bolts, cloak arcs, storm atronachs, electrified bodies, runes and
+// walls all ramp on this.
+static constexpr float kBlastRampSeconds = 0.09f;
 // How long the memory of an elemental hit survives. What a body is burning
 // with is whatever struck it moments before it fell - not something from a
 // fight two rooms back.
@@ -302,12 +313,21 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 	spellStats.lastStrength = strength;
 	spellStats.lastRadius = radius;
 
+	// A rune or a wall segment is a discharge too, and unlike a cloak arc it is
+	// re-emitted every frame rather than opened once - so it cannot ride the
+	// blast path, and would pop to full depth on the frame it appeared. It
+	// carries its own age, so the same ramp costs no state at all. Melt and
+	// crust need none of this: they integrate, so they already arrive over time.
+	const float hazardRamp = MarkForElement(element) == SpellMark::Pit ?
+	                             std::clamp(runtime.age / std::max(kBlastRampSeconds, 1e-3f), 0.0f, 1.0f) :
+	                             1.0f;
+
 	SpellEmitter emitter{};
 	emitter.position = { position.x, position.y };
 	// A wall segment and a rune both stay put, so there is no sweep to carry.
 	emitter.previous = emitter.position;
 	emitter.radius = radius;
-	emitter.strength = strength;
+	emitter.strength = strength * hazardRamp;
 	emitter.rate = std::max(settings.SpellMeltRate, 0.0f) * RateScaleOf(costliest) * heightFade;
 	emitter.element = element;
 	emitter.mark = MarkForElement(element);
@@ -827,11 +847,21 @@ void SnowDeformation::ConsiderCorpseEffect(RE::Actor* a_actor, float a_deltaTime
 	if (hit == lastElementalHit.end() || hit->second.element == SpellElement::None)
 		return;
 
+	// Sized to the body. Nothing else in the feature did this - the reach was a
+	// flat per-school number, so a mudcrab and a mammoth marked the same circle.
+	// The bounding sphere of the actor's own 3D is what says how much snow it
+	// is actually lying in, and a sprawled ragdoll reading larger than it did
+	// standing up is correct rather than a fault.
+	float sizeScale = 1.0f;
+	if (auto* root = a_actor->Get3D(false))
+		sizeScale = std::clamp(root->worldBound.radius / kCorpseReferenceBound,
+			kCorpseSizeMin, kCorpseSizeMax);
+
 	CloakState state{};
 	state.actor = a_actor->GetHandle();
 	state.element = hit->second.element;
 	state.rateScale = 1.0f;
-	state.reachScale = 1.0f;
+	state.reachScale = kCorpseReachScale * sizeScale;
 	state.burnRemaining = std::max(settings.CorpseEffectSeconds, 0.0f);
 	if (corpseEffects.size() > 256)
 		corpseEffects.clear();
