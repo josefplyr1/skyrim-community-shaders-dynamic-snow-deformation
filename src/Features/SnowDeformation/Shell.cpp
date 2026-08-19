@@ -89,7 +89,21 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 	if (a_dataRelativePath.empty())
 		return false;
 
-	RE::BSResourceNiBinaryStream stream(a_dataRelativePath);
+	// "Textures\Effects\shockbolttile01" is how anyone would write the path,
+	// and the resource system wants the extension. Supplying it is kinder than
+	// silently loading nothing and leaving the user to guess which half of the
+	// path was wrong.
+	std::string path = a_dataRelativePath;
+	{
+		const size_t dot = path.find_last_of('.');
+		const size_t sep = path.find_last_of("\\/");
+		// No dot at all, or the only dot is in a folder name: npos compares
+		// LARGER than any real index, so the two cases cannot share one test.
+		if (dot == std::string::npos || (sep != std::string::npos && dot < sep))
+			path += ".dds";
+	}
+
+	RE::BSResourceNiBinaryStream stream(path);
 	if (stream.good() && stream.stream) {
 		// The stream reports the size the CONSUMER sees, so a compressed BSA
 		// entry gives its uncompressed length here and decompresses as it is
@@ -110,8 +124,8 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 	// Fallback: a real path on disk, for anything the resource system does not
 	// own. Loose files already came back above, so this is only ever the
 	// unusual case.
-	const std::string path = "Data\\" + a_dataRelativePath;
-	const std::wstring wide(path.begin(), path.end());
+	const std::string diskPath = "Data\\" + path;
+	const std::wstring wide(diskPath.begin(), diskPath.end());
 	if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()))) {
 		logger::debug("SnowDeformation: loaded {} off disk", path);
 		return true;

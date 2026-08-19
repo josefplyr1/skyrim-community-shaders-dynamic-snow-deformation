@@ -19,7 +19,7 @@
  * has no thickness to see edge-on.
  */
 
-#define ARC_SEGMENTS 12
+#define ARC_SEGMENTS 32
 #define ARC_VERTS_PER_SEGMENT 6
 
 cbuffer ArcCB : register(b0)
@@ -50,15 +50,33 @@ float Hash11(float a_x)
 	return frac(sin(a_x * 127.1) * 43758.5453);
 }
 
-float3 JointOffset(float a_t, float a_seed, float3 a_side, float3 a_up)
+float3 JointOffset(float a_t, float a_seed, float3 a_side, float3 a_up, float a_length)
 {
 	// Zero at both ends: a bolt is anchored at the hand and at the ground, and
 	// a fork that misses either end reads as a stray ribbon rather than a
 	// strike. sin() gives that pinning for free.
 	const float pin = sin(a_t * 3.14159265);
-	const float n1 = Hash11(a_t * 17.0 + a_seed) - 0.5;
-	const float n2 = Hash11(a_t * 29.0 + a_seed * 3.7) - 0.5;
-	return (a_side * n1 + a_up * n2) * pin;
+	const float joint = a_t * ARC_SEGMENTS;
+
+	// FINE: a fresh kink at every joint. This carries the character - lightning
+	// is a mostly straight line interrupted often, not a few wild swings.
+	const float f1 = Hash11(joint * 1.7 + a_seed * 31.0) - 0.5;
+	const float f2 = Hash11(joint * 2.3 + a_seed * 57.0) - 0.5;
+
+	// COARSE: one slow wander every several joints, so the line drifts off true
+	// rather than vibrating around it. Quantised on purpose, so it changes AT a
+	// joint and reads as a kink instead of a curve.
+	const float band = floor(joint / 6.0);
+	const float c1 = Hash11(band * 7.1 + a_seed * 11.0) - 0.5;
+	const float c2 = Hash11(band * 9.3 + a_seed * 19.0) - 0.5;
+
+	// Both amplitudes are fractions of the bolt's own LENGTH. Scaling the
+	// wander off the ribbon WIDTH instead - which is what this did first - made
+	// a thick bolt thrash and a thin one barely move, and that is backwards:
+	// how far lightning strays has nothing to do with how thick it is drawn.
+	const float fine = a_length * 0.018;
+	const float wander = a_length * 0.030;
+	return (a_side * (f1 * fine + c1 * wander) + a_up * (f2 * fine + c2 * wander)) * pin;
 }
 
 #ifdef VSHADER
@@ -90,8 +108,7 @@ VS_OUTPUT main(uint a_vertexID : SV_VertexID)
 	const float3 up3 = normalize(cross(side3, dir));
 
 	const float seed = ArcParams.w;
-	const float jitterScale = ArcParams.x * 6.0;
-	float3 world = lerp(from, to, t) + JointOffset(t, seed, side3, up3) * jitterScale;
+	float3 world = lerp(from, to, t) + JointOffset(t, seed, side3, up3, axisLen);
 
 	// Face the camera. Rebased space, so the camera sits at the origin and the
 	// view direction is the position itself.
@@ -108,7 +125,11 @@ VS_OUTPUT main(uint a_vertexID : SV_VertexID)
 	const float halfWidth = ArcParams.x * 0.5 * taper;
 
 	vsout.Position = mul(CameraViewProj, float4(rel + ribbon * side * halfWidth, 1.0));
-	vsout.TexCoord = float2(t, side * 0.5 + 0.5);
+	// The vanilla art here is a TILE (shockbolttile01 and friends), so U repeats
+	// at a fixed world rate rather than stretching once over the whole bolt - a
+	// long strike would otherwise smear the pattern and a short one squash it.
+	// Sampler wraps on U for exactly this.
+	vsout.TexCoord = float2(t * max(axisLen / 192.0, 1.0), side * 0.5 + 0.5);
 	vsout.Taper = taper;
 	return vsout;
 }

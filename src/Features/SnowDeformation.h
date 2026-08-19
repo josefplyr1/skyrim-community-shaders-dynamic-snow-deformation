@@ -284,10 +284,10 @@ public:
 		float ShockCloakStrikeScale = 0.25f;
 		/** @brief Draw the arc that justifies the pock. The snow already marks where a cloak discharges; without something reaching the spot, the hole reads as a glitch rather than as lightning. Visual only - nothing is spawned into the world. */
 		bool EnableLightningArcs = true;
-		float LightningArcWidth = 9.0f;
-		float LightningArcBrightness = 6.0f;
-		float LightningArcLife = 0.16f;
-		std::array<float, 3> LightningArcTint = { 0.62f, 0.78f, 1.0f };
+		float LightningArcWidth = 10.0f;
+		float LightningArcBrightness = 10.0f;
+		float LightningArcLife = 0.30f;
+		std::array<float, 3> LightningArcTint = { 0.698f, 0.620f, 1.0f };
 		/** @brief Optional DDS for the bolt, relative to Data. EMPTY by default and deliberately so: the shader draws a real core-and-falloff channel on its own, and a guessed vanilla path that resolves to nothing would leave a black band in the air. */
 		std::string LightningArcTexturePath = "";
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
@@ -808,7 +808,7 @@ public:
 	/** @brief Bounded hard. Arcs are cosmetic, so a barrage drops the excess rather than growing a list on the render thread. */
 	static constexpr size_t kMaxLightningArcs = 24;
 	/** @brief Quads along one bolt. Must match ARC_SEGMENTS in LightningArc.hlsl. */
-	static constexpr uint kLightningArcSegments = 12;
+	static constexpr uint kLightningArcSegments = 32;
 	std::vector<LightningArc> lightningArcs;
 	uint32_t lightningArcSeed = 0;
 
