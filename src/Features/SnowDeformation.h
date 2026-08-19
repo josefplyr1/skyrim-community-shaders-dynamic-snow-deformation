@@ -475,7 +475,6 @@ public:
 		float CrustBreakOnCarve;
 		float perFramePad;
 
-
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
 		float4 StampEnds[kMaxStamps];
@@ -1533,7 +1532,6 @@ protected:
 	 */
 	void ConsiderHazard(RE::TESObjectREFR* a_ref);
 
-
 	/**
 	 * @brief What a projectile will leave behind when it dies, recorded while
 	 * it is still alive.
@@ -1558,8 +1556,14 @@ protected:
 		float landingReach = 0.0f;
 		SpellElement element = SpellElement::None;
 	};
-	/** @brief Per live projectile (formID), rebuilt every frame. */
+	/** @brief Per live projectile (formID), rebuilt every frame. Holds only projectiles still IN FLIGHT - one that has already struck marks at once instead. */
 	std::unordered_map<uint32_t, PendingBlast> projectileBlasts;
+
+	/** @brief Projectiles that have already struck and already marked. A hitscan bolt lingers for as long as its beam is drawn, so it stays in the manager long after it hit; this stops it marking again every frame of that. Pruned as the projectiles die, since form ids are recycled. */
+	std::unordered_set<uint32_t> hitscanBlasted;
+
+	/** @brief Turns a recorded blast into a held-open mark. Shared by the projectile that struck on sight and the one whose death we only notice when it leaves the manager. */
+	void OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* a_tes);
 
 	/**
 	 * @brief A detonation's mark, held open for a fraction of a second.
@@ -1578,6 +1582,8 @@ protected:
 		float rate = 0.0f;
 		/** @brief Seconds left before the mark stops deepening. */
 		float remaining = 0.0f;
+		/** @brief Seconds since it opened. A pit follows CARVE, which is instantaneous, so without this a discharge simply EXISTS on the frame it lands; the age ramps its depth in over a fraction of a second instead. */
+		float age = 0.0f;
 		/** @brief Pits only: how much wider than a bolt this discharge forks. */
 		float pitScale = 1.0f;
 		SpellElement element = SpellElement::None;
@@ -1600,6 +1606,35 @@ protected:
 	};
 	SpellCastSink spellCastSink;
 	bool spellCastSinkRegistered = false;
+
+	/**
+	 * @brief Death sink, because an atronach's death cannot be polled for.
+	 *
+	 * It is UNSUMMONED when it dies rather than left as a corpse, so by the
+	 * time any per-frame sweep looks it is already out of the high-process
+	 * list, out of its 3D, or both - and waiting for its handle to go stale
+	 * takes far longer than the window that separates a death from the player
+	 * simply walking away. The engine says exactly when it happened, so ask it.
+	 *
+	 * The sink reads the actor's POSITION and its RACE's spell list, which is
+	 * static form data. Nothing here walks a live actor's effects.
+	 */
+	class DeathSink : public RE::BSTEventSink<RE::TESDeathEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESDeathEvent* a_event,
+			RE::BSTEventSource<RE::TESDeathEvent>* a_source) override;
+	};
+	DeathSink deathSink;
+
+	/** @brief Queued by the death sink on the game thread, drained by the gather. */
+	struct QueuedDeath
+	{
+		uint32_t formID = 0;
+		RE::NiPoint3 position{};
+		SpellElement element = SpellElement::None;
+	};
+	std::vector<QueuedDeath> queuedDeaths;
 	/** @brief Registered lazily on the first gather, so the event holder is certainly up. */
 	void RegisterSpellCastSink();
 
@@ -1686,6 +1721,16 @@ protected:
 
 	/** @brief Reads an actor's race (and its base) for an innate aura, through the cache. Implemented in SnowDeformation/Spells.cpp. */
 	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
+
+	/**
+	 * @brief The uncached walk behind ResolveInnateAura, for callers off the render thread.
+	 *
+	 * The death sink runs on the GAME thread and must not touch the race cache
+	 * the gather is reading, so it repeats the walk instead. A death is rare
+	 * enough that the saving would have bought nothing anyway.
+	 */
+	static bool AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out);
+	static bool AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out);
 
 	/** @brief Runs the innate-aura state machine for every actor in the window: hover, trail, death blast, burnout. */
 	void GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);

@@ -48,6 +48,8 @@ static constexpr float kImpactRadiusDefault = 90.0f;
 // be HELD for that long to get there - see ActiveBlast.
 static constexpr float kExplosionRate = 4.0f;
 static constexpr float kBlastDuration = 0.35f;
+// Held at least long enough to finish ramping in, whatever the ramp is set to.
+static constexpr float kBlastMinHold = 0.05f;
 // Effect magnitude mapping to the unscaled rate (vanilla Flames is 8/sec), and
 // the clamp either side of it. Modded spells run to absurd magnitudes; the
 // ceiling stops one of them melting a crater in a frame.
@@ -91,6 +93,14 @@ static constexpr float kAtronachDeathRate = 4.0f;
 // gone on the next frame - but so is one whose cell the player walked out of,
 // and that one must not leave a crater behind it.
 static constexpr float kInnateDeathWindow = 0.5f;
+// Resistance an innate ability must grant before an actor counts as being MADE
+// of that element. Deliberately near-total: the playable races and the cold
+// animals all sit at 50, and every elemental creature in the game sits at 100.
+static constexpr float kElementalImmunity = 90.0f;
+// How long a blast takes to reach its full mark. A pit follows CARVE, which is
+// instantaneous, so a discharge otherwise simply EXISTS on the frame it lands -
+// snow that was never seen to move. Short enough to still read as a strike.
+static constexpr float kBlastRampSeconds = 0.18f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -399,12 +409,45 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	return RE::BSEventNotifyControl::kContinue;
 }
 
+RE::BSEventNotifyControl SnowDeformation::DeathSink::ProcessEvent(
+	const RE::TESDeathEvent* a_event, RE::BSTEventSource<RE::TESDeathEvent>*)
+{
+	auto& feature = globals::features::snowDeformation;
+	// The dying edge, not the dead one: a flame atronach is already coming
+	// apart by the time the second fires, and its position is the better read
+	// while the body is still where it fell.
+	if (!a_event || a_event->dead || !a_event->actorDying || !feature.settings.EnableSpellIntegration)
+		return RE::BSEventNotifyControl::kContinue;
+	auto* actor = a_event->actorDying->As<RE::Actor>();
+	if (!actor)
+		return RE::BSEventNotifyControl::kContinue;
+
+	// Uncached on purpose: this runs on the GAME thread, and the race cache is
+	// the gather's. A death is rare enough that repeating the walk costs
+	// nothing worth sharing state for.
+	InnateAuraRecord record{};
+	if (!AuraFromActorRecords(actor, record))
+		return RE::BSEventNotifyControl::kContinue;
+
+	QueuedDeath queued{};
+	queued.formID = actor->formID;
+	queued.position = actor->GetPosition();
+	queued.element = record.element;
+	{
+		std::scoped_lock lock(feature.queuedCastLock);
+		if (feature.queuedDeaths.size() < kMaxSpellEmitters)
+			feature.queuedDeaths.push_back(queued);
+	}
+	return RE::BSEventNotifyControl::kContinue;
+}
+
 void SnowDeformation::RegisterSpellCastSink()
 {
 	spellCastSinkRegistered = true;
 	if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
 		holder->AddEventSink<RE::TESSpellCastEvent>(&spellCastSink);
-		logger::debug("SnowDeformation: spell cast sink registered");
+		holder->AddEventSink<RE::TESDeathEvent>(&deathSink);
+		logger::debug("SnowDeformation: spell cast and death sinks registered");
 	}
 }
 
@@ -529,45 +572,118 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 // The read is of FORMS only - a race and a base object, both static for the
 // run - never of a live actor's effect list, which is the thing that crashed
 // three times in Step 7.
-const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
+bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out)
 {
-	// A lambda rather than a file-scope helper: the record type and the
-	// element enum are members of this class, so nothing outside it can name
-	// them in a signature.
-	auto auraFromSpellList = [](const RE::TESSpellList* a_list, InnateAuraRecord& a_out) {
-		const auto* effects = a_list ? a_list->actorEffects : nullptr;
-		if (!effects || !effects->spells)
-			return false;
-		for (uint32_t i = 0; i < effects->numSpells; i++) {
-			const RE::SpellItem* spell = effects->spells[i];
-			if (!spell)
-				continue;
-			for (const auto* item : spell->effects) {
-				const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
-				// The same gate the cast sink applies, minus its self-area
-				// case: an innate ability declares no duration to make it
-				// cloak-like, so only a true cloak archetype qualifies here.
-				if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf ||
-					base->data.archetype != RE::EffectSetting::Archetype::kCloak)
-					continue;
-				const SpellElement element = ClassifyElement(base);
-				if (element == SpellElement::None)
-					continue;
-				a_out.element = element;
-				a_out.rateScale = std::clamp(item->effectItem.magnitude / kSpellReferenceMagnitude,
-					kSpellMagnitudeMin, kSpellMagnitudeMax);
-				// Feet, as everywhere else. Vanilla atronachs name no area at
-				// all and fall through to the per-school reach.
-				a_out.reachOverride = item->effectItem.area > 0 ?
-				                          std::clamp(static_cast<float>(item->effectItem.area) * kSelfAreaToUnits,
-											  kSelfAreaReachMin, kSelfAreaReachMax) :
-				                          0.0f;
-				return true;
-			}
-		}
+	const auto* effects = a_list ? a_list->actorEffects : nullptr;
+	if (!effects || !effects->spells)
 		return false;
+
+	// An ELEMENTAL AFFINITY, gathered as we go: near-total immunity to one
+	// element paired with a weakness to another is the engine's own way of
+	// saying a creature is MADE of that element. It is the fallback for the
+	// ones that radiate without carrying a cloak - an ice wraith is as much a
+	// thing of frost as an atronach is, and says so in its records, but it has
+	// no cloak effect for the walk below to find.
+	//
+	// Both halves are needed. Immunity alone catches the Dwarven automatons,
+	// which are authored at 100 frost resistance and are machines rather than
+	// ice; none of them carries a weakness, so the pair separates them cleanly.
+	float immunity[4] = {};
+	bool weakness[4] = {};
+	auto elementOfAV = [](RE::ActorValue a_av) {
+		switch (a_av) {
+		case RE::ActorValue::kResistFire:
+			return SpellElement::Fire;
+		case RE::ActorValue::kResistFrost:
+			return SpellElement::Frost;
+		case RE::ActorValue::kResistShock:
+			return SpellElement::Shock;
+		default:
+			return SpellElement::None;
+		}
 	};
 
+	for (uint32_t i = 0; i < effects->numSpells; i++) {
+		const RE::SpellItem* spell = effects->spells[i];
+		if (!spell)
+			continue;
+		for (const auto* item : spell->effects) {
+			const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+			if (!base)
+				continue;
+
+			// A CLOAK wins outright, and carries its own strength and reach.
+			// The same gate the cast sink applies, minus its self-area case:
+			// an innate ability declares no duration to make it cloak-like, so
+			// only a true cloak archetype qualifies here.
+			if (base->data.delivery == RE::MagicSystem::Delivery::kSelf &&
+				base->data.archetype == RE::EffectSetting::Archetype::kCloak) {
+				const SpellElement element = ClassifyElement(base);
+				if (element != SpellElement::None) {
+					a_out.element = element;
+					a_out.rateScale = std::clamp(item->effectItem.magnitude / kSpellReferenceMagnitude,
+						kSpellMagnitudeMin, kSpellMagnitudeMax);
+					// Feet, as everywhere else. Vanilla atronachs name no area
+					// at all and fall through to the per-school reach.
+					a_out.reachOverride = item->effectItem.area > 0 ?
+					                          std::clamp(static_cast<float>(item->effectItem.area) * kSelfAreaToUnits,
+												  kSelfAreaReachMin, kSelfAreaReachMax) :
+					                          0.0f;
+					return true;
+				}
+			}
+
+			const SpellElement affinity = elementOfAV(base->data.primaryAV);
+			if (affinity == SpellElement::None)
+				continue;
+			const size_t slot = static_cast<size_t>(affinity);
+			// Resistance and weakness are both positive ValueMods on a resist
+			// actor value, so the sign is not what tells them apart - the
+			// detrimental flag is.
+			if (base->IsDetrimental())
+				weakness[slot] = true;
+			else
+				immunity[slot] = std::max(immunity[slot], item->effectItem.magnitude);
+		}
+	}
+
+	// Strongest immunity wins, and something else must be a weakness.
+	SpellElement made = SpellElement::None;
+	float best = kElementalImmunity;
+	for (size_t slot = 1; slot < 4; slot++)
+		if (immunity[slot] >= best) {
+			bool weakElsewhere = false;
+			for (size_t other = 1; other < 4; other++)
+				weakElsewhere = weakElsewhere || (other != slot && weakness[other]);
+			if (weakElsewhere) {
+				best = immunity[slot];
+				made = static_cast<SpellElement>(slot);
+			}
+		}
+	if (made == SpellElement::None)
+		return false;
+
+	a_out.element = made;
+	// A resistance PERCENTAGE says nothing about how hard the creature works
+	// the snow, so it must not be read as one: the school's own rate stands.
+	a_out.rateScale = 1.0f;
+	a_out.reachOverride = 0.0f;
+	return true;
+}
+
+bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out)
+{
+	auto* race = a_actor ? a_actor->GetRace() : nullptr;
+	if (!race)
+		return false;
+	// The race first, which is where every vanilla atronach carries it; then
+	// the actor's base, because a mod is free to put the ability on the NPC
+	// record instead and reuse a stock race.
+	return AuraFromSpellList(race, a_out) || AuraFromSpellList(a_actor->GetActorBase(), a_out);
+}
+
+const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
+{
 	auto* race = a_actor ? a_actor->GetRace() : nullptr;
 	if (!race)
 		return nullptr;
@@ -579,11 +695,7 @@ const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::
 		return it->second.element != SpellElement::None ? &it->second : nullptr;
 
 	InnateAuraRecord record{};
-	// The race first, which is where every vanilla atronach carries it; then
-	// the actor's base, because a mod is free to put the ability on the NPC
-	// record instead and reuse a stock race.
-	if (!auraFromSpellList(race, record))
-		auraFromSpellList(a_actor->GetActorBase(), record);
+	AuraFromActorRecords(a_actor, record);
 
 	if (innateAuraByRace.size() > 512)
 		innateAuraByRace.clear();
@@ -630,7 +742,7 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	opened.radius = radius;
 	opened.strength = strength;
 	opened.rate = kAtronachDeathRate;
-	opened.remaining = kBlastDuration;
+	opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
 	opened.element = a_state.element;
 	opened.mark = MarkForElement(a_state.element);
 	opened.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
@@ -639,6 +751,27 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 
 void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
 {
+	// Deaths, from the sink. This is the ONLY route that reliably fires for an
+	// atronach: it is unsummoned rather than left as a corpse, so by the time
+	// any sweep looks it is already out of the high-process list, out of its
+	// 3D, or both, and its handle stays resolvable long past the window that
+	// tells a death from the player walking away.
+	{
+		std::vector<QueuedDeath> deaths;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			deaths.swap(queuedDeaths);
+		}
+		for (const auto& death : deaths) {
+			auto& state = innateAuras[death.formID];
+			if (state.element == SpellElement::None)
+				state.element = death.element;
+			if (!state.blasted)
+				OpenInnateDeathBlast(state, death.position);
+			state.lastPosition = death.position;
+		}
+	}
+
 	// Aged first, zeroed by an observation below: after the sweep, anything
 	// still carrying time has not been seen this frame.
 	for (auto& entry : innateAuras)
@@ -733,6 +866,55 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 	}
 }
 
+void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* a_tes)
+{
+	if (a_blast.element == SpellElement::None || !a_tes)
+		return;
+
+	// A bolt dies between frames, so the last sighting sits short of the
+	// impact - the faster it flew, the shorter. Carrying the flight on to the
+	// ground puts the crater where it struck instead of where it was last
+	// drawn, which is the same reason a fire stream marks its contact rather
+	// than its emitter.
+	float2 markPosition = { a_blast.position.x, a_blast.position.y };
+	float strength = 0.0f;
+	float radius = 0.0f;
+
+	RE::NiPoint3 landing{};
+	const float reach = std::max(a_blast.landingReach, kBlastLandingReach);
+	const bool landed = TraceGroundContact(a_tes, a_blast.position, a_blast.direction, reach, landing) &&
+	                    a_blast.position.GetDistance(landing) <= reach;
+	if (landed) {
+		markPosition = { landing.x, landing.y };
+		strength = 1.0f;
+		radius = a_blast.radius;
+	} else if (!GroundMark(a_blast.heightAboveLand, a_blast.radius, strength, radius)) {
+		// Stopped by an actor or a wall well above the snow: the ground below
+		// takes the weaker, broader mark rather than a full crater.
+		return;
+	}
+	if (strength < kMinSpellStrength)
+		return;
+	spellStats.detonations++;
+	if (activeBlasts.size() >= kMaxSpellEmitters)
+		return;
+
+	spellStats.lastStrength = strength;
+	spellStats.lastRadius = radius;
+
+	ActiveBlast opened{};
+	opened.position = markPosition;
+	// Carried from the AUTHORED radius rather than the fire-scaled one.
+	opened.pitScale = a_blast.pitScale;
+	opened.radius = radius;
+	opened.strength = strength;
+	opened.rate = kExplosionRate;
+	opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+	opened.element = a_blast.element;
+	opened.mark = MarkForElement(a_blast.element);
+	activeBlasts.push_back(opened);
+}
+
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -744,6 +926,10 @@ void SnowDeformation::GatherSpellEmitters()
 		spellAuraPrev.clear();
 		activeCloaks.clear();
 		innateAuras.clear();
+		{
+			std::scoped_lock lock(queuedCastLock);
+			queuedDeaths.clear();
+		}
 		return;
 	}
 
@@ -820,10 +1006,19 @@ void SnowDeformation::GatherSpellEmitters()
 	// manager still lists it: waiting for it to leave would strand its blast
 	// forever if the game keeps spent projectiles around.
 	std::unordered_set<uint32_t> stillAlive;
+	// Everything the manager still lists, destroyed or not. Separate from
+	// stillAlive on purpose: a bolt that has struck is flagged destroyed at
+	// once but stays listed while its beam is drawn, so the already-marked
+	// latch has to be held against PRESENCE. Held against stillAlive it was
+	// dropped on the same frame it was set, and the mark repeated every frame
+	// until the beam expired.
+	std::unordered_set<uint32_t> presentIDs;
 	stillAlive.reserve(live.size());
+	presentIDs.reserve(live.size());
 	for (auto& projectile : live) {
 		if (!projectile)
 			continue;
+		presentIDs.insert(projectile->formID);
 		if (projectile->GetProjectileRuntimeData().flags.any(RE::Projectile::Flags::kDestroyed))
 			continue;
 		stillAlive.insert(projectile->formID);
@@ -942,7 +1137,25 @@ void SnowDeformation::GatherSpellEmitters()
 				pending.heightAboveLand = position.z - blastGroundZ;
 				pending.radius = authored * std::max(settings.BlastRadiusScale, 0.0f);
 				pending.element = element;
-				projectileBlasts[projectile->formID] = pending;
+
+				// A projectile that has already struck must mark NOW. Waiting
+				// for it to leave the manager is right for something still in
+				// flight, and wrong for a bolt that resolved the instant it
+				// was cast: a hitscan projectile lingers for as long as its
+				// beam is drawn, so the crater arrived most of a second after
+				// the target was hit. Its own impact list says it has landed,
+				// and the hitscan flag says it landed immediately.
+				const bool struckAlready = strikes && (hitscan || !runtime.impacts.empty());
+				if (struckAlready) {
+					if (!hitscanBlasted.contains(projectile->formID)) {
+						hitscanBlasted.insert(projectile->formID);
+						OpenProjectileBlast(pending, tes);
+					}
+					// Never queued for the disappearance route, so it cannot
+					// mark a second time when the beam finally expires.
+				} else {
+					projectileBlasts[projectile->formID] = pending;
+				}
 			}
 		}
 
@@ -1061,52 +1274,7 @@ void SnowDeformation::GatherSpellEmitters()
 		}
 		const PendingBlast blast = it->second;
 		it = projectileBlasts.erase(it);
-
-		if (blast.element == SpellElement::None)
-			continue;
-
-		// A bolt dies between frames, so the last sighting sits short of the
-		// impact - the faster it flew, the shorter. Carrying the flight on to
-		// the ground puts the crater where it struck instead of where it was
-		// last drawn, which is the same reason a fire stream marks its contact
-		// rather than its emitter.
-		float2 markPosition = { blast.position.x, blast.position.y };
-		float strength = 0.0f;
-		float radius = 0.0f;
-
-		RE::NiPoint3 landing{};
-		const float reach = std::max(blast.landingReach, kBlastLandingReach);
-		const bool landed = TraceGroundContact(tes, blast.position, blast.direction, reach, landing) &&
-		                    blast.position.GetDistance(landing) <= reach;
-		if (landed) {
-			markPosition = { landing.x, landing.y };
-			strength = 1.0f;
-			radius = blast.radius;
-		} else if (!GroundMark(blast.heightAboveLand, blast.radius, strength, radius)) {
-			// Stopped by an actor or a wall well above the snow: the ground
-			// below takes the weaker, broader mark rather than a full crater.
-			continue;
-		}
-		if (strength < kMinSpellStrength)
-			continue;
-		spellStats.detonations++;
-		if (activeBlasts.size() >= kMaxSpellEmitters)
-			continue;
-
-		spellStats.lastStrength = strength;
-		spellStats.lastRadius = radius;
-
-		ActiveBlast opened{};
-		opened.position = markPosition;
-		// Carried from the AUTHORED radius rather than the fire-scaled one.
-		opened.pitScale = blast.pitScale;
-		opened.radius = radius;
-		opened.strength = strength;
-		opened.rate = kExplosionRate;
-		opened.remaining = kBlastDuration;
-		opened.element = blast.element;
-		opened.mark = MarkForElement(blast.element);
-		activeBlasts.push_back(opened);
+		OpenProjectileBlast(blast, tes);
 	}
 
 	// Self-centred area spells enter here: the sink queued them on the game
@@ -1139,7 +1307,7 @@ void SnowDeformation::GatherSpellEmitters()
 			opened.radius = radius;
 			opened.strength = strength;
 			opened.rate = kExplosionRate;
-			opened.remaining = kBlastDuration;
+			opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
 			opened.element = cast.element;
 			opened.mark = MarkForElement(cast.element);
 			activeBlasts.push_back(opened);
@@ -1153,21 +1321,30 @@ void SnowDeformation::GatherSpellEmitters()
 		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
 		for (auto it = activeBlasts.begin(); it != activeBlasts.end();) {
 			if (spellEmitters.size() < kMaxSpellEmitters) {
+				// A mark forms over a moment rather than at once. Melt already
+				// ramps, because it integrates - a PIT does not, since it
+				// follows carve, so a discharge would otherwise simply exist
+				// on the frame it landed with nothing seen to move.
+				const float ramp = std::clamp(it->age / std::max(kBlastRampSeconds, 1e-3f), 0.0f, 1.0f);
 				SpellEmitter emitter{};
 				emitter.position = it->position;
 				emitter.previous = it->position;
 				emitter.radius = it->radius;
-				emitter.strength = it->strength;
+				emitter.strength = it->strength * ramp;
 				emitter.rate = it->rate;
 				emitter.element = it->element;
 				emitter.mark = it->mark;
 				emitter.pitScale = it->pitScale;
 				spellEmitters.push_back(emitter);
 			}
+			it->age += deltaTime;
 			it->remaining -= deltaTime;
 			it = it->remaining > 0.0f ? it + 1 : activeBlasts.erase(it);
 		}
 	}
+
+	// Projectile form ids are recycled, so a fired id must not stay latched.
+	std::erase_if(hitscanBlasted, [&](uint32_t a_id) { return !presentIDs.contains(a_id); });
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);
