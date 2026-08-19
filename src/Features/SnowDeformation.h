@@ -214,6 +214,8 @@ public:
 			RE::NiPointer<RE::NiAVObject> a;
 			RE::NiPointer<RE::NiAVObject> b;
 			float radius;
+			/** @brief Shortest this segment has ever measured, so a torn body cannot comb a line. Bones are rigid, so a segment's length is a property of the skeleton; the shortest sighting is the honest one, and taking the minimum lets a first sight that happened to be mid-shatter correct itself. Negative until first measured. */
+			float restLength = -1.0f;
 		};
 		std::vector<Limb> limbs;
 	};
@@ -281,17 +283,17 @@ public:
 		/** @brief How far an actor's lowest contact may sit above its footing and still count as standing on it, in world units. Above this it carves nothing. Generous enough to cover a walker's stride and the slack in a creature skeleton's lowest bone. */
 		float FloatingActorBand = 20.0f;
 		/** @brief Reach of a FIRE atronach's innate aura, against the fire cloak reach. An atronach's whole body burns, so it works a wider circle than a cloak wrapped round a mage. */
-		float AtronachFireReach = 1.5f;
+		float AtronachFireReach = 0.50f;
 		/** @brief Radius of the blast a fire atronach leaves when it dies, in world units. Seeded from the record the game authors for that explosion (400), then scaled like any other blast. */
 		float AtronachFireDeathRadius = 400.0f;
 		/** @brief Seconds a dead fire atronach keeps burning the ground it fell on. The body burns out after it lands, so the mark deepens for a while and then stops - unlike the blast, which is one moment. */
 		float AtronachFireBurnSeconds = 6.0f;
 		/** @brief Reach of a FROST atronach's innate aura, against the frost crust reach. This is the glaze it leaves in the trench it walks. */
-		float AtronachFrostReach = 1.5f;
-		/** @brief Radius a frost atronach glazes when it shatters, in world units. Authored at 100, far tighter than the fire one - it breaks apart rather than detonating. */
-		float AtronachFrostDeathRadius = 100.0f;
+		float AtronachFrostReach = 2.00f;
+		/** @brief Radius a frost atronach glazes when it shatters, in world units. The record authors 100, but that is the radius it HURTS over, and after the blast scale it lands near 30 units - under half a footprint, so the mark could not be judged at all. Raised to something visible; still far tighter than the fire one, which is the relationship the records describe. */
+		float AtronachFrostDeathRadius = 240.0f;
 		/** @brief Reach of a STORM atronach's innate aura, against the shock cloak reach. */
-		float AtronachShockReach = 1.5f;
+		float AtronachShockReach = 1.00f;
 		/** @brief Radius a storm atronach discharges over when it dies, in world units. Authored at 320. */
 		float AtronachShockDeathRadius = 320.0f;
 		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
@@ -1483,7 +1485,7 @@ protected:
 	 * collision shapes, which is the pair the stamping paths below already
 	 * choose between.
 	 */
-	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ) const;
+	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ, float* a_gapOut = nullptr) const;
 
 	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
@@ -1608,6 +1610,10 @@ protected:
 		bool blasted = false;
 		/** @brief Innate only: seconds of ground burn left after the body landed. Zero for the schools that leave nothing burning. */
 		float burnRemaining = 0.0f;
+		/** @brief Innate only: where this actor was last seen alive. An atronach is UNSUMMONED when it dies rather than left as a corpse, so the blast has to be thrown at the last sighting - the same shape as PendingBlast, which exists because a projectile is gone by the time it has detonated. */
+		RE::NiPoint3 lastPosition{};
+		/** @brief Innate only: seconds since this actor was last observed alive. Separates a death from a walk out of range, which would otherwise blast the snow wherever the actor happened to be standing. */
+		float unseenFor = 0.0f;
 	};
 	/** @brief Queued by the sink on the game thread, drained by the gather. */
 	std::vector<CloakState> queuedCloaks;
@@ -1647,6 +1653,9 @@ protected:
 
 	/** @brief Runs the innate-aura state machine for every actor in the window: hover, trail, death blast, burnout. */
 	void GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
+
+	/** @brief Throws the one-frame blast a dying innate-aura actor leaves. Shared by both death routes - the one that leaves a body and the one that simply vanishes. */
+	void OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position);
 	/** @brief Last XY per cloaked actor, so a moving aura sweeps a band rather than dotting it. */
 	std::unordered_map<uint32_t, float2> spellAuraPrev;
 	std::unordered_map<uint32_t, float2> currentAuraPositions;
@@ -1708,6 +1717,12 @@ protected:
 		uint spells = 0;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
 		uint floating = 0;
+		/** @brief Nearest non-player actor's measurements, so the floating gate can be read against a real creature instead of guessed at. */
+		float nearestGapToRoot = 0.0f;
+		float nearestGapToLand = 0.0f;
+		uint nearestState = 0;
+		bool nearestFloating = false;
+		bool nearestValid = false;
 	};
 	StampStats stampStats;
 

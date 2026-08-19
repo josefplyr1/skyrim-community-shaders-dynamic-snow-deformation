@@ -325,6 +325,14 @@ void SnowDeformation::DrawSettings()
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
 		ImGui::Text("innate auras %u | bodies burning %u | floating actors not carving %u",
 			spellStats.innate, spellStats.burning, stampStats.floating);
+		if (stampStats.nearestValid) {
+			static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
+			const uint state = stampStats.nearestState;
+			ImGui::Text("nearest actor: %s | gap to its own footing %.0f | gap to land %.0f | state %s",
+				stampStats.nearestFloating ? "FLOATING" : "touching",
+				stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
+				state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
+		}
 		ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 			spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
 

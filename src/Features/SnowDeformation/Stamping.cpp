@@ -72,6 +72,25 @@ static constexpr float kFallSpeedGate = 300.0f;
 // across the world, so both segment endpoints must be live and near the
 // actor (dragons are the far-endpoint ceiling).
 static constexpr float kMaxLimbEndpointDistance = 1024.0f;
+// How far past its own rest length a limb segment may stretch before it stops
+// being a limb. Bones are rigid, so in principle this is 1.0; the slack is for
+// animated scale and for the pseudo-joints the ancestor walk produces. A frost
+// atronach SHATTERS on death and its pieces fly apart, and the capsule between
+// two of them combs a flat band across the snow - the endpoint test cannot see
+// it, because both ends stay within reach of the actor while being nowhere
+// near each other.
+static constexpr float kLimbStretchGate = 2.0f;
+// Floor under the gate, so terminal segments (a == b, rest length zero) and
+// very short bones are not held to a hair's breadth.
+static constexpr float kLimbStretchFloor = 24.0f;
+// Backstop on how long a segment may be against its own THICKNESS, for the
+// case the learned length cannot cover: a death that swaps the actor's 3D
+// rebuilds the bone cache, so the first length it ever measures is already the
+// shattered one and there is no intact frame left to correct it. Self-scaling
+// in the right direction - a mammoth's limbs are thick, so it stays permissive
+// where bones really are long, and tight on the small skeletons where a comb
+// across the snow is most visible.
+static constexpr float kLimbAspectGate = 10.0f;
 // Runaway-skeleton caps on the bone cache.
 static constexpr size_t kMaxCachedFeet = 8;
 static constexpr size_t kMaxCachedLimbs = 32;
@@ -86,6 +105,19 @@ static bool LimbEndpointValid(const RE::NiTransform& a_world, const RE::NiPoint3
 }
 
 // Case-insensitive substring/prefix tests for skeleton bone names.
+// True when this segment has stretched past anything a bone could be. The rest
+// length is learned rather than configured: the shortest sighting is the honest
+// one, so a first sight that happened to catch a body mid-shatter corrects
+// itself as soon as an intact frame arrives.
+static bool LimbStretched(SnowDeformation::StampBones::Limb& a_limb, float a_length, float a_radius)
+{
+	if (a_limb.restLength < 0.0f || a_length < a_limb.restLength)
+		a_limb.restLength = a_length;
+	if (a_length > std::max(a_limb.restLength * kLimbStretchGate, kLimbStretchFloor))
+		return true;
+	return a_length > std::max(a_radius, 1.0f) * kLimbAspectGate;
+}
+
 static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
 {
 	const char* hay = a_name.c_str();
@@ -194,8 +226,10 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 // bigger - there is no mass to read off a collision shape, but this tracks it
 // closely enough that the exceptions do not matter.
 bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root,
-	const StampBones* a_bones, float a_groundZ) const
+	const StampBones* a_bones, float a_groundZ, float* a_gapOut) const
 {
+	if (a_gapOut)
+		*a_gapOut = 0.0f;
 	if (!a_actor)
 		return false;
 	const float band = std::max(settings.FloatingActorBand, 0.0f);
@@ -230,7 +264,10 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 	// Nothing to measure is not the same as hovering.
 	if (lowest == FLT_MAX)
 		return false;
-	return lowest - a_groundZ > band;
+	const float gap = lowest - a_groundZ;
+	if (a_gapOut)
+		*a_gapOut = gap;
+	return gap > band;
 }
 
 float SnowDeformation::CrustBreakForce(float a_radius) const
@@ -244,6 +281,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	GatherSpellEmitters();
 
 	uint stampCount = 0;
+	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
 	corpseMoundSpheres.clear();
@@ -288,8 +326,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		// Airborne living actors do not carve. Dead ragdolls are exempt:
 		// their controllers freeze in stale states (often kInAir).
+		//
+		// kFlying is the engine's own word for a creature that does not walk,
+		// which is the cleanest floating signal there is where a creature uses
+		// it - no measurement, no threshold. It does not cover everything: the
+		// atronach races are all authored Walks and hover by animation instead,
+		// which is what ActorIsFloating below is for.
 		if (!isDead)
-			if (auto* charController = actor->GetCharController(); charController && charController->context.currentState == RE::hkpCharacterStateType::kInAir)
+			if (auto* charController = actor->GetCharController(); charController &&
+																   (charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
+																	   charController->context.currentState == RE::hkpCharacterStateType::kFlying))
 				return;
 
 		// Living actors on ELEVATED structures (walkways, roofs, bridges) do
@@ -351,8 +397,33 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// LOWEST foot instead, which plants a hovering actor's sole no matter
 		// how high it is. Corpses are exempt: a body that has fallen is lying
 		// in the snow, and its dent is correct.
-		if (!isDead && settings.NoCarveFloatingActors &&
-			ActorIsFloating(actor.get(), root, bones, groundZ)) {
+		float floatingGap = 0.0f;
+		const bool floating = !isDead && ActorIsFloating(actor.get(), root, bones, groundZ, &floatingGap);
+
+		// Diagnostics for the nearest creature, so the clearance band can be
+		// read off a real wisp or ghost rather than guessed at. The gap to the
+		// LAND is reported beside it because the two references answer
+		// different questions: an actor lifted by its animation shows up in the
+		// first, one whose controller itself floats only in the second.
+		if (!actor->IsPlayerRef()) {
+			const float distSq = cameraPosition.GetSquaredDistance(position);
+			if (!stampStats.nearestValid || distSq < nearestDistSq) {
+				nearestDistSq = distSq;
+				float landZ = position.z;
+				if (const auto tesNear = RE::TES::GetSingleton())
+					tesNear->GetLandHeight(position, landZ);
+				stampStats.nearestValid = true;
+				stampStats.nearestGapToRoot = floatingGap;
+				stampStats.nearestGapToLand = position.z - landZ;
+				stampStats.nearestFloating = floating;
+				auto* controller = actor->GetCharController();
+				stampStats.nearestState = controller ?
+				                              static_cast<uint>(controller->context.currentState) :
+				                              0xFFu;
+			}
+		}
+
+		if (floating && settings.NoCarveFloatingActors) {
 			stampStats.floating++;
 			return;
 		}
@@ -453,7 +524,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// into the nominal snow layer: wading legs connect the prints in
 			// deep snow, shallow snow keeps prints discrete. No trail latch:
 			// per-frame segment stamps stay continuous at any speed.
-			for (const auto& limb : bones->limbs) {
+			for (auto& limb : bones->limbs) {
 				if (stampCount >= kMaxStamps)
 					break;
 				auto* nodeA = limb.a.get();
@@ -465,6 +536,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
 					continue;
 				const float boneScale = aWorld.scale;
+				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
+					continue;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
 					kMinStampShapeRadius, kMaxStampShapeRadius);
 				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
@@ -504,7 +577,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			const float corpseGroundZ = lowestLimbBottom != FLT_MAX ? std::max(groundZ, lowestLimbBottom) : groundZ;
 
 			uint32_t limbIndex = 0;
-			for (const auto& limb : bones->limbs) {
+			for (auto& limb : bones->limbs) {
 				const uint32_t thisIndex = limbIndex++;
 				if (stampCount >= kMaxStamps)
 					break;
@@ -517,6 +590,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
 					continue;
 				const float boneScale = aWorld.scale;
+				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
+					continue;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
 					kMinStampShapeRadius, kMaxStampShapeRadius);
 				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;

@@ -86,6 +86,11 @@ static constexpr float kDeathAuraReach = 1.35f;
 // How fast the blast a dying atronach throws reaches its basin. Same shape as
 // any other detonation: held open for a moment rather than applied in a frame.
 static constexpr float kAtronachDeathRate = 4.0f;
+// How recently an actor must have been seen alive for its DISAPPEARANCE to
+// count as a death. An atronach is unsummoned when it dies, so it is simply
+// gone on the next frame - but so is one whose cell the player walked out of,
+// and that one must not leave a crater behind it.
+static constexpr float kInnateDeathWindow = 0.5f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -586,8 +591,59 @@ const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::
 	return stored.element != SpellElement::None ? &stored : nullptr;
 }
 
+void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position)
+{
+	a_state.blasted = true;
+
+	// A setting rather than a reading: an atronach's death explosion is spawned
+	// by script and arrives as neither a projectile nor a reference, so there is
+	// no live record to measure. The defaults are seeded from what the game
+	// authors for each one.
+	float authored = settings.AtronachFireDeathRadius;
+	if (a_state.element == SpellElement::Frost)
+		authored = settings.AtronachFrostDeathRadius;
+	else if (a_state.element == SpellElement::Shock)
+		authored = settings.AtronachShockDeathRadius;
+
+	// Fire is the only one that keeps burning: a frost atronach shatters and a
+	// storm one earths itself, and both are over the moment they land. A body
+	// that vanished outright has nothing to burn either way - the caller drops
+	// it immediately after.
+	a_state.burnRemaining = a_state.element == SpellElement::Fire ?
+	                            std::max(settings.AtronachFireBurnSeconds, 0.0f) :
+	                            0.0f;
+
+	auto* tes = RE::TES::GetSingleton();
+	float groundZ = a_position.z;
+	if (tes)
+		tes->GetLandHeight(a_position, groundZ);
+	const float scaled = authored * std::max(settings.BlastRadiusScale, 0.0f);
+	float strength = 0.0f;
+	float radius = 0.0f;
+	if (!GroundMark(a_position.z - groundZ, scaled, strength, radius))
+		return;
+	if (strength < kMinSpellStrength || activeBlasts.size() >= kMaxSpellEmitters)
+		return;
+
+	ActiveBlast opened{};
+	opened.position = { a_position.x, a_position.y };
+	opened.radius = radius;
+	opened.strength = strength;
+	opened.rate = kAtronachDeathRate;
+	opened.remaining = kBlastDuration;
+	opened.element = a_state.element;
+	opened.mark = MarkForElement(a_state.element);
+	opened.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
+	activeBlasts.push_back(opened);
+}
+
 void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
 {
+	// Aged first, zeroed by an observation below: after the sweep, anything
+	// still carrying time has not been seen this frame.
+	for (auto& entry : innateAuras)
+		entry.second.unseenFor += a_deltaTime;
+
 	auto consider = [&](RE::ActorHandle a_handle) {
 		auto actor = a_handle.get();
 		if (!actor || !actor->Is3DLoaded())
@@ -622,6 +678,9 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 			break;
 		}
 
+		state.lastPosition = actor->GetPosition();
+		state.unseenFor = 0.0f;
+
 		if (!actor->IsDead()) {
 			// Reanimated or resurrected: it can die - and burst - again.
 			state.blasted = false;
@@ -631,49 +690,11 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 			return;
 		}
 
-		// Death, once. An atronach's own death explosion is spawned by script
-		// and never reaches this feature as a projectile or a reference, so
-		// the state machine has to throw it - which is also why the radius is
-		// a setting rather than something read off a form.
-		if (!state.blasted) {
-			state.blasted = true;
-			const RE::NiPoint3 position = actor->GetPosition();
-			float authored = settings.AtronachFireDeathRadius;
-			if (state.element == SpellElement::Frost)
-				authored = settings.AtronachFrostDeathRadius;
-			else if (state.element == SpellElement::Shock)
-				authored = settings.AtronachShockDeathRadius;
-			// Fire is the only one that keeps burning: a frost atronach
-			// shatters and a storm one earths itself, and both are over the
-			// moment they land.
-			state.burnRemaining = state.element == SpellElement::Fire ?
-			                          std::max(settings.AtronachFireBurnSeconds, 0.0f) :
-			                          0.0f;
-
-			auto* tes = RE::TES::GetSingleton();
-			float groundZ = position.z;
-			if (tes)
-				tes->GetLandHeight(position, groundZ);
-			const float scaled = authored * std::max(settings.BlastRadiusScale, 0.0f);
-			float strength = 0.0f;
-			float radius = 0.0f;
-			if (GroundMark(position.z - groundZ, scaled, strength, radius) &&
-				strength >= kMinSpellStrength && activeBlasts.size() < kMaxSpellEmitters) {
-				ActiveBlast opened{};
-				opened.position = { position.x, position.y };
-				opened.radius = radius;
-				opened.strength = strength;
-				opened.rate = kAtronachDeathRate;
-				opened.remaining = kBlastDuration;
-				opened.element = state.element;
-				opened.mark = MarkForElement(state.element);
-				opened.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
-				activeBlasts.push_back(opened);
-			}
-		}
-
-		// The body burns out where it fell. Its own carve stamps handle the
-		// dent - it landed, so it is touching - and this is the heat on top.
+		// Died and left a body: blast now, then let it burn out where it fell.
+		// Its own carve stamps handle the dent - it landed, so it is touching -
+		// and the burn is the heat on top.
+		if (!state.blasted)
+			OpenInnateDeathBlast(state, state.lastPosition);
 		if (state.burnRemaining > 0.0f) {
 			spellStats.burning++;
 			ConsiderActorAuras(actor.get(), state, a_deltaTime);
@@ -686,6 +707,30 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 	if (auto* processLists = RE::ProcessLists::GetSingleton())
 		for (auto& handle : processLists->highActorHandles)
 			consider(handle);
+
+	// Died and left NOTHING. An atronach is unsummoned on death rather than
+	// left as a corpse, so the loop above never sees a dead one at all - it is
+	// simply absent on the next frame, which is why the fire atronach's burst
+	// marked nothing. This is the same shape as PendingBlast: remember what an
+	// actor would leave while it is still there, and throw it when it goes.
+	//
+	// A handle that no longer resolves is the 'gone' test, exactly as a
+	// projectile missing from its manager is. The recency window is what
+	// separates a death from the player walking away: a real death is seen on
+	// the frame before, while an unloading cell has left the actor unobserved
+	// for a long time first.
+	for (auto it = innateAuras.begin(); it != innateAuras.end();) {
+		auto& state = it->second;
+		if (state.unseenFor <= 0.0f || state.actor.get()) {
+			// Seen this frame, or still loaded and merely out of range.
+			++it;
+			continue;
+		}
+		if (!state.blasted && state.unseenFor < kInnateDeathWindow)
+			OpenInnateDeathBlast(state, state.lastPosition);
+		// Nothing left to ride: a body that vanished leaves no corpse to burn.
+		it = innateAuras.erase(it);
+	}
 }
 
 void SnowDeformation::GatherSpellEmitters()
