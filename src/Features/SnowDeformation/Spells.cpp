@@ -79,6 +79,13 @@ static constexpr float kMinTrailDepth = 2.0f;
 static constexpr float kCloakCentreHeight = 70.0f;
 // Fallback lifetime for a cloak whose effect declares no duration.
 static constexpr float kCloakDefaultDuration = 60.0f;
+// A dead body has stopped hovering, so its mark sits on the ground rather than
+// at chest height - and it works a wider circle than the living one did,
+// because the whole body is lying in the snow instead of passing over it.
+static constexpr float kDeathAuraReach = 1.35f;
+// How fast the blast a dying atronach throws reaches its basin. Same shape as
+// any other detonation: held open for a moment rather than applied in a frame.
+static constexpr float kAtronachDeathRate = 4.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -416,10 +423,16 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	const float baseReach = arcs ? settings.ShockCloakRadius :
 	                               (MarkForElement(a_cloak.element) == SpellMark::Crust ? settings.CrustRadius :
 																						  settings.CloakRadius);
+	// A body that has fallen is no longer carrying its aura around: it is
+	// lying IN the snow rather than passing over it, so the mark drops to
+	// ground level and widens, and it has nowhere left to sweep.
+	const bool burning = a_cloak.burnRemaining > 0.0f;
 	// An area spell states its own reach; a cloak names none and takes the
-	// per-element setting.
-	const float cloakReach = a_cloak.reachOverride > 0.0f ? a_cloak.reachOverride : std::max(baseReach, 1.0f);
-	if (!GroundMark(position.z + kCloakCentreHeight - groundZ, cloakReach, heightFade, radius))
+	// per-element setting. The scale is the innate auras' own knob - an
+	// atronach's whole body is the source, where a cloak wraps one mage.
+	const float cloakReach = (a_cloak.reachOverride > 0.0f ? a_cloak.reachOverride : std::max(baseReach, 1.0f)) *
+	                         std::max(a_cloak.reachScale, 0.01f) * (burning ? kDeathAuraReach : 1.0f);
+	if (!GroundMark(position.z + (burning ? 0.0f : kCloakCentreHeight) - groundZ, cloakReach, heightFade, radius))
 		return;
 	if (heightFade < kMinSpellStrength)
 		return;
@@ -436,12 +449,16 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	const float2 current{ position.x, position.y };
 	float2 previous = current;
 	const uint32_t formID = a_actor->formID;
-	if (auto it = spellAuraPrev.find(formID); it != spellAuraPrev.end()) {
-		const float dx = current.x - it->second.x;
-		const float dy = current.y - it->second.y;
-		if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
-			previous = it->second;
-	}
+	// A burning body does not sweep. Its ragdoll still drifts a little as it
+	// settles, and a capsule from that would comb a line across the snow that
+	// nothing actually travelled.
+	if (!burning)
+		if (auto it = spellAuraPrev.find(formID); it != spellAuraPrev.end()) {
+			const float dx = current.x - it->second.x;
+			const float dy = current.y - it->second.y;
+			if (dx * dx + dy * dy < kSpellTrailBreak * kSpellTrailBreak)
+				previous = it->second;
+		}
 	currentAuraPositions[formID] = current;
 
 	spellStats.lastStrength = strength;
@@ -494,6 +511,183 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	spellEmitters.push_back(emitter);
 }
 
+// The aura an actor was BORN with, off its own records.
+//
+// Step 7's cast sink cannot see this one: nothing casts it. What it needs is
+// not a race list - the aura is a real SpellItem on the race's spell list, and
+// its cloak effect carries the same four axes every other detector classifies
+// through. Verified against Skyrim.esm: AbFlameAtronach holds AbAtronachCloakFire
+// with archetype Cloak, resist variable ResistFire and magnitude 10, and the
+// frost and storm races hold the matching pair. So a modded atronach works for
+// the same reason a modded Flames clone does.
+//
+// The read is of FORMS only - a race and a base object, both static for the
+// run - never of a live actor's effect list, which is the thing that crashed
+// three times in Step 7.
+const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
+{
+	// A lambda rather than a file-scope helper: the record type and the
+	// element enum are members of this class, so nothing outside it can name
+	// them in a signature.
+	auto auraFromSpellList = [](const RE::TESSpellList* a_list, InnateAuraRecord& a_out) {
+		const auto* effects = a_list ? a_list->actorEffects : nullptr;
+		if (!effects || !effects->spells)
+			return false;
+		for (uint32_t i = 0; i < effects->numSpells; i++) {
+			const RE::SpellItem* spell = effects->spells[i];
+			if (!spell)
+				continue;
+			for (const auto* item : spell->effects) {
+				const RE::EffectSetting* base = item ? item->baseEffect : nullptr;
+				// The same gate the cast sink applies, minus its self-area
+				// case: an innate ability declares no duration to make it
+				// cloak-like, so only a true cloak archetype qualifies here.
+				if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf ||
+					base->data.archetype != RE::EffectSetting::Archetype::kCloak)
+					continue;
+				const SpellElement element = ClassifyElement(base);
+				if (element == SpellElement::None)
+					continue;
+				a_out.element = element;
+				a_out.rateScale = std::clamp(item->effectItem.magnitude / kSpellReferenceMagnitude,
+					kSpellMagnitudeMin, kSpellMagnitudeMax);
+				// Feet, as everywhere else. Vanilla atronachs name no area at
+				// all and fall through to the per-school reach.
+				a_out.reachOverride = item->effectItem.area > 0 ?
+				                          std::clamp(static_cast<float>(item->effectItem.area) * kSelfAreaToUnits,
+											  kSelfAreaReachMin, kSelfAreaReachMax) :
+				                          0.0f;
+				return true;
+			}
+		}
+		return false;
+	};
+
+	auto* race = a_actor ? a_actor->GetRace() : nullptr;
+	if (!race)
+		return nullptr;
+
+	// Cached per RACE form: races do not change while the game runs, and the
+	// alternative is walking two spell lists for every actor every frame.
+	// A miss is cached too, so a wolf costs one hash lookup.
+	if (auto it = innateAuraByRace.find(race->formID); it != innateAuraByRace.end())
+		return it->second.element != SpellElement::None ? &it->second : nullptr;
+
+	InnateAuraRecord record{};
+	// The race first, which is where every vanilla atronach carries it; then
+	// the actor's base, because a mod is free to put the ability on the NPC
+	// record instead and reuse a stock race.
+	if (!auraFromSpellList(race, record))
+		auraFromSpellList(a_actor->GetActorBase(), record);
+
+	if (innateAuraByRace.size() > 512)
+		innateAuraByRace.clear();
+	auto& stored = innateAuraByRace[race->formID] = record;
+	return stored.element != SpellElement::None ? &stored : nullptr;
+}
+
+void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
+{
+	auto consider = [&](RE::ActorHandle a_handle) {
+		auto actor = a_handle.get();
+		if (!actor || !actor->Is3DLoaded())
+			return;
+		if (a_cameraPosition.GetSquaredDistance(actor->GetPosition()) > a_cullRadius * a_cullRadius)
+			return;
+		const auto* record = ResolveInnateAura(actor.get());
+		if (!record)
+			return;
+
+		const uint32_t formID = actor->formID;
+		if (innateAuras.size() > 256 && !innateAuras.contains(formID))
+			innateAuras.clear();
+		auto& state = innateAuras[formID];
+		if (state.element == SpellElement::None) {
+			state.actor = actor->GetHandle();
+			state.element = record->element;
+			state.rateScale = record->rateScale;
+			state.reachOverride = record->reachOverride;
+			state.innate = true;
+		}
+		// Reach scale is read fresh so the menu sliders move live.
+		switch (state.element) {
+		case SpellElement::Frost:
+			state.reachScale = settings.AtronachFrostReach;
+			break;
+		case SpellElement::Shock:
+			state.reachScale = settings.AtronachShockReach;
+			break;
+		default:
+			state.reachScale = settings.AtronachFireReach;
+			break;
+		}
+
+		if (!actor->IsDead()) {
+			// Reanimated or resurrected: it can die - and burst - again.
+			state.blasted = false;
+			state.burnRemaining = 0.0f;
+			spellStats.innate++;
+			ConsiderActorAuras(actor.get(), state, a_deltaTime);
+			return;
+		}
+
+		// Death, once. An atronach's own death explosion is spawned by script
+		// and never reaches this feature as a projectile or a reference, so
+		// the state machine has to throw it - which is also why the radius is
+		// a setting rather than something read off a form.
+		if (!state.blasted) {
+			state.blasted = true;
+			const RE::NiPoint3 position = actor->GetPosition();
+			float authored = settings.AtronachFireDeathRadius;
+			if (state.element == SpellElement::Frost)
+				authored = settings.AtronachFrostDeathRadius;
+			else if (state.element == SpellElement::Shock)
+				authored = settings.AtronachShockDeathRadius;
+			// Fire is the only one that keeps burning: a frost atronach
+			// shatters and a storm one earths itself, and both are over the
+			// moment they land.
+			state.burnRemaining = state.element == SpellElement::Fire ?
+			                          std::max(settings.AtronachFireBurnSeconds, 0.0f) :
+			                          0.0f;
+
+			auto* tes = RE::TES::GetSingleton();
+			float groundZ = position.z;
+			if (tes)
+				tes->GetLandHeight(position, groundZ);
+			const float scaled = authored * std::max(settings.BlastRadiusScale, 0.0f);
+			float strength = 0.0f;
+			float radius = 0.0f;
+			if (GroundMark(position.z - groundZ, scaled, strength, radius) &&
+				strength >= kMinSpellStrength && activeBlasts.size() < kMaxSpellEmitters) {
+				ActiveBlast opened{};
+				opened.position = { position.x, position.y };
+				opened.radius = radius;
+				opened.strength = strength;
+				opened.rate = kAtronachDeathRate;
+				opened.remaining = kBlastDuration;
+				opened.element = state.element;
+				opened.mark = MarkForElement(state.element);
+				opened.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
+				activeBlasts.push_back(opened);
+			}
+		}
+
+		// The body burns out where it fell. Its own carve stamps handle the
+		// dent - it landed, so it is touching - and this is the heat on top.
+		if (state.burnRemaining > 0.0f) {
+			spellStats.burning++;
+			ConsiderActorAuras(actor.get(), state, a_deltaTime);
+			state.burnRemaining -= a_deltaTime;
+		}
+	};
+
+	if (auto* player = RE::PlayerCharacter::GetSingleton())
+		consider(player->GetHandle());
+	if (auto* processLists = RE::ProcessLists::GetSingleton())
+		for (auto& handle : processLists->highActorHandles)
+			consider(handle);
+}
+
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -504,6 +698,7 @@ void SnowDeformation::GatherSpellEmitters()
 		spellTrailPrev.clear();
 		spellAuraPrev.clear();
 		activeCloaks.clear();
+		innateAuras.clear();
 		return;
 	}
 
@@ -564,6 +759,11 @@ void SnowDeformation::GatherSpellEmitters()
 				ConsiderActorAuras(actor.get(), it->second, cloakDelta);
 			++it;
 		}
+
+		// Innate auras run beside the cast ones, through the same emitter and
+		// the same melt path - only their lifecycle differs, so they keep
+		// their own map rather than a flag in that one.
+		GatherInnateAuras(cloakDelta, cameraPosition, cullRadius);
 	}
 
 	// Every projectile still flying, recorded before any culling or

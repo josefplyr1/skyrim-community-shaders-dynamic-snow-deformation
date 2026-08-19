@@ -193,6 +193,46 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 // gives under a mammoth, and the shapes a heavy skeleton carries are simply
 // bigger - there is no mass to read off a collision shape, but this tracks it
 // closely enough that the exceptions do not matter.
+bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root,
+	const StampBones* a_bones, float a_groundZ) const
+{
+	if (!a_actor)
+		return false;
+	const float band = std::max(settings.FloatingActorBand, 0.0f);
+	float lowest = FLT_MAX;
+
+	// Whatever the stamping path below would use. Feet first, because an
+	// actor that has them stamps from them; then limb undersides; and only
+	// when a skeleton offers neither is the collision tree walked.
+	if (a_bones) {
+		for (const auto& foot : a_bones->feet)
+			if (auto* node = foot.node.get(); node && node->world.scale >= 0.01f)
+				lowest = std::min(lowest, node->world.translate.z);
+		if (lowest == FLT_MAX)
+			for (const auto& limb : a_bones->limbs) {
+				auto* nodeA = limb.a.get();
+				auto* nodeB = limb.b.get();
+				if (!nodeA || !nodeB)
+					continue;
+				lowest = std::min(lowest,
+					std::min(nodeA->world.translate.z, nodeB->world.translate.z) - limb.radius * nodeA->world.scale);
+			}
+	}
+	if (lowest == FLT_MAX && a_root)
+		RE::BSVisit::TraverseScenegraphCollision(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			RE::NiPoint3 centerPos;
+			float radius;
+			if (Util::GetShapeBound(a_object, centerPos, radius))
+				lowest = std::min(lowest, centerPos.z - radius);
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
+
+	// Nothing to measure is not the same as hovering.
+	if (lowest == FLT_MAX)
+		return false;
+	return lowest - a_groundZ > band;
+}
+
 float SnowDeformation::CrustBreakForce(float a_radius) const
 {
 	const float threshold = std::max(settings.CrustBreakRadius, 1.0f);
@@ -303,6 +343,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		if (!cache.feet.empty() || !cache.limbs.empty())
 			bones = &cache;
+
+		// Floating actors carve nothing. Atronachs, wisps and ghosts never
+		// touch the ground, so every mark they leave today is one the snow
+		// should not have taken - and the foot path is what puts it there:
+		// when no foot reaches the ground it falls back to plumbing the
+		// LOWEST foot instead, which plants a hovering actor's sole no matter
+		// how high it is. Corpses are exempt: a body that has fallen is lying
+		// in the snow, and its dent is correct.
+		if (!isDead && settings.NoCarveFloatingActors &&
+			ActorIsFloating(actor.get(), root, bones, groundZ)) {
+			stampStats.floating++;
+			return;
+		}
 
 		// Living actors need matched feet to take the bone path: a limbs-only
 		// match (creature spines/necks) would steal the collision-shape

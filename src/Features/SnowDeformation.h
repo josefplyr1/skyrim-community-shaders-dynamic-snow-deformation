@@ -276,6 +276,24 @@ public:
 		float CrustBreakRadius = 30.0f;
 		/** @brief Master switch for spell-driven marks. Off, the melt path still exists for the test emitter and for campfire clearings. */
 		bool EnableSpellIntegration = true;
+		/** @brief Stop actors that never reach the ground from carving it. Measured rather than listed: an actor whose lowest contact stays clear of its own footing is not standing on anything, which covers atronachs, wisps, ghosts and any modded levitator without naming one. */
+		bool NoCarveFloatingActors = true;
+		/** @brief How far an actor's lowest contact may sit above its footing and still count as standing on it, in world units. Above this it carves nothing. Generous enough to cover a walker's stride and the slack in a creature skeleton's lowest bone. */
+		float FloatingActorBand = 20.0f;
+		/** @brief Reach of a FIRE atronach's innate aura, against the fire cloak reach. An atronach's whole body burns, so it works a wider circle than a cloak wrapped round a mage. */
+		float AtronachFireReach = 1.5f;
+		/** @brief Radius of the blast a fire atronach leaves when it dies, in world units. Seeded from the record the game authors for that explosion (400), then scaled like any other blast. */
+		float AtronachFireDeathRadius = 400.0f;
+		/** @brief Seconds a dead fire atronach keeps burning the ground it fell on. The body burns out after it lands, so the mark deepens for a while and then stops - unlike the blast, which is one moment. */
+		float AtronachFireBurnSeconds = 6.0f;
+		/** @brief Reach of a FROST atronach's innate aura, against the frost crust reach. This is the glaze it leaves in the trench it walks. */
+		float AtronachFrostReach = 1.5f;
+		/** @brief Radius a frost atronach glazes when it shatters, in world units. Authored at 100, far tighter than the fire one - it breaks apart rather than detonating. */
+		float AtronachFrostDeathRadius = 100.0f;
+		/** @brief Reach of a STORM atronach's innate aura, against the shock cloak reach. */
+		float AtronachShockReach = 1.5f;
+		/** @brief Radius a storm atronach discharges over when it dies, in world units. Authored at 320. */
+		float AtronachShockDeathRadius = 320.0f;
 		/** @brief Reach of a cloak's mark on the ground, in world units. Unlike a blast there is no authored number to scale against - a cloak record says nothing about how far its heat spreads - so this is the reach itself. It also widens with the wearer's height above the snow, as every airborne source does. */
 		float CloakRadius = 100.0f;
 		/** @brief Scale on the crater a detonation leaves, against the radius the explosion record authors. Bethesda's blast radii are tuned for damage, not for how far the ground should be scarred, and read far too wide on snow at 1.0. */
@@ -1452,6 +1470,22 @@ protected:
 	float CrustBreakForce(float a_radius) const;
 
 	/**
+	 * @brief True when nothing this actor carries comes down to its footing.
+	 *
+	 * Measured, not listed. Bethesda does not flag a hovering creature - the
+	 * atronach races are all authored `Walks` and none sets `kFlies` - so a
+	 * flag lookup would find nothing and a race table would miss every modded
+	 * levitator. The lowest thing an actor could carve with, against the
+	 * ground it stands on, answers the question directly and covers wisps and
+	 * ghosts for free.
+	 *
+	 * Reads the cached bones where there are any and falls back to the
+	 * collision shapes, which is the pair the stamping paths below already
+	 * choose between.
+	 */
+	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ) const;
+
+	/**
 	 * @brief Adds a placed hazard (spell wall, rune) to this frame's emitters.
 	 *
 	 * Called from the reference scan GatherStamps already runs for props
@@ -1566,11 +1600,53 @@ protected:
 		uint32_t strikeSeed = 0;
 		/** @brief Reach in world units taken straight from the effect's authored area, or 0 when it named none and the per-element cloak radius should be used instead. */
 		float reachOverride = 0.0f;
+		/** @brief Multiplier on whatever reach this aura settles on. Only innate auras use it: an atronach's body is a far larger source than a cloak wrapped round a mage, and each school states its own. */
+		float reachScale = 1.0f;
+		/** @brief Set on an INNATE aura - one the actor was born with rather than one anybody cast. It has no timer to run down, so it lives as long as the actor does. */
+		bool innate = false;
+		/** @brief Innate only: the one-frame death blast has been queued, so it never fires twice. */
+		bool blasted = false;
+		/** @brief Innate only: seconds of ground burn left after the body landed. Zero for the schools that leave nothing burning. */
+		float burnRemaining = 0.0f;
 	};
 	/** @brief Queued by the sink on the game thread, drained by the gather. */
 	std::vector<CloakState> queuedCloaks;
 	/** @brief Live cloaks by wearer formID; a re-cast refreshes rather than stacks. */
 	std::unordered_map<uint32_t, CloakState> activeCloaks;
+
+	/**
+	 * @brief What an actor's own records say it radiates, with nothing cast.
+	 *
+	 * An atronach's aura is INNATE, so the cast sink of Step 7 never sees it -
+	 * nothing ever casts it. The answer is not a race list and not a keyword
+	 * table: the aura is a real SpellItem sitting on the race's own spell list,
+	 * and its cloak effect carries the same four axes every other detector
+	 * classifies through. Verified against Skyrim.esm - AbFlameAtronach carries
+	 * AbAtronachCloakFire (archetype Cloak, resist ResistFire, magnitude 10),
+	 * and the frost and storm races carry the matching pair.
+	 *
+	 * So it is derived exactly like a cast spell, and modded atronachs work for
+	 * the same reason modded Flames clones do. Every read here is of a static
+	 * FORM, never of a live actor's effect list - the thing that crashed three
+	 * times in Step 7 and must not come back.
+	 */
+	struct InnateAuraRecord
+	{
+		SpellElement element = SpellElement::None;
+		float rateScale = 1.0f;
+		/** @brief Authored area in world units, or 0 when the effect named none. */
+		float reachOverride = 0.0f;
+	};
+	/** @brief Resolved once per race form and kept: race records do not change while the game runs. Absence of an aura is cached too, so a wolf costs one lookup. */
+	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByRace;
+	/** @brief Live innate auras by actor formID. Separate from activeCloaks because their lifecycles differ: a cast cloak runs down its own timer, an innate one lasts as long as its owner and then goes through the death phases. */
+	std::unordered_map<uint32_t, CloakState> innateAuras;
+
+	/** @brief Reads an actor's race (and its base) for an innate aura, through the cache. Implemented in SnowDeformation/Spells.cpp. */
+	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
+
+	/** @brief Runs the innate-aura state machine for every actor in the window: hover, trail, death blast, burnout. */
+	void GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 	/** @brief Last XY per cloaked actor, so a moving aura sweeps a band rather than dotting it. */
 	std::unordered_map<uint32_t, float2> spellAuraPrev;
 	std::unordered_map<uint32_t, float2> currentAuraPositions;
@@ -1602,6 +1678,10 @@ protected:
 		uint casts = 0;
 		/** @brief Cloaks currently running, marking the ground their wearer crosses. */
 		uint auras = 0;
+		/** @brief Innate auras seen this frame: atronachs and anything else whose records give it one without a cast. */
+		uint innate = 0;
+		/** @brief Dead innate-aura bodies still burning the ground they fell on. */
+		uint burning = 0;
 		/** @brief Projectiles whose effects name no element this feature knows. */
 		uint rejectedElement = 0;
 		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */
@@ -1626,6 +1706,8 @@ protected:
 		uint propRefs = 0;
 		uint propMovers = 0;
 		uint spells = 0;
+		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
+		uint floating = 0;
 	};
 	StampStats stampStats;
 

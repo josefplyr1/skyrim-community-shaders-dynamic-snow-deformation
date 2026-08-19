@@ -49,6 +49,15 @@
 	X(CrustThawMinutes) \
 	X(CrustBreakOnCarve) \
 	X(ScorchStrength) \
+	X(NoCarveFloatingActors) \
+	X(FloatingActorBand) \
+	X(AtronachFireReach) \
+	X(AtronachFireDeathRadius) \
+	X(AtronachFireBurnSeconds) \
+	X(AtronachFrostReach) \
+	X(AtronachFrostDeathRadius) \
+	X(AtronachShockReach) \
+	X(AtronachShockDeathRadius) \
 	X(SnowClassDepths) \
 	X(TextureDepths) \
 	X(ObjectsSnowDepth) \

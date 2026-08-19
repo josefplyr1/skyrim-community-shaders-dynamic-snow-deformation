@@ -382,12 +382,20 @@ float StampNoise(float2 p)
 	// has gone cannot also be burnt.
 	float meltedNow = min(melted + max(total - carve, 0.0), total);
 
-	// Crust grows toward its target, then whatever broke through is taken off
-	// it: snow that has just been smashed is not still frozen solid.
-	float crustNow = crust;
+	// What was smashed this frame comes off the crust that was ALREADY there,
+	// and only then does this frame's frost set on what is left. The order is
+	// what lets a cold heavy thing trench snow and leave the trench frozen
+	// behind it - a frost atronach walking, which nothing else in the design
+	// produces, since fire removes snow and force displaces it. Growing first
+	// and breaking afterwards destroyed a glaze that had not existed when the
+	// foot landed, so the two cancelled and the trail came out bare.
+	//
+	// Carving still breaks a standing crust exactly as before: the break is
+	// applied to `crust`, which is the glaze the boot actually met.
+	float crustNow = saturate(crust * (1.0 - crustBreak));
 	[flatten] if (crustTarget > crustNow)
 		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
-	crustNow = saturate(crustNow * (1.0 - crustBreak));
+	crustNow = saturate(crustNow);
 
 	// Alpha is written as 1, not 0. Nothing reads it yet - it is being kept for
 	// blood - but the ImGui debug preview blends the map with its alpha, and a
