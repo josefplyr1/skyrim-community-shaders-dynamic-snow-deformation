@@ -474,7 +474,10 @@ void SnowDeformation::DrawSettings()
 					stampStats.nearestFloating ? "FLOATING" : "touching",
 					stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
 					state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
-				ImGui::Text("             body alpha %.2f | marked Ghost %s | verdict %s",
+				ImGui::Text("             bones: feet %u | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u)",
+					stampStats.nearestFeet, stampStats.nearestLimbs,
+					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props);
+			ImGui::Text("             body alpha %.2f | marked Ghost %s | verdict %s",
 					stampStats.nearestBodyAlpha, stampStats.nearestGhostFlag ? "yes" : "no",
 					stampStats.nearestIncorporeal ? "INCORPOREAL" : "solid");
 			}

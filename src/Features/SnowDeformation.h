@@ -2055,6 +2055,9 @@ protected:
 		uint beforeSpells = 0;
 		/** @brief Actors stopped by the TRANSLUCENCY gate, which is a different measurement from floating and answers to a different setting. */
 		uint incorporeal = 0;
+		/** @brief What the nearest actor's skeleton offered the stamper. Feet decide the path outright: with them an actor prints heel-to-toe, without them it falls to its collision shapes, and an actor that passes every gate and still marks nothing is one of those two coming up empty. */
+		uint nearestFeet = 0;
+		uint nearestLimbs = 0;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
 		uint floating = 0;
 		/** @brief Nearest non-player actor's measurements, so the floating gate can be read against a real creature instead of guessed at. */
