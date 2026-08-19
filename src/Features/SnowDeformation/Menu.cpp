@@ -463,8 +463,8 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::Text("rejected: no element %u | no blast form %u",
 				spellStats.rejectedElement, spellStats.rejectedNoBlast);
-			ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating actors not carving %u",
-				spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating);
+			ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",
+				spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating, stampStats.incorporeal);
 			ImGui::Text("death events seen %u | death blasts opened %u",
 				spellStats.deathsSeen, spellStats.deathBlasts);
 			if (stampStats.nearestValid) {

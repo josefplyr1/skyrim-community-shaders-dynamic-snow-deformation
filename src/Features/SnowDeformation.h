@@ -2053,6 +2053,8 @@ protected:
 		uint spells = 0;
 		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
 		uint beforeSpells = 0;
+		/** @brief Actors stopped by the TRANSLUCENCY gate, which is a different measurement from floating and answers to a different setting. */
+		uint incorporeal = 0;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
 		uint floating = 0;
 		/** @brief Nearest non-player actor's measurements, so the floating gate can be read against a real creature instead of guessed at. */

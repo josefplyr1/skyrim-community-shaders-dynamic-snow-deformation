@@ -520,8 +520,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		if ((floating && settings.NoCarveFloatingActors) || incorporeal) {
+		// Counted apart. One number for both said "floating actors not carving"
+		// while incorporeal ones were in it too, which is a diagnostic that
+		// answers the wrong question: the two gates measure different things
+		// and are tuned by different settings, so a reading that cannot say
+		// which one fired sends you to the wrong slider.
+		if (floating && settings.NoCarveFloatingActors) {
 			stampStats.floating++;
+			return;
+		}
+		if (incorporeal) {
+			stampStats.incorporeal++;
 			return;
 		}
 
