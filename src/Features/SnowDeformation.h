@@ -1941,6 +1941,8 @@ protected:
 	};
 	/** @brief Resolved once per race form and kept: race records do not change while the game runs. Absence of an aura is cached too, so a wolf costs one lookup. */
 	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByRace;
+	/** @brief The NPC-record answers, keyed by the BASE they came from. Separate from the race cache on purpose: one map keyed by race holding a value read off an NPC is what gave every Nord in the game a frost aura from a single Ice Warlock. */
+	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByBase;
 	/** @brief Live innate auras by actor formID. Separate from activeCloaks because their lifecycles differ: a cast cloak runs down its own timer, an innate one lasts as long as its owner and then goes through the death phases. */
 	std::unordered_map<uint32_t, CloakState> innateAuras;
 
@@ -2058,6 +2060,8 @@ protected:
 		/** @brief What the nearest actor's skeleton offered the stamper. Feet decide the path outright: with them an actor prints heel-to-toe, without them it falls to its collision shapes, and an actor that passes every gate and still marks nothing is one of those two coming up empty. */
 		uint nearestFeet = 0;
 		uint nearestLimbs = 0;
+		/** @brief Nearest actor is MADE of an element, so the translucency test was skipped rather than passed. Without this the panel reports alpha 1.00 for an actor whose alpha was never read, which reads as "measured opaque". */
+		bool nearestElemental = false;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
 		uint floating = 0;
 		/** @brief Nearest non-player actor's measurements, so the floating gate can be read against a real creature instead of guessed at. */

@@ -477,9 +477,11 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("             bones: feet %u | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u)",
 					stampStats.nearestFeet, stampStats.nearestLimbs,
 					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props);
-			ImGui::Text("             body alpha %.2f | marked Ghost %s | verdict %s",
-					stampStats.nearestBodyAlpha, stampStats.nearestGhostFlag ? "yes" : "no",
-					stampStats.nearestIncorporeal ? "INCORPOREAL" : "solid");
+			ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
+					stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
+					stampStats.nearestGhostFlag ? "yes" : "no",
+					stampStats.nearestIncorporeal ? "INCORPOREAL" :
+						(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));
 			}
 			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);

@@ -529,6 +529,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestGapToRoot = floatingGap;
 				stampStats.nearestGapToLand = position.z - landZ;
 				stampStats.nearestFloating = floating;
+				stampStats.nearestElemental = elemental;
 				stampStats.nearestFeet = bones ? static_cast<uint>(bones->feet.size()) : 0;
 				stampStats.nearestLimbs = bones ? static_cast<uint>(bones->limbs.size()) : 0;
 				stampStats.nearestBodyAlpha = bodyAlpha;

@@ -1115,24 +1115,16 @@ bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord&
 	auto* race = a_actor ? a_actor->GetRace() : nullptr;
 	if (!race)
 		return false;
-	// The RACE only, and deliberately.
+	// The race first, which is where every vanilla innate aura lives; then the
+	// actor's base, because a mod is free to put the ability on the NPC record
+	// and reuse a stock race.
 	//
-	// A race's spell list is abilities: things that are always on. An NPC's is
-	// a LOADOUT - the spells that actor can cast - and the two are the same
-	// field with opposite meanings. Nothing in the record separates them:
-	// every atronach ability and every cloak an NPC merely knows is authored
-	// kSpell, so spell type cannot be the discriminator, and 193 vanilla NPCs
-	// carry a cloak they have not cast.
-	//
-	// Reading the NPC list also poisoned the cache below, which is keyed by
-	// RACE: one Ice Warlock made every Nord in the game radiate frost, one
-	// Storm Warlock every High Elf and Breton, and GuardWinterholdCollege -
-	// authored on FoxRace - every fox.
-	//
-	// A mage that ACTUALLY casts a cloak still marks the ground. That is the
-	// cast sink's job and has been since Step 7; this path is only for the
-	// ones that radiate without ever casting.
-	return AuraFromSpellList(race, a_out);
+	// Reading the NPC record is only safe because AuraFromSpellList now takes
+	// kAbility alone. That list is a LOADOUT as well as an ability list, and
+	// 193 vanilla NPCs carry a cloak they have never cast; without the type
+	// test every one of them radiated. The caller must also cache each answer
+	// under the record it came from - see ResolveInnateAura.
+	return AuraFromSpellList(race, a_out) || AuraFromSpellList(a_actor->GetActorBase(), a_out);
 }
 
 const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
@@ -1141,19 +1133,38 @@ const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::
 	if (!race)
 		return nullptr;
 
-	// Cached per RACE form: races do not change while the game runs, and the
+	// Cached per form, and each answer under the record it was READ from.
+	// Races and base records do not change while the game runs, and the
 	// alternative is walking two spell lists for every actor every frame.
 	// A miss is cached too, so a wolf costs one hash lookup.
-	if (auto it = innateAuraByRace.find(race->formID); it != innateAuraByRace.end())
-		return it->second.element != SpellElement::None ? &it->second : nullptr;
+	//
+	// The two caches are not one cache. Keying an NPC-derived answer by race
+	// is what made a single Ice Warlock give every Nord in the game a frost
+	// aura, every High Elf and Breton one from a Storm Warlock, and every fox
+	// one from GuardWinterholdCollege, which is authored on FoxRace.
+	auto raceIt = innateAuraByRace.find(race->formID);
+	if (raceIt == innateAuraByRace.end()) {
+		InnateAuraRecord record{};
+		AuraFromSpellList(race, record);
+		if (innateAuraByRace.size() > 512)
+			innateAuraByRace.clear();
+		raceIt = innateAuraByRace.insert_or_assign(race->formID, record).first;
+	}
+	if (raceIt->second.element != SpellElement::None)
+		return &raceIt->second;
 
-	InnateAuraRecord record{};
-	AuraFromActorRecords(a_actor, record);
-
-	if (innateAuraByRace.size() > 512)
-		innateAuraByRace.clear();
-	auto& stored = innateAuraByRace[race->formID] = record;
-	return stored.element != SpellElement::None ? &stored : nullptr;
+	auto* base = a_actor->GetActorBase();
+	if (!base)
+		return nullptr;
+	auto baseIt = innateAuraByBase.find(base->formID);
+	if (baseIt == innateAuraByBase.end()) {
+		InnateAuraRecord record{};
+		AuraFromSpellList(base, record);
+		if (innateAuraByBase.size() > 2048)
+			innateAuraByBase.clear();
+		baseIt = innateAuraByBase.insert_or_assign(base->formID, record).first;
+	}
+	return baseIt->second.element != SpellElement::None ? &baseIt->second : nullptr;
 }
 
 void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position)
