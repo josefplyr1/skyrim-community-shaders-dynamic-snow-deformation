@@ -141,9 +141,10 @@ static constexpr float kShoutRangeMax = 12000.0f;
 // Travel speed if a shout's projectile names none. Vanilla authors 1536 for
 // Unrelenting Force and 1200 for the breaths.
 static constexpr float kShoutDefaultSpeed = 1400.0f;
-// The front is never shorter than this fraction of the wedge, so the first
-// frame is a mouthful of snow rather than nothing at all.
-static constexpr float kShoutMinExtent = 0.08f;
+// The front's reach on the very first frame is one frame of travel and no more.
+// A floor here was a mistake worth remembering: at eight percent of the wedge
+// it meant the first stretch in front of the shouter simply EXISTED, and the
+// travel only began beyond it.
 // Rate a BLAST sets its crust at. The crust rate in settings is tuned for a
 // sustained source - a frost cloak standing over one spot for seconds - and at
 // 0.6 a second it reached barely a fifth of a glaze inside a blast's window,
@@ -1694,9 +1695,11 @@ void SnowDeformation::GatherSpellEmitters()
 					// The angle is what stays fixed as the front advances, so
 					// the half-width grows with the reach rather than standing
 					// at its final size over a stub of a wedge.
+					// Measured from the age this frame ENDS at, so the first
+					// frame lays a sliver rather than nothing.
 					const float extent = std::clamp(
-						it->coneSpeed * it->age / std::max(it->coneLength, 1e-3f),
-						kShoutMinExtent, 1.0f);
+						it->coneSpeed * (it->age + deltaTime) / std::max(it->coneLength, 1e-3f),
+						0.0f, 1.0f);
 					emitter.position = { it->apex.x + it->coneDir.x * it->coneLength * extent,
 						it->apex.y + it->coneDir.y * it->coneLength * extent };
 					emitter.radius = it->radius * extent;

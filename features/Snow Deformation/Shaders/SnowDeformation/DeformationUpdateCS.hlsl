@@ -57,14 +57,14 @@
 // Added to a stamp's mode to mark it a cone. Mirrored by kStampModeCone in
 // SnowDeformation.h.
 #define STAMP_MODE_CONE 10.0
-// Half-width at the mouth of a cone, as a fraction of its width at the far
-// end. Very nearly a point: a shout leaves the throat and OPENS, so anything
-// wider here reads as a canyon that starts at full width under the shouter's
-// own feet. Not zero only because the width divides.
-#define CONE_MOUTH 0.015
-// Where the far end starts fading, along the axis. Without it the wedge stops
-// at a wall, which reads as a cut rather than as a shockwave running out.
-#define CONE_END_FADE 0.75
+// A cone's width is a fixed SLOPE from its apex, never a fraction of how far it
+// has got so far. That distinction is the whole of why it can grow: both the
+// stamp's radius and its axis scale together as the front advances, so the
+// slope between them is constant and ground once covered never changes shape
+// again. Anything here that keyed off the CURRENT length instead - a mouth
+// width, a fade over the last stretch - reached back and re-shaped snow the
+// front had already passed, which is what made the near berms crawl outward
+// as the shout ran on.
 
 // Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
@@ -293,15 +293,16 @@ float StampNoise(float2 p)
 				float along = dot(rel, axis);
 				// Perpendicular offset, via the 2D cross product.
 				float perp = abs(rel.x * axis.y - rel.y * axis.x);
-				float axisT = saturate(along / max(axisLen, 1e-3));
-				// Widens linearly from the mouth, so the rim is a straight
-				// line rather than the bulge a row of discs makes.
-				float halfWidth = radius * max(CONE_MOUTH + (1.0 - CONE_MOUTH) * axisT, 1e-3);
+				float axisT = along / max(axisLen, 1e-3);
+				// One slope, straight from the apex. radius and axisLen scale
+				// together while the front travels, so this is the same wedge
+				// at every extension - only longer.
+				float halfWidth = max(radius * axisT, 1e-3);
 				edgeCoord = perp / halfWidth;
-				// Behind the apex is outside the shape entirely.
-				edgeCoord = along < 0.0 ? 1e6 : edgeCoord;
-				// And the far end runs out rather than stopping at a wall.
-				edgeCoord = max(edgeCoord, smoothstep(CONE_END_FADE, 1.0, axisT));
+				// Behind the apex, or past the front, is outside the shape.
+				// The far end is a clean edge on purpose: it is where the
+				// shockwave got to, not somewhere it faded away.
+				edgeCoord = (along < 0.0 || along > axisLen) ? 1e6 : edgeCoord;
 			}
 
 			[branch] if (mode < 0.5)
