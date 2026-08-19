@@ -305,7 +305,7 @@ public:
 		/** @brief Let shouts plough the snow in front of the shouter. Off, a shout still marks through whatever projectile it throws, which is why the breaths already made a mark or two before this existed. */
 		bool EnableShoutCones = true;
 		/** @brief Total spread of a shout's cone, in degrees. The records author no width - only a reach - so this is the one number about a shout's shape that has to be taste. */
-		float ShoutConeSpread = 45.0f;
+		float ShoutConeSpread = 25.0f;
 		/** @brief Multiplier on the reach the shout's own projectile authors. 1.0 is exactly what the game says: 1000 units for Unrelenting Force, 1200 for the breaths, 10000 for a dragon's. */
 		float ShoutConeLength = 1.0f;
 		/** @brief Depth a full-strength shove carves, as a fraction of the layer. Force is the only school that DISPLACES snow rather than changing it, so it is also the only one that raises a berm at the far lip - which is what makes Unrelenting Force read as pushed rather than deleted. */
@@ -1610,6 +1610,12 @@ protected:
 		bool cone = false;
 		/** @brief Cone only: the apex, which the emitter carries as its previous position. */
 		float2 apex{};
+		/** @brief Cone only: unit heading, so the front can be advanced along it each frame. */
+		float2 coneDir{};
+		/** @brief Cone only: how far the wedge reaches once fully out, from the apex. */
+		float coneLength = 0.0f;
+		/** @brief Cone only: units per second the front travels, off the shout's own projectile. A shout is a thing that GOES somewhere - it does not appear along its whole length at once. */
+		float coneSpeed = 0.0f;
 	};
 	std::vector<ActiveBlast> activeBlasts;
 
@@ -1664,6 +1670,8 @@ protected:
 		/** @brief Unit heading, already flattened: a shockwave runs along the ground rather than following the crosshair into the sky. */
 		RE::NiPoint3 direction{};
 		float length = 0.0f;
+		/** @brief Units per second the front travels, from the shout's own projectile record. */
+		float speed = 0.0f;
 		/** @brief 0-1, from the projectile's authored impact force against Unrelenting Force's own. */
 		float strength = 1.0f;
 		SpellElement element = SpellElement::None;

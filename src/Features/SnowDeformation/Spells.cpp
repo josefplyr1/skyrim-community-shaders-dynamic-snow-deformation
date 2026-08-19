@@ -138,6 +138,18 @@ static constexpr float kShoutMaxPitchDeg = 40.0f;
 // A shout's reach if its projectile names none.
 static constexpr float kShoutDefaultRange = 1000.0f;
 static constexpr float kShoutRangeMax = 12000.0f;
+// Travel speed if a shout's projectile names none. Vanilla authors 1536 for
+// Unrelenting Force and 1200 for the breaths.
+static constexpr float kShoutDefaultSpeed = 1400.0f;
+// The front is never shorter than this fraction of the wedge, so the first
+// frame is a mouthful of snow rather than nothing at all.
+static constexpr float kShoutMinExtent = 0.08f;
+// Rate a BLAST sets its crust at. The crust rate in settings is tuned for a
+// sustained source - a frost cloak standing over one spot for seconds - and at
+// 0.6 a second it reached barely a fifth of a glaze inside a blast's window,
+// which is why Frost Breath was all but invisible while Fire Breath cut to the
+// floor. A blast has one moment, so it has to arrive within it.
+static constexpr float kBlastCrustRate = 4.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -606,6 +618,7 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	cone.position = a_caster->GetPosition();
 	cone.direction = { std::sin(yaw), std::cos(yaw), 0.0f };
 	cone.length = range;
+	cone.speed = projectile && projectile->data.speed > 1.0f ? projectile->data.speed : kShoutDefaultSpeed;
 	cone.strength = strength;
 	cone.element = element;
 	{
@@ -1163,14 +1176,21 @@ void SnowDeformation::OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes)
 	if (strength < kMinSpellStrength)
 		return;
 
+	const float travel = std::max(a_cone.length - standoff, 1.0f);
+	const float speed = std::max(a_cone.speed, 1.0f);
+
 	ActiveBlast opened{};
 	opened.cone = true;
 	opened.apex = { apex.x, apex.y };
 	opened.position = { tip.x, tip.y };
+	opened.coneDir = { a_cone.direction.x, a_cone.direction.y };
+	opened.coneLength = travel;
+	opened.coneSpeed = speed;
 	opened.radius = farHalfWidth;
 	opened.strength = strength;
 	opened.rate = kExplosionRate;
-	opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+	// Held for as long as the front takes to run out, and then a moment more.
+	opened.remaining = travel / speed + std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
 	opened.element = a_cone.element;
 	opened.mark = MarkForElement(a_cone.element);
 	opened.pitScale = 1.0f;
@@ -1654,7 +1674,15 @@ void SnowDeformation::GatherSpellEmitters()
 				// ramps, because it integrates - a PIT does not, since it
 				// follows carve, so a discharge would otherwise simply exist
 				// on the frame it landed with nothing seen to move.
-				const float ramp = std::clamp(it->age / std::max(kBlastRampSeconds, 1e-3f), 0.0f, 1.0f);
+				//
+				// A CONE needs none of that: it has somewhere to be going. Its
+				// front runs out from the mouth at the shout's own speed, so
+				// the ground it has already passed is at full depth while the
+				// ground ahead has not been touched - which is what a shout
+				// travelling looks like, and what a strength ramp cannot say.
+				const float ramp = it->cone ?
+				                       1.0f :
+				                       std::clamp(it->age / std::max(kBlastRampSeconds, 1e-3f), 0.0f, 1.0f);
 				SpellEmitter emitter{};
 				emitter.position = it->position;
 				// A wedge sweeps from its apex; everything else marks where it
@@ -1662,11 +1690,29 @@ void SnowDeformation::GatherSpellEmitters()
 				emitter.previous = it->cone ? it->apex : it->position;
 				emitter.cone = it->cone;
 				emitter.radius = it->radius;
+				if (it->cone) {
+					// The angle is what stays fixed as the front advances, so
+					// the half-width grows with the reach rather than standing
+					// at its final size over a stub of a wedge.
+					const float extent = std::clamp(
+						it->coneSpeed * it->age / std::max(it->coneLength, 1e-3f),
+						kShoutMinExtent, 1.0f);
+					emitter.position = { it->apex.x + it->coneDir.x * it->coneLength * extent,
+						it->apex.y + it->coneDir.y * it->coneLength * extent };
+					emitter.radius = it->radius * extent;
+				}
 				emitter.strength = it->strength * ramp;
 				emitter.rate = it->rate;
 				emitter.element = it->element;
 				emitter.mark = it->mark;
 				emitter.pitScale = it->pitScale;
+				// A blast has one moment to set its crust in, so it cannot use
+				// the rate meant for something standing over a spot for
+				// seconds. Expressed against the setting so the setting still
+				// governs every sustained source, exactly as before.
+				emitter.rateScale = it->mark == SpellMark::Crust ?
+				                        kBlastCrustRate / std::max(settings.CrustRate, 0.01f) :
+				                        1.0f;
 				spellEmitters.push_back(emitter);
 			}
 			it->age += deltaTime;
