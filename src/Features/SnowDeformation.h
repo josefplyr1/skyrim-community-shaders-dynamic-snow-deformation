@@ -273,7 +273,7 @@ public:
 		/** @brief How far a crust flattens the snow's own normal map. The strongest of the ice cues by a distance: powder reads as grain and ice reads as a sheet, so smoothing the surface says "frozen over" louder than reflectance or colour can. */
 		float CrustNormalFlatten = 0.75f;
 		/** @brief Brightness of the grazing-angle sheen on crusted snow. Snow is already near-white, so a specular lobe has almost no headroom above it; a sheet catching the sky at a glancing angle is the one thing powder cannot do, and this is the strongest ice cue after smoothness. */
-		float CrustSheen = 1.00f;
+		float CrustSheen = 1.50f;
 		/** @brief Reflectance of fully crusted snow. Loose snow sits near 0.028, which is so low that a physically honest ice value is invisible beside it; this is a look knob, not a measurement. */
 		float CrustSpecular = 0.250f;
 		/** @brief Colour cast multiplied onto crusted snow. Slightly dark and slightly blue reads as refrozen; leave at 1,1,1 for no cast at all. */
