@@ -300,6 +300,10 @@ public:
 		 * Bethesda's "Is Ghost" means invulnerable rather than incorporeal.
 		 */
 		int IncorporealMode = 1;
+		/** @brief Let a body that is still burning, crackling or frozen over go on marking the snow beneath it. The element comes from the last one that struck the actor before it died, so it needs no reading of the corpse itself. */
+		bool CorpseElementalMarks = true;
+		/** @brief Seconds a body goes on marking after it dies. Mods that keep a corpse visibly alight or frozen (Frozen Electrocuted Combusted and its like) run far longer than vanilla, so this is taste rather than physics. */
+		float CorpseEffectSeconds = 8.0f;
 		/** @brief Reach of a FIRE atronach's innate aura, against the fire cloak reach. An atronach's whole body burns, so it works a wider circle than a cloak wrapped round a mage. */
 		float AtronachFireReach = 0.50f;
 		/** @brief Radius of the blast a fire atronach leaves when it dies, in world units. Seeded from the record the game authors for that explosion (400), then scaled like any other blast. */
@@ -1635,6 +1639,40 @@ protected:
 		SpellElement element = SpellElement::None;
 	};
 	std::vector<QueuedDeath> queuedDeaths;
+
+	/**
+	 * @brief What last struck an actor, so a body knows what it is still burning with.
+	 *
+	 * A corpse that is alight, crackling or frozen stiff should go on marking
+	 * the snow under it - but what a corpse is DOING is exactly the sort of
+	 * live-actor state this feature refuses to poll for. The element does not
+	 * have to be read off the body at all: the effect that hit it announced
+	 * itself on the way in, and the effect record is static data.
+	 */
+	class MagicApplySink : public RE::BSTEventSink<RE::TESMagicEffectApplyEvent>
+	{
+	public:
+		RE::BSEventNotifyControl ProcessEvent(const RE::TESMagicEffectApplyEvent* a_event,
+			RE::BSTEventSource<RE::TESMagicEffectApplyEvent>* a_source) override;
+	};
+	MagicApplySink magicApplySink;
+
+	/** @brief Queued by the apply sink on the game thread, drained by the gather. */
+	struct QueuedHit
+	{
+		uint32_t formID = 0;
+		SpellElement element = SpellElement::None;
+	};
+	std::vector<QueuedHit> queuedHits;
+
+	/** @brief The last element to strike each actor, and how long that memory has left. Short: what killed a body is whatever hit it moments before, not something from a fight two rooms back. */
+	struct ElementalHit
+	{
+		SpellElement element = SpellElement::None;
+		float remaining = 0.0f;
+	};
+	std::unordered_map<uint32_t, ElementalHit> lastElementalHit;
+
 	/** @brief Registered lazily on the first gather, so the event holder is certainly up. */
 	void RegisterSpellCastSink();
 
@@ -1719,6 +1757,12 @@ protected:
 	/** @brief Live innate auras by actor formID. Separate from activeCloaks because their lifecycles differ: a cast cloak runs down its own timer, an innate one lasts as long as its owner and then goes through the death phases. */
 	std::unordered_map<uint32_t, CloakState> innateAuras;
 
+	/** @brief Bodies still marking after death, by formID. Rides the same CloakState and the same emitter as everything else; only its start condition is different. */
+	std::unordered_map<uint32_t, CloakState> corpseEffects;
+
+	/** @brief Runs the after-death mark for one actor, whether or not it ever had an aura of its own. */
+	void ConsiderCorpseEffect(RE::Actor* a_actor, float a_deltaTime);
+
 	/** @brief Reads an actor's race (and its base) for an innate aura, through the cache. Implemented in SnowDeformation/Spells.cpp. */
 	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
 
@@ -1732,8 +1776,8 @@ protected:
 	static bool AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out);
 	static bool AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out);
 
-	/** @brief Runs the innate-aura state machine for every actor in the window: hover, trail, death blast, burnout. */
-	void GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
+	/** @brief Runs the per-actor marks for everything in the window: innate auras (hover, trail, death blast, burnout) and bodies still burning after death. */
+	void GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 
 	/** @brief Throws the one-frame blast a dying innate-aura actor leaves. Shared by both death routes - the one that leaves a body and the one that simply vanishes. */
 	void OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position);
@@ -1772,6 +1816,12 @@ protected:
 		uint innate = 0;
 		/** @brief Dead innate-aura bodies still burning the ground they fell on. */
 		uint burning = 0;
+		/** @brief Death events received for an actor carrying an innate aura. If this stays 0 while atronachs die in front of you, the event is not the route. */
+		uint deathsSeen = 0;
+		/** @brief Death blasts actually opened. Against deathsSeen this says whether the event fired and the mark was rejected, or the event never came. */
+		uint deathBlasts = 0;
+		/** @brief Bodies marking the snow after death from what last struck them. */
+		uint corpses = 0;
 		/** @brief Projectiles whose effects name no element this feature knows. */
 		uint rejectedElement = 0;
 		/** @brief Projectiles that name an element but no explosion form, so there is no blast to arm. */

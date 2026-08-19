@@ -328,6 +328,13 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSpellEnable = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_enable_tooltip"), "Lets cast magic mark the snow. Off, the melt machinery still serves campfire clearings."));
 
+		ImGui::Checkbox(T(TKEY("corpse_marks"), "Bodies Keep Marking"), &settings.CorpseElementalMarks);
+		if (auto _ttCorpse = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("corpse_marks_tooltip"), "A body that is still alight, crackling or frozen over goes on working the snow it fell in - melting, pocking or glazing to match. Which one comes from whatever last struck the actor before it died, so nothing has to be read off the corpse itself. Mods that keep bodies burning or frozen long after death get the most out of this."));
+		ImGui::SliderFloat(T(TKEY("corpse_seconds"), "Body Mark Duration"), &settings.CorpseEffectSeconds, 0.0f, 30.0f, "%.1f s");
+		if (auto _ttCorpseSecs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("corpse_seconds_tooltip"), "How long a body goes on marking after it falls. Vanilla death effects fade in a couple of seconds; mods that leave a corpse visibly burning or frozen run far longer, so match this to what you can actually see rather than to anything physical."));
+
 		ImGui::SeparatorText(T(TKEY("spell_cat_stats"), "Detected"));
 		// Diagnostics use plain text by existing convention (no i18n).
 		ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
@@ -337,8 +344,10 @@ void SnowDeformation::DrawSettings()
 			spellStats.armed, spellStats.detonations, spellStats.casts);
 		ImGui::Text("rejected: no element %u | no blast form %u",
 			spellStats.rejectedElement, spellStats.rejectedNoBlast);
-		ImGui::Text("innate auras %u | bodies burning %u | floating actors not carving %u",
-			spellStats.innate, spellStats.burning, stampStats.floating);
+		ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating actors not carving %u",
+			spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating);
+		ImGui::Text("death events seen %u | death blasts opened %u",
+			spellStats.deathsSeen, spellStats.deathBlasts);
 		if (stampStats.nearestValid) {
 			static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
 			const uint state = stampStats.nearestState;

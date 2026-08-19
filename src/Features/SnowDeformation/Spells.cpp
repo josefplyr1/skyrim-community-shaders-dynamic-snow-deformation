@@ -101,6 +101,10 @@ static constexpr float kElementalImmunity = 90.0f;
 // instantaneous, so a discharge otherwise simply EXISTS on the frame it lands -
 // snow that was never seen to move. Short enough to still read as a strike.
 static constexpr float kBlastRampSeconds = 0.18f;
+// How long the memory of an elemental hit survives. What a body is burning
+// with is whatever struck it moments before it fell - not something from a
+// fight two rooms back.
+static constexpr float kElementalMemory = 6.0f;
 // Authored blast radius that maps to an unscaled pit. Pit sizing deliberately
 // ignores the blast radius SCALE, which is tuned for how wide FIRE should
 // scar; a discharge answers to its own setting, and the authored size only
@@ -428,6 +432,10 @@ RE::BSEventNotifyControl SnowDeformation::DeathSink::ProcessEvent(
 	InnateAuraRecord record{};
 	if (!AuraFromActorRecords(actor, record))
 		return RE::BSEventNotifyControl::kContinue;
+	// Counted here rather than at the drain, so the menu can tell an event
+	// that never arrived from a mark that arrived and was rejected. That
+	// distinction is the whole of what the parked atronach question needs.
+	feature.spellStats.deathsSeen++;
 
 	QueuedDeath queued{};
 	queued.formID = actor->formID;
@@ -441,13 +449,46 @@ RE::BSEventNotifyControl SnowDeformation::DeathSink::ProcessEvent(
 	return RE::BSEventNotifyControl::kContinue;
 }
 
+RE::BSEventNotifyControl SnowDeformation::MagicApplySink::ProcessEvent(
+	const RE::TESMagicEffectApplyEvent* a_event, RE::BSTEventSource<RE::TESMagicEffectApplyEvent>*)
+{
+	auto& feature = globals::features::snowDeformation;
+	if (!a_event || !a_event->target || !feature.settings.EnableSpellIntegration ||
+		!feature.settings.CorpseElementalMarks)
+		return RE::BSEventNotifyControl::kContinue;
+	auto* actor = a_event->target->As<RE::Actor>();
+	if (!actor)
+		return RE::BSEventNotifyControl::kContinue;
+
+	// The effect RECORD, classified through the same resist variable as every
+	// other detector. Nothing is read off the actor but its identity.
+	auto* form = RE::TESForm::LookupByID(a_event->magicEffect);
+	const SpellElement element = ClassifyElement(form ? form->As<RE::EffectSetting>() : nullptr);
+	if (element == SpellElement::None)
+		return RE::BSEventNotifyControl::kContinue;
+
+	QueuedHit queued{};
+	queued.formID = actor->formID;
+	queued.element = element;
+	{
+		std::scoped_lock lock(feature.queuedCastLock);
+		// Damage ticks arrive constantly, so this is a bound rather than a
+		// budget: the newest hit is the one that matters and the rest are the
+		// same answer repeated.
+		if (feature.queuedHits.size() < kMaxSpellEmitters)
+			feature.queuedHits.push_back(queued);
+	}
+	return RE::BSEventNotifyControl::kContinue;
+}
+
 void SnowDeformation::RegisterSpellCastSink()
 {
 	spellCastSinkRegistered = true;
 	if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
 		holder->AddEventSink<RE::TESSpellCastEvent>(&spellCastSink);
 		holder->AddEventSink<RE::TESDeathEvent>(&deathSink);
-		logger::debug("SnowDeformation: spell cast and death sinks registered");
+		holder->AddEventSink<RE::TESMagicEffectApplyEvent>(&magicApplySink);
+		logger::debug("SnowDeformation: spell cast, death and magic-apply sinks registered");
 	}
 }
 
@@ -538,15 +579,26 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 		const float reach = cloakReach * spread;
 
 		const float2 strike{ current.x + std::cos(angle) * reach, current.y + std::sin(angle) * reach };
-		emitter.position = strike;
-		// A discharge lands, it does not sweep - no capsule from the last one.
-		emitter.previous = strike;
-		emitter.radius = radius;
-		emitter.strength = strength;
-		emitter.rate = 0.0f;
-		emitter.pitScale = cloakReach * std::max(settings.ShockCloakStrikeScale, 0.05f) /
-		                   std::max(settings.PitRadius, 4.0f);
-		spellEmitters.push_back(emitter);
+
+		// Opened as a BLAST rather than pushed straight out as an emitter. An
+		// arc off a cloak is a discharge exactly as a bolt's strike is, so it
+		// belongs on the same path - which is also what gives it the ramp, so
+		// the snow is seen to give way instead of the pock simply existing.
+		// One route now serves cloaks, storm atronachs and electrified bodies.
+		if (activeBlasts.size() >= kMaxSpellEmitters)
+			return;
+		ActiveBlast arc{};
+		arc.position = strike;
+		arc.radius = radius;
+		arc.strength = strength;
+		// A pit is thrown, not melted into: nothing to integrate.
+		arc.rate = 0.0f;
+		arc.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+		arc.pitScale = cloakReach * std::max(settings.ShockCloakStrikeScale, 0.05f) /
+		               std::max(settings.PitRadius, 4.0f);
+		arc.element = a_cloak.element;
+		arc.mark = SpellMark::Pit;
+		activeBlasts.push_back(arc);
 		return;
 	}
 
@@ -749,8 +801,65 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	activeBlasts.push_back(opened);
 }
 
-void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
+void SnowDeformation::ConsiderCorpseEffect(RE::Actor* a_actor, float a_deltaTime)
 {
+	if (!settings.CorpseElementalMarks || !a_actor)
+		return;
+	const uint32_t formID = a_actor->formID;
+
+	if (auto it = corpseEffects.find(formID); it != corpseEffects.end()) {
+		// Raised again, or the effect has burnt out.
+		if (!a_actor->IsDead() || it->second.burnRemaining <= 0.0f) {
+			corpseEffects.erase(it);
+			return;
+		}
+		spellStats.corpses++;
+		ConsiderActorAuras(a_actor, it->second, a_deltaTime);
+		it->second.burnRemaining -= a_deltaTime;
+		return;
+	}
+
+	// Starts once, on the first frame the body is seen dead with a live memory
+	// of what hit it. The corpse itself is never asked what it is doing.
+	if (!a_actor->IsDead())
+		return;
+	auto hit = lastElementalHit.find(formID);
+	if (hit == lastElementalHit.end() || hit->second.element == SpellElement::None)
+		return;
+
+	CloakState state{};
+	state.actor = a_actor->GetHandle();
+	state.element = hit->second.element;
+	state.rateScale = 1.0f;
+	state.reachScale = 1.0f;
+	state.burnRemaining = std::max(settings.CorpseEffectSeconds, 0.0f);
+	if (corpseEffects.size() > 256)
+		corpseEffects.clear();
+	corpseEffects[formID] = state;
+	lastElementalHit.erase(hit);
+}
+
+void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius)
+{
+	// What struck whom, aged down. Drained before the sweep so a hit and the
+	// death it caused can land on the same frame.
+	{
+		std::vector<QueuedHit> hits;
+		{
+			std::scoped_lock lock(queuedCastLock);
+			hits.swap(queuedHits);
+		}
+		for (const auto& hit : hits) {
+			if (lastElementalHit.size() > 512 && !lastElementalHit.contains(hit.formID))
+				lastElementalHit.clear();
+			lastElementalHit[hit.formID] = { hit.element, kElementalMemory };
+		}
+		for (auto it = lastElementalHit.begin(); it != lastElementalHit.end();) {
+			it->second.remaining -= a_deltaTime;
+			it = it->second.remaining > 0.0f ? std::next(it) : lastElementalHit.erase(it);
+		}
+	}
+
 	// Deaths, from the sink. This is the ONLY route that reliably fires for an
 	// atronach: it is unsummoned rather than left as a corpse, so by the time
 	// any sweep looks it is already out of the high-process list, out of its
@@ -766,8 +875,12 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 			auto& state = innateAuras[death.formID];
 			if (state.element == SpellElement::None)
 				state.element = death.element;
-			if (!state.blasted)
+			if (!state.blasted) {
+				const size_t before = activeBlasts.size();
 				OpenInnateDeathBlast(state, death.position);
+				if (activeBlasts.size() > before)
+					spellStats.deathBlasts++;
+			}
 			state.lastPosition = death.position;
 		}
 	}
@@ -783,6 +896,11 @@ void SnowDeformation::GatherInnateAuras(float a_deltaTime, const RE::NiPoint3& a
 			return;
 		if (a_cameraPosition.GetSquaredDistance(actor->GetPosition()) > a_cullRadius * a_cullRadius)
 			return;
+
+		// Runs for EVERY actor, not only the ones with an aura of their own:
+		// an ordinary bandit killed by fire is exactly the case this is for.
+		ConsiderCorpseEffect(actor.get(), a_deltaTime);
+
 		const auto* record = ResolveInnateAura(actor.get());
 		if (!record)
 			return;
@@ -926,9 +1044,12 @@ void SnowDeformation::GatherSpellEmitters()
 		spellAuraPrev.clear();
 		activeCloaks.clear();
 		innateAuras.clear();
+		corpseEffects.clear();
+		lastElementalHit.clear();
 		{
 			std::scoped_lock lock(queuedCastLock);
 			queuedDeaths.clear();
+			queuedHits.clear();
 		}
 		return;
 	}
@@ -994,7 +1115,7 @@ void SnowDeformation::GatherSpellEmitters()
 		// Innate auras run beside the cast ones, through the same emitter and
 		// the same melt path - only their lifecycle differs, so they keep
 		// their own map rather than a flag in that one.
-		GatherInnateAuras(cloakDelta, cameraPosition, cullRadius);
+		GatherActorMarks(cloakDelta, cameraPosition, cullRadius);
 	}
 
 	// Every projectile still flying, recorded before any culling or

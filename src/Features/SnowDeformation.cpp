@@ -52,6 +52,8 @@
 	X(NoCarveFloatingActors) \
 	X(FloatingActorBand) \
 	X(IncorporealMode) \
+	X(CorpseElementalMarks) \
+	X(CorpseEffectSeconds) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \
 	X(AtronachFireBurnSeconds) \
