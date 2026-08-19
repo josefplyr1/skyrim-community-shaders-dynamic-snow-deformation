@@ -1470,6 +1470,7 @@
     "feature.snow_deformation.melt_emitter_remove": "Remove",
     "feature.snow_deformation.melt_persistence": "Fire Melt Persistence",
     "feature.snow_deformation.melt_persistence_tooltip": "How much longer melted ground stays bare than trampled ground. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. 0 = both recover at the same rate.",
+    "feature.snow_deformation.menu_advanced": "Advanced",
     "feature.snow_deformation.model_depths": "Snow Depth by Model Class",
     "feature.snow_deformation.model_depths_tooltip": "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh.",
     "feature.snow_deformation.mound_steepness": "Mound Steepness",
