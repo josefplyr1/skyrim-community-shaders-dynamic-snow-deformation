@@ -793,6 +793,9 @@ void SnowDeformation::DrawShell()
 		context->DSSetShader(tessDS, nullptr, 0);
 		context->HSSetConstantBuffers(0, 1, cbs);
 		context->DSSetConstantBuffers(0, 1, cbs);
+		// SharedData (b5): the skirt descent reads the EM height-blending
+		// gate; bind the b4-b6 triple exactly as the PS gets it above.
+		context->DSSetConstantBuffers(4, 3, sharedBuffers);
 		// The hull shader reads the deformation map for trench-aware factors.
 		ID3D11ShaderResourceView* hsDeformSRV = GetDeformationSRV();
 		context->HSSetShaderResources(1, 1, &hsDeformSRV);
@@ -868,6 +871,8 @@ void SnowDeformation::DrawShell()
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
+		ID3D11Buffer* nullSharedCBs[3] = {};
+		context->DSSetConstantBuffers(4, 3, nullSharedCBs);
 		ID3D11SamplerState* nullDSSampler = nullptr;
 		context->DSSetSamplers(0, 1, &nullDSSampler);
 	}

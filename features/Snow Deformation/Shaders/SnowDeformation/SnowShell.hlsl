@@ -1160,6 +1160,30 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 
+	float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
+	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	// Coarser mips with distance: vertex density falls below texel density
+	// out there and full-res sampling shimmers.
+	float snowMip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
+
+	// Grain-driven skirt descent (HEIGHT-BLEND-PLAN round 5): EM's boundary
+	// look is sharpened weights + the parallax march displacing the boundary
+	// per view ray; the shell's analog is real geometry. Across the coverage
+	// edge band the surface descends to the ground in grain-shaped tongues
+	// instead of a knife-cut hover. Half the PS alpha's sharpness: the alpha
+	// cuts the crisp outline on top, while near-binary geometry raises
+	// vertical walls that smear the top-projected texture. Deterministic per
+	// position (grid-local + world-anchored grain), so shared patch-edge
+	// vertices agree and the mesh stays crack-free.
+	float descentBlend = SnowHeightBlendSharpness(camDist);
+	float wEdge = smoothstep(0.0, 0.6, coverage);
+	[branch] if (HasSnowHeight > 0.5 && descentBlend > 1.0 && z > terrainHeight && wEdge < 0.999)
+	{
+		float hDescent = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
+		float descent = SnowHeightBlendOneSided(wEdge, hDescent, 1.0 + (descentBlend - 1.0) * 0.5);
+		z = terrainHeight + (z - terrainHeight) * descent;
+	}
+
 	// Real relief from the PBR displacement map, through the SAME anti-tiling
 	// taps the PS shades with, so the normal map's shading and the geometry
 	// describe one surface. (Until 2026-08-17 this took a single un-offset
@@ -1171,19 +1195,14 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	// distance band as the micro-normal.
 	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
 	{
-		float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
 		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
 		float depthAbove = z - terrainHeight;
 		[branch] if (reliefFade > 0.001 && depthAbove > 0.5)
 		{
-			float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-			// Coarser mips with distance: vertex density falls below texel
-			// density out there and full-res sampling shimmers.
-			float mip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
 			// Same uv and same world XY the PS feeds ComputeSnowTaps, so the
 			// tap set here is the one that will shade this point.
 			SnowTaps reliefTaps = ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal);
-			float h = SampleSnowHeight(reliefTaps, 0.0.xx, mip);
+			float h = SampleSnowHeight(reliefTaps, 0.0.xx, snowMip);
 			float carve = saturate(SampleDeformation(gridLocal));
 			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
 		}

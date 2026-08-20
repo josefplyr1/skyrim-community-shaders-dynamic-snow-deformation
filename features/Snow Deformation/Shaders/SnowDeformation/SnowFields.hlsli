@@ -114,6 +114,7 @@ float SampleTerrainVertexAO(float2 gridLocal)
 	float s11 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t1.x, t1.y, 0)));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
+#endif  // PSHADER
 
 // EM's landscape height blending (ExtendedMaterialsTerrain.hlsli::
 // ProcessTerrainHeightWeights) specialized to two surfaces: an edge fade
@@ -155,6 +156,5 @@ float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
 {
 	return SnowHeightBlend(w, hSnow, 1.0 - w, heightBlend);
 }
-#endif  // PSHADER
 
 #endif  //__SNOW_FIELDS_DEPENDENCY_HLSL__
