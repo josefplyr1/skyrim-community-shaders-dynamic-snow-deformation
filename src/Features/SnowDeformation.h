@@ -1887,6 +1887,8 @@ protected:
 		uint32_t formID = 0;
 		RE::NiPoint3 position{};
 		SpellElement element = SpellElement::None;
+		/** @brief The dying actor, so a FUSED death can follow the body through its death animation. The position at event time is where it STOOD when the engine decided it was dead; a flame atronach then collapses and slides for seconds before bursting, and the mark belongs under the corpse, not under the decision. */
+		RE::ActorHandle actor;
 	};
 	std::vector<QueuedDeath> queuedDeaths;
 
@@ -1936,6 +1938,8 @@ protected:
 		SpellElement element = SpellElement::None;
 		RE::NiPoint3 position{};
 		float fuse = 0.0f;
+		/** @brief Followed while it still resolves; the last position it was seen at is where the blast lands. */
+		RE::ActorHandle actor;
 	};
 	std::vector<PendingDeathBlast> pendingDeathBlasts;
 

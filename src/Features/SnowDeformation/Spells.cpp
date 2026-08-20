@@ -653,6 +653,7 @@ RE::BSEventNotifyControl SnowDeformation::DeathSink::ProcessEvent(
 	queued.formID = actor->formID;
 	queued.position = actor->GetPosition();
 	queued.element = record.element;
+	queued.actor = actor->GetHandle();
 	{
 		std::scoped_lock lock(feature.queuedCastLock);
 		if (feature.queuedDeaths.size() < kMaxSpellEmitters)
@@ -1374,7 +1375,8 @@ void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_
 					// after the stagger. Mark when the EXPLOSION happens, not
 					// when the engine first knows it will.
 					state.blasted = true;
-					pendingDeathBlasts.push_back({ death.formID, death.element, death.position, kFireDeathFuseSeconds });
+					pendingDeathBlasts.push_back({ death.formID, death.element, death.position,
+						kFireDeathFuseSeconds, death.actor });
 				} else {
 					const size_t before = activeBlasts.size();
 					OpenInnateDeathBlast(state, death.position);
@@ -2282,6 +2284,13 @@ void SnowDeformation::GatherSpellEmitters()
 		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
 		for (auto pend = pendingDeathBlasts.begin(); pend != pendingDeathBlasts.end();) {
 			pend->fuse -= deltaTime;
+			// Follow the body while it lasts. The event-time position is where
+			// it STOOD when the engine decided it was dead; the corpse then
+			// collapses and slides through the death animation, and the burst
+			// happens wherever it ends up. Only the POSITION is read - the
+			// same touch every stamp already makes, never the effect list.
+			if (auto actor = pend->actor.get(); actor && actor->Is3DLoaded())
+				pend->position = actor->GetPosition();
 			if (pend->fuse > 0.0f) {
 				++pend;
 				continue;
