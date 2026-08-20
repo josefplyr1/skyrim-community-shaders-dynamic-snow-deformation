@@ -1335,6 +1335,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// nothing in this pass; TB's alpha path runs through depth-prepass
 	// machinery not replicated here.
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	// Uniform flow: feeds the AA rim inside the branch below.
+	float edgeAAWidth = fwidth(coverageAlpha);
 	[branch] if (ShellLODDebug == 1)
 	{
 		// Heatmap analyzes the covered snow surface only: bare/submerged
@@ -1346,17 +1348,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellDebugData == 0 && ShellLODDebug == 0)
 	{
-		// A/B (HEIGHT-BLEND-PLAN round 4): where height blending shapes the
-		// edges, the shaped alpha decides outright and survivors write opaque
-		// - no stochastic dissolve, and no partial alpha left for the
-		// deferred resolve to re-dither through the .w outputs below. Any
-		// dither still visible in that state is not this shader's. The far
-		// field (sharpness decayed to 1) keeps the dithered cross-fade.
+		// Where height blending shapes the edges, the shaped alpha decides
+		// outright (HEIGHT-BLEND-PLAN round 4) - no stochastic dissolve, and
+		// no partial alpha left for the deferred resolve to re-dither through
+		// the .w outputs below. Round 5: the raw 0.5 test read as a razor
+		// cut, so the test rides a screen-space ramp at the crossing; alpha
+		// is near-binary after shaping, so the ramp is a hairline, and the
+		// noise test dithers only that hairline - TAA resolves it as edge
+		// AA. The far field (sharpness decayed to 1) keeps the full dithered
+		// cross-fade.
 		if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
 		{
-			if (coverageAlpha < 0.5)
+			float edgeAA = saturate((coverageAlpha - 0.5) / max(edgeAAWidth, 1e-4) + 0.5);
+			if (screenNoise * screenNoise >= edgeAA)
 				discard;
-			coverageAlpha = 1.0;
+			coverageAlpha = edgeAA;
 		}
 		else if (screenNoise * screenNoise >= coverageAlpha)
 			discard;
