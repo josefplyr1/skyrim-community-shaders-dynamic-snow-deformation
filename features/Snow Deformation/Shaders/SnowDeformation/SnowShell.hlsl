@@ -1786,7 +1786,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// ROUTING-ROADMAP M1): glints, energy conservation and every future
 	// TruePBR lobe ride the shared code. Outputs are Lighting-internal units;
 	// Color::PBRLightingScale is applied at the write tail below.
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;

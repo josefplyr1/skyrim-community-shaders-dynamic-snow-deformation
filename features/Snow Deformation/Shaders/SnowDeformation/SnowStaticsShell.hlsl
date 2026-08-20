@@ -1963,7 +1963,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
 	// ground snow shade identically across the SnowSnowFade cross-fade.
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;

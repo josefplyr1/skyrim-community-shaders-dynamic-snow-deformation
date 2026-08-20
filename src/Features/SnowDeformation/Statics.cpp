@@ -2,6 +2,7 @@
 
 #include <d3dcompiler.h>
 
+#include "Features/ExponentialHeightFog.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -405,9 +406,13 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
 		}
 	}
+	// EHF sun attenuation only compiles when the addon is installed (its
+	// hlsli is not CORE); the shells' PBR sun path gates on this define.
+	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+
 	if (!staticsPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
 				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
@@ -426,7 +431,7 @@ bool SnowDeformation::EnsureStaticsShaders()
 	}
 	if (!patchPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH"));
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH", ehfDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
 				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");

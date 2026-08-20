@@ -28,6 +28,16 @@ static uint PBRFlags = 0;
 
 #include "Common/LightingEval.hlsli"
 
+// EHF is an addon, not CORE: the include only resolves when it is installed,
+// so the CPU side gates the define on the feature being loaded. Its volumetric
+// functions (uncalled here) sample through the host shader's SampColorSampler;
+// alias the shell's linear sampler for the parse.
+#if defined(SNOW_EXP_HEIGHT_FOG)
+#	define SampColorSampler ShellLinearSampler
+#	include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
+#	undef SampColorSampler
+#endif
+
 struct SnowSunLighting
 {
 	float3 directDiffuse;   // albedo-multiplied, incl. transmission
@@ -38,7 +48,9 @@ struct SnowSunLighting
 
 // glintParams = (logMicrofacetDensity, microfacetRoughness,
 // densityRandomization, screenSpaceScale) - the ShellCB packing.
-SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float sunShadow,
+// worldPos is camera-relative, camPosAdjust the camera's world offset - the
+// pair GetSunlightFogAttenuation expects (same as Lighting/RunGrass).
+SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float3 worldPos, float3 camPosAdjust, float sunShadow,
 	float3 albedo, float roughness, float3 F0, float ao,
 	float4 glintParams, float glintActive,
 	float2 glintUV, float2 uvDDX, float2 uvDDY, float2 pixelPos)
@@ -46,6 +58,14 @@ SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float sunShadow,
 	// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
 	// Lighting.hlsl feeds its dir light context.
 	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
+
+	// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
+	// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
+	// shell read warmer than the ground beside it.
+#if defined(SNOW_EXP_HEIGHT_FOG)
+	[branch] if (SharedData::exponentialHeightFogSettings.enabled)
+		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
+#endif
 
 	MaterialProperties material = (MaterialProperties)0;
 	material.BaseColor = albedo;

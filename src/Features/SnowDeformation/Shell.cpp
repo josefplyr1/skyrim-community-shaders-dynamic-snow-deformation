@@ -3,6 +3,7 @@
 #include <DDSTextureLoader.h>
 
 #include "Deferred.h"
+#include "Features/ExponentialHeightFog.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -305,9 +306,22 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 {
 	if (!shellPS) {
 		logger::debug("Compiling SnowShell PS");
-		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+		auto defines = ShellPSDefines();
+		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;
+}
+
+// EHF sun attenuation only compiles when the addon is installed (its hlsli
+// is not CORE); SnowShading.hlsli gates on the define.
+std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines(const char* a_extra)
+{
+	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
+	if (a_extra)
+		defines.emplace_back(a_extra, "");
+	if (globals::features::exponentialHeightFog.loaded)
+		defines.emplace_back("SNOW_EXP_HEIGHT_FOG", "");
+	return defines;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellLODPS()
@@ -317,7 +331,8 @@ ID3D11PixelShader* SnowDeformation::GetShellLODPS()
 	// G-buffer down to kMAIN.
 	if (!shellLODPS) {
 		logger::debug("Compiling SnowShell LOD heatmap PS");
-		shellLODPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "PSHADER", "" }, { "SNOW_LOD_HISTOGRAM", "" } }, "ps_5_0"));
+		auto defines = ShellPSDefines("SNOW_LOD_HISTOGRAM");
+		shellLODPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellLODPS;
 }
