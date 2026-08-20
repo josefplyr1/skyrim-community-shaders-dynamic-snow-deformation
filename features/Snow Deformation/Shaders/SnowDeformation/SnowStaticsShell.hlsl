@@ -1982,14 +1982,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 			normalWS, V, viewZ, screenUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;
+	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 	float3 ambientPart = ambientColor * diffuseLobe;
 	// Skylighting parity; same path as the terrain shell.
 	[branch] if (SkylightingActive > 0.5)
 	{
 		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS);
-		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
+		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
 	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance

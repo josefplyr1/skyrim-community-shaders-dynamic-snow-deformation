@@ -1815,16 +1815,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 			normalWS, V, viewZ, clusterUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
 	}
 
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS))) * snowAO;
+	// No AO here: the routed GetIndirectLobeWeights already folds snowAO into
+	// diffuseLobe via MultiBounceAO (PBR.hlsli:276), exactly as ground does.
+	// Multiplying again was double-counting - it read as darker nights and
+	// less-blue days, ambient being where the sky blue lives.
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 	float3 ambientPart = ambientColor * diffuseLobe;
 	// Skylighting parity with Lighting.hlsl's deferred tail: the ambient is
 	// darkened by the probe volume with the same multi-bounce term terrain
-	// uses, so the shell's shade matches adjacent ground.
+	// uses (ApplySkylighting passes the SCALED albedo).
 	[branch] if (SkylightingActive > 0.5)
 	{
 		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS);
-		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
+		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
 	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
