@@ -185,6 +185,9 @@ cbuffer ShellCB : register(b0)
 	// world tile size, w = whether the pattern loaded at all. Those three ride
 	// spare room here rather than growing a buffer mirrored across two shaders.
 	float4 CrustLook2;
+	// x > 0.5 = stochastic dissolve allowed; 0 = hard alpha test everywhere,
+	// survivors opaque. yzw spare.
+	float4 BorderStyle;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1381,16 +1384,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellDebugData == 0 && ShellLODDebug == 0)
 	{
-		// Where height blending shapes the edges, the shaped alpha decides
-		// outright (HEIGHT-BLEND-PLAN round 4) - no stochastic dissolve, and
-		// no partial alpha left for the deferred resolve to re-dither through
-		// the .w outputs below. Round 5: the raw 0.5 test read as a razor
-		// cut, so the test rides a screen-space ramp at the crossing; alpha
-		// is near-binary after shaping, so the ramp is a hairline, and the
-		// noise test dithers only that hairline - TAA resolves it as edge
-		// AA. The far field (sharpness decayed to 1) keeps the full dithered
-		// cross-fade.
-		if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
+		// Border Dithering OFF: hard alpha test everywhere and survivors
+		// write fully opaque, so no partial alpha reaches the deferred
+		// resolve through the .w outputs below - any translucency still on
+		// screen in this state is provably not this shader's. Dithering ON:
+		// where height blending shapes the edges, the shaped alpha decides
+		// outright (HEIGHT-BLEND-PLAN round 4) with a ~1px AA rim (round 5:
+		// the raw 0.5 test read as a razor cut; alpha is near-binary after
+		// shaping, so the screen-space ramp is a hairline and the noise test
+		// dithers only that hairline - TAA resolves it as edge AA); the far
+		// field (sharpness decayed to 1) keeps the full dithered cross-fade.
+		if (BorderStyle.x < 0.5)
+		{
+			if (coverageAlpha < 0.5)
+				discard;
+			coverageAlpha = 1.0;
+		}
+		else if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
 		{
 			float edgeAA = saturate((coverageAlpha - 0.5) / max(edgeAAWidth, 1e-4) + 0.5);
 			if (screenNoise * screenNoise >= edgeAA)

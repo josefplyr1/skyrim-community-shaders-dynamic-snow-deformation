@@ -1351,6 +1351,8 @@
     "feature.snow_deformation.berm_height_tooltip": "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm.",
     "feature.snow_deformation.blast_radius_scale": "Fire Blast Radius",
     "feature.snow_deformation.blast_radius_scale_tooltip": "Size of the crater a detonation leaves, against the radius the explosion itself authors. Those radii are tuned for how far the blast HURTS, which is a good deal wider than the ground it should scar.",
+    "feature.snow_deformation.border_dithering": "Border Dithering",
+    "feature.snow_deformation.border_dithering_tooltip": "Stochastic dissolve on the landscape shell's edges. Off = every edge is a hard height-blended cut and committed snow is fully opaque; distant borders lose their soft cross-fade too. Useful to judge the height-blended edge shapes without dither noise.",
     "feature.snow_deformation.border_noise": "Border Noise",
     "feature.snow_deformation.border_noise_tooltip": "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam.",
     "feature.snow_deformation.border_smoothness": "Border Smoothness",

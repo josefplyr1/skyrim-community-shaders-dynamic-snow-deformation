@@ -295,6 +295,10 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("snow_borders"), "Snow Borders"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttBorders = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
+		ImGui::Checkbox(T(TKEY("border_dithering"), "Border Dithering"), &settings.SnowBorderDithering);
+		if (auto _ttBd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Stochastic dissolve on the landscape shell's edges. Off = every edge is a hard height-blended cut and committed snow is fully opaque; distant borders lose their soft cross-fade too. Useful to judge the height-blended edge shapes without dither noise."));
+
 		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
 		if (auto _ttWcs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));

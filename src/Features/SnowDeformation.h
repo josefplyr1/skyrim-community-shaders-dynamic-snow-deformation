@@ -436,6 +436,8 @@ public:
 		float WallDriftHeight = 12.0f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
+		/** @brief Stochastic dissolve on the landscape shell's edges. Off = hard height-blended alpha test everywhere and survivors write opaque, so no partial alpha reaches the deferred resolve; the far field loses its dithered cross-fade too. */
+		bool SnowBorderDithering = true;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 48.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -750,8 +752,10 @@ public:
 		float4 SpellShading;
 		/** @brief x = reflectance of fully crusted snow, yz = red and green of its colour cast, w = grazing-angle sheen strength. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook;
-		/** @brief x = blue of the crust colour cast. Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
+		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test everywhere, survivors opaque). yzw spare. Appended LAST; mirror any change in SnowShell.hlsl. */
+		float4 BorderStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
