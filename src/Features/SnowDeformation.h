@@ -465,7 +465,7 @@ public:
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
-		float BermHeight = 0.50f;
+		float BermHeight = 0.33f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
