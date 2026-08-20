@@ -1346,7 +1346,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellDebugData == 0 && ShellLODDebug == 0)
 	{
-		if (screenNoise * screenNoise >= coverageAlpha)
+		// A/B (HEIGHT-BLEND-PLAN round 4): where height blending shapes the
+		// edges, the shaped alpha decides outright and survivors write opaque
+		// - no stochastic dissolve, and no partial alpha left for the
+		// deferred resolve to re-dither through the .w outputs below. Any
+		// dither still visible in that state is not this shader's. The far
+		// field (sharpness decayed to 1) keeps the dithered cross-fade.
+		if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
+		{
+			if (coverageAlpha < 0.5)
+				discard;
+			coverageAlpha = 1.0;
+		}
+		else if (screenNoise * screenNoise >= coverageAlpha)
 			discard;
 	}
 
