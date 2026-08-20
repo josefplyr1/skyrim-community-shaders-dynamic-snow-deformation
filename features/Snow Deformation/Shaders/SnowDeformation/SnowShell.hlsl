@@ -37,12 +37,16 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "Skylighting/Skylighting.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
-// Extended Materials' parallax self-shadow math (Tatarchuk 2006) reused
-// verbatim: DisplacementParams, AdjustDisplacementNormalized, the tap-count
-// and quality constants. Only the four fetches are replaced, so they can run
-// through our anti-tiling taps. LANDSCAPE/TRUE_PBR stay undefined, so the
-// terrain and PBR branches of the header compile out. Extended Materials is
-// CORE, so the include always resolves.
+// Extended Materials' parallax: the POM march runs EM's own GetParallaxCoords
+// through the EM_PARALLAX_CUSTOM_HEIGHT injection point (fetches routed via
+// the anti-tiling taps; body in SnowParallax.hlsli - M4). The soft-shadow
+// taps stay locally reimplemented (the statics shell blends two planar
+// projections' RAW occlusions, which EM's multiplier API cannot express).
+// LANDSCAPE/TRUE_PBR stay undefined here, so the terrain and PBR branches of
+// the header compile out. Extended Materials is CORE, so the include always
+// resolves.
+#	define EM_PARALLAX_CUSTOM_HEIGHT
+float EMParallaxCustomHeight(float2 uv, float mip);
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
 // Routed PBR tail (defines TRUE_PBR + GLINT for everything it pulls in,
 // including the glint NDF) - must come after the includes above (they must
@@ -1439,13 +1443,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// normal, RMAOS and the parallax shadow all ride the displaced position.
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
-		// bumpT/bumpB ARE the uv axes (world-XY planar projection), so this is
-		// the planar equivalent of normalize(mul(tbn, viewDirection)).
-		float3 viewTS = normalize(float3(dot(V, bumpT), dot(V, bumpB), dot(V, normalWS)));
+		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
+		// marcher builds tangent-space view from this frame itself.
+		float3x3 snowTbn = float3x3(bumpT, bumpB, normalWS);
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
-		float2 pomOffset = SnowParallaxOffset(snowTaps, viewTS, snowHeightMip,
-			1.0 - bumpFade, (uint)max(SnowParallax.w, 4.0), pomParams);
+		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
 		snowUV += pomOffset;
 		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
 	}

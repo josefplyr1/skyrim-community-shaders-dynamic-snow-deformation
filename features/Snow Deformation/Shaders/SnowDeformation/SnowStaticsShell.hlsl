@@ -32,8 +32,11 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "Skylighting/Skylighting.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
-// Extended Materials' parallax self-shadow math; see SnowShell.hlsl for why
-// only the fetches are reimplemented.
+// Extended Materials' parallax; see SnowShell.hlsl - the POM march routes
+// through EM's marcher via the injection point, the soft-shadow taps stay
+// local for the two-plane raw-occlusion blend.
+#	define EM_PARALLAX_CUSTOM_HEIGHT
+float EMParallaxCustomHeight(float2 uv, float mip);
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
 // Routed PBR tail (defines TRUE_PBR + GLINT for everything it pulls in,
 // including the glint NDF) - must come after the includes above (they must
@@ -1770,24 +1773,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
-		uint pomSteps = (uint)max(SnowParallax.w, 4.0);
-		float pomFade = 1.0 - bumpFade;
 
 		// Top plane: bumpT/bumpB ARE its uv axes.
-		float3 viewTSTop = normalize(float3(dot(V, bumpT), dot(V, bumpB), dot(V, normalWS)));
-		float2 offsetTop = SnowParallaxOffset(snowTaps, viewTSTop, snowHeightMip, pomFade, pomSteps, pomParams);
+		float3x3 tbnTop = float3x3(bumpT, bumpB, normalWS);
+		float2 offsetTop = SnowParallaxOffset(snowTaps, snowUV, V, tbnTop, pixelDist, snowHeightMip, screenNoise, pomParams);
 		snowUV += offsetTop;
 		snowTaps = OffsetSnowTaps(snowTaps, offsetTop);
 
 		// Side plane: raw world axes by construction, matching how
-		// snowSidePlane was built. Only steep pixels pay for it.
+		// snowSidePlane was built. Only steep pixels pay for it. The plane
+		// normal is flipped toward the viewer (the old path took abs of the
+		// view's N component for the same tolerance).
 		[branch] if (snowSteepness > 0.001)
 		{
 			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
 			float3 sideB = float3(0.0, 0.0, 1.0);
 			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
-			float3 viewTSSide = normalize(float3(dot(V, sideT), dot(V, sideB), abs(dot(V, sideN))));
-			float2 offsetSide = SnowParallaxOffset(snowTapsSide, viewTSSide, snowHeightMipSide, pomFade, pomSteps, pomParams);
+			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
+			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
+			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, pixelDist, snowHeightMipSide, screenNoise, pomParams);
 			snowUVSide += offsetSide;
 			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
 		}

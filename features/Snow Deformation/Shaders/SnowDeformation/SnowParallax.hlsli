@@ -187,76 +187,35 @@ SnowTaps OffsetSnowTaps(SnowTaps taps, float2 uvOffset)
 	return taps;
 }
 
-// Parallax occlusion march: Extended Materials' GetParallaxCoords, with the
-// fetches routed through the anti-tiling taps so the depth it resolves is the
-// depth of the grain that actually gets drawn. Structure, the grazing-angle
-// limiter, the contact refinement and the secant solve are EM's; the loop is
-// scalar rather than quad-vectorized because each of our fetches is already a
-// 3-tap blend, so the cost lives in the taps and not in the lane count.
-//
-// Returns a uv OFFSET (zero when disabled), applied to the base uv and to
-// every tap. Marching the blended field rather than the dominant tap is
-// deliberate: the dominant tap flips at Voronoi boundaries, and a flip means
-float2 SnowParallaxOffset(SnowTaps taps, float3 viewTS, float mip, float distFade, uint maxSteps, DisplacementParams params)
+// Context for EMParallaxCustomHeight: HLSL has no closures, so the taps and
+// base uv the march reads through are parked in statics just before calling
+// into Extended Materials' marcher.
+static SnowTaps g_snowParallaxTaps;
+static float2 g_snowParallaxBaseUV;
+
+// The height fetch EM's marcher calls through its EM_PARALLAX_CUSTOM_HEIGHT
+// injection point (prototype declared by the shells before the EM include):
+// every march step runs the same anti-tiling blend the shading samples, so
+// the depth the march resolves is the depth of the grain actually drawn.
+float EMParallaxCustomHeight(float2 uv, float mip)
 {
-	// EM's grazing limiter, NOT a true 1/z: unbounded shear at grazing angles
-	// breaks the sampling derivatives into marbling. That is the failure that
-	// killed the 2026-08-14 attempt (7ce548ba), and the reason this divisor
-	// looks arbitrary.
-	viewTS.xy /= viewTS.z * 0.7 + 0.3 + params.FlattenAmount;
+	return SampleSnowHeight(g_snowParallaxTaps, uv - g_snowParallaxBaseUV, mip);
+}
 
-	float maxHeight = 0.1 * params.HeightScale;
-	float minHeight = maxHeight * 0.5;
-
-	uint numSteps = (uint)max(4.0, round(maxSteps * (1.0 - distFade)));
-	float stepSize = rcp((float)numSteps);
-	float2 perStep = viewTS.xy * maxHeight * stepSize;
-
-	// Ray enters half a slab above the polygon plane: displacement 0.5 IS the
-	// plane (EM centres its height convention), so relief runs both ways.
-	float2 prevOffset = viewTS.xy * minHeight;
-	float prevBound = 1.0;
-	float prevHeight = 1.0;
-
-	float2 pt1 = 0.0.xx;
-	float2 pt2 = 0.0.xx;
-
-	uint stepsLeft = numSteps;
-	bool refined = false;
-	[loop] while (stepsLeft > 0)
-	{
-		float2 offs = prevOffset - perStep;
-		float bound = prevBound - stepSize;
-		float h = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, offs, mip), params);
-		[branch] if (h >= bound)
-		{
-			pt1 = float2(bound, h);
-			pt2 = float2(prevBound, prevHeight);
-			if (refined)
-				break;
-			// Contact refinement: re-march the straddling interval at the full
-			// budget, so N steps resolve like N*N. prev* still holds the empty
-			// end of the interval, which is where the finer march restarts.
-			refined = true;
-			stepsLeft = numSteps;
-			stepSize /= (float)numSteps;
-			perStep /= (float)numSteps;
-			continue;
-		}
-		prevOffset = offs;
-		prevBound = bound;
-		prevHeight = h;
-		stepsLeft--;
-	}
-
-	// Line-line intersection of the ray against the height segment.
-	float d2 = pt2.x - pt2.y;
-	float d1 = pt1.x - pt1.y;
-	float denom = d2 - d1;
-	float parallaxAmount = denom == 0.0 ? 0.0 : (pt1.x * d2 - pt2.x * d1) / denom;
-
-	float offset = (1.0 - parallaxAmount) * -maxHeight + minHeight;
-	return viewTS.xy * offset * (1.0 - distFade);
+// Parallax occlusion march: Extended Materials' OWN GetParallaxCoords
+// (ROUTING-ROADMAP M4), reached through the injection point above. Step
+// budget, distance fade, grazing limiter, quad-vectorized contact refinement
+// and the secant solve are all EM's - the same policies the ground beside
+// the shell gets. Returns a uv OFFSET (zero when disabled), applied by the
+// caller to the base uv and every tap.
+float2 SnowParallaxOffset(SnowTaps taps, float2 baseUV, float3 viewWS, float3x3 tbn, float pixelDist, float mip, float noise, DisplacementParams params)
+{
+	g_snowParallaxTaps = taps;
+	g_snowParallaxBaseUV = baseUV;
+	float pixelOffsetUnused;
+	float2 resultCoords = ExtendedMaterials::GetParallaxCoords(pixelDist, baseUV, mip, viewWS, tbn, noise,
+		SnowHeightMap, SnowSampler, 0, params, pixelOffsetUnused);
+	return resultCoords - baseUV;
 }
 #endif  // PSHADER
 
