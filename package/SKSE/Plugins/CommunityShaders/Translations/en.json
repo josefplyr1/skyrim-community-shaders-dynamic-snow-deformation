@@ -1440,6 +1440,8 @@
     "feature.snow_deformation.force_track_depth": "Travelling Shove Depth",
     "feature.snow_deformation.force_track_depth_tooltip": "How deep a travelling shove scours, against a full carve. A vortex scours the surface rather than digging to the ground - and the raised rim is derived from how deep the cut goes, so this is the dial that decides whether the trail reads as a scoured hollow or as a canyon with a ridge down each side.",
     "feature.snow_deformation.force_track_tooltip": "Width of the trail left by a shove slow enough to watch travel - a cyclone rather than a shockwave. Those are told apart by speed alone: every shout blast crosses its own reach in about a second, while a cyclone crawls at barely above a sprint and takes four, so it leaves the line it took instead of a wedge. Nothing authors a width for it any more than for a cone, so this is taste.",
+    "feature.snow_deformation.fringe_slices": "Fringe Slices",
+    "feature.snow_deformation.fringe_slices_tooltip": "Thin snow layers stacked across the border fringe: low layers settle only into the ground texture's hollows, so snow and dirt interpenetrate in 3D instead of meeting at a single cut. 0 disables. Untrampled Border Fade sets the stack's height.",
     "feature.snow_deformation.frost_pattern": "Frost Crystal Detail",
     "feature.snow_deformation.frost_pattern_scale": "Frost Crystal Size",
     "feature.snow_deformation.frost_pattern_scale_tooltip": "How large the crystal pattern is on the ground. Not a repeat distance - the sampling scatters the texture so there is no repeat to find - just how big the frost structure reads.",

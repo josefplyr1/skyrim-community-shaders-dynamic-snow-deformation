@@ -382,6 +382,10 @@ struct VS_OUTPUT
 	float DebugHeight : TEXCOORD5;
 	// xyz: smooth per-vertex terrain normal, w: coverage alpha (taper*fade).
 	float4 TerrainNormalAlpha : TEXCOORD6;
+#ifdef SNOW_FRINGE_SLICE
+	// Slice level in world units above the terrain (constant per instance).
+	float SliceH : TEXCOORD7;
+#endif
 };
 
 // Manual bilinear over the terrain window (Load-based, deterministic).
@@ -987,11 +991,20 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	vsout.Snowness = coverage;
 	vsout.DebugHeight = terrainHeight;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
+#ifdef SNOW_FRINGE_SLICE
+	// Overwritten by the slice VS; defaulted here so every path returns a
+	// fully written struct.
+	vsout.SliceH = 0.0;
+#endif
 	return vsout;
 }
 
 #if defined(VSHADER) && !defined(SNOW_TESS)
+#ifdef SNOW_FRINGE_SLICE
+VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
+#else
 VS_OUTPUT main(uint vertexID : SV_VertexID)
+#endif
 {
 	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	static const float2 kCornersFlipped[6] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
@@ -1038,7 +1051,24 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
 #endif
 
+#ifdef SNOW_FRINGE_SLICE
+	// Fringe slice (HEIGHT-BLEND-PLAN Phase 1c): instance k is a thin sheet
+	// at a fixed level above the terrain, spanning the contact fringe.
+	// Inside a deep sheet the top surface z-culls the slices (drawn after
+	// it); deep-bare ground sinks them out of existence here. Levels split
+	// the Untrampled fringe band, staggered off the ground and the top.
+	float sliceSheetH = z - terrainHeight;
+	float sliceH = (float(instanceID) + 0.5) / max(BorderStyle.z, 1.0) * max(BorderUntrampledFade, 2.0);
+	z = sliceSheetH < -2.0 ? terrainHeight - 100.0 : terrainHeight + sliceH;
+#endif
+
+#ifdef SNOW_FRINGE_SLICE
+	VS_OUTPUT sliceOut = FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+	sliceOut.SliceH = sliceH;
+	return sliceOut;
+#else
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
+#endif
 }
 #endif
 
@@ -1381,6 +1411,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// blending on and the height map bound.
 	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+#	ifdef SNOW_FRINGE_SLICE
+	// Slice occupancy/occlusion (HEIGHT-BLEND-PLAN Phase 1c): this pixel of
+	// slice k survives where the snow surface reaches the slice's level AND
+	// no dirt grain stands taller - low slices live only in the dirt's
+	// hollows, so the fringe interpenetrates with real depth instead of a
+	// single flat cut. Both height fields share the fringe band as their
+	// vertical scale; missing land data reads as a neutral mid bump.
+	{
+		[branch] if (psEdgeFade < 0.5 || HasSnowHeight < 0.5)
+			discard;
+		float sliceGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;
+		[branch] if (snowTop < input.SliceH)
+			discard;
+		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		float hLandWorld = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * rampFadeBand;
+		[branch] if (hLandWorld > input.SliceH)
+			discard;
+		coverageAlpha = 1.0;
+	}
+#	else
 	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
@@ -1395,6 +1446,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		else
 			coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
 	}
+#	endif
 
 	// Stochastic discard dither: writing alpha without discarding blends
 	// nothing in this pass; TB's alpha path runs through depth-prepass
@@ -1402,6 +1454,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	// Uniform flow: feeds the AA rim inside the branch below.
 	float edgeAAWidth = fwidth(coverageAlpha);
+#	ifndef SNOW_FRINGE_SLICE
 	[branch] if (ShellLODDebug == 1)
 	{
 		// Heatmap analyzes the covered snow surface only: bare/submerged
@@ -1439,6 +1492,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		else if (screenNoise * screenNoise >= coverageAlpha)
 			discard;
 	}
+#	endif  // !SNOW_FRINGE_SLICE
 
 	// Normal = smooth interpolated terrain normal + per-pixel gradient of
 	// the shared carve profile (central differences at the deformation
@@ -2025,9 +2079,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// terrain surface. Z-fighting is a distance problem, so the clamp starts
 	// well beyond anything the player stands next to.
 	psout.DepthLE = input.Position.z;
+#	ifndef SNOW_FRINGE_SLICE
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
 	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
+#	endif
 
 	return psout;
 }

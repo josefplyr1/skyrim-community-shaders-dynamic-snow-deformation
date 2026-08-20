@@ -340,6 +340,25 @@ ID3D11PixelShader* SnowDeformation::GetShellLODPS()
 	return shellLODPS;
 }
 
+ID3D11VertexShader* SnowDeformation::GetShellSliceVS()
+{
+	if (!shellSliceVS) {
+		logger::debug("Compiling SnowShell fringe-slice VS");
+		shellSliceVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_FRINGE_SLICE", "" } }, "vs_5_0"));
+	}
+	return shellSliceVS;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellSlicePS()
+{
+	if (!shellSlicePS) {
+		logger::debug("Compiling SnowShell fringe-slice PS");
+		auto defines = ShellPSDefines("SNOW_FRINGE_SLICE");
+		shellSlicePS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return shellSlicePS;
+}
+
 ID3D11VertexShader* SnowDeformation::GetShellTessVS()
 {
 	if (!shellTessVS) {
@@ -525,7 +544,8 @@ void SnowDeformation::DrawShell()
 	cbData.BorderNoise = settings.SnowBorderNoise;
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
-		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f), 0.0f, 0.0f };
+		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
+		std::clamp(settings.FringeSlices, 0.0f, 8.0f), 0.0f };
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
@@ -834,6 +854,21 @@ void SnowDeformation::DrawShell()
 	} else {
 		context->VSSetShader(vs, nullptr, 0);
 		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+	}
+
+	// Fringe slices (HEIGHT-BLEND-PLAN Phase 1c): instanced thin sheets in
+	// the contact fringe, drawn AFTER the top surface so interior slices
+	// z-cull against it. Legacy grid VS - flat sheets need no tessellation.
+	const UINT fringeSlices = (UINT)std::clamp(settings.FringeSlices, 0.0f, 8.0f);
+	if (fringeSlices > 0 && !lodHeatmap && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0) {
+		auto* sliceVS = GetShellSliceVS();
+		auto* slicePS = GetShellSlicePS();
+		if (sliceVS && slicePS) {
+			context->VSSetShader(sliceVS, nullptr, 0);
+			context->PSSetShader(slicePS, nullptr, 0);
+			context->DrawInstanced(kShellGridDim * kShellGridDim * 6, fringeSlices, 0, 0);
+			context->PSSetShader(ps, nullptr, 0);
+		}
 	}
 	globals::profiler->EndPass();
 
