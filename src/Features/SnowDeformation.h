@@ -1925,6 +1925,8 @@ protected:
 	void RegisterSpellCastSink();
 	/** @brief Calendar reading last frame, in game hours. -1 = not yet read. Watches for wait/sleep/fast-travel jumps, which move the game's clock without moving ours. */
 	float spellGameHours = -1.0f;
+	/** @brief Accumulated calendar-beyond-timescale movement, in game seconds. Zero-mean in normal play; a wait, sleep or fast travel piles up here and is then applied to every timer at once. */
+	float spellGameDrift = 0.0f;
 
 	/** @brief Queued by the sink on the GAME thread and drained by the gather on the render thread, hence the lock. */
 	struct QueuedCast

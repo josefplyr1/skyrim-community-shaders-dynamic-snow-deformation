@@ -570,6 +570,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			stampStats.incorporeal++;
 			return;
 		}
+		// A ghost's see-through look arrives by SCRIPT, frames after its model
+		// loads, and a carve is permanent until the refill buries it - so the
+		// stamps laid before the first honest alpha reading leave a trench no
+		// ghost should own. Re-reading faster (the previous fix) cannot close
+		// that window; not stamping until the readings settle does. Costs any
+		// newly seen actor its first second of prints, which nobody standing
+		// a hundred metres away has ever been close enough to miss.
+		const bool alphaGoverns = !elemental &&
+		                          (settings.IncorporealMode == 1 || settings.IncorporealMode == 3);
+		if (!isDead && alphaGoverns && bones && bones->alphaSettle < kBodyAlphaSettleReads) {
+			stampStats.incorporeal++;
+			return;
+		}
 
 		// Living actors need matched feet to take the bone path: a limbs-only
 		// match (creature spines/necks) would steal the collision-shape
