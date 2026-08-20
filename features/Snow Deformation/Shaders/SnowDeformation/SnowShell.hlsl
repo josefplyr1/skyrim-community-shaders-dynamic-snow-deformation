@@ -1496,6 +1496,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 V = -normalize(input.WorldPos);
 
+	// Pre-parallax uv for the glint grid, mirroring Lighting.hlsl's
+	// uvOriginal: the POM offset below is view-dependent, and glints anchored
+	// to the offset uv re-shuffle whenever the camera moves.
+	const float2 snowUVOriginal = snowUV;
+	const float2 glintDuvdx = snowTaps.duvdx;
+	const float2 glintDuvdy = snowTaps.duvdy;
+
 	// Parallax occlusion: the depth the shell was missing. The normal map
 	// only tilts the lighting; this moves the texture itself, so grain
 	// occludes grain and the surface reads as thick. Runs BEFORE every snow
@@ -1788,7 +1795,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Color::PBRLightingScale is applied at the write tail below.
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
+		SnowGlintParams, EnableGlints, snowUVOriginal, glintDuvdx, glintDuvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;

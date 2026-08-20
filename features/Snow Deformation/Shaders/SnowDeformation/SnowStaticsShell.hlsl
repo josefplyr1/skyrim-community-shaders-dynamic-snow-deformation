@@ -1811,6 +1811,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 V = -normalize(input.WorldPos);
 
+	// Pre-parallax uv for the glint grid (Lighting.hlsl's uvOriginal pattern;
+	// see SnowShell.hlsl): the POM offset is view-dependent and glints must
+	// not ride it.
+	const float2 snowUVOriginal = snowUV;
+	const float2 glintDuvdx = snowTaps.duvdx;
+	const float2 glintDuvdy = snowTaps.duvdy;
+
 	// Parallax occlusion, same marcher the landscape shell uses (shared in
 	// SnowParallax.hlsli, so the two cannot drift). Object snow needs it in
 	// BOTH projections, and unlike SampleSnowPlanar the two cannot share one
@@ -1965,7 +1972,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// ground snow shade identically across the SnowSnowFade cross-fade.
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
+		SnowGlintParams, EnableGlints, snowUVOriginal, glintDuvdx, glintDuvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
