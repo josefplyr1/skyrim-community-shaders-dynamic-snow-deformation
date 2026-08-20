@@ -748,8 +748,10 @@ public:
 		float4 SpellShading;
 		/** @brief x = reflectance of fully crusted snow, yz = red and green of its colour cast, w = grazing-angle sheen strength. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook;
-		/** @brief x = blue of the crust colour cast. Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
+		/** @brief Sun color as the game's lighting passes receive it: diffuse x fade WITHOUT the imagespace sunlightScale that SharedData::DirLightColor bakes in (per-pass DirLightColor does not carry it; the M1 sunset A/B proved the mismatch). Appended LAST; mirrored in BOTH shell shaders. */
+		float4 SunColor;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

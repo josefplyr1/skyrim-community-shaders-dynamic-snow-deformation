@@ -555,6 +555,21 @@ void SnowDeformation::DrawShell()
 	auto& skylighting = globals::features::skylighting;
 	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
 
+	// Sun color as the lighting passes receive it: diffuse x fade, WITHOUT
+	// the imagespace sunlightScale State.cpp bakes into SharedData's copy.
+	// The sunset A/B proved the per-pass DirLightColor does not carry it.
+	cbData.SunColor = { 0.0f, 0.0f, 0.0f, 0.0f };
+	if (auto* shadowSceneNodeSun = globals::game::smState->shadowSceneNode[0]) {
+		if (auto* sunLightRef = shadowSceneNodeSun->GetRuntimeData().sunLight) {
+			if (auto* sunDirLight = skyrim_cast<RE::NiDirectionalLight*>(sunLightRef->light.get())) {
+				auto& sunRuntime = sunDirLight->GetLightRuntimeData();
+				cbData.SunColor = { sunRuntime.diffuse.red * sunRuntime.fade,
+					sunRuntime.diffuse.green * sunRuntime.fade,
+					sunRuntime.diffuse.blue * sunRuntime.fade, 1.0f };
+			}
+		}
+	}
+
 	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
 	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {

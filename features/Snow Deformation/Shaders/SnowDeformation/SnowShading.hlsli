@@ -38,14 +38,16 @@ struct SnowSunLighting
 
 // glintParams = (logMicrofacetDensity, microfacetRoughness,
 // densityRandomization, screenSpaceScale) - the ShellCB packing.
-SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float sunShadow,
+// sunColorRaw = ShellCB SunColor (diffuse x fade, no sunlightScale), NOT
+// SharedData::DirLightColor - see the ShellCB comment.
+SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float3 sunColorRaw, float sunShadow,
 	float3 albedo, float roughness, float3 F0, float ao,
 	float4 glintParams, float glintActive,
 	float2 glintUV, float2 uvDDX, float2 uvDDY, float2 pixelPos)
 {
 	// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
 	// Lighting.hlsl feeds its dir light context.
-	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
+	float3 sunColor = Color::DirectionalLight(sunColorRaw) * Color::PBRLightingCompensation;
 
 	MaterialProperties material = (MaterialProperties)0;
 	material.BaseColor = albedo;
