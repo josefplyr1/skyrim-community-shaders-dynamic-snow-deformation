@@ -112,8 +112,8 @@ static constexpr float kCorpseSizeMax = 2.5f;
 static constexpr float kAtronachDeathRate = 4.0f;
 /** @brief How long a death blast is held open. A spell impact's kBlastDuration reaches full depth only at the bowl's centre; a death is the element's largest event and gets time to dig its whole width. */
 static constexpr float kAtronachDeathHold = 1.2f;
-/** @brief Seconds between a flame atronach's death EVENT and its actual burst. Josef timed the mark landing the moment it died, seconds before the explosion; the stagger runs roughly this long. */
-static constexpr float kFireDeathFuseSeconds = 1.7f;
+/** @brief Seconds between a flame atronach's death EVENT and its actual burst. Timed in game against the explosion itself: 1.7 still landed early, 3.0 lines up. Frost shatters and storm earths itself the moment they die, so neither waits. */
+static constexpr float kFireDeathFuseSeconds = 3.0f;
 // How recently an actor must have been seen alive for its DISAPPEARANCE to
 // count as a death. An atronach is unsummoned when it dies, so it is simply
 // gone on the next frame - but so is one whose cell the player walked out of,
