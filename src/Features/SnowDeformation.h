@@ -438,8 +438,8 @@ public:
 		float TrampleZoneHeight = 50.0f;
 		/** @brief Stochastic dissolve on the landscape shell's edges. Off (default, Josef 2026-08-20) = hard height-blended alpha test everywhere and survivors write opaque, so no partial alpha reaches the deferred resolve; the far field loses its dithered cross-fade too. */
 		bool SnowBorderDithering = false;
-		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error; lower values let deep trampling expose the real ground, which reads naturally now that shell and landscape snow match. */
-		float TrenchFloorHeight = 1.0f;
+		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
+		float TrenchFloorHeight = 3.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 48.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
