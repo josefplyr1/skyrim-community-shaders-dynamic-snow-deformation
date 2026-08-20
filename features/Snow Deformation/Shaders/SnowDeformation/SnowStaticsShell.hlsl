@@ -1811,10 +1811,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 V = -normalize(input.WorldPos);
 
-	// Pre-parallax uv for the glint grid (Lighting.hlsl's uvOriginal pattern;
-	// see SnowShell.hlsl): the POM offset is view-dependent and glints must
-	// not ride it.
-	const float2 snowUVOriginal = snowUV;
+	// Pre-parallax derivatives for the glint grid (Lighting.hlsl's uvOriginal
+	// pattern; see SnowShell.hlsl): the POM offset is view-dependent and
+	// glints must not ride it. The uv itself is rebuilt world-anchored below.
 	const float2 glintDuvdx = snowTaps.duvdx;
 	const float2 glintDuvdy = snowTaps.duvdy;
 
@@ -1970,9 +1969,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
 	// ground snow shade identically across the SnowSnowFade cross-fade.
+	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
+	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
+	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, snowUVOriginal, glintDuvdx, glintDuvdy, input.Position.xy);
+		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
