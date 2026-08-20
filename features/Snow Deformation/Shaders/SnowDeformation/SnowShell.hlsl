@@ -22,10 +22,6 @@
 #include "TerrainVariation/TerrainVariation.hlsli"
 
 #ifdef PSHADER
-// TruePBR's procedural glint NDF (Deliot & Chermain 2023) for snow sparkle.
-// Needs only the shared 128px noise texture at t20, which the CPU side binds
-// for this pass (EnableGlints gates the path when it is unavailable).
-#	include "Common/Glints/Glints2023.hlsli"
 // Shadow sampling for the shell surface: terrain/cloud shadows via
 // GetWorldShadow, dynamic (actor) shadows via the raw cascade atlas copies
 // (SnowShadow.hlsli) with the VolumetricShadows shared VSM as the fallback
@@ -49,6 +45,9 @@ SamplerState ShellLinearSampler : register(s1);
 // terrain and PBR branches of the header compile out. Extended Materials is
 // CORE, so the include always resolves.
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
+// Routed PBR sun tail (defines TRUE_PBR + GLINT for everything it pulls in,
+// including the glint NDF) - must stay the LAST include; see its header.
+#	include "SnowDeformation/SnowShading.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -1653,11 +1652,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
-	float3 H = normalize(V + L);
 	float satNdotL = saturate(dot(normalWS, L));
 	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
-	float satNdotH = saturate(dot(normalWS, H));
-	float satVdotH = saturate(dot(V, H));
 
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
 	// Distant shadow softening: the far cascade's texels quantize into hard
@@ -1786,33 +1782,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
-	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
-	float specD = BRDF::D_GGX(snowRoughness, satNdotH);
-	// Sparkle: TruePBR's discrete glint NDF replaces the smooth GGX NDF.
-	// Parameters come from the landscape's authored PBR config so shell
-	// sparkle matches ground sparkle; the uv is the albedo uv so the sparkle
-	// field rides the same tiling.
-	[branch] if (EnableGlints > 0.5 && SnowGlintParams.x > 1.1)
-	{
-		float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-		float3 glintB = cross(normalWS, glintT);
-		float3 glintH = float3(dot(H, glintT), dot(H, glintB), saturate(dot(H, normalWS)));
-		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0).x);
-		Glints::GlintCachedVars glintCache;
-		Glints::PrecomputeGlints(glintNoise, snowUV, snowTaps.duvdx, snowTaps.duvdy, SnowGlintParams.w, glintCache);
-		float dMax = BRDF::D_GGX(snowRoughness, 1.0);
-		specD = Glints::SampleGlints2023NDF(glintNoise, SnowGlintParams.x, SnowGlintParams.y, SnowGlintParams.z, glintCache, glintH, specD, dMax).x;
-	}
-	float specV = BRDF::Vis_SmithJointApprox(snowRoughness, satNdotV, satNdotL);
-
-	// Indirect lobes: the specular weight is what the environment reflects,
-	// diffuse receives only what specular does not (energy conservation).
-	float2 envBRDF = BRDF::EnvBRDF(snowRoughness, satNdotV);
-	float3 specularLobe = snowF0 * envBRDF.x + envBRDF.y;
-	float3 diffuseLobe = kSnowAlbedo * (1.0 - specularLobe);
-
-	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
-	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
+	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
+	// ROUTING-ROADMAP M1): glints, energy conservation and every future
+	// TruePBR lobe ride the shared code. Outputs are Lighting-internal units;
+	// Color::PBRLightingScale is applied at the write tail below.
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
+		kSnowAlbedo, snowRoughness, snowF0, snowAO,
+		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
+	float3 specularLobe = sunLit.specularLobe;
+	float3 diffuseLobe = sunLit.diffuseLobe;
+	float3 directDiffuse = sunLit.directDiffuse;
+	float3 directSpecular = sunLit.directSpecular;
 
 	// Ice reads at GRAZING angles, where a sheet catches the sky and powder
 	// does not. Snow is already near-white, so a specular lobe has almost no
@@ -1846,6 +1826,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
 	}
+	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
+	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
+	// lobe does not - the composite assumes exactly this split.
+	ambientPart *= Color::PBRLightingScale;
+	directDiffuse *= Color::PBRLightingScale;
+	directSpecular *= Color::PBRLightingScale;
+	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse;
 
 	[branch] if (ShellDebugData == 2)

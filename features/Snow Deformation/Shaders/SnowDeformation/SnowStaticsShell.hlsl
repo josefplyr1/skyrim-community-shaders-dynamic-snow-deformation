@@ -22,9 +22,6 @@
 #include "Common/SharedData.hlsli"
 
 #ifdef PSHADER
-// TruePBR's procedural glint NDF for snow sparkle (noise texture at t20,
-// bound by the CPU side for the whole shell pass; EnableGlints gates it).
-#	include "Common/Glints/Glints2023.hlsli"
 // Same shadow stack as the terrain shell (see SnowShell.hlsl).
 #	define TERRAIN_SHADOWS
 #	define CLOUD_SHADOWS
@@ -39,6 +36,9 @@ SamplerState ShellLinearSampler : register(s1);
 // Extended Materials' parallax self-shadow math; see SnowShell.hlsl for why
 // only the fetches are reimplemented.
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
+// Routed PBR sun tail (defines TRUE_PBR + GLINT for everything it pulls in,
+// including the glint NDF) - must stay the LAST include; see its header.
+#	include "SnowDeformation/SnowShading.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -1914,11 +1914,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
-	float3 H = normalize(V + L);
 	float satNdotL = saturate(dot(normalWS, L));
 	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
-	float satNdotH = saturate(dot(normalWS, H));
-	float satVdotH = saturate(dot(V, H));
 
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
 	float sunShadow;
@@ -1963,30 +1960,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
 	}
 
-	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
-
-	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
-	float specD = BRDF::D_GGX(snowRoughness, satNdotH);
-	// Sparkle; same glint NDF and authored parameters as the terrain shell.
-	[branch] if (EnableGlints > 0.5 && SnowGlintParams.x > 1.1)
-	{
-		float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-		float3 glintB = cross(normalWS, glintT);
-		float3 glintH = float3(dot(H, glintT), dot(H, glintB), saturate(dot(H, normalWS)));
-		float glintNoise = Random::R1Modified(float(SharedData::FrameCount), (Random::pcg2d(uint2(input.Position.xy)) / 4294967296.0).x);
-		Glints::GlintCachedVars glintCache;
-		Glints::PrecomputeGlints(glintNoise, snowUV, snowTaps.duvdx, snowTaps.duvdy, SnowGlintParams.w, glintCache);
-		float dMax = BRDF::D_GGX(snowRoughness, 1.0);
-		specD = Glints::SampleGlints2023NDF(glintNoise, SnowGlintParams.x, SnowGlintParams.y, SnowGlintParams.z, glintCache, glintH, specD, dMax).x;
-	}
-	float specV = BRDF::Vis_SmithJointApprox(snowRoughness, satNdotV, satNdotL);
-
-	float2 envBRDF = BRDF::EnvBRDF(snowRoughness, satNdotV);
-	float3 specularLobe = snowF0 * envBRDF.x + envBRDF.y;
-	float3 diffuseLobe = kSnowAlbedo * (1.0 - specularLobe);
-
-	float3 directDiffuse = sunLight * satNdotL * (1.0 - F) * kSnowAlbedo;
-	float3 directSpecular = specD * specV * F * sunLight * satNdotL;
+	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
+	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
+	// ground snow shade identically across the SnowSnowFade cross-fade.
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
+		kSnowAlbedo, snowRoughness, snowF0, snowAO,
+		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
+	float3 specularLobe = sunLit.specularLobe;
+	float3 diffuseLobe = sunLit.diffuseLobe;
+	float3 directDiffuse = sunLit.directDiffuse;
+	float3 directSpecular = sunLit.directSpecular;
 
 	// Placed lights: same clustered path as the terrain shell, with each
 	// shadow-casting light's own map sampled at the skin/patch surface.
@@ -2008,6 +1991,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe, skylightingDiffuse));
 	}
+	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
+	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
+	// lobe does not - the composite assumes exactly this split.
+	ambientPart *= Color::PBRLightingScale;
+	directDiffuse *= Color::PBRLightingScale;
+	directSpecular *= Color::PBRLightingScale;
+	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse;
 
 	// Debug view: decision data as flat colors. Patch: R = trample,
