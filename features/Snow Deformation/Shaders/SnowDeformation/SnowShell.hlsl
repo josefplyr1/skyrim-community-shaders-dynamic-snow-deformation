@@ -1308,6 +1308,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// a stretched-out translucent margin wherever the shell nears geometry.
 	float objectFadeBand = 5.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
+	// The grain-driven descent (DS) deliberately lays the rim onto its own
+	// terrain, which this fade reads as hovering-over-geometry and crushes
+	// to sparse specks (the round-5 dither regression). Under height
+	// blending, exempt pixels whose backdrop IS the terrain: reconstruct the
+	// scene surface's world height along the view ray and fade only where
+	// something stands above the terrain data - planks, rocks, the fade's
+	// actual clients. Sentinel terrain (-50000) reads as objectness 1, so
+	// data gaps keep the plain fade.
+	float edgeBlend = SnowHeightBlendSharpness(shellZ);
+	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
+	{
+		float sceneSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z * (sceneZ / max(shellZ, 1e-3));
+		float objectness = smoothstep(1.5, 6.0, sceneSurfaceZ - pixelTerrain.x);
+		proximityFade = max(proximityFade, 1.0 - objectness);
+	}
 	// Two situations hug the geometry behind them and must override the
 	// fade: carved trench floors (terrain, actor feet in the trench) and the
 	// shell riding a raised height field a few units above the surface
@@ -1341,7 +1356,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// so a pixel an override holds at full alpha stays full. Mip outside the
 	// branch (derivatives); the fetch fires only on partial alpha with height
 	// blending on and the height map bound.
-	float edgeBlend = SnowHeightBlendSharpness(shellZ);
 	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
 	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
