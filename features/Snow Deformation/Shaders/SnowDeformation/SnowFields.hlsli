@@ -122,10 +122,6 @@ float SampleTerrainVertexAO(float2 gridLocal)
 // EnableHeightBlending gate; constants mirror EM's HEIGHT_MULT/HEIGHT_POWER.
 static const float kHeightBlendMult = 8.0;
 static const float kHeightBlendPower = 2.0;
-// One-sided reference: a neighbor surface the shell cannot sample reads as
-// a mid-height plane - the same 0.5 the relief displacement centers on - so
-// the snow side dissolves by its own grain.
-static const float kHeightBlendMidRef = 0.5;
 
 float SnowHeightBlendSharpness(float viewDist)
 {
@@ -146,6 +142,18 @@ float SnowHeightBlend(float w, float hSnow, float hOther, float heightBlend)
 	float wSnow = min(100, exp2(heightBlend * (log2(abs(w)) + kHeightBlendMult * hSnow * logHeightBlend)));
 	float wOther = min(100, exp2(heightBlend * (log2(abs(1.0 - w)) + kHeightBlendMult * hOther * logHeightBlend)));
 	return wSnow * rcp(max(wSnow + wOther, 1e-6));
+}
+
+// One-sided form: the neighbor surface the shell cannot sample. NOT a
+// constant reference - grain near any fixed value gets no push, and "grain
+// near the reference" is a spatially coherent contour, so a constant prints
+// a dithered ribbon at one particular height. Instead the bar sweeps with
+// the fade itself (1-w): tall grain survives to the outer edge, low grain
+// dies early, and the crossing isoline moves with the ramp - no height is
+// special, so partial alpha survives only on a thin moving line.
+float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
+{
+	return SnowHeightBlend(w, hSnow, 1.0 - w, heightBlend);
 }
 #endif  // PSHADER
 

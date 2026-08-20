@@ -1292,7 +1292,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): reshape the class-
 	// border ramp and the object proximity dissolve by the snow grain,
-	// one-sided vs the mid plane, so fingers of snow dissolve by their own
+	// one-sided vs a fade-swept bar, so fingers of snow dissolve by their own
 	// height instead of cross-fading through translucency. Shape first; the
 	// carve/lift/melt overrides below win exactly as over the plain fades.
 	// Mip outside the branch (derivatives); the fetch fires only on partial
@@ -1304,8 +1304,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		((coverageAlpha > 0.001 && coverageAlpha < 0.999) || (proximityFade > 0.001 && proximityFade < 0.999)))
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, kHeightBlendMidRef, edgeBlend);
-		proximityFade = SnowHeightBlend(proximityFade, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+		coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
+		proximityFade = SnowHeightBlendOneSided(proximityFade, edgeSnowH, edgeBlend);
 	}
 
 	// Two situations hug the geometry behind them and must override the

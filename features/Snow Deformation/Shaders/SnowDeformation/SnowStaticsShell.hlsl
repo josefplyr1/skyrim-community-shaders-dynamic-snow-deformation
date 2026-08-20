@@ -1594,7 +1594,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 6+4): reshape the rim
 	// coverage fade and the ground hand-off band below by the snow grain,
-	// one-sided vs the mid plane. Shape first; the trench-floor guarantee
+	// one-sided vs a fade-swept bar. Shape first; the trench-floor guarantee
 	// and floor wear below win exactly as over the plain fades. Mip outside
 	// the branches (derivatives); fetches fire only on partial alpha with
 	// height blending on and the height map bound. The two sites' fetches
@@ -1606,7 +1606,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (edgeBlendOn && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
-		coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+		coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
 	}
 
 	// Blend into the ground shell: where this pixel sits at or below the
@@ -1628,7 +1628,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
 		{
 			float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
-			groundBand = SnowHeightBlend(groundBand, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+			groundBand = SnowHeightBlendOneSided(groundBand, edgeSnowH, edgeBlend);
 		}
 		coverageAlpha *= groundBand;
 		dbgSeam *= groundBand;
