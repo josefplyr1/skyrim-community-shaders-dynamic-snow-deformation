@@ -1289,25 +1289,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// a stretched-out translucent margin wherever the shell nears geometry.
 	float objectFadeBand = 5.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
-
-	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): reshape the class-
-	// border ramp and the object proximity dissolve by the snow grain,
-	// one-sided vs a fade-swept bar, so fingers of snow dissolve by their own
-	// height instead of cross-fading through translucency. Shape first; the
-	// carve/lift/melt overrides below win exactly as over the plain fades.
-	// Mip outside the branch (derivatives); the fetch fires only on partial
-	// alpha with height blending on and the height map bound.
-	float edgeBlend = SnowHeightBlendSharpness(shellZ);
-	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
-	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
-	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 &&
-		((coverageAlpha > 0.001 && coverageAlpha < 0.999) || (proximityFade > 0.001 && proximityFade < 0.999)))
-	{
-		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
-		proximityFade = SnowHeightBlendOneSided(proximityFade, edgeSnowH, edgeBlend);
-	}
-
 	// Two situations hug the geometry behind them and must override the
 	// fade: carved trench floors (terrain, actor feet in the trench) and the
 	// shell riding a raised height field a few units above the surface
@@ -1331,6 +1312,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 	pixelMelt = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
+
+	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): shape the COMBINED
+	// alpha once, after the overrides - every partial band commits by grain
+	// whatever fade produced it: the class ramp, the proximity dissolve, or
+	// an override's own edge (the melt ring's 0.1-0.4 ramp printed an
+	// unshaped dithered skirt when the components were shaped individually
+	// before the overrides). Overrides still win: shaping preserves 0 and 1,
+	// so a pixel an override holds at full alpha stays full. Mip outside the
+	// branch (derivatives); the fetch fires only on partial alpha with height
+	// blending on and the height map bound.
+	float edgeBlend = SnowHeightBlendSharpness(shellZ);
+	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
+	{
+		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+		coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
+	}
 
 	// Stochastic discard dither: writing alpha without discarding blends
 	// nothing in this pass; TB's alpha path runs through depth-prepass
