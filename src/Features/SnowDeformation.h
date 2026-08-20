@@ -1929,6 +1929,15 @@ protected:
 	float spellGameHours = -1.0f;
 	/** @brief Accumulated calendar-beyond-timescale movement, in game seconds. Zero-mean in normal play; a wait, sleep or fast travel piles up here and is then applied to every timer at once. */
 	float spellGameDrift = 0.0f;
+	/** @brief Fire atronach deaths waiting out the death animation. The death EVENT fires the moment the creature dies, but a flame atronach staggers and only then bursts - a mark at event time appears seconds before the explosion it is supposed to be from. Frost shatters and storm earths itself instantly, so only fire waits. */
+	struct PendingDeathBlast
+	{
+		uint32_t formID = 0;
+		SpellElement element = SpellElement::None;
+		RE::NiPoint3 position{};
+		float fuse = 0.0f;
+	};
+	std::vector<PendingDeathBlast> pendingDeathBlasts;
 
 	/** @brief Queued by the sink on the GAME thread and drained by the gather on the render thread, hence the lock. */
 	struct QueuedCast

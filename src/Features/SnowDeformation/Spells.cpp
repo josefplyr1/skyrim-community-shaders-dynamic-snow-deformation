@@ -112,6 +112,8 @@ static constexpr float kCorpseSizeMax = 2.5f;
 static constexpr float kAtronachDeathRate = 4.0f;
 /** @brief How long a death blast is held open. A spell impact's kBlastDuration reaches full depth only at the bowl's centre; a death is the element's largest event and gets time to dig its whole width. */
 static constexpr float kAtronachDeathHold = 1.2f;
+/** @brief Seconds between a flame atronach's death EVENT and its actual burst. Josef timed the mark landing the moment it died, seconds before the explosion; the stagger runs roughly this long. */
+static constexpr float kFireDeathFuseSeconds = 1.7f;
 // How recently an actor must have been seen alive for its DISAPPEARANCE to
 // count as a death. An atronach is unsummoned when it dies, so it is simply
 // gone on the next frame - but so is one whose cell the player walked out of,
@@ -820,9 +822,11 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 						keywords += base->keywords[k]->GetFormEditorID();
 						keywords += ' ';
 					}
-				logger::info("    effect {:08X} delivery={} resist={} archetype={} keywords: {}",
+				const auto* impacts = base->data.impactDataSet;
+				logger::info("    effect {:08X} delivery={} resist={} archetype={} impacts={:08X} keywords: {}",
 					base->formID, static_cast<int>(base->data.delivery),
 					static_cast<int>(base->data.resistVariable), static_cast<int>(base->data.archetype),
+					impacts ? impacts->formID : 0u,
 					keywords.empty() ? "(none)" : keywords.c_str());
 			}
 		return;
@@ -1365,10 +1369,18 @@ void SnowDeformation::GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_
 			if (state.element == SpellElement::None)
 				state.element = death.element;
 			if (!state.blasted) {
-				const size_t before = activeBlasts.size();
-				OpenInnateDeathBlast(state, death.position);
-				if (activeBlasts.size() > before)
-					spellStats.deathBlasts++;
+				if (death.element == SpellElement::Fire) {
+					// The event fires at the moment of death; the burst comes
+					// after the stagger. Mark when the EXPLOSION happens, not
+					// when the engine first knows it will.
+					state.blasted = true;
+					pendingDeathBlasts.push_back({ death.formID, death.element, death.position, kFireDeathFuseSeconds });
+				} else {
+					const size_t before = activeBlasts.size();
+					OpenInnateDeathBlast(state, death.position);
+					if (activeBlasts.size() > before)
+						spellStats.deathBlasts++;
+				}
 			}
 			state.lastPosition = death.position;
 		}
@@ -2268,6 +2280,22 @@ void SnowDeformation::GatherSpellEmitters()
 	// rate were made absurd.
 	{
 		const float deltaTime = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
+		for (auto pend = pendingDeathBlasts.begin(); pend != pendingDeathBlasts.end();) {
+			pend->fuse -= deltaTime;
+			if (pend->fuse > 0.0f) {
+				++pend;
+				continue;
+			}
+			auto& state = innateAuras[pend->formID];
+			if (state.element == SpellElement::None)
+				state.element = pend->element;
+			const size_t before = activeBlasts.size();
+			OpenInnateDeathBlast(state, pend->position);
+			if (activeBlasts.size() > before)
+				spellStats.deathBlasts++;
+			pend = pendingDeathBlasts.erase(pend);
+		}
+
 		for (auto it = activeBlasts.begin(); it != activeBlasts.end();) {
 			if (spellEmitters.size() < kSpellEmitterCeiling) {
 				// A mark forms over a moment rather than at once. Melt already
