@@ -1592,6 +1592,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// seam blends below decide.
 	coverageAlpha *= max(smoothstep(-0.05, 0.1, input.Coverage), shoulderWall);
 
+	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 6+4): reshape the rim
+	// coverage fade and the ground hand-off band below by the snow grain,
+	// one-sided vs the mid plane. Shape first; the trench-floor guarantee
+	// and floor wear below win exactly as over the plain fades. Mip outside
+	// the branches (derivatives); fetches fire only on partial alpha with
+	// height blending on and the height map bound. The two sites' fetches
+	// are identical expressions and CSE into one.
+	float edgeBlend = SnowHeightBlendSharpness(pixelDist);
+	float2 edgeSnowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
+	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+	bool edgeBlendOn = HasSnowHeight > 0.5 && edgeBlend > 1.0;
+	[branch] if (edgeBlendOn && coverageAlpha > 0.001 && coverageAlpha < 0.999)
+	{
+		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
+		coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+	}
+
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells dither into
 	// one blanket instead of meeting at a hard seam. The same dials that
@@ -1608,6 +1625,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float bandLow = -(4.0 + BorderSmooth * 0.5);
 		float bandHigh = 2.0 + BorderSmooth * 0.125;
 		float groundBand = smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
+		if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
+		{
+			float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
+			groundBand = SnowHeightBlend(groundBand, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+		}
 		coverageAlpha *= groundBand;
 		dbgSeam *= groundBand;
 	}

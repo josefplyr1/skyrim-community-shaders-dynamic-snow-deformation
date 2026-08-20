@@ -114,6 +114,39 @@ float SampleTerrainVertexAO(float2 gridLocal)
 	float s11 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t1.x, t1.y, 0)));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
+
+// EM's landscape height blending (ExtendedMaterialsTerrain.hlsli::
+// ProcessTerrainHeightWeights) specialized to two surfaces: an edge fade
+// contests by height instead of cross-fading through translucency. Same
+// log2-space formula, same near/far sharpness ramp, same
+// EnableHeightBlending gate; constants mirror EM's HEIGHT_MULT/HEIGHT_POWER.
+static const float kHeightBlendMult = 8.0;
+static const float kHeightBlendPower = 2.0;
+// One-sided reference: a neighbor surface the shell cannot sample reads as
+// a mid-height plane - the same 0.5 the relief displacement centers on - so
+// the snow side dissolves by its own grain.
+static const float kHeightBlendMidRef = 0.5;
+
+float SnowHeightBlendSharpness(float viewDist)
+{
+	float nearBlendToFar = smoothstep(1024.0 * 1024.0, 2048.0 * 2048.0, viewDist * viewDist);
+	float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1.0 - nearBlendToFar)) : 0.0;
+	return 1.0 + blendFactor * kHeightBlendPower;
+}
+
+// w' = normalize(pow(w * B^(MULT*h), B)) over {w, 1-w}. Preserves 0 and 1,
+// so gates and overrides composed around it keep their meaning. EM's skip
+// when the heights carry no signal is kept: without it pow() sharpens the
+// fade alone and hardens it into a contour.
+float SnowHeightBlend(float w, float hSnow, float hOther, float heightBlend)
+{
+	if (heightBlend <= 1.0 || abs(hSnow - hOther) <= 1e-3)
+		return w;
+	float logHeightBlend = log2(heightBlend);
+	float wSnow = min(100, exp2(heightBlend * (log2(abs(w)) + kHeightBlendMult * hSnow * logHeightBlend)));
+	float wOther = min(100, exp2(heightBlend * (log2(abs(1.0 - w)) + kHeightBlendMult * hOther * logHeightBlend)));
+	return wSnow * rcp(max(wSnow + wOther, 1e-6));
+}
 #endif  // PSHADER
 
 #endif  //__SNOW_FIELDS_DEPENDENCY_HLSL__

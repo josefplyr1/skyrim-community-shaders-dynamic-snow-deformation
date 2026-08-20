@@ -1289,6 +1289,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// a stretched-out translucent margin wherever the shell nears geometry.
 	float objectFadeBand = 5.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
+
+	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): reshape the class-
+	// border ramp and the object proximity dissolve by the snow grain,
+	// one-sided vs the mid plane, so fingers of snow dissolve by their own
+	// height instead of cross-fading through translucency. Shape first; the
+	// carve/lift/melt overrides below win exactly as over the plain fades.
+	// Mip outside the branch (derivatives); the fetch fires only on partial
+	// alpha with height blending on and the height map bound.
+	float edgeBlend = SnowHeightBlendSharpness(shellZ);
+	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
+	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
+	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 &&
+		((coverageAlpha > 0.001 && coverageAlpha < 0.999) || (proximityFade > 0.001 && proximityFade < 0.999)))
+	{
+		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+		coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+		proximityFade = SnowHeightBlend(proximityFade, edgeSnowH, kHeightBlendMidRef, edgeBlend);
+	}
+
 	// Two situations hug the geometry behind them and must override the
 	// fade: carved trench floors (terrain, actor feet in the trench) and the
 	// shell riding a raised height field a few units above the surface
