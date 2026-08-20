@@ -1075,6 +1075,9 @@ public:
 	/** @brief Depth copy taken after the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell; Terrain Blending's technique adapted to the two snow kinds. */
 	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
+	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
+	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,

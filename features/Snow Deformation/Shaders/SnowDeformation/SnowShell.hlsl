@@ -216,6 +216,10 @@ Texture2D<float4> SnowRmaosMap : register(t7);
 // self-shadow. float4 to match Extended Materials' own TexParallaxSampler
 // convention; the SRV is single-channel, so only .x carries data.
 Texture2D<float4> SnowHeightMap : register(t8);
+// Pre-shell copy of the MASKS target: y carries the land's EM grain height
+// (Lighting.hlsl LANDSCAPE writes it; 0 = no data - POM inactive, grass, or
+// an object behind), the missing side of the two-sided edge contest.
+Texture2D<float3> LandMasksCopy : register(t10);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -1365,7 +1369,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
+		// TWO-SIDED where the pre-shell G-buffer carries the land's grain
+		// height (Phase 1b): the dirt's pebbles finally contest the snow's
+		// grain - EM's actual boundary mechanism. The encoding self-gates:
+		// 0 = no data (POM off, grass, an object behind), fall back to the
+		// one-sided fade-swept bar.
+		float hLand = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		[flatten] if (hLand > 0.002)
+			coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, saturate((hLand - 0.004) * (1.0 / 0.996)), edgeBlend);
+		else
+			coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
 	}
 
 	// Stochastic discard dither: writing alpha without discarding blends

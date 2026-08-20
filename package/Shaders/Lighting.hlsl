@@ -3021,6 +3021,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
+#		elif defined(LANDSCAPE)
+	// Masks.y is dead for landscape (SSS reads it only where Masks.x > 0):
+	// carry the EM-resolved grain height (the terrain POM hit, 0.5-neutral in
+	// the far fade) for Snow Deformation's two-sided edge contest. 0 = no
+	// data; heights encode to (0.004, 1].
+	psout.Masks = float4(0, pixelOffset > 0.0 ? 0.004 + pixelOffset * 0.996 : 0.0, masksZ, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #		endif

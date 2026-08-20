@@ -630,6 +630,18 @@ void SnowDeformation::DrawShell()
 		lastShellCBData = std::make_unique<ShellCB>();
 	*lastShellCBData = cbData;
 
+	// Pre-shell copy of MASKS: Masks.y carries the land's EM grain height
+	// (Lighting.hlsl LANDSCAPE; 0 = no data), and the land under the shell
+	// is only readable before the shell overwrites the G-buffer. Unbind
+	// around the copy; our own targets are set immediately after.
+	{
+		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
+		if (masksRT.SRV) {
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
+		}
+	}
+
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
 	auto& rtData = renderer->GetRuntimeData();
@@ -689,6 +701,11 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 	context->VSSetShaderResources(11, 2, objectCapSRVs);
 	context->PSSetShaderResources(11, 2, objectCapSRVs);
+	// Land grain height copy (t10) for the two-sided edge contest.
+	if (landMasksCopySRV) {
+		ID3D11ShaderResourceView* landMasksSRV = landMasksCopySRV.get();
+		context->PSSetShaderResources(10, 1, &landMasksSRV);
+	}
 	// Baked berm field (t14). The berm is read by the surface evaluation
 	// (VS/DS) and by the normal block (PS), so every stage that can run
 	// ShellSurfaceZ or shade needs it.
