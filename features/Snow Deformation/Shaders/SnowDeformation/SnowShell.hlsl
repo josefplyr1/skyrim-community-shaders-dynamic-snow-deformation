@@ -668,10 +668,10 @@ float SampleObjectDepthCap(float2 worldXY)
 // boundaries and carved floors stay flat. Wave height and wavelength are
 // live controls (UndulationAmp / UndulationScale).
 //
-// Minimum snow cover on carved trench floors (world units). Covers the
-// terrain window's bilinear approximation error so the real landscape mesh
-// never pokes through a floor.
-static const float kTrenchFloor = 5.0;
+// Minimum snow cover on carved trench floors is live (BorderStyle.y, the
+// Trench Floor Height slider): the old constant 5 covered the terrain
+// window's bilinear error so the mesh never poked through; low values let
+// deep trampling wear through to the real ground on purpose.
 // Melted fire basins keep this much snow above the terrain: the floor stays
 // shell snow, never bare ground, never below the terrain mesh.
 static const float kFireMeltFloor = 1.0;
@@ -688,7 +688,7 @@ float Undulation(float2 worldXY)
 // deformation carves the layer toward the trench floor.
 float CarveProfile(float deformation, float uncarvedDepth)
 {
-	float floorDepth = min(uncarvedDepth, kTrenchFloor * smoothstep(0.5, 8.0, uncarvedDepth));
+	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
 	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
 }
 
@@ -906,13 +906,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// Touch-down toe: compress the last few units of positive depth so
 		// the blanket's rim meets the ground at class borders instead of
 		// hanging a hovering lip over the bare side (visible under-gap at
-		// grazing angles). Trench floors (kTrenchFloor 5) pass unchanged.
+		// grazing angles). Deep trench floors pass unchanged; a floor set
+		// below ~5 (Trench Floor Height) compresses with the toe.
 		[flatten] if (depth > 0.0)
 			depth *= smoothstep(0.0, 5.0, depth);
 
 		// Deformation carves only where the layer is actually raised; the
 		// negative-depth submerge at class edges is untouched. The carved floor
-		// never drops below kTrenchFloor units (or the un-carved depth when
+		// never drops below Trench Floor Height units (or the un-carved depth when
 		// thinner), so trench bottoms stay shell snow. The floor tapers away as
 		// the uncarved depth thins toward class borders; a full floor there would
 		// hold a hard-edged slab over bare ground (border fade itself is alpha,

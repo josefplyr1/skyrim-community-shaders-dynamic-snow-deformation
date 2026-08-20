@@ -436,8 +436,10 @@ public:
 		float WallDriftHeight = 12.0f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
-		/** @brief Stochastic dissolve on the landscape shell's edges. Off = hard height-blended alpha test everywhere and survivors write opaque, so no partial alpha reaches the deferred resolve; the far field loses its dithered cross-fade too. */
-		bool SnowBorderDithering = true;
+		/** @brief Stochastic dissolve on the landscape shell's edges. Off (default, Josef 2026-08-20) = hard height-blended alpha test everywhere and survivors write opaque, so no partial alpha reaches the deferred resolve; the far field loses its dithered cross-fade too. */
+		bool SnowBorderDithering = false;
+		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error; lower values let deep trampling expose the real ground, which reads naturally now that shell and landscape snow match. */
+		float TrenchFloorHeight = 1.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 48.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -754,7 +756,7 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test everywhere, survivors opaque). yzw spare. Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test everywhere, survivors opaque); y = minimum snow on carved trench floors in units above terrain. zw spare. Appended LAST; mirror any change in SnowShell.hlsl. */
 		float4 BorderStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

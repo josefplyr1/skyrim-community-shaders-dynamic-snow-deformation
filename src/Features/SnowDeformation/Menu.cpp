@@ -299,6 +299,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Stochastic dissolve on the landscape shell's edges. Off = every edge is a hard height-blended cut and committed snow is fully opaque; distant borders lose their soft cross-fade too. Useful to judge the height-blended edge shapes without dither noise."));
 
+		ImGui::SliderFloat(T(TKEY("trench_floor_height"), "Trench Floor Height"), &settings.TrenchFloorHeight, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttTfh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_floor_height_tooltip"), "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors."));
+
 		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
 		if (auto _ttWcs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));

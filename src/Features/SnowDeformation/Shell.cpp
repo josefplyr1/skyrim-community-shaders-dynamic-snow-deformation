@@ -524,7 +524,8 @@ void SnowDeformation::DrawShell()
 	cbData.EnableGlints = globals::features::truePBR.glintsNoiseTexture ? 1.0f : 0.0f;
 	cbData.BorderNoise = settings.SnowBorderNoise;
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
-	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
+		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f), 0.0f, 0.0f };
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;

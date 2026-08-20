@@ -1610,6 +1610,8 @@
     "feature.snow_deformation.trail_irregularity_tooltip": "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles.",
     "feature.snow_deformation.trench_detail": "Landscape Trenches",
     "feature.snow_deformation.trench_detail_tooltip": "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected.",
+    "feature.snow_deformation.trench_floor_height": "Trench Floor Height",
+    "feature.snow_deformation.trench_floor_height_tooltip": "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors.",
     "feature.snow_deformation.trench_sharpness": "Trench Wall Sharpness",
     "feature.snow_deformation.trench_sharpness_tooltip": "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge.",
     "feature.snow_deformation.undulation": "Surface Undulation",

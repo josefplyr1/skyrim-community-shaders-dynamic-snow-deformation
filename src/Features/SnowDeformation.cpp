@@ -90,6 +90,7 @@
 	X(TrampleZoneHeight) \
 	X(WallDriftHeight) \
 	X(SnowBorderDithering) \
+	X(TrenchFloorHeight) \
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
 	X(SnowBorderTrampledFade) \
