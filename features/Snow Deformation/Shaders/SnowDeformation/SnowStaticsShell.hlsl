@@ -212,6 +212,10 @@ Texture2D<float> ShellDepthCopy : register(t9);
 SamplerState SnowSampler : register(s0);
 #endif
 
+// Shared trench-detail shaping (noise, berm shape/bake tap, churn) - the
+// verbatim-identical pieces of both shells live in one file (M8).
+#include "SnowDeformation/SnowFields.hlsli"
+
 // Must match kSnowUVTile in SnowShell.hlsl (the game's landscape tiling:
 // 24 repeats per 4096-unit cell).
 static const float kSnowUVTile = 4096.0 / 24.0;
@@ -272,44 +276,12 @@ float SampleDeformation(float2 gridLocal)
 // to carry a ridge) and a geometry berm would straddle the patch/skin
 // height seam.
 
-// 17 taps on two staggered rings; see the landscape shell's BermField.
-static const float2 kBermTaps[16] = {
-	float2(18.0, 0.0), float2(12.73, 12.73), float2(0.0, 18.0), float2(-12.73, 12.73),
-	float2(-18.0, 0.0), float2(-12.73, -12.73), float2(0.0, -18.0), float2(12.73, -12.73),
-	float2(36.96, 15.31), float2(15.31, 36.96), float2(-15.31, 36.96), float2(-36.96, 15.31),
-	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
-};
-
 float BermFieldTapped(float2 gridLocal)
 {
 	float b = SampleDeformation(gridLocal);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += SampleDeformation(gridLocal + kBermTaps[i]);
 	return saturate(b / 17.0);
-}
-
-// One bilinear tap of the bake (BermFieldCS), which stores the average above
-// texel-for-texel over the deformation map. The PS calls the berm five times,
-// so this is 340 loads a pixel replaced by five.
-float BermFieldBaked(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	BermFieldMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float s00 = BermFieldMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = BermFieldMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = BermFieldMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = BermFieldMap.Load(int3(t1.x, t1.y, 0));
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 float BermField(float2 gridLocal)
@@ -322,40 +294,9 @@ float BermField(float2 gridLocal)
 	return field;
 }
 
-// Kept in step with the landscape shell's BermShape: early saturation, and
-// the carved-interior cut is owned by an explicit (1 - deformation) mask at
-// the call sites rather than a high-field falloff here.
-float BermShape(float bermDeform)
-{
-	return smoothstep(0.02, 0.32, bermDeform);
-}
-
-float ShapeNoiseHash(float2 cell)
-{
-	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-	p3 += dot(p3, p3.yzx + 33.33);
-	return frac((p3.x + p3.y) * p3.z);
-}
-
-float ShapeNoise(float2 p)
-{
-	float2 i = floor(p);
-	float2 f = frac(p);
-	f = f * f * (3.0 - 2.0 * f);
-	return lerp(lerp(ShapeNoiseHash(i), ShapeNoiseHash(i + float2(1, 0)), f.x),
-		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
-}
-
 float ChurnNoise(float2 worldXY)
 {
-	float s = max(ObjChurnSizeScale, 0.05);
-	float n = ShapeNoise(worldXY / (16.0 * s)) * 0.65 + ShapeNoise(worldXY / (7.0 * s)) * 0.35;
-	return (n - 0.5) * 2.0;
-}
-
-float ChurnWeight(float deformation, float bermDeform)
-{
-	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));
+	return ChurnNoiseScaled(worldXY, ObjChurnSizeScale);
 }
 
 #ifdef PATCH
