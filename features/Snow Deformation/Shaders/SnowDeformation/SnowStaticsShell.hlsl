@@ -1942,11 +1942,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 	float3 ambientPart = ambientColor * diffuseLobe;
+	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
+	// on a rock in a dark grove shares the grove's baked shade, and using the
+	// same source as the terrain shell keeps the SnowSnowFade cross-fade flat.
+	float2 terrainLocal = (input.WorldPos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
+	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
+	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity; same path as the terrain shell.
 	[branch] if (SkylightingActive > 0.5)
 	{
 		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, kSkylightingVertexAOProxy);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
@@ -2014,7 +2020,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Reflectance = float4(specularLobe, coverageAlpha);
 	// Albedo-multiplied, skylit ambient luma; matches Lighting's masksZ.
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, coverageAlpha);
-	psout.Masks2 = float4(0.0, 0.0, 0.0, coverageAlpha);
+	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
+	// divides SSGI's AO by it).
+	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
 }
 #endif

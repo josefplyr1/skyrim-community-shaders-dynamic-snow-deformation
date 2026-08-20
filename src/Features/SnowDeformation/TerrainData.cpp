@@ -214,6 +214,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		vertexTextures.fill(kNoLandTexture);
 	for (auto& vertexWeights : data.layerWeight)
 		vertexWeights.fill(0);
+	data.vertexAO.fill(255);
 	if (auto* worldspace = cell->GetRuntimeData().worldSpace)
 		data.worldspaceID = worldspace->GetFormID();
 
@@ -249,6 +250,12 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			data.height[cellIdx] = loadedData->heights[quadI][vertexI] + cellBaseZ;
 			minHeight = std::min(minHeight, data.height[cellIdx]);
 			maxHeight = std::max(maxHeight, data.height[cellIdx]);
+
+			// Same 0-255-in-int8 storage trick as percents below; ground's
+			// vertexAO is the max component of the land vertex color.
+			const auto& vertexColor = loadedData->colors[quadI][vertexI];
+			data.vertexAO[cellIdx] = std::max({ static_cast<uint8_t>(vertexColor[0]),
+				static_cast<uint8_t>(vertexColor[1]), static_cast<uint8_t>(vertexColor[2]) });
 
 			// Gather this vertex's weight per distinct texture: at most the
 			// base plus 6 layers, and layers of the same texture merge. An
@@ -324,7 +331,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		auto it = shellCells.find(key);
 		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
 			it->second.height == data.height && it->second.layerTexture == data.layerTexture &&
-			it->second.layerWeight == data.layerWeight)
+			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO)
 			return;
 		shellCells[key] = data;
 	}
@@ -502,7 +509,10 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					texel[0] = rowCell->height[idx];
 					texel[1] = rampDepth;
 					texel[2] = std::min(coverage, 1.0f);
-					texel[3] = 0.0f;
+					// Land vertex AO packed into [0, 0.499): the LOD-fill CS
+					// writes its provenance codes at >= 0.5 and skips baked
+					// texels (x wins), so both meanings coexist in one channel.
+					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
 
 					statCells.insert(rowKey);
 					statMinH = std::min(statMinH, texel[0]);

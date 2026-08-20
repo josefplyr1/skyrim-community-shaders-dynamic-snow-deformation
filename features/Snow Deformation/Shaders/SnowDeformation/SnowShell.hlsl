@@ -1769,13 +1769,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// less-blue days, ambient being where the sky blue lives.
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
 	float3 ambientPart = ambientColor * diffuseLobe;
+	// The land's real baked vertex AO under this pixel, by ground's recipe
+	// (Lighting.hlsl:2633-2636): linearized max component, VertexAOStrength
+	// lerp. Skylighting darkens only BEYOND it (the function divides), and
+	// the composite's SSGI reads its complement from Masks2.
+	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(gridLocal).xxx).x;
+	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	// Skylighting parity with Lighting.hlsl's deferred tail: the ambient is
 	// darkened by the probe volume with the same multi-bounce term terrain
 	// uses (ApplySkylighting passes the SCALED albedo).
 	[branch] if (SkylightingActive > 0.5)
 	{
 		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, kSkylightingVertexAOProxy);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
@@ -1894,7 +1900,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// masksZ is albedo-multiplied and skylit (directionalAmbientColor *=
 	// outputAlbedo, then ApplySkylighting); ambientPart matches that.
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
-	psout.Masks2 = float4(0.0, 0.0, 0.0, alpha);
+	// Stored as 1 - vertexAO, matching Lighting's convention (the composite
+	// divides SSGI's AO by it).
+	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
 #	endif
 
 	// Conservative depth clamp: where the shell falls just behind the

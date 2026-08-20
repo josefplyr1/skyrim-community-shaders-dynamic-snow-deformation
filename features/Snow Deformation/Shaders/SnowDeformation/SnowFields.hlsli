@@ -92,4 +92,28 @@ float ChurnWeight(float deformation, float bermDeform)
 	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));
 }
 
+#if defined(PSHADER)
+// Land vertex AO, packed by the CPU window build into the terrain window's
+// w channel: baked texels carry maxComponent(vertex color) * 0.499, so the
+// LOD-fill provenance codes (>= 0.5) stay distinguishable. Texels without
+// vertex data (LOD fill, sentinel) read as 1 = no baked occlusion.
+float DecodeTerrainVertexAO(float4 texel)
+{
+	return (texel.x > -50000.0 && texel.w < 0.5) ? saturate(texel.w * (1.0 / 0.499)) : 1.0;
+}
+
+float SampleTerrainVertexAO(float2 gridLocal)
+{
+	float2 t = clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim, TerrainDim) - 1);
+	float s00 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t0.x, t0.y, 0)));
+	float s10 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t1.x, t0.y, 0)));
+	float s01 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t0.x, t1.y, 0)));
+	float s11 = DecodeTerrainVertexAO(TerrainWindow.Load(int3(t1.x, t1.y, 0)));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+#endif  // PSHADER
+
 #endif  //__SNOW_FIELDS_DEPENDENCY_HLSL__

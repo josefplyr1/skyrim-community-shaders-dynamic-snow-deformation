@@ -38,15 +38,6 @@ static uint PBRFlags = 0;
 #	undef SampColorSampler
 #endif
 
-// Stand-in for the land vertex AO that CS surfaces pass to
-// GetSkylightingDiffuse (Lighting.hlsl:2639, RunGrass.hlsl:495): skylighting
-// darkens only BEYOND the surface's baked AO (the function divides by it).
-// The shell has no vertex data; without a divisor it eats the probe's full
-// occlusion raw - measured as a uniform 0.834x on the ambient vs ground
-// (G-buffer diff, 2026-08-20). 0.8 matches snow-terrain vertex paint in
-// practice; the real fix is baking land vertex AO into the terrain window.
-static const float kSkylightingVertexAOProxy = 0.8;
-
 struct SnowSunLighting
 {
 	float3 directDiffuse;   // albedo-multiplied, incl. transmission

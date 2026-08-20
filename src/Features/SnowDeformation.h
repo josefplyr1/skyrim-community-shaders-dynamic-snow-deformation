@@ -162,6 +162,8 @@ public:
 		// shell from cached data without a re-bake.
 		std::array<std::array<uint16_t, kShellVertexLayers>, 33 * 33> layerTexture;
 		std::array<std::array<uint8_t, kShellVertexLayers>, 33 * 33> layerWeight;
+		/** @brief Max component of the land vertex color per vertex (0-255): the baked AO ground's skylighting is applied relative to. Packed into the terrain window's w channel as [0, 0.499). */
+		std::array<uint8_t, 33 * 33> vertexAO;
 		// City worldspaces reuse their Tamriel cell coordinates (WindhelmWorld
 		// spans the same 28-36 / 6-12 block as the terrain outside its gate),
 		// so the coordinate key alone matches cells from a worldspace we left.
