@@ -1307,14 +1307,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// geometry still has height left, and the committed edge dies in
 	// mid-air as a floating rim (round 10, Josef's hover screenshots).
 	float pixelEffDepth = pixelRampDepth > 0.0 ? pixelRampDepth * smoothstep(0.0, 5.0, pixelRampDepth) : pixelRampDepth;
-	// Contest anchored at TOUCHDOWN (Josef's diagram): w = 0.5 exactly
-	// where the sheet meets the ground, so the grain-vs-grain contest
-	// decides the interlock AT the contact fringe - EM's equal-weight
-	// boundary case; one band above ground snow wins outright, submerged
-	// loses. The old smoothstep(0, band, depth) cut the sheet band/2 up
-	// its skirt: the edge floated, and widening the band for detail
-	// retracted it further up the slope.
-	float rampTerm = saturate(0.5 + pixelEffDepth / rampFadeBand);
+	// Two factors doing the two jobs the old smoothstep(0, band, depth) did
+	// with one number (which is why fixing its floating cut flooded the
+	// shore): the CLASS GATE enforces the assigned-depth design - blended
+	// class depth must exceed ~2 units, so negative-depth classes (mud,
+	// shoreline, -5) and their shallow blend plateaus never carry shell,
+	// independent of the band slider (no recession). The CONTACT term is
+	// the touchdown contest: w = 0.5 where the sheet meets the ground, so
+	// the grain-vs-grain interlock plays out at the contact fringe (EM's
+	// equal-weight boundary case), band = fringe width only.
+	float rampTerm = smoothstep(1.0, 3.0, pixelRampDepth) * saturate(0.5 + pixelEffDepth / rampFadeBand);
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
 
 	// Object blending (Terrain Blending-style depth proximity): where the
