@@ -1940,7 +1940,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+	float3 ambientColor = SnowAmbientColor(normalWS);
 	float3 ambientPart = ambientColor * diffuseLobe;
 	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
 	// on a rock in a dark grove shares the grove's baked shade, and using the

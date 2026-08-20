@@ -4,6 +4,7 @@
 
 #include "Deferred.h"
 #include "Features/ExponentialHeightFog.h"
+#include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
@@ -321,6 +322,8 @@ std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines
 		defines.emplace_back(a_extra, "");
 	if (globals::features::exponentialHeightFog.loaded)
 		defines.emplace_back("SNOW_EXP_HEIGHT_FOG", "");
+	if (globals::features::ibl.loaded)
+		defines.emplace_back("SNOW_IBL", "");
 	return defines;
 }
 
@@ -704,6 +707,12 @@ void SnowDeformation::DrawShell()
 	if (globals::features::truePBR.glintsNoiseTexture) {
 		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
 		context->PSSetShaderResources(20, 1, &glintSRV);
+	}
+	// IBL SH textures (t76/t77, the include's forward slots): same not-
+	// guaranteed-at-deferred-time reasoning as the glint noise above.
+	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
+		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
+		context->PSSetShaderResources(76, 2, iblSRVs);
 	}
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.

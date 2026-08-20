@@ -3,6 +3,7 @@
 #include <d3dcompiler.h>
 
 #include "Features/ExponentialHeightFog.h"
+#include "Features/IBL.h"
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
@@ -307,7 +308,7 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr)
+static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr)
 {
 	struct ShaderInclude : public ID3DInclude
 	{
@@ -341,6 +342,7 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 		{ a_stageDefine, "" },
 		{ a_extraDefine ? a_extraDefine : "DX11", "" },
 		{ a_extraDefine2 ? a_extraDefine2 : "DX11", "" },
+		{ a_extraDefine3 ? a_extraDefine3 : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -409,10 +411,11 @@ bool SnowDeformation::EnsureStaticsShaders()
 	// EHF sun attenuation only compiles when the addon is installed (its
 	// hlsli is not CORE); the shells' PBR sun path gates on this define.
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
+	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
 
 	if (!staticsPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine));
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
 				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
@@ -431,7 +434,7 @@ bool SnowDeformation::EnsureStaticsShaders()
 	}
 	if (!patchPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH", ehfDefine));
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
 				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
@@ -1367,6 +1370,12 @@ void SnowDeformation::DrawCapturedStatics()
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
+	// IBL SH textures (t76/t77): the skins draw standalone from the landscape
+	// shell, so slot state from its pass is not guaranteed here.
+	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
+		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
+		context->PSSetShaderResources(76, 2, iblSRVs);
+	}
 	// The VS reads the same raster for the edge taper; the patch rebinds VS
 	// t11 for itself further down. The DS reads it too when tessellating.
 	context->VSSetShaderResources(11, 1, &objectTopSRV);

@@ -1767,7 +1767,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// diffuseLobe via MultiBounceAO (PBR.hlsli:276), exactly as ground does.
 	// Multiplying again was double-counting - it read as darker nights and
 	// less-blue days, ambient being where the sky blue lives.
-	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+	float3 ambientColor = SnowAmbientColor(normalWS);
 	float3 ambientPart = ambientColor * diffuseLobe;
 	// The land's real baked vertex AO under this pixel, by ground's recipe
 	// (Lighting.hlsl:2633-2636): linearized max component, VertexAOStrength

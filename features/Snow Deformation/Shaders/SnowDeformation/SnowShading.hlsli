@@ -38,6 +38,27 @@ static uint PBRFlags = 0;
 #	undef SampColorSampler
 #endif
 
+// IBL is an addon like EHF; the CPU gates the define on the feature being
+// loaded and binds the SH textures at the include's forward slots (t76/t77).
+#if defined(SNOW_IBL)
+#	include "IBL/IBL.hlsli"
+#endif
+
+// Ambient parity with Lighting.hlsl:2601-2658: when IBL is enabled it
+// transforms the DALC - DALCMode >= 2 keeps it and ADDS the sky-cubemap SH
+// term (where the sky blue lives), modes 0-1 replace it with env IBL. The
+// shells always draw in-world, so Lighting's static-IBL branch (menus,
+// loading screens) never applies here.
+float3 SnowAmbientColor(float3 normalWS)
+{
+	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
+#if defined(SNOW_IBL)
+	[branch] if (SharedData::iblSettings.EnableIBL)
+		ambientColor = ImageBasedLighting::GetDiffuseIBL(ambientColor, -normalWS);
+#endif
+	return ambientColor;
+}
+
 struct SnowSunLighting
 {
 	float3 directDiffuse;   // albedo-multiplied, incl. transmission
