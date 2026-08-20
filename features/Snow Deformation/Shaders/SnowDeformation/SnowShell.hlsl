@@ -37,7 +37,6 @@ SamplerState ShellLinearSampler : register(s1);
 #	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
 #	include "Skylighting/Skylighting.hlsli"
 #	include "SnowDeformation/SnowShadow.hlsli"
-#	include "SnowDeformation/SnowLights.hlsli"
 // Extended Materials' parallax self-shadow math (Tatarchuk 2006) reused
 // verbatim: DisplacementParams, AdjustDisplacementNormalized, the tap-count
 // and quality constants. Only the four fetches are replaced, so they can run
@@ -45,9 +44,11 @@ SamplerState ShellLinearSampler : register(s1);
 // terrain and PBR branches of the header compile out. Extended Materials is
 // CORE, so the include always resolves.
 #	include "ExtendedMaterials/ExtendedMaterials.hlsli"
-// Routed PBR sun tail (defines TRUE_PBR + GLINT for everything it pulls in,
-// including the glint NDF) - must stay the LAST include; see its header.
+// Routed PBR tail (defines TRUE_PBR + GLINT for everything it pulls in,
+// including the glint NDF) - must come after the includes above (they must
+// compile without TRUE_PBR); SnowLights calls into it, so it comes last.
 #	include "SnowDeformation/SnowShading.hlsli"
+#	include "SnowDeformation/SnowLights.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -1799,9 +1800,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// world block instead (an exact tile multiple): seams are fixed lines in
 	// the world, invisible in a stochastic field. Derivatives are unchanged.
 	const float2 glintUV = fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
-		kSnowAlbedo, snowRoughness, snowF0, snowAO,
+	// Built once, shared by the sun and every point light (M3).
+	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
+		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
@@ -1824,8 +1827,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, clusterUV, kSnowAlbedo, snowF0, snowRoughness, directDiffuse, directSpecular);
+		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
+			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
 	}
 
 	// No AO here: the routed GetIndirectLobeWeights already folds snowAO into

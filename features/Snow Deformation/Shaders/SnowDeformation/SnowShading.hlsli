@@ -55,27 +55,22 @@ struct SnowSunLighting
 	float3 specularLobe;    // -> Reflectance RT (composite expects unscaled)
 };
 
+// The material + glint frame, built ONCE per pixel and shared by the sun and
+// every point light - the same reuse Lighting.hlsl gets from its single
+// MaterialProperties.
+struct SnowMaterialCtx
+{
+	MaterialProperties material;
+	float3x3 tbnTr;
+};
+
 // glintParams = (logMicrofacetDensity, microfacetRoughness,
 // densityRandomization, screenSpaceScale) - the ShellCB packing.
-// worldPos is camera-relative, camPosAdjust the camera's world offset - the
-// pair GetSunlightFogAttenuation expects (same as Lighting/RunGrass).
-SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float3 worldPos, float3 camPosAdjust, float sunShadow,
+SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	float3 albedo, float roughness, float3 F0, float ao,
 	float4 glintParams, float glintActive,
 	float2 glintUV, float2 uvDDX, float2 uvDDY, float2 pixelPos)
 {
-	// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
-	// Lighting.hlsl feeds its dir light context.
-	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
-
-	// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
-	// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
-	// shell read warmer than the ground beside it.
-#if defined(SNOW_EXP_HEIGHT_FOG)
-	[branch] if (SharedData::exponentialHeightFogSettings.enabled)
-		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
-#endif
-
 	MaterialProperties material = (MaterialProperties)0;
 	material.BaseColor = albedo;
 	material.Roughness = roughness;
@@ -99,22 +94,63 @@ SnowSunLighting SnowEvaluateSunPBR(float3 normalWS, float3 V, float3 worldPos, f
 	// arbitrary-but-stable world-Y frame the hand-rolled path used.
 	float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 glintB = cross(normalWS, glintT);
-	float3x3 tbnTr = float3x3(glintT, glintB, normalWS);
+
+	SnowMaterialCtx ctx;
+	ctx.material = material;
+	ctx.tbnTr = float3x3(glintT, glintB, normalWS);
+	return ctx;
+}
+
+// worldPos is camera-relative, camPosAdjust the camera's world offset - the
+// pair GetSunlightFogAttenuation expects (same as Lighting/RunGrass).
+SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V,
+	float3 worldPos, float3 camPosAdjust, float sunShadow,
+	float2 glintUV, float2 uvDDX, float2 uvDDY)
+{
+	// raw x pi (LL off) / gamma-corrected x pi x mults (LL on): exactly what
+	// Lighting.hlsl feeds its dir light context.
+	float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
+
+	// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
+	// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
+	// shell read warmer than the ground beside it.
+#if defined(SNOW_EXP_HEIGHT_FOG)
+	[branch] if (SharedData::exponentialHeightFogSettings.enabled)
+		sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
+#endif
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, sunColor, sunShadow, sunShadow);
 
 	DirectLightingOutput lightingOutput;
-	EvaluateLighting(context, material, tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
+	EvaluateLighting(context, mtl.material, mtl.tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
 
 	IndirectContext indirectContext = CreateIndirectLightingContext(normalWS, normalWS, V);
 	IndirectLobeWeights lobeWeights;
-	GetIndirectLobeWeights(lobeWeights, indirectContext, material, glintUV);
+	GetIndirectLobeWeights(lobeWeights, indirectContext, mtl.material, glintUV);
 
 	SnowSunLighting o;
-	o.directDiffuse = lightingOutput.diffuse * material.BaseColor + lightingOutput.transmission;
+	o.directDiffuse = lightingOutput.diffuse * mtl.material.BaseColor + lightingOutput.transmission;
 	o.directSpecular = lightingOutput.specular;
 	o.diffuseLobe = lobeWeights.diffuse;
 	o.specularLobe = lobeWeights.specular;
 	return o;
+}
+
+// One point light through the same PBR path as the sun (ROUTING-ROADMAP M3).
+// lightColor arrives Color::PointLight-processed by the caller; the pi
+// compensation is applied here for the same reason as the sun's.
+void SnowEvaluateLightPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V, float3 L,
+	float3 lightColor, float lightShadow,
+	float2 glintUV, float2 uvDDX, float2 uvDDY,
+	inout float3 diffuse, inout float3 specular)
+{
+	float3 c = lightColor * Color::PBRLightingCompensation;
+	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, c, lightShadow, lightShadow);
+
+	DirectLightingOutput lightingOutput;
+	EvaluateLighting(context, mtl.material, mtl.tbnTr, glintUV, uvDDX, uvDDY, lightingOutput);
+
+	diffuse += lightingOutput.diffuse * mtl.material.BaseColor + lightingOutput.transmission;
+	specular += lightingOutput.specular;
 }

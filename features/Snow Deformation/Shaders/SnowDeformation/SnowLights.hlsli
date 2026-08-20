@@ -7,7 +7,8 @@
 // not available; the cluster list carries every visible placed light and
 // is the sole source here. Shadow-casting lights sample their own shadow
 // maps via SnowShadow::GetPointLightShadow, so include SnowShadow.hlsli
-// first.
+// first. Per-light shading routes through SnowEvaluateLightPBR, so
+// SnowShading.hlsli must ALSO be included first.
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
@@ -44,18 +45,20 @@ namespace SnowLights
 		return true;
 	}
 
-	// Adds the clustered point lights to the shell's direct lobes.
-	// worldPos camera-relative, worldPosAbs absolute; clusterUV is the
-	// pixel's projection-space screen UV. Shadow-casting lights sample
-	// their own shadow map at the shell surface, so shadow length is
-	// correct for the raised snow. Room/portal culling is skipped: the
-	// shell only exists in exteriors. GetAttenuation self-selects
-	// inverse-square vs vanilla falloff per light flags, so ISL parity is
-	// automatic.
+	// Adds the clustered point lights to the shell's direct lobes, each
+	// light shaded through the SAME routed PBR path as the sun
+	// (SnowEvaluateLightPBR - ROUTING-ROADMAP M3), so point lights carry
+	// glints and every future TruePBR lobe automatically. worldPos
+	// camera-relative, worldPosAbs absolute; clusterUV is the pixel's
+	// projection-space screen UV. Shadow-casting lights sample their own
+	// shadow map at the shell surface, so shadow length is correct for the
+	// raised snow. Room/portal culling is skipped: the shell only exists in
+	// exteriors. GetAttenuation self-selects inverse-square vs vanilla
+	// falloff per light flags, so ISL parity is automatic.
 	void AccumulatePointLights(
+		SnowMaterialCtx mtl,
 		float3 worldPos, float3 worldPosAbs, float3 normalWS, float3 V, float viewZ,
-		float2 clusterUV,
-		float3 albedo, float3 F0, float roughness,
+		float2 clusterUV, float2 glintUV, float2 uvDDX, float2 uvDDY,
 		inout float3 diffuse, inout float3 specular)
 	{
 		uint clusterIndex = 0;
@@ -82,22 +85,11 @@ namespace SnowLights
 				lightShadow = SnowShadow::GetPointLightShadow(worldPosAbs, light.shadowLightIndex, light.radius);
 
 			float3 L = normalize(lightDirection);
-			float satNdotL = saturate(dot(normalWS, L));
-			if (satNdotL <= 0.0 || lightShadow <= 0.0)
+			if (dot(normalWS, L) <= 0.0 || lightShadow <= 0.0)
 				continue;
 
-			float3 H = normalize(V + L);
-			float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
-			float satNdotH = saturate(dot(normalWS, H));
-			float satVdotH = saturate(dot(V, H));
-
-			float3 F = BRDF::F_Schlick(F0, satVdotH);
-			float specD = BRDF::D_GGX(roughness, satNdotH);
-			float specV = BRDF::Vis_SmithJointApprox(roughness, satNdotV, satNdotL);
-
-			float3 lit = lightColor * lightShadow * satNdotL;
-			diffuse += lit * (1.0 - F) * albedo;
-			specular += specD * specV * F * lit;
+			SnowEvaluateLightPBR(mtl, normalWS, V, L, lightColor, lightShadow,
+				glintUV, uvDDX, uvDDY, diffuse, specular);
 		}
 	}
 }
