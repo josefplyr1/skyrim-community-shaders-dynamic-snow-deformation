@@ -792,8 +792,20 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 	spellStats.lastShoutForce = shoveForce;
 	spellStats.lastShoutVerdict = 3;
 
-	if (element == SpellElement::None)
+	if (element == SpellElement::None) {
+		// A shout the records say should classify and the runtime says does
+		// not means the runtime is seeing different records - a load-order
+		// override, usually. Log what is ACTUALLY there so the disagreement
+		// can be read instead of re-derived from vanilla masters again.
+		logger::info("[SNOW DEFORMATION] shout rejected, no element: {} ({} effects)",
+			a_spell->GetName() ? a_spell->GetName() : "?", a_spell->effects.size());
+		for (const auto* item : a_spell->effects)
+			if (const auto* base = item ? item->baseEffect : nullptr)
+				logger::info("    effect {:08X} delivery={} resist={} archetype={}",
+					base->formID, static_cast<int>(base->data.delivery),
+					static_cast<int>(base->data.resistVariable), static_cast<int>(base->data.archetype));
 		return;
+	}
 
 	// A shove that TRAVELS is not a shockwave and gets no wedge. It is an
 	// object making its way across the ground, and what it leaves is the line
@@ -1218,10 +1230,14 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	// through it, at full strength, fading only as the CENTRE climbs out of
 	// its own reach.
 	const float height = std::max(a_position.z - groundZ, 0.0f);
-	if (height >= scaled)
+	if (height >= scaled) {
+		logger::info("[SNOW DEFORMATION] death blast skipped: {:.0f} above ground, reach {:.0f}", height, scaled);
 		return;
+	}
 	const float strength = std::clamp(1.5f * (1.0f - height / std::max(scaled, 1.0f)), 0.0f, 1.0f);
 	const float radius = std::max(std::sqrt(std::max(scaled * scaled - height * height, 0.0f)), scaled * 0.35f);
+	logger::info("[SNOW DEFORMATION] death blast: height {:.0f} reach {:.0f} -> strength {:.2f} radius {:.0f} rate {:.1f}",
+		height, scaled, strength, radius, kAtronachDeathRate);
 	if (strength < kMinSpellStrength || activeBlasts.size() >= kMaxSpellEmitters)
 		return;
 
@@ -1696,7 +1712,7 @@ void SnowDeformation::GatherSpellEmitters()
 		if (spellGameHours >= 0.0f) {
 			const float dtReal = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
 			const float gameSeconds = (hours - spellGameHours) * 3600.0f;
-			const float expected = dtReal * std::max(calendar->GetTimescale(), 1.0f);
+			const float expected = dtReal * std::clamp(calendar->GetTimescale(), 1.0f, 100.0f);
 			if (gameSeconds < -1.0f) {
 				wentBack = true;
 				spellGameDrift = 0.0f;
@@ -1712,10 +1728,18 @@ void SnowDeformation::GatherSpellEmitters()
 				// only a real skip accumulates. Floored rather than zeroed
 				// downward: menus that PAUSE the calendar would otherwise bank
 				// unbounded negative drift and swallow the next real wait.
+				// The timescale is read CAPPED. Waiting appears to work by
+				// cranking the timescale enormously for the animation, so an
+				// uncapped expectation absorbs the very hour it should be
+				// catching - the drift stayed zero through a wait and the
+				// cloak survived again. No one plays above ~60; a reading in
+				// the hundreds is the wait itself.
 				spellGameDrift = std::max(spellGameDrift + gameSeconds - expected, -5.0f);
 				if (spellGameDrift > 15.0f) {
 					jumpSeconds = spellGameDrift;
 					spellGameDrift = 0.0f;
+					logger::info("[SNOW DEFORMATION] time jump: {:.0f} game seconds applied to {} cloaks, {} blasts",
+						jumpSeconds, activeCloaks.size(), activeBlasts.size());
 				}
 			}
 		}

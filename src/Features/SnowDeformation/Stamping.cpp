@@ -352,7 +352,14 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 					std::min(nodeA->world.translate.z, nodeB->world.translate.z) - limb.radius * nodeA->world.scale);
 			}
 	}
-	if (lowest == FLT_MAX && a_root)
+	// Feet decide alone; LIMBS do not. A skeleton that matched no foot bone
+	// offers only spines and necks, and a reindeer measured by its spine reads
+	// 71 units off the ground - past every wisp threshold - while standing
+	// flat-footed in the snow. So a footless skeleton is also measured by its
+	// COLLISION, which reaches its legs, and the lower of the two answers.
+	// Wisps stay caught: their collision is their floating body.
+	const bool measuredByFeet = lowest != FLT_MAX && a_bones && !a_bones->feet.empty();
+	if (!measuredByFeet && a_root)
 		RE::BSVisit::TraverseScenegraphCollision(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
