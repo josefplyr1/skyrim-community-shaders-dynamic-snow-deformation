@@ -1299,10 +1299,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
 
-	// User-tunable dissolve band (depth units): how much of the ramp's tail
-	// the untrampled edge dithers across before committing.
+	// User-tunable contest fringe (units): how far around the contact point
+	// the height contest operates.
 	float rampFadeBand = max(2.0, BorderUntrampledFade);
-	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * smoothstep(0.0, rampFadeBand, pixelRampDepth);
+	// Mirror of the VS touch-down toe, so the alpha reads the sheet's
+	// ACTUAL height above ground: without it the alpha cut lands while the
+	// geometry still has height left, and the committed edge dies in
+	// mid-air as a floating rim (round 10, Josef's hover screenshots).
+	float pixelEffDepth = pixelRampDepth > 0.0 ? pixelRampDepth * smoothstep(0.0, 5.0, pixelRampDepth) : pixelRampDepth;
+	// Contest anchored at TOUCHDOWN (Josef's diagram): w = 0.5 exactly
+	// where the sheet meets the ground, so the grain-vs-grain contest
+	// decides the interlock AT the contact fringe - EM's equal-weight
+	// boundary case; one band above ground snow wins outright, submerged
+	// loses. The old smoothstep(0, band, depth) cut the sheet band/2 up
+	// its skirt: the edge floated, and widening the band for detail
+	// retracted it further up the slope.
+	float rampTerm = saturate(0.5 + pixelEffDepth / rampFadeBand);
+	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
 
 	// Object blending (Terrain Blending-style depth proximity): where the
 	// shell hovers within a few units in front of any geometry behind it
