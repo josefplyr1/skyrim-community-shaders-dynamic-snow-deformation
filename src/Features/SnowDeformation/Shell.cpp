@@ -210,44 +210,46 @@ void SnowDeformation::EnsureShellSnowTextures()
 		snowGlintScreenSpaceScale = 1.0f;
 		snowRoughnessScale = 0.7f;
 		snowSpecularLevel = 0.02f;
-		try {
-			size_t slashPos = base.find_last_of('\\');
-			std::string baseName = (slashPos == std::string::npos) ? base : base.substr(slashPos + 1);
-			std::transform(baseName.begin(), baseName.end(), baseName.begin(),
+		snowDisplacementScale = 1.0f;
+		snowPBRSetName.clear();
+
+		// TruePBR already parsed every PBRTextureSets JSON into its table, keyed
+		// by filename stem (the texture-set editor ID) - the same string the old
+		// directory scan matched against. Match the keys instead: shared struct,
+		// shared parse, and ReloadTextureSetData/menu edits reach us through
+		// RefreshSnowPBRParams. Exact key first, then the lexicographically
+		// smallest substring match so multi-match modlists resolve the same way
+		// every run (the old filesystem-order scan did not).
+		size_t slashPos = base.find_last_of('\\');
+		std::string baseName = (slashPos == std::string::npos) ? base : base.substr(slashPos + 1);
+		std::transform(baseName.begin(), baseName.end(), baseName.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		const auto& pbrSets = globals::features::truePBR.pbrTextureSets;
+		size_t matchCount = 0;
+		for (const auto& [setName, setData] : pbrSets) {
+			std::string keyLower = setName;
+			std::transform(keyLower.begin(), keyLower.end(), keyLower.begin(),
 				[](unsigned char c) { return (char)std::tolower(c); });
-			for (const auto& entry : std::filesystem::directory_iterator("Data\\PBRTextureSets")) {
-				if (!entry.is_regular_file())
-					continue;
-				std::string fname = entry.path().filename().string();
-				std::string fnameLower = fname;
-				std::transform(fnameLower.begin(), fnameLower.end(), fnameLower.begin(),
-					[](unsigned char c) { return (char)std::tolower(c); });
-				if (!fnameLower.ends_with(".json") || fnameLower.find(baseName) == std::string::npos)
-					continue;
-				std::ifstream file(entry.path());
-				nlohmann::json cfg = nlohmann::json::parse(file, nullptr, false);
-				if (cfg.is_discarded())
-					continue;
-				if (auto glintIt = cfg.find("glintParameters"); glintIt != cfg.end() && glintIt->is_object()) {
-					snowGlintLogDensity = glintIt->value("logMicrofacetDensity", 6.0f);
-					// Same clamps Lighting.hlsl applies (PBR::Constants).
-					snowGlintMicroRoughness = std::clamp(glintIt->value("microfacetRoughness", 1.0f), 0.005f, 0.3f);
-					snowGlintDensityRandomization = std::clamp(glintIt->value("densityRandomization", 5.0f), 0.0f, 5.0f);
-					snowGlintScreenSpaceScale = std::max(1.0f, glintIt->value("screenSpaceScale", 1.0f));
-					if (!glintIt->value("enabled", true))
-						snowGlintLogDensity = 0.0f;  // below the shader's >1.1 gate
-				}
-				snowRoughnessScale = cfg.value("roughnessScale", 0.7f);
-				snowSpecularLevel = cfg.value("specularLevel", 0.02f);
-				snowDisplacementScale = cfg.value("displacementScale", 1.0f);
-				logger::info("[SNOW DEFORMATION] PBR config matched: {} (glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",
-					fname, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel);
+			if (keyLower.find(baseName) == std::string::npos)
+				continue;
+			++matchCount;
+			if (keyLower == baseName) {
+				snowPBRSetName = setName;
 				break;
 			}
-		} catch (const std::exception& e) {
-			logger::info("[SNOW DEFORMATION] PBR config scan failed: {}", e.what());
+			if (snowPBRSetName.empty() || setName < snowPBRSetName)
+				snowPBRSetName = setName;
+		}
+		if (!snowPBRSetName.empty()) {
+			RefreshSnowPBRParams();
+			logger::info("[SNOW DEFORMATION] TruePBR config matched: {} ({} of {} sets matched '{}'; glintDensity={:.1f} roughScale={:.2f} spec={:.3f})",
+				snowPBRSetName, matchCount, pbrSets.size(), baseName, snowGlintLogDensity, snowRoughnessScale, snowSpecularLevel);
+		} else {
+			logger::info("[SNOW DEFORMATION] no TruePBR config matches '{}' ({} sets loaded); using built-in snow defaults",
+				baseName, pbrSets.size());
 		}
 	} else {
+		snowPBRSetName.clear();
 		bool ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
 		if (!ok && chosenPath != "Textures\\Landscape\\snow01.dds") {
 			logger::info("[SNOW DEFORMATION] Snow diffuse not loose-file loadable: {}", chosenPath);
@@ -255,6 +257,29 @@ void SnowDeformation::EnsureShellSnowTextures()
 			ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
 		}
 		logger::info("[SNOW DEFORMATION] Snow diffuse load ({}): {}", ok ? "ok (legacy)" : "missing, using fallback color", chosenPath);
+	}
+}
+
+void SnowDeformation::RefreshSnowPBRParams()
+{
+	if (snowPBRSetName.empty())
+		return;
+	const auto& pbrSets = globals::features::truePBR.pbrTextureSets;
+	auto it = pbrSets.find(snowPBRSetName);
+	if (it == pbrSets.end())
+		return;
+	const auto& cfg = it->second;
+	snowRoughnessScale = cfg.roughnessScale;
+	snowSpecularLevel = cfg.specularLevel;
+	snowDisplacementScale = cfg.displacementScale;
+	if (cfg.glintParameters.enabled) {
+		snowGlintLogDensity = cfg.glintParameters.logMicrofacetDensity;
+		// Same clamps Lighting.hlsl applies (PBR::Constants).
+		snowGlintMicroRoughness = std::clamp(cfg.glintParameters.microfacetRoughness, 0.005f, 0.3f);
+		snowGlintDensityRandomization = std::clamp(cfg.glintParameters.densityRandomization, 0.0f, 5.0f);
+		snowGlintScreenSpaceScale = std::max(1.0f, cfg.glintParameters.screenSpaceScale);
+	} else {
+		snowGlintLogDensity = 0.0f;  // below the shader's >1.1 gate
 	}
 }
 
@@ -427,6 +452,9 @@ void SnowDeformation::DrawShell()
 	};
 
 	EnsureShellSnowTextures();
+	// Per frame so TruePBR's hot-reload and live menu edits of the matched
+	// texture set reach the shell the same frame they reach the ground.
+	RefreshSnowPBRParams();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;

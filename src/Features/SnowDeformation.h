@@ -932,7 +932,7 @@ public:
 	bool shellSnowTextureIsPBR = false;
 	bool shellSnowTextureAttempted = false;
 
-	/** @brief Material parameters fetched from the modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture basename) so the shell's sparkle and response follow whatever texture set the user runs. Defaults mirror common authored snow values. */
+	/** @brief Material parameters resolved from TruePBR's shared texture-set table (keys = JSON filename stems, matched by texture basename) so the shell's sparkle and response follow whatever texture set the user runs. Defaults mirror common authored snow values. */
 	float snowGlintLogDensity = 6.0f;
 	float snowGlintMicroRoughness = 0.3f;
 	float snowGlintDensityRandomization = 5.0f;
@@ -940,10 +940,14 @@ public:
 	float snowRoughnessScale = 0.7f;
 	float snowSpecularLevel = 0.02f;
 	float snowDisplacementScale = 1.0f;
+	/** @brief Matched key into TruePBR::pbrTextureSets; empty = no match, built-in defaults. The full PBRTextureSetData (subsurface, coat, fuzz) is reachable through it. */
+	std::string snowPBRSetName;
 	winrt::com_ptr<ID3D11SamplerState> shellSnowSampler;
 
 	/** @brief Lazy-loads the shell snow texture set (and its authored PBR parameters) from the user-configured path. Implemented in SnowDeformation/Shell.cpp. */
 	void EnsureShellSnowTextures();
+	/** @brief Re-reads the matched TruePBR texture set's values (per frame: follows ReloadTextureSetData and live menu edits). Implemented in SnowDeformation/Shell.cpp. */
+	void RefreshSnowPBRParams();
 
 	/** @brief Bakes one cell's heights and per-vertex snow coverage from LoadedLandData. Called from the TESObjectLAND hook. Implemented in SnowDeformation/TerrainData.cpp. */
 	void BakeShellCell(RE::TESObjectLAND* land);
