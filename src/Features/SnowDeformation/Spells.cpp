@@ -1618,9 +1618,37 @@ void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* 
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
-	spellStats = {};
+	// Live counts are re-counted below every frame. Event counts arrive from
+	// SINKS between frames, so a full reset turned each of those into a
+	// one-frame flash no eye could catch: "death events seen 0" never meant
+	// the event does not fire - it meant the panel cannot hold a number for
+	// longer than a frame. That single line cost the atronach death mark its
+	// diagnostic and manufactured a phantom shout regression, so the event
+	// fields now carry across the reset as running totals since load.
+	{
+		const SpellStats carried = spellStats;
+		spellStats = {};
+		spellStats.casts = carried.casts;
+		spellStats.detonations = carried.detonations;
+		spellStats.shouts = carried.shouts;
+		spellStats.shoutDiscs = carried.shoutDiscs;
+		spellStats.groundContacts = carried.groundContacts;
+		spellStats.deathsSeen = carried.deathsSeen;
+		spellStats.deathBlasts = carried.deathBlasts;
+		spellStats.rejectedElement = carried.rejectedElement;
+		spellStats.rejectedNoBlast = carried.rejectedNoBlast;
+		spellStats.lifted = carried.lifted;
+		spellStats.lastShoutElement = carried.lastShoutElement;
+		spellStats.lastShoutSpeed = carried.lastShoutSpeed;
+		spellStats.lastShoutForce = carried.lastShoutForce;
+		spellStats.lastShoutVerdict = carried.lastShoutVerdict;
+		spellStats.lastStrength = carried.lastStrength;
+		spellStats.lastRadius = carried.lastRadius;
+	}
 
 	if (!settings.EnableSpellIntegration) {
+		spellStats = {};
+		spellGameHours = -1.0f;
 		spellPrevPositions.clear();
 		spellTrailPrev.clear();
 		spellAuraPrev.clear();
@@ -1641,6 +1669,53 @@ void SnowDeformation::GatherSpellEmitters()
 
 	if (!spellCastSinkRegistered)
 		RegisterSpellCastSink();
+
+	// Waiting, sleeping and fast travel move the game's CALENDAR while this
+	// feature's clocks tick render seconds, so a cloak the game expired an
+	// hour ago kept melting out its remaining half minute. A jump is calendar
+	// movement far beyond what the timescale produces in one frame; every
+	// duration this feature tracks then advances by the game seconds jumped,
+	// which is what the engine does to its own active effects. Backwards - a
+	// loaded save - clears instead: those timers belong to a timeline that no
+	// longer exists.
+	if (auto* calendar = globals::game::calendar) {
+		const float hours = calendar->GetHoursPassed();
+		float jumpSeconds = 0.0f;
+		bool wentBack = false;
+		if (spellGameHours >= 0.0f) {
+			const float dtReal = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
+			const float gameSeconds = (hours - spellGameHours) * 3600.0f;
+			const float expected = dtReal * std::max(calendar->GetTimescale(), 1.0f);
+			if (gameSeconds < -1.0f)
+				wentBack = true;
+			else if (gameSeconds > expected * 8.0f + 30.0f)
+				jumpSeconds = gameSeconds - expected;
+		}
+		spellGameHours = hours;
+		if (wentBack) {
+			activeCloaks.clear();
+			corpseEffects.clear();
+			dashWatches.clear();
+			activeBlasts.clear();
+			lightningArcs.clear();
+		} else if (jumpSeconds > 0.0f) {
+			for (auto& cloak : activeCloaks) {
+				cloak.second.remaining -= jumpSeconds;
+				cloak.second.burnRemaining -= jumpSeconds;
+			}
+			for (auto& corpse : corpseEffects) {
+				corpse.second.remaining -= jumpSeconds;
+				corpse.second.burnRemaining -= jumpSeconds;
+			}
+			for (auto& aura : innateAuras)
+				aura.second.burnRemaining -= jumpSeconds;
+			for (auto& watch : dashWatches)
+				watch.remaining -= jumpSeconds;
+			for (auto& blast : activeBlasts)
+				blast.remaining -= jumpSeconds;
+			lightningArcs.clear();
+		}
+	}
 
 	auto* manager = RE::Projectile::Manager::GetSingleton();
 	auto* tes = RE::TES::GetSingleton();

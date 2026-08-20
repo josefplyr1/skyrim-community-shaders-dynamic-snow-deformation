@@ -1923,6 +1923,8 @@ protected:
 
 	/** @brief Registered lazily on the first gather, so the event holder is certainly up. */
 	void RegisterSpellCastSink();
+	/** @brief Calendar reading last frame, in game hours. -1 = not yet read. Watches for wait/sleep/fast-travel jumps, which move the game's clock without moving ours. */
+	float spellGameHours = -1.0f;
 
 	/** @brief Queued by the sink on the GAME thread and drained by the gather on the render thread, hence the lock. */
 	struct QueuedCast

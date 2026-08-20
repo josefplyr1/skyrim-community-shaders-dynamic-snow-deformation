@@ -448,7 +448,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
 				spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
 				spellStats.groundContacts, spellStats.trails);
-			ImGui::Text("blasts: armed %u | from detonations %u | from casts %u | shouts %u (%u discs)",
+			ImGui::Text("blasts: armed %u | detonations %u | casts %u | shouts %u (%u discs)   [totals since load]",
 				spellStats.armed, spellStats.detonations, spellStats.casts,
 				spellStats.shouts, spellStats.shoutDiscs);
 			ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
