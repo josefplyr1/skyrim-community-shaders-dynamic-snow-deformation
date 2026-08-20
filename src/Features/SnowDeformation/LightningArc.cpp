@@ -208,7 +208,8 @@ void SnowDeformation::DrawLightningArcs()
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
 
-	ID3D11ShaderResourceView* srv = arcTextureSRV.get();
+	const bool useTexture = settings.LightningArcUseTexture && arcTextureSRV;
+	ID3D11ShaderResourceView* srv = useTexture ? arcTextureSRV.get() : nullptr;
 	context->PSSetShaderResources(0, 1, &srv);
 	ID3D11SamplerState* samplers[1] = { arcSampler.get() };
 	context->PSSetSamplers(0, 1, samplers);
@@ -224,7 +225,7 @@ void SnowDeformation::DrawLightningArcs()
 	data.CameraViewProj = fb.GetCameraViewProj();
 	data.ArcCameraPosAdjust = fb.GetCameraPosAdjust();
 	data.ArcTint = { settings.LightningArcTint[0], settings.LightningArcTint[1],
-		settings.LightningArcTint[2], arcTextureSRV ? 1.0f : 0.0f };
+		settings.LightningArcTint[2], useTexture ? 1.0f : 0.0f };
 
 	// One draw per arc. There are never many, and the alternative is an array
 	// in the constant buffer for no gain.

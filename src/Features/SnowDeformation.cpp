@@ -63,7 +63,14 @@
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
 	X(FrostTexturePath) \
-	X(EnableLightningArcs) 	X(LightningArcWidth) 	X(LightningArcBrightness) 	X(LightningArcLife) 	X(LightningArcTint) 	X(LightningArcTexturePath) 	X(FrostPatternStrength) \
+	X(EnableLightningArcs) \
+	X(LightningArcWidth) \
+	X(LightningArcBrightness) \
+	X(LightningArcLife) \
+	X(LightningArcTint) \
+	X(LightningArcTexturePath) \
+	X(LightningArcUseTexture) \
+	X(FrostPatternStrength) \
 	X(FrostPatternScale) \
 	X(AtronachFireReach) \
 	X(AtronachFireDeathRadius) \

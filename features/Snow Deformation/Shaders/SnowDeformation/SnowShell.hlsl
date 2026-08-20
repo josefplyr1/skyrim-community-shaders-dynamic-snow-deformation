@@ -706,14 +706,20 @@ float CarveProfile(float deformation, float uncarvedDepth)
 // a long, gentle outer tail instead of a knife along the stamp falloff.
 // Height is the live BermHeightAmp slider.
 
-// The rise must still be CLIMBING at ~0.5 (the field value right at
-// the trail edge) or its flattened top smears into a plateau there; the
-// cut starting at 0.5 then caps it into a narrow rounded crest against
-// the rim, descending steadily outward from the top. Tail reaches zero
-// with zero slope (no normal-map seam where the berm ends).
+// Saturates EARLY (full height once the disc is a third carved), and the old
+// high-field cut is gone - both for the same reported reason. The cut's job,
+// keeping berms out of carved interiors, is now done exactly by the explicit
+// (1 - deformation) mask at every call site, which also lets the strip
+// between two adjacent trails pile a proper ridge (the cut used to kill it).
+// And a rise that kept climbing to 0.6 meant a rim point's berm grew for as
+// long as the trail kept extending within the 40-unit disc - Josef watched
+// ground he had already passed "morph" upward, which snow does not do. With
+// the early plateau, the berm is at full height by the time the trail REACHES
+// a point, and the walker meets a full lip ahead of the leading edge instead
+// of raising one behind. Tail still reaches zero with zero slope.
 float BermShape(float bermDeform)
 {
-	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
+	return smoothstep(0.02, 0.32, bermDeform);
 }
 
 // 17 taps on two staggered 8-point rings. Tap COUNT is the anti-seam: for
@@ -981,7 +987,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float deformation = saturate(SampleDeformation(gridLocal));
 			float bermD = BermField(gridLocal);
 			float uncarved = depth;
-			depth = CarveProfile(deformation, uncarved) + BermShape(bermD) * uncarved * BermHeightAmp;
+			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
+			// blurred field also lifted the trench floor and walls - a narrow
+			// trail's disc average is well above zero at its own centre, so
+			// raising Berm Height raised the whole trench with it.
+			depth = CarveProfile(deformation, uncarved) +
+			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp;
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -1410,9 +1421,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bermXN = BermField(gridLocal - float2(step, 0.0));
 	float bermYP = BermField(gridLocal + float2(0.0, step));
 	float bermYN = BermField(gridLocal - float2(0.0, step));
+	// Differenced WITH the (1 - deformation) mask, so the shading gradient is
+	// of the exact surface the vertex path displaces - an unmasked gradient
+	// here shades a hill the geometry no longer has.
 	float2 bermGrad = float2(
-		BermShape(bermXP) - BermShape(bermXN),
-		BermShape(bermYP) - BermShape(bermYN)) / (2.0 * step);
+		BermShape(bermXP) * saturate(1.0 - dXP) - BermShape(bermXN) * saturate(1.0 - dXN),
+		BermShape(bermYP) * saturate(1.0 - dYP) - BermShape(bermYN) * saturate(1.0 - dYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp;
 
@@ -1698,7 +1712,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth) + BermShape(sampleDeform) * sampleDepth * BermHeightAmp;
+			// The berm occluder reads the berm FIELD, as the geometry does. It
+			// used to read the RAW deformation, and BermShape of a raw value
+			// peaks across the trench's sloping wall - so the march saw every
+			// trail ringed by a phantom ridge and laid shadow bands on flat,
+			// sun-facing snow beside it: Josef's "shadows where there should
+			// be none". One bilinear tap when the bake is live; the unbaked
+			// A/B path skips the term rather than paying 17 taps per march
+			// step, and under-occludes its berms slightly.
+			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
+			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{

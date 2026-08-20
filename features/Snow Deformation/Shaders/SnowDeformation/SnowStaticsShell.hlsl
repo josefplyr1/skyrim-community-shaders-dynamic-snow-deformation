@@ -321,9 +321,12 @@ float BermField(float2 gridLocal)
 	return field;
 }
 
+// Kept in step with the landscape shell's BermShape: early saturation, and
+// the carved-interior cut is owned by an explicit (1 - deformation) mask at
+// the call sites rather than a high-field falloff here.
 float BermShape(float bermDeform)
 {
-	return smoothstep(0.0, 0.6, bermDeform) * (1.0 - smoothstep(0.5, 0.8, bermDeform));
+	return smoothstep(0.02, 0.32, bermDeform);
 }
 
 float ShapeNoiseHash(float2 cell)
@@ -1793,7 +1796,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			BermShape(BermField(trenchGridLocal + float2(bStep, 0.0))) - BermShape(BermField(trenchGridLocal - float2(bStep, 0.0))),
 			BermShape(BermField(trenchGridLocal + float2(0.0, bStep))) - BermShape(BermField(trenchGridLocal - float2(0.0, bStep)))) / (2.0 * bStep);
 		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
-		normalWS = normalize(normalWS + float3(-bermGrad * bermDepth * ObjBermHeightAmp, 0.0));
+		// Centre-masked rather than per-tap: this berm is shading-only, and
+		// the mask's job is just to keep the ridge off the dug floor.
+		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp, 0.0));
 	}
 	float disturb = ChurnWeight(pixelDeform, bermC) * ObjCrispStrengthV;
 	disturb *= 1.0 - smoothstep(300.0, 1000.0, pixelDist);

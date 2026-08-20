@@ -610,6 +610,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttArcC = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("arc_tint_tooltip"), "Colour of the discharge."));
 
+			ImGui::Checkbox(T(TKEY("arc_use_texture"), "Use Arc Texture"), &settings.LightningArcUseTexture);
+			if (auto _ttArcU = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("arc_use_texture_tooltip"), "Off, the bolt is drawn as a pure light channel - a hot core with a soft falloff. On, the texture below shapes that channel; it modulates rather than replaces, so the bolt stays continuous where the art is blank."));
+
 			ImGui::InputText(T(TKEY("arc_texture_path"), "Arc Texture"), &settings.LightningArcTexturePath);
 			if (auto _ttArcT = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("arc_texture_path_tooltip"), "Optional DDS path relative to Data. EMPTY by default and deliberately so: the bolt is drawn as a real core-and-falloff channel that stands on its own, and a guessed vanilla path that resolves to nothing would leave a dark band hanging in the air. Supply one to shape the channel; it modulates rather than replaces."));
