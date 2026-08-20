@@ -180,10 +180,6 @@ cbuffer ShellCB : register(b0)
 	// world tile size, w = whether the pattern loaded at all. Those three ride
 	// spare room here rather than growing a buffer mirrored across two shaders.
 	float4 CrustLook2;
-
-	// Sun diffuse x fade, WITHOUT SharedData's baked-in sunlightScale - the
-	// per-pass DirLightColor ground receives does not carry it.
-	float4 SunColor;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1784,13 +1780,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
 	}
 
-	float3 sunLight = SunColor.xyz * sunShadow;
+	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1): glints, energy conservation and every future
 	// TruePBR lobe ride the shared code. Outputs are Lighting-internal units;
 	// Color::PBRLightingScale is applied at the write tail below.
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, SunColor.xyz, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;

@@ -144,15 +144,6 @@ cbuffer ShellCB : register(b0)
 	// Parallax: x = HeightScale, y = self-shadow strength. zw are the
 	// landscape shell's occlusion march params; object snow does not march.
 	float4 SnowParallax;
-
-	// Landscape-only rows, declared so SunColor lands on the shared offset.
-	float4 SpellShading;
-	float4 CrustLook;
-	float4 CrustLook2;
-
-	// Sun diffuse x fade, WITHOUT SharedData's baked-in sunlightScale - the
-	// per-pass DirLightColor ground receives does not carry it.
-	float4 SunColor;
 }
 
 cbuffer StaticCB : register(b1)
@@ -1972,7 +1963,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
 	// ground snow shade identically across the SnowSnowFade cross-fade.
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, SunColor.xyz, sunShadow,
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(normalWS, V, sunShadow,
 		kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, snowUV, snowTaps.duvdx, snowTaps.duvdy, input.Position.xy);
 	float3 specularLobe = sunLit.specularLobe;
