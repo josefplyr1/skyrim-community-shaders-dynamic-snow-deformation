@@ -110,6 +110,8 @@ static constexpr float kCorpseSizeMax = 2.5f;
 // How fast the blast a dying atronach throws reaches its basin. Same shape as
 // any other detonation: held open for a moment rather than applied in a frame.
 static constexpr float kAtronachDeathRate = 4.0f;
+/** @brief How long a death blast is held open. A spell impact's kBlastDuration reaches full depth only at the bowl's centre; a death is the element's largest event and gets time to dig its whole width. */
+static constexpr float kAtronachDeathHold = 1.2f;
 // How recently an actor must have been seen alive for its DISAPPEARANCE to
 // count as a death. An atronach is unsummoned when it dies, so it is simply
 // gone on the next frame - but so is one whose cell the player walked out of,
@@ -246,8 +248,12 @@ SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectS
 {
 	if (!a_effect)
 		return SpellElement::None;
-	// The resist variable is the one axis every damaging effect carries,
-	// vanilla or modded, which is why no spell is ever named here.
+	// The resist variable is the primary axis - but not, it turns out, one
+	// every damaging effect carries. A modded Ice Form arrived with resist
+	// NONE on both effects (the vanilla record was overridden by a light
+	// plugin), so the engine's own damage keywords are the fallback: they are
+	// what perks and enchantments classify by, so any mod that wants its
+	// spell to interact with the game's systems tags them.
 	switch (a_effect->data.resistVariable) {
 	case RE::ActorValue::kResistFire:
 		return SpellElement::Fire;
@@ -256,8 +262,15 @@ SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectS
 	case RE::ActorValue::kResistShock:
 		return SpellElement::Shock;
 	default:
-		return SpellElement::None;
+		break;
 	}
+	if (a_effect->HasKeywordString("MagicDamageFire"))
+		return SpellElement::Fire;
+	if (a_effect->HasKeywordString("MagicDamageFrost"))
+		return SpellElement::Frost;
+	if (a_effect->HasKeywordString("MagicDamageShock"))
+		return SpellElement::Shock;
+	return SpellElement::None;
 }
 
 SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_element)
@@ -800,10 +813,18 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 		logger::info("[SNOW DEFORMATION] shout rejected, no element: {} ({} effects)",
 			a_spell->GetName() ? a_spell->GetName() : "?", a_spell->effects.size());
 		for (const auto* item : a_spell->effects)
-			if (const auto* base = item ? item->baseEffect : nullptr)
-				logger::info("    effect {:08X} delivery={} resist={} archetype={}",
+			if (const auto* base = item ? item->baseEffect : nullptr) {
+				std::string keywords;
+				for (uint32_t k = 0; k < base->numKeywords; k++)
+					if (base->keywords && base->keywords[k]) {
+						keywords += base->keywords[k]->GetFormEditorID();
+						keywords += ' ';
+					}
+				logger::info("    effect {:08X} delivery={} resist={} archetype={} keywords: {}",
 					base->formID, static_cast<int>(base->data.delivery),
-					static_cast<int>(base->data.resistVariable), static_cast<int>(base->data.archetype));
+					static_cast<int>(base->data.resistVariable), static_cast<int>(base->data.archetype),
+					keywords.empty() ? "(none)" : keywords.c_str());
+			}
 		return;
 	}
 
@@ -1246,7 +1267,13 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	opened.radius = radius;
 	opened.strength = strength;
 	opened.rate = kAtronachDeathRate;
-	opened.remaining = std::max(kBlastDuration, kBlastRampSeconds + kBlastMinHold);
+	// Held far longer than a spell impact. kBlastDuration is tuned for a bolt
+	// landing; an atronach's death is the largest thing its element does, and
+	// at 0.35s its wide bowl only reached a fraction of depth outside the
+	// centre - a dish shallow enough to read as nothing, dug where the
+	// creature's own aura had already melted a hole.
+	opened.remaining = kAtronachDeathHold;
+	opened.diag = true;
 	opened.element = a_state.element;
 	opened.mark = MarkForElement(a_state.element);
 	opened.pitScale = std::clamp(authored / kPitReferenceRadius, kPitScaleMin, kPitScaleMax);
@@ -1705,7 +1732,18 @@ void SnowDeformation::GatherSpellEmitters()
 	// which is what the engine does to its own active effects. Backwards - a
 	// loaded save - clears instead: those timers belong to a timeline that no
 	// longer exists.
-	if (auto* calendar = globals::game::calendar) {
+	// The global can lag the game's own singleton, and a null here silently
+	// disarmed the whole detector - no jump was ever logged because this block
+	// never ran. Fall back to the singleton, and say ONCE whether the watch is
+	// armed so an absent jump line can be told from an absent detector.
+	auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	static bool watchAnnounced = false;
+	if (!watchAnnounced) {
+		watchAnnounced = true;
+		logger::info("[SNOW DEFORMATION] time-jump watch: calendar {}, timescale {:.0f}",
+			calendar ? "armed" : "MISSING", calendar ? calendar->GetTimescale() : 0.0f);
+	}
+	if (calendar) {
 		const float hours = calendar->GetHoursPassed();
 		float jumpSeconds = 0.0f;
 		bool wentBack = false;
@@ -2281,7 +2319,14 @@ void SnowDeformation::GatherSpellEmitters()
 			}
 			it->age += deltaTime;
 			it->remaining -= deltaTime;
-			it = it->remaining > 0.0f ? it + 1 : activeBlasts.erase(it);
+			if (it->remaining <= 0.0f) {
+				if (it->diag)
+					logger::info("[SNOW DEFORMATION] death blast closed: lived {:.2f}s, final strength {:.2f}, radius {:.0f}, {} emitters queued this frame",
+						it->age, it->strength, it->radius, spellEmitters.size());
+				it = activeBlasts.erase(it);
+			} else {
+				++it;
+			}
 		}
 	}
 

@@ -1753,6 +1753,8 @@ protected:
 		float age = 0.0f;
 		/** @brief Pits only: how much wider than a bolt this discharge forks. */
 		float pitScale = 1.0f;
+		/** @brief Log this blast's lifecycle. Set only by the atronach death path while its mark is under investigation: the counters prove the blast opens and the snow says nothing lands, and this is the instrument that says which frame is lying. */
+		bool diag = false;
 		SpellElement element = SpellElement::None;
 		SpellMark mark = SpellMark::Melt;
 		/** @brief Laid as a wedge from apex to position. Shouts only. */
