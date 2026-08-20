@@ -14,37 +14,18 @@
 #include "Common/Color.hlsli"
 #include "Common/SharedData.hlsli"
 
-namespace LightLimitFix
-{
-#include "LightLimitFix/Common.hlsli"
-
-	// Same registers LLF uses in the forward pass; bound by the CPU side
-	// for the shell draws.
-	StructuredBuffer<Light> lights : register(t35);
-	StructuredBuffer<uint> lightList : register(t36);
-	StructuredBuffer<LightGrid> lightGrid : register(t37);
-}
+// LLF's own header: the cluster buffers (t35-37, the registers the CPU side
+// binds for the shell draws), structs, and GetClusterIndex - previously a
+// local copy, deleted once b12 was measured bound during the deferred pass
+// (its FrameBuffer read is the first-person fix). StrictLightData (b3) comes
+// along unbound; nothing here reads it - the cluster list is the sole source
+// in the deferred pass.
+#include "LightLimitFix/LightLimitFix.hlsli"
 
 #include "InverseSquareLighting/InverseSquareLighting.hlsli"
 
 namespace SnowLights
 {
-	// LightLimitFix::GetClusterIndex reads FrameBuffer (b12) for its
-	// first-person fix; b12 is not bound in this pass and the shell is
-	// never first person, so the cluster math is local.
-	bool GetClusterIndex(float2 uv, float z, out uint clusterIndex)
-	{
-		clusterIndex = 0;
-		const uint3 clusterSize = SharedData::lightLimitFixSettings.ClusterSize.xyz;
-		z = max(z, SharedData::CameraData.y);
-		uint clusterZ = log(z / SharedData::CameraData.y) * clusterSize.z / log(SharedData::CameraData.x / SharedData::CameraData.y);
-		uint3 cluster = uint3(uint2(uv * clusterSize.xy), clusterZ);
-		if (any(cluster >= clusterSize))
-			return false;
-		clusterIndex = cluster.x + (clusterSize.x * cluster.y) + (clusterSize.x * clusterSize.y * cluster.z);
-		return true;
-	}
-
 	// Adds the clustered point lights to the shell's direct lobes, each
 	// light shaded through the SAME routed PBR path as the sun
 	// (SnowEvaluateLightPBR - ROUTING-ROADMAP M3), so point lights carry
@@ -62,7 +43,7 @@ namespace SnowLights
 		inout float3 diffuse, inout float3 specular)
 	{
 		uint clusterIndex = 0;
-		[branch] if (!GetClusterIndex(clusterUV, viewZ, clusterIndex))
+		[branch] if (!LightLimitFix::GetClusterIndex(clusterUV, viewZ, clusterIndex))
 			return;
 
 		LightLimitFix::LightGrid grid = LightLimitFix::lightGrid[clusterIndex];
