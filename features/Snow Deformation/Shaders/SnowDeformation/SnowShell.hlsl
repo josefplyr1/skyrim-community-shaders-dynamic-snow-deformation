@@ -1045,7 +1045,11 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	terrainHeight = sliceShaped.x;
 	float sliceBand = max(BorderUntrampledFade, 2.0);
 	float sliceH = lerp(-4.0, sliceBand, (float(instanceID) + 0.5) / max(BorderStyle.z, 1.0));
-	bool sliceFringe = sliceShaped.y > -6.0 && (sliceShaped.y < sliceBand + 10.0 || sliceShaped.z < 0.7);
+	// Cull tight against the negative side (round 12): -6 let the deep -5
+	// plateaus keep slices, and window-vs-mesh error floated the lowest
+	// straddle levels above the true ground out there - the interpenetration
+	// look appearing far from any border. -2.5 confines it to the fringe.
+	bool sliceFringe = sliceShaped.y > -2.5 && (sliceShaped.y < sliceBand + 10.0 || sliceShaped.z < 0.7);
 	float z = sliceFringe ? terrainHeight + sliceH : terrainHeight - 1000.0;
 #else
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
@@ -1433,14 +1437,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;
 		[branch] if (snowTop < input.SliceH)
 			discard;
-		// Dirt occlusion is measured against the VISIBLE ground (scene-depth
-		// reconstruction, the round-6 math), not the analytic terrain: the
-		// slice hides where the land grain stands taller than the slice's
-		// true height above whatever ground is actually behind this pixel.
+		// Dirt occlusion. Amplitude is a FIXED ~2 units (round 12: scaling
+		// the land grain by the fringe band claimed 2.5-4-unit dirt bumps
+		// and cleared an air gap under the whole stack - the hover). Ground
+		// reference: the visible surface only when the backdrop hugs the
+		// slice along the ray; at grazing angles the ray lands on dirt far
+		// behind the slice's footprint, so silhouettes fall back to the
+		// analytic terrain - most of the camera-dependent breathing.
+		const float kSliceDirtAmp = 2.0;
 		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		float hLandWorld = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * rampFadeBand;
+		float hLandWorld = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * kSliceDirtAmp;
 		float sceneSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z * (sceneZ / max(shellZ, 1e-3));
-		float aboveVisibleGround = input.WorldPos.z + ShellCameraPosAdjust.z - sceneSurfaceZ;
+		float groundRefZ = (sceneZ - shellZ) < 20.0 ? sceneSurfaceZ : pixelTerrain.x;
+		float aboveVisibleGround = input.WorldPos.z + ShellCameraPosAdjust.z - groundRefZ;
 		[branch] if (aboveVisibleGround < hLandWorld)
 			discard;
 		coverageAlpha = 1.0;
