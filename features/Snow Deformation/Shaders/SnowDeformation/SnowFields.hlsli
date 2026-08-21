@@ -1,13 +1,17 @@
 #ifndef __SNOW_FIELDS_DEPENDENCY_HLSL__
 #define __SNOW_FIELDS_DEPENDENCY_HLSL__
 
-// Trench-detail shaping shared verbatim by SnowShell.hlsl and
-// SnowStaticsShell.hlsl (ROUTING-ROADMAP M8), so landscape and object snow
-// cannot drift apart. Relies on the including shell's ShellCB
-// (GridToDeformOffset, DeformInvWorldSize) and BermFieldMap (t14), declared
-// before this include. Deliberately NOT shared: the deformation samplers
-// (the landscape smooths bicubic, statics stays bilinear by cost) and
-// BermFieldTapped, which rides each shell's own sampler.
+// Trench-detail shaping, spell-mark readers and shared field surfaces,
+// verbatim-identical in SnowShell.hlsl and SnowStaticsShell.hlsl
+// (ROUTING-ROADMAP M8; readers folded here round 37), so landscape and
+// object snow cannot drift apart. Relies on the including shell's ShellCB
+// (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
+// UndulationAmp/Scale, BorderStyle), DeformationMap (t1), BermFieldMap
+// (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17), SnowSampler
+// (PS) and the TerrainVariation include - all declared before this include.
+// Deliberately NOT shared: the deformation .x samplers (the landscape
+// smooths bicubic, statics stays bilinear by cost) and BermFieldTapped,
+// which rides each shell's own sampler.
 
 // World-anchored value noise, shared by the border domain warp, the dune
 // undulation and the churn (and any other organic-edge shaping).
@@ -91,6 +95,181 @@ float ChurnWeight(float deformation, float bermDeform)
 {
 	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));
 }
+
+// ---- Deformation surface-state readers (spell marks). One bilinear tap;
+// channel meanings in DeformationUpdateCS.hlsl. ----
+
+// Melted depth at a point: the positive half of the surface-state channel.
+// The shadow caster reads it to keep melt pits from casting.
+float SampleMelted(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(v.y);
+}
+
+// Scorch at a point: burnt snow left by a shock discharge, the negative half
+// of the same channel.
+float SampleScorch(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(-v.y);
+}
+
+// Crust at a point: refrozen snow, the map's third channel.
+float SampleCrust(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float c00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).z;
+	float c10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).z;
+	float c01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).z;
+	float c11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).z;
+	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
+}
+
+// Wide exclusion field, bilinear: x = door suppression, y = melt. Returns 0
+// outside the window (nothing claimed where nothing was baked). The
+// landscape unions this with its near object-bottoms mask; the skin reads
+// it alone.
+float2 SampleExclusionField(float2 worldXY)
+{
+	float2 result = 0.0;
+	[branch] if (ExclusionFieldWindow.w > 0.5)
+	{
+		float2 local = (worldXY - ExclusionFieldWindow.xy) * ExclusionFieldWindow.z;
+		[branch] if (all(abs(local) < 0.995))
+		{
+			float2 dims;
+			ExclusionFieldMap.GetDimensions(dims.x, dims.y);
+			float2 uv = local * 0.5 + 0.5;
+			float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+			int2 t0 = (int2)t;
+			float2 f = t - t0;
+			int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+			float2 s00 = ExclusionFieldMap.Load(int3(t0.x, t0.y, 0));
+			float2 s10 = ExclusionFieldMap.Load(int3(t1.x, t0.y, 0));
+			float2 s01 = ExclusionFieldMap.Load(int3(t0.x, t1.y, 0));
+			float2 s11 = ExclusionFieldMap.Load(int3(t1.x, t1.y, 0));
+
+			result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		}
+	}
+	return result;
+}
+
+// ---- Shared field surface pieces: the carve profile, the dune undulation
+// and the melt floor, seen identically by geometry, shading and both
+// shells' self-shadow marches. ----
+
+// Melted fire basins keep this much snow above the terrain: the floor stays
+// shell snow, never bare ground, never below the terrain mesh.
+static const float kFireMeltFloor = 1.0;
+
+float Undulation(float2 worldXY)
+{
+	float2 p = worldXY / max(UndulationScale, 0.05);
+	float n = ShapeNoise(p / 340.0) * 0.72 + ShapeNoise(p / 110.0) * 0.28;
+	return (n - 0.5) * 2.0 * UndulationAmp;
+}
+
+// Deformation carves the layer toward the trench floor; the floor rides the
+// live Trench Floor Height slider (BorderStyle.y).
+float CarveProfile(float deformation, float uncarvedDepth)
+{
+	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
+	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
+}
+
+#if defined(PSHADER)
+// Frost pattern taps, shared by the normal, the albedo and the polish so the
+// texture is fetched once and the three always agree about where a crystal
+// is.
+struct FrostTaps
+{
+	float3 normal;   // tangent-space, already flipped for our v direction
+	float crystal;   // 0 in the gaps, 1 on the crystal
+	bool valid;
+};
+
+// The lattice the stochastic sampler scatters over, kept inside float
+// precision. ComputeStochasticOffsets multiplies by WORLD_SCALE (332.54) and
+// the hash then multiplies by another 1271, both tuned for landscape UVs that
+// live in 0-1. World coordinates are five digits, so the product lands past
+// 1e8 - far beyond the ~1.6e7 where a float32 still has a fraction to take -
+// and frac() returns the same number across whole regions, which is a
+// stochastic sampler that has quietly stopped scattering.
+//
+// So the tile index is wrapped before it ever reaches the hash. The scatter
+// pattern then repeats every WRAP tiles, which at any sane crystal size is
+// tens of thousands of units away. DeformationUpdateCS guards its own noise
+// the same way and for the same reason.
+#define FROST_LATTICE_WRAP 512.0
+
+FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
+{
+	FrostTaps taps;
+	taps.normal = float3(0.0, 0.0, 1.0);
+	taps.crystal = 0.0;
+	taps.valid = false;
+
+	float2 tileUV = worldXY / max(tileSize, 4.0);
+	// Derivatives from the UNWRAPPED coordinate: the wrap below is a cliff one
+	// pixel wide, and a mip level chosen across it would band there.
+	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(tileUV);
+	float2 wrapped = tileUV - FROST_LATTICE_WRAP * floor(tileUV / FROST_LATTICE_WRAP);
+
+	// Divided back out because the sampler expects a landscape UV and converts
+	// it to lattice cells itself; this hands it one cell per texture tile.
+	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
+	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
+	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
+	n.y = -n.y;  // DDS v grows down; our uv v grows with world +Y
+	taps.normal = n;
+	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
+	taps.valid = true;
+	return taps;
+}
+#endif  // PSHADER (frost)
 
 #if defined(PSHADER)
 // Land vertex AO, packed by the CPU window build into the terrain window's

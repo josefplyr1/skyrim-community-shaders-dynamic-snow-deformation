@@ -235,57 +235,10 @@ Texture2D<float4> FrostPatternDiffuse : register(t17);
 
 SamplerState SnowSampler : register(s0);
 
-// Shared trench-detail shaping (noise, berm shape/bake tap, churn) - the
-// verbatim-identical pieces of both shells live in one file (M8).
+// Shared trench-detail shaping, spell-mark readers, field surfaces and the
+// frost pattern - the verbatim-identical pieces of both shells live in one
+// file (M8; readers folded round 37).
 #include "SnowDeformation/SnowFields.hlsli"
-
-// Frost pattern taps, shared by the normal, the albedo and the polish so the
-// texture is fetched once and the three always agree about where a crystal is.
-struct FrostTaps
-{
-	float3 normal;   // tangent-space, already flipped for our v direction
-	float crystal;   // 0 in the gaps, 1 on the crystal
-	bool valid;
-};
-
-// The lattice the stochastic sampler scatters over, kept inside float
-// precision. ComputeStochasticOffsets multiplies by WORLD_SCALE (332.54) and
-// the hash then multiplies by another 1271, both tuned for landscape UVs that
-// live in 0-1. World coordinates are five digits, so the product lands past
-// 1e8 - far beyond the ~1.6e7 where a float32 still has a fraction to take -
-// and frac() returns the same number across whole regions, which is a
-// stochastic sampler that has quietly stopped scattering.
-//
-// So the tile index is wrapped before it ever reaches the hash. The scatter
-// pattern then repeats every WRAP tiles, which at any sane crystal size is
-// tens of thousands of units away. DeformationUpdateCS guards its own noise
-// the same way and for the same reason.
-#define FROST_LATTICE_WRAP 512.0
-
-FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
-{
-	FrostTaps taps;
-	taps.normal = float3(0.0, 0.0, 1.0);
-	taps.crystal = 0.0;
-	taps.valid = false;
-
-	float2 tileUV = worldXY / max(tileSize, 4.0);
-	// Derivatives from the UNWRAPPED coordinate: the wrap below is a cliff one
-	// pixel wide, and a mip level chosen across it would band there.
-	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(tileUV);
-	float2 wrapped = tileUV - FROST_LATTICE_WRAP * floor(tileUV / FROST_LATTICE_WRAP);
-
-	// Divided back out because the sampler expects a landscape UV and converts
-	// it to lattice cells itself; this hands it one cell per texture tile.
-	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
-	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
-	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
-	n.y = -n.y;  // DDS v grows down; our uv v grows with world +Y
-	taps.normal = n;
-	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
-	taps.valid = true;
-	return taps;
-}
 
 
 // The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
@@ -490,72 +443,8 @@ float SampleDisplacedFast(float2 gridLocal)
 	return saturate(v.x - max(v.y, 0.0));
 }
 
-// Melted depth at a point: the positive half of the surface-state channel.
-// The shadow caster reads it to keep melt pits from casting.
-float SampleMelted(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	return saturate(v.y);
-}
-
-// Scorch at a point: burnt snow left by a shock discharge, read out of the
-// negative half of the map's surface-state channel.
-float SampleScorch(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	return saturate(-v.y);
-}
-
-// Crust at a point: refrozen snow, from the map's third channel.
-float SampleCrust(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float c00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).z;
-	float c10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).z;
-	float c01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).z;
-	float c11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).z;
-	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
-}
+// SampleMelted / SampleScorch / SampleCrust live in SnowFields.hlsli
+// (round 37): both shells read the surface-state channels identically.
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
 // the sum provides the smoothness and bicubic per tap would be waste.
@@ -600,34 +489,7 @@ float SampleObjectHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Wide exclusion field, bilinear. Returns 0 outside the window, so the near
-// mask alone governs there (and nothing is claimed where nothing was baked).
-float2 SampleExclusionField(float2 worldXY)
-{
-	float2 result = 0.0;
-	[branch] if (ExclusionFieldWindow.w > 0.5)
-	{
-		float2 local = (worldXY - ExclusionFieldWindow.xy) * ExclusionFieldWindow.z;
-		[branch] if (all(abs(local) < 0.995))
-		{
-			float2 dims;
-			ExclusionFieldMap.GetDimensions(dims.x, dims.y);
-			float2 uv = local * 0.5 + 0.5;
-			float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
-			int2 t0 = (int2)t;
-			float2 f = t - t0;
-			int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-			float2 s00 = ExclusionFieldMap.Load(int3(t0.x, t0.y, 0));
-			float2 s10 = ExclusionFieldMap.Load(int3(t1.x, t0.y, 0));
-			float2 s01 = ExclusionFieldMap.Load(int3(t0.x, t1.y, 0));
-			float2 s11 = ExclusionFieldMap.Load(int3(t1.x, t1.y, 0));
-
-			result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-		}
-	}
-	return result;
-}
+// SampleExclusionField lives in SnowFields.hlsli (round 37).
 
 float2 SampleObjectBottom(float2 worldXY)
 {
@@ -700,25 +562,9 @@ float SampleObjectDepthCap(float2 worldXY)
 // Trench Floor Height slider): the old constant 5 covered the terrain
 // window's bilinear error so the mesh never poked through; low values let
 // deep trampling wear through to the real ground on purpose.
-// Melted fire basins keep this much snow above the terrain: the floor stays
-// shell snow, never bare ground, never below the terrain mesh.
-static const float kFireMeltFloor = 1.0;
-
-float Undulation(float2 worldXY)
-{
-	float2 p = worldXY / max(UndulationScale, 0.05);
-	float n = ShapeNoise(p / 340.0) * 0.72 + ShapeNoise(p / 110.0) * 0.28;
-	return (n - 0.5) * 2.0 * UndulationAmp;
-}
-
-// Carve profile, shared by the surface (ShellSurfaceZ), the PS shading
-// gradient and the self-shadow march so all three see the same shape:
-// deformation carves the layer toward the trench floor.
-float CarveProfile(float deformation, float uncarvedDepth)
-{
-	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
-	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
-}
+// Undulation, CarveProfile and kFireMeltFloor live in SnowFields.hlsli
+// (round 37): the surface, the shading gradient and BOTH shells' self-shadow
+// marches see the same shape.
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
 // a deeper layer throws a taller berm. The shape input is the BLURRED
