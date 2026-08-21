@@ -1045,11 +1045,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	terrainHeight = sliceShaped.x;
 	float sliceBand = max(BorderUntrampledFade, 2.0);
 	float sliceH = lerp(-4.0, sliceBand, (float(instanceID) + 0.5) / max(BorderStyle.z, 1.0));
-	// Cull tight against the negative side (round 12): -6 let the deep -5
-	// plateaus keep slices, and window-vs-mesh error floated the lowest
-	// straddle levels above the true ground out there - the interpenetration
-	// look appearing far from any border. -2.5 confines it to the fringe.
-	bool sliceFringe = sliceShaped.y > -2.5 && (sliceShaped.y < sliceBand + 10.0 || sliceShaped.z < 0.7);
+	// GENEROUS vertex cull, perf only (round 13): the precise fringe
+	// boundary is per PIXEL in the PS - culling per 8-unit grid vertex put
+	// z-cliffs through quads and their edges rasterized as blocky
+	// right-angle steps. The margin keeps the cliff quads outside the
+	// PS-surviving region, so they are always discarded or z-failed.
+	bool sliceFringe = sliceShaped.y > -4.0 && (sliceShaped.y < sliceBand + 12.0 || sliceShaped.z < 0.7);
 	float z = sliceFringe ? terrainHeight + sliceH : terrainHeight - 1000.0;
 #else
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
@@ -1431,7 +1432,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// single flat cut. Both height fields share the fringe band as their
 	// vertical scale; missing land data reads as a neutral mid bump.
 	{
-		[branch] if (psEdgeFade < 0.5 || HasSnowHeight < 0.5)
+		// Per-pixel fringe bounds (round 13): the shaped-field test at
+		// texture resolution draws the organic boundary the vertex cull
+		// cannot; the -0.5 floor confines the interpenetration to a tight
+		// ribbon at the contact line instead of the whole border-blend
+		// strip (patches were surfacing well outside the intersection).
+		[branch] if (psEdgeFade < 0.5 || HasSnowHeight < 0.5 || pixelRampDepth < -0.5)
 			discard;
 		float sliceGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;

@@ -440,8 +440,8 @@ public:
 		bool SnowBorderDithering = false;
 		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
-		/** @brief Fringe slice count (0 disables, up to 32): instanced thin sheets straddling the shell/ground intersection; low slices survive only in the dirt's hollows (land grain from Masks.y), so the boundary interpenetrates with real depth. The slice VS skips the full surface evaluation, so high counts stay cheap. */
-		float FringeSlices = 16.0f;
+		/** @brief Fringe slice count (0 disables, up to 32): instanced thin sheets straddling the shell/ground intersection; low slices survive only in the dirt's hollows (land grain from Masks.y), so the boundary interpenetrates with real depth. Default 1 (Josef, round 13): more slices reshape rather than improve the blend and cost real FPS. */
+		float FringeSlices = 1.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
 		float SnowBorderNoise = 48.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
