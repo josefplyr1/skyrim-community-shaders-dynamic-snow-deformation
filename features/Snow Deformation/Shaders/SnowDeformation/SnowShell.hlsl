@@ -1235,6 +1235,28 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		z = terrainHeight + (z - terrainHeight) * descent;
 	}
 
+	// Edge grain (round 15, Josef's diagram): the sheet's visible border is
+	// often the GEOMETRIC clip of the skirt against the ground, and with
+	// relief retired the skirt is smooth - a featureless clip line no
+	// matter what the alpha does. Displace the edge zone by the same
+	// grain x fringe band the PS contest uses: the clip line itself goes
+	// grainy, and geometry and alpha agree by construction. Exempt: carved
+	// trenches and melt floors stay calm; fades out one band above ground
+	// and with the same 1024-2048 distance range as the contest.
+	float edgeGrainBand = max(BorderUntrampledFade, 2.0);
+	float edgeGrainH = z - terrainHeight;
+	[branch] if (HasSnowHeight > 0.5 && edgeGrainH > -2.0 && edgeGrainH < edgeGrainBand * 2.0)
+	{
+		float edgeGrainW = (1.0 - smoothstep(edgeGrainBand, edgeGrainBand * 2.0, edgeGrainH)) * (1.0 - smoothstep(1024.0, 2048.0, camDist));
+		edgeGrainW *= 1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)));
+		edgeGrainW *= 1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0);
+		[branch] if (edgeGrainW > 0.001)
+		{
+			float hEdge = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
+			z += (hEdge - 0.5) * edgeGrainBand * edgeGrainW;
+		}
+	}
+
 	// Real relief from the PBR displacement map, through the SAME anti-tiling
 	// taps the PS shades with, so the normal map's shading and the geometry
 	// describe one surface. (Until 2026-08-17 this took a single un-offset
@@ -1439,6 +1461,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// strip (patches were surfacing well outside the intersection).
 		[branch] if (psEdgeFade < 0.5 || HasSnowHeight < 0.5 || pixelRampDepth < -0.5)
 			discard;
+		// No peeling (round 15): where the sheet itself commits, slices stay
+		// strictly beneath its surface - the grain-boosted occupancy was
+		// floating slices ABOVE thin sheet interior as a peeling skin at
+		// high Untrampled values. Lamination is interior or beyond the cut.
+		[branch] if (rampTerm >= 0.5 && input.SliceH > pixelEffDepth - 0.25)
+			discard;
 		float sliceGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;
 		[branch] if (snowTop < input.SliceH)
@@ -1461,19 +1489,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha = 1.0;
 	}
 #	else
-	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
+	// Geometric edge contest (round 15, Josef's two-layer discovery): the
+	// slice layer proved the look, and it never consulted EM's
+	// height-blending checkbox - while this block did (edgeBlend), so with
+	// that checkbox off the sheet silently fell back to a smooth hard cut
+	// and ALL visible border detail came from the slices. The sheet now
+	// uses the slices' own survival math: keep a pixel where the sheet's
+	// surface (toe'd height + grain) stands above the dirt's grain surface,
+	// decided geometrically, gated only by our own distance fade (the same
+	// 1024-2048 range EM's terrain POM detail lives in). Multiplied in, so
+	// the class design and the melt/carve/lift overrides keep their word;
+	// dirt can only eat in, and the slice layer carries the outward side.
+	float contestFade = 1.0 - smoothstep(1024.0, 2048.0, shellZ);
+	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		// TWO-SIDED where the pre-shell G-buffer carries the land's grain
-		// height (Phase 1b): the dirt's pebbles finally contest the snow's
-		// grain - EM's actual boundary mechanism. The encoding self-gates:
-		// 0 = no data (POM off, grass, an object behind), fall back to the
-		// one-sided fade-swept bar.
-		float hLand = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		[flatten] if (hLand > 0.002)
-			coverageAlpha = SnowHeightBlend(coverageAlpha, edgeSnowH, saturate((hLand - 0.004) * (1.0 / 0.996)), edgeBlend);
-		else
-			coverageAlpha = SnowHeightBlendOneSided(coverageAlpha, edgeSnowH, edgeBlend);
+		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		const float kEdgeDirtAmp = 2.0;  // matches the slice pass
+		float dirtSurf = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * kEdgeDirtAmp;
+		float snowSurf = pixelEffDepth + (edgeSnowH - 0.5) * rampFadeBand;
+		float win = smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
+		coverageAlpha *= lerp(1.0, win, contestFade);
 	}
 #	endif
 
