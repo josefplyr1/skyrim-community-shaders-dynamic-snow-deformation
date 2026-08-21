@@ -1972,8 +1972,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	// Compressed snow reads slightly darker and bluer than powder.
-	kSnowAlbedo *= 1.0 - pixelDeform * float3(0.13, 0.12, 0.08);
+	// No compression darkening: the terrain shell has none, and the skin-only
+	// term read as a color mismatch between trampled and untrampled object
+	// snow (round 33). If compressed snow ever gets a tint, it goes into
+	// BOTH shells from one shared constant.
 
 	// PBR response; identical constants to the terrain shell.
 	static const float kSnowRoughness = 0.6;
