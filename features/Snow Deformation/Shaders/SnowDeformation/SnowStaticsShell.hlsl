@@ -1656,9 +1656,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	                        ? 1.0 - smoothstep(1024.0, 2048.0, pixelDist)
 	                        : 0.0;
 	float seamTotal = 1.0;
+	float3 groundData = SampleTerrainStatics(input.GridLocal);
 	[branch] if (contestFade < 0.999)
 	{
-		float3 groundData = SampleTerrainStatics(input.GridLocal);
 		[flatten] if (groundData.x > -50000.0)
 		{
 			float groundShellZ = groundData.x + max(groundData.y, 0.0);
@@ -1692,6 +1692,42 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	coverageAlpha *= seamTotal;
 	dbgSeam *= seamTotal;
+
+	// Shading continuity across the meeting line (round 30, "still very
+	// edgy"): with the cut committed, what remains visible of the seam is
+	// the LIGHTING discontinuity - the skin's macro normal against the
+	// blanket's. Ease the skin's normal toward the blanket's analytic
+	// surface normal through the last units above the blanket top, so the
+	// two surfaces agree by the line and the crease reads as one snowfield.
+	// Micro detail stays continuous by construction: both sides sample the
+	// same world-anchored snow normal map, applied after this. Keyed to the
+	// analytic height field, not the ray gate - the gate's boundary (the
+	// blanket's silhouette behind the pixel) would print its own edge into
+	// a normal blend. Blanket depth > 0.5 keeps pair 4's bare-ground
+	// hand-off out of this: flattening the rim toward bare dirt is not
+	// continuity, there is no blanket to agree with.
+	[branch] if (HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
+	{
+		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
+		float normalBand = 1.0 - smoothstep(0.5, 6.0, pixelAbsZ - blanketTopZ);
+		[branch] if (normalBand > 0.001)
+		{
+			const float nStep = 4.0;
+			float3 gXP = SampleTerrainStatics(input.GridLocal + float2(nStep, 0.0));
+			float3 gXN = SampleTerrainStatics(input.GridLocal - float2(nStep, 0.0));
+			float3 gYP = SampleTerrainStatics(input.GridLocal + float2(0.0, nStep));
+			float3 gYN = SampleTerrainStatics(input.GridLocal - float2(0.0, nStep));
+			[flatten] if (min(min(gXP.x, gXN.x), min(gYP.x, gYN.x)) > -50000.0)
+			{
+				float zXP = gXP.x + max(gXP.y, 0.0);
+				float zXN = gXN.x + max(gXN.y, 0.0);
+				float zYP = gYP.x + max(gYP.y, 0.0);
+				float zYN = gYN.x + max(gYN.y, 0.0);
+				float3 blanketN = normalize(float3(-(zXP - zXN) / (2.0 * nStep), -(zYP - zYN) / (2.0 * nStep), 1.0));
+				normalWS = normalize(lerp(normalWS, blanketN, normalBand * (1.0 - smoothstep(1024.0, 2048.0, pixelDist))));
+			}
+		}
+	}
 
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel

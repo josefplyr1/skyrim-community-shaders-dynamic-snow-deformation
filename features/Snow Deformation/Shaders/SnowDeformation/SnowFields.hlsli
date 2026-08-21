@@ -119,15 +119,18 @@ float SampleTerrainVertexAO(float2 gridLocal)
 // EM's landscape height blending (ExtendedMaterialsTerrain.hlsli::
 // ProcessTerrainHeightWeights) specialized to two surfaces: an edge fade
 // contests by height instead of cross-fading through translucency. Same
-// log2-space formula, same near/far sharpness ramp, same
-// EnableHeightBlending gate; constants mirror EM's HEIGHT_MULT/HEIGHT_POWER.
+// log2-space formula and near/far sharpness ramp; constants mirror EM's
+// HEIGHT_MULT/HEIGHT_POWER. EM-checkbox-INDEPENDENT (round 18: the Snow
+// Borders dials are the only owners of the snow border; the checkbox
+// consult here silently disabled the statics rim/ground shaping and the
+// DS skirt descent).
 static const float kHeightBlendMult = 8.0;
 static const float kHeightBlendPower = 2.0;
 
 float SnowHeightBlendSharpness(float viewDist)
 {
 	float nearBlendToFar = smoothstep(1024.0 * 1024.0, 2048.0 * 2048.0, viewDist * viewDist);
-	float blendFactor = SharedData::extendedMaterialSettings.EnableHeightBlending ? sqrt(saturate(1.0 - nearBlendToFar)) : 0.0;
+	float blendFactor = sqrt(saturate(1.0 - nearBlendToFar));
 	return 1.0 + blendFactor * kHeightBlendPower;
 }
 

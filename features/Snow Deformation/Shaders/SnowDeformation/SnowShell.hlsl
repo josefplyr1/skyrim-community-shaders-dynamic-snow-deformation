@@ -490,6 +490,29 @@ float SampleDisplacedFast(float2 gridLocal)
 	return saturate(v.x - max(v.y, 0.0));
 }
 
+// Melted depth at a point: the positive half of the surface-state channel.
+// The shadow caster reads it to keep melt pits from casting.
+float SampleMelted(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(v.y);
+}
+
 // Scorch at a point: burnt snow left by a shock discharge, read out of the
 // negative half of the map's surface-state channel.
 float SampleScorch(float2 gridLocal)
@@ -1056,6 +1079,13 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// sees these shadows: the shell covers it.
 	float3 rawTerrainCast = SampleTerrain(gridLocal);
 	float castVis = smoothstep(2.0, 5.0, z - rawTerrainCast.x) * smoothstep(0.2, 0.5, coverage);
+	// Melt pits do not cast (the coverage principle again: snow the melt
+	// removed casts nothing). The visible pit dissolves at texture
+	// resolution while the caster rim collapses at vertex resolution; the
+	// mismatched rim printed a static blocky shadow onto the revealed
+	// ground. The wide exclusion field already sinks static clearings;
+	// this is the stamped (spell) melt, ring included.
+	castVis *= 1.0 - smoothstep(0.05, 0.25, SampleMelted(gridLocal));
 	if (castVis < 0.35)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
