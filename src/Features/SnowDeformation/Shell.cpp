@@ -545,7 +545,7 @@ void SnowDeformation::DrawShell()
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
-		std::clamp(settings.FringeSlices, 0.0f, 8.0f), 0.0f };
+		std::clamp(settings.FringeSlices, 0.0f, 32.0f), 0.0f };
 	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
 	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
@@ -859,7 +859,7 @@ void SnowDeformation::DrawShell()
 	// Fringe slices (HEIGHT-BLEND-PLAN Phase 1c): instanced thin sheets in
 	// the contact fringe, drawn AFTER the top surface so interior slices
 	// z-cull against it. Legacy grid VS - flat sheets need no tessellation.
-	const UINT fringeSlices = (UINT)std::clamp(settings.FringeSlices, 0.0f, 8.0f);
+	const UINT fringeSlices = (UINT)std::clamp(settings.FringeSlices, 0.0f, 32.0f);
 	if (fringeSlices > 0 && !lodHeatmap && cbData.ShellDebugData == 0 && cbData.ShellLODDebug == 0) {
 		auto* sliceVS = GetShellSliceVS();
 		auto* slicePS = GetShellSlicePS();

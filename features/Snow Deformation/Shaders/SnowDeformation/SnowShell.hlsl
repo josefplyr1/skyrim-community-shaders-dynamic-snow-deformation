@@ -1030,7 +1030,26 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 
 	float coverage;
 	float terrainHeight;
+#ifdef SNOW_FRINGE_SLICE
+	// Slices skip the full surface evaluation (berm, carve, undulation,
+	// exclusion): they need only the shaped terrain fields, so many
+	// instances stay cheap. Levels STRADDLE the analytic terrain (-4 up to
+	// the fringe band): the window is bilinear-approximate and the true
+	// mesh sits units above or below it, so the depth test against the
+	// real ground selects, per pixel, the slices that hug it - the stack
+	// anchors to the VISIBLE intersection instead of the analytic one
+	// (round 11: window-anchored levels drowned under or floated above the
+	// mesh, leaving the old clean cut).
+	float3 sliceShaped = SampleTerrainShaped(gridLocal);
+	coverage = sliceShaped.z;
+	terrainHeight = sliceShaped.x;
+	float sliceBand = max(BorderUntrampledFade, 2.0);
+	float sliceH = lerp(-4.0, sliceBand, (float(instanceID) + 0.5) / max(BorderStyle.z, 1.0));
+	bool sliceFringe = sliceShaped.y > -6.0 && (sliceShaped.y < sliceBand + 10.0 || sliceShaped.z < 0.7);
+	float z = sliceFringe ? terrainHeight + sliceH : terrainHeight - 1000.0;
+#else
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+#endif
 
 #ifdef SNOW_SHADOW_CAST
 	// Shadow-caster variant: only the excess height above the ambient snow
@@ -1049,17 +1068,6 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float castExcess = max(0.0, z - castBase);
 	float castGate = smoothstep(3.0, 8.0, castExcess) * smoothstep(0.2, 0.5, coverage);
 	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
-#endif
-
-#ifdef SNOW_FRINGE_SLICE
-	// Fringe slice (HEIGHT-BLEND-PLAN Phase 1c): instance k is a thin sheet
-	// at a fixed level above the terrain, spanning the contact fringe.
-	// Inside a deep sheet the top surface z-culls the slices (drawn after
-	// it); deep-bare ground sinks them out of existence here. Levels split
-	// the Untrampled fringe band, staggered off the ground and the top.
-	float sliceSheetH = z - terrainHeight;
-	float sliceH = (float(instanceID) + 0.5) / max(BorderStyle.z, 1.0) * max(BorderUntrampledFade, 2.0);
-	z = sliceSheetH < -2.0 ? terrainHeight - 100.0 : terrainHeight + sliceH;
 #endif
 
 #ifdef SNOW_FRINGE_SLICE
@@ -1425,9 +1433,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;
 		[branch] if (snowTop < input.SliceH)
 			discard;
+		// Dirt occlusion is measured against the VISIBLE ground (scene-depth
+		// reconstruction, the round-6 math), not the analytic terrain: the
+		// slice hides where the land grain stands taller than the slice's
+		// true height above whatever ground is actually behind this pixel.
 		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
 		float hLandWorld = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * rampFadeBand;
-		[branch] if (hLandWorld > input.SliceH)
+		float sceneSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z * (sceneZ / max(shellZ, 1e-3));
+		float aboveVisibleGround = input.WorldPos.z + ShellCameraPosAdjust.z - sceneSurfaceZ;
+		[branch] if (aboveVisibleGround < hLandWorld)
 			discard;
 		coverageAlpha = 1.0;
 	}

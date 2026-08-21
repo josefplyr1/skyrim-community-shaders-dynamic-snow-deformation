@@ -303,9 +303,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTfh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_floor_height_tooltip"), "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors."));
 
-		ImGui::SliderFloat(T(TKEY("fringe_slices"), "Fringe Slices"), &settings.FringeSlices, 0.0f, 8.0f, "%.0f");
+		ImGui::SliderFloat(T(TKEY("fringe_slices"), "Fringe Slices"), &settings.FringeSlices, 0.0f, 32.0f, "%.0f");
 		if (auto _ttFs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fringe_slices_tooltip"), "Thin snow layers stacked across the border fringe: low layers settle only into the ground texture's hollows, so snow and dirt interpenetrate in 3D instead of meeting at a single cut. 0 disables. Untrampled Border Fade sets the stack's height."));
+			ImGui::Text("%s", T(TKEY("fringe_slices_tooltip"), "Thin snow layers straddling the line where the shell meets the ground: low layers settle only into the ground texture's hollows, so snow and dirt interpenetrate in 3D instead of meeting at a single cut. 0 disables. Untrampled Border Fade sets the stack's height; more slices = finer layering."));
 
 		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
 		if (auto _ttWcs = Util::HoverTooltipWrapper())
