@@ -93,8 +93,7 @@
 	X(TrenchFloorHeight) \
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
-	X(SnowBorderTrampledFade) \
-	X(SnowBorderUntrampledFade) \
+	X(SnowBorderFade) \
 	X(SnowSnowFade) \
 	X(SnowMoundSteepness) \
 	X(UndulationStrength) \

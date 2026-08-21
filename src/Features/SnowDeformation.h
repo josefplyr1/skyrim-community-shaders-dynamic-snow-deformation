@@ -436,18 +436,16 @@ public:
 		float WallDriftHeight = 12.0f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
-		/** @brief Stochastic dissolve on the landscape shell's edges. Off (default, Josef 2026-08-20) = hard height-blended alpha test everywhere and survivors write opaque, so no partial alpha reaches the deferred resolve; the far field loses its dithered cross-fade too. */
-		bool SnowBorderDithering = false;
+		/** @brief ON (default) = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; OFF = clean binary cut. Round 18 fixed the inverted polarity (the checkbox used to gate a retired cross-fade path, so OFF showed the dust). */
+		bool SnowBorderDithering = true;
 		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Reworked round 17: energy sits in a short 8-unit wavelength — fine raggedness, not waves; default dropped from 48 accordingly. */
 		float SnowBorderNoise = 10.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
-		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. Default 0 (Josef, round 17). */
-		float SnowBorderTrampledFade = 0.0f;
-		/** @brief Contact-term slope at class borders; mainly controls the outward dust reach now. Default 64 (Josef, round 17: makes the edge dither clearly visible). */
-		float SnowBorderUntrampledFade = 64.0f;
+		/** @brief Border Fade, in PERCENT (round 18: the old 2..64-unit band read as a big move when it mainly sets how visible the outward dust is). Remapped to the internal 2..64 contact-term band on upload; 100% = the old 64. */
+		float SnowBorderFade = 100.0f;
 		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
 		float SnowSnowFade = 10.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */

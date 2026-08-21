@@ -97,8 +97,8 @@ cbuffer ShellCB : register(b0)
 	float BorderNoise;   // world-unit domain-warp jitter of class-depth borders
 	float BorderSmooth;  // world-unit ramp-widening radius between classes
 
-	float BorderTrampledFade;    // depth window: trench-floor visibility override toward borders
-	float BorderUntrampledFade;  // depth band: untrampled edge dissolve
+	float BorderTrampledFade;    // UNUSED since round 18 (slider retired); layout keeper
+	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
 	float SnowSnowFade;          // statics skin: object <-> landscape snow cross-fade band
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
@@ -749,19 +749,20 @@ float3 SampleTerrainShaped(float2 gridLocal)
 	[branch] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
 	{
 		float2 worldXY = GridOrigin + gridLocal;
-		// Two octaves, energy in the FINE one (round 17, Josef's sketch):
-		// the old single 37-unit wavelength at high amplitude folded the
-		// border into big lobes and islands; a short-wavelength majority
-		// makes fine raggedness instead, at any amplitude.
-		float2 jitter = (float2(
-							 ShapeNoise(worldXY / 31.0) - 0.5,
-							 ShapeNoise(worldXY / 31.0 + 111.7) - 0.5) *
-								 0.4 +
-							 float2(
-								 ShapeNoise(worldXY / 8.0) - 0.5,
-								 ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
-								 0.6) *
-		                (2.0 * BorderNoise);
+		// Coarse wander + fine raggedness (round 18): the coarse octave is
+		// the ORIGINAL 37-unit model but capped at the strength its old 16
+		// setting had - enough organic wander, never the lobes/islands the
+		// uncapped version folded into; the fine 8-unit octave scales on
+		// with the slider for the ragged detail (Josef's sketch).
+		float coarseAmp = min(BorderNoise, 16.0);
+		float2 jitter = float2(
+							ShapeNoise(worldXY / 37.0) - 0.5,
+							ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
+		                    (2.0 * coarseAmp) +
+		                float2(
+							ShapeNoise(worldXY / 8.0) - 0.5,
+							ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
+		                    (1.2 * BorderNoise);
 		float2 shapedLocal = gridLocal + jitter;
 
 		float2 depthCoverage = SampleTerrain(shapedLocal).yz;
@@ -1374,8 +1375,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// something stands above the terrain data - planks, rocks, the fade's
 	// actual clients. Sentinel terrain (-50000) reads as objectness 1, so
 	// data gaps keep the plain fade.
-	float edgeBlend = SnowHeightBlendSharpness(shellZ);
-	[branch] if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
+	// Distance-gated like the contest (round 18: this previously keyed off
+	// EM's height-blending checkbox via SnowHeightBlendSharpness).
+	[branch] if (HasSnowHeight > 0.5 && shellZ < 2048.0)
 	{
 		float sceneSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z * (sceneZ / max(shellZ, 1e-3));
 		float objectness = smoothstep(1.5, 6.0, sceneSurfaceZ - pixelTerrain.x);
@@ -1402,7 +1404,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// without an override the proximity fade dithers them into translucency
 	// like any other near-coincident surface.
 	pixelMelt = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
-	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
+	// Trampled Border Fade retired (round 18): its default-0 behavior is the
+	// keeper, so the window is the constant it resolved to.
+	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, 1.0, pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
 
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 1+2): shape the COMBINED
@@ -1446,12 +1450,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha *= lerp(1.0, win, contestFade);
 	}
 
-	// Stochastic discard dither: writing alpha without discarding blends
-	// nothing in this pass; TB's alpha path runs through depth-prepass
-	// machinery not replicated here.
+	// Hard alpha test + optional outward dust. Survivors write fully
+	// opaque, so no partial alpha reaches the deferred resolve through the
+	// .w outputs below. Border Dithering ON scatters a whisker of
+	// stochastic snow just BEYOND the cut (the 0.2..0.5 alpha tail) - dust
+	// from the intersection onto the ground, never upward into the
+	// committed sheet; OFF is a clean binary cut. (Round 18: the checkbox
+	// previously gated a retired cross-fade path, which inverted its
+	// apparent meaning - OFF showed the dust, ON showed nothing.)
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-	// Uniform flow: feeds the AA rim inside the branch below.
-	float edgeAAWidth = fwidth(coverageAlpha);
 	[branch] if (ShellLODDebug == 1)
 	{
 		// Heatmap analyzes the covered snow surface only: bare/submerged
@@ -1463,37 +1470,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellDebugData == 0 && ShellLODDebug == 0)
 	{
-		// Border Dithering OFF: hard alpha test everywhere and survivors
-		// write fully opaque, so no partial alpha reaches the deferred
-		// resolve through the .w outputs below - any translucency still on
-		// screen in this state is provably not this shader's. Dithering ON:
-		// where height blending shapes the edges, the shaped alpha decides
-		// outright (HEIGHT-BLEND-PLAN round 4) with a ~1px AA rim (round 5:
-		// the raw 0.5 test read as a razor cut; alpha is near-binary after
-		// shaping, so the screen-space ramp is a hairline and the noise test
-		// dithers only that hairline - TAA resolves it as edge AA); the far
-		// field (sharpness decayed to 1) keeps the full dithered cross-fade.
-		if (BorderStyle.x < 0.5)
-		{
-			// Outward dust (round 16, Josef): a whisker of stochastic snow
-			// just BEYOND the cut - dust scattering from the intersection
-			// onto the ground, never upward into the committed sheet. Full
-			// alpha keeps its hard edge; the 0.2..0.5 tail dithers out
-			// (widened from 0.35 in round 17: ~1 unit read too thin).
-			float dust = saturate((coverageAlpha - 0.2) * (1.0 / 0.3));
-			if (screenNoise * screenNoise >= dust)
-				discard;
-			coverageAlpha = 1.0;
-		}
-		else if (HasSnowHeight > 0.5 && edgeBlend > 1.0)
-		{
-			float edgeAA = saturate((coverageAlpha - 0.5) / max(edgeAAWidth, 1e-4) + 0.5);
-			if (screenNoise * screenNoise >= edgeAA)
-				discard;
-			coverageAlpha = edgeAA;
-		}
-		else if (screenNoise * screenNoise >= coverageAlpha)
+		float dust = BorderStyle.x > 0.5
+		                 ? saturate((coverageAlpha - 0.2) * (1.0 / 0.3))
+		                 : (coverageAlpha >= 0.5 ? 1.0 : 0.0);
+		if (screenNoise * screenNoise >= dust)
 			discard;
+		coverageAlpha = 1.0;
 	}
 
 	// Normal = smooth interpolated terrain normal + per-pixel gradient of
@@ -1847,13 +1829,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow source and the shell hugs the very ground the march ran on.
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
-		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));
-		// Depth agreement: the march ran on the PRE-shell depth. Where the
-		// shell drapes well above what that ray hit (rocks buried under the
-		// drift field), the mask holds the buried object's own shadowing and
-		// would print it through the snow. Trust it only where the shell
-		// hugs the surface the march actually saw.
-		sssBlend *= 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
+		// Depth agreement is the ONLY gate (round 18): the march ran on the
+		// PRE-shell depth, so where the shell drapes well above what the ray
+		// hit (rocks buried under the drift field) the mask holds the buried
+		// object's own shadowing and would print it through the snow - trust
+		// it only where the shell hugs the surface the march actually saw.
+		// The old additional 4000-9000 distance gate silently excluded ALL
+		// near-field SSS - including grass shadows, which CS casts only via
+		// this march and which therefore never fell on the shell (Josef).
+		// The hug gate alone covers the buried-object case at every range.
+		float sssBlend = 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
@@ -2111,7 +2096,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// error of the mesh and z-fights as view-dependent holes. 0.75 units is
 	// too thin to overdraw feet or props, wide enough to settle coincident
 	// surfaces; edge zone only, so deep interiors keep the raw depth.
-	else if (ShellDebugData == 0 && ShellLODDebug == 0 && pixelEffDepth < 4.0 && shellZ > sceneZ && shellZ - sceneZ < 0.75)
+	// Round 18: carved floors too - pixelEffDepth is the UNCARVED ramp, so
+	// low Trench Floor Height floors were excluded and their wear-through
+	// hole rims shimmered with the camera.
+	else if (ShellDebugData == 0 && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 
 	return psout;

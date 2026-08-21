@@ -297,7 +297,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("snow_borders_tooltip"), "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...)."));
 		ImGui::Checkbox(T(TKEY("border_dithering"), "Border Dithering"), &settings.SnowBorderDithering);
 		if (auto _ttBd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Stochastic dissolve on the landscape shell's edges. Off = every edge is a hard height-blended cut and committed snow is fully opaque; distant borders lose their soft cross-fade too. Useful to judge the height-blended edge shapes without dither noise."));
+			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Scatters a thin dusting of snow just beyond the committed edge onto the ground, like windblown spill. Off = a clean binary cut. Border Fade controls how far the dust reaches."));
 
 		ImGui::SliderFloat(T(TKEY("trench_floor_height"), "Trench Floor Height"), &settings.TrenchFloorHeight, 0.0f, 8.0f, "%.1f units");
 		if (auto _ttTfh = Util::HoverTooltipWrapper())
@@ -325,13 +325,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("border_smoothness_tooltip"), "Widens the depth ramp between neighboring classes so deep snow meets shallow ground in a slope instead of a ravine wall."));
 
-			ImGui::SliderFloat(T(TKEY("border_trampled_fade"), "Trampled Border Fade"), &settings.SnowBorderTrampledFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttTf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_trampled_fade_tooltip"), "How gradually TRAMPLED snow (trench floors) blends out toward a class border, letting the ground beneath show through faintly. Too high and the landscape becomes too visible under trenches."));
-
-			ImGui::SliderFloat(T(TKEY("border_untrampled_fade"), "Untrampled Border Fade"), &settings.SnowBorderUntrampledFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttUf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("border_untrampled_fade_tooltip"), "How gradually UNTRAMPLED snow dissolves at a class border. Shorter = the pristine snow edge commits sooner."));
+			ImGui::SliderFloat(T(TKEY("border_fade"), "Border Fade"), &settings.SnowBorderFade, 0.0f, 100.0f, "%.0f%%");
+			if (auto _ttBf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("border_fade_tooltip"), "How much of the snow's edge takes part in the height contest against the ground - higher values make the scattered dust past the edge broader and more visible. Border Dithering must be on for the dust itself."));
 
 			ImGui::SliderFloat(T(TKEY("snow_snow_fade"), "Snow <-> Snow Fade"), &settings.SnowSnowFade, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttSs = Util::HoverTooltipWrapper())

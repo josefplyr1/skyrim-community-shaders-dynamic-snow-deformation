@@ -526,8 +526,11 @@ void SnowDeformation::DrawShell()
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f), 0.0f, 0.0f };
-	cbData.BorderTrampledFade = settings.SnowBorderTrampledFade;
-	cbData.BorderUntrampledFade = settings.SnowBorderUntrampledFade;
+	// Border Fade is a percent in the UI; the shader band stays 2..64.
+	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
+	// Retired round 18 (layout keeper; the shader hard-codes its old
+	// default-0 resolution).
+	cbData.BorderTrampledFade = 0.0f;
 	cbData.SnowSnowFade = settings.SnowSnowFade;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
