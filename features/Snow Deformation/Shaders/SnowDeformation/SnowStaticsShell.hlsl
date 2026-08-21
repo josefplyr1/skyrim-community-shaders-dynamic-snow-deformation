@@ -1610,7 +1610,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// height blending on and the height map bound. The two sites' fetches
 	// are identical expressions and CSE into one.
 	float edgeBlend = SnowHeightBlendSharpness(pixelDist);
-	float2 edgeSnowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
+	// STABLE grid position, not the trench-POM-corrected one: these fetches
+	// decide alpha survival, and a cut keyed to a parallax hit swims with
+	// the camera (round 31: trench walls crawled under camera-only motion
+	// once the EM un-gate activated this shaping; the round-16 hLand lesson,
+	// same class). Parallax positions are for texture detail only.
+	float2 edgeSnowUV = (SnowUVOffset + input.GridLocal) / kSnowUVTile;
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
 	bool edgeBlendOn = HasSnowHeight > 0.5 && edgeBlend > 1.0;
 	[branch] if (edgeBlendOn && coverageAlpha > 0.001 && coverageAlpha < 0.999)
@@ -1662,10 +1667,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[flatten] if (groundData.x > -50000.0)
 		{
 			float groundShellZ = groundData.x + max(groundData.y, 0.0);
-			float seamNoise = (CoverageNoise(worldXY * 0.5) - 0.5) * BorderNoise * 0.5;
-			float bandLow = -(4.0 + BorderSmooth * 0.5);
-			float bandHigh = 2.0 + BorderSmooth * 0.125;
-			float groundBand = smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
+			// Pinned band, decoupled from the Border Noise / Border Smoothness
+			// sliders (round 31, Josef's finding: noise 0 + smoothness 64 is
+			// the look for THIS seam - noise detaches the band from the real
+			// meeting line, and the wide band gives the soft rise of ground
+			// snow up the object - while the landscape class border wants the
+			// sliders). Values are the slider math at exactly 0 / 64.
+			const float kSeamBandLow = -36.0;
+			const float kSeamBandHigh = 10.0;
+			float groundBand = smoothstep(kSeamBandLow, kSeamBandHigh, pixelAbsZ - groundShellZ);
 			if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
 			{
 				float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
@@ -1706,10 +1716,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// a normal blend. Blanket depth > 0.5 keeps pair 4's bare-ground
 	// hand-off out of this: flattening the rim toward bare dirt is not
 	// continuity, there is no blanket to agree with.
+	float seamShadowLift = 0.0;
 	[branch] if (HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
 		float normalBand = 1.0 - smoothstep(0.5, 6.0, pixelAbsZ - blanketTopZ);
+		// Shadow continuity to match the normal continuity (round 31, the
+		// lit rim): a rim pixel sitting below the blanket top samples the
+		// sun cascade at the BLANKET's height, so the shadow boundary on
+		// the blanket continues across the seam instead of skipping the
+		// recessed rim (the receiver's normal offset plus a low sun lifts
+		// a lower sample point out of near-grazing shadows). Lift only,
+		// capped: deep floor pixels keep something near their own shadow.
+		seamShadowLift = normalBand * min(max(blanketTopZ - pixelAbsZ, 0.0), 8.0) * (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
 		[branch] if (normalBand > 0.001)
 		{
 			const float nStep = 4.0;
@@ -1979,7 +1998,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF; same path as the terrain shell.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		// seamShadowLift raises a recessed rim's receiver to the blanket top.
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos + float3(0.0, 0.0, seamShadowLift), normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
