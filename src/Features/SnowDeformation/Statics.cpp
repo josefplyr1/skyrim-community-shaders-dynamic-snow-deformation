@@ -1569,6 +1569,11 @@ void SnowDeformation::DrawCapturedStatics()
 			context->VSSetShader(patchVS, nullptr, 0);
 		}
 		context->PSSetShader(patchPS, nullptr, 0);
+		// Object top raster (PS t11): the patch's self-shadow march needs the
+		// same footprint test as the skins - inside a footprint the tap
+		// surface is the object top, not the terrain window's class ramp.
+		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
+		context->PSSetShaderResources(11, 1, &patchTopSRV);
 
 		StaticsCB scb{};
 		// WorldRow0.xy = snapped patch origin (256 quads x 8 units = +-1024
@@ -1581,6 +1586,8 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.RoundedDepth = settings.SnowMeshesDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		// The march's footprint test (see the t11 bind above).
+		scb.HasObjectTop = 1.0f;
 		// The patch only has texels where the raster already permitted carving,
 		// so the per-pixel trench terms must not gate it a second time.
 		scb.ObjectTrenches = 1.0f;

@@ -2214,20 +2214,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		{
 			float d = kMarchDist[marchI];
 			float2 sampleLocal = input.GridLocal + stepDir * d;
-			float3 st = SampleTerrainStatics(sampleLocal);
-			float sampleDepth = max(st.y, 0.0);
-			{
-				float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
-				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
-			}
-			float sampleDeform = SampleDeformation(sampleLocal);
-			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
-			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
-			// Sentinel terrain contributes a hugely negative horizon: a no-op
-			// through the max below, same as the landscape's window edge.
-			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
-#	ifndef PATCH
+			float sh = -100000.0;
+			bool tapOnObject = false;
 			[branch] if (HasObjectTop > 0.5)
 			{
 				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
@@ -2238,10 +2226,35 @@ PS_OUTPUT main(VS_OUTPUT input)
 					float2 topUV = float2(topLocal.x * 0.5 + 0.5, 0.5 - topLocal.y * 0.5);
 					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
 					[flatten] if (topH > -50000.0)
-						sh = max(sh, topH + sampleDepth);
+					{
+						// Inside an object's footprint the surface is its top
+						// plus a skin dusting. The terrain window's class-ramp
+						// surface does not exist here: marching against it
+						// fabricated a snow slab a class depth above every
+						// skin, and the round-35 top term then stacked the
+						// ramp on the top as well - object snow fell into
+						// shadow at any low sun (round 36, Josef's screens).
+						sh = topH + 2.0;
+						tapOnObject = true;
+					}
 				}
 			}
-#	endif
+			[branch] if (!tapOnObject)
+			{
+				float3 st = SampleTerrainStatics(sampleLocal);
+				float sampleDepth = max(st.y, 0.0);
+				{
+					float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
+					sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+				}
+				float sampleDeform = SampleDeformation(sampleLocal);
+				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+				sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
+				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
+				// Sentinel terrain contributes a hugely negative horizon: a
+				// no-op through the max below, same as the landscape's edge.
+				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
 		float soft = lerp(0.06, 0.35, farShadowT);
