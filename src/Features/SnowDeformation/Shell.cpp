@@ -376,6 +376,33 @@ ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
 	return depthSyncCS;
 }
 
+void SnowDeformation::BindSeamShield()
+{
+	// Called from Deferred's exterior composite dispatch. Inactive frames
+	// still need the CB bound with the flag off once the define exists, but
+	// skipping the bind entirely is also safe: the shader gates on
+	// SnowSeamParams.w, and an unbound b7 reads zeros = inactive.
+	const bool active = settings.EnableSnowDeformation && globals::state->inWorld &&
+	                    shellTerrainTexture && lastShellCBData != nullptr;
+	if (!active)
+		return;
+	if (!seamShieldCB)
+		seamShieldCB = new ConstantBuffer(ConstantBufferDesc<SeamShieldCB>(), "SnowDeformation::SeamShieldCB");
+	SeamShieldCB data{};
+	data.WindowOffset = { lastShellCBData->GridToTerrainOffset.x - lastShellCBData->GridOrigin.x,
+		lastShellCBData->GridToTerrainOffset.y - lastShellCBData->GridOrigin.y };
+	data.TexelSize = lastShellCBData->TerrainTexelSize;
+	data.Dim = (float)lastShellCBData->TerrainDim;
+	data.Params = { 0.75f, 0.0f, 0.0f, 1.0f };
+	seamShieldCB->Update(data);
+
+	auto context = globals::d3d::context;
+	ID3D11ShaderResourceView* srv = shellTerrainTexture->srv.get();
+	context->CSSetShaderResources(16, 1, &srv);
+	ID3D11Buffer* cb = seamShieldCB->CB();
+	context->CSSetConstantBuffers(7, 1, &cb);
+}
+
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)

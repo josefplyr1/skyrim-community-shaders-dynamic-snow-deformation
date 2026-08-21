@@ -380,6 +380,12 @@ void Deferred::DeferredPasses()
 
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
+		// Snow shell SSGI seam shield (t16/b7); the interior composite is
+		// compiled without the block and the exterior one runtime-gates on
+		// the CB's active flag.
+		if (!interior && globals::features::snowDeformation.loaded)
+			globals::features::snowDeformation.BindSeamShield();
+
 		ID3D11UnorderedAccessView* uavs[3]{ main.UAV, normals.UAV, motionVectors.UAV };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
@@ -396,13 +402,14 @@ void Deferred::DeferredPasses()
 
 	// Clear
 	{
-		ID3D11ShaderResourceView* views[16]{ nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* views[17]{};
 		context->CSSetShaderResources(0, ARRAYSIZE(views), views);
 
 		ID3D11UnorderedAccessView* uavs[3]{ nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 		ID3D11Buffer* buffers[1] = { nullptr };
+		context->CSSetConstantBuffers(7, 1, buffers);
 		context->CSSetConstantBuffers(12, 1, buffers);
 
 		context->CSSetShader(nullptr, nullptr, 0);
@@ -623,6 +630,11 @@ ID3D11ComputeShader* Deferred::GetComputeMainComposite()
 		// (R24_UNORM_X8_TYPELESS game depth) to `Texture2D<float>` (R32_FLOAT blendedDepth).
 		if (globals::features::terrainBlending.loaded)
 			defines.push_back({ "TERRAIN_BLENDING", nullptr });
+
+		// SSGI seam shield at the snow shell's border (t16/b7, bound by the
+		// snow feature per frame; exterior composite only).
+		if (globals::features::snowDeformation.loaded)
+			defines.push_back({ "SNOW_DEFORMATION", nullptr });
 
 		mainCompositeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\DeferredCompositeCS.hlsl", defines, "cs_5_0"));
 	}

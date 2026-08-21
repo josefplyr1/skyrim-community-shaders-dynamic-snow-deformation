@@ -440,8 +440,8 @@ public:
 		bool SnowBorderDithering = true;
 		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
-		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Reworked round 17: energy sits in a short 8-unit wavelength — fine raggedness, not waves; default dropped from 48 accordingly. */
-		float SnowBorderNoise = 10.0f;
+		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Round 18: capped 37-unit wander + fine 8-unit octave; default 16 (Josef, round 19). */
+		float SnowBorderNoise = 16.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief Border Fade, in PERCENT (round 18: the old 2..64-unit band read as a big move when it mainly sets how visible the outward dust is). Remapped to the internal 2..64 contact-term band on upload; 100% = the old 64. */
@@ -804,6 +804,17 @@ public:
 	ID3D11DomainShader* shellDS = nullptr;
 
 	ConstantBuffer* shellCB = nullptr;
+
+	/** @brief SSGI seam shield: analytic contact-fringe mask handed to the deferred composite (t16/b7) so it can lift SSGI's AO on the ground ring just beyond the shell edge, where the discarded shell cannot shield via Masks2. Bound from Deferred's composite dispatch; implemented in SnowDeformation/Shell.cpp. */
+	struct SeamShieldCB
+	{
+		float2 WindowOffset;
+		float TexelSize;
+		float Dim;
+		float4 Params;  ///< x = lift strength, w > 0.5 = active this frame
+	};
+	void BindSeamShield();
+	ConstantBuffer* seamShieldCB = nullptr;
 
 	/** @brief One live arc: where it came from, where it struck, and how far through its life it is. */
 	struct LightningArc
