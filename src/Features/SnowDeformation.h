@@ -1117,10 +1117,10 @@ public:
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
 
-	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only) and by the REAL slice each cascade descriptor renders to (shadowmapIndex — the atlas is shared with local shadow lights and the sun's slices move with the active-light set). */
-	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[2];
+	/** @brief Per-descriptor DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only) and by the REAL slice each descriptor renders to (shadowmapIndex — the atlas is shared with local shadow lights and the sun's slices move with the active-light set). Four entries (round 26): the sun owns MORE shadowmaps than the two cascades (the focus map is in the family, and descriptor order is not guaranteed), so the shell is injected into every one — each descriptor carries its own transform and slice, making the ordering irrelevant. Truncated shadows (near lobe present, far lobe missing, boundary sweeping with the view) were the two-descriptor assumption missing the far cascade. */
+	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[4];
 	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
-	uint32_t shadowAtlasDSVSlice[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+	uint32_t shadowAtlasDSVSlice[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
 	/** @brief Atlas slices of sun cascades 0/1, captured at mask time (descriptors are only live then) and uploaded via BorderStyle.zw for the PS crisp path, which samples the same shared atlas. */
 	uint32_t sunCascadeSlice[2] = { 0, 1 };
 	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;

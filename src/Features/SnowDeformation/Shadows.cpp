@@ -256,7 +256,12 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return;
 	}
 	auto& lightRuntime = sunShadowLight->GetRuntimeData();
-	const uint32_t cascadeCount = std::min<uint32_t>((uint32_t)lightRuntime.shadowmapDescriptors.size(), 2u);
+	// EVERY sun shadowmap gets the shell (round 26): the descriptor list is
+	// larger than the two cascades (the focus map is in the family) and its
+	// order is not guaranteed - the old min(2) assumption left whichever
+	// real cascade sat past index 1 shell-less, presenting as a shadow
+	// truncated at the cascade boundary, the cut sweeping with the view.
+	const uint32_t cascadeCount = std::min<uint32_t>((uint32_t)lightRuntime.shadowmapDescriptors.size(), 4u);
 	if (cascadeCount == 0) {
 		logOnce("skip: zero cascades");
 		return;
@@ -319,7 +324,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			if (slice >= atlasDesc.ArraySize)
 				continue;
 		}
-		sunCascadeSlice[i] = slice;
+		// The PS receiving path only follows the first two (the cascades it
+		// blends); the extra descriptors are inject-only.
+		if (i < 2)
+			sunCascadeSlice[i] = slice;
 		if (shadowAtlasDSVTexture == atlasTex.get() && shadowAtlasDSVSlice[i] == slice && shadowAtlasDSV[i])
 			continue;
 		shadowAtlasDSV[i] = nullptr;
@@ -354,8 +362,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (packed != lastPacked && changeLogCount < 200) {
 			lastPacked = packed;
 			changeLogCount++;
-			logger::info("[SNOW DEFORMATION] ShadowInject: slices used = {}, {} (raw shadowmapIndex = {}, {}; atlas has {}; fallback = {})",
-				sunCascadeSlice[0], sunCascadeSlice[1], raw0, raw1, atlasDesc.ArraySize, sliceFallback);
+			logger::info("[SNOW DEFORMATION] ShadowInject: slices used = {}, {} (raw shadowmapIndex = {}, {}; descriptors = {}; atlas has {}; fallback = {})",
+				sunCascadeSlice[0], sunCascadeSlice[1], raw0, raw1, (uint32_t)lightRuntime.shadowmapDescriptors.size(), atlasDesc.ArraySize, sliceFallback);
 		}
 	}
 
