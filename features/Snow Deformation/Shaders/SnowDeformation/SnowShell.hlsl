@@ -1046,7 +1046,18 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float castBase = rawTerrainCast.x + max(rawTerrainCast.y, 0.0);
 	float castExcess = max(0.0, z - castBase);
 	float castGate = smoothstep(3.0, 8.0, castExcess) * smoothstep(0.2, 0.5, coverage);
-	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
+	// Round 20: the excess-only caster missed the two shadows that matter -
+	// pit walls shadowing the exposed ground inside trenches and melt
+	// clearings (the carved surface sits BELOW the uncarved base, so excess
+	// is zero there), and the bank rim shadowing the bare side of a class
+	// border. Where the real surface dips below the ambient base or the
+	// border fringe begins, cast from the REAL surface; the flat blanket
+	// interior keeps the excess-only rule so the world inside and beneath
+	// the layer is not globally darkened.
+	float pitGate = smoothstep(2.0, 6.0, castBase - z);
+	float borderGate = (1.0 - smoothstep(6.0, 10.0, max(rawTerrainCast.y, 0.0))) * smoothstep(0.2, 0.5, coverage);
+	float castRealGate = max(pitGate, borderGate);
+	z = lerp(rawTerrainCast.x + lerp(-64.0, castExcess, castGate), z, castRealGate);
 #endif
 
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
