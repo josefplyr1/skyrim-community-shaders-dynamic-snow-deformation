@@ -1620,49 +1620,78 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 
 	// Blend into the ground shell: where this pixel sits at or below the
-	// terrain shell's snow surface, dissolve so the two shells dither into
-	// one blanket instead of meeting at a hard seam. The same dials that
-	// shape class borders shape this hand-off: Border Smoothness widens the
-	// dissolve band (a taller, softer rise of ground snow up the object) and
-	// Border Noise jitters where the meeting line sits, so the seam wanders
-	// organically around a rock's base instead of tracing a level line.
-	float3 groundData = SampleTerrainStatics(input.GridLocal);
-	[flatten] if (groundData.x > -50000.0)
+	// terrain shell's snow surface, dissolve so the two shells meet as one
+	// blanket. Two constructions, near to far.
+	//
+	// PAIR-3 CONTEST (HEIGHT-BLEND-PLAN, near field): where the landscape
+	// shell VISIBLY renders behind this pixel (pre-vs-post shell depth
+	// divergence - the one gate that can only ever dissolve snow into snow;
+	// a height band alone could dissolve the skin over its own mesh and
+	// expose the bare road beneath), the cut is geometric: the skin
+	// survives where its surface stands above the blanket surface
+	// reconstructed along the view ray, the crossing displaced by the
+	// world-anchored grain so the meeting line runs in grain fingers
+	// instead of a level contour. Both sides sample the SAME snow field -
+	// a two-sided grain difference cancels exactly at the crease - so the
+	// one-sided displacement IS the raggedness. No BorderNoise here: the
+	// cut belongs on the visible crease (the round-10 touchdown lesson),
+	// grain supplies the wander. Committed 0/1 (Border Dithering ON keeps
+	// a dust tail below the crossing, outward-only) because every .w
+	// output feeds the deferred temporal resolve, which re-dithers any
+	// partial alpha whatever shaped it. Reconstruction error at grazing
+	// angles is self-correcting: it grows with the ray gap, and a large
+	// gap means the skin stands proud and wins outright anyway.
+	//
+	// FALLBACK (far field, no height map, or shell not visibly behind):
+	// the analytic band vs the terrain window's shell top (Border
+	// Smoothness / Border Noise dials, one-sided shaping) times the smooth
+	// SnowSnowFade ray band - the prior construction, unchanged, and still
+	// the whole story for pair 4's bare-land hand-off.
+	float postShellZ = SharedData::GetScreenDepth(ShellDepthCopy.Load(int3(input.Position.xy, 0)));
+	float preShellZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+	float skinZ = input.CurrentClip.w;
+	float pixelAbsZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+	bool shellBehind = preShellZ - postShellZ > 1.0;
+	float contestFade = (SnowSnowFade > 0.01 && HasSnowHeight > 0.5 && shellBehind)
+	                        ? 1.0 - smoothstep(1024.0, 2048.0, pixelDist)
+	                        : 0.0;
+	float seamTotal = 1.0;
+	[branch] if (contestFade < 0.999)
 	{
-		float groundShellZ = groundData.x + max(groundData.y, 0.0);
-		float pixelAbsZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-		float seamNoise = (CoverageNoise(worldXY * 0.5) - 0.5) * BorderNoise * 0.5;
-		float bandLow = -(4.0 + BorderSmooth * 0.5);
-		float bandHigh = 2.0 + BorderSmooth * 0.125;
-		float groundBand = smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
-		if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
+		float3 groundData = SampleTerrainStatics(input.GridLocal);
+		[flatten] if (groundData.x > -50000.0)
 		{
-			float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
-			groundBand = SnowHeightBlendOneSided(groundBand, edgeSnowH, edgeBlend);
+			float groundShellZ = groundData.x + max(groundData.y, 0.0);
+			float seamNoise = (CoverageNoise(worldXY * 0.5) - 0.5) * BorderNoise * 0.5;
+			float bandLow = -(4.0 + BorderSmooth * 0.5);
+			float bandHigh = 2.0 + BorderSmooth * 0.125;
+			float groundBand = smoothstep(bandLow, bandHigh, pixelAbsZ - (groundShellZ + seamNoise));
+			if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
+			{
+				float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
+				groundBand = SnowHeightBlendOneSided(groundBand, edgeSnowH, edgeBlend);
+			}
+			seamTotal = groundBand;
 		}
-		coverageAlpha *= groundBand;
-		dbgSeam *= groundBand;
+		[branch] if (SnowSnowFade > 0.01 && shellBehind)
+			seamTotal *= smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
 	}
-
-	// Snow<->Snow Fade; Terrain Blending's technique adapted: the fade is
-	// measured along the view ray against the landscape shell's actually-
-	// rendered surface (post-shell depth copy), and only where the thing
-	// behind this pixel is the shell (pre-vs-post depth divergence). A
-	// height-based band could dissolve the skin over its own mesh and expose
-	// the bare road beneath; this construction can only ever fade white snow
-	// into white snow.
-	[branch] if (SnowSnowFade > 0.01)
+	[branch] if (contestFade > 0.001)
 	{
-		float postShellZ = SharedData::GetScreenDepth(ShellDepthCopy.Load(int3(input.Position.xy, 0)));
-		float preShellZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-		[flatten] if (preShellZ - postShellZ > 1.0)  // the landscape shell is behind this pixel
-		{
-			float skinZ = input.CurrentClip.w;
-			float snowSeam = smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
-			coverageAlpha *= snowSeam;
-			dbgSeam *= snowSeam;
-		}
+		float shellSurfZ = ShellCameraPosAdjust.z + input.WorldPos.z * (postShellZ / max(skinZ, 1e-3));
+		float grainSkin = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
+		// One grain scale and one dust reach across every snow border
+		// (kEdgeGrainAmp and the landscape edge's tail).
+		const float kSeamGrainAmp = 2.0;
+		const float kSeamDustReach = 2.0;
+		float margin = pixelAbsZ - shellSurfZ + (grainSkin - 0.5) * kSeamGrainAmp;
+		float seamContest = BorderStyle.x > 0.5
+		                        ? saturate(margin / kSeamDustReach + 1.0)
+		                        : (margin >= 0.0 ? 1.0 : 0.0);
+		seamTotal = lerp(seamTotal, seamContest, contestFade);
 	}
+	coverageAlpha *= seamTotal;
+	dbgSeam *= seamTotal;
 
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel
