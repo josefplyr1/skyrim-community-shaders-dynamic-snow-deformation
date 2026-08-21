@@ -1801,6 +1801,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// different 2D direction in each and the offsets are not interchangeable.
 	// Each plane therefore marches itself and shifts its OWN tap set; the
 	// existing sample blend then mixes them exactly as before.
+	float2 snowUVPreParallax = snowUV;
+	float2 snowUVSidePreParallax = snowUVSide;
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
@@ -1840,9 +1842,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
 		[branch] if (disturb > 0.01)
 		{
+			// POM offset added AFTER the frequency multiply (round 28, same
+			// fix as the landscape shell): scaling the displaced uv scaled
+			// the view-dependent offset by Grain Fineness, sliding the
+			// crisp layer across the surface faster than the base grain.
 			float crispScale = max(ObjCrispScaleV, 1.0);
-			SnowTaps crispTaps = ComputeSnowTaps(snowUV * crispScale, worldXY);
-			SnowTaps crispTapsSide = ComputeSnowTaps(snowUVSide * crispScale, snowSidePlane);
+			float2 crispUV = snowUVPreParallax * crispScale + (snowUV - snowUVPreParallax);
+			float2 crispUVSide = snowUVSidePreParallax * crispScale + (snowUVSide - snowUVSidePreParallax);
+			SnowTaps crispTaps = ComputeSnowTaps(crispUV, worldXY);
+			SnowTaps crispTapsSide = ComputeSnowTaps(crispUVSide, snowSidePlane);
 			float2 crispN = SampleSnowPlanar(SnowNormalMap, crispTaps, crispTapsSide, snowSteepness).xy * 2.0 - 1.0;
 			texN.xy += crispN * disturb;
 		}

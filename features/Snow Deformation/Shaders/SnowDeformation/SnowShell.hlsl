@@ -1626,6 +1626,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// occludes grain and the surface reads as thick. Runs BEFORE every snow
 	// fetch, and shifts the tap set rather than rebuilding it, so albedo,
 	// normal, RMAOS and the parallax shadow all ride the displaced position.
+	float2 snowUVPreParallax = snowUV;
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
@@ -1643,7 +1644,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
 		[branch] if (disturb > 0.01)
 		{
-			SnowTaps crispTaps = ComputeSnowTaps(snowUV * max(CrispScaleV, 1.0), worldXYPS);
+			// The POM offset is added AFTER the frequency multiply (round
+			// 28): scaling the displaced uv scaled the view-dependent
+			// offset by Grain Fineness too, so the crisp layer slid across
+			// the surface 4-8x faster than the base grain - the warping
+			// Grain Strength was blamed for. Unamplified, the micro-grain
+			// travels with the displaced surface at the same speed as the
+			// base tap.
+			float2 crispUV = snowUVPreParallax * max(CrispScaleV, 1.0) + (snowUV - snowUVPreParallax);
+			SnowTaps crispTaps = ComputeSnowTaps(crispUV, worldXYPS);
 			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
 			texN.xy += crispN * disturb;
 		}
