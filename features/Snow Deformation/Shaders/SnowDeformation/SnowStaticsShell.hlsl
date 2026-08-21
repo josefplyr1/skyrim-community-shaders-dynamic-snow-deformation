@@ -1716,19 +1716,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// a normal blend. Blanket depth > 0.5 keeps pair 4's bare-ground
 	// hand-off out of this: flattening the rim toward bare dirt is not
 	// continuity, there is no blanket to agree with.
-	float seamShadowLift = 0.0;
 	[branch] if (HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
-		float normalBand = 1.0 - smoothstep(0.5, 6.0, pixelAbsZ - blanketTopZ);
-		// Shadow continuity to match the normal continuity (round 31, the
-		// lit rim): a rim pixel sitting below the blanket top samples the
-		// sun cascade at the BLANKET's height, so the shadow boundary on
-		// the blanket continues across the seam instead of skipping the
-		// recessed rim (the receiver's normal offset plus a low sun lifts
-		// a lower sample point out of near-grazing shadows). Lift only,
-		// capped: deep floor pixels keep something near their own shadow.
-		seamShadowLift = normalBand * min(max(blanketTopZ - pixelAbsZ, 0.0), 8.0) * (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
+		float dzTop = pixelAbsZ - blanketTopZ;
+		// TWO-SIDED thin band, up-facing pixels only (round 32, settled by
+		// the RenderDoc receiver replay): the one-sided full-strength blend
+		// hijacked everything BELOW the blanket top - carved walls, floors,
+		// and the rock's sun-facing flank at the seam, whose true normal
+		// catches the low sun exactly like the blanket rim beside it.
+		// Flattening it printed a dim skin stripe against a glowing rim -
+		// the "bright seam band". Flanks and recesses keep their normals;
+		// only near-top, up-facing pixels ease into the blanket.
+		float normalBand = smoothstep(-6.0, -2.0, dzTop) * (1.0 - smoothstep(0.5, 6.0, dzTop));
+		normalBand *= smoothstep(0.3, 0.6, normalWS.z);
 		[branch] if (normalBand > 0.001)
 		{
 			const float nStep = 4.0;
@@ -1998,8 +1999,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF; same path as the terrain shell.
-		// seamShadowLift raises a recessed rim's receiver to the blanket top.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos + float3(0.0, 0.0, seamShadowLift), normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		// (Round 32: the round-31 seamShadowLift receiver raise is REVERTED -
+		// the RenderDoc replay proved no cascade shadow was missing at the
+		// seam, so the lift only risked boundary drift.)
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
