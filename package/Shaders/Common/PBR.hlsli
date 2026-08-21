@@ -127,10 +127,15 @@ namespace PBR
 		const float3 L = context.lightDir;
 		const float3 H = context.halfVector;
 
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
+		// Coat members exist only on the TRUE_PBR DirectContext; the terrain
+		// family (incl. the snow-LOD evaluation in non-TRUE_PBR permutations)
+		// compiles without them and never reaches the coat branches.
 		const float3 coatN = context.coatWorldNormal;
 		const float3 coatV = context.coatViewDir;
 		const float3 coatL = context.coatLightDir;
 		const float3 coatH = context.coatHalfVector;
+#endif
 
 		float NdotL = dot(N, L);
 		float NdotV = dot(N, V);
@@ -144,7 +149,7 @@ namespace PBR
 		float satNdotH = saturate(NdotH);
 		float satVdotH = saturate(VdotH);
 
-#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
 		[branch] if ((PBRFlags & Flags::HairMarschner) != 0)
 		{
 			lightingOutput.transmission += softLightColor * GetHairColorMarschner(N, V, L, NdotL, NdotV, VdotL, 0, 1, 0, material);
@@ -164,7 +169,7 @@ namespace PBR
 			lightingOutput.diffuse += detailedLightColor * satNdotL * BRDF::Diffuse_Lambert() * kD;
 			lightingOutput.specular += Fr * detailedLightColor * satNdotL;
 
-#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
 			[branch] if ((PBRFlags & Flags::Fuzz) != 0)
 			{
 				float3 fuzzSpecular = SpecularMicroflakes(material.Roughness, material.FuzzColor, satNdotL, satNdotV, satNdotH, satVdotH) * detailedLightColor * satNdotL;
@@ -223,7 +228,7 @@ namespace PBR
 
 		float NdotV = saturate(dot(N, V));
 
-#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
 		[branch] if ((PBRFlags & Flags::HairMarschner) != 0)
 		{
 			float3 L = normalize(V - N * dot(V, N));
@@ -236,7 +241,7 @@ namespace PBR
 		{
 			lobeWeights.diffuse = material.BaseColor;
 
-#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
 			[branch] if ((PBRFlags & Flags::Subsurface) != 0)
 			{
 				lobeWeights.diffuse += material.SubsurfaceColor * (1 - material.Thickness) / Math::PI;
@@ -252,7 +257,7 @@ namespace PBR
 			// Energy conservation: diffuse receives only what specular does not reflect
 			lobeWeights.diffuse *= 1 - lobeWeights.specular;
 
-#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE)
+#if !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE)
 			[branch] if ((PBRFlags & Flags::TwoLayer) != 0)
 			{
 				float2 coatSpecularBRDF = BRDF::EnvBRDF(material.CoatRoughness, NdotV);

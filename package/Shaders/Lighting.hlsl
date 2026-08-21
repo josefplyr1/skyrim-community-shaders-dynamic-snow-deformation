@@ -897,6 +897,14 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+// The LOD terrain family has no TRUE_PBR permutation, so the PBR evaluators
+// are pulled in explicitly for the horizon-snow override. Every
+// PBRFlags-consuming branch is compiled out by the terrain guards inside;
+// the PerMaterial PBRFlags satisfies the reference without a stub.
+#		include "Common/PBR.hlsli"
+#	endif
+
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
@@ -2787,21 +2795,35 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
-	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels get
-	// the shell's far-field diffuse — dirLightColor already carries EHF and
-	// the world shadow; PBRLightingCompensation and PBRLightingScale mirror
-	// SnowShading.hlsli's units contract. directionalAmbientColor above is
-	// the same DALC/IBL term as SnowAmbientColor, on the perturbed normal.
-	// The shared tail below then produces the shell's G-buffer conventions
-	// (Masks.z ambient luma, ApplySkylighting, Albedo lobe). Specular is
-	// deliberately absent at LOD distance; no vertex color — the shell has
-	// none.
+	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
+	// re-evaluated through the SAME PBR functions the shell and TruePBR
+	// statics use — dirLightContext already carries this pixel's perturbed
+	// normal, view ray, and the EHF/world-shadowed sun; the compensation
+	// reconstructs the TRUE_PBR-flavoured light input this non-PBR
+	// permutation never applied (PI-CONVENTION-SPIKE.md), and GetDirect-
+	// LightInput's Lambert cancels it back out. Mirrors the TRUE_PBR tail
+	// (:2735-2790): direct + Fresnel-weighted lobe × ambient, all
+	// × PBRLightingScale. Specular output stays deliberately absent at LOD
+	// distance; no vertex color — the shell has none.
 	[branch] if (snowLodReplaceW > 0.003)
 	{
-		float3 snowLobe = snowLodAlbedo * Color::PBRLightingScale;
-		float3 snowDirect = dirLightColor * Color::PBRLightingCompensation * saturate(dot(worldNormal.xyz, DirLightDirection.xyz)) * dirDetailedShadow * snowLobe;
-		color.xyz = lerp(color.xyz, snowDirect + snowLobe * directionalAmbientColor, snowLodReplaceW);
-		outputAlbedo = lerp(outputAlbedo, snowLobe, snowLodReplaceW);
+		MaterialProperties snowMaterial = (MaterialProperties)0;
+		snowMaterial.BaseColor = snowLodAlbedo;
+		// The shell's material defaults (SnowShell.hlsl kSnowRoughness/kSnowF0
+		// order): scalar stand-ins for its RMAOS map, which mips flat at LOD
+		// range anyway.
+		snowMaterial.Roughness = SharedData::snowDeformationSettings.SnowRoughnessScale;
+		snowMaterial.F0 = 0.028;
+		snowMaterial.AO = 1.0;
+		DirectContext snowContext = dirLightContext;
+		snowContext.lightColor *= Color::PBRLightingCompensation;
+		DirectLightingOutput snowLit;
+		PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);
+		IndirectLobeWeights snowLobes;
+		PBR::GetIndirectLobeWeights(snowLobes, indirectContext, snowMaterial);
+		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
+		color.xyz = lerp(color.xyz, snowColor, snowLodReplaceW);
+		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, snowLodReplaceW);
 		specularColor = lerp(specularColor, 0.0, snowLodReplaceW);
 		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, snowLodReplaceW);
 		material.Roughness = lerp(material.Roughness, 1.0, snowLodReplaceW);
