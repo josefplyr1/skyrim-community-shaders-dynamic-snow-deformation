@@ -1084,8 +1084,11 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// resolution while the caster rim collapses at vertex resolution; the
 	// mismatched rim printed a static blocky shadow onto the revealed
 	// ground. The wide exclusion field already sinks static clearings;
-	// this is the stamped (spell) melt, ring included.
-	castVis *= 1.0 - smoothstep(0.05, 0.25, SampleMelted(gridLocal));
+	// this is the stamped (spell) melt, ring included. Thresholds sit WELL
+	// above the residue floor (round 32): the refill decays .y every frame,
+	// and a 0.05 lower edge put decaying residue on the castVis NaN cliff -
+	// caster triangles over every old melt site flipped once a second.
+	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));
 	if (castVis < 0.35)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
