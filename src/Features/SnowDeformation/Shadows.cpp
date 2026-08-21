@@ -304,15 +304,26 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// Josef's angle A/B; the point-light path at the top of this file
 	// always honored shadowmapIndex). The slices are also recorded for the
 	// PS receiving path, which had the same assumption.
+	bool sliceFallback = false;
 	for (uint32_t i = 0; i < cascadeCount; i++) {
-		const uint32_t slice = lightRuntime.shadowmapDescriptors[i].shadowmapIndex;
+		uint32_t slice = lightRuntime.shadowmapDescriptors[i].shadowmapIndex;
+		// FAIL SAFE (round 24): an out-of-range shadowmapIndex means the
+		// descriptor is not live at this instant for this view state; the
+		// old silent `continue` here was an appear/disappear shadow keyed
+		// to view direction. Fall back to the legacy cascade==slice
+		// assumption - a possibly-offset shadow beats a missing one, and
+		// the change-driven log below records every occurrence.
+		if (slice >= atlasDesc.ArraySize) {
+			slice = i;
+			sliceFallback = true;
+			if (slice >= atlasDesc.ArraySize)
+				continue;
+		}
 		sunCascadeSlice[i] = slice;
 		if (shadowAtlasDSVTexture == atlasTex.get() && shadowAtlasDSVSlice[i] == slice && shadowAtlasDSV[i])
 			continue;
 		shadowAtlasDSV[i] = nullptr;
 		shadowAtlasDSVSlice[i] = slice;
-		if (slice >= atlasDesc.ArraySize)
-			continue;
 		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
 		dsvDesc.Format = dsvFormat;
 		dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
@@ -328,11 +339,24 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		logOnce("skip: DSV creation failed");
 		return;
 	}
-	static uint32_t sliceLayoutLog = 0;
-	if (sliceLayoutLog < 8) {
-		sliceLayoutLog++;
-		logger::info("[SNOW DEFORMATION] ShadowInject: cascade slices = {}, {} (atlas has {})",
-			sunCascadeSlice[0], cascadeCount > 1 ? (int)sunCascadeSlice[1] : -1, atlasDesc.ArraySize);
+	// Change-driven layout log (round 24): the one-shot version stopped
+	// after startup and missed exactly the view-dependent reallocation we
+	// are hunting. One line per CHANGE of the slice pair / raw descriptor
+	// indices / fallback state - reproduce the disappearing shadow and the
+	// log names the moment.
+	{
+		const uint32_t raw0 = lightRuntime.shadowmapDescriptors[0].shadowmapIndex;
+		const uint32_t raw1 = cascadeCount > 1 ? lightRuntime.shadowmapDescriptors[1].shadowmapIndex : 0xFFu;
+		const uint32_t packed = (sunCascadeSlice[0] & 0xFF) | ((sunCascadeSlice[1] & 0xFF) << 8) |
+		                        ((raw0 & 0xFF) << 16) | ((raw1 & 0xFF) << 24);
+		static uint32_t lastPacked = 0xFFFFFFFFu;
+		static uint32_t changeLogCount = 0;
+		if (packed != lastPacked && changeLogCount < 200) {
+			lastPacked = packed;
+			changeLogCount++;
+			logger::info("[SNOW DEFORMATION] ShadowInject: slices used = {}, {} (raw shadowmapIndex = {}, {}; atlas has {}; fallback = {})",
+				sunCascadeSlice[0], sunCascadeSlice[1], raw0, raw1, atlasDesc.ArraySize, sliceFallback);
+		}
 	}
 
 	if (!shadowCastRS) {
