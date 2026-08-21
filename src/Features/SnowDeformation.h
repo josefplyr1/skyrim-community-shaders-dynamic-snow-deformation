@@ -440,16 +440,14 @@ public:
 		bool SnowBorderDithering = false;
 		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
-		/** @brief Fringe slice count (0 disables, up to 32): instanced thin sheets straddling the shell/ground intersection; low slices survive only in the dirt's hollows (land grain from Masks.y), so the boundary interpenetrates with real depth. Default 1 (Josef, round 13): more slices reshape rather than improve the blend and cost real FPS. */
-		float FringeSlices = 1.0f;
-		/** @brief World-unit jitter of where class-depth borders fall (domain warp), so snow edges never trace the texture seam. */
-		float SnowBorderNoise = 48.0f;
+		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Reworked round 17: energy sits in a short 8-unit wavelength — fine raggedness, not waves; default dropped from 48 accordingly. */
+		float SnowBorderNoise = 10.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
-		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. */
-		float SnowBorderTrampledFade = 20.0f;
-		/** @brief Depth band (units) over which untrampled snow's edge dissolves at class borders. */
-		float SnowBorderUntrampledFade = 5.0f;
+		/** @brief How far from a class border trampled snow keeps its visibility override; beyond ~20 the landscape under trenches becomes too visible. Default 0 (Josef, round 17). */
+		float SnowBorderTrampledFade = 0.0f;
+		/** @brief Contact-term slope at class borders; mainly controls the outward dust reach now. Default 64 (Josef, round 17: makes the edge dither clearly visible). */
+		float SnowBorderUntrampledFade = 64.0f;
 		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
 		float SnowSnowFade = 10.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
@@ -758,7 +756,7 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test everywhere, survivors opaque); y = minimum snow on carved trench floors in units above terrain. zw spare. Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test + outward dust, survivors opaque); y = minimum snow on carved trench floors in units above terrain. zw spare (z was the removed fringe-slice count). Appended LAST; mirror any change in SnowShell.hlsl. */
 		float4 BorderStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -798,11 +796,6 @@ public:
 	ID3D11PixelShader* GetShellLODPS();
 	ID3D11PixelShader* shellLODPS = nullptr;
 
-	/** @brief Fringe-slice permutation (SNOW_FRINGE_SLICE): instanced thin sheets in the contact fringe; a slice pixel survives where the snow reaches its level and no dirt grain stands taller. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11VertexShader* GetShellSliceVS();
-	ID3D11PixelShader* GetShellSlicePS();
-	ID3D11VertexShader* shellSliceVS = nullptr;
-	ID3D11PixelShader* shellSlicePS = nullptr;
 
 	/** @brief Tessellated-path stages (SNOW_TESS): control-point VS (grid placement only), hull shader (distance-based crack-free factors) and domain shader (full surface evaluation + displacement-map relief). Active when Relief Depth > 0. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellTessVS();

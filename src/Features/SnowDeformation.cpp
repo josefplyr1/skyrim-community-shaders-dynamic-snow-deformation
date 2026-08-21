@@ -91,7 +91,6 @@
 	X(WallDriftHeight) \
 	X(SnowBorderDithering) \
 	X(TrenchFloorHeight) \
-	X(FringeSlices) \
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
 	X(SnowBorderTrampledFade) \
@@ -656,12 +655,6 @@ void SnowDeformation::ClearShaderCache()
 	if (shellPS)
 		shellPS->Release();
 	shellPS = nullptr;
-	if (shellSliceVS)
-		shellSliceVS->Release();
-	shellSliceVS = nullptr;
-	if (shellSlicePS)
-		shellSlicePS->Release();
-	shellSlicePS = nullptr;
 	if (shellLODPS)
 		shellLODPS->Release();
 	shellLODPS = nullptr;
