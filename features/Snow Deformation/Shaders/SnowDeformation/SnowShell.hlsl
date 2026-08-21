@@ -1461,6 +1461,34 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha *= lerp(1.0, win, contestFade);
 	}
 
+	// Trench-floor contest (round 27, the second floor->0 gate): heavily
+	// trampled floors run the SAME geometric contest as the edge - the
+	// REMAINING snow (the carve profile's floor, the exact math the
+	// geometry uses) against the dirt's grain - so wear-through opens
+	// grain-shaped holes to the real ground by design instead of by window
+	// error. Trench Floor Height is the dial with no new settings: at 3+
+	// the remaining snow always beats the ~2-unit dirt grain (solid
+	// floors, today's default, unchanged); toward 0, full trampling wears
+	// through, dirt bumps piercing first. The tight carve gate keeps
+	// trench WALLS solid - only trail floors contest. Runs after the carve
+	// override on purpose: the override guarantees floors against fades,
+	// and this is the one voice allowed to overrule it.
+	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
+	{
+		float floorEff = min(pixelEffDepth, BorderStyle.y * smoothstep(0.5, 8.0, pixelEffDepth));
+		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
+		[branch] if (remaining < 4.0)
+		{
+			float floorGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+			float hLandFloorRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+			float hLandFloor01 = hLandFloorRaw > 0.002 ? saturate((hLandFloorRaw - 0.004) * (1.0 / 0.996)) : 0.5;
+			float dirtSurfFloor = (0.5 + (hLandFloor01 - 0.5) * 0.5) * 2.0;
+			float snowSurfFloor = remaining + (floorGrain - 0.5) * 2.0;
+			float winFloor = smoothstep(-0.25, 0.25, snowSurfFloor - dirtSurfFloor);
+			coverageAlpha *= lerp(1.0, winFloor, contestFade * smoothstep(0.75, 0.95, pixelCarve));
+		}
+	}
+
 	// Hard alpha test + optional outward dust. Survivors write fully
 	// opaque, so no partial alpha reaches the deferred resolve through the
 	// .w outputs below. Border Dithering ON scatters a whisker of
