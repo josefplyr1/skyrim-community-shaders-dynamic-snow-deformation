@@ -227,14 +227,69 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 				}
 			}
 		}
+		// The texture-name families over-accept: a shore RockShelf wears the
+		// same mountain diffuse as a snowy crag, but its PROJECTED material
+		// is the coastal sand MATO, not snow (Josef's Pale beach evidence,
+		// 2026-08-22). When the LOD still hangs under its reference, the
+		// STAT's directional-material record settles it — a MATO's model
+		// path IS its projected texture. Unreferenced merged batches keep
+		// the name heuristic.
+		bool naturalFeature = it->second.naturalFeature;
+		if (naturalFeature) {
+			RE::TESObjectREFR* refr = nullptr;
+			for (RE::NiAVObject* node = a_pass->geometry; node && !refr; node = node->parent)
+				refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+			if (refr) {
+				if (auto* base = refr->GetBaseObject(); base) {
+					static std::unordered_map<RE::FormID, bool> matoSnowCache;
+					if (matoSnowCache.size() > 4096)
+						matoSnowCache.clear();
+					auto [matoIt, matoInserted] = matoSnowCache.try_emplace(base->GetFormID(), false);
+					if (matoInserted) {
+						if (auto* stat = base->As<RE::TESObjectSTAT>(); stat && stat->data.materialObj) {
+							std::string matoPath(stat->data.materialObj->GetModel());
+							std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
+								[](unsigned char c) { return (char)std::tolower(c); });
+							matoIt->second = matoPath.find("snow") != std::string::npos;
+						}
+					}
+					naturalFeature = matoIt->second;
+				}
+			}
+		}
 		const bool lodAccept = isObjectLOD &&
-		                       (it->second.naturalFeature ||
+		                       (naturalFeature ||
 								   (settings.SkinMergedLODAtlases && it->second.mergedAtlas));
 		if (!(it->second.base || lodAccept)) {
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
 			return;
 		}
+	}
+
+	// Twig-card shape class (branch piles, shore driftwood): vanilla flags
+	// them snow-projected so they pass the flag gate, but the capture sees
+	// sparse cards and the skin wraps them into broken shards (Josef's
+	// TreeReachBranchPile01 evidence, 2026-08-22). Name-matched on the
+	// diffuse path; extend the list as offenders surface.
+	if (auto* shardMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
+		static std::unordered_map<const void*, bool> shardMaterialCache;
+		if (shardMaterialCache.size() > 4096)
+			shardMaterialCache.clear();
+		auto [shardIt, shardInserted] = shardMaterialCache.try_emplace(shardMaterial, false);
+		if (shardInserted) {
+			if (auto textureSet = shardMaterial->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+					std::string lowered(path);
+					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					shardIt->second = lowered.find("branchpile") != std::string::npos ||
+					                  lowered.find("driftwood") != std::string::npos;
+				}
+			}
+		}
+		if (shardIt->second)
+			return;
 	}
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected

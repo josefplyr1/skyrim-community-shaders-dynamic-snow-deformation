@@ -924,7 +924,14 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// no sun angle can resurrect them. The world under the layer never
 	// sees these shadows: the shell covers it.
 	float3 rawTerrainCast = SampleTerrain(gridLocal);
-	float castVis = smoothstep(2.0, 5.0, z - rawTerrainCast.x) * smoothstep(0.2, 0.5, coverage);
+	// Round 33 (Josef's Pale beach phantom shadows): the far anti-pinhole
+	// pass dilates coverage AND height (4-tap max + ridge pad), so beyond
+	// ~3000 units a ring around every patch passes both castVis terms while
+	// the main view discards those pixels per-texel — and this depth-only
+	// caster has no PS to do the same. Gating coverage on the UNDILATED
+	// texel under the vertex keeps true snowfields casting and silences
+	// the dilation skirt over bare coast.
+	float castVis = smoothstep(2.0, 5.0, z - rawTerrainCast.x) * smoothstep(0.2, 0.5, min(coverage, saturate(rawTerrainCast.z)));
 	// Melt pits do not cast (the coverage principle again: snow the melt
 	// removed casts nothing). The visible pit dissolves at texture
 	// resolution while the caster rim collapses at vertex resolution; the
