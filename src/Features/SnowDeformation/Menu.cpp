@@ -85,6 +85,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
 		if (auto _ttHs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
+		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Match Projected Snow"), &settings.ProjSnowMatch);
+		if (auto _ttPsm = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
 		bool distantChanged = false;
 
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");

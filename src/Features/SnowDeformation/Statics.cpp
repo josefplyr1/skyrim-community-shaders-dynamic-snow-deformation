@@ -107,6 +107,65 @@ static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a
 		a_radius, a_cameraInside ? "yes" : "no",
 		a_geometry->name.empty() ? "<unnamed>" : a_geometry->name.c_str());
 }
+namespace
+{
+	enum class MatoClass
+	{
+		kNoReference,
+		kNoMato,
+		kSnow,
+		kNotSnow
+	};
+
+	// The reference's STAT directional-material record settles snow vs sand:
+	// a MATO's model path IS its projected texture. Cached per base form.
+	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
+	{
+		RE::TESObjectREFR* refr = nullptr;
+		for (RE::NiAVObject* node = a_geometry; node && !refr; node = node->parent)
+			refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+		if (!refr)
+			return MatoClass::kNoReference;
+		auto* base = refr->GetBaseObject();
+		if (!base)
+			return MatoClass::kNoReference;
+		static std::unordered_map<RE::FormID, MatoClass> matoClassCache;
+		if (matoClassCache.size() > 4096)
+			matoClassCache.clear();
+		auto [it, inserted] = matoClassCache.try_emplace(base->GetFormID(), MatoClass::kNoMato);
+		if (inserted) {
+			if (auto* stat = base->As<RE::TESObjectSTAT>(); stat && stat->data.materialObj) {
+				std::string matoPath(stat->data.materialObj->GetModel());
+				std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
+					[](unsigned char c) { return (char)std::tolower(c); });
+				it->second = matoPath.find("snow") != std::string::npos ? MatoClass::kSnow : MatoClass::kNotSnow;
+			}
+		}
+		return it->second;
+	}
+}
+
+void SnowDeformation::SetProjectedSnowBit(RE::BSRenderPass* a_pass)
+{
+	// Projected-snow bit for Lighting's material match (SNOW-MATCH Phase 2):
+	// cleared every pass so it never leaks, set when this draw's projected
+	// material is actually snow. Flags are trustworthy on full meshes (sand
+	// projection sets kProjectedUV without kSnow — the Pale beach evidence);
+	// the MATO check guards the flagged path against exceptions whenever a
+	// reference is reachable. Runs BEFORE the game's SetupGeometry (the
+	// ExtendedTranslucency pattern): the descriptor is consumed inside it.
+	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
+	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
+		return;
+	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+	const auto& flags = a_pass->shaderProperty->flags;
+	if (settings.EnableSnowDeformation && settings.ProjSnowMatch &&
+		flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow) &&
+		ClassifyProjectedMato(a_pass->geometry) != MatoClass::kNotSnow)
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+}
+
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
@@ -230,32 +289,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// The texture-name families over-accept: a shore RockShelf wears the
 		// same mountain diffuse as a snowy crag, but its PROJECTED material
 		// is the coastal sand MATO, not snow (Josef's Pale beach evidence,
-		// 2026-08-22). When the LOD still hangs under its reference, the
-		// STAT's directional-material record settles it — a MATO's model
-		// path IS its projected texture. Unreferenced merged batches keep
-		// the name heuristic.
+		// 2026-08-22). When the LOD still hangs under its reference the MATO
+		// settles it — positive snow evidence required. Unreferenced merged
+		// batches keep the name heuristic.
 		bool naturalFeature = it->second.naturalFeature;
 		if (naturalFeature) {
-			RE::TESObjectREFR* refr = nullptr;
-			for (RE::NiAVObject* node = a_pass->geometry; node && !refr; node = node->parent)
-				refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
-			if (refr) {
-				if (auto* base = refr->GetBaseObject(); base) {
-					static std::unordered_map<RE::FormID, bool> matoSnowCache;
-					if (matoSnowCache.size() > 4096)
-						matoSnowCache.clear();
-					auto [matoIt, matoInserted] = matoSnowCache.try_emplace(base->GetFormID(), false);
-					if (matoInserted) {
-						if (auto* stat = base->As<RE::TESObjectSTAT>(); stat && stat->data.materialObj) {
-							std::string matoPath(stat->data.materialObj->GetModel());
-							std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
-								[](unsigned char c) { return (char)std::tolower(c); });
-							matoIt->second = matoPath.find("snow") != std::string::npos;
-						}
-					}
-					naturalFeature = matoIt->second;
-				}
-			}
+			const MatoClass matoClass = ClassifyProjectedMato(a_pass->geometry);
+			if (matoClass != MatoClass::kNoReference)
+				naturalFeature = matoClass == MatoClass::kSnow;
 		}
 		const bool lodAccept = isObjectLOD &&
 		                       (naturalFeature ||
@@ -344,9 +385,12 @@ struct SD_BSLightingShader_SetupGeometry
 {
 	static void thunk(RE::BSLightingShader* shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
 	{
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.SetProjectedSnowBit(a_pass);
+
 		func(shader, a_pass, a_flags);
 
-		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
 			snowDeformation.BSLightingShader_SetupGeometry(a_pass);
 	}

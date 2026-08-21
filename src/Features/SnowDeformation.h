@@ -505,6 +505,8 @@ public:
 		bool HorizonSnow = true;
 		/** @brief A/B toggle: shade horizon snow with the old vanilla-math recolor instead of the shell's recipe. */
 		bool LODReplaceLegacy = false;
+		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
+		bool ProjSnowMatch = true;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -528,7 +530,9 @@ public:
 
 		/** @brief A/B: 1 = old input-patch recolor, 0 = shell-recipe output override. */
 		float LODReplaceLegacy;
-		float padLod[3];
+		/** @brief Projected-snow material match enabled and the snow set is bound. */
+		float ProjSnowEnable;
+		float padLod[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -1084,6 +1088,9 @@ public:
 
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
+
+	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
+	void SetProjectedSnowBit(RE::BSRenderPass* a_pass);
 
 	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);

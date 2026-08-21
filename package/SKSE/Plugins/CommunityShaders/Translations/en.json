@@ -1520,6 +1520,8 @@
     "feature.snow_deformation.pit_depth_tooltip": "How deep a discharge pocks the snow, as a fraction of the layer. Lightning scatters snow rather than boring into it, so this sits below a footprint - and unlike a melt it does not deepen with time, however long a cloak crackles over one spot.",
     "feature.snow_deformation.pit_radius": "Lightning Pit Radius",
     "feature.snow_deformation.pit_radius_tooltip": "Reach of a single discharge before its arc legs, which fork out past it. Bigger spells scale up from here.",
+    "feature.snow_deformation.proj_snow_match": "Match Projected Snow",
+    "feature.snow_deformation.proj_snow_match_tooltip": "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look.",
     "feature.snow_deformation.range_skins": "Object Snow",
     "feature.snow_deformation.range_skins_fade": "Distant Snow Blend",
     "feature.snow_deformation.range_skins_fade_tooltip": "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects.",

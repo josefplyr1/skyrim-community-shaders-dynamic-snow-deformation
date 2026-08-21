@@ -126,7 +126,8 @@
 	X(DistantSnowLineFade) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
-	X(LODReplaceLegacy)
+	X(LODReplaceLegacy) \
+	X(ProjSnowMatch)
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
 {
@@ -374,6 +375,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.LODReplaceLegacy = settings.LODReplaceLegacy ? 1.0f : 0.0f;
+	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	return data;
 }
 

@@ -370,7 +370,9 @@ namespace SharedData
 		// shell-recipe output override (SNOW-MATCH Phase 1). Scalar pads (not
 		// an array: cbuffer arrays stride per-register) mirror the C++ padLod.
 		float LODReplaceLegacy;
-		float padLod0;
+		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
+		// snow set is bound at t102.
+		float ProjSnowEnable;
 		float padLod1;
 		float padLod2;
 	};

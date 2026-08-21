@@ -91,6 +91,7 @@ namespace Permutation
 		// SnowDeformation per-tile landscape snow flags (tile 0 = bit 10).
 		static const uint SnowLandIsSnowShift = 10;
 		static const uint SnowLandIsSnowMask = (0x3F << 10);
+		static const uint SnowProjectedIsSnow = (1 << 16);
 	}
 
 	cbuffer PerShader : register(b4)
