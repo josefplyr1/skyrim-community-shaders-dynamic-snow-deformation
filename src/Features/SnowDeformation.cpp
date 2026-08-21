@@ -127,7 +127,8 @@
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(LODReplaceLegacy) \
-	X(ProjSnowMatch)
+	X(ProjSnowMatch) \
+	X(ShellDepthOcclusion)
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
 {

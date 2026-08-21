@@ -575,3 +575,181 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->PSSetShaderResources(4, 1, &srv);
 	}
 }
+
+void SnowDeformation::DepthPrepassInject()
+{
+	// SSS marches the depth as it stands at deferred start - a depth the
+	// shell has never written, so geometry the snow visually buries still
+	// stands in it and prints screen-space shadow streaks ON TOP of the
+	// shell (Josef's fence evidence, 2026-08-22). Stamp the caster surface
+	// (solid coverage + real excess only; everything else NaN-collapses)
+	// into the main depth BEFORE ScreenSpaceShadows::Prepass: buried
+	// casters sink beneath the snow in the march, and drifts gain their
+	// own contact shadows. Called from Deferred::PrepassPasses ahead of
+	// the feature loop, because screenSpaceShadows precedes this feature
+	// in the feature list.
+	if (!settings.EnableSnowDeformation || !settings.ShellDepthOcclusion)
+		return;
+	if (!globals::state->inWorld)
+		return;
+	if (!lastShellCBData || !shellCB || !shellTerrainTexture)
+		return;
+	auto* vs = GetShellShadowVS();
+	if (!vs)
+		return;
+
+	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
+	auto renderer = globals::game::renderer;
+	auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+	if (!dsv)
+		return;
+
+	static winrt::com_ptr<ID3D11DepthStencilState> stampDSS;
+	static winrt::com_ptr<ID3D11RasterizerState> stampRS;
+	if (!stampDSS) {
+		D3D11_DEPTH_STENCIL_DESC desc{};
+		desc.DepthEnable = TRUE;
+		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		if (FAILED(device->CreateDepthStencilState(&desc, stampDSS.put())))
+			return;
+		Util::SetResourceName(stampDSS.get(), "SnowDeformation::DepthStampDSS");
+	}
+	if (!stampRS) {
+		D3D11_RASTERIZER_DESC desc{};
+		desc.FillMode = D3D11_FILL_SOLID;
+		desc.CullMode = D3D11_CULL_NONE;
+		desc.DepthClipEnable = TRUE;
+		// Push the stamp slightly AWAY so the main-pass shell draw
+		// (LESS_EQUAL, fresh grid) always wins against this stale-grid
+		// surface. Kept small: a push past the burial depth would let deep
+		// casters re-emerge in the march at distance.
+		desc.DepthBias = 256;
+		desc.SlopeScaledDepthBias = 1.0f;
+		if (FAILED(device->CreateRasterizerState(&desc, stampRS.put())))
+			return;
+		Util::SetResourceName(stampRS.get(), "SnowDeformation::DepthStampRS");
+	}
+
+	// ---- Save the state we touch (PrepassPasses nulled the RTs already;
+	// captured and restored anyway so this stays order-independent).
+	winrt::com_ptr<ID3D11RenderTargetView> prevRTVs[8];
+	winrt::com_ptr<ID3D11DepthStencilView> prevDSV;
+	{
+		ID3D11RenderTargetView* rtvs[8] = {};
+		ID3D11DepthStencilView* prevDsvRaw = nullptr;
+		context->OMGetRenderTargets(8, rtvs, &prevDsvRaw);
+		for (uint32_t i = 0; i < 8; i++)
+			prevRTVs[i].attach(rtvs[i]);
+		prevDSV.attach(prevDsvRaw);
+	}
+	winrt::com_ptr<ID3D11RasterizerState> prevRS;
+	context->RSGetState(prevRS.put());
+	winrt::com_ptr<ID3D11DepthStencilState> prevDSS;
+	UINT prevStencilRef = 0;
+	context->OMGetDepthStencilState(prevDSS.put(), &prevStencilRef);
+	winrt::com_ptr<ID3D11VertexShader> prevVS;
+	context->VSGetShader(prevVS.put(), nullptr, nullptr);
+	winrt::com_ptr<ID3D11PixelShader> prevPS;
+	context->PSGetShader(prevPS.put(), nullptr, nullptr);
+	D3D11_PRIMITIVE_TOPOLOGY prevTopology;
+	context->IAGetPrimitiveTopology(&prevTopology);
+	winrt::com_ptr<ID3D11InputLayout> prevLayout;
+	context->IAGetInputLayout(prevLayout.put());
+	winrt::com_ptr<ID3D11Buffer> prevVSCB0;
+	{
+		ID3D11Buffer* cb = nullptr;
+		context->VSGetConstantBuffers(0, 1, &cb);
+		prevVSCB0.attach(cb);
+	}
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVs[6];
+	{
+		ID3D11ShaderResourceView* srvs[6] = {};
+		context->VSGetShaderResources(0, 6, srvs);
+		for (uint32_t i = 0; i < 6; i++)
+			prevVSSRVs[i].attach(srvs[i]);
+	}
+	winrt::com_ptr<ID3D11Buffer> prevVB;
+	UINT prevVBStride = 0, prevVBOffset = 0;
+	{
+		ID3D11Buffer* vb = nullptr;
+		context->IAGetVertexBuffers(0, 1, &vb, &prevVBStride, &prevVBOffset);
+		prevVB.attach(vb);
+	}
+
+	// Last frame's field data under THIS frame's camera: the fields are
+	// world-anchored, so a one-frame-stale grid origin samples the same
+	// surface (the cascade injection's proven trade).
+	ShellCB stampCB = *lastShellCBData;
+	RefreshShellGridPlacement(stampCB);
+	auto& fb = globals::game::frameBufferCached;
+	stampCB.CameraViewProj = fb.GetCameraViewProj();
+	stampCB.CameraViewProjUnjittered = fb.GetCameraViewProjUnjittered();
+	stampCB.CameraPreviousViewProjUnjittered = fb.GetCameraPreviousViewProjUnjittered();
+	stampCB.CameraView = fb.GetCameraView();
+	stampCB.CameraPosAdjust = fb.GetCameraPosAdjust();
+	stampCB.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
+	stampCB.ShellDebugData = 0;
+	shellCB->Update(stampCB);
+
+	ID3D11ShaderResourceView* vsSRVs[6] = { shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
+		GetDeformationSRV(), nullptr, nullptr,
+		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
+		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
+	context->VSSetShaderResources(0, 6, vsSRVs);
+	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
+	context->VSSetShaderResources(14, 1, &bermSRV);
+	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
+	context->VSSetShaderResources(15, 1, &exclusionSRV);
+	ID3D11Buffer* cb0 = shellCB->CB();
+	context->VSSetConstantBuffers(0, 1, &cb0);
+
+	context->OMSetRenderTargets(0, nullptr, dsv);
+	context->PSSetShader(nullptr, nullptr, 0);
+	context->VSSetShader(vs, nullptr, 0);
+	context->RSSetState(stampRS.get());
+	context->OMSetDepthStencilState(stampDSS.get(), 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->IASetInputLayout(nullptr);
+	ID3D11Buffer* nullVB = nullptr;
+	UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+
+	globals::profiler->BeginPass("SnowDeformation::DepthStamp");
+	context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+	globals::profiler->EndPass();
+
+	// ---- Restore, including the SHARED shellCB (see the cascade caster's
+	// restore note: later consumers read this same buffer).
+	shellCB->Update(*lastShellCBData);
+	{
+		ID3D11RenderTargetView* rtvs[8];
+		for (uint32_t i = 0; i < 8; i++)
+			rtvs[i] = prevRTVs[i].get();
+		context->OMSetRenderTargets(8, rtvs, prevDSV.get());
+	}
+	context->RSSetState(prevRS.get());
+	context->OMSetDepthStencilState(prevDSS.get(), prevStencilRef);
+	context->VSSetShader(prevVS.get(), nullptr, 0);
+	context->PSSetShader(prevPS.get(), nullptr, 0);
+	context->IASetPrimitiveTopology(prevTopology);
+	context->IASetInputLayout(prevLayout.get());
+	{
+		ID3D11Buffer* cb = prevVSCB0.get();
+		context->VSSetConstantBuffers(0, 1, &cb);
+	}
+	{
+		ID3D11ShaderResourceView* srvs[6];
+		for (uint32_t i = 0; i < 6; i++)
+			srvs[i] = prevVSSRVs[i].get();
+		context->VSSetShaderResources(0, 6, srvs);
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context->VSSetShaderResources(14, 1, &nullSRV);
+		context->VSSetShaderResources(15, 1, &nullSRV);
+	}
+	{
+		ID3D11Buffer* vb = prevVB.get();
+		context->IASetVertexBuffers(0, 1, &vb, &prevVBStride, &prevVBOffset);
+	}
+}

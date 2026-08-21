@@ -1732,6 +1732,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float projWeight = 0;
 
+#	if defined(SNOW_DEFORMATION)
+	// SNOW-MATCH Phase 2: set where the CPU classified this draw's projected
+	// material as snow AND the feature replaced the projection's diffuse.
+	// Read again at the write tail for the non-PBR convention scale.
+	bool snowProjMatch = false;
+#	endif
+
 #	if defined(PROJECTED_UV)
 	float3 projWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	float3 triFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
@@ -1768,8 +1775,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		// shell's world tiling — same triplanar frame, our texture. The
 		// authored tint/scale chain below stays: neutral in practice, and one
 		// convention path. Normals stay the projection's own (Josef's spec).
-		const bool snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
-		                           (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
+		snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+		                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 		[branch] if (snowProjMatch)
 		{
 			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
@@ -2851,6 +2858,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		specularColor = lerp(specularColor, 0.0, snowLodReplaceW);
 		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, snowLodReplaceW);
 		material.Roughness = lerp(material.Roughness, 1.0, snowLodReplaceW);
+	}
+#	endif
+
+#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+	// SNOW-MATCH Phase 2, non-PBR statics: the projected snow's albedo is
+	// already the shell's set, but this permutation lights it with vanilla
+	// math — no PBRLightingScale, so it reads ~1/0.65 hot beside the shell
+	// (Josef's fence evidence). Re-lighting through the PBR path is not
+	// possible here (sun and point lights are already summed into color), so
+	// apply the TRUE_PBR tail's own output scaling to the projected-snow
+	// fraction of the pixel. The kD/EnvBRDF Fresnel terms (~3%) remain.
+	[branch] if (snowProjMatch && projectedMaterialWeight > 0.003)
+	{
+		float snowConvention = lerp(1.0, Color::PBRLightingScale, projectedMaterialWeight);
+		color.xyz *= snowConvention;
+		outputAlbedo *= snowConvention;
+		specularColor *= snowConvention;
 	}
 #	endif
 
