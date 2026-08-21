@@ -1243,17 +1243,20 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	// grainy, and geometry and alpha agree by construction. Exempt: carved
 	// trenches and melt floors stay calm; fades out one band above ground
 	// and with the same 1024-2048 distance range as the contest.
-	float edgeGrainBand = max(BorderUntrampledFade, 2.0);
+	// FIXED amplitude and reach (round 16): scaling these by the Untrampled
+	// band displaced the whole sheet by half the slider - Josef's wave
+	// field. Grain relief is a physical ~2 units whatever the dials say.
+	const float kEdgeGrainAmp = 2.0;
 	float edgeGrainH = z - terrainHeight;
-	[branch] if (HasSnowHeight > 0.5 && edgeGrainH > -2.0 && edgeGrainH < edgeGrainBand * 2.0)
+	[branch] if (HasSnowHeight > 0.5 && edgeGrainH > -2.0 && edgeGrainH < 6.0)
 	{
-		float edgeGrainW = (1.0 - smoothstep(edgeGrainBand, edgeGrainBand * 2.0, edgeGrainH)) * (1.0 - smoothstep(1024.0, 2048.0, camDist));
+		float edgeGrainW = (1.0 - smoothstep(3.0, 6.0, edgeGrainH)) * (1.0 - smoothstep(1024.0, 2048.0, camDist));
 		edgeGrainW *= 1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)));
 		edgeGrainW *= 1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0);
 		[branch] if (edgeGrainW > 0.001)
 		{
 			float hEdge = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
-			z += (hEdge - 0.5) * edgeGrainBand * edgeGrainW;
+			z += (hEdge - 0.5) * kEdgeGrainAmp * edgeGrainW;
 		}
 	}
 
@@ -1468,7 +1471,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (rampTerm >= 0.5 && input.SliceH > pixelEffDepth - 0.25)
 			discard;
 		float sliceGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
-		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * rampFadeBand;
+		float snowTop = pixelEffDepth + (sliceGrain - 0.5) * 2.0;
 		[branch] if (snowTop < input.SliceH)
 			discard;
 		// Dirt occlusion. Amplitude is a FIXED ~2 units (round 12: scaling
@@ -1505,9 +1508,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		const float kEdgeDirtAmp = 2.0;  // matches the slice pass
-		float dirtSurf = (hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5) * kEdgeDirtAmp;
-		float snowSurf = pixelEffDepth + (edgeSnowH - 0.5) * rampFadeBand;
+		// Fixed amplitudes (round 16: band-scaled grain magnified the
+		// contest with the slider). The land's grain is the POM hit -
+		// view-dependent - so it weighs in at HALF strength around neutral:
+		// half the camera breathing, most of the detail; the snow-side
+		// grain is world-anchored and stays full.
+		const float kEdgeGrainAmp = 2.0;
+		const float kEdgeDirtAmp = 2.0;
+		float hLand01 = hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
+		float dirtSurf = (0.5 + (hLand01 - 0.5) * 0.5) * kEdgeDirtAmp;
+		float snowSurf = pixelEffDepth + (edgeSnowH - 0.5) * kEdgeGrainAmp;
 		float win = smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
 		coverageAlpha *= lerp(1.0, win, contestFade);
 	}
@@ -1543,7 +1553,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// field (sharpness decayed to 1) keeps the full dithered cross-fade.
 		if (BorderStyle.x < 0.5)
 		{
-			if (coverageAlpha < 0.5)
+			// Outward dust (round 16, Josef): a whisker of stochastic snow
+			// just BEYOND the cut - dust scattering from the intersection
+			// onto the ground, never upward into the committed sheet. Full
+			// alpha keeps its hard edge; the 0.35..0.5 tail dithers out.
+			float dust = saturate((coverageAlpha - 0.35) * (1.0 / 0.15));
+			if (screenNoise * screenNoise >= dust)
 				discard;
 			coverageAlpha = 1.0;
 		}
@@ -2170,6 +2185,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	ifndef SNOW_FRINGE_SLICE
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
 	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
+		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
+	// Near-field micro-clamp (round 16): the edge zone rides within window
+	// error of the mesh and z-fights as view-dependent holes. 0.75 units is
+	// too thin to overdraw feet or props, wide enough to settle coincident
+	// surfaces; edge zone only, so deep interiors keep the raw depth.
+	else if (ShellDebugData == 0 && ShellLODDebug == 0 && pixelEffDepth < 4.0 && shellZ > sceneZ && shellZ - sceneZ < 0.75)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 #	endif
 
