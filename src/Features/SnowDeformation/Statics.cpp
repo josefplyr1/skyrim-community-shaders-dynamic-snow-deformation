@@ -1385,6 +1385,14 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &coneSRV);
 	context->DSSetShaderResources(13, 1, &coneSRV);
 	context->PSSetShaderResources(13, 1, &coneSRV);
+	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
+	// skin's self-shadow march and spell-mark shading read the landscape
+	// shell's slots; the skins draw standalone, so bind explicitly here.
+	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
+	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
+	EnsureFrostPatternTextures();
+	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
+	context->PSSetShaderResources(16, 2, skinFrostSRVs);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();

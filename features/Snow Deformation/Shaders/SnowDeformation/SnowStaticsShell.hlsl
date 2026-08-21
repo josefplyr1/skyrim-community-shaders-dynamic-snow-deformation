@@ -21,6 +21,10 @@
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 
+// Stochastic anti-tiling sampler (same include the terrain shell uses); the
+// frost crystal pattern scatters with it.
+#include "TerrainVariation/TerrainVariation.hlsli"
+
 #ifdef PSHADER
 // Same shadow stack as the terrain shell (see SnowShell.hlsl).
 #	define TERRAIN_SHADOWS
@@ -204,6 +208,11 @@ Texture2D<float4> DeformationMap : register(t1);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
+// Wide exclusion field + frost crystal patterns; the landscape shell's slots
+// (t15-t17) and readers, bound by the skin draw since round 35.
+Texture2D<float2> ExclusionFieldMap : register(t15);
+Texture2D<float4> FrostPatternNormal : register(t16);
+Texture2D<float4> FrostPatternDiffuse : register(t17);
 
 // The domain shader samples the displacement companion for tessellated
 // relief, so the material block is visible to it as well as the PS.
@@ -311,6 +320,134 @@ float ChurnNoise(float2 worldXY)
 {
 	return ChurnNoiseScaled(worldXY, ObjChurnSizeScale);
 }
+
+// ---- Spell marks + self-shadow march fields (round 35): the landscape
+// shell's readers verbatim, so object snow carries the same scorch, crust,
+// frost and horizon shadows as the ground beside it. ----
+
+// Scorch at a point: the negative half of the deformation map's surface-state
+// channel (see SnowShell.hlsl).
+float SampleScorch(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return saturate(-v.y);
+}
+
+// Crust at a point: refrozen snow, the map's third channel.
+float SampleCrust(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float c00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).z;
+	float c10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).z;
+	float c01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).z;
+	float c11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).z;
+	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
+}
+
+// Wide exclusion field, bilinear; 0 outside the window. The skin has no near
+// object-bottoms mask bound, so the wide field alone carries melt here.
+float2 SampleExclusionField(float2 worldXY)
+{
+	float2 result = 0.0;
+	[branch] if (ExclusionFieldWindow.w > 0.5)
+	{
+		float2 local = (worldXY - ExclusionFieldWindow.xy) * ExclusionFieldWindow.z;
+		[branch] if (all(abs(local) < 0.995))
+		{
+			float2 dims;
+			ExclusionFieldMap.GetDimensions(dims.x, dims.y);
+			float2 uv = local * 0.5 + 0.5;
+			float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+			int2 t0 = (int2)t;
+			float2 f = t - t0;
+			int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+			float2 s00 = ExclusionFieldMap.Load(int3(t0.x, t0.y, 0));
+			float2 s10 = ExclusionFieldMap.Load(int3(t1.x, t0.y, 0));
+			float2 s01 = ExclusionFieldMap.Load(int3(t0.x, t1.y, 0));
+			float2 s11 = ExclusionFieldMap.Load(int3(t1.x, t1.y, 0));
+
+			result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		}
+	}
+	return result;
+}
+
+// Mirrors SnowShell.hlsl (melt basins keep this much snow above the terrain).
+static const float kFireMeltFloor = 1.0;
+
+float Undulation(float2 worldXY)
+{
+	float2 p = worldXY / max(UndulationScale, 0.05);
+	float n = ShapeNoise(p / 340.0) * 0.72 + ShapeNoise(p / 110.0) * 0.28;
+	return (n - 0.5) * 2.0 * UndulationAmp;
+}
+
+// Carve profile; identical to SnowShell.hlsl so the march sees the exact
+// carved shape the landscape geometry renders.
+float CarveProfile(float deformation, float uncarvedDepth)
+{
+	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
+	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
+}
+
+#ifdef PSHADER
+struct FrostTaps
+{
+	float3 normal;   // tangent-space, already flipped for our v direction
+	float crystal;   // 0 in the gaps, 1 on the crystal
+	bool valid;
+};
+
+// See SnowShell.hlsl for the precision reasoning behind the wrap.
+#define FROST_LATTICE_WRAP 512.0
+
+FrostTaps SampleFrostPattern(float2 worldXY, float tileSize)
+{
+	FrostTaps taps;
+	taps.normal = float3(0.0, 0.0, 1.0);
+	taps.crystal = 0.0;
+	taps.valid = false;
+
+	float2 tileUV = worldXY / max(tileSize, 4.0);
+	g_terrainStochasticLodBase = ComputeTerrainStochasticLodBase(tileUV);
+	float2 wrapped = tileUV - FROST_LATTICE_WRAP * floor(tileUV / FROST_LATTICE_WRAP);
+
+	StochasticOffsets offsets = ComputeStochasticOffsets(wrapped / WORLD_SCALE);
+	float3 n = StochasticEffect(FrostPatternNormal, SnowSampler, wrapped, offsets).xyz * 2.0 - 1.0;
+	n.z = sqrt(saturate(1.0 - dot(n.xy, n.xy)));
+	n.y = -n.y;  // DDS v grows down; our uv v grows with world +Y
+	taps.normal = n;
+	taps.crystal = saturate(StochasticEffect(FrostPatternDiffuse, SnowSampler, wrapped, offsets).x);
+	taps.valid = true;
+	return taps;
+}
+#endif
 
 #ifdef PATCH
 // B-spline bicubic deformation sample; the landscape shell's smoothing,
@@ -1837,6 +1974,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
 	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
+	// The distance fade WITHOUT the crust flattening applied: the frost
+	// crystal replacing the powder grain must not fade with it.
+	const float bumpFadeRaw = bumpFade;
+	// Spell marks (round 35, landscape parity): crust flattens the powder
+	// grain here; albedo/polish/grazing terms follow below. Stable grid
+	// position for the fetch (round-31 lesson).
+	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
+	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
 	// Uniform flow: the parallax shadow branch below is divergent, and
@@ -1962,6 +2107,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
+	// Frost crystal (landscape recipe): the pattern normal rides bumpFadeRaw
+	// so the crystal survives the crust's flattening of the powder grain.
+	FrostTaps frost;
+	frost.normal = float3(0.0, 0.0, 1.0);
+	frost.crystal = 0.0;
+	frost.valid = false;
+	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
+	[branch] if (frostAmount > 0.001)
+	{
+		frost = SampleFrostPattern(worldXY, CrustLook2.z);
+		normalWS = normalize(normalWS +
+		                     (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
+	}
+
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
 	// Snow material; same albedo path as the terrain shell.
@@ -1977,6 +2136,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// snow (round 33). If compressed snow ever gets a tint, it goes into
 	// BOTH shells from one shared constant.
 
+	// Spell marks on the albedo; the landscape recipes verbatim.
+	{
+		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
+		[branch] if (scorch > 0.001)
+			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
+	}
+	[branch] if (crustAmount > 0.001)
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
+	[branch] if (frost.valid)
+		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
+
 	// PBR response; identical constants to the terrain shell.
 	static const float kSnowRoughness = 0.6;
 	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
@@ -1990,6 +2160,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
+	}
+
+	// Crust polishes whatever the material ended up being; after the RMAOS
+	// block or an installed map silently discards it (landscape lesson).
+	[branch] if (crustAmount > 0.001)
+	{
+		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
+		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
+	}
+	[branch] if (frost.valid)
+	{
+		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
+		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;
@@ -2011,6 +2194,58 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float detailedShadow;
 		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
+	// (round 35): hills, berms and drift rims cast the same soft shadows onto
+	// object snow as onto the ground beside it, and a trench's own rim
+	// darkens its interior. Same tap ring, same carved-surface rule; the
+	// melt term reads the wide exclusion field alone (no near mask bound
+	// here). Object tops from the skin's own raster window join the horizon.
+	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
+	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
+		float sunLen2D = max(length(L.xy), 1e-4);
+		float sunTan = L.z / sunLen2D;
+		float2 stepDir = L.xy / sunLen2D;
+		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float horizonTan = -10.0;
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			float d = kMarchDist[marchI];
+			float2 sampleLocal = input.GridLocal + stepDir * d;
+			float3 st = SampleTerrainStatics(sampleLocal);
+			float sampleDepth = max(st.y, 0.0);
+			{
+				float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
+				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+			}
+			float sampleDeform = SampleDeformation(sampleLocal);
+			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
+			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
+			// Sentinel terrain contributes a hugely negative horizon: a no-op
+			// through the max below, same as the landscape's window edge.
+			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+#	ifndef PATCH
+			[branch] if (HasObjectTop > 0.5)
+			{
+				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+				[flatten] if (all(abs(topLocal) < 0.98))
+				{
+					float2 topDims;
+					ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+					float2 topUV = float2(topLocal.x * 0.5 + 0.5, 0.5 - topLocal.y * 0.5);
+					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
+					[flatten] if (topH > -50000.0)
+						sh = max(sh, topH + sampleDepth);
+				}
+			}
+#	endif
+			horizonTan = max(horizonTan, (sh - surfZ) / d);
+		}
+		float soft = lerp(0.06, 0.35, farShadowT);
+		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
 	// Screen-Space Shadows: same long-range term bare ground multiplies in,
 	// distance-blended past the cascades like the landscape shell (the SSS
@@ -2057,6 +2292,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
+
+	// Ice reads at GRAZING angles (landscape recipe): the one thing white
+	// snow cannot already be doing.
+	[branch] if (crustAmount > 0.001)
+	{
+		float grazing = pow(1.0 - satNdotV, 4.0);
+		directSpecular += grazing * crustAmount * CrustLook.w * SharedData::DirLightColor.xyz * sunShadow;
+	}
 
 	// Placed lights: same clustered path as the terrain shell, with each
 	// shadow-casting light's own map sampled at the skin/patch surface.
