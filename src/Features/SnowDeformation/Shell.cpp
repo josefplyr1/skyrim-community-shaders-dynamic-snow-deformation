@@ -552,7 +552,8 @@ void SnowDeformation::DrawShell()
 	cbData.BorderNoise = settings.SnowBorderNoise;
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
-		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f), 0.0f, 0.0f };
+		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
+		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old

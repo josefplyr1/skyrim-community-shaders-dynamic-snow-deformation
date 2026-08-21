@@ -185,8 +185,9 @@ cbuffer ShellCB : register(b0)
 	// world tile size, w = whether the pattern loaded at all. Those three ride
 	// spare room here rather than growing a buffer mirrored across two shaders.
 	float4 CrustLook2;
-	// x > 0.5 = stochastic dissolve allowed; 0 = hard alpha test everywhere,
-	// survivors opaque. yzw spare.
+	// x > 0.5 = outward dust beyond the committed edge; y = trench floor
+	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
+	// them with the active-light set - round 22).
 	float4 BorderStyle;
 }
 
@@ -1762,7 +1763,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{

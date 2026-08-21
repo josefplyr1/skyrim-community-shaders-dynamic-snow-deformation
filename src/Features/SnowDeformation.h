@@ -754,7 +754,7 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = stochastic dissolve allowed on the landscape shell's edges (0 = hard alpha test + outward dust, survivors opaque); y = minimum snow on carved trench floors in units above terrain. zw spare (z was the removed fringe-slice count). Appended LAST; mirror any change in SnowShell.hlsl. */
+		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Appended LAST; mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -1117,9 +1117,12 @@ public:
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
 
-	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only). */
+	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only) and by the REAL slice each cascade descriptor renders to (shadowmapIndex — the atlas is shared with local shadow lights and the sun's slices move with the active-light set). */
 	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[2];
 	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
+	uint32_t shadowAtlasDSVSlice[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+	/** @brief Atlas slices of sun cascades 0/1, captured at mask time (descriptors are only live then) and uploaded via BorderStyle.zw for the PS crisp path, which samples the same shared atlas. */
+	uint32_t sunCascadeSlice[2] = { 0, 1 };
 	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
 	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
 

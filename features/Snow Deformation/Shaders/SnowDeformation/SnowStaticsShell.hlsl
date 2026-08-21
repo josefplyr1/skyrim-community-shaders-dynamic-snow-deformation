@@ -148,6 +148,16 @@ cbuffer ShellCB : register(b0)
 	// Parallax: x = HeightScale, y = self-shadow strength. zw are the
 	// landscape shell's occlusion march params; object snow does not march.
 	float4 SnowParallax;
+
+	// Landscape-shell rows declared only so BorderStyle lands on ShellCB's
+	// offset (624): SnowShadow.hlsli reads its zw for the sun cascades'
+	// REAL atlas slices (round 22). Do not drop them.
+	float4 SpellShading;
+	float4 CrustLook;
+	float4 CrustLook2;
+	// x/y landscape border dials (unused here); zw = sun cascade atlas
+	// slices for the crisp shadow path.
+	float4 BorderStyle;
 }
 
 cbuffer StaticCB : register(b1)
@@ -1896,7 +1906,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF; same path as the terrain shell.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0);
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{

@@ -40,9 +40,14 @@ Texture2DArray<float> SnowPointShadowAtlas : register(t39);
 
 namespace SnowShadow
 {
-	float SampleCascadeCmp(float3 posLS, uint cascade)
+	// atlasSlice: the cascade's REAL slice in the SHARED sun atlas
+	// (BorderStyle.zw, captured from shadowmapIndex at mask time - the
+	// slices move as local shadow lights come and go with the view; round
+	// 22). The ESRAM partner is a dedicated cascade resource, so it keeps
+	// direct cascade indexing.
+	float SampleCascadeCmp(float3 posLS, uint atlasSlice, uint cascade)
 	{
-		float lit = SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, cascade), posLS.z);
+		float lit = SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, atlasSlice), posLS.z);
 		float litEsram = SnowShadowAtlasESRAM.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, cascade), posLS.z);
 		return min(lit, litEsram);
 	}
@@ -53,19 +58,22 @@ namespace SnowShadow
 	// into soft penumbra blobs without dropping the shadows (LOD trees cast
 	// into these cascades; fading them out erases their shadows from
 	// distant snow).
-	float SampleCascadePCF(float3 posLS, uint cascade, float2 texel, float a_spread)
+	float SampleCascadePCF(float3 posLS, uint cascade, uint atlasSlice, float2 texel, float a_spread)
 	{
-		float shadow = SampleCascadeCmp(posLS, cascade);
+		float shadow = SampleCascadeCmp(posLS, atlasSlice, cascade);
 		const float2 kTaps[4] = { { 1.4, 0.4 }, { -0.4, 1.4 }, { -1.4, -0.4 }, { 0.4, -1.4 } };
 		[unroll] for (uint tapI = 0; tapI < 4; tapI++)
-			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel * a_spread, posLS.z), cascade);
+			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel * a_spread, posLS.z), atlasSlice, cascade);
 		return shadow * 0.2;
 	}
 
 	// positionRel is camera-relative. The receiver is offset along the normal
 	// (instead of a large depth bias) so flat sunlit snow shows no acne while
 	// contact shadows stay attached.
-	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread)
+	// a_atlasSlices: the REAL shared-atlas slices of cascades 0/1
+	// (BorderStyle.zw at the call sites - this include precedes the ShellCB
+	// declaration, so the CB cannot be read here).
+	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread, uint2 a_atlasSlices)
 	{
 		DirectionalShadowLightData sd = DirectionalShadowLights[0];
 
@@ -90,7 +98,7 @@ namespace SnowShadow
 			float3 posLS = mul(sd.ShadowProj[primaryCascade], float4(positionWS, 1)).xyz;
 			posLS.xy = saturate(posLS.xy);
 			posLS.z -= 0.0008 * (primaryCascade + 1.0);
-			float shadow = SampleCascadePCF(posLS, primaryCascade, texel, a_spread);
+			float shadow = SampleCascadePCF(posLS, primaryCascade, primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 
 			[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
 			{
@@ -98,7 +106,7 @@ namespace SnowShadow
 				posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
 				posLS.xy = saturate(posLS.xy);
 				posLS.z -= 0.0008 * (secondaryCascade + 1.0);
-				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade, texel, a_spread);
+				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 				shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
 			}
 

@@ -275,46 +275,64 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	}
 	D3D11_TEXTURE2D_DESC atlasDesc;
 	atlasTex->GetDesc(&atlasDesc);
-	if (!(atlasDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL) || atlasDesc.ArraySize < cascadeCount) {
-		logOnce("skip: atlas lacks DEPTH_STENCIL bind or slices");
+	if (!(atlasDesc.BindFlags & D3D11_BIND_DEPTH_STENCIL)) {
+		logOnce("skip: atlas lacks DEPTH_STENCIL bind");
 		return;
 	}
-	if (shadowAtlasDSVTexture != atlasTex.get()) {
-		DXGI_FORMAT dsvFormat;
-		switch (atlasDesc.Format) {
-		case DXGI_FORMAT_R16_TYPELESS:
-		case DXGI_FORMAT_D16_UNORM:
-			dsvFormat = DXGI_FORMAT_D16_UNORM;
-			break;
-		case DXGI_FORMAT_R24G8_TYPELESS:
-		case DXGI_FORMAT_D24_UNORM_S8_UINT:
-			dsvFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
-			break;
-		case DXGI_FORMAT_R32_TYPELESS:
-		case DXGI_FORMAT_D32_FLOAT:
-			dsvFormat = DXGI_FORMAT_D32_FLOAT;
-			break;
-		default:
-			return;
-		}
-		for (uint32_t i = 0; i < 2; i++) {
-			shadowAtlasDSV[i] = nullptr;
-			D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
-			dsvDesc.Format = dsvFormat;
-			dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
-			dsvDesc.Texture2DArray.MipSlice = 0;
-			dsvDesc.Texture2DArray.FirstArraySlice = i;
-			dsvDesc.Texture2DArray.ArraySize = 1;
-			if (i < atlasDesc.ArraySize)
-				device->CreateDepthStencilView(atlasTex.get(), &dsvDesc, shadowAtlasDSV[i].put());
-			if (shadowAtlasDSV[i])
-				Util::SetResourceName(shadowAtlasDSV[i].get(), "SnowDeformation::ShadowAtlas DSV");
-		}
-		shadowAtlasDSVTexture = atlasTex.get();
+	DXGI_FORMAT dsvFormat;
+	switch (atlasDesc.Format) {
+	case DXGI_FORMAT_R16_TYPELESS:
+	case DXGI_FORMAT_D16_UNORM:
+		dsvFormat = DXGI_FORMAT_D16_UNORM;
+		break;
+	case DXGI_FORMAT_R24G8_TYPELESS:
+	case DXGI_FORMAT_D24_UNORM_S8_UINT:
+		dsvFormat = DXGI_FORMAT_D24_UNORM_S8_UINT;
+		break;
+	case DXGI_FORMAT_R32_TYPELESS:
+	case DXGI_FORMAT_D32_FLOAT:
+		dsvFormat = DXGI_FORMAT_D32_FLOAT;
+		break;
+	default:
+		return;
 	}
+	// Per-cascade DSVs on the REAL slice each descriptor renders to
+	// (desc.shadowmapIndex): the atlas is SHARED with local shadow lights,
+	// and the sun's cascades move slices as the active-light set changes
+	// with the view. Assuming slices 0/1 made the shell's shadow vanish at
+	// some camera angles while stamping into other lights' maps (round 22,
+	// Josef's angle A/B; the point-light path at the top of this file
+	// always honored shadowmapIndex). The slices are also recorded for the
+	// PS receiving path, which had the same assumption.
+	for (uint32_t i = 0; i < cascadeCount; i++) {
+		const uint32_t slice = lightRuntime.shadowmapDescriptors[i].shadowmapIndex;
+		sunCascadeSlice[i] = slice;
+		if (shadowAtlasDSVTexture == atlasTex.get() && shadowAtlasDSVSlice[i] == slice && shadowAtlasDSV[i])
+			continue;
+		shadowAtlasDSV[i] = nullptr;
+		shadowAtlasDSVSlice[i] = slice;
+		if (slice >= atlasDesc.ArraySize)
+			continue;
+		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+		dsvDesc.Format = dsvFormat;
+		dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2DARRAY;
+		dsvDesc.Texture2DArray.MipSlice = 0;
+		dsvDesc.Texture2DArray.FirstArraySlice = slice;
+		dsvDesc.Texture2DArray.ArraySize = 1;
+		device->CreateDepthStencilView(atlasTex.get(), &dsvDesc, shadowAtlasDSV[i].put());
+		if (shadowAtlasDSV[i])
+			Util::SetResourceName(shadowAtlasDSV[i].get(), "SnowDeformation::ShadowAtlas DSV");
+	}
+	shadowAtlasDSVTexture = atlasTex.get();
 	if (!shadowAtlasDSV[0]) {
 		logOnce("skip: DSV creation failed");
 		return;
+	}
+	static uint32_t sliceLayoutLog = 0;
+	if (sliceLayoutLog < 8) {
+		sliceLayoutLog++;
+		logger::info("[SNOW DEFORMATION] ShadowInject: cascade slices = {}, {} (atlas has {})",
+			sunCascadeSlice[0], cascadeCount > 1 ? (int)sunCascadeSlice[1] : -1, atlasDesc.ArraySize);
 	}
 
 	if (!shadowCastRS) {
