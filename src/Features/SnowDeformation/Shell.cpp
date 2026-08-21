@@ -403,6 +403,54 @@ void SnowDeformation::BindSeamShield()
 	context->CSSetConstantBuffers(7, 1, &cb);
 }
 
+void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
+{
+	// Grid placement re-derived from THIS frame's camera; shared by
+	// DrawShell and the shadow-caster injection (round 23: the injection
+	// used last frame's snapshot, and a one-frame-stale grid slides a
+	// crisp full-surface shadow whenever the camera moves - the old blob
+	// caster hid it). Spacing is FIXED at 8 units: the shell ends at the
+	// loaded-cell seam (ShellEdgeFade), so range no longer scales density;
+	// tighter spacing was measured to EXPLODE cost (sub-pixel triangles
+	// near the camera: 94 m range = 2-unit triangles = 4.2 ms Shell pass
+	// vs 1.1 ms at 8). The window-offset fields pair the fresh GridOrigin
+	// with the CURRENT window state, which describes the texture content
+	// actually bound - correct even when the window scrolls later in the
+	// frame.
+	auto& fb = globals::game::frameBufferCached;
+	const auto camAdjust = fb.GetCameraPosAdjust();
+	const float shellSpacing = kShellGridSpacing;
+	a_cb.GridSpacing = shellSpacing;
+	a_cb.GridDim = kShellGridDim;
+	// The warped grid is camera-centered: snap the center to the grid step
+	// so inner vertices stay texel-stable, then offset by the warped span.
+	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
+	a_cb.WarpedHalfSpan = warpedHalfSpan;
+	a_cb.GridOrigin = {
+		std::floor(camAdjust.x / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan,
+		std::floor(camAdjust.y / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan
+	};
+	a_cb.TerrainTexelSize = kShellVertexSpacing;
+	a_cb.TerrainDim = kShellWindowDim;
+	// Keep shader-side sampling math in small grid-local coordinates.
+	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	a_cb.GridToTerrainOffset = {
+		a_cb.GridOrigin.x - shellWindowCellX * cellSize,
+		a_cb.GridOrigin.y - shellWindowCellY * cellSize
+	};
+	a_cb.GridToDeformOffset = {
+		a_cb.GridOrigin.x - windowOrigin.x,
+		a_cb.GridOrigin.y - windowOrigin.y
+	};
+	// Snow uv offset folded to the tile period, so shader-side uv math stays
+	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
+	constexpr float kSnowUVTile = 4096.0f / 24.0f;
+	a_cb.SnowUVOffset = {
+		std::fmod(a_cb.GridOrigin.x, kSnowUVTile),
+		std::fmod(a_cb.GridOrigin.y, kSnowUVTile)
+	};
+}
+
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
@@ -428,24 +476,7 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
-	// Spacing is FIXED at 8 units: the shell ends at the loaded-cell seam
-	// (ShellEdgeFade), so range no longer scales density. Tighter spacing
-	// was measured to EXPLODE cost (sub-pixel triangles near the camera:
-	// 94 m range = 2-unit triangles = 4.2 ms Shell pass vs 1.1 ms at 8).
-	const float shellSpacing = kShellGridSpacing;
-	cbData.GridSpacing = shellSpacing;
-	cbData.GridDim = kShellGridDim;
-	// The warped grid is camera-centered: snap the center to the grid step
-	// so inner vertices stay texel-stable, then offset by the warped span.
-	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
-	cbData.WarpedHalfSpan = warpedHalfSpan;
-	cbData.GridOrigin = {
-		std::floor(cbData.CameraPosAdjust.x / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan,
-		std::floor(cbData.CameraPosAdjust.y / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan
-	};
-
-	cbData.TerrainTexelSize = kShellVertexSpacing;
-	cbData.TerrainDim = kShellWindowDim;
+	RefreshShellGridPlacement(cbData);
 	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : 0u));
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 3);
 	cbData.StaticsDebugView = float(staticsDebugView);
@@ -476,25 +507,6 @@ void SnowDeformation::DrawShell()
 		cbData.SeamRampInv = 1.0f / 2048.0f;
 	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
-
-	// Keep shader-side sampling math in small grid-local coordinates.
-	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
-	cbData.GridToTerrainOffset = {
-		cbData.GridOrigin.x - shellWindowCellX * cellSize,
-		cbData.GridOrigin.y - shellWindowCellY * cellSize
-	};
-	cbData.GridToDeformOffset = {
-		cbData.GridOrigin.x - windowOrigin.x,
-		cbData.GridOrigin.y - windowOrigin.y
-	};
-
-	// Snow uv offset folded to the tile period, so shader-side uv math stays
-	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
-	constexpr float kSnowUVTile = 4096.0f / 24.0f;
-	cbData.SnowUVOffset = {
-		std::fmod(cbData.GridOrigin.x, kSnowUVTile),
-		std::fmod(cbData.GridOrigin.y, kSnowUVTile)
-	};
 
 	EnsureShellSnowTextures();
 	// Per frame so TruePBR's hot-reload and live menu edits of the matched

@@ -474,6 +474,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 		// ShellCB matrices are row_major with mul(M, v): store the transpose.
 		ShellCB shadowCB = *lastShellCBData;
+		// Re-anchor the grid to THIS frame's camera (round 23): the snapshot
+		// is last frame's, and a one-frame-stale grid slides a crisp
+		// full-surface shadow whenever the camera moves.
+		RefreshShellGridPlacement(shadowCB);
 		shadowCB.CameraViewProj = DirectX::XMMatrixTranspose(clip);
 		// Absolute-world rendering: zero the camera-relative adjust.
 		shadowCB.CameraPosAdjust = { 0.0f, 0.0f, 0.0f, 0.0f };
