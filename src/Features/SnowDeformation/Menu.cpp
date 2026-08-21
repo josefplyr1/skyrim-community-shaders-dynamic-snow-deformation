@@ -96,6 +96,9 @@ void SnowDeformation::DrawSettings()
 			distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 			if (auto _ttLss = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view (brown = bare, blue-white = snow); the same setting drives the Horizon Snow recolor."));
+			ImGui::Checkbox(T(TKEY("lod_replace_legacy"), "Legacy Horizon Shading"), &settings.LODReplaceLegacy);
+			if (auto _ttLrl = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("lod_replace_legacy_tooltip"), "A/B comparison: shade horizon snow with the old recolor (vanilla LOD lighting math) instead of the snow shell's own recipe. The old math reads brighter and bluer than the shell, peaking at golden hour. Leave off unless comparing."));
 			ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
 
 			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");

@@ -1467,6 +1467,8 @@
     "feature.snow_deformation.lod_debug_rings": "Warp Ring View",
     "feature.snow_deformation.lod_debug_view": "Distant Debug View",
     "feature.snow_deformation.lod_debug_view_tooltip": "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Ring View: warp rings by color, dimmed while still camera-relative. Provenance: green = baked terrain data, red sheet = no data (unvisited cells).",
+    "feature.snow_deformation.lod_replace_legacy": "Legacy Horizon Shading",
+    "feature.snow_deformation.lod_replace_legacy_tooltip": "A/B comparison: shade horizon snow with the old recolor (vanilla LOD lighting math) instead of the snow shell's own recipe. The old math reads brighter and bluer than the shell, peaking at golden hour. Leave off unless comparing.",
     "feature.snow_deformation.lod_shimmer": "Far-Field Shimmer Meter",
     "feature.snow_deformation.lod_shimmer_tooltip": "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field.",
     "feature.snow_deformation.lod_snow_sensitivity": "LOD Snow Detection",

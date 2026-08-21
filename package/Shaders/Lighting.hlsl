@@ -1481,11 +1481,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
 	// Horizon snow: where the game's own LOD terrain bake reads as snow,
 	// wear the shell's snow material instead — same albedo, same world
-	// tiling, same roughness — so the shell's geometry hands off to
-	// identically-dressed terrain beyond its reach. Classification runs on
-	// the raw (gamma) bake, matching the window fill's thresholds; LOD
-	// meshes carry model-space normals ≈ world space, so normal.z gates
-	// cliffs back to rock even where the bake is pale.
+	// tiling — so the shell's geometry hands off to identically-dressed
+	// terrain beyond its reach. Classification runs on the raw (gamma)
+	// bake, matching the window fill's thresholds; LOD meshes carry
+	// model-space normals ≈ world space, so normal.z gates cliffs back to
+	// rock even where the bake is pale. Shading happens at the write tail
+	// (the shell's recipe on the OUTPUTS); the legacy A/B path patches the
+	// vanilla INPUTS here instead.
+	float snowLodReplaceW = 0.0;
+	float3 snowLodAlbedo = 0.0;
 	[branch] if (SharedData::snowDeformationSettings.LODReplaceEnable > 0.5)
 	{
 		float lodSnowScore = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb);
@@ -1497,12 +1501,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// tile seam regardless of the sampler's address mode.
 			float2 snowRawUV = (input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
 			float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
-			float3 snowGamma = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSkyrimGamma(snowSample) : snowSample;
-			baseColor.xyz = lerp(baseColor.xyz, Color::Diffuse(snowGamma), lodReplaceW);
-			glossiness = lerp(glossiness, 1.0 - SharedData::snowDeformationSettings.SnowRoughnessScale, lodReplaceW);
+			[branch] if (SharedData::snowDeformationSettings.LODReplaceLegacy > 0.5)
+			{
+				float3 snowGamma = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSkyrimGamma(snowSample) : snowSample;
+				baseColor.xyz = lerp(baseColor.xyz, Color::Diffuse(snowGamma), lodReplaceW);
+				glossiness = lerp(glossiness, 1.0 - SharedData::snowDeformationSettings.SnowRoughnessScale, lodReplaceW);
+			}
+			else
+			{
+				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo):
+				// sRGB-encoded, no vanilla Diffuse() processing.
+				snowLodReplaceW = lodReplaceW;
+				snowLodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowSample) : snowSample;
+			}
 			// Normal-map parity with the shell: perturb the LOD normal by the
 			// snow normal at the same world tiling. LOD normals are world-
 			// space up-ish, so a world-axis tangent frame is stable here.
+			// Shared by both paths; feeds N·L and the DALC/IBL ambient.
 			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 			{
 				float3 snowNormalTS = SnowDeformation::HorizonSnowNormal.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).xyz * 2.0 - 1.0;
@@ -2770,6 +2785,28 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
+
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
+	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels get
+	// the shell's far-field diffuse — dirLightColor already carries EHF and
+	// the world shadow; PBRLightingCompensation and PBRLightingScale mirror
+	// SnowShading.hlsli's units contract. directionalAmbientColor above is
+	// the same DALC/IBL term as SnowAmbientColor, on the perturbed normal.
+	// The shared tail below then produces the shell's G-buffer conventions
+	// (Masks.z ambient luma, ApplySkylighting, Albedo lobe). Specular is
+	// deliberately absent at LOD distance; no vertex color — the shell has
+	// none.
+	[branch] if (snowLodReplaceW > 0.003)
+	{
+		float3 snowLobe = snowLodAlbedo * Color::PBRLightingScale;
+		float3 snowDirect = dirLightColor * Color::PBRLightingCompensation * saturate(dot(worldNormal.xyz, DirLightDirection.xyz)) * dirDetailedShadow * snowLobe;
+		color.xyz = lerp(color.xyz, snowDirect + snowLobe * directionalAmbientColor, snowLodReplaceW);
+		outputAlbedo = lerp(outputAlbedo, snowLobe, snowLodReplaceW);
+		specularColor = lerp(specularColor, 0.0, snowLodReplaceW);
+		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, snowLodReplaceW);
+		material.Roughness = lerp(material.Roughness, 1.0, snowLodReplaceW);
+	}
+#	endif
 
 	directionalAmbientColor *= outputAlbedo;
 

@@ -503,6 +503,8 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
+		/** @brief A/B toggle: shade horizon snow with the old vanilla-math recolor instead of the shell's recipe. */
+		bool LODReplaceLegacy = false;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -523,6 +525,10 @@ public:
 		float LODReplaceEnable;
 		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
 		float SnowHasNormal;
+
+		/** @brief A/B: 1 = old input-patch recolor, 0 = shell-recipe output override. */
+		float LODReplaceLegacy;
+		float padLod[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
