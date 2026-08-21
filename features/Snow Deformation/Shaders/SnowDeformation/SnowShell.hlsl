@@ -1042,22 +1042,21 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// overshoots, leaving false shadow blotches on open ground. The caster
 	// also requires solid snow coverage, so field raises whose visible snow
 	// is dithered away never cast from invisible snow.
+	// Round 21 (Josef's hill + beach evidence): game casters are real
+	// geometry at real positions; the old surrogate was neither. Its
+	// excess-only rule cast nothing from smooth raised snow (a snowfield's
+	// surface IS the ambient depth - zero excess), while its sunk remainder
+	// still clipped near-horizontal low-sun rays and printed sideways
+	// shadow blotches on bare ground - underground geometry is not
+	// invisible to light. The REAL surface now casts wherever it stands
+	// meaningfully above the ground and carries snow; everything else is
+	// culled by NaN collapse, which drops the triangles at the rasterizer -
+	// no sun angle can resurrect them. The world under the layer never
+	// sees these shadows: the shell covers it.
 	float3 rawTerrainCast = SampleTerrain(gridLocal);
-	float castBase = rawTerrainCast.x + max(rawTerrainCast.y, 0.0);
-	float castExcess = max(0.0, z - castBase);
-	float castGate = smoothstep(3.0, 8.0, castExcess) * smoothstep(0.2, 0.5, coverage);
-	// Round 20: the excess-only caster missed the two shadows that matter -
-	// pit walls shadowing the exposed ground inside trenches and melt
-	// clearings (the carved surface sits BELOW the uncarved base, so excess
-	// is zero there), and the bank rim shadowing the bare side of a class
-	// border. Where the real surface dips below the ambient base or the
-	// border fringe begins, cast from the REAL surface; the flat blanket
-	// interior keeps the excess-only rule so the world inside and beneath
-	// the layer is not globally darkened.
-	float pitGate = smoothstep(2.0, 6.0, castBase - z);
-	float borderGate = (1.0 - smoothstep(6.0, 10.0, max(rawTerrainCast.y, 0.0))) * smoothstep(0.2, 0.5, coverage);
-	float castRealGate = max(pitGate, borderGate);
-	z = lerp(rawTerrainCast.x + lerp(-64.0, castExcess, castGate), z, castRealGate);
+	float castVis = smoothstep(2.0, 5.0, z - rawTerrainCast.x) * smoothstep(0.2, 0.5, coverage);
+	if (castVis < 0.35)
+		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
 
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);

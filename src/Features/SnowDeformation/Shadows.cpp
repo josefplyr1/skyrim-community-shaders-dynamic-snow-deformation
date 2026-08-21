@@ -31,6 +31,15 @@ void SnowDeformation::CaptureShadowAtlas()
 		liveEsramSRV = gameRenderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM].depthSRV;
 
 	if (liveAtlasSRV && liveEsramSRV) {
+		// Inject BEFORE taking the copies (round 21): copies taken pre-shell
+		// meant the shell shaded itself from a shell-less atlas, so a bank's
+		// shadow fell on characters and dirt but stopped dead at the snow
+		// line. Copying after the injection lets the snowfield receive its
+		// own banks' shadows; acne stays off because the caster and the
+		// visible shell run the SAME surface math and the caster carries a
+		// depth push away from the light (kCasterDepthPush).
+		InjectShellShadowCasters(liveAtlasSRV.get());
+
 		CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
 		CopySRVResource(liveEsramSRV, "SnowDeformation::ShadowEsramCopy", shadowEsramCopyTex, shadowEsramCopySRV);
 		// Diagnostics: how many slices the copy carries (settings UI line).
@@ -39,12 +48,6 @@ void SnowDeformation::CaptureShadowAtlas()
 			shadowAtlasCopyTex->GetDesc(&atlasDesc);
 			dbgLodAtlasSlices = atlasDesc.ArraySize;
 		}
-
-		// With the receiver copies safely taken (pre-shell), render the shell
-		// INTO the live atlas so the world receives snow shadows: the game's
-		// shadow mask is drawn right after this and picks the shell up like
-		// any other caster.
-		InjectShellShadowCasters(liveAtlasSRV.get());
 	}
 
 	// One-shot + transition diagnostics: what is the shadow source? Logged on
