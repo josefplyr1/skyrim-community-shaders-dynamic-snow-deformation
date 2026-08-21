@@ -1097,11 +1097,9 @@ public:
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
-	/** @brief Full-resolution COPIES of the game's raw sun-shadow cascade atlas and its ESRAM partner, taken during the shadow-mask pass. Copies are mandatory: by deferred time the engine has reused the live targets (ESRAM is aliased scratch memory), and sampling them live produces garbage flicker. Taken before the shell is injected as a caster, so the shell's receiver path never sees itself (no self-shadow acne). */
+	/** @brief Full-resolution COPY of the game's raw sun-shadow cascade atlas, taken during the shadow-mask pass. The copy is mandatory: by deferred time the engine has reused the live target, and sampling it live produces garbage flicker. Taken AFTER the shell is injected as a caster (round 21), so the snowfield receives its own banks' shadows; acne is held off by the caster's depth push. */
 	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
-	winrt::com_ptr<ID3D11Texture2D> shadowEsramCopyTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> shadowEsramCopySRV;
 	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
 	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */

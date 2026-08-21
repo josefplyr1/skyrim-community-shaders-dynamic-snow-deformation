@@ -8,9 +8,13 @@
 // matching the ShadowProj matrices from DirectionalShadowLights (t98), with
 // hardware comparison PCF at full atlas resolution.
 //
-// Two source textures, min'd like VolumetricShadows' downsample does: the
-// main atlas and its ESRAM partner target, both captured as copies during
-// the game's shadow-mask pass (see SnowDeformation::CaptureShadowAtlas).
+// One source texture: the sun cascade atlas, captured as a copy during the
+// game's shadow-mask pass (see SnowDeformation::CaptureShadowAtlas). The
+// old second source min'd in VolumetricShadows-style was the VOLUMETRIC
+// LIGHTING shadowmap (kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM) - the round-33
+// RenderDoc capture showed it near-empty, and it was sampled through the
+// SUN atlas's per-slice transforms besides: it could only ever duplicate or
+// wrongly darken, at ten comparison taps per pixel (round 38, removed).
 // Cascade selection, blend and distance fade mirror
 // VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
 // about where shadows exist.
@@ -19,7 +23,6 @@
 // SharedData and FrameBuffer from it.
 
 Texture2DArray<float> SnowShadowAtlas : register(t22);
-Texture2DArray<float> SnowShadowAtlasESRAM : register(t23);
 SamplerComparisonState SnowShadowCmpSampler : register(s2);
 
 // Shadow-casting local lights (fires, lanterns, torches). Their maps live
@@ -43,13 +46,10 @@ namespace SnowShadow
 	// atlasSlice: the cascade's REAL slice in the SHARED sun atlas
 	// (BorderStyle.zw, captured from shadowmapIndex at mask time - the
 	// slices move as local shadow lights come and go with the view; round
-	// 22). The ESRAM partner is a dedicated cascade resource, so it keeps
-	// direct cascade indexing.
-	float SampleCascadeCmp(float3 posLS, uint atlasSlice, uint cascade)
+	// 22).
+	float SampleCascadeCmp(float3 posLS, uint atlasSlice)
 	{
-		float lit = SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, atlasSlice), posLS.z);
-		float litEsram = SnowShadowAtlasESRAM.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, cascade), posLS.z);
-		return min(lit, litEsram);
+		return SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, atlasSlice), posLS.z);
 	}
 
 	// Center + 4 rotated taps, each hardware-bilinear 2x2 comparison; a
@@ -58,12 +58,12 @@ namespace SnowShadow
 	// into soft penumbra blobs without dropping the shadows (LOD trees cast
 	// into these cascades; fading them out erases their shadows from
 	// distant snow).
-	float SampleCascadePCF(float3 posLS, uint cascade, uint atlasSlice, float2 texel, float a_spread)
+	float SampleCascadePCF(float3 posLS, uint atlasSlice, float2 texel, float a_spread)
 	{
-		float shadow = SampleCascadeCmp(posLS, atlasSlice, cascade);
+		float shadow = SampleCascadeCmp(posLS, atlasSlice);
 		const float2 kTaps[4] = { { 1.4, 0.4 }, { -0.4, 1.4 }, { -1.4, -0.4 }, { 0.4, -1.4 } };
 		[unroll] for (uint tapI = 0; tapI < 4; tapI++)
-			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel * a_spread, posLS.z), atlasSlice, cascade);
+			shadow += SampleCascadeCmp(float3(posLS.xy + kTaps[tapI] * texel * a_spread, posLS.z), atlasSlice);
 		return shadow * 0.2;
 	}
 
@@ -98,7 +98,7 @@ namespace SnowShadow
 			float3 posLS = mul(sd.ShadowProj[primaryCascade], float4(positionWS, 1)).xyz;
 			posLS.xy = saturate(posLS.xy);
 			posLS.z -= 0.0008 * (primaryCascade + 1.0);
-			float shadow = SampleCascadePCF(posLS, primaryCascade, primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
+			float shadow = SampleCascadePCF(posLS, primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 
 			[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
 			{
@@ -106,7 +106,7 @@ namespace SnowShadow
 				posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
 				posLS.xy = saturate(posLS.xy);
 				posLS.z -= 0.0008 * (secondaryCascade + 1.0);
-				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
+				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 				shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
 			}
 

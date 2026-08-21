@@ -855,7 +855,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	                         TextureBytes(texOf(heightBottomRaw[0])) + TextureBytes(texOf(heightBottomRaw[1])) +
 	                         TextureBytes(texOf(heightTopFiltered)) + TextureBytes(texOf(heightBottomFiltered)) +
 	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
-	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get()) + TextureBytes(shadowEsramCopyTex.get());
+	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get());
 	const uint64_t pointCopy = TextureBytes(pointShadowAtlasCopyTex.get());
 	const uint64_t sceneCopies = TextureBytes(shellDepthCopyTex.get());
 	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +

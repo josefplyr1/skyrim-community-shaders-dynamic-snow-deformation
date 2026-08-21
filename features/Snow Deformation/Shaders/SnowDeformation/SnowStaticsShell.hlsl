@@ -98,7 +98,7 @@ cbuffer ShellCB : register(b0)
 	float2 ObjectHeightCenter;
 
 	float ObjectHeightHalfExtent;
-	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
+	// The raw cascade-atlas copy is bound at t22 this frame (else the
 	// shader falls back to the blurred VSM path).
 	float CrispShadows;
 	// Screen-Space Shadows output is bound at t45: the long-range

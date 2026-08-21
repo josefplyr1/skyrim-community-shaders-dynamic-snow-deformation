@@ -9,28 +9,25 @@ void SnowDeformation::CaptureShadowAtlas()
 	// Called mid-frame while the game renders the shadow mask: PS t4 holds
 	// the sun cascade atlas right now (at any other time it holds whatever
 	// material texture the last draw bound; an earlier EarlyPrepass grab
-	// captured a 128px BC7 diffuse). Copy the atlas and its ESRAM partner
-	// immediately: by deferred time the engine has reused the live targets
-	// (ESRAM is aliased scratch).
+	// captured a 128px BC7 diffuse). Copy it immediately: by deferred time
+	// the engine has reused the live target. (The old second copy of the
+	// volumetric-lighting ESRAM shadowmap, min'd in VolumetricShadows-style,
+	// was removed round 38: the round-33 capture showed it near-empty, and
+	// the shader sampled it through the SUN atlas's transforms besides.)
 	//
-	// When a frame skips this pass, the previous copies are kept; one-frame-
+	// When a frame skips this pass, the previous copy is kept; one-frame-
 	// stale cascades are invisible, but flapping between the crisp and VSM
-	// paths reads as full-surface flicker. The copies are a real per-frame
-	// bandwidth cost, so a disabled feature must not pay them.
+	// paths reads as full-surface flicker. The copy is a real per-frame
+	// bandwidth cost, so a disabled feature must not pay it.
 	if (!settings.EnableSnowDeformation || !globals::state->HasDirectionalShadows()) {
 		shadowAtlasCopySRV = nullptr;
-		shadowEsramCopySRV = nullptr;
 		return;
 	}
 
 	winrt::com_ptr<ID3D11ShaderResourceView> liveAtlasSRV;
 	globals::d3d::context->PSGetShaderResources(4, 1, liveAtlasSRV.put());
 
-	ID3D11ShaderResourceView* liveEsramSRV = nullptr;
-	if (auto* gameRenderer = globals::game::renderer)
-		liveEsramSRV = gameRenderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM].depthSRV;
-
-	if (liveAtlasSRV && liveEsramSRV) {
+	if (liveAtlasSRV) {
 		// Inject BEFORE taking the copies (round 21): copies taken pre-shell
 		// meant the shell shaded itself from a shell-less atlas, so a bank's
 		// shadow fell on characters and dirt but stopped dead at the snow
@@ -41,7 +38,6 @@ void SnowDeformation::CaptureShadowAtlas()
 		InjectShellShadowCasters(liveAtlasSRV.get());
 
 		CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
-		CopySRVResource(liveEsramSRV, "SnowDeformation::ShadowEsramCopy", shadowEsramCopyTex, shadowEsramCopySRV);
 		// Diagnostics: how many slices the copy carries (settings UI line).
 		if (shadowAtlasCopyTex) {
 			D3D11_TEXTURE2D_DESC atlasDesc;
@@ -55,7 +51,7 @@ void SnowDeformation::CaptureShadowAtlas()
 	// missing/flickering shell shadows come with the answer attached.
 	static uint32_t shadowLogCount = 0;
 	static int lastValidState = -1;
-	int validState = (shadowAtlasCopySRV && shadowEsramCopySRV) ? 1 : 0;
+	int validState = shadowAtlasCopySRV ? 1 : 0;
 	if ((shadowLogCount < 6 || validState != lastValidState) && shadowLogCount < 40) {
 		shadowLogCount++;
 		lastValidState = validState;
@@ -65,8 +61,8 @@ void SnowDeformation::CaptureShadowAtlas()
 		D3D11_SHADER_RESOURCE_VIEW_DESC liveViewDesc{};
 		if (liveAtlasSRV)
 			liveAtlasSRV->GetDesc(&liveViewDesc);
-		logger::info("[SNOW DEFORMATION] ShadowCopy: atlasLive={} esramLive={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
-			liveAtlasSRV != nullptr, liveEsramSRV != nullptr, validState,
+		logger::info("[SNOW DEFORMATION] ShadowCopy: atlasLive={} valid={} atlas={}x{} slices={} fmt={} samples={} liveViewDim={} liveViewFmt={}",
+			liveAtlasSRV != nullptr, validState,
 			atlasDesc.Width, atlasDesc.Height, atlasDesc.ArraySize, uint32_t(atlasDesc.Format), atlasDesc.SampleDesc.Count,
 			uint32_t(liveViewDesc.ViewDimension), uint32_t(liveViewDesc.Format));
 	}
