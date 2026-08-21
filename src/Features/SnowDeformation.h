@@ -873,6 +873,8 @@ public:
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
 	bool shellDataDebug = false;
+	/** @brief Border-field debug plane (ShellDebugData 3): hue = class-depth band, brightness = snow grain, white = the cut contour, magenta grid = land grain data present. */
+	bool shellBorderDebug = false;
 	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
 	bool shellExclusionDebug = false;
 

@@ -1995,6 +1995,29 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
 		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);
 	}
+	else if (ShellDebugData == 3)
+	{
+		// Border-field debug: hue bands the shaped class depth (the field
+		// the cut and the slice ribbon key off), brightness rides the snow
+		// grain, WHITE marks the cut contour (raw ~2), and a magenta grid
+		// marks pixels whose pre-shell G-buffer carries land grain data.
+		// Reading it: how far the orange ribbon wanders from the white line
+		// IS the bleed; missing magenta explains one-sided fallbacks.
+		float dbgRaw = pixelTerrain.y;
+		float3 dbgBand =
+			dbgRaw < -0.5 ? float3(0.5, 0.05, 0.05) :
+			dbgRaw < 1.0  ? float3(0.9, 0.5, 0.1) :
+			dbgRaw < 3.0  ? float3(0.1, 0.8, 0.2) :
+			dbgRaw < 8.0  ? float3(0.1, 0.7, 0.8) :
+							float3(0.15, 0.2, 0.9);
+		float dbgGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+		preLit = dbgBand * (0.4 + 0.6 * dbgGrain);
+		[flatten] if (abs(dbgRaw - 2.0) < 0.15)
+			preLit = float3(1.0, 1.0, 1.0);
+		float dbgLand = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		[flatten] if (dbgLand > 0.002 && frac(input.Position.x / 8.0) < 0.15 && frac(input.Position.y / 8.0) < 0.15)
+			preLit = lerp(preLit, float3(1.0, 0.0, 1.0), 0.7);
+	}
 	else if (ShellDebugData != 0)
 	{
 		// R = height, G = per-pixel coverage, B = ramp depth (40 units = full

@@ -438,7 +438,7 @@ void SnowDeformation::DrawShell()
 
 	cbData.TerrainTexelSize = kShellVertexSpacing;
 	cbData.TerrainDim = kShellWindowDim;
-	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : 0u);
+	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : 0u));
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 3);
 	cbData.StaticsDebugView = float(staticsDebugView);
 
