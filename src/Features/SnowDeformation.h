@@ -475,7 +475,7 @@ public:
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
 		/** @brief Frequency multiplier of the fine-grain normal layer on disturbed snow. */
-		float CrispScale = 4.0f;
+		float CrispScale = 4.5f;
 		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
 		float CrispStrength = 1.5f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
