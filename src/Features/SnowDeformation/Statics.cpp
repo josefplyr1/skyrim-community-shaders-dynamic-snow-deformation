@@ -5,6 +5,7 @@
 #include "Features/ExponentialHeightFog.h"
 #include "Features/IBL.h"
 #include "Globals.h"
+#include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
 
@@ -145,24 +146,27 @@ namespace
 	}
 }
 
-void SnowDeformation::SetProjectedSnowBit(RE::BSRenderPass* a_pass)
+void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass)
 {
 	// Projected-snow bit for Lighting's material match (SNOW-MATCH Phase 2):
 	// cleared every pass so it never leaks, set when this draw's projected
-	// material is actually snow. kSnow is NOT required: the frame7075 capture
-	// proved snow projections without it (the Cone001 fence, technique
-	// ENVMAP+PROJECTED_UV, descriptor 100E201) — kProjectedUV plus a
-	// non-contrary MATO is the gate; sand/moss stay excluded by their MATO
-	// (kNotSnow). Runs BEFORE the game's SetupGeometry (the
-	// ExtendedTranslucency pattern): the descriptor is consumed inside it.
+	// material is actually snow. Classified from the PASS TECHNIQUE
+	// (currentRawTechnique — the TruePBR precedent), NOT the property flags:
+	// the game renders projected snow as its own pass whose technique
+	// carries ProjectedUV (frame7075's fence: descriptor 100E201) while the
+	// property need not carry kProjectedUV or kSnow — gating on property
+	// flags is what kept this bit off the fence through two rounds. Sand
+	// and moss stay excluded by their MATO (kNotSnow). Runs BEFORE the
+	// game's SetupGeometry (the ExtendedTranslucency pattern): the
+	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
+	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-	const auto& flags = a_pass->shaderProperty->flags;
+	const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 	if (settings.EnableSnowDeformation && settings.ProjSnowMatch &&
-		flags.all(Flag::kProjectedUV) && !flags.all(Flag::kTreeAnim) &&
+		passProjected && !a_pass->shaderProperty->flags.all(Flag::kTreeAnim) &&
 		shellSnowDiffuseSRV &&
 		ClassifyProjectedMato(a_pass->geometry) != MatoClass::kNotSnow) {
 		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
@@ -279,13 +283,16 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					// LOD loses the kSnow/kProjectedUV flags its full mesh
 					// carries, so a glacier keeps its snow up close and drops it
 					// at range. The full mesh's own texture name is the only
-					// classification left, and these two families are the ones
-					// that wear projected snow as terrain-scale features.
-					// "ice" is deliberately NOT matched: three letters that hit
-					// lattice/office/service by accident, and "glacier" already
-					// covers the ice family we actually saw dropped.
-					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
-					                            lowered.find("mountain") != std::string::npos;
+					// classification left. "ice" is deliberately NOT matched:
+					// three letters that hit lattice/office/service by accident,
+					// and "glacier" already covers the ice family we actually
+					// saw dropped. "mountain" was DROPPED 2026-08-22: shore
+					// rocks wear the same mountain diffuse, their LOD hangs off
+					// no reference (the MATO override below cannot run), and the
+					// skins put snow on the Pale's sand beaches at range; snowy
+					// mountainsides at distance are LOD terrain, which Horizon
+					// Snow already dresses.
+					it->second.naturalFeature = lowered.find("glacier") != std::string::npos;
 					// A merged DynDOLOD batch wears a generic atlas packing many
 					// objects together, so the path says nothing about whether
 					// any one of them is snowy. Gated behind the experiment
@@ -396,7 +403,7 @@ struct SD_BSLightingShader_SetupGeometry
 	{
 		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
-			snowDeformation.SetProjectedSnowBit(a_pass);
+			snowDeformation.SetProjectedSnowBit(shader, a_pass);
 
 		func(shader, a_pass, a_flags);
 

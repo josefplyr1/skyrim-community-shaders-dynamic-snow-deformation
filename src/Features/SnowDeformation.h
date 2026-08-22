@@ -1089,8 +1089,8 @@ public:
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
-	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
-	void SetProjectedSnowBit(RE::BSRenderPass* a_pass);
+	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds t102/t103 for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
+	void SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass);
 
 	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
