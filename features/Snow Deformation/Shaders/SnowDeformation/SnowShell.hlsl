@@ -737,6 +737,14 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			terrainHeight += farBlend * 3.0 * saturate(coverage);
 		}
 
+		// The mask carries two independent channels. x = door suppression,
+		// smooth 0-1, so doorstep clearings fade at their edges instead of
+		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
+		// (coverage untouched), so melted ground keeps a thin snow floor
+		// instead of fading to bare ground. Sampled BEFORE the object lift:
+		// the wall-drift banks must respect clearings too (see below).
+		float2 shelterMask = SampleExclusionMask(GridOrigin + gridLocal);
+
 		// Object height field: t4 holds the SLOPE-LIMITED snow-height field
 		// (terrain run through the angle-of-repose cone transform), t5 the
 		// shelter mask; 1 under floating structures, so walkways, roofs and
@@ -747,6 +755,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float field = SampleObjectHeight(worldXY);
 			[flatten] if (field > -50000.0)
 			{
+				// Clearings suppress the wall-drift lift: the drift failsafe
+				// below otherwise raised banks over EXCLUDED ground, and the
+				// suppressed-coverage slab hovered at bank height over the
+				// bare dirt — the fixed blocky black patch that scaled with
+				// Wall Drift Height (Josef's lever evidence, gone at <10).
+				field = lerp(field, min(field, terrainHeight), saturate(shelterMask.x));
 				// Where a captured object defines the surface, the layer wears
 				// the object's own skin depth instead of the landscape class
 				// depth (a thin-skinned rock must not carry a deep landscape
@@ -767,15 +781,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			}
 		}
 
-		// The mask carries two independent channels. x = door suppression,
-		// smooth 0-1, so doorstep clearings fade at their edges instead of
-		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
-		// (coverage untouched), so melted ground keeps a thin snow floor
-		// instead of fading to bare ground. Outside the ObjectLiftCap gate: the
-		// wide field needs no object height data, so clearings survive even
-		// where the near window has nothing to say.
 		{
-			float2 shelterMask = SampleExclusionMask(GridOrigin + gridLocal);
 			coverage *= saturate(1.0 - shelterMask.x);
 			float melt = saturate(shelterMask.y);
 			rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);

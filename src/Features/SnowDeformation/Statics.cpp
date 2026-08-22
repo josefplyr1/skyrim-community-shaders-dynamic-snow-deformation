@@ -185,6 +185,55 @@ namespace
 		bool naturalFeature = false;
 	};
 
+	// Pointer-identity ownership: does any loaded reference's 3D subtree
+	// contain this geometry? The userData walk fails on some real meshes
+	// (glaciers — their bases never reached the MATO log despite Josef
+	// standing beside them), and ff2dacc1's unreferenced check then mistook
+	// them for merged Windhelm sheets whenever the camera stood inside
+	// their footprint — for a glacier underfoot, always. Exact and
+	// heuristic-free; merged LOD genuinely belongs to no reference. Only
+	// candidates already big + camera-inside + walk-unreferenced get here;
+	// cached per geometry, render thread only like the other caches.
+	bool GeometryBelongsToLoadedReference(RE::BSGeometry* a_geometry)
+	{
+		static std::unordered_map<const void*, bool> ownershipCache;
+		if (ownershipCache.size() > 4096)
+			ownershipCache.clear();
+		auto [it, inserted] = ownershipCache.try_emplace(a_geometry, false);
+		if (!inserted)
+			return it->second;
+		auto* tes = RE::TES::GetSingleton();
+		if (!tes)
+			return false;
+		const RE::NiPoint3 center = a_geometry->worldBound.center;
+		const float reach = a_geometry->worldBound.radius + 1024.0f;
+		bool found = false;
+		tes->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+			if (!a_ref || a_ref->GetPosition().GetDistance(center) > reach)
+				return RE::BSContainer::ForEachResult::kContinue;
+			auto* root = a_ref->Get3D();
+			if (!root)
+				return RE::BSContainer::ForEachResult::kContinue;
+			std::vector<RE::NiAVObject*> stack{ root };
+			while (!stack.empty()) {
+				RE::NiAVObject* node = stack.back();
+				stack.pop_back();
+				if (node == a_geometry) {
+					found = true;
+					return RE::BSContainer::ForEachResult::kStop;
+				}
+				if (auto* niNode = node->AsNode()) {
+					for (auto& child : niNode->GetChildren())
+						if (child)
+							stack.push_back(child.get());
+				}
+			}
+			return RE::BSContainer::ForEachResult::kContinue;
+		});
+		it->second = found;
+		return found;
+	}
+
 	// Mesh-name ice family (Josef's console sweep, 2026-08-22: Iceberg*,
 	// Glacier*, IcePile* — texture paths alone missed several). Bare "ice"
 	// is only safe as a NAME PREFIX: as a substring it hits Cornice/Device.
@@ -320,6 +369,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			bool referenced = false;
 			for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
 				referenced = node->GetUserData() != nullptr;
+			// The userData walk is a fallible proxy: real glacier meshes walk
+			// as unreferenced too, and this rejection then ate them whenever
+			// the camera stood inside their footprint (Josef's Saarthal
+			// evidence + the MATO log's silence on glacier bases). Settle it
+			// exactly before rejecting.
+			if (!referenced)
+				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
 			if (!referenced) {
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
