@@ -1413,6 +1413,8 @@
     "feature.snow_deformation.debug_options": "Debugging Options",
     "feature.snow_deformation.debug_overlay": "Debug Terrain Overlay",
     "feature.snow_deformation.debug_overlay_tooltip": "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow.",
+    "feature.snow_deformation.debug_proj_snow": "Debug Projected Snow Match",
+    "feature.snow_deformation.debug_proj_snow_tooltip": "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is.",
     "feature.snow_deformation.debug_tiling_ruler": "Debug Tiling Ruler",
     "feature.snow_deformation.debug_tiling_ruler_tooltip": "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera.",
     "feature.snow_deformation.description": "Maintains a persistent deformation map around the player so snow can be visibly compressed by actors moving through it, leaving lasting trails.",

@@ -1771,35 +1771,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
 		float3 projDiffuse = Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz;
-#			if defined(SNOW_DEFORMATION)
-		// SNOW-MATCH Phase 2: draws whose projected material the CPU
-		// classified as snow (flags + MATO) wear the shell's snow set at the
-		// shell's world tiling — same triplanar frame, our texture. The
-		// authored tint/scale chain below stays: neutral in practice, and one
-		// convention path. Normals stay the projection's own (Josef's spec).
-		snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
-		                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
-		[branch] if (snowProjMatch)
-		{
-			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
-			projDiffuse = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
-			snowProjAlbedo = projDiffuse;
-		}
-#			endif
 		float3 projBaseColor = Color::ColorToLinear(projDiffuse) * Color::ColorToLinear(ProjectedUVParams2.xyz);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
-		float3 projRMAOS = float3(ParallaxOccData.x, 0, ParallaxOccData.y);
-#				if defined(SNOW_DEFORMATION)
-		// Shell-matched response, not just color: roughness and F0 stand-ins
-		// for the shell's RMAOS (rawRMAOS.w IS F0 at the material build;
-		// 0.028 = the shell's kSnowF0).
-		[flatten] if (snowProjMatch)
-			projRMAOS = float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028);
-#				endif
-		rawRMAOS.xyw = lerp(rawRMAOS.xyw, projRMAOS, projectedMaterialWeight);
+		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(ParallaxOccData.x, 0, ParallaxOccData.y), projectedMaterialWeight);
 		float4 projectedGlintParameters = 0;
 		if ((PBRFlags & PBR::Flags::ProjectedGlint) != 0) {
 			projectedGlintParameters = SparkleParams;
@@ -1825,6 +1801,42 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif  // SNOW
 		}
 	}
+
+#		if defined(SNOW_DEFORMATION)
+	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
+	// picks texture vs flat-color projection above; when the CPU classified
+	// this draw's projected material as snow, both paths converge here onto
+	// the shell's snow set. The flat path especially: its untextured white
+	// is the only story consistent with every frame7075 measurement
+	// (RGBScale = 0 blacks the texture path, yet the fence rails render
+	// blue-white), and it samples no texture, which is why the in-branch
+	// swap of rounds 1-4 could never change it.
+	snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+	                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
+	[branch] if (snowProjMatch)
+	{
+		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+		[branch] if (projectedMaterialWeight > 0.003)
+		{
+			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
+			snowProjAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
+			// Classification debug: everything this block replaces, in magenta.
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
+				snowProjAlbedo = float3(1.0, 0.0, 1.0);
+#			if defined(TRUE_PBR)
+			// PBR pixels are convention-correct already: albedo + the shell's
+			// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).
+			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowProjAlbedo), projectedMaterialWeight);
+			rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), projectedMaterialWeight);
+#			else
+			// Vanilla pixels get the albedo here; the write tail re-lights
+			// the snow fraction through the PBR evaluators (hue+brightness).
+			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowProjAlbedo) * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
+#			endif
+		}
+	}
+#		endif
 
 #			if defined(SPECULAR)
 	useSnowSpecular = useSnowDecalSpecular;

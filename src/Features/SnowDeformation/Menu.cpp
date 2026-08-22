@@ -805,6 +805,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRuler = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
 
+		ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Debug Projected Snow Match"), &debugProjSnowView);
+		if (auto _ttProj = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is."));
+
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 
 		{

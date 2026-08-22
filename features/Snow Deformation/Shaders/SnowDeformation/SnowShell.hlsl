@@ -942,6 +942,12 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// and a 0.05 lower edge put decaying residue on the castVis NaN cliff -
 	// caster triangles over every old melt site flipped once a second.
 	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));
+	// Round 34 (Josef's call): the far field keeps printing blotches from
+	// residual data/geometry mismatches the near gates cannot see, and the
+	// shell's crisp shadows only matter near the camera anyway — the far
+	// field is diffuse-dominated and terrain shadows carry the rest. Fade
+	// the caster out entirely over ~40-70 m.
+	castVis *= 1.0 - smoothstep(2800.0, 4900.0, length(gridLocal - WarpedHalfSpan));
 	if (castVis < 0.35)
 		z = asfloat(0x7fc00000);  // NaN: kills every triangle touching this vertex
 #endif
