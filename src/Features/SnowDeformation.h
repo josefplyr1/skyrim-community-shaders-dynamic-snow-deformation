@@ -267,7 +267,7 @@ public:
 		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
 		float TrailIrregularity = 0.60f;
 		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink toward whichever side is shallower once BOTH sides are dug away; walls and open snow never move. Default OFF until A/B'd - it changes the map every subsystem reads (TRENCH-REALISM-PLAN.md Stage 3b). */
-		float SlumpRate = 0.0f;
+		float SlumpRate = 0.1f;
 		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */

@@ -135,8 +135,12 @@
 #define SLUMP_RADII 3
 // Radii up to this index gate; beyond it they only deepen.
 #define SLUMP_GATE_RADII 2
-static const float kSlumpRadius[SLUMP_RADII] = { 24.0, 48.0, 96.0 };
+static const float kSlumpRadius[SLUMP_RADII] = { 16.0, 32.0, 64.0 };
 static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
+// A strip settles PARTWAY toward its neighbors' floor, not onto it - about
+// half. Josef's cross-section: the fin survives as a low bump inside the
+// channel, it does not melt to the bottom.
+#define SLUMP_SETTLE 0.5
 // Least min-support inside the gate radii that engages an axis. Well above
 // refill remnants and trench shoulders, well below a walked trail's floor.
 #define SLUMP_MIN_SUPPORT 0.25
@@ -330,9 +334,9 @@ float SlumpTap(int2 p, int2 dims)
 				if (gate > SLUMP_MIN_SUPPORT)
 					slumpTarget = max(slumpTarget, axisTarget);
 			}
-			// Low bumps, not a plane: the settled floor keeps an uneven
-			// remainder, which is what Josef's cross-section asks for.
-			slumpTarget *= 1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / MELT_NOISE_COARSE);
+			// Low bumps, not a plane: half-depth settle, wobbled on the
+			// coarse cells so the floor keeps an uneven remainder.
+			slumpTarget *= SLUMP_SETTLE * (1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / MELT_NOISE_COARSE));
 			// Crusted snow is frozen solid and holds its shape. The melted
 			// channel is left alone: raising depth only loosens its clamp,
 			// so the added depth reads as DISPLACED - which also sheds the
