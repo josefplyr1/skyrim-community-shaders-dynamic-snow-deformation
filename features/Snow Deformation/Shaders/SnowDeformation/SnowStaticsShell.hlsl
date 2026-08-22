@@ -2095,13 +2095,34 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float2 stepDir = L.xy / sunLen2D;
 		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
 		float horizonTan = -10.0;
+		// The top raster stores only the HIGHEST surface per texel, so under
+		// a multi-level object's overhang it records the deck ABOVE the
+		// receiver and every tap reads "inside a hill" — full shadow in
+		// raster-texel steps on surfaces plainly in the sun (round 37,
+		// Josef's glacier-ledge evidence). The raster cannot see under
+		// roofs: where it stands well above the surface being shaded, drop
+		// its term and let the cascades/SSS own the shading here.
+		bool objectTopUsable = HasObjectTop > 0.5;
+		[branch] if (objectTopUsable)
+		{
+			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
+			[flatten] if (all(abs(selfLocal) < 0.98))
+			{
+				float2 topDims;
+				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
+				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
+				if (selfTop > -50000.0 && selfTop > surfZ + 32.0)
+					objectTopUsable = false;
+			}
+		}
 		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
 		{
 			float d = kMarchDist[marchI];
 			float2 sampleLocal = input.GridLocal + stepDir * d;
 			float sh = -100000.0;
 			bool tapOnObject = false;
-			[branch] if (HasObjectTop > 0.5)
+			[branch] if (objectTopUsable)
 			{
 				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
 				[flatten] if (all(abs(topLocal) < 0.98))
