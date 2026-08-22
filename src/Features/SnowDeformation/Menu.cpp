@@ -119,10 +119,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttRkg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before Distant Snow Blend starts dissolving it, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
 
-			ImGui::Checkbox(T(TKEY("skin_merged_lod_atlases"), "Snow on Merged Distant Objects"), &settings.SkinMergedLODAtlases);
-			if (auto _ttAtlas = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("skin_merged_lod_atlases_tooltip"), "DynDOLOD merges many distant objects into single batches wearing a shared atlas texture, whose name gives no clue whether any object in it is snowy. Off, those batches are skipped and the objects inside them carry no distant snow. On, they are covered anyway - measured at +53 objects for +0.05 ms. A merged batch is one mesh, so this is all-or-nothing per batch: turn it off if you ever see snow land on something that should stay bare, such as a shipwreck hull."));
-
 			ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
 			if (auto _ttSdb = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour."));
@@ -807,7 +803,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Debug Projected Snow Match"), &debugProjSnowView);
 		if (auto _ttProj = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is."));
+			ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
+		ImGui::Text("Projected match, last frame: %u classified / %u no projection / %u vetoed",
+			statProjMatchedPrev, statProjNoProjectionPrev, statProjVetoedPrev);
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 

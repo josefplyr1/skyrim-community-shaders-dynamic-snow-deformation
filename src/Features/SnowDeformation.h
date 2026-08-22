@@ -461,7 +461,6 @@ public:
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
-		bool SkinMergedLODAtlases = true;
 		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
 		float ParallaxDepth = 1.0f;
 		/** @brief Coarse steps in the parallax march before contact refinement (which re-marches the hit interval at the same budget, so N resolves like N*N). Scaled down with distance. The main quality/cost dial. */
@@ -1085,6 +1084,14 @@ public:
 	std::vector<CapturedSnowStatic> capturedStatics;
 	std::unordered_set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
+
+	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). */
+	std::atomic<uint32_t> statProjMatched{ 0 };
+	std::atomic<uint32_t> statProjNoProjection{ 0 };
+	std::atomic<uint32_t> statProjVetoed{ 0 };
+	uint32_t statProjMatchedPrev = 0;
+	uint32_t statProjNoProjectionPrev = 0;
+	uint32_t statProjVetoedPrev = 0;
 
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);

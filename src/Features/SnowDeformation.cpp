@@ -101,7 +101,6 @@
 	X(Tessellation) \
 	X(ReliefDepth) \
 	X(ParallaxShadowStrength) \
-	X(SkinMergedLODAtlases) \
 	X(ParallaxDepth) \
 	X(ParallaxSteps) \
 	X(TrenchFloorFade) \
@@ -465,6 +464,12 @@ void SnowDeformation::Prepass()
 	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
+
+	// Publish last frame's projected-snow classification counters for the
+	// menu debug readout, then reset for this frame's opaque pass.
+	statProjMatchedPrev = statProjMatched.exchange(0, std::memory_order_relaxed);
+	statProjNoProjectionPrev = statProjNoProjection.exchange(0, std::memory_order_relaxed);
+	statProjVetoedPrev = statProjVetoed.exchange(0, std::memory_order_relaxed);
 
 	UpdateActiveWorldspace();
 

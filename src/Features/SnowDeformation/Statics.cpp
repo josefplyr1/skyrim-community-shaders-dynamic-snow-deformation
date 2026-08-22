@@ -118,8 +118,13 @@ namespace
 		kNotSnow
 	};
 
-	// The reference's STAT directional-material record settles snow vs sand:
-	// a MATO's model path IS its projected texture. Cached per base form.
+	// The reference's STAT directional-material record vetoes non-snow
+	// projections. NEGATIVE keywords only (round 6): requiring "snow" in the
+	// path vetoed every MATO whose replacer names it differently — the
+	// magenta debug view showed the fence never classifying, and its MATO
+	// was the last gate standing. Sand/moss/ash keep their veto; an
+	// unrecognized path passes. Cached per base form; each new entry is
+	// logged so the modlist's actual MATO names are in CommunityShaders.log.
 	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
 	{
 		RE::TESObjectREFR* refr = nullptr;
@@ -139,7 +144,22 @@ namespace
 				std::string matoPath(stat->data.materialObj->GetModel());
 				std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
 					[](unsigned char c) { return (char)std::tolower(c); });
-				it->second = matoPath.find("snow") != std::string::npos ? MatoClass::kSnow : MatoClass::kNotSnow;
+				if (matoPath.find("snow") != std::string::npos) {
+					it->second = MatoClass::kSnow;
+				} else {
+					static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
+					it->second = MatoClass::kNoMato;
+					for (const auto* keyword : kNotSnowKeywords) {
+						if (matoPath.find(keyword) != std::string::npos) {
+							it->second = MatoClass::kNotSnow;
+							break;
+						}
+					}
+				}
+				logger::info("[SNOW DEFORMATION] Projected MATO on base {:08X}: '{}' -> {}", base->GetFormID(), matoPath,
+					it->second == MatoClass::kSnow ? "snow" : (it->second == MatoClass::kNotSnow ? "NOT snow (vetoed)" : "neutral"));
+			} else {
+				logger::info("[SNOW DEFORMATION] Projected base {:08X}: no STAT MATO -> neutral", base->GetFormID());
 			}
 		}
 		return it->second;
@@ -163,20 +183,26 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
+	if (!settings.EnableSnowDeformation || !settings.ProjSnowMatch || !shellSnowDiffuseSRV)
+		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
-	if (settings.EnableSnowDeformation && settings.ProjSnowMatch &&
-		passProjected && !a_pass->shaderProperty->flags.all(Flag::kTreeAnim) &&
-		shellSnowDiffuseSRV &&
-		ClassifyProjectedMato(a_pass->geometry) != MatoClass::kNotSnow) {
-		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
-		// draws (frame7075: null at every player-view draw — stomped around
-		// the cubemap pass; t101 only survives via its later re-bind).
-		// Re-bind per classified draw, where it is actually sampled.
-		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
-		globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+	if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
+		statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
+		return;
 	}
+	if (ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow) {
+		statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+		return;
+	}
+	statProjMatched.fetch_add(1, std::memory_order_relaxed);
+	extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+	// The Prepass-time t102/t103 bind does NOT survive to the Lighting
+	// draws (frame7075: null at every player-view draw — stomped around
+	// the cubemap pass; t101 only survives via its later re-bind).
+	// Re-bind per classified draw, where it is actually sampled.
+	ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
+	globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
 }
 
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
@@ -263,7 +289,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		{
 			bool base = false;
 			bool naturalFeature = false;
-			bool mergedAtlas = false;
 		};
 		static std::unordered_map<const void*, SnowPathMatch> driftMaterialCache;
 		if (driftMaterialCache.size() > 4096)
@@ -293,12 +318,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 					// mountainsides at distance are LOD terrain, which Horizon
 					// Snow already dresses.
 					it->second.naturalFeature = lowered.find("glacier") != std::string::npos;
-					// A merged DynDOLOD batch wears a generic atlas packing many
-					// objects together, so the path says nothing about whether
-					// any one of them is snowy. Gated behind the experiment
-					// toggle: accepting these skins the WHOLE batch or none of
-					// it, so if the batch is mixed it puts snow on ship hulls.
-					it->second.mergedAtlas = lowered.find("dyndolod") != std::string::npos;
+					// The merged-DynDOLOD-atlas experiment was RETIRED 2026-08-22
+					// (Josef's call): it skinned whole mixed batches all-or-nothing
+					// (snow on sand-shore rocks), and the projected-snow match now
+					// covers distant object snow appearance without it.
 				}
 			}
 		}
@@ -314,9 +337,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			if (matoClass != MatoClass::kNoReference)
 				naturalFeature = matoClass == MatoClass::kSnow;
 		}
-		const bool lodAccept = isObjectLOD &&
-		                       (naturalFeature ||
-								   (settings.SkinMergedLODAtlases && it->second.mergedAtlas));
+		const bool lodAccept = isObjectLOD && naturalFeature;
 		if (!(it->second.base || lodAccept)) {
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
