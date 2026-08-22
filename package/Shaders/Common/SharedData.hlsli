@@ -373,7 +373,9 @@ namespace SharedData
 		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
 		// snow set is bound at t102.
 		float ProjSnowEnable;
-		float padLod1;
+		// Baked-snow material match (glacier/iceberg recolor) enabled and the
+		// snow set is bound at t102.
+		float BakedSnowEnable;
 		float padLod2;
 	};
 

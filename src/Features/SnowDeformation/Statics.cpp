@@ -259,6 +259,39 @@ namespace
 		       lowered.find("iceberg") != std::string::npos;
 	}
 
+	// The combined family signal (node name OR diffuse path), cached per
+	// geometry and per material: SetProjectedSnowBit runs on every Lighting
+	// draw, so the lowercase transforms cannot run per call.
+	bool IceFamilySignal(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
+	{
+		static std::unordered_map<const void*, bool> nameCache;
+		if (nameCache.size() > 4096)
+			nameCache.clear();
+		auto [nameIt, nameInserted] = nameCache.try_emplace(a_geometry, false);
+		if (nameInserted)
+			nameIt->second = IsIceFamilyGeometry(a_geometry);
+		if (nameIt->second)
+			return true;
+		if (!a_material)
+			return false;
+		static std::unordered_map<const void*, bool> texCache;
+		if (texCache.size() > 4096)
+			texCache.clear();
+		auto [texIt, texInserted] = texCache.try_emplace(a_material, false);
+		if (texInserted) {
+			if (auto textureSet = a_material->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path) {
+					std::string lowered(path);
+					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					texIt->second = lowered.find("glacier") != std::string::npos ||
+					                lowered.find("iceberg") != std::string::npos;
+				}
+			}
+		}
+		return texIt->second;
+	}
+
 	// One-shot journey log for the ice family (glacier/iceberg): the skins
 	// keep failing at SOME gate and the gates key on different identity
 	// signals (geometry node name vs texture path vs shader flags). Any
@@ -277,12 +310,7 @@ namespace
 					texPath = path;
 			}
 		}
-		std::string loweredTex(texPath);
-		std::transform(loweredTex.begin(), loweredTex.end(), loweredTex.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		const bool texFamily = loweredTex.find("glacier") != std::string::npos ||
-		                       loweredTex.find("iceberg") != std::string::npos;
-		if (!texFamily && !IsIceFamilyGeometry(geometry))
+		if (!IceFamilySignal(geometry, material))
 			return;
 		static std::unordered_set<uint64_t> logged;
 		if (logged.size() > 512)
@@ -341,29 +369,42 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// game's SetupGeometry (the ExtendedTranslucency pattern): the
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) |
+						 uint32_t(State::ExtraFeatureDescriptors::SnowBakedIsSnow));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	if (!settings.EnableSnowDeformation || !settings.ProjSnowMatch || !shellSnowDiffuseSRV)
+	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
-	const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
-	if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
-		statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
-		return;
+	bool bindSnowSet = false;
+	// Baked-snow (glacier) match: classified by the ice-family signal alone,
+	// independent of technique — glacier snow is baked into the mesh and its
+	// draws carry no projected pass (the journey log's proj=0 snow=0 rows).
+	if (settings.GlacierSnowMatch &&
+		IceFamilySignal(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))) {
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowBakedIsSnow);
+		bindSnowSet = true;
 	}
-	if (ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow) {
-		statProjVetoed.fetch_add(1, std::memory_order_relaxed);
-		return;
+	if (settings.ProjSnowMatch) {
+		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
+		if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
+			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
+		} else if (ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow) {
+			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+		} else {
+			statProjMatched.fetch_add(1, std::memory_order_relaxed);
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+			bindSnowSet = true;
+		}
 	}
-	statProjMatched.fetch_add(1, std::memory_order_relaxed);
-	extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-	// The Prepass-time t102/t103 bind does NOT survive to the Lighting
-	// draws (frame7075: null at every player-view draw — stomped around
-	// the cubemap pass; t101 only survives via its later re-bind).
-	// Re-bind per classified draw, where it is actually sampled.
-	ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
-	globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+	if (bindSnowSet) {
+		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
+		// draws (frame7075: null at every player-view draw — stomped around
+		// the cubemap pass; t101 only survives via its later re-bind).
+		// Re-bind per classified draw, where it is actually sampled.
+		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
+		globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+	}
 }
 
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
@@ -396,6 +437,20 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// otherwise capture and drag a static skin behind a moving creature.
 	if (a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
 		LogIceJourney(a_pass, "rejected: skinned geometry");
+		return;
+	}
+	// LOADED ice-family meshes take the RECOLOR route (SetProjectedSnowBit's
+	// baked match), never the geometry skin: the skin conforms through the
+	// object raster, whose 4096-unit window cannot cover a glacier (Josef's
+	// 70 m OSGR ceiling), and its mesh-facet lift produced square patches,
+	// dual class layers and rim gaps on these meshes. Their snow is baked
+	// in; color is the only thing wrong with it. LOD family batches KEEP
+	// their skins: LOD draws are vanilla permutations the TRUE_PBR recolor
+	// cannot reach, and at LOD ranges the skin's conforming limits don't
+	// show.
+	if (settings.GlacierSnowMatch && !flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
+		IceFamilySignal(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))) {
+		LogIceJourney(a_pass, "skipped: glacier recolor route (no skin)");
 		return;
 	}
 	// Merged LOD spans a whole worldspace quad; nothing belonging to a single

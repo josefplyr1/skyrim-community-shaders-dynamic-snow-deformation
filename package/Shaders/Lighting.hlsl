@@ -866,7 +866,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV))
+#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV) || defined(TRUE_PBR))
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #	endif
 
@@ -1848,6 +1848,37 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
+
+#	if defined(SNOW_DEFORMATION) && defined(TRUE_PBR) && !defined(WORLD_MAP)
+	// SNOW-MATCH glaciers: the CPU classified this draw as ice family
+	// (glacier/iceberg node name or diffuse path). Their snow is BAKED into
+	// mesh and texture — no projection exists for the projected match to
+	// swap, and the geometry skin cannot wrap meshes this size (its raster
+	// window is 4096 units). Recolor the baked snow instead: up-facing,
+	// bright texels take the shell's snow set; steep dark ice walls keep
+	// their authored look. PBR pixels only — this modlist's glaciers are
+	// TruePBR; a vanilla-material ice mesh passes through untouched.
+	[branch] if (SharedData::snowDeformationSettings.BakedSnowEnable > 0.5 &&
+				 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowBakedIsSnow) != 0)
+	{
+		float3 bakedWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
+		float3 bakedFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
+		float3 bakedTriWeights = Triplanar::GetWeights(worldNormal.xyz, bakedFaceNormal);
+		float3 bakedSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, bakedWorldPos, bakedTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+		// t102 is authored sRGB unless the set is a linear PBR one; baseColor
+		// here is linear albedo.
+		float3 bakedAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? bakedSample : Color::ColorToLinear(bakedSample);
+		float bakedUp = saturate(worldNormal.z);
+		float bakedLuma = Color::RGBToLuminance(baseColor.xyz);
+		float bakedMask = smoothstep(0.35, 0.7, bakedUp) * smoothstep(0.12, 0.35, bakedLuma);
+		// Classification debug: everything this block recolors, in cyan.
+		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 8) != 0)
+			bakedAlbedo = float3(0.0, 1.0, 1.0);
+		baseColor.xyz = lerp(baseColor.xyz, bakedAlbedo, bakedMask);
+		// The shell's response stand-ins (rawRMAOS.w IS F0; 0.028 = kSnowF0).
+		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), bakedMask);
+	}
+#	endif
 
 #	if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;

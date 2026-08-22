@@ -1806,7 +1806,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// near-field SSS - including grass shadows, which CS casts only via
 		// this march and which therefore never fell on the shell (Josef).
 		// The hug gate alone covers the buried-object case at every range.
-		float sssBlend = 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
+		// Tightened 8-24 -> 2-9 (Josef's fence evidence): the mask is marched
+		// on the PRE-shell depth, so a post's shadow on the buried ground
+		// printed faintly through 15-25 units of cover — visible from one
+		// angle, gone from another. The rule: shadow falling on buried
+		// ground stays invisible; shadow falling on the shell itself is the
+		// cascades' and the march's job (captured objects are in the
+		// raster), so SSS is trusted only where the shell truly hugs the
+		// surface the march saw — trench floors, thin cover, and the far
+		// field where the sampled surface IS the terrain under the shell.
+		float sssBlend = 1.0 - smoothstep(2.0, 9.0, sceneZ - shellZ);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 

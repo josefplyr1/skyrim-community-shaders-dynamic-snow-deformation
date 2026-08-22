@@ -88,6 +88,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Match Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
+		ImGui::Checkbox(T(TKEY("glacier_snow_match"), "Match Glacier Snow"), &settings.GlacierSnowMatch);
+		if (auto _ttGsm = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("glacier_snow_match_tooltip"), "Glaciers and icebergs carry snow baked into their meshes, which never matches the shell's material. This recolors their up-facing snow to the shell's own set at every distance, and stops the object snow shell from trying to wrap these huge meshes — its conforming window can't cover them, which produced square patches, doubled layers and rim gaps."));
 		bool distantChanged = false;
 
 		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
@@ -802,6 +805,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
 		ImGui::Text("Projected match, last frame: %u classified / %u no projection / %u vetoed",
 			statProjMatchedPrev, statProjNoProjectionPrev, statProjVetoedPrev);
+
+		ImGui::Checkbox(T(TKEY("debug_glacier_snow"), "Debug Glacier Snow Match"), &debugGlacierView);
+		if (auto _ttGlac = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_glacier_snow_tooltip"), "Tints every pixel the glacier baked-snow match recolors in cyan. If a glacier shows no cyan, its draw wasn't classified as ice family; if cyan covers its bare ice walls, the snow mask is too wide."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 

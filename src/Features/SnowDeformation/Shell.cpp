@@ -3,9 +3,11 @@
 #include <DDSTextureLoader.h>
 
 #include "Deferred.h"
+#include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
 #include "Features/IBL.h"
 #include "Features/LightLimitFix.h"
+#include "Features/TerrainShadows.h"
 #include "Features/ScreenSpaceShadows.h"
 #include "Features/Skylighting.h"
 #include "Features/TerrainBlending.h"
@@ -775,6 +777,20 @@ void SnowDeformation::DrawShell()
 	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
 		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
 		context->PSSetShaderResources(76, 2, iblSRVs);
+	}
+	// Terrain Shadows height map (t60) + Cloud Shadows cube copy (t25):
+	// GetWorldShadow reads both, and the Prepass-time binds do not survive
+	// to this pass (the t102 lesson). Unbound t60 reads zeros, which the
+	// helper's ramp maps to shadow 1.0 — the far shell stood bright while
+	// the LOD terrain past the seam wore the mountain shadow (Josef's
+	// Throat of the World pair). The statics skin inherits these like t22.
+	if (globals::features::terrainShadows.loaded && globals::features::terrainShadows.texShadowHeight) {
+		ID3D11ShaderResourceView* terrainShadowSRV = globals::features::terrainShadows.texShadowHeight->srv.get();
+		context->PSSetShaderResources(60, 1, &terrainShadowSRV);
+	}
+	if (globals::features::cloudShadows.loaded && globals::features::cloudShadows.texCubemapCloudOccCopy) {
+		ID3D11ShaderResourceView* cloudShadowSRV = globals::features::cloudShadows.texCubemapCloudOccCopy->srv.get();
+		context->PSSetShaderResources(25, 1, &cloudShadowSRV);
 	}
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.

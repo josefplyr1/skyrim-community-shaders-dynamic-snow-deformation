@@ -125,7 +125,8 @@
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(LODReplaceLegacy) \
-	X(ProjSnowMatch)
+	X(ProjSnowMatch) \
+	X(GlacierSnowMatch)
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
 {
@@ -358,7 +359,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.WindowOrigin = windowOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u);
+	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugGlacierView ? 8u : 0u);
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
 	// (where the shell ends), so the recolor simply applies to all of it â€”
@@ -374,6 +375,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.LODReplaceLegacy = settings.LODReplaceLegacy ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
+	data.BakedSnowEnable = (settings.EnableSnowDeformation && settings.GlacierSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// (Josef's ON/OFF map pair); skins are gated the same way in
@@ -381,6 +383,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	if (globals::state->isMapMenuOpen) {
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
+		data.BakedSnowEnable = 0.0f;
 	}
 	return data;
 }

@@ -504,6 +504,8 @@ public:
 		bool LODReplaceLegacy = false;
 		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
 		bool ProjSnowMatch = true;
+		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is EXCLUDED from the geometry skin — the skin conforms through the object raster, whose 4096-unit window can never cover a glacier (Josef's 70 m ceiling), and its mesh-facet lift produced square patches, dual class layers and rim gaps on them. */
+		bool GlacierSnowMatch = true;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -529,7 +531,9 @@ public:
 		float LODReplaceLegacy;
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
-		float padLod[2];
+		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
+		float BakedSnowEnable;
+		float padLod;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -1532,6 +1536,8 @@ public:
 	bool debugTilingRuler = false;
 	/** @brief Tints classified projected-snow pixels magenta (DebugTerrainOverlay bit 4) so the SnowProjectedIsSnow bit is verifiable in-game without a capture. */
 	bool debugProjSnowView = false;
+	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
+	bool debugGlacierView = false;
 
 protected:
 	/** @brief Fills perFrameData.Stamps from the player and nearby loaded actors. Implemented in SnowDeformation/Stamping.cpp. */
