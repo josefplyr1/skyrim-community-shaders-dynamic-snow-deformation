@@ -1816,6 +1816,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// stays invisible, shadow on the shell is the cascades' and the
 		// march's job.
 		float sssBlend = 1.0 - smoothstep(4.0, 14.0, sceneZ - shellZ);
+		// Distant LOD shadows ARE Screen-Space Shadows (ledger r107: no
+		// third cascade exists; LOD trees shadow bare ground only via the
+		// depth march). The hug gate's along-ray gap explodes at grazing
+		// far views — snow depth / sin(elevation), plus the anti-pinhole
+		// lift past 3000 — so it silently culled ALL far SSS, which is the
+		// distant-shadow regression Josef chased across three rounds. Far
+		// field: SSS applies fully; buried-caster prints don't read at
+		// that range (r34: the far field is diffuse-dominated).
+		sssBlend = lerp(sssBlend, 1.0, smoothstep(2500.0, 5000.0, shellZ));
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 

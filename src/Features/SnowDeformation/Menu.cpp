@@ -808,7 +808,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("debug_glacier_snow"), "Debug Glacier Snow Match"), &debugGlacierView);
 		if (auto _ttGlac = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_glacier_snow_tooltip"), "Tints every pixel the glacier baked-snow match recolors in cyan. If a glacier shows no cyan, its draw wasn't classified as ice family; if cyan covers its bare ice walls, the snow mask is too wide."));
+			ImGui::Text("%s", T(TKEY("debug_glacier_snow_tooltip"), "Paints every ice-family pixel the recolor reaches: BLUE = classified but kept as ice (snow mask 0), CYAN = recolored as snow (mask 1). A glacier with no tint at all means its draw never reached the recolor. The object snow shell draws on top and hides the tint where it covers."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 

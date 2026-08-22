@@ -1871,10 +1871,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float bakedUp = saturate(worldNormal.z);
 		float bakedLuma = Color::RGBToLuminance(baseColor.xyz);
 		float bakedMask = smoothstep(0.35, 0.7, bakedUp) * smoothstep(0.12, 0.35, bakedLuma);
-		// Classification debug: everything this block recolors, in cyan.
-		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 8) != 0)
-			bakedAlbedo = float3(0.0, 1.0, 1.0);
-		baseColor.xyz = lerp(baseColor.xyz, bakedAlbedo, bakedMask);
+		// Classification debug, unconditional on the mask so one screenshot
+		// separates the failure modes: any tint = the draw is classified and
+		// this block runs; the GREEN channel is the snow mask (blue = mask 0
+		// [kept as ice], cyan = mask 1 [recolored as snow]); no tint at all
+		// = the draw never got here.
+		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 8) != 0) {
+			baseColor.xyz = float3(0.0, bakedMask, 1.0);
+		} else {
+			baseColor.xyz = lerp(baseColor.xyz, bakedAlbedo, bakedMask);
+		}
 		// The shell's response stand-ins (rawRMAOS.w IS F0; 0.028 = kSnowF0).
 		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), bakedMask);
 	}
