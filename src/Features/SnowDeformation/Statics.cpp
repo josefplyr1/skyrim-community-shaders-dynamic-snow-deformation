@@ -391,6 +391,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, "rejected: tree-anim flag");
 		return;
 	}
+	// Skinned geometry never qualifies: with the family acceptance no
+	// longer LOD-only, an "Ice"-prefixed actor mesh (ice wraith) would
+	// otherwise capture and drag a static skin behind a moving creature.
+	if (a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
+		LogIceJourney(a_pass, "rejected: skinned geometry");
+		return;
+	}
 	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
 	// reference comes close. Windhelm's merged quads measured 8700-12608.
 	constexpr float kMergedLODRadius = 4096.0f;
@@ -463,12 +470,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			naturalFeature = false;
 			matoVetoed = true;
 		}
-		const bool lodAccept = isObjectLOD && naturalFeature;
-		if (!(pathMatch.base || lodAccept)) {
+		// Family accepts at ANY range, not just LOD (journey log, Josef's
+		// cliff run 2026-08-22: all 119 rejections were loaded glacier/ice
+		// meshes with NO proj/snow flags — this modlist's PBR glacier
+		// textures replace the vanilla projected-snow setup — while their
+		// LOD counterparts all captured; LOD-only acceptance was the whole
+		// bare-glacier bug). The MATO veto stands.
+		if (!(pathMatch.base || naturalFeature)) {
 			if (matoVetoed)
 				LogIceJourney(a_pass, "rejected: family matched but MATO vetoed (kNotSnow)");
-			else if (naturalFeature)
-				LogIceJourney(a_pass, "rejected: family matched but not object LOD (loaded mesh w/o proj+snow flags)");
 			else
 				LogIceJourney(a_pass, "rejected: no family signal at material gate (name/texture both missed)");
 			if (isObjectLOD)
@@ -856,6 +866,20 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
+// One-shot log per obstruction base: the gather admits by size alone, so
+// this is the audit trail for phantom OBBs (whatever dams drift where no
+// wall stands shows up here by model path).
+static void LogObstruction(uint32_t a_formID, const std::string& a_path, float a_extX, float a_extY, float a_extZ)
+{
+	static std::unordered_set<uint32_t> logged;
+	if (logged.size() > 256)
+		return;
+	if (!logged.insert(a_formID).second)
+		return;
+	logger::info("[SNOW DEFORMATION] drift obstruction base {:08X} ext {:.0f}x{:.0f}x{:.0f} '{}'",
+		a_formID, a_extX, a_extY, a_extZ, a_path);
+}
+
 void SnowDeformation::RenderObjectHeightMap()
 {
 	auto context = globals::d3d::context;
@@ -1066,19 +1090,30 @@ void SnowDeformation::RenderObjectHeightMap()
 							}
 						}
 
-						// Wall-drift obstructions: big grounded statics dam
-						// drifting snow (buildings, towers, huge rocks). OBND
-						// half-extents gate; trees excluded - their bounds are
-						// mostly canopy air.
-						if (obstructions.size() < kMaxObstructions) {
+						// Wall-drift obstructions: big grounded STATICS dam
+						// drifting snow (buildings, towers, huge rocks). STAT
+						// only, with a visible model: TESBoundObject also
+						// admitted FX movables and other bases whose OBB
+						// corresponds to no wall (a campsite column passes the
+						// size gates), and the drift's interior plateau —
+						// designed to hide inside real walls — surfaced through
+						// the shell as Josef's square at WDH 48, its banks
+						// casting the block shadow beside the camp clearing.
+						// Marker/collision/occlusion statics are invisible by
+						// design and vetoed by path. OBND half-extents gate;
+						// trees excluded - their bounds are mostly canopy air.
+						if (obstructions.size() < kMaxObstructions && base->Is(RE::FormType::Static) && !lowered.empty() &&
+							lowered.find("marker") == std::string::npos && lowered.find("collision") == std::string::npos &&
+							lowered.find("occlusion") == std::string::npos && lowered.find("invisible") == std::string::npos &&
+							lowered.find("fx") == std::string::npos &&
+							lowered.find("tree") == std::string::npos && lowered.find("pine") == std::string::npos) {
 							if (auto* boundObj = base->As<RE::TESBoundObject>()) {
 								const float scale = a_ref->GetScale();
 								const float extX = (boundObj->boundData.boundMax.x - boundObj->boundData.boundMin.x) * 0.5f * scale;
 								const float extY = (boundObj->boundData.boundMax.y - boundObj->boundData.boundMin.y) * 0.5f * scale;
 								const float extZ = (boundObj->boundData.boundMax.z - boundObj->boundData.boundMin.z) * 0.5f * scale;
 								if (extZ >= kObstructionMinHeight && std::min(extX, extY) >= kObstructionMinFootprint &&
-									std::max(extX, extY) <= kObstructionMaxFootprint &&
-									lowered.find("tree") == std::string::npos && lowered.find("pine") == std::string::npos) {
+									std::max(extX, extY) <= kObstructionMaxFootprint) {
 									const float centerX = (boundObj->boundData.boundMax.x + boundObj->boundData.boundMin.x) * 0.5f * scale;
 									const float centerY = (boundObj->boundData.boundMax.y + boundObj->boundData.boundMin.y) * 0.5f * scale;
 									auto pos = a_ref->GetPosition();
@@ -1087,6 +1122,7 @@ void SnowDeformation::RenderObjectHeightMap()
 									obstructions.push_back({ { pos.x + cosZ * centerX + sinZ * centerY,
 																 pos.y - sinZ * centerX + cosZ * centerY, extX, extY },
 										{ sinZ, cosZ, pos.z, 0.0f } });
+									LogObstruction(base->GetFormID(), lowered, extX, extY, extZ);
 								}
 							}
 						}
