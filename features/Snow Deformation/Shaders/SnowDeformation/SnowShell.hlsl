@@ -1802,6 +1802,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
 
+	// SSS gate diagnostics for ShellDebugData 4: x = mask darkness (what
+	// the ground-marched mask wants to print here), y = gate trust,
+	// z = the buried-caster probe fired. Stays black when the feature is
+	// off or inactive - itself a diagnostic.
+	float3 sssDebug = float3(0.0, 0.0, 0.0);
+
 	// Screen-Space Shadows (the integrated long-range depth march): these
 	// carry the distant LOD tree shadows far beyond the two cascades. The
 	// texture was marched on the prepass depth (the ground under the
@@ -1827,6 +1833,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// gap. Thresholds cannot separate grass shadows from buried
 		// prints (their gaps overlap - three rounds of evidence); the
 		// CASTER can, and the discriminator below does.
+		sssDebug.z = 0.0;
 		float sssRayGap = sceneZ - shellZ;
 		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
 		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
@@ -1860,11 +1867,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 					// grass is never captured, so grass shadows cannot be
 					// touched by this no matter the threshold.
 					[flatten] if (tapTop > -50000.0 && tapTop > sssSurfZ - 16.0)
+					{
 						sssBlend = 0.0;
+						sssDebug.z = 1.0;
+					}
 				}
 			}
 		}
-		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
+		sunShadow *= lerp(1.0, sssMask, sssBlend);
+		sssDebug.x = 1.0 - sssMask;
+		sssDebug.y = sssBlend;
 	}
 
 	// Parallax self-shadow on the snow's own grain: Extended Materials'
@@ -1892,7 +1905,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
 		// Faded on the same band as the normal map it occludes: past it the
 		// grain is not drawn, so shadowing it would darken nothing visible.
-		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
+		// ALSO faded out on walls: the march is jittered by screenNoise
+		// (screen-anchored, per-frame) with a distance-driven tap count, so
+		// on a wall's high-contrast side-projected grain it reads as
+		// shading that crawls when the camera moves. Wall shading comes
+		// from the trench self-shadow march and the cascades instead.
+		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
@@ -1985,6 +2003,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dbgField = SampleObjectHeight(dbgWorldXY);
 		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
 		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);
+	}
+	else if (ShellDebugData == 4)
+	{
+		// SSS gate view. RED = the mask's darkness at this shell pixel
+		// (marched on the ground BENEATH the shell), GREEN = how much the
+		// vertical hug gate trusts it, BLUE = the buried-caster probe
+		// fired and killed it. A shadow print on the snow = red together
+		// with green and NO blue. All black = the mask never reached the
+		// shell here (feature off / inactive).
+		preLit = sssDebug;
 	}
 	else if (ShellDebugData == 3)
 	{

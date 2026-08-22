@@ -769,6 +769,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Shell: Exclusion Debug Plane"), &shellExclusionDebug);
 		ImGui::Checkbox(T(TKEY("shell_border_debug"), "Shell: Border Debug Plane"), &shellBorderDebug);
+		ImGui::Checkbox(T(TKEY("shell_sss_debug"), "Shell: SSS Gate Debug"), &shellSSSDebug);
+		if (auto _ttSssDbg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 		if (auto _ttBdbg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_border_debug_tooltip"), "False-color plane of the border fields: dark red = designed bare (below -0.5), orange = slice ribbon zone (-0.5..1), green = the cut zone (1..3, white line at the cut contour), cyan/blue = deeper snow. Brightness = snow grain; magenta grid = land grain data present at that pixel."));
 		if (auto _ttExcl = Util::HoverTooltipWrapper())
