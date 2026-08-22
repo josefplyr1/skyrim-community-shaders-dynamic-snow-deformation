@@ -22,6 +22,7 @@
 	X(FootPrintScale) \
 	X(TrenchWallSharpness) \
 	X(TrailIrregularity) \
+	X(SlumpRate) \
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
 	X(MeltPersistence) \
@@ -509,6 +510,7 @@ void SnowDeformation::Prepass()
 	// smoothstep(1, 1, x) edge.
 	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f, 0.0f, 0.98f);
 	perFrameData.StampNoiseAmp = std::max(settings.TrailIrregularity, 0.0f);
+	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 
 	float deltaTime = *globals::game::deltaTime;
 	// Refill rate follows the weather's snowfall density; interiors have no

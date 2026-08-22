@@ -105,6 +105,40 @@
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
 
+// Unsupported-snow slump (TRENCH-REALISM-PLAN.md Stage 3b). A strip of snow
+// left standing between two separate trails has had its support dug away on
+// BOTH sides, so it settles toward its neighbors' floor; a trench WALL is
+// carved on one side only, so its support test reads ~0 and it never moves.
+// That asymmetry is the whole design - this is a support test, NOT a blur.
+// Per axis at radius R: support = min(carve at +R, carve at -R); the settle
+// target is the max over axes and radii. It has a fixed point by
+// construction: once the strip reaches its neighbors' depth the min equals
+// its own value, and open snow never starts because one side is always
+// pristine - so the collapse cannot creep outward.
+//
+// Radii are WORLD units (converted through the live TexelSize - the window
+// resizes with the Trenches range slider). Three radii so width picks the
+// outcome: a narrow fin is seen by all three and collapses fully, a wider
+// strip only by the longest reach, which settles it partway (SLUMP_REACH),
+// and a genuinely wide pristine strip is two trench walls and stands.
+#define SLUMP_RADII 3
+static const float kSlumpRadius[SLUMP_RADII] = { 24.0, 48.0, 96.0 };
+static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
+// Eight axes 22.5 degrees apart (taps go both ways, so 180 covers the
+// circle). Four showed up as a cross pattern on diagonal fins.
+#define SLUMP_AXES 8
+static const float2 kSlumpAxis[SLUMP_AXES] = {
+	float2(1.0, 0.0), float2(0.9239, 0.3827), float2(0.7071, 0.7071), float2(0.3827, 0.9239),
+	float2(0.0, 1.0), float2(-0.3827, 0.9239), float2(-0.7071, 0.7071), float2(-0.9239, 0.3827)
+};
+// Depth-fraction per second at slider 1: a fin sinks over a second or two
+// after the second walker passes, settling rather than popping.
+#define SLUMP_SPEED 0.5
+// The settled floor is UNEVEN on purpose - low bumps, not a plane. The
+// target wobbles on the coarse melt cells, which are already the scale of
+// a wandering outline rather than a chipped surface.
+#define SLUMP_FLOOR_NOISE 0.45
+
 cbuffer PerFrame : register(b0)
 {
 	float2 WindowOrigin;
@@ -148,7 +182,8 @@ cbuffer PerFrame : register(b0)
 	// How completely carving through a crust destroys it, against how deep the
 	// cut went. Anything that cuts snow has broken the skin over it.
 	float CrustBreakOnCarve;
-	float perFramePad;
+	// Unsupported-snow slump speed, 0-1; 0 disables the pass entirely.
+	float SlumpRate;
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -180,6 +215,16 @@ float StampNoise(float2 p)
 		lerp(StampNoiseHash(i + float2(0, 1)), StampNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
+// Total depth of a previous-map texel for the slump support test. Outside the
+// window counts as PRISTINE, not as carved: a border texel then has one
+// untouched side and stands, which errs toward doing nothing at the edge.
+float SlumpTap(int2 p, int2 dims)
+{
+	if (any(p < 0) || any(p >= dims))
+		return 0.0;
+	return PreviousDeformation[uint2(p)].x;
+}
+
 [numthreads(8, 8, 1)] void main(uint3 DTid
 								: SV_DispatchThreadID) {
 	uint2 pixel = DTid.xy;
@@ -189,6 +234,8 @@ float StampNoise(float2 p)
 	// melt basin from a dug trench.
 	float melted = 0.0;
 	float crust = 0.0;
+
+	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
 	if (!ClearMap) {
 		int2 sourcePixel = int2(pixel) + ScrollDelta;
@@ -236,9 +283,40 @@ float StampNoise(float2 p)
 		// gives way to temperature besides - so a glaze fades even under a
 		// clear sky, where the refill has stopped entirely.
 		crust = max(crust - refill - CrustThaw * DeltaTime, 0.0);
-	}
 
-	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
+		// Unsupported-snow slump: see the SLUMP_* block up top for the
+		// design. Runs on the PREVIOUS map at the scrolled position, like
+		// the drift fetch above, and RAISES deformation toward the settle
+		// target at a rate - so it composes with the refill (which is
+		// pulling the other way on both the strip and its neighbors) and
+		// with this frame's stamps, which max-blend over it below.
+		[branch] if (SlumpRate > 0.001 && deformation < 0.999)
+		{
+			float slumpTarget = 0.0;
+			[unroll] for (uint axis = 0; axis < SLUMP_AXES; axis++)
+			{
+				[unroll] for (uint r = 0; r < SLUMP_RADII; r++)
+				{
+					int2 off = int2(round(kSlumpAxis[axis] * (kSlumpRadius[r] / max(TexelSize, 1e-4))));
+					float support = min(SlumpTap(sourcePixel + off, int2(dims)),
+						SlumpTap(sourcePixel - off, int2(dims)));
+					slumpTarget = max(slumpTarget, support * kSlumpReach[r]);
+				}
+			}
+			// Low bumps, not a plane: the settled floor keeps an uneven
+			// remainder, which is what Josef's cross-section asks for.
+			slumpTarget *= 1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / MELT_NOISE_COARSE);
+			// Crusted snow is frozen solid and holds its shape. The melted
+			// channel is left alone: raising depth only loosens its clamp,
+			// so the added depth reads as DISPLACED - which also sheds the
+			// strip's berm through the (1 - deformation) mask for free.
+			[branch] if (slumpTarget > deformation)
+			{
+				deformation = min(deformation + SlumpRate * SLUMP_SPEED * (1.0 - crust) * DeltaTime,
+					slumpTarget);
+			}
+		}
+	}
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
