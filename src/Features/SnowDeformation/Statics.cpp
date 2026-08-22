@@ -141,7 +141,17 @@ namespace
 		auto [it, inserted] = matoClassCache.try_emplace(base->GetFormID(), MatoClass::kNoMato);
 		if (inserted) {
 			if (auto* stat = base->As<RE::TESObjectSTAT>(); stat && stat->data.materialObj) {
-				std::string matoPath(stat->data.materialObj->GetModel());
+				// The MODL path is junk on vanilla MATO records (Bethesda left
+				// 'shadertests\shaderbox.nif' in most of them — the whole
+				// modlist logged that one path), so the editor ID carries the
+				// real identity (SnowMaterialObjectNoise1P, SandMaterialObject
+				// ...). Runtime editor IDs need po3 Tweaks; when absent the
+				// signal degrades to the path alone.
+				std::string matoPath;
+				if (const char* edid = stat->data.materialObj->GetFormEditorID())
+					matoPath = edid;
+				matoPath += '|';
+				matoPath += stat->data.materialObj->GetModel();
 				std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
 					[](unsigned char c) { return (char)std::tolower(c); });
 				if (matoPath.find("snow") != std::string::npos) {
@@ -249,6 +259,51 @@ namespace
 		       lowered.find("iceberg") != std::string::npos;
 	}
 
+	// One-shot journey log for the ice family (glacier/iceberg): the skins
+	// keep failing at SOME gate and the gates key on different identity
+	// signals (geometry node name vs texture path vs shader flags). Any
+	// signal matching logs the geometry's facts and which gate ended this
+	// pass's journey, once per geometry+outcome; the outcome must be a
+	// string literal (the dedup keys on its address). Render thread only,
+	// like the other caches.
+	void LogIceJourney(RE::BSRenderPass* a_pass, const char* a_outcome)
+	{
+		auto* geometry = a_pass->geometry;
+		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		const char* texPath = "";
+		if (material) {
+			if (auto textureSet = material->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path)
+					texPath = path;
+			}
+		}
+		std::string loweredTex(texPath);
+		std::transform(loweredTex.begin(), loweredTex.end(), loweredTex.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		const bool texFamily = loweredTex.find("glacier") != std::string::npos ||
+		                       loweredTex.find("iceberg") != std::string::npos;
+		if (!texFamily && !IsIceFamilyGeometry(geometry))
+			return;
+		static std::unordered_set<uint64_t> logged;
+		if (logged.size() > 512)
+			return;
+		if (!logged.insert((uint64_t)(uintptr_t)geometry ^ ((uint64_t)(uintptr_t)a_outcome << 1)).second)
+			return;
+		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+		const auto& flags = a_pass->shaderProperty->flags;
+		RE::TESObjectREFR* refr = nullptr;
+		for (RE::NiAVObject* node = geometry; node && !refr; node = node->parent)
+			refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+		logger::info("[SNOW DEFORMATION] ice journey '{}' r={:.0f} proj={} snow={} lodObj={} hdLod={} lodLand={} ref={:08X} tex='{}' -> {}",
+			geometry->name.empty() ? "<unnamed>" : geometry->name.c_str(),
+			geometry->worldBound.radius,
+			flags.all(Flag::kProjectedUV) ? 1 : 0, flags.all(Flag::kSnow) ? 1 : 0,
+			flags.all(Flag::kLODObjects) ? 1 : 0, flags.all(Flag::kHDLODObjects) ? 1 : 0,
+			flags.all(Flag::kLODLandscape) ? 1 : 0,
+			refr && refr->GetBaseObject() ? refr->GetBaseObject()->GetFormID() : 0u,
+			texPath, a_outcome);
+	}
+
 	const SnowPathMatch& ClassifySnowPath(RE::BSLightingShaderMaterialBase* a_material)
 	{
 		static std::unordered_map<const void*, SnowPathMatch> pathCache;
@@ -332,8 +387,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Animated flora never qualifies: card meshes shard under the skin.
-	if (flags.all(Flag::kTreeAnim))
+	if (flags.all(Flag::kTreeAnim)) {
+		LogIceJourney(a_pass, "rejected: tree-anim flag");
 		return;
+	}
 	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
 	// reference comes close. Windhelm's merged quads measured 8700-12608.
 	constexpr float kMergedLODRadius = 4096.0f;
@@ -377,6 +434,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
 			if (!referenced) {
+				LogIceJourney(a_pass, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
 			}
@@ -400,10 +458,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// snow MATOs wrongly rejected glaciers, whose snow is baked and
 		// needs no projection record.
 		bool naturalFeature = pathMatch.naturalFeature || IsIceFamilyGeometry(a_pass->geometry);
-		if (naturalFeature && ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow)
+		bool matoVetoed = false;
+		if (naturalFeature && ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow) {
 			naturalFeature = false;
+			matoVetoed = true;
+		}
 		const bool lodAccept = isObjectLOD && naturalFeature;
 		if (!(pathMatch.base || lodAccept)) {
+			if (matoVetoed)
+				LogIceJourney(a_pass, "rejected: family matched but MATO vetoed (kNotSnow)");
+			else if (naturalFeature)
+				LogIceJourney(a_pass, "rejected: family matched but not object LOD (loaded mesh w/o proj+snow flags)");
+			else
+				LogIceJourney(a_pass, "rejected: no family signal at material gate (name/texture both missed)");
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
 			return;
@@ -431,8 +498,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 				}
 			}
 		}
-		if (shardIt->second)
+		if (shardIt->second) {
+			LogIceJourney(a_pass, "rejected: twig-card shape class");
 			return;
+		}
 	}
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
@@ -449,12 +518,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
-	if (!fadeExempt && dx * dx + dy * dy > captureRange * captureRange)
+	if (!fadeExempt && dx * dx + dy * dy > captureRange * captureRange) {
+		LogIceJourney(a_pass, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
+	}
 
 	// The same geometry renders through multiple passes; capture once.
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
+	LogIceJourney(a_pass, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
 
 	// Road-mesh model class: deterministic NAME + texture-path match. The
 	// name check matters: road models are built from MULTIPLE trishapes

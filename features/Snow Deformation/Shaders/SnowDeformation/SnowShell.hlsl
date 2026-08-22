@@ -755,12 +755,18 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float field = SampleObjectHeight(worldXY);
 			[flatten] if (field > -50000.0)
 			{
-				// Clearings suppress the wall-drift lift: the drift failsafe
-				// below otherwise raised banks over EXCLUDED ground, and the
-				// suppressed-coverage slab hovered at bank height over the
-				// bare dirt — the fixed blocky black patch that scaled with
-				// Wall Drift Height (Josef's lever evidence, gone at <10).
-				field = lerp(field, min(field, terrainHeight), saturate(shelterMask.x));
+				// The lift never crosses the shell's own boundary: banks and
+				// cones rise only from ground that shows shell snow (class
+				// coverage minus clearings). Gating on the exclusion mask
+				// alone missed bare LANDSCAPE classes: the drift raised a rim
+				// right where the shell meets the dirt and hung a coverage-
+				// forced slab whose shadow caster scaled with Wall Drift
+				// Height (castVis crosses its 0.35 cull near WDH 10 — Josef's
+				// lever point). Supersedes the wall-base failsafe design pin:
+				// banks stop at the coverage edge instead of forcing snow
+				// onto bare ground.
+				float groundSnow = smoothstep(0.1, 0.45, coverage) * (1.0 - saturate(shelterMask.x));
+				field = lerp(min(field, terrainHeight), field, groundSnow);
 				// Where a captured object defines the surface, the layer wears
 				// the object's own skin depth instead of the landscape class
 				// depth (a thin-skinned rock must not carry a deep landscape
@@ -1224,6 +1230,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float capField = SampleObjectHeight(capWorldXY);
 		[flatten] if (capField > -50000.0)
 		{
+			// Boundary gate mirroring ShellSurfaceZ: no lift from bare ground.
+			float capGround = smoothstep(0.1, 0.45, pixelCoverage) * (1.0 - saturate(SampleExclusionMask(capWorldXY).x));
+			capField = lerp(min(capField, pixelTerrain.x), capField, capGround);
 			float capLift = capField - pixelTerrain.x;
 			float capT = smoothstep(0.25, 1.0, capLift / max(pixelClassDepth, 1.0));
 			pixelClassDepth = lerp(pixelClassDepth, min(pixelClassDepth, SampleObjectDepthCap(capWorldXY)), capT);
@@ -1302,17 +1311,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// rejoins the soft dissolve at borders.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
 	float pixelLift = 0.0;
-	float pixelMelt = 0.0;
+	float2 pixelShelter = SampleExclusionMask(GridOrigin + gridLocal);
 	[branch] if (ObjectLiftCap > 0.0)
 	{
 		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
 		[flatten] if (fieldHeight > -50000.0)
+		{
+			// Boundary gate mirroring ShellSurfaceZ: a lift the geometry no
+			// longer takes must not hold the alpha override either.
+			float liftGround = smoothstep(0.1, 0.45, saturate(pixelTerrain.z)) * (1.0 - saturate(pixelShelter.x));
+			fieldHeight = lerp(min(fieldHeight, pixelTerrain.x), fieldHeight, liftGround);
 			pixelLift = fieldHeight - pixelTerrain.x;
+		}
 	}
 	// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above it);
 	// without an override the proximity fade dithers them into translucency
 	// like any other near-coincident surface.
-	pixelMelt = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
+	float pixelMelt = saturate(pixelShelter.y);
 	// Trampled Border Fade retired (round 18): its default-0 behavior is the
 	// keeper, so the window is the constant it resolved to.
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, 1.0, pixelTerrain.y);
@@ -1734,8 +1749,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// sun. Same rule for MELT bowls (fires, workspace clearings):
 			// without the melt, every bowl-floor pixel reads as ringed by
 			// full-height snow and the whole bowl darkens.
+			float2 sampleMask = SampleExclusionMask(GridOrigin + sampleLocal);
 			{
-				float sampleMelt = saturate(SampleExclusionMask(GridOrigin + sampleLocal).y);
+				float sampleMelt = saturate(sampleMask.y);
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
 			float sampleDeform = saturate(SampleDeformation(sampleLocal));
@@ -1755,7 +1771,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 			{
 				float sf = SampleObjectHeight(GridOrigin + sampleLocal);
 				[flatten] if (sf > -50000.0)
+				{
+					// Boundary gate mirroring ShellSurfaceZ: banks the geometry
+					// no longer raises must not occlude the march either.
+					float sampleGround = smoothstep(0.1, 0.45, saturate(st.z)) * (1.0 - saturate(sampleMask.x));
+					sf = lerp(min(sf, st.x), sf, sampleGround);
 					sh = max(sh, sf + sampleDepth);
+				}
 			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
