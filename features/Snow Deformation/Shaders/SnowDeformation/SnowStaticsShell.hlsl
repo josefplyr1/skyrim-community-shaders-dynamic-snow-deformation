@@ -163,8 +163,8 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// Compacted snow (Stage 1): x glint suppression, y albedo darkening
-	// fraction at full churn, z roughness rise. One constant, both shells.
+	// x = compaction glint suppression (Stage 1); y = wall combing strength
+	// (Stage 2 P4, landscape shell only); zw spare.
 	float4 CompactLook;
 }
 
@@ -1307,33 +1307,8 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 
 
-// Two-plane projection blend, on the SAMPLES. Flat-topped pixels never touch
-// the side plane, so the second set of stochastic taps is only paid for on
-// slopes and rims.
-float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTaps, float sideWeight)
-{
-	float4 c = SampleSnowMap(tex, topTaps);
-	[branch] if (sideWeight > 0.001)
-		c = lerp(c, SampleSnowMap(tex, sideTaps), sideWeight);
-	return c;
-}
-
-// --- Parallax self-shadow. Mirrors SnowShell.hlsl; keep the two in step. ---
-
-
-// Two-plane occlusion, blended on the RESULTS. Unlike the sample blend above
-// this cannot share one ray: each projection has its own uv axes, so the
-// light resolves to a different 2D direction in each. Flat-topped pixels skip
-// the side plane entirely, as with SampleSnowPlanar.
-float SnowParallaxOcclusionPlanar(SnowTaps topTaps, SnowTaps sideTaps, float sideWeight,
-	float2 lightUVTop, float2 lightUVSide, float mipTop, float mipSide,
-	float quality, float noise, DisplacementParams params)
-{
-	float o = SnowParallaxOcclusion(topTaps, lightUVTop, mipTop, quality, noise, params);
-	[branch] if (sideWeight > 0.001)
-		o = lerp(o, SnowParallaxOcclusion(sideTaps, lightUVSide, mipSide, quality, noise, params), sideWeight);
-	return o;
-}
+// SampleSnowPlanar / SnowParallaxOcclusionPlanar moved to SnowParallax.hlsli
+// (Stage 2 P3): the landscape shell runs the same two-plane blend now.
 
 
 struct PS_OUTPUT

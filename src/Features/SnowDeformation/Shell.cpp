@@ -570,10 +570,10 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
-	// Compaction: matte only, one shared constant for both shells. The
-	// darken/roughen halves were retired 2026-08-22 - IBL + DALC already
-	// darken trenches (Josef's verdict).
-	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
+	// x compaction matte (the darken/roughen halves were retired - IBL +
+	// DALC already darken trenches); y wall combing, riding the spare room.
+	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
+		std::clamp(settings.WallComb, 0.0f, 1.0f), 0.0f, 0.0f };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old

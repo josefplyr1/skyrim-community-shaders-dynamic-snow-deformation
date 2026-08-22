@@ -190,8 +190,8 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
-	// Compacted snow (Stage 1): x glint suppression, y albedo darkening
-	// fraction at full churn, z roughness rise. One constant, both shells.
+	// x = compaction glint suppression (Stage 1); y = wall combing strength
+	// (Stage 2 P4, landscape shell only); zw spare.
 	float4 CompactLook;
 }
 
@@ -1513,6 +1513,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Uniform flow: the parallax shadow branch below is divergent, and
 	// derivatives taken inside it would be garbage at its edges.
 	float snowHeightMip = SnowHeightMip(snowUV);
+	// Two-plane projection (Stage 2 P3, the statics shell's recipe): trench
+	// walls are near-vertical, and the top-down uv stretches down them as
+	// smears. Steep pixels blend in a side-plane SAMPLE via SampleSnowPlanar;
+	// keyed on the per-pixel trench normal, so only walls pay the second tap
+	// set. Captured before the normal map perturbs normalWS - the side POM
+	// march must resolve the view into the SAME plane these uvs use.
+	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
+	float2 snowSidePlane = snowSideDropsX ? float2(worldXYPS.y, snowWorldZAbs) : float2(worldXYPS.x, snowWorldZAbs);
+	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
+	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
+	float snowHeightMipSide = SnowHeightMip(snowUVSide);
 	// Tangent basis for the snow maps. The snow uv is a world-XY planar
 	// projection, so the frame is axis-aligned by construction: bumpT is
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
@@ -1544,14 +1557,60 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
 		snowUV += pomOffset;
 		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
+
+		// Side plane marches its own ray (statics recipe): the two
+		// projections have different uv axes, so the view resolves to a
+		// different 2D direction in each. Only steep pixels pay for it.
+		[branch] if (snowSteepness > 0.001)
+		{
+			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+			float3 sideB = float3(0.0, 0.0, 1.0);
+			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
+			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
+			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
+			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, shellZ, snowHeightMipSide, screenNoise, pomParams);
+			snowUVSide += offsetSide;
+			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
+		}
 	}
 
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
-		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
+		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
+	}
+
+	// Wall combing (Stage 2 P4, RDR2 O2): fine grooves dragged straight down
+	// a trench wall's FALL LINE, ~3.5 cm apart, staying vertical as the
+	// trench curves. Direction = normalize(profileGrad), the carve profile's
+	// own gradient - already computed for the wall normal, and zero anywhere
+	// that is not a trench wall, so floors, pristine ground and plain steep
+	// terrain never comb. Every input is world-anchored (worldXYPS + the
+	// profile field); nothing here may ride a view-dependent quantity -
+	// grain sliding with the camera is a twice-bitten failure mode here
+	// (the pre-POM derivative snapshot, the glint 4096 fold).
+	float combW = CompactLook.y * snowSteepness * (1.0 - smoothstep(200.0, 700.0, shellZ));
+	[branch] if (combW > 0.001)
+	{
+		float fallLen = length(profileGrad);
+		[branch] if (fallLen > 0.05)
+		{
+			float2 fallDir = profileGrad / fallLen;
+			// Horizontal axis ACROSS the wall: grooves vary along it and
+			// run down the fall line.
+			float2 across = float2(-fallDir.y, fallDir.x);
+			float combCoord = dot(worldXYPS, across);
+			const float kCombSpacing = 2.5;
+			// Phase wobble so the teeth read dragged rather than machined;
+			// strand jitter breaks the comb into strands of varying depth.
+			float wobble = ShapeNoise(worldXYPS / 9.0);
+			float comb = sin(combCoord * (6.2831853 / kCombSpacing) + wobble * 4.0);
+			float strand = 0.55 + 0.45 * ShapeNoise(float2(combCoord / 7.0, dot(worldXYPS, fallDir) / 90.0));
+			float amp = combW * saturate(fallLen * 4.0) * strand;
+			normalWS = normalize(normalWS + float3(across, 0.0) * comb * amp);
+		}
 	}
 
 	// Frost crystal, laid ON TOP of the flattened powder grain rather than
@@ -1596,7 +1655,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
 	[branch] if (HasSnowTexture != 0)
 	{
-		kSnowAlbedo = SampleSnowMap(SnowDiffuse, snowTaps).rgb;
+		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		// PBR-authored textures store linear color; the rest of this path works
 		// in the pipeline's gamma space. Auto-enabled when the PBR set resolved.
 		[flatten] if (SnowTextureIsLinear != 0.0)
@@ -1651,7 +1710,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float snowAO = 1.0;
 	[branch] if (HasSnowRmaos > 0.5)
 	{
-		float4 rmaos = SampleSnowMap(SnowRmaosMap, snowTaps);
+		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
 		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
@@ -1849,7 +1908,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Light into the snow uv's own frame. bumpT/bumpB ARE the uv axes, so
 		// this is the planar-projection equivalent of mul(DirLightDirection, tbn).
 		float2 lightUV = float2(dot(L, bumpT), dot(L, bumpB));
-		float occlusion = SnowParallaxOcclusion(snowTaps, lightUV, snowHeightMip,
+		float2 lightUVSide = snowSideDropsX ? float2(L.y, L.z) : float2(L.x, L.z);
+		float occlusion = SnowParallaxOcclusionPlanar(snowTaps, snowTapsSide, snowSteepness,
+			lightUV, lightUVSide, snowHeightMip, snowHeightMipSide,
 			SnowParallaxQuality(shellZ), screenNoise, SnowDisplacementParams());
 
 		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);

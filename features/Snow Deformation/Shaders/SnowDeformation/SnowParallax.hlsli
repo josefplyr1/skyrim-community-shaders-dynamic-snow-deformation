@@ -135,6 +135,18 @@ float SnowHeightMip(float2 uv)
 // the saturate, so a caller blending more than one planar projection can mix
 // them and clamp once.
 // MUST stay in step with the copy in SnowStaticsShell.hlsl.
+// Two-plane projection blend, on the SAMPLES. Lifted from the statics shell
+// (Stage 2 P3): lerping the UVs instead produces a coordinate field that
+// belongs to neither plane and smears the whole transition band. Flat pixels
+// never touch the side plane, so the second tap set is only paid on slopes.
+float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTaps, float sideWeight)
+{
+	float4 c = SampleSnowMap(tex, topTaps);
+	[branch] if (sideWeight > 0.001)
+		c = lerp(c, SampleSnowMap(tex, sideTaps), sideWeight);
+	return c;
+}
+
 float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float quality, float noise, DisplacementParams params)
 {
 	uint tapCount = ExtendedMaterials::ParallaxShadowTapCount(quality);
@@ -153,6 +165,20 @@ float SnowParallaxOcclusion(SnowTaps taps, float2 lightUV, float mip, float qual
 	if (quality > 0.75)
 		sh.w = ExtendedMaterials::AdjustDisplacementNormalized(SampleSnowHeight(taps, rayDir * multipliers.w, mip), params);
 	return dot(max(0.0, sh - sh0), shadowStrength);
+}
+
+// Two-plane occlusion, blended on the RESULTS (also lifted from the statics
+// shell). Unlike the sample blend this cannot share one ray: each projection
+// has its own uv axes, so the light resolves to a different 2D direction in
+// each. Flat pixels skip the side plane entirely.
+float SnowParallaxOcclusionPlanar(SnowTaps topTaps, SnowTaps sideTaps, float sideWeight,
+	float2 lightUVTop, float2 lightUVSide, float mipTop, float mipSide,
+	float quality, float noise, DisplacementParams params)
+{
+	float o = SnowParallaxOcclusion(topTaps, lightUVTop, mipTop, quality, noise, params);
+	[branch] if (sideWeight > 0.001)
+		o = lerp(o, SnowParallaxOcclusion(sideTaps, lightUVSide, mipSide, quality, noise, params), sideWeight);
+	return o;
 }
 
 // The shells' shared DisplacementParams: HeightScale is the PBR JSON
