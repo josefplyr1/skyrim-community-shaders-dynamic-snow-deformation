@@ -1868,9 +1868,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		// t102 is authored sRGB unless the set is a linear PBR one; baseColor
 		// here is linear albedo.
 		float3 bakedAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? bakedSample : Color::ColorToLinear(bakedSample);
-		float bakedUp = saturate(worldNormal.z);
+		// The BAKE, not the slope, decides where snow sits: baked snow is
+		// WHITE (bright, desaturated) while glacier ice is teal (saturated).
+		// The original up-facing gate never reached mask 1 on real glacier
+		// tops — bumpy sastrugi normal maps keep worldNormal.z under its
+		// upper edge — so Josef's Alftand debug shot showed blue walls and
+		// no cyan anywhere.
 		float bakedLuma = Color::RGBToLuminance(baseColor.xyz);
-		float bakedMask = smoothstep(0.35, 0.7, bakedUp) * smoothstep(0.12, 0.35, bakedLuma);
+		float bakedMax = max(baseColor.r, max(baseColor.g, baseColor.b));
+		float bakedSat = (bakedMax - min(baseColor.r, min(baseColor.g, baseColor.b))) / max(bakedMax, 1e-4);
+		float bakedMask = smoothstep(0.18, 0.38, bakedLuma) * smoothstep(0.4, 0.18, bakedSat);
 		// Classification debug, unconditional on the mask so one screenshot
 		// separates the failure modes: any tint = the draw is classified and
 		// this block runs; the GREEN channel is the snow mask (blue = mask 0
