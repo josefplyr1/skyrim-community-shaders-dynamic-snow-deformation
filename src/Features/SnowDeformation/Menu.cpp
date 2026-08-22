@@ -397,6 +397,14 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttGs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed snow. 0 disables it."));
 
+			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
+			if (auto _ttCm = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("compact_shade"), "Compaction Shading"), &settings.CompactShade, 0.0f, 1.0f, "%.2f");
+			if (auto _ttCsh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("compact_shade_tooltip"), "How much trampled snow darkens and roughens (1.0 = 14% darker at full churn). This is what keeps a trench readable in flat light - overcast, dusk, building shadow - where shape-only shading vanishes. Both shells; 0 = off."));
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

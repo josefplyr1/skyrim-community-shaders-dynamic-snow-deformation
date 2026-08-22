@@ -109,6 +109,8 @@
 	X(ChurnSize) \
 	X(CrispScale) \
 	X(CrispStrength) \
+	X(CompactMatte) \
+	X(CompactShade) \
 	X(ObjBermHeight) \
 	X(ObjChurnHeight) \
 	X(ObjChurnSize) \

@@ -162,6 +162,9 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
+	// Compacted snow (Stage 1): x glint suppression, y albedo darkening
+	// fraction at full churn, z roughness rise. One constant, both shells.
+	float4 CompactLook;
 }
 
 cbuffer StaticCB : register(b1)
@@ -1879,7 +1882,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// recipes with the independent Obj* knobs; geometry berm waits for the
 	// skin rework.
 	float bermC = 0.0;
-	[branch] if (ObjBermHeightAmp > 0.005 || ObjCrispStrengthV > 0.01)
+	[branch] if (ObjBermHeightAmp > 0.005 || ObjCrispStrengthV > 0.01 || CompactLook.x > 0.001 || CompactLook.y > 0.0001)
 		bermC = BermField(trenchGridLocal);
 	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
 	{
@@ -2016,10 +2019,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	// No compression darkening: the terrain shell has none, and the skin-only
-	// term read as a color mismatch between trampled and untrampled object
-	// snow (round 33). If compressed snow ever gets a tint, it goes into
-	// BOTH shells from one shared constant.
+	// Compaction darkening from the SAME shared constant as the terrain
+	// shell - round 33 rejected a skin-only term as a color mismatch, and
+	// Stage 1 is the both-shells version it called for. Recipe identical to
+	// SnowShell.hlsl (cool-biased: packed snow absorbs red first).
+	float churnMat = ChurnWeight(pixelDeform, bermC);
+	[branch] if (CompactLook.y > 0.0001 && churnMat > 0.001)
+		kSnowAlbedo *= 1.0 - CompactLook.y * churnMat * float3(1.0, 0.97, 0.90);
 
 	// Spell marks on the albedo; the landscape recipes verbatim.
 	{
@@ -2046,6 +2052,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
+
+	// Compaction roughens BEFORE crust polishes: refrozen floors are ice,
+	// and ice wins.
+	snowRoughness = saturate(snowRoughness + CompactLook.z * churnMat);
 
 	// Crust polishes whatever the material ended up being; after the RMAOS
 	// block or an installed map silently discards it (landscape lesson).
@@ -2208,8 +2218,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
+	// Compaction thins the glint field toward the smooth-GGX fallback
+	// (same recipe as SnowShell.hlsl; density under the 1.1 gate = no
+	// glints at all).
+	float4 glintParamsC = SnowGlintParams;
+	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

@@ -189,6 +189,9 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
+	// Compacted snow (Stage 1): x glint suppression, y albedo darkening
+	// fraction at full churn, z roughness rise. One constant, both shells.
+	float4 CompactLook;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -1633,6 +1636,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
+	// Compaction (Stage 1): trampled snow is packed - slightly darker, and
+	// cool-biased, because packed snow absorbs red first; a warm-grey tint
+	// reads as dirt where this must read as density. The weight is the same
+	// churn field the crisp grain uses, so the material change lands exactly
+	// on floors, walls and berms and never draws its own boundary.
+	float churnMat = ChurnWeight(pixelCarve, bermCenter);
+	[branch] if (CompactLook.y > 0.0001 && churnMat > 0.001)
+		kSnowAlbedo *= 1.0 - CompactLook.y * churnMat * float3(1.0, 0.97, 0.90);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -1674,6 +1685,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
+
+	// Compaction roughens BEFORE crust polishes: a refrozen trench floor is
+	// ice, and ice wins.
+	snowRoughness = saturate(snowRoughness + CompactLook.z * churnMat);
 
 	// Crust polishes whatever the material ended up being, PBR set or not. It
 	// has to come after the block above rather than before it, or an installed
@@ -1890,8 +1905,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the world, invisible in a stochastic field. Derivatives are unchanged.
 	const float2 glintUV = fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
+	// Compaction thins the glint field toward the smooth-GGX fallback: at
+	// MinGlintDensity (1.0) the density sits under SnowBuildMaterial's 1.1
+	// gate and the sparkle is gone entirely. Log-space lerp, so partial
+	// churn reads as sparser glitter rather than dimmer.
+	float4 glintParamsC = SnowGlintParams;
+	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

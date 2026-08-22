@@ -477,6 +477,10 @@ public:
 		float CrispScale = 4.5f;
 		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
 		float CrispStrength = 1.5f;
+		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
+		float CompactMatte = 0.6f;
+		/** @brief Trampled-snow darkening + roughening strength (1.0 = 14% darker at full churn). Shared by both shells - round 33 rejected a skin-only tint as a mismatch. */
+		float CompactShade = 0.5f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
 		float ObjBermHeight = 0.35f;
 		float ObjChurnHeight = 5.0f;
@@ -768,8 +772,10 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Appended LAST; mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
+		/** @brief Compacted-snow material (trench plan Stage 1): x = glint suppression 0-1, y = albedo darkening fraction at full churn, z = roughness rise at full churn, w spare. ONE constant for BOTH shells (round 33). Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		float4 CompactLook;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

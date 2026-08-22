@@ -568,6 +568,12 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
+	// One shared constant for both shells (round 33: a skin-only darkening
+	// read as a mismatch). Shading slider 1.0 = 14% darkening at full churn;
+	// the default 0.5 sits inside the reference footage's 6-10% band.
+	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
+		std::clamp(settings.CompactShade, 0.0f, 1.0f) * 0.14f,
+		std::clamp(settings.CompactShade, 0.0f, 1.0f) * 0.30f, 0.0f };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old
