@@ -201,7 +201,11 @@ cbuffer StaticCB : register(b1)
 	// Strength of the coverage LOD terms (facing handover, rim contour push).
 	// 0 reproduces the pre-LOD gates exactly.
 	float SkinDistantBareness;
-	float3 padStatics;
+	// >0.5: skip the SkinFade distance dissolve (glacier/iceberg captures,
+	// whose own baked snow never matches the shell). Mirror in
+	// SnowDeformation.h StaticsCB.
+	float FadeExempt;
+	float2 padStatics;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1820,8 +1824,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the
 	// capture range); distant objects keep their real look instead of
-	// turning blank white.
-	coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
+	// turning blank white. Glacier/iceberg captures are exempt: their own
+	// baked snow never matches the shell, so the skin persists at every
+	// loaded distance (geometry still collapses to flat paint by
+	// SkinHeightFadeEnd).
+	[flatten] if (FadeExempt < 0.5)
+		coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 	// Captured before the override: mode 2 renders the value the dither sees.
 	float dbgAlpha = coverageAlpha;

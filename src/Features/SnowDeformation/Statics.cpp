@@ -164,6 +164,48 @@ namespace
 		}
 		return it->second;
 	}
+
+	// Diffuse-path facts, cached per material and shared by the flags-fail
+	// acceptance, the range-cap exemption and the capture's fade flag.
+	// Caching the ACCEPT decision instead would be wrong: the same material
+	// can reach the hook as both LOD and non-LOD, and the LOD path accepts
+	// more.
+	struct SnowPathMatch
+	{
+		// Drifts wear plain LANDSCAPE snow textures (no "drift" in the
+		// path); requiring the landscape folder keeps frosted plants
+		// (plant/tree folders) out.
+		bool base = false;
+		// The glacier/iceberg family wears baked snow the projected match
+		// can never recolor. "ice" is deliberately NOT matched (hits
+		// lattice/office/service); "mountain" was dropped 2026-08-22 (shore
+		// rocks share the diffuse, their LOD hangs off no reference, and
+		// distant snowy mountainsides are Horizon Snow's job). The merged-
+		// DynDOLOD-atlas experiment was retired the same day.
+		bool naturalFeature = false;
+	};
+
+	const SnowPathMatch& ClassifySnowPath(RE::BSLightingShaderMaterialBase* a_material)
+	{
+		static std::unordered_map<const void*, SnowPathMatch> pathCache;
+		if (pathCache.size() > 4096)
+			pathCache.clear();
+		auto [it, inserted] = pathCache.try_emplace(a_material, SnowPathMatch{});
+		if (inserted) {
+			if (auto textureSet = a_material->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+					std::string lowered(path);
+					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+						[](unsigned char c) { return (char)std::tolower(c); });
+					it->second.base = lowered.find("drift") != std::string::npos ||
+					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
+					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
+					                            lowered.find("iceberg") != std::string::npos;
+				}
+			}
+		}
+		return it->second;
+	}
 }
 
 void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass)
@@ -280,65 +322,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// the horizon recolor, never to object snow.
 		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 
-		// Two independent path facts, cached per material: the base match, and
-		// the natural-feature match that only LOD is allowed to use. Caching
-		// the ACCEPT decision instead would be wrong - the same material can
-		// in principle reach here as both LOD and non-LOD, and the LOD path
-		// accepts more.
-		struct SnowPathMatch
-		{
-			bool base = false;
-			bool naturalFeature = false;
-		};
-		static std::unordered_map<const void*, SnowPathMatch> driftMaterialCache;
-		if (driftMaterialCache.size() > 4096)
-			driftMaterialCache.clear();
-		auto [it, inserted] = driftMaterialCache.try_emplace(material, SnowPathMatch{});
-		if (inserted) {
-			if (auto textureSet = material->textureSet.get()) {
-				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-					std::string lowered(path);
-					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-						[](unsigned char c) { return (char)std::tolower(c); });
-					// Drifts wear plain LANDSCAPE snow textures (no "drift" in
-					// the path); requiring the landscape folder keeps frosted
-					// plants (plant/tree folders) out.
-					it->second.base = lowered.find("drift") != std::string::npos ||
-					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
-					// LOD loses the kSnow/kProjectedUV flags its full mesh
-					// carries, so a glacier keeps its snow up close and drops it
-					// at range. The full mesh's own texture name is the only
-					// classification left. "ice" is deliberately NOT matched:
-					// three letters that hit lattice/office/service by accident,
-					// and "glacier" already covers the ice family we actually
-					// saw dropped. "mountain" was DROPPED 2026-08-22: shore
-					// rocks wear the same mountain diffuse, their LOD hangs off
-					// no reference (the MATO override below cannot run), and the
-					// skins put snow on the Pale's sand beaches at range; snowy
-					// mountainsides at distance are LOD terrain, which Horizon
-					// Snow already dresses.
-					it->second.naturalFeature = lowered.find("glacier") != std::string::npos;
-					// The merged-DynDOLOD-atlas experiment was RETIRED 2026-08-22
-					// (Josef's call): it skinned whole mixed batches all-or-nothing
-					// (snow on sand-shore rocks), and the projected-snow match now
-					// covers distant object snow appearance without it.
-				}
-			}
-		}
+		const SnowPathMatch& pathMatch = ClassifySnowPath(material);
 		// The texture-name families over-accept: a shore RockShelf wears the
 		// same mountain diffuse as a snowy crag, but its PROJECTED material
 		// is the coastal sand MATO, not snow (Josef's Pale beach evidence,
 		// 2026-08-22). When the LOD still hangs under its reference the MATO
 		// settles it — positive snow evidence required. Unreferenced merged
 		// batches keep the name heuristic.
-		bool naturalFeature = it->second.naturalFeature;
+		bool naturalFeature = pathMatch.naturalFeature;
 		if (naturalFeature) {
 			const MatoClass matoClass = ClassifyProjectedMato(a_pass->geometry);
 			if (matoClass != MatoClass::kNoReference)
 				naturalFeature = matoClass == MatoClass::kSnow;
 		}
 		const bool lodAccept = isObjectLOD && naturalFeature;
-		if (!(it->second.base || lodAccept)) {
+		if (!(pathMatch.base || lodAccept)) {
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
 			return;
@@ -372,11 +370,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
 	// everywhere in Skyrim; the skin only matters within the chosen range.
+	// Glacier/iceberg captures are EXEMPT (Josef's Saarthal evidence,
+	// 2026-08-22): their baked snow is far whiter than the shell and no
+	// projection exists for the match to recolor, so between the skin range
+	// and cell unload they stood out bright; the skin now covers them at
+	// every loaded distance and skips the fade to match.
+	auto* captureMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+	const bool fadeExempt = captureMaterial && ClassifySnowPath(captureMaterial).naturalFeature;
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
-	if (dx * dx + dy * dy > captureRange * captureRange)
+	if (!fadeExempt && dx * dx + dy * dy > captureRange * captureRange)
 		return;
 
 	// The same geometry renders through multiple passes; capture once.
@@ -415,7 +420,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1113,6 +1118,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// both gates have to reach this pass; without them every object reads
 		// as non-carving and the trench patch dies everywhere, roads included.
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
@@ -1633,6 +1639,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.HasObjectTop = objectTopSRV ? 1.0f : 0.0f;
 		scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.SkinDistantBareness = settings.SkinDistantBareness;

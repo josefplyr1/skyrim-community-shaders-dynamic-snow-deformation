@@ -1078,6 +1078,8 @@ public:
 		RE::NiTransform world;
 		/** @brief Road/bridge match: this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
 		bool road;
+		/** @brief Glacier/iceberg family: captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
+		bool fadeExempt;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1213,7 +1215,9 @@ public:
 		float ObjectTrenches;
 		/** @brief Strength of the skin's coverage LOD terms (facing handover to the geometric face normal, rim-contour push); 0 reproduces the pre-LOD gates exactly. */
 		float SkinDistantBareness;
-		float padStatics[3];
+		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
+		float FadeExempt;
+		float padStatics[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
