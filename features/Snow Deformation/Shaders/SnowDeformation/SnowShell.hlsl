@@ -1806,16 +1806,37 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// near-field SSS - including grass shadows, which CS casts only via
 		// this march and which therefore never fell on the shell (Josef).
 		// The hug gate alone covers the buried-object case at every range.
-		// Hug gate 8-24 -> 4-14 (two rounds of Josef's evidence bracketing
-		// it): the mask is marched on the PRE-shell depth, so at 8-24 a
-		// fence post's buried-ground shadow printed faintly through 15-25
-		// units of cover, while 2-9 visibly thinned the grass shadows ON
-		// the shell — grass casts only via SSS, from ground a thin cover
-		// sits a few units above. 4-14 kills the deep-cover print and
-		// keeps thin-cover grass; the rule stands: shadow on buried ground
-		// stays invisible, shadow on the shell is the cascades' and the
-		// march's job.
-		float sssBlend = 1.0 - smoothstep(4.0, 14.0, sceneZ - shellZ);
+		// Hug gate back at the generous 8-24 (the "complete grass" era):
+		// three rounds of Josef's evidence proved the fence-print and
+		// grass-shadow depth gaps OVERLAP, so no constant separates them —
+		// 2-9 and 4-14 each starved grass while a shallow-buried post base
+		// still printed. The separation is not a threshold, it is the
+		// CASTER: the fence post is a captured object — its true shadow on
+		// the shell already comes from the cascades and the self-shadow
+		// march — while grass is never captured and SSS is its only
+		// source. Suppress SSS where a captured object stands sunward.
+		float sssBlend = 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
+		// Buried-caster discriminator: three sunward taps of the object-top
+		// raster; any captured surface standing above this pixel's shell
+		// means the mask's darkness here is that object's buried shadow.
+		[branch] if (ObjectLiftCap > 0.0 && sssBlend > 0.001)
+		{
+			float2 sunXY = L.xy / max(length(L.xy), 1e-4);
+			float sssSurfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+			[unroll] for (uint sssI = 0; sssI < 3; sssI++)
+			{
+				float2 tapWorldXY = GridOrigin + gridLocal + sunXY * (40.0 + 70.0 * sssI);
+				float2 tapDims;
+				bool tapValid;
+				float2 tapTexel = ObjectMapTexel(tapWorldXY, tapDims, tapValid);
+				[flatten] if (tapValid)
+				{
+					float tapTop = ObjectTopsRaw.Load(int3((int2)tapTexel, 0));
+					[flatten] if (tapTop > -50000.0 && tapTop > sssSurfZ + 8.0)
+						sssBlend = 0.0;
+				}
+			}
+		}
 		// Distant LOD shadows ARE Screen-Space Shadows (ledger r107: no
 		// third cascade exists; LOD trees shadow bare ground only via the
 		// depth march). The hug gate's along-ray gap explodes at grazing
@@ -1823,7 +1844,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// lift past 3000 — so it silently culled ALL far SSS, which is the
 		// distant-shadow regression Josef chased across three rounds. Far
 		// field: SSS applies fully; buried-caster prints don't read at
-		// that range (r34: the far field is diffuse-dominated).
+		// that range (r34: the far field is diffuse-dominated). Applied
+		// after the discriminator so the far field is never suppressed.
 		sssBlend = lerp(sssBlend, 1.0, smoothstep(2500.0, 5000.0, shellZ));
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
