@@ -245,15 +245,6 @@ void Deferred::PrepassPasses()
 	auto context = globals::d3d::context;
 	context->OMSetRenderTargets(0, nullptr, nullptr);  // Unbind all bound render targets
 
-	// Ordered ahead of the feature loop: ScreenSpaceShadows precedes
-	// SnowDeformation in the feature list, and its march must see the
-	// shell's depth stamp or buried objects cast onto the snow above them.
-	{
-		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
-			snowDeformation.DepthPrepassInject();
-	}
-
 	Feature::ForEachLoadedFeature("Prepass", [](Feature* feature) { feature->Prepass(); }, true);
 }
 

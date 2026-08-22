@@ -1550,8 +1550,6 @@
     "feature.snow_deformation.shell_border_debug_tooltip": "False-color plane of the border fields: dark red = designed bare (below -0.5), orange = slice ribbon zone (-0.5..1), green = the cut zone (1..3, white line at the cut contour), cyan/blue = deeper snow. Brightness = snow grain; magenta grid = land grain data present at that pixel.",
     "feature.snow_deformation.shell_data_debug": "Shell: Data Debug Plane",
     "feature.snow_deformation.shell_data_debug_tooltip": "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader.",
-    "feature.snow_deformation.shell_depth_occlusion": "Snow Occludes Contact Shadows",
-    "feature.snow_deformation.shell_depth_occlusion_tooltip": "Stamps the snow surface into the depth that Screen Space Shadows marches, so objects buried under the snow stop casting contact shadows on top of it, and drifts cast their own. Off restores the old behavior where the march only sees the bare ground.",
     "feature.snow_deformation.shell_distant_exclusions_disabled": "Shell: Disable Distant Clearings",
     "feature.snow_deformation.shell_distant_exclusions_disabled_tooltip": "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render.",
     "feature.snow_deformation.shell_exclusion_debug": "Shell: Exclusion Debug Plane",

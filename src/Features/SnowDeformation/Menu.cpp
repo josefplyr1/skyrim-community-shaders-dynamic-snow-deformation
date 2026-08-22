@@ -187,10 +187,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttPss = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
 
-			ImGui::Checkbox(T(TKEY("shell_depth_occlusion"), "Snow Occludes Contact Shadows"), &settings.ShellDepthOcclusion);
-			if (auto _ttSdo = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_depth_occlusion_tooltip"), "Stamps the snow surface into the depth that Screen Space Shadows marches, so objects buried under the snow stop casting contact shadows on top of it, and drifts cast their own. Off restores the old behavior where the march only sees the bare ground."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

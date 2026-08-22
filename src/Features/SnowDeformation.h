@@ -507,8 +507,6 @@ public:
 		bool LODReplaceLegacy = false;
 		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
 		bool ProjSnowMatch = true;
-		/** @brief Stamp the caster surface into the pre-SSS depth so buried objects stop casting contact shadows onto the shell. */
-		bool ShellDepthOcclusion = true;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -1093,9 +1091,6 @@ public:
 
 	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
 	void SetProjectedSnowBit(RE::BSRenderPass* a_pass);
-
-	/** @brief Stamps the shell caster surface into the main depth before ScreenSpaceShadows marches it (called from Deferred::PrepassPasses, ahead of the feature loop). Implemented in SnowDeformation/Shadows.cpp. */
-	void DepthPrepassInject();
 
 	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
