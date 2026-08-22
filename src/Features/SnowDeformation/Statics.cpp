@@ -547,6 +547,39 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
+	// One skin per family mesh (Josef's stacked-layer evidence + the log:
+	// EVERY trishape of an ice pile captured — slab, ice wall AND snow cap
+	// — so the tops wore several stacked skins and read brighter than the
+	// shell, with layers that moved independently under the sliders).
+	// Loaded family trishapes skin only where their own diffuse IS snow
+	// (the sculpted caps — exactly where a skin belongs); slab and ice
+	// trishapes go skinless and the baked-snow recolor owns their embedded
+	// snow patches. LOD family batches keep their skins (Josef verified
+	// that look).
+	if (settings.GlacierSnowMatch && !flags.any(Flag::kLODObjects, Flag::kHDLODObjects)) {
+		auto* familyMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
+		if (IceFamilySignal(a_pass->geometry, familyMaterial)) {
+			static std::unordered_map<const void*, bool> snowDiffuseCache;
+			if (snowDiffuseCache.size() > 4096)
+				snowDiffuseCache.clear();
+			auto [sdIt, sdInserted] = snowDiffuseCache.try_emplace(familyMaterial, false);
+			if (sdInserted && familyMaterial) {
+				if (auto textureSet = familyMaterial->textureSet.get()) {
+					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path) {
+						std::string lowered(path);
+						std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+							[](unsigned char c) { return (char)std::tolower(c); });
+						sdIt->second = lowered.find("snow") != std::string::npos;
+					}
+				}
+			}
+			if (!sdIt->second) {
+				LogIceJourney(a_pass, "skipped: family slab/ice trishape (recolor route; snow caps keep the skin)");
+				return;
+			}
+		}
+	}
+
 	// Twig-card shape class (branch piles, shore driftwood): vanilla flags
 	// them snow-projected so they pass the flag gate, but the capture sees
 	// sparse cards and the skin wraps them into broken shards (Josef's
