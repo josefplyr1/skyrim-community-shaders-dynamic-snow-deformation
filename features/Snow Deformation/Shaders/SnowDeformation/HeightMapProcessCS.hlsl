@@ -23,8 +23,6 @@
 //
 // Sentinels: top empty = -100000, bottom empty = +100000.
 
-#define MAX_OBSTRUCTIONS 48
-
 cbuffer HeightProcessCB : register(b0)
 {
 	int2 ScrollDelta;
@@ -45,23 +43,13 @@ cbuffer HeightProcessCB : register(b0)
 
 	uint CorpseSphereCount;  // resting dead actors' collision spheres
 	float CorpseMoundCap;    // max mound height above terrain
-	float2 WindBiasH;        // unit wind direction (blowing toward) x strength 0-1
+	float2 padWind;
 	float4 CorpseSpheres[64];  // xyz world center, w radius
 
-	float DriftHeight;  // peak wall-drift bank height (0 disables)
-	uint ObstructionCount;
 	// Rounded-class depth, for the object snow cone seed.
 	float ObjectSnowDepth;
-	float padObs;
-	float4 ObstructionPosExt[MAX_OBSTRUCTIONS];  // xy world center, zw half extents (local XY)
-	float4 ObstructionRot[MAX_OBSTRUCTIONS];     // xy = sin/cos of Z rotation, z = foundation height
+	float3 padObs;
 }
-
-// Wall drifts: band width past the wall, baseline bank fraction in calm
-// weather, extra fraction earned by windward alignment x wind strength.
-#define DRIFT_BAND 140.0
-#define DRIFT_BASE 0.3
-#define DRIFT_WIND 0.7
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
 // dusting (the shell keeps covering the ground - bare ground would expose
@@ -201,63 +189,6 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		// Deliberately no edge noise: roofline sinks read best smooth (fire
 		// bowls keep their noisy rims; sheltered snow follows the structure).
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));
-	}
-
-	// Wall drifts: wind piles snow into banks against large statics
-	// (buildings, towers, boulders), passed as OBB footprints. Windward
-	// walls (outward normal facing INTO the wind) bank toward full
-	// DriftHeight; calm weather keeps a modest all-around bank; leeward
-	// walls simply never earn the windward bonus. The cone transform
-	// downstream rounds every bank into a natural slope; exclusions run
-	// AFTER this, so doorways stay swept through the banks.
-	[branch] if (DriftHeight > 0.01)
-	{
-		float windStrength = length(WindBiasH);
-		float2 windDir = windStrength > 0.001 ? WindBiasH / windStrength : float2(0.0, 0.0);
-		for (uint obsI = 0; obsI < ObstructionCount; obsI++) {
-			float4 posExt = ObstructionPosExt[obsI];
-			float4 obsRot = ObstructionRot[obsI];
-			// Smooth z-gate: a binary cutoff stepped the whole bank off along
-			// the 400-unit contour on sloped ground - a cliff through open
-			// snowfield at any slider value.
-			float gateFade = 1.0 - smoothstep(250.0, 500.0, abs(obsRot.z - terrain));
-			[branch] if (gateFade > 0.001)
-			{
-				float2 rel = worldXY - posExt.xy;
-				float2 local = float2(obsRot.y * rel.x - obsRot.x * rel.y, obsRot.x * rel.x + obsRot.y * rel.y);
-				float2 q = abs(local) - posExt.zw;
-				float outside = length(max(q, 0.0));
-				[branch] if (outside < DRIFT_BAND)
-				{
-					// Windwardness from the RADIAL direction around the object,
-					// not the nearest-face normal: face normals flip instantly
-					// at box corners, seaming a full windward bank against a
-					// baseline leeward one - a cliff at every slider value. The
-					// radial direction varies continuously around walls,
-					// corners and the interior alike, so bank height glides
-					// from windward maximum to leeward baseline. No leeward
-					// scour: leeward simply never earns the windward bonus.
-					float relLen = length(rel);
-					float windward = relLen > 0.001 ? saturate(-dot(rel / relLen, windDir)) : 0.0;
-					float amp = DRIFT_BASE + DRIFT_WIND * windward * windStrength;
-					// Inside the footprint (outside == 0) the profile is 1: a
-					// hidden plateau, continuous with the wall banks. Without
-					// it the un-lifted interior is the cone transform's lowest
-					// neighbor and every bank gets cut down INTO the wall at
-					// the repose slope, terraced by the sparse cone steps.
-					float profile = 1.0 - smoothstep(0.0, DRIFT_BAND, outside);
-					// Sheltered ground cannot accumulate a bank: the roof that
-					// melts the snow also blocks the drift. Without this gate a
-					// building's bank stacked directly against its walkway's
-					// melted strip - ~76 units of surface swing in a couple of
-					// texels, the canyon in every report. The hidden interior
-					// plateau stays ungated: it exists to keep the cone from
-					// cutting banks, and its ground is never visible.
-					float driftGate = lerp(1.0, 1.0 - saturate(melt / SHELTER_MELT), smoothstep(0.0, 20.0, outside));
-					field = max(field, terrain + DriftHeight * amp * profile * gateFade * driftGate);
-				}
-			}
-		}
 	}
 
 	// Exclusion zones: pull the field back to terrain, then either suppress

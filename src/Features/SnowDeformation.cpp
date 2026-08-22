@@ -88,7 +88,6 @@
 	X(SnowTextureLinear) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
-	X(WallDriftHeight) \
 	X(SnowBorderDithering) \
 	X(TrenchFloorHeight) \
 	X(SnowBorderNoise) \
@@ -375,6 +374,14 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.LODReplaceLegacy = settings.LODReplaceLegacy ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
+	// The world map renders the LOD world without the shell, so a shell-
+	// matched recolor there mismatches everything else the map shows
+	// (Josef's ON/OFF map pair); skins are gated the same way in
+	// DrawCapturedStatics. The map's consistent look is the untouched one.
+	if (globals::state->isMapMenuOpen) {
+		data.LODReplaceEnable = 0.0f;
+		data.ProjSnowEnable = 0.0f;
+	}
 	return data;
 }
 

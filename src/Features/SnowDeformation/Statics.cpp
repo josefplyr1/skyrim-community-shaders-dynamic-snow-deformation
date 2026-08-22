@@ -440,7 +440,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			// exactly before rejecting.
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
-			if (!referenced) {
+			// Ice-family sheets are exempt: the containment rule protects
+			// Windhelm's stone sheets, but a glacier LOD batch is rejected
+			// exactly while the camera stands inside its span (the single
+			// containment line in Josef's cliff log, r=13068) — precisely
+			// where the glacier field below must stay skinned — and on the
+			// world map the panning camera strobed the whole field on and
+			// off across sheet boundaries.
+			bool iceSheet = false;
+			if (auto* sheetMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
+				iceSheet = ClassifySnowPath(sheetMaterial).naturalFeature;
+			if (!referenced && !iceSheet) {
 				LogIceJourney(a_pass, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -866,20 +876,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
-// One-shot log per obstruction base: the gather admits by size alone, so
-// this is the audit trail for phantom OBBs (whatever dams drift where no
-// wall stands shows up here by model path).
-static void LogObstruction(uint32_t a_formID, const std::string& a_path, float a_extX, float a_extY, float a_extZ)
-{
-	static std::unordered_set<uint32_t> logged;
-	if (logged.size() > 256)
-		return;
-	if (!logged.insert(a_formID).second)
-		return;
-	logger::info("[SNOW DEFORMATION] drift obstruction base {:08X} ext {:.0f}x{:.0f}x{:.0f} '{}'",
-		a_formID, a_extX, a_extY, a_extZ, a_path);
-}
-
 void SnowDeformation::RenderObjectHeightMap()
 {
 	auto context = globals::d3d::context;
@@ -914,25 +910,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.CorpseMoundCap = kCorpseMoundCap;
 	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
 		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
-	// Wind for the wall-drift bias, same source as the refill drift but
-	// temporally smoothed (~8 s): drifted banks are slow accumulation and
-	// must not pump up and down with per-frame gusts.
-	float2 windNow = { 0.0f, 0.0f };
-	if (auto* sky = RE::Sky::GetSingleton()) {
-		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
-		windNow = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
-	}
-	const float windDt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.016f;
-	const float windBlend = std::clamp(windDt / 8.0f, 0.0f, 1.0f);
-	driftWind.x += (windNow.x - driftWind.x) * windBlend;
-	driftWind.y += (windNow.y - driftWind.y) * windBlend;
-	processData.WindBiasH = driftWind;
-	processData.DriftHeight = std::max(settings.WallDriftHeight, 0.0f);
-	processData.ObstructionCount = (uint32_t)obstructions.size();
-	for (size_t obsI = 0; obsI < obstructions.size(); obsI++) {
-		processData.ObstructionPosExt[obsI] = obstructions[obsI].first;
-		processData.ObstructionRot[obsI] = obstructions[obsI].second;
-	}
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -951,7 +928,6 @@ void SnowDeformation::RenderObjectHeightMap()
 				survivalHeatSources = dataHandler->LookupForm<RE::BGSListForm>(0x0008AA, "ccQDRSSE001-SurvivalMode.esl");
 		}
 		staticExclusions.clear();
-		obstructions.clear();
 		uint32_t gatherTrampleCount = 0;
 		// Generic-flame entries by exclusion index, and the footprints of
 		// stations that own their flames (smelters, forges): a flame inside
@@ -1090,43 +1066,6 @@ void SnowDeformation::RenderObjectHeightMap()
 							}
 						}
 
-						// Wall-drift obstructions: big grounded STATICS dam
-						// drifting snow (buildings, towers, huge rocks). STAT
-						// only, with a visible model: TESBoundObject also
-						// admitted FX movables and other bases whose OBB
-						// corresponds to no wall (a campsite column passes the
-						// size gates), and the drift's interior plateau —
-						// designed to hide inside real walls — surfaced through
-						// the shell as Josef's square at WDH 48, its banks
-						// casting the block shadow beside the camp clearing.
-						// Marker/collision/occlusion statics are invisible by
-						// design and vetoed by path. OBND half-extents gate;
-						// trees excluded - their bounds are mostly canopy air.
-						if (obstructions.size() < kMaxObstructions && base->Is(RE::FormType::Static) && !lowered.empty() &&
-							lowered.find("marker") == std::string::npos && lowered.find("collision") == std::string::npos &&
-							lowered.find("occlusion") == std::string::npos && lowered.find("invisible") == std::string::npos &&
-							lowered.find("fx") == std::string::npos &&
-							lowered.find("tree") == std::string::npos && lowered.find("pine") == std::string::npos) {
-							if (auto* boundObj = base->As<RE::TESBoundObject>()) {
-								const float scale = a_ref->GetScale();
-								const float extX = (boundObj->boundData.boundMax.x - boundObj->boundData.boundMin.x) * 0.5f * scale;
-								const float extY = (boundObj->boundData.boundMax.y - boundObj->boundData.boundMin.y) * 0.5f * scale;
-								const float extZ = (boundObj->boundData.boundMax.z - boundObj->boundData.boundMin.z) * 0.5f * scale;
-								if (extZ >= kObstructionMinHeight && std::min(extX, extY) >= kObstructionMinFootprint &&
-									std::max(extX, extY) <= kObstructionMaxFootprint) {
-									const float centerX = (boundObj->boundData.boundMax.x + boundObj->boundData.boundMin.x) * 0.5f * scale;
-									const float centerY = (boundObj->boundData.boundMax.y + boundObj->boundData.boundMin.y) * 0.5f * scale;
-									auto pos = a_ref->GetPosition();
-									const float angleZ = a_ref->GetAngleZ();
-									const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
-									obstructions.push_back({ { pos.x + cosZ * centerX + sinZ * centerY,
-																 pos.y - sinZ * centerX + cosZ * centerY, extX, extY },
-										{ sinZ, cosZ, pos.z, 0.0f } });
-									LogObstruction(base->GetFormID(), lowered, extX, extY, extZ);
-								}
-							}
-						}
-
 						// Survival warm-up formlist: heat neither table named.
 						// Modest circle when grounded (the list also holds
 						// candelabras), footprint-sized spot when raised.
@@ -1163,7 +1102,6 @@ void SnowDeformation::RenderObjectHeightMap()
 				}
 
 				statTrampleCount = gatherTrampleCount;
-				statObstructionCount = (uint32_t)obstructions.size();
 
 				// Overflow: keep the sources nearest the player.
 				if (staticExclusions.size() > kMaxExclusions) {
@@ -1597,6 +1535,11 @@ void SnowDeformation::DrawCapturedStatics()
 {
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty())
+		return;
+	// Not on the world map: skins strobed there as the panning camera
+	// crossed capture gates, and a skin without the shell beside it only
+	// mismatches the map. Mirrors the recolor gate in GetCommonSettingsGPU.
+	if (globals::state->isMapMenuOpen)
 		return;
 	if (!EnsureStaticsShaders())
 		return;

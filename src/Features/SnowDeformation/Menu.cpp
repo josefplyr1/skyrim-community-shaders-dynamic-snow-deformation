@@ -313,10 +313,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttWch = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("workspace_clearing_height_tooltip"), "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second."));
 
-		ImGui::SliderFloat(T(TKEY("wall_drift_height"), "Wall Drift Height"), &settings.WallDriftHeight, 0.0f, 48.0f, "%.0f units");
-		if (auto _ttWdh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("wall_drift_height_tooltip"), "Peak height of snow banks drifted against buildings and other large structures. Windward walls bank fully with the weather's wind, calm weather keeps modest banks all around, and the leeward side stays scoured. 0 disables."));
-
 		ImGui::PushID("snow_borders");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::SliderFloat(T(TKEY("border_noise"), "Border Noise"), &settings.SnowBorderNoise, 0.0f, 64.0f, "%.0f units");
@@ -903,8 +899,8 @@ void SnowDeformation::DrawSettings()
 		if (auto* sky = RE::Sky::GetSingleton())
 			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
 				Util::Units::RadiansToDegrees(sky->windAngle));
-		ImGui::Text("Exclusion zones: %u, workspace clearings: %u, drift obstructions: %u (Survival heat list %s)",
-			statExclusionCount, statTrampleCount, statObstructionCount, survivalHeatSources ? "found" : "absent");
+		ImGui::Text("Exclusion zones: %u, workspace clearings: %u (Survival heat list %s)",
+			statExclusionCount, statTrampleCount, survivalHeatSources ? "found" : "absent");
 		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
 			snowMasksSizeForUI(),
 			(unsigned long long)landMaskHits.load(std::memory_order_relaxed),

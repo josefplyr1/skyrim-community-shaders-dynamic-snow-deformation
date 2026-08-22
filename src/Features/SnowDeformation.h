@@ -432,8 +432,6 @@ public:
 		bool SnowTextureLinear = false;
 		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
 		float TrampleZoneScale = 0.75f;
-		/** @brief Peak height of wind-drifted snow banks against building walls, in world units. 0 disables wall drifts. Default 0 until the boundary-gated lift is verified (Josef, 2026-08-22: any nonzero value lifted the shell rim at landscape boundaries and cast a WDH-scaled block shadow). */
-		float WallDriftHeight = 0.0f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
 		/** @brief ON (default) = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; OFF = clean binary cut. Round 18 fixed the inverted polarity (the checkbox used to gate a retired cross-fade path, so OFF showed the dust). */
@@ -1271,9 +1269,6 @@ public:
 	static constexpr float kCorpseMoundCap = 20.0f;
 	static constexpr uint kMaxCorpseSpheres = 64;
 
-	/** @brief Wall-drift obstruction OBBs per frame (buildings, towers, huge rocks). */
-	static constexpr uint kMaxObstructions = 48;
-
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
@@ -1326,20 +1321,12 @@ public:
 		/** @brief Dead actors at rest, as collision spheres (xyz world center, w radius): CombineCS raises capped snow mounds over them, gated by local refill. */
 		uint32_t CorpseSphereCount;
 		float CorpseMoundCap;
-		/** @brief Live wind (unit direction, blowing toward, times strength 0-1): windward walls drift deeper, leeward walls scour. */
-		float2 WindBiasH;
+		float2 padWind;
 		float4 CorpseSpheres[kMaxCorpseSpheres];
 
-		/** @brief Peak wall-drift bank height in world units, from Settings::WallDriftHeight. */
-		float DriftHeight;
-		uint ObstructionCount;
 		/** @brief Rounded-class snow depth, seeding the object snow cone. */
 		float ObjectSnowDepth;
-		float padObs;
-		/** @brief Building/large-static OBB footprints: xy = world center, zw = half extents (local XY). */
-		float4 ObstructionPosExt[kMaxObstructions];
-		/** @brief xy = sin/cos of the ref's Z rotation, z = foundation height (z-gate). */
-		float4 ObstructionRot[kMaxObstructions];
+		float padObs[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
@@ -1428,18 +1415,6 @@ public:
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
 	uint32_t statTrampleCount = 0;
 
-	// ---- Wall drifts: banks where wind piles snow against large statics ----
-
-	/** @brief OBND half-extent thresholds for the obstruction gather: tall enough and wide enough to dam drifting snow (buildings, towers, huge rocks; 175 half-height ~= 350-unit structures and up). The max cap rejects compound/village meshes whose sloppy bounds swallow open walkable ground - their interior plateau renders as a floating snow sheet. */
-	static constexpr float kObstructionMinHeight = 175.0f;
-	static constexpr float kObstructionMinFootprint = 100.0f;
-	static constexpr float kObstructionMaxFootprint = 700.0f;
-	/** @brief Wind for the drift bias, exponentially smoothed (~8 s): drifts are slow accumulation and must not breathe with per-frame gusts. */
-	float2 driftWind = { 0.0f, 0.0f };
-	/** @brief Cadence-gathered obstruction OBBs, copied into HeightProcessCB every frame. */
-	std::vector<std::pair<float4, float4>> obstructions;
-	/** @brief Obstructions in the last gather, for the debug readout. */
-	uint32_t statObstructionCount = 0;
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 
