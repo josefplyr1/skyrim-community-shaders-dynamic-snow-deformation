@@ -1555,31 +1555,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
-		// The top march is only honest where the surface IS the top plane:
-		// on a wall the TBN follows the wall's normal while snowUV stays a
-		// world-XY projection, and marching that mismatched frame produced
-		// offsets that redrew the wall whenever the camera changed POSITION
-		// (rotation in place was fine - view rays to a fixed point only
-		// change under translation). Walls take their relief from the side
-		// march below instead.
-		pomOffset *= 1.0 - snowSteepness;
+		// Trench walls march NOTHING (round 3). A march is only honest when
+		// the surface lies in its projection plane; a 40-60 degree wall lies
+		// in neither the top plane nor the side plane, so BOTH marches
+		// resolve the view through a mismatched frame and redraw the wall
+		// whenever the camera changes position (round 2's steepness scale
+		// still left 40-90% of the top march live on exactly those walls -
+		// the smoothstep only saturates near vertical). The hard tilt cut
+		// below keeps the full march on the gentle slopes that always had
+		// it, kills it by ~40 degrees, and the side plane samples UNMARCHED
+		// - at a 21-unit wall, stability is worth far more than parallax.
+		pomOffset *= 1.0 - smoothstep(0.15, 0.35, 1.0 - abs(normalWS.z));
 		snowUV += pomOffset;
 		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
-
-		// Side plane marches its own ray (statics recipe): the two
-		// projections have different uv axes, so the view resolves to a
-		// different 2D direction in each. Only steep pixels pay for it.
-		[branch] if (snowSteepness > 0.001)
-		{
-			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-			float3 sideB = float3(0.0, 0.0, 1.0);
-			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
-			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
-			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
-			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, shellZ, snowHeightMipSide, screenNoise, pomParams);
-			snowUVSide += offsetSide;
-			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
-		}
 	}
 
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
@@ -1887,9 +1875,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		{
 			float2 sunXY = L.xy / max(length(L.xy), 1e-4);
 			float sssSurfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-			[unroll] for (uint sssI = 0; sssI < 3; sssI++)
+			// Taps start at 15 units, not 40: a caster one plank-width away
+			// (the Dawnstar stair boards) slipped BETWEEN the pixel and the
+			// old first tap, so all three overshot it and its buried shadow
+			// printed in the trench dips - where the hug gate passes by
+			// design, because a carved floor hugs the ground. Same far reach.
+			[unroll] for (uint sssI = 0; sssI < 4; sssI++)
 			{
-				float2 tapWorldXY = GridOrigin + gridLocal + sunXY * (40.0 + 70.0 * sssI);
+				float2 tapWorldXY = GridOrigin + gridLocal + sunXY * (15.0 + 55.0 * sssI);
 				float2 tapDims;
 				bool tapValid;
 				float2 tapTexel = ObjectMapTexel(tapWorldXY, tapDims, tapValid);
