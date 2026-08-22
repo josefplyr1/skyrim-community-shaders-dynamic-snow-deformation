@@ -1519,7 +1519,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// keyed on the per-pixel trench normal, so only walls pay the second tap
 	// set. Captured before the normal map perturbs normalWS - the side POM
 	// march must resolve the view into the SAME plane these uvs use.
-	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+	// Earlier and narrower than the statics ramp (0.55-0.25) on purpose:
+	// landscape trench walls live at 40-65 degrees, and any top-projection
+	// share there is a heavily foreshortened smear whose anisotropic
+	// footprint boils as the camera moves - the mid-wall shimmer of the
+	// round-3 A/B. Side takes over fully by ~57 degrees; statics keeps its
+	// ramp because its drape sides are near-vertical and never sit in the
+	// band.
+	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
 	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXYPS.y, snowWorldZAbs) : float2(worldXYPS.x, snowWorldZAbs);
@@ -1889,7 +1896,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 				[flatten] if (tapValid)
 				{
 					float tapTop = ObjectTopsRaw.Load(int3((int2)tapTexel, 0));
-					[flatten] if (tapTop > -50000.0 && tapTop > sssSurfZ + 8.0)
+					// A buried caster is by definition LOW: stair planks and
+					// fence rails poke barely above the snow, so the old
+					// "stands > 8 above the shell" trigger missed exactly
+					// the casters that print (the Dawnstar pair). Any
+					// captured surface from slightly-buried upward counts -
+					// grass is never captured, so grass shadows cannot be
+					// touched by this no matter the threshold.
+					[flatten] if (tapTop > -50000.0 && tapTop > sssSurfZ - 16.0)
 						sssBlend = 0.0;
 				}
 			}
