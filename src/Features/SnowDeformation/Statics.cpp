@@ -185,6 +185,21 @@ namespace
 		bool naturalFeature = false;
 	};
 
+	// Mesh-name ice family (Josef's console sweep, 2026-08-22: Iceberg*,
+	// Glacier*, IcePile* — texture paths alone missed several). Bare "ice"
+	// is only safe as a NAME PREFIX: as a substring it hits Cornice/Device.
+	bool IsIceFamilyGeometry(RE::BSGeometry* a_geometry)
+	{
+		if (!a_geometry || a_geometry->name.empty())
+			return false;
+		std::string lowered(a_geometry->name.c_str());
+		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		return lowered.rfind("ice", 0) == 0 ||
+		       lowered.find("glacier") != std::string::npos ||
+		       lowered.find("iceberg") != std::string::npos;
+	}
+
 	const SnowPathMatch& ClassifySnowPath(RE::BSLightingShaderMaterialBase* a_material)
 	{
 		static std::unordered_map<const void*, SnowPathMatch> pathCache;
@@ -323,18 +338,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 
 		const SnowPathMatch& pathMatch = ClassifySnowPath(material);
-		// The texture-name families over-accept: a shore RockShelf wears the
-		// same mountain diffuse as a snowy crag, but its PROJECTED material
-		// is the coastal sand MATO, not snow (Josef's Pale beach evidence,
-		// 2026-08-22). When the LOD still hangs under its reference the MATO
-		// settles it — positive snow evidence required. Unreferenced merged
-		// batches keep the name heuristic.
-		bool naturalFeature = pathMatch.naturalFeature;
-		if (naturalFeature) {
-			const MatoClass matoClass = ClassifyProjectedMato(a_pass->geometry);
-			if (matoClass != MatoClass::kNoReference)
-				naturalFeature = matoClass == MatoClass::kSnow;
-		}
+		// Texture family OR mesh-name family: several glacier/ice meshes
+		// carry non-family texture paths (Josef's console sweep). The MATO
+		// only VETOES (kNotSnow — the sand-shore rocks); requiring positive
+		// snow MATOs wrongly rejected glaciers, whose snow is baked and
+		// needs no projection record.
+		bool naturalFeature = pathMatch.naturalFeature || IsIceFamilyGeometry(a_pass->geometry);
+		if (naturalFeature && ClassifyProjectedMato(a_pass->geometry) == MatoClass::kNotSnow)
+			naturalFeature = false;
 		const bool lodAccept = isObjectLOD && naturalFeature;
 		if (!(pathMatch.base || lodAccept)) {
 			if (isObjectLOD)
@@ -376,7 +387,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// and cell unload they stood out bright; the skin now covers them at
 	// every loaded distance and skips the fade to match.
 	auto* captureMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-	const bool fadeExempt = captureMaterial && ClassifySnowPath(captureMaterial).naturalFeature;
+	const bool fadeExempt = (captureMaterial && ClassifySnowPath(captureMaterial).naturalFeature) ||
+	                        IsIceFamilyGeometry(a_pass->geometry);
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;

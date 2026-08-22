@@ -2112,7 +2112,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
 				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
 				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				if (selfTop > -50000.0 && selfTop > surfZ + 32.0)
+				// 12 units: on normal tops the raster sits AT or BELOW the
+				// lifted skin surface (selfTop - surfZ is negative by the
+				// skin depth), so even a small positive margin only fires
+				// under genuine upper decks — 32 missed low ledges (Josef's
+				// cliff evidence).
+				if (selfTop > -50000.0 && selfTop > surfZ + 12.0)
 					objectTopUsable = false;
 			}
 		}
