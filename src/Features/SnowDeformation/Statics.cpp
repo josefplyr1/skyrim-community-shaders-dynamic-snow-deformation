@@ -149,10 +149,11 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSRenderPass* a_pass)
 {
 	// Projected-snow bit for Lighting's material match (SNOW-MATCH Phase 2):
 	// cleared every pass so it never leaks, set when this draw's projected
-	// material is actually snow. Flags are trustworthy on full meshes (sand
-	// projection sets kProjectedUV without kSnow — the Pale beach evidence);
-	// the MATO check guards the flagged path against exceptions whenever a
-	// reference is reachable. Runs BEFORE the game's SetupGeometry (the
+	// material is actually snow. kSnow is NOT required: the frame7075 capture
+	// proved snow projections without it (the Cone001 fence, technique
+	// ENVMAP+PROJECTED_UV, descriptor 100E201) — kProjectedUV plus a
+	// non-contrary MATO is the gate; sand/moss stay excluded by their MATO
+	// (kNotSnow). Runs BEFORE the game's SetupGeometry (the
 	// ExtendedTranslucency pattern): the descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
@@ -161,9 +162,17 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSRenderPass* a_pass)
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
 	if (settings.EnableSnowDeformation && settings.ProjSnowMatch &&
-		flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow) &&
-		ClassifyProjectedMato(a_pass->geometry) != MatoClass::kNotSnow)
+		flags.all(Flag::kProjectedUV) && !flags.all(Flag::kTreeAnim) &&
+		shellSnowDiffuseSRV &&
+		ClassifyProjectedMato(a_pass->geometry) != MatoClass::kNotSnow) {
 		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
+		// draws (frame7075: null at every player-view draw — stomped around
+		// the cubemap pass; t101 only survives via its later re-bind).
+		// Re-bind per classified draw, where it is actually sampled.
+		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
+		globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+	}
 }
 
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)

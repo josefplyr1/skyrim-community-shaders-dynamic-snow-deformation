@@ -897,11 +897,12 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-// The LOD terrain family has no TRUE_PBR permutation, so the PBR evaluators
-// are pulled in explicitly for the horizon-snow override. Every
-// PBRFlags-consuming branch is compiled out by the terrain guards inside;
-// the PerMaterial PBRFlags satisfies the reference without a stub.
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+// Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
+// the LOD terrain family (horizon snow) and projected-snow statics (the
+// frame7075 fence, technique ENVMAP+PROJECTED_UV). The optional-lobe
+// branches inside are TRUE_PBR-gated, so these permutations compile the
+// coatless diffuse/lobe core against the vanilla MaterialProperties.
 #		include "Common/PBR.hlsli"
 #	endif
 
@@ -1732,6 +1733,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float projWeight = 0;
 
+#	if defined(SNOW_DEFORMATION)
+	// SNOW-MATCH Phase 2: set where the CPU classified this draw's projected
+	// material as snow and the swap ran; the albedo is saved for the write
+	// tail, which re-lights the projected-snow fraction of non-PBR pixels.
+	bool snowProjMatch = false;
+	float3 snowProjAlbedo = 0.0;
+#	endif
+
 #	if defined(PROJECTED_UV)
 	float3 projWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
 	float3 triFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
@@ -1768,13 +1777,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		// shell's world tiling — same triplanar frame, our texture. The
 		// authored tint/scale chain below stays: neutral in practice, and one
 		// convention path. Normals stay the projection's own (Josef's spec).
-		const bool snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
-		                           (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
+		snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+		                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 		[branch] if (snowProjMatch)
 		{
 			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
 			projDiffuse = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
+			snowProjAlbedo = projDiffuse;
 		}
 #			endif
 		float3 projBaseColor = Color::ColorToLinear(projDiffuse) * Color::ColorToLinear(ProjectedUVParams2.xyz);
@@ -2775,6 +2785,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz += diffuseColor * material.BaseColor;
 #	endif
 
+#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+	// Total accumulated lights before :2798 clobbers diffuseColor; the
+	// projected-snow override below reconstructs the point-light share
+	// from it so torch-lit snow caps keep their light at night.
+	float3 snowProjLightTotal = diffuseColor;
+#	endif
+
 	color.xyz += indirectLobeWeights.diffuse * directionalAmbientColor;
 	color.xyz += transmissionColor;
 
@@ -2851,6 +2868,39 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		specularColor = lerp(specularColor, 0.0, snowLodReplaceW);
 		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, snowLodReplaceW);
 		material.Roughness = lerp(material.Roughness, 1.0, snowLodReplaceW);
+	}
+#	endif
+
+#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+	// SNOW-MATCH Phase 2 round 3: the projected-snow fraction of non-PBR
+	// statics re-lit through the SAME PBR evaluators as the shell and the
+	// horizon snow. frame7075 measured the fence's snow pass (vanilla
+	// ENVMAP+PROJECTED_UV) writing blue-tilted Diffuse — the Phase 0
+	// convention signature; a brightness scale cannot fix hue. Sun and
+	// ambient rebuilt on the snow albedo saved at the swap; the point-light
+	// share is carried over from the vanilla accumulation (the sun's vanilla
+	// term subtracted out), scaled into the same units. The wood fraction
+	// keeps the vanilla output untouched.
+	[branch] if (snowProjMatch && projectedMaterialWeight > 0.003)
+	{
+		MaterialProperties snowMaterial = (MaterialProperties)0;
+		snowMaterial.BaseColor = snowProjAlbedo;
+		snowMaterial.Roughness = SharedData::snowDeformationSettings.SnowRoughnessScale;
+		snowMaterial.F0 = 0.028;
+		snowMaterial.AO = 1.0;
+		DirectContext snowContext = dirLightContext;
+		snowContext.lightColor *= Color::PBRLightingCompensation;
+		DirectLightingOutput snowLit;
+		PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);
+		IndirectLobeWeights snowLobes;
+		PBR::GetIndirectLobeWeights(snowLobes, indirectContext, snowMaterial);
+		float3 vanillaSunTerm = dirLightColor * saturate(dot(worldNormal.xyz, DirLightDirection.xyz)) * dirDetailedShadow;
+		float3 pointLightShare = max(0.0, snowProjLightTotal - vanillaSunTerm);
+		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + pointLightShare * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
+		color.xyz = lerp(color.xyz, snowColor, projectedMaterialWeight);
+		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, projectedMaterialWeight);
+		specularColor = lerp(specularColor, 0.0, projectedMaterialWeight);
+		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, projectedMaterialWeight);
 	}
 #	endif
 
