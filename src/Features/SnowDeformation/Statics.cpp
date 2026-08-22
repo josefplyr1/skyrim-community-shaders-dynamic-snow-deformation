@@ -439,20 +439,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, "rejected: skinned geometry");
 		return;
 	}
-	// LOADED ice-family meshes take the RECOLOR route (SetProjectedSnowBit's
-	// baked match), never the geometry skin: the skin conforms through the
-	// object raster, whose 4096-unit window cannot cover a glacier (Josef's
-	// 70 m OSGR ceiling), and its mesh-facet lift produced square patches,
-	// dual class layers and rim gaps on these meshes. Their snow is baked
-	// in; color is the only thing wrong with it. LOD family batches KEEP
-	// their skins: LOD draws are vanilla permutations the TRUE_PBR recolor
-	// cannot reach, and at LOD ranges the skin's conforming limits don't
-	// show.
-	if (settings.GlacierSnowMatch && !flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
-		IceFamilySignal(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))) {
-		LogIceJourney(a_pass, "skipped: glacier recolor route (no skin)");
-		return;
-	}
+	// Ice-family meshes keep their skins at EVERY range (Josef's verdict,
+	// 2026-08-22 round 2: the LOD family look — always covered — is the
+	// acceptance criterion, and a skinless loaded glacier reads as having
+	// no snow even with the baked-snow recolor active). The recolor rides
+	// underneath as a second layer: it tints the baked snow that shows
+	// through skin gaps and beyond the raster window. The skin's
+	// structural limits here (58 m conforming window, facet squares,
+	// stacked trishape layers, rim gaps) stay known; the recolor's job is
+	// to soften what they expose.
 	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
 	// reference comes close. Windhelm's merged quads measured 8700-12608.
 	constexpr float kMergedLODRadius = 4096.0f;

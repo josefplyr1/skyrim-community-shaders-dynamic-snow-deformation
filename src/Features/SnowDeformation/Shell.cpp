@@ -792,6 +792,20 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* cloudShadowSRV = globals::features::cloudShadows.texCubemapCloudOccCopy->srv.get();
 		context->PSSetShaderResources(25, 1, &cloudShadowSRV);
 	}
+	// One-shot audit: Josef reports the far shell still missing the LOD
+	// terrain shadow after the t60 bind landed — this settles whether the
+	// bind even fires on his setup (feature off? texture absent?) before
+	// reaching for a capture.
+	{
+		static std::atomic<bool> loggedShadowBind{ false };
+		if (!loggedShadowBind.exchange(true))
+			logger::info("[SNOW DEFORMATION] shell far-shadow bind: terrainShadows loaded={} tex={} enabled={} | cloudShadows loaded={} tex={}",
+				globals::features::terrainShadows.loaded,
+				globals::features::terrainShadows.texShadowHeight != nullptr,
+				globals::features::terrainShadows.settings.EnableTerrainShadow,
+				globals::features::cloudShadows.loaded,
+				globals::features::cloudShadows.texCubemapCloudOccCopy != nullptr);
+	}
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.
 	if (cbData.CrispShadows > 0.5f || pointShadowAtlasCopySRV) {
