@@ -1900,6 +1900,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Top plane: bumpT/bumpB ARE its uv axes.
 		float3x3 tbnTop = float3x3(bumpT, bumpB, normalWS);
 		float2 offsetTop = SnowParallaxOffset(snowTaps, snowUV, V, tbnTop, pixelDist, snowHeightMip, screenNoise, pomParams);
+		// Faded with steepness, in step with the landscape shell: on a steep
+		// side the top TBN follows the surface normal while snowUV stays a
+		// top-down projection, and marching that mismatched frame redraws
+		// the face whenever the camera changes position.
+		offsetTop *= 1.0 - snowSteepness;
 		snowUV += offsetTop;
 		snowTaps = OffsetSnowTaps(snowTaps, offsetTop);
 

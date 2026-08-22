@@ -1555,6 +1555,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
+		// The top march is only honest where the surface IS the top plane:
+		// on a wall the TBN follows the wall's normal while snowUV stays a
+		// world-XY projection, and marching that mismatched frame produced
+		// offsets that redrew the wall whenever the camera changed POSITION
+		// (rotation in place was fine - view rays to a fixed point only
+		// change under translation). Walls take their relief from the side
+		// march below instead.
+		pomOffset *= 1.0 - snowSteepness;
 		snowUV += pomOffset;
 		snowTaps = OffsetSnowTaps(snowTaps, pomOffset);
 
@@ -1580,37 +1588,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
-	}
-
-	// Wall combing (Stage 2 P4, RDR2 O2): fine grooves dragged straight down
-	// a trench wall's FALL LINE, ~3.5 cm apart, staying vertical as the
-	// trench curves. Direction = normalize(profileGrad), the carve profile's
-	// own gradient - already computed for the wall normal, and zero anywhere
-	// that is not a trench wall, so floors, pristine ground and plain steep
-	// terrain never comb. Every input is world-anchored (worldXYPS + the
-	// profile field); nothing here may ride a view-dependent quantity -
-	// grain sliding with the camera is a twice-bitten failure mode here
-	// (the pre-POM derivative snapshot, the glint 4096 fold).
-	float combW = CompactLook.y * snowSteepness * (1.0 - smoothstep(200.0, 700.0, shellZ));
-	[branch] if (combW > 0.001)
-	{
-		float fallLen = length(profileGrad);
-		[branch] if (fallLen > 0.05)
-		{
-			float2 fallDir = profileGrad / fallLen;
-			// Horizontal axis ACROSS the wall: grooves vary along it and
-			// run down the fall line.
-			float2 across = float2(-fallDir.y, fallDir.x);
-			float combCoord = dot(worldXYPS, across);
-			const float kCombSpacing = 2.5;
-			// Phase wobble so the teeth read dragged rather than machined;
-			// strand jitter breaks the comb into strands of varying depth.
-			float wobble = ShapeNoise(worldXYPS / 9.0);
-			float comb = sin(combCoord * (6.2831853 / kCombSpacing) + wobble * 4.0);
-			float strand = 0.55 + 0.45 * ShapeNoise(float2(combCoord / 7.0, dot(worldXYPS, fallDir) / 90.0));
-			float amp = combW * saturate(fallLen * 4.0) * strand;
-			normalWS = normalize(normalWS + float3(across, 0.0) * comb * amp);
-		}
 	}
 
 	// Frost crystal, laid ON TOP of the flattened powder grain rather than
@@ -1646,6 +1623,50 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
+	}
+
+	// The cascade shadow's receiver-normal bias must not see the comb: the
+	// per-groove jitter dithered the shadow lookup and read as blurred
+	// shadow edges on the walls (round-1 verdict). Captured here, after the
+	// normal map and frost - the bias content the shadow had before P4.
+	const float3 cascadeNormalWS = normalWS;
+
+	// Wall combing (Stage 2 P4, RDR2 O2): fine grooves dragged straight down
+	// a trench wall's FALL LINE, ~3.5 cm apart, staying vertical as the
+	// trench curves. Direction = normalize(profileGrad), the carve profile's
+	// own gradient - already computed for the wall normal, and zero anywhere
+	// that is not a trench wall, so floors, pristine ground and plain steep
+	// terrain never comb. Every input is world-anchored (worldXYPS + the
+	// profile field); nothing here may ride a view-dependent quantity -
+	// grain sliding with the camera is a twice-bitten failure mode here
+	// (the pre-POM derivative snapshot, the glint 4096 fold).
+	//
+	// Round 2: the grooves also carve an AO term (combGroove, applied after
+	// the RMAOS block) - a normal wiggle alone was invisible on bright
+	// ambient-lit snow; the concave half of each groove holding a little
+	// less light is what makes combing read in ANY light.
+	float combGroove = 0.0;
+	float combW = CompactLook.y * snowSteepness * (1.0 - smoothstep(200.0, 700.0, shellZ));
+	[branch] if (combW > 0.001)
+	{
+		float fallLen = length(profileGrad);
+		[branch] if (fallLen > 0.05)
+		{
+			float2 fallDir = profileGrad / fallLen;
+			// Horizontal axis ACROSS the wall: grooves vary along it and
+			// run down the fall line.
+			float2 across = float2(-fallDir.y, fallDir.x);
+			float combCoord = dot(worldXYPS, across);
+			const float kCombSpacing = 2.5;
+			// Phase wobble so the teeth read dragged rather than machined;
+			// strand jitter breaks the comb into strands of varying depth.
+			float wobble = ShapeNoise(worldXYPS / 9.0);
+			float comb = sin(combCoord * (6.2831853 / kCombSpacing) + wobble * 4.0);
+			float strand = 0.55 + 0.45 * ShapeNoise(float2(combCoord / 7.0, dot(worldXYPS, fallDir) / 90.0));
+			float amp = combW * saturate(fallLen * 4.0) * strand;
+			normalWS = normalize(normalWS + float3(across, 0.0) * comb * amp);
+			combGroove = amp * saturate(-comb);
+		}
 	}
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
@@ -1715,6 +1736,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
+	// Groove floors hold a little less light (see the comb block).
+	snowAO *= 1.0 - 0.4 * combGroove;
 
 	// Crust polishes whatever the material ended up being, PBR set or not. It
 	// has to come after the block above rather than before it, or an installed
@@ -1754,7 +1777,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, cascadeNormalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
