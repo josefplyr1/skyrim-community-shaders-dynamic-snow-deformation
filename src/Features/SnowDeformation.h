@@ -473,20 +473,12 @@ public:
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
-		/** @brief Frequency multiplier of the fine-grain normal layer on disturbed snow. */
-		float CrispScale = 4.5f;
-		/** @brief Strength of the fine-grain normal layer on disturbed snow. */
-		float CrispStrength = 1.5f;
-		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
+		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
 		float CompactMatte = 0.6f;
-		/** @brief Trampled-snow darkening + roughening strength (1.0 = 14% darker at full churn). Shared by both shells - round 33 rejected a skin-only tint as a mismatch. */
-		float CompactShade = 0.5f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
 		float ObjBermHeight = 0.35f;
 		float ObjChurnHeight = 5.0f;
 		float ObjChurnSize = 0.25f;
-		float ObjCrispScale = 6.0f;
-		float ObjCrispStrength = 1.8f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 100.0f;
 		float RangeSkinsM = 750.0f;
@@ -738,12 +730,11 @@ public:
 		float ChurnHeightAmp;
 		/** @brief Multiplier on the churn lump wavelengths. */
 		float ChurnSizeScale;
-		/** @brief Frequency multiplier of the disturbed-snow fine-grain normal layer. */
+		/** @brief RETIRED 2026-08-22 (crisp grain removed; layout keepers, uploaded 1/0). */
 		float CrispScaleV;
-		/** @brief Strength of the disturbed-snow fine-grain normal layer. */
 		float CrispStrengthV;
 
-		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). */
+		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). The two ObjCrisp rows are RETIRED layout keepers like the pair above. */
 		float ObjBermHeightAmp;
 		float ObjChurnHeightAmp;
 		float ObjChurnSizeScale;
@@ -774,7 +765,7 @@ public:
 		float4 CrustLook2;
 		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief Compacted-snow material (trench plan Stage 1): x = glint suppression 0-1, y = albedo darkening fraction at full churn, z = roughness rise at full churn, w spare. ONE constant for BOTH shells (round 33). Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief Compacted-snow material (trench plan Stage 1): x = glint suppression 0-1; yzw spare - the darken/roughen halves were RETIRED 2026-08-22 (IBL + DALC already darken trenches). ONE constant for BOTH shells. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

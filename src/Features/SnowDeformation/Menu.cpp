@@ -347,7 +347,7 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Landscape Trenches"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttTd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the fine-grain shading detail. Untouched snow is never affected."));
+			ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the matte compacted finish. Untouched snow is never affected."));
 		ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 		if (auto _ttFloat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));
@@ -389,21 +389,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttCs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
 
-			ImGui::SliderFloat(T(TKEY("crisp_scale"), "Grain Fineness"), &settings.CrispScale, 1.0f, 8.0f, "%.1fx");
-			if (auto _ttGf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed snow (shading only)."));
-
-			ImGui::SliderFloat(T(TKEY("crisp_strength"), "Grain Strength"), &settings.CrispStrength, 0.0f, 3.0f, "%.2f");
-			if (auto _ttGs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed snow. 0 disables it."));
-
 			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
-
-			ImGui::SliderFloat(T(TKEY("compact_shade"), "Compaction Shading"), &settings.CompactShade, 0.0f, 1.0f, "%.2f");
-			if (auto _ttCsh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("compact_shade_tooltip"), "How much trampled snow darkens and roughens (1.0 = 14% darker at full churn). This is what keeps a trench readable in flat light - overcast, dusk, building shadow - where shape-only shading vanishes. Both shells; 0 = off."));
 
 			ImGui::TreePop();
 		}
@@ -428,14 +416,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("obj_churn_size"), "Churn Size"), &settings.ObjChurnSize, 0.25f, 4.0f, "%.2fx");
 			if (auto _ttOcs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("obj_churn_size_tooltip"), "Size of the broken lumps: smaller = finer rubble, larger = broad clods."));
-
-			ImGui::SliderFloat(T(TKEY("obj_crisp_scale"), "Grain Fineness"), &settings.ObjCrispScale, 1.0f, 8.0f, "%.1fx");
-			if (auto _ttOgf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_crisp_scale_tooltip"), "How much finer the snow normal map repeats on disturbed object snow (shading only)."));
-
-			ImGui::SliderFloat(T(TKEY("obj_crisp_strength"), "Grain Strength"), &settings.ObjCrispStrength, 0.0f, 3.0f, "%.2f");
-			if (auto _ttOgs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_crisp_strength_tooltip"), "How strongly the fine grain cuts through on disturbed object snow. 0 disables it."));
 
 			ImGui::TreePop();
 		}

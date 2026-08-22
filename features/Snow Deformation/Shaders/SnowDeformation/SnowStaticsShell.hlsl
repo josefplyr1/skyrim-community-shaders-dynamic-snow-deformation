@@ -128,6 +128,7 @@ cbuffer ShellCB : register(b0)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
+	// Crisp grain retired 2026-08-22; layout keepers.
 	float CrispScaleV;
 	float CrispStrengthV;
 
@@ -1877,12 +1878,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float snowHeightMip = SnowHeightMip(snowUV);
 	float snowHeightMipSide = SnowHeightMip(snowUVSide);
 
-	// Object trench detail: shading-only berm ridge along trails, plus the
-	// disturbance weight for the crisp grain below. The landscape shell's
-	// recipes with the independent Obj* knobs; geometry berm waits for the
-	// skin rework.
+	// Object trench detail: shading-only berm ridge along trails; also the
+	// compaction weight's berm term. Geometry berm waits for the skin
+	// rework.
 	float bermC = 0.0;
-	[branch] if (ObjBermHeightAmp > 0.005 || ObjCrispStrengthV > 0.01 || CompactLook.x > 0.001 || CompactLook.y > 0.0001)
+	[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.x > 0.001)
 		bermC = BermField(trenchGridLocal);
 	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
 	{
@@ -1895,8 +1895,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// the mask's job is just to keep the ridge off the dug floor.
 		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp, 0.0));
 	}
-	float disturb = ChurnWeight(pixelDeform, bermC) * ObjCrispStrengthV;
-	disturb *= 1.0 - smoothstep(300.0, 1000.0, pixelDist);
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
 	// Built from the geometric normal before the normal map perturbs it, and
@@ -1919,8 +1917,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// different 2D direction in each and the offsets are not interchangeable.
 	// Each plane therefore marches itself and shifts its OWN tap set; the
 	// existing sample blend then mixes them exactly as before.
-	float2 snowUVPreParallax = snowUV;
-	float2 snowUVSidePreParallax = snowUVSide;
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
@@ -1953,25 +1949,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// object snow carry the same grain: real PBR normal map when available,
 	// luminance height-proxy fallback otherwise. Applied after the coverage
 	// gate: bending the normal first would jitter the up-facing test into
-	// speckled edges. Disturbed snow layers in a finer-repeat tap of the
-	// same map (crisp grain), weighted by the disturbance itself.
+	// speckled edges.
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
-		[branch] if (disturb > 0.01)
-		{
-			// POM offset added AFTER the frequency multiply (round 28, same
-			// fix as the landscape shell): scaling the displaced uv scaled
-			// the view-dependent offset by Grain Fineness, sliding the
-			// crisp layer across the surface faster than the base grain.
-			float crispScale = max(ObjCrispScaleV, 1.0);
-			float2 crispUV = snowUVPreParallax * crispScale + (snowUV - snowUVPreParallax);
-			float2 crispUVSide = snowUVSidePreParallax * crispScale + (snowUVSide - snowUVSidePreParallax);
-			SnowTaps crispTaps = ComputeSnowTaps(crispUV, worldXY);
-			SnowTaps crispTapsSide = ComputeSnowTaps(crispUVSide, snowSidePlane);
-			float2 crispN = SampleSnowPlanar(SnowNormalMap, crispTaps, crispTapsSide, snowSteepness).xy * 2.0 - 1.0;
-			texN.xy += crispN * disturb;
-		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
@@ -1989,9 +1970,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
-		// No second frequency to layer in the luminance fallback; deepen the
-		// relief instead.
-		bumpGrad *= 1.0 + 0.8 * disturb;
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
@@ -2019,13 +1997,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	// Compaction darkening from the SAME shared constant as the terrain
-	// shell - round 33 rejected a skin-only term as a color mismatch, and
-	// Stage 1 is the both-shells version it called for. Recipe identical to
-	// SnowShell.hlsl (cool-biased: packed snow absorbs red first).
+	// Compaction weight (Stage 1), shared constant with the terrain shell;
+	// feeds the glint suppression alone (the darken/roughen halves were
+	// retired - IBL + DALC already darken trenches).
 	float churnMat = ChurnWeight(pixelDeform, bermC);
-	[branch] if (CompactLook.y > 0.0001 && churnMat > 0.001)
-		kSnowAlbedo *= 1.0 - CompactLook.y * churnMat * float3(1.0, 0.97, 0.90);
 
 	// Spell marks on the albedo; the landscape recipes verbatim.
 	{
@@ -2052,10 +2027,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
-
-	// Compaction roughens BEFORE crust polishes: refrozen floors are ice,
-	// and ice wins.
-	snowRoughness = saturate(snowRoughness + CompactLook.z * churnMat);
 
 	// Crust polishes whatever the material ended up being; after the RMAOS
 	// block or an installed map silently discards it (landscape lesson).

@@ -138,6 +138,7 @@ cbuffer ShellCB : register(b0)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
+	// Crisp grain retired 2026-08-22; layout keepers.
 	float CrispScaleV;
 	float CrispStrengthV;
 
@@ -1512,15 +1513,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Uniform flow: the parallax shadow branch below is divergent, and
 	// derivatives taken inside it would be garbage at its edges.
 	float snowHeightMip = SnowHeightMip(snowUV);
-	// Disturbed-snow crisping (RDR2 reference): churned snow reads finer-
-	// grained than settled cover. Where the surface is carved (trench walls
-	// and floors) or piled (berms), layer in a higher-frequency tap of the
-	// same normal map; the weight IS the disturbance, so the transition
-	// never draws a boundary. The 3x taps alias 3x sooner, so their own
-	// distance fade is tighter than bumpFade.
-	float disturb = ChurnWeight(pixelCarve, bermCenter) * CrispStrengthV;
-	disturb *= 1.0 - smoothstep(300.0, 1000.0, shellZ);
-
 	// Tangent basis for the snow maps. The snow uv is a world-XY planar
 	// projection, so the frame is axis-aligned by construction: bumpT is
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
@@ -1542,7 +1534,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// occludes grain and the surface reads as thick. Runs BEFORE every snow
 	// fetch, and shifts the tap set rather than rebuilding it, so albedo,
 	// normal, RMAOS and the parallax shadow all ride the displaced position.
-	float2 snowUVPreParallax = snowUV;
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
@@ -1558,20 +1549,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
 	{
 		float3 texN = SampleSnowMap(SnowNormalMap, snowTaps).xyz * 2.0 - 1.0;
-		[branch] if (disturb > 0.01)
-		{
-			// The POM offset is added AFTER the frequency multiply (round
-			// 28): scaling the displaced uv scaled the view-dependent
-			// offset by Grain Fineness too, so the crisp layer slid across
-			// the surface 4-8x faster than the base grain - the warping
-			// Grain Strength was blamed for. Unamplified, the micro-grain
-			// travels with the displaced surface at the same speed as the
-			// base tap.
-			float2 crispUV = snowUVPreParallax * max(CrispScaleV, 1.0) + (snowUV - snowUVPreParallax);
-			SnowTaps crispTaps = ComputeSnowTaps(crispUV, worldXYPS);
-			float2 crispN = SampleSnowMap(SnowNormalMap, crispTaps).xy * 2.0 - 1.0;
-			texN.xy += crispN * disturb;
-		}
 		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
 		texN.y = -texN.y;  // DDS v grows down; our uv v grows with world +Y
 		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
@@ -1609,9 +1586,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
-		// Luminance-bump fallback: no second frequency to layer, so crisp by
-		// deepening the relief instead.
-		bumpGrad *= 1.0 + 0.8 * disturb;
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
@@ -1636,14 +1610,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
-	// Compaction (Stage 1): trampled snow is packed - slightly darker, and
-	// cool-biased, because packed snow absorbs red first; a warm-grey tint
-	// reads as dirt where this must read as density. The weight is the same
-	// churn field the crisp grain uses, so the material change lands exactly
-	// on floors, walls and berms and never draws its own boundary.
+	// Compaction weight (Stage 1): the churn field, so the matte lands
+	// exactly on floors, walls and berms and never draws its own boundary.
+	// The darken/roughen halves were retired - IBL + DALC already darken
+	// trenches - so this feeds the glint suppression alone.
 	float churnMat = ChurnWeight(pixelCarve, bermCenter);
-	[branch] if (CompactLook.y > 0.0001 && churnMat > 0.001)
-		kSnowAlbedo *= 1.0 - CompactLook.y * churnMat * float3(1.0, 0.97, 0.90);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -1685,10 +1656,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
-
-	// Compaction roughens BEFORE crust polishes: a refrozen trench floor is
-	// ice, and ice wins.
-	snowRoughness = saturate(snowRoughness + CompactLook.z * churnMat);
 
 	// Crust polishes whatever the material ended up being, PBR set or not. It
 	// has to come after the block above rather than before it, or an installed

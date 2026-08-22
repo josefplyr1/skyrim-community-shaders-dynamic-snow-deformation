@@ -548,13 +548,15 @@ void SnowDeformation::DrawShell()
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
-	cbData.CrispScaleV = std::clamp(settings.CrispScale, 1.0f, 8.0f);
-	cbData.CrispStrengthV = std::clamp(settings.CrispStrength, 0.0f, 3.0f);
+	// Crisp grain retired 2026-08-22 (real geometry carries the detail);
+	// the four rows are layout keepers.
+	cbData.CrispScaleV = 1.0f;
+	cbData.CrispStrengthV = 0.0f;
 	cbData.ObjBermHeightAmp = std::clamp(settings.ObjBermHeight, 0.0f, 1.0f);
 	cbData.ObjChurnHeightAmp = std::clamp(settings.ObjChurnHeight, 0.0f, 8.0f);
 	cbData.ObjChurnSizeScale = std::clamp(settings.ObjChurnSize, 0.25f, 4.0f);
-	cbData.ObjCrispScaleV = std::clamp(settings.ObjCrispScale, 1.0f, 8.0f);
-	cbData.ObjCrispStrengthV = std::clamp(settings.ObjCrispStrength, 0.0f, 3.0f);
+	cbData.ObjCrispScaleV = 1.0f;
+	cbData.ObjCrispStrengthV = 0.0f;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -568,12 +570,10 @@ void SnowDeformation::DrawShell()
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
 		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
-	// One shared constant for both shells (round 33: a skin-only darkening
-	// read as a mismatch). Shading slider 1.0 = 14% darkening at full churn;
-	// the default 0.5 sits inside the reference footage's 6-10% band.
-	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
-		std::clamp(settings.CompactShade, 0.0f, 1.0f) * 0.14f,
-		std::clamp(settings.CompactShade, 0.0f, 1.0f) * 0.30f, 0.0f };
+	// Compaction: matte only, one shared constant for both shells. The
+	// darken/roughen halves were retired 2026-08-22 - IBL + DALC already
+	// darken trenches (Josef's verdict).
+	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old

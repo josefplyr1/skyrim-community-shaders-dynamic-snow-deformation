@@ -107,15 +107,10 @@
 	X(BermHeight) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
-	X(CrispScale) \
-	X(CrispStrength) \
 	X(CompactMatte) \
-	X(CompactShade) \
 	X(ObjBermHeight) \
 	X(ObjChurnHeight) \
 	X(ObjChurnSize) \
-	X(ObjCrispScale) \
-	X(ObjCrispStrength) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsFadeM) \
