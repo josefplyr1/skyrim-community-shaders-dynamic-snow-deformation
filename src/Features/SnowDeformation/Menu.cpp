@@ -393,10 +393,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttCm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
 
-			ImGui::SliderFloat(T(TKEY("wall_comb"), "Wall Combing"), &settings.WallComb, 0.0f, 1.0f, "%.2f");
-			if (auto _ttWc = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("wall_comb_tooltip"), "Fine grooves dragged straight down trench wall faces, like drag marks where snow was sheared through. Only trench walls comb - floors, untouched snow and natural slopes never do. 0 = off, for A/B."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

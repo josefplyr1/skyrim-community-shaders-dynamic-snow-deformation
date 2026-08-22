@@ -108,7 +108,6 @@
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(CompactMatte) \
-	X(WallComb) \
 	X(ObjBermHeight) \
 	X(ObjChurnHeight) \
 	X(ObjChurnSize) \

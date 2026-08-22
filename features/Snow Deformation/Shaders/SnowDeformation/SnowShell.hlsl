@@ -190,8 +190,8 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); y = wall combing strength
-	// (Stage 2 P4, landscape shell only); zw spare.
+	// x = compaction glint suppression (Stage 1); yzw spare (Stage 1
+	// darken/roughen and Stage 2 combing both retired).
 	float4 CompactLook;
 }
 
@@ -1620,50 +1620,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
-	// The cascade shadow's receiver-normal bias must not see the comb: the
-	// per-groove jitter dithered the shadow lookup and read as blurred
-	// shadow edges on the walls (round-1 verdict). Captured here, after the
-	// normal map and frost - the bias content the shadow had before P4.
-	const float3 cascadeNormalWS = normalWS;
-
-	// Wall combing (Stage 2 P4, RDR2 O2): fine grooves dragged straight down
-	// a trench wall's FALL LINE, ~3.5 cm apart, staying vertical as the
-	// trench curves. Direction = normalize(profileGrad), the carve profile's
-	// own gradient - already computed for the wall normal, and zero anywhere
-	// that is not a trench wall, so floors, pristine ground and plain steep
-	// terrain never comb. Every input is world-anchored (worldXYPS + the
-	// profile field); nothing here may ride a view-dependent quantity -
-	// grain sliding with the camera is a twice-bitten failure mode here
-	// (the pre-POM derivative snapshot, the glint 4096 fold).
-	//
-	// Round 2: the grooves also carve an AO term (combGroove, applied after
-	// the RMAOS block) - a normal wiggle alone was invisible on bright
-	// ambient-lit snow; the concave half of each groove holding a little
-	// less light is what makes combing read in ANY light.
-	float combGroove = 0.0;
-	float combW = CompactLook.y * snowSteepness * (1.0 - smoothstep(200.0, 700.0, shellZ));
-	[branch] if (combW > 0.001)
-	{
-		float fallLen = length(profileGrad);
-		[branch] if (fallLen > 0.05)
-		{
-			float2 fallDir = profileGrad / fallLen;
-			// Horizontal axis ACROSS the wall: grooves vary along it and
-			// run down the fall line.
-			float2 across = float2(-fallDir.y, fallDir.x);
-			float combCoord = dot(worldXYPS, across);
-			const float kCombSpacing = 2.5;
-			// Phase wobble so the teeth read dragged rather than machined;
-			// strand jitter breaks the comb into strands of varying depth.
-			float wobble = ShapeNoise(worldXYPS / 9.0);
-			float comb = sin(combCoord * (6.2831853 / kCombSpacing) + wobble * 4.0);
-			float strand = 0.55 + 0.45 * ShapeNoise(float2(combCoord / 7.0, dot(worldXYPS, fallDir) / 90.0));
-			float amp = combW * saturate(fallLen * 4.0) * strand;
-			normalWS = normalize(normalWS + float3(across, 0.0) * comb * amp);
-			combGroove = amp * saturate(-comb);
-		}
-	}
-
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
 	// Snow material: the modlist's snow diffuse when available, otherwise a
@@ -1731,8 +1687,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowAO = rmaos.z;
 		snowF0 = rmaos.w * SnowSpecularLevel;
 	}
-	// Groove floors hold a little less light (see the comb block).
-	snowAO *= 1.0 - 0.4 * combGroove;
+
 
 	// Crust polishes whatever the material ended up being, PBR set or not. It
 	// has to come after the block above rather than before it, or an installed
@@ -1772,7 +1727,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		// Full-resolution comparison PCF against the game's raw cascade
 		// atlas: the same crisp tree/actor shadows bare ground receives.
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, cascadeNormalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
@@ -1856,25 +1811,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow source and the shell hugs the very ground the march ran on.
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
-		// Depth agreement is the ONLY gate (round 18): the march ran on the
-		// PRE-shell depth, so where the shell drapes well above what the ray
-		// hit (rocks buried under the drift field) the mask holds the buried
-		// object's own shadowing and would print it through the snow - trust
-		// it only where the shell hugs the surface the march actually saw.
-		// The old additional 4000-9000 distance gate silently excluded ALL
-		// near-field SSS - including grass shadows, which CS casts only via
-		// this march and which therefore never fell on the shell (Josef).
-		// The hug gate alone covers the buried-object case at every range.
-		// Hug gate back at the generous 8-24 (the "complete grass" era):
-		// three rounds of Josef's evidence proved the fence-print and
-		// grass-shadow depth gaps OVERLAP, so no constant separates them —
-		// 2-9 and 4-14 each starved grass while a shallow-buried post base
-		// still printed. The separation is not a threshold, it is the
-		// CASTER: the fence post is a captured object — its true shadow on
-		// the shell already comes from the cascades and the self-shadow
-		// march — while grass is never captured and SSS is its only
-		// source. Suppress SSS where a captured object stands sunward.
-		float sssBlend = 1.0 - smoothstep(8.0, 24.0, sceneZ - shellZ);
+		// Depth agreement is the gate (round 18): the march ran on the
+		// PRE-shell depth, so trust the mask only where the shell hugs the
+		// surface the march actually saw. Measured VERTICALLY, not along
+		// the view ray: the along-ray gap is snow depth / sin(elevation),
+		// which explodes at far grazing views - that explosion is why
+		// 38614476 forced SSS fully on past 2500 units, and that override
+		// is exactly what painted buried-terrain shadows through distant
+		// drifts. The vertical gap does not blow up with view angle, so
+		// one rule now covers every range and the override is GONE: far
+		// hugging ground keeps its LOD tree shadows, a deep drift
+		// suppresses at any distance. The along-ray term survives only as
+		// a wide backstop for steep faces seen edge-on, where the marched
+		// surface is a genuinely different surface at a small vertical
+		// gap. Thresholds cannot separate grass shadows from buried
+		// prints (their gaps overlap - three rounds of evidence); the
+		// CASTER can, and the discriminator below does.
+		float sssRayGap = sceneZ - shellZ;
+		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
+		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
+		                 (1.0 - smoothstep(150.0, 400.0, sssRayGap));
 		// Buried-caster discriminator: three sunward taps of the object-top
 		// raster; any captured surface standing above this pixel's shell
 		// means the mask's darkness here is that object's buried shadow.
@@ -1908,16 +1864,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 			}
 		}
-		// Distant LOD shadows ARE Screen-Space Shadows (ledger r107: no
-		// third cascade exists; LOD trees shadow bare ground only via the
-		// depth march). The hug gate's along-ray gap explodes at grazing
-		// far views — snow depth / sin(elevation), plus the anti-pinhole
-		// lift past 3000 — so it silently culled ALL far SSS, which is the
-		// distant-shadow regression Josef chased across three rounds. Far
-		// field: SSS applies fully; buried-caster prints don't read at
-		// that range (r34: the far field is diffuse-dominated). Applied
-		// after the discriminator so the far field is never suppressed.
-		sssBlend = lerp(sssBlend, 1.0, smoothstep(2500.0, 5000.0, shellZ));
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
