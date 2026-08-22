@@ -117,13 +117,29 @@
 // pristine - so the collapse cannot creep outward.
 //
 // Radii are WORLD units (converted through the live TexelSize - the window
-// resizes with the Trenches range slider). Three radii so width picks the
-// outcome: a narrow fin is seen by all three and collapses fully, a wider
-// strip only by the longest reach, which settles it partway (SLUMP_REACH),
-// and a genuinely wide pristine strip is two trench walls and stands.
+// resizes with the Trenches range slider). An axis contributes NOTHING
+// unless it finds real support (SLUMP_MIN_SUPPORT) within the two GATE
+// radii - that bound is what contains the effect to the trenches: only a
+// strip narrower than twice the outer gate radius can settle at all, and a
+// settled strip cannot hand support onward to open snow, because the texel
+// past its edge still has one pristine side inside the gate. The third,
+// longer radius never gates; it only reads the flanking trenches' floor
+// depth for texels that already qualified, so 24-unit taps landing on a
+// shallow trench SHOULDER do not understate the target.
+//
+// Support is DISPLACED, UNSCORCHED depth - x minus |y| - never raw x.
+// Melt basins and lightning scorch are spell-authored marks; counting them
+// here would let a campfire or a strike settle the pristine snow around it
+// (diverges from the berm field's Displaced(), which keeps scorch: a berm
+// is about spoil thrown, this is about ground bearing weight).
 #define SLUMP_RADII 3
+// Radii up to this index gate; beyond it they only deepen.
+#define SLUMP_GATE_RADII 2
 static const float kSlumpRadius[SLUMP_RADII] = { 24.0, 48.0, 96.0 };
 static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
+// Least min-support inside the gate radii that engages an axis. Well above
+// refill remnants and trench shoulders, well below a walked trail's floor.
+#define SLUMP_MIN_SUPPORT 0.25
 // Eight axes 22.5 degrees apart (taps go both ways, so 180 covers the
 // circle). Four showed up as a cross pattern on diagonal fins.
 #define SLUMP_AXES 8
@@ -215,14 +231,16 @@ float StampNoise(float2 p)
 		lerp(StampNoiseHash(i + float2(0, 1)), StampNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
-// Total depth of a previous-map texel for the slump support test. Outside the
-// window counts as PRISTINE, not as carved: a border texel then has one
-// untouched side and stands, which errs toward doing nothing at the edge.
+// Support depth of a previous-map texel for the slump test: displaced,
+// unscorched carve only (see the SLUMP_* block). Outside the window counts
+// as PRISTINE, not as carved: a border texel then has one untouched side
+// and stands, which errs toward doing nothing at the edge.
 float SlumpTap(int2 p, int2 dims)
 {
 	if (any(p < 0) || any(p >= dims))
 		return 0.0;
-	return PreviousDeformation[uint2(p)].x;
+	float4 t = PreviousDeformation[uint2(p)];
+	return saturate(t.x - abs(t.y));
 }
 
 [numthreads(8, 8, 1)] void main(uint3 DTid
@@ -290,18 +308,27 @@ float SlumpTap(int2 p, int2 dims)
 		// target at a rate - so it composes with the refill (which is
 		// pulling the other way on both the strip and its neighbors) and
 		// with this frame's stamps, which max-blend over it below.
-		[branch] if (SlumpRate > 0.001 && deformation < 0.999)
+		// The receiving texel is skipped outright while it carries any melt
+		// or scorch of its own: those marks are spell-authored shapes, and
+		// deepening one - even toward a correct neighbor floor - redraws it.
+		[branch] if (SlumpRate > 0.001 && deformation < 0.999 && abs(melted) < 0.005)
 		{
 			float slumpTarget = 0.0;
 			[unroll] for (uint axis = 0; axis < SLUMP_AXES; axis++)
 			{
+				float gate = 0.0;
+				float axisTarget = 0.0;
 				[unroll] for (uint r = 0; r < SLUMP_RADII; r++)
 				{
 					int2 off = int2(round(kSlumpAxis[axis] * (kSlumpRadius[r] / max(TexelSize, 1e-4))));
 					float support = min(SlumpTap(sourcePixel + off, int2(dims)),
 						SlumpTap(sourcePixel - off, int2(dims)));
-					slumpTarget = max(slumpTarget, support * kSlumpReach[r]);
+					if (r < SLUMP_GATE_RADII)
+						gate = max(gate, support);
+					axisTarget = max(axisTarget, support * kSlumpReach[r]);
 				}
+				if (gate > SLUMP_MIN_SUPPORT)
+					slumpTarget = max(slumpTarget, axisTarget);
 			}
 			// Low bumps, not a plane: the settled floor keeps an uneven
 			// remainder, which is what Josef's cross-section asks for.
