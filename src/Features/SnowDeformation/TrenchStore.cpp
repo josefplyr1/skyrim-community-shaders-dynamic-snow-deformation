@@ -4,6 +4,7 @@
 #include "Utils/D3D.h"
 
 #include <DirectXPackedVector.h>
+#include <limits>
 #include <unordered_set>
 
 // Persistent trenches, Stage A. Design and staging in PERSISTENT-TRENCHES-PLAN.md;
@@ -373,18 +374,44 @@ void SnowDeformation::EnforceTrenchBudget()
 	if (trenchEncodedTotal <= budget)
 		return;
 
-	// Least-recently-touched ground goes first: the store should hold where you
-	// have BEEN, and the places you have not returned to are the ones whose
-	// trenches you are least likely to walk back into.
+	// FURTHEST ground goes first, not least-recently-touched.
+	//
+	// Recency was the original rule and it degenerated: the rolling mirror
+	// rewrites every tile in the window every few seconds, so it touches
+	// nearly everything and the timestamps stop discriminating. Eviction then
+	// picked arbitrarily, and the ground the player was standing on was as
+	// likely to go as an NPC trail on the far side of the hold - which is
+	// exactly what Josef saw when a store larger than the budget was culled on
+	// load and his trenches were among the casualties.
+	//
+	// Distance from the window centre cannot degenerate that way, and it
+	// matches what the feature is for: snow is only ever SEEN nearby, so when
+	// the store cannot hold everything the far half is what to lose. Another
+	// worldspace outranks any distance - Solstheim's trenches are not competing
+	// with the Rift's.
+	const float2 centre = { windowOrigin.x + deformWorldSize * 0.5f,
+		windowOrigin.y + deformWorldSize * 0.5f };
+	const uint32_t here = activeWorldspace.load(std::memory_order_acquire);
+
 	trenchEvictScratch.clear();
 	trenchEvictScratch.reserve(trenchTiles.size());
-	for (const auto& [key, tile] : trenchTiles)
-		trenchEvictScratch.emplace_back(tile.lastTouch, key);
+	for (const auto& [key, tile] : trenchTiles) {
+		float rank;
+		if (key.worldspace != here) {
+			rank = std::numeric_limits<float>::max();
+		} else {
+			const float dx = ((float)key.x + 0.5f) * kTrenchTileWorld - centre.x;
+			const float dy = ((float)key.y + 0.5f) * kTrenchTileWorld - centre.y;
+			rank = dx * dx + dy * dy;
+		}
+		trenchEvictScratch.emplace_back(rank, key);
+	}
+	// Furthest first.
 	std::sort(trenchEvictScratch.begin(), trenchEvictScratch.end(),
-		[](const auto& a, const auto& b) { return a.first < b.first; });
+		[](const auto& a, const auto& b) { return a.first > b.first; });
 
 	size_t evicted = 0;
-	for (const auto& [touch, key] : trenchEvictScratch) {
+	for (const auto& [rank, key] : trenchEvictScratch) {
 		if (trenchEncodedTotal <= budget)
 			break;
 		auto it = trenchTiles.find(key);
