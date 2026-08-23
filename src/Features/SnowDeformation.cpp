@@ -583,7 +583,7 @@ void SnowDeformation::Prepass()
 		for (uint i = 0; i < waveCount; i++) {
 			const auto& wave = bowWaves[i];
 			perFrameData.DepositPosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
-			perFrameData.DepositShape[i] = { wave.radius, wave.strength, 0.0f, 0.0f };
+			perFrameData.DepositShape[i] = { wave.radius, wave.strength, wave.prev.x, wave.prev.y };
 		}
 	}
 

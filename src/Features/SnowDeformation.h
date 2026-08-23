@@ -478,17 +478,17 @@ public:
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
 		/** @brief Bow wave (ROADMAP #35): crest height as a fraction of local snow depth. 0 = off. */
-		float BowWaveHeight = 0.70f;
+		float BowWaveHeight = 0.80f;
 		/** @brief Bow wave: multiplier on the push radius, i.e. how far ahead and aside the crest reaches. */
 		float BowWaveReach = 0.90f;
 		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
-		float BowWaveForward = 0.30f;
+		float BowWaveForward = 1.00f;
 		/** @brief Bow wave: how far the crest breaks into uneven lumps rather than a smooth swell (P6's clod octave, world-anchored). 0 = smooth. */
-		float BowWaveChunk = 1.0f;
+		float BowWaveChunk = 0.40f;
 		/** @brief Bow wave: seconds the pushed crest holds its height after the actor stops, before sinking back. Displaced snow does not un-displace; this is the closest a live-computed crest gets to that (see ROADMAP #35's deposit-field note). */
-		float BowWaveSettle = 2.5f;
+		float BowWaveSettle = 0.1f;
 		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
-		float BowWaveFullSpeed = 220.0f;
+		float BowWaveFullSpeed = 200.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -880,6 +880,8 @@ public:
 	struct BowWave
 	{
 		float2 pos{};
+		/** @brief Previous foot position - the crest rides this capsule, exactly as the trench stamp does. */
+		float2 prev{};
 		float2 dir{};
 		float radius = 24.0f;
 		float strength = 0.0f;

@@ -699,30 +699,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
 						kMinFootStampRadius, kMaxStampShapeRadius);
 
-					// Only the LEADING foot pushes. The trailing foot is
-					// standing in the trench its owner already dug, and a
-					// crest around it was the "wave behind the character"
-					// (Josef): snow there has been displaced already, so
-					// there is nothing left to shoulder. This is the same
-					// rule the trenches run on - the foot that is HERE marks,
-					// what it has left behind settles - and because the lead
-					// alternates every stride the crest still never pulses.
-					const float footAhead = (tip.x - position.x) * bowWaveDir.x +
-					                        (tip.y - position.y) * bowWaveDir.y;
-					if (bowWaveStrength > 0.02f && footAhead > -2.0f &&
-						(bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
-						bowWaves.size() < kMaxBowWaves) {
-						BowWave wave{};
-						wave.pos = tip;
-						wave.dir = bowWaveDir;
-						wave.radius = kBowWaveBaseRadius * depthScale;
-						wave.strength = bowWaveStrength;
-						const float cdx = footWorld.translate.x - cameraPosition.x;
-						const float cdy = footWorld.translate.y - cameraPosition.y;
-						wave.distSq = cdx * cdx + cdy * cdy;
-						bowWaves.push_back(wave);
-					}
-
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
 					// discrete print instead of dragging from the previous one.
@@ -744,6 +720,32 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 							segStart = it->second;
 					}
 					currentPositions[key] = heel;
+
+					// Only the LEADING foot pushes. The trailing foot is
+					// standing in the trench its owner already dug, so there
+					// is nothing left there to shoulder - that was the "wave
+					// behind the character". Emitted HERE, after segStart, so
+					// the crest rides the same swept CAPSULE the trench stamp
+					// uses rather than radiating from a point: a point source
+					// threw its whole radius ahead of wherever the foot was,
+					// which bulged the far wall of a trench before the foot
+					// had crossed it (Josef, round 5).
+					const float footAhead = (tip.x - position.x) * bowWaveDir.x +
+					                        (tip.y - position.y) * bowWaveDir.y;
+					if (bowWaveStrength > 0.02f && footAhead > -2.0f &&
+						(bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
+						bowWaves.size() < kMaxBowWaves) {
+						BowWave wave{};
+						wave.pos = tip;
+						wave.prev = segStart;
+						wave.dir = bowWaveDir;
+						wave.radius = kBowWaveBaseRadius * depthScale;
+						wave.strength = bowWaveStrength;
+						const float cdx = footWorld.translate.x - cameraPosition.x;
+						const float cdy = footWorld.translate.y - cameraPosition.y;
+						wave.distSq = cdx * cdx + cdy * cdy;
+						bowWaves.push_back(wave);
+					}
 
 					float4 stamp{};
 					stamp.x = tip.x;

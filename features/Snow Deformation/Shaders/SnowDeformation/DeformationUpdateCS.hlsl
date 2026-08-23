@@ -224,11 +224,12 @@ cbuffer PerFrame : register(b0)
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 
-	// Bow wave. x = live count, y = reach scale, z = forward bias, w = settle
-	// seconds (how long a deposit holds before it starts sinking).
+	// x = live count, y = reach scale, z = forward bias, w = settle seconds
+	// (how long a deposit lying INSIDE a trench holds; out on untouched snow
+	// a deposit is permanent until refill buries it).
 	float4 DepositParams;
-	float4 DepositPosDir[MAX_DEPOSIT_WAVES];   // xy world pos, zw unit travel direction
-	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw spare
+	float4 DepositPosDir[MAX_DEPOSIT_WAVES];   // xy world pos (the foot), zw unit travel direction
+	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw previous foot position
 }
 
 Texture2D<float4> PreviousDeformation : register(t0);
@@ -329,10 +330,19 @@ float SlumpTap(int2 p, int2 dims)
 		// gives way to temperature besides - so a glaze fades even under a
 		// clear sky, where the refill has stopped entirely.
 		crust = max(crust - refill - CrustThaw * DeltaTime, 0.0);
-		// Deposited snow settles on its own clock and is also buried by
-		// refill, so a snowfall erases a churned approach exactly as it
-		// erases the trench beside it.
-		deposit = max(deposit - refill - DeltaTime / max(DepositParams.w, 0.05), 0.0);
+		// SETTLE IS A TRENCH CLOCK, NOT A WAVE CLOCK (Josef, round 5).
+		// Snow shouldered onto untouched cover has been MOVED, and moving
+		// itself back is not something snow does - so out there the only
+		// thing that takes a deposit away is refill, i.e. fresh snowfall
+		// burying it, exactly as it buries the trench beside it. That is why
+		// the wave now stays when the walker stops.
+		//
+		// Inside the trench the deposit is spoil lying on ground that has
+		// ALREADY been carved, and that is what was thickening the trench's
+		// own spiky edges; there the settle clock clears it fast. One field,
+		// two lifetimes, told apart by whether the ground under it was dug.
+		const float dugHere = saturate(deformation * 3.0);
+		deposit = max(deposit - refill - dugHere * DeltaTime / max(DepositParams.w, 0.05), 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
 		// design. Runs on the PREVIOUS map at the scrolled position, like
@@ -622,14 +632,31 @@ float SlumpTap(int2 p, int2 dims)
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
-			const float2 rel = worldPos - DepositPosDir[w].xy;
+			// CAPSULE, not a point (Josef, round 5): the crest hugs the swept
+			// path the foot actually took this frame, which is the same
+			// segStart -> tip capsule the trench stamps use. A point source
+			// threw its whole radius forward from wherever the foot happened
+			// to be, so the far wall of a trench started bulging before the
+			// foot had crossed it.
+			const float2 tipPos = DepositPosDir[w].xy;
+			const float2 prevPos = DepositShape[w].zw;
+			const float2 seg = tipPos - prevPos;
+			const float segLenSq = dot(seg, seg);
+			const float segT = segLenSq > 1e-4 ? saturate(dot(worldPos - prevPos, seg) / segLenSq) : 0.0;
+			const float2 rel = worldPos - (prevPos + seg * segT);
 			const float radius = max(DepositShape[w].x * DepositParams.y, 1e-3);
 			const float d = length(rel);
-			[branch] if (d > radius * 2.2)
+			// Reach cut back hard from 2.2x: that tail was the early bulge.
+			[branch] if (d > radius * 1.45)
 				continue;
 			const float t = d / radius;
-			const float radial = smoothstep(0.30, 1.0, t) * (1.0 - smoothstep(1.15, 2.2, t));
-			const float forward = d > 1e-3 ? dot(rel / d, DepositPosDir[w].zw) : 1.0;
+			const float radial = smoothstep(0.25, 0.85, t) * (1.0 - smoothstep(0.95, 1.45, t));
+			// Direction is judged from the LEADING end of the capsule, so the
+			// forward lobe sits ahead of the toe rather than ahead of the
+			// swept segment's middle.
+			const float2 relTip = worldPos - tipPos;
+			const float dTip = length(relTip);
+			const float forward = dTip > 1e-3 ? dot(relTip / dTip, DepositPosDir[w].zw) : 1.0;
 			const float halfAngle = saturate(forward * 0.5 + 0.5);
 			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
 			crest = max(crest, radial * angular * DepositShape[w].y);

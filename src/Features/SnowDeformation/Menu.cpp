@@ -409,7 +409,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("bow_wave_settle"), "Bow Wave Settle"), &settings.BowWaveSettle, 0.1f, 8.0f, "%.1f s");
 			if (auto _ttBwSet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("bow_wave_settle_tooltip"), "How long the pushed crest holds its height after you stop, before sinking back. Snow that has been shoved aside does not shove itself back, so longer reads as more solid. It cannot hold forever yet - a crest that stays put permanently needs the deposit field on the roadmap."));
+				ImGui::Text("%s", T(TKEY("bow_wave_settle_tooltip"), "How long pushed snow lying INSIDE a trench takes to flatten out. It does NOT affect the wave itself: snow shouldered onto untouched cover stays where it was pushed until fresh snowfall buries it. Low values keep a trench's own spiky edges clean instead of thickening them with spoil."));
 
 			ImGui::SliderFloat(T(TKEY("bow_wave_speed"), "Bow Wave Full Speed"), &settings.BowWaveFullSpeed, 40.0f, 500.0f, "%.0f u/s");
 			if (auto _ttBwS = Util::HoverTooltipWrapper())
