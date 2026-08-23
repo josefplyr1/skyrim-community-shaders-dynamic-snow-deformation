@@ -1533,9 +1533,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
 	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXYPS.y, snowWorldZAbs) : float2(worldXYPS.x, snowWorldZAbs);
-	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
+	// NO SnowUVOffset on the side plane, and a STATIC 4096-unit fold (24
+	// tiles exactly - the glint-fold trick). SnowUVOffset compensates
+	// gridLocal's rebase, but the side plane is ABSOLUTE coordinates that
+	// never rebase - adding the offset slid the wall texture by the scroll
+	// amount every time the camera-following grid advanced: a wall that
+	// redraws under camera translation and holds still under rotation,
+	// which is the round-1..7 wall-shift saga, settled by the mode-5 unlit
+	// view still shifting. The fold keeps the uv small for float precision;
+	// derivatives and the mip come from the UNFOLDED uv so the fold seam
+	// cannot spike them.
+	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
+	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
-	float snowHeightMipSide = SnowHeightMip(snowUVSide);
+	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
+	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
+	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
 	// Tangent basis for the snow maps. The snow uv is a world-XY planar
 	// projection, so the frame is axis-aligned by construction: bumpT is
 	// world +X (uv.x), bumpB world +Y (uv.y). Built from the geometric normal
@@ -1882,6 +1895,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 			}
 		}
+		// Near field, the mask is a CONTACT term, not a shadow map: its
+		// casters' true shadows already come from the cascades, so at full
+		// strength every trusted ground-marched silhouette doubles as a
+		// hard offset print - the player's own blob being the uncatchable
+		// case, since actors are never captured and no probe can see them.
+		// 35% near reads as soft contact darkening and keeps the grass
+		// shadows; full strength returns by 2500, where SSS is the only
+		// source of LOD tree shadows (r107).
+		sssBlend *= lerp(0.35, 1.0, smoothstep(800.0, 2500.0, shellZ));
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;

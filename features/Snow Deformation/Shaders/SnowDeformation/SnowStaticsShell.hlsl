@@ -1836,7 +1836,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the SAME plane these uvs were built on.
 	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
 	float2 snowSidePlane = snowSideDropsX ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
-	float2 snowUVSide = (SnowUVOffset + snowSidePlane) / kSnowUVTile;
+	// NO SnowUVOffset here + static 4096-unit fold, in step with the
+	// landscape shell (see its comment): the offset compensates a rebasing
+	// coordinate, and this plane is absolute - adding it slid drape-side
+	// texture on every grid scroll, just too subtly to notice on small
+	// near-vertical sides.
+	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
+	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
 	// The distance fade WITHOUT the crust flattening applied: the frost
 	// crystal replacing the powder grain must not fade with it.
@@ -1848,10 +1854,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
 	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
+	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
+	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
 	// Uniform flow: the parallax shadow branch below is divergent, and
 	// derivatives taken inside it would be garbage at its edges.
 	float snowHeightMip = SnowHeightMip(snowUV);
-	float snowHeightMipSide = SnowHeightMip(snowUVSide);
+	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
 
 	// Object trench detail: shading-only berm ridge along trails; also the
 	// compaction weight's berm term. Geometry berm waits for the skin
