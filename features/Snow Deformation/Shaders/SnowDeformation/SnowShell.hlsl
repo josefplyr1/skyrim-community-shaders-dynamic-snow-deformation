@@ -1895,15 +1895,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 			}
 		}
-		// Near field, the mask is a CONTACT term, not a shadow map: its
-		// casters' true shadows already come from the cascades, so at full
-		// strength every trusted ground-marched silhouette doubles as a
-		// hard offset print - the player's own blob being the uncatchable
-		// case, since actors are never captured and no probe can see them.
-		// 35% near reads as soft contact darkening and keeps the grass
-		// shadows; full strength returns by 2500, where SSS is the only
-		// source of LOD tree shadows (r107).
-		sssBlend *= lerp(0.35, 1.0, smoothstep(800.0, 2500.0, shellZ));
+		// The near field takes NO SSS at all (Josef's call after seeing the
+		// 35% contact version: still reads as shadows from under the snow).
+		// Casters' true shadows come from the cascades near; the mask only
+		// earns its keep past 2500, where it is the sole source of LOD
+		// tree shadows (r107). KNOWN TRADE, chosen deliberately: near-field
+		// grass shadows on the shell die with it - grass casts only via
+		// this march. If grass shadows are ever missed, this ramp is the
+		// dial.
+		sssBlend *= smoothstep(800.0, 2500.0, shellZ);
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;
