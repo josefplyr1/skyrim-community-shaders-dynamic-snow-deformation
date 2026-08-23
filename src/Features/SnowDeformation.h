@@ -487,14 +487,6 @@ public:
 		float BowWaveChunk = 0.15f;
 		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
 		float BowWaveFullSpeed = 200.0f;
-		/** @brief Airborne powder thrown off the bow wave (ROADMAP #35 phase two). A/B toggle, default OFF - the failure mode (reads as smoke) is a judgement call only Josef can make. */
-		bool EnableSnowMist = false;
-		/** @brief Mist opacity. */
-		float MistAmount = 1.0f;
-		/** @brief Mist curtain height, as a multiple of the push radius. */
-		float MistHeight = 0.9f;
-		/** @brief Mist brightness - the calibration knob for the post-composite colour space, as the retired spray needed. */
-		float MistBrightness = 1.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -886,8 +878,6 @@ public:
 	struct BowWave
 	{
 		float2 pos{};
-		/** @brief Foot height - the mist curtain stands on it (the crest itself is a 2D field and does not need it). */
-		float z = 0.0f;
 		/** @brief Previous foot position - the crest rides this capsule, exactly as the trench stamp does. */
 		float2 prev{};
 		float2 dir{};
@@ -904,30 +894,6 @@ public:
 		float4 BowWaveShape[kMaxBowWaves];
 	};
 	ConstantBuffer* bowWaveCB = nullptr;
-
-	/** @brief Layout must match MistCB in SnowMist.hlsl. Its own buffer, same reasoning as ArcCB. */
-	struct MistCB
-	{
-		Matrix CameraViewProj;
-		float4 MistCameraPosAdjust;
-		float4 MistParams;
-		float4 MistShape;
-		float4 MistSlices;
-		float4 MistFootRad[kMaxBowWaves];
-		float4 MistDirStr[kMaxBowWaves];
-	};
-	ConstantBuffer* mistCB = nullptr;
-	ID3D11VertexShader* mistVS = nullptr;
-	ID3D11PixelShader* mistPS = nullptr;
-	winrt::com_ptr<ID3D11BlendState> mistBlendState;
-	/** @brief Sprites per wave. Must match MIST_SPRITES in SnowMist.hlsl. */
-	static constexpr uint kMistSprites = 24;
-
-	ID3D11VertexShader* GetSnowMistVS();
-	ID3D11PixelShader* GetSnowMistPS();
-	bool EnsureSnowMistResources();
-	/** @brief Draws the airborne powder after the deferred composite, LIT via the shared CS modules. Rides the same bow-wave list the crest is written from - phase two of ROADMAP #35, and it exists only because phase one does. */
-	void DrawSnowMist();
 	std::vector<BowWave> bowWaves;
 	/** @brief Smoothed speed + last travel direction per actor, so the crest eases in and OUT rather than snapping off the instant someone stops - the "settles after a brief moment" half of the design - and keeps pointing the right way while it eases. xy = unit direction, z = smoothed speed. Keyed by formID. */
 	std::unordered_map<uint32_t, float4> bowWaveSpeed;

@@ -113,10 +113,6 @@
 	X(BowWaveForward) \
 	X(BowWaveChunk) \
 	X(BowWaveFullSpeed) \
-	X(EnableSnowMist) \
-	X(MistAmount) \
-	X(MistHeight) \
-	X(MistBrightness) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(CompactMatte) \

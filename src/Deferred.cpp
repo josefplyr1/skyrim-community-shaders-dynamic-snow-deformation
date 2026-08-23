@@ -425,10 +425,8 @@ void Deferred::DeferredPasses()
 	// lit the scene rather than in the G-buffer the shell writes to.
 	{
 		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded) {
+		if (snowDeformation.loaded)
 			snowDeformation.DrawLightningArcs();
-			snowDeformation.DrawSnowMist();
-		}
 	}
 }
 
