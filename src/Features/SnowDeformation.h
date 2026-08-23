@@ -276,6 +276,8 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Trenches survive leaving the deformation window: departing texels go to a sparse world-grid tile store and come back when the window returns. In-session only so far - nothing is written to the save (ROADMAP #34 Stage A). Off restores the old behaviour, where walking away discards them. */
 		bool PersistTrenches = true;
+		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. 0 disables the floor and leaves snowfall as the only reaper. */
+		float StoredTrenchFadeDays = 7.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
@@ -1680,8 +1682,31 @@ protected:
 		}
 	};
 
+	struct TrenchTile
+	{
+		std::vector<uint8_t> depth;
+		/** @brief Decay clock reading when these bytes were last brought up to date. Per tile, so the sweep can lag without ever being wrong. */
+		float clock = 0.0f;
+	};
+
 	/** @brief Quantised depth per trodden tile. Untrodden ground has no entry, and a tile that decays to nothing is erased. */
-	std::unordered_map<TrenchTileKey, std::vector<uint8_t>, TrenchTileKeyHash> trenchTiles;
+	std::unordered_map<TrenchTileKey, TrenchTile, TrenchTileKeyHash> trenchTiles;
+
+	/** @brief Monotonic "depth removed since the store began", in 0-1 depth units. A tile's decay is the difference between this and its own clock, which is what lets a tile sit out of the window for a week and come back correct. */
+	float trenchDecayClock = 0.0f;
+	/** @brief Last calendar reading in hours; negative until armed. Elapsed hours telescope, so the calendar's float32 day quantisation cancels rather than accumulating. */
+	float trenchGameHours = -1.0f;
+	/** @brief Last plausible timescale. Waiting cranks the live one enormously for its animation, so a reading taken then is the wait and not the player's setting. */
+	float trenchTimescale = 20.0f;
+
+	/** @brief Keys still to visit this sweep cycle; refilled from the store when it empties. Amortised so no frame pays for the whole store. */
+	std::vector<TrenchTileKey> trenchSweepQueue;
+	size_t trenchStatNonZero = 0;
+	size_t trenchStatThin = 0;
+	size_t trenchStatSweptTiles = 0;
+	size_t trenchAccumNonZero = 0;
+	size_t trenchAccumThin = 0;
+	size_t trenchAccumTiles = 0;
 
 	/** @brief What one staged band covers, captured at copy time: a clear, a worldspace change or a range change all move the live values out from under the map before the readback lands. */
 	struct TrenchBandCopy
@@ -1711,7 +1736,7 @@ protected:
 
 	/** @brief One-entry tile cache for the inject sampler, which walks a tile's pixel footprint in scan order. */
 	TrenchTileKey trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
-	const std::vector<uint8_t>* trenchSampleTile = nullptr;
+	const TrenchTile* trenchSampleTile = nullptr;
 
 	/** @brief Creates the inject texture and the band staging ring. */
 	bool CreateTrenchStoreResources();
@@ -1727,8 +1752,27 @@ protected:
 	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY);
 	/** @brief Drops every stored tile and the cache that points into it. */
 	void ClearTrenchStore();
-	/** @brief Live tile count and raw bytes, for the debug readout. */
-	std::pair<size_t, size_t> GetTrenchStoreStats() const { return { trenchTiles.size(), trenchTiles.size() * (size_t)kTrenchTileDim * kTrenchTileDim }; }
+	/** @brief Advances the decay clock off game time, and drops the store on a backwards jump. */
+	void TickTrenchClock();
+	/** @brief Brings one tile's bytes up to the current clock. Returns false when nothing nonzero is left, i.e. the tile should be erased. */
+	bool DecayTrenchTile(TrenchTile& a_tile);
+	/** @brief Decays and prunes a slice of the store, and gathers the occupancy figures. Amortised: correctness never depends on it, only reclaimed memory does. */
+	void SweepTrenchStore();
+
+	/** @brief Debug readout: live tiles, raw bytes, mean occupancy 0-1, and how many tiles are under a twentieth full. */
+	struct TrenchStoreStats
+	{
+		size_t tiles;
+		size_t bytes;
+		float occupancy;
+		size_t thin;
+	};
+	TrenchStoreStats GetTrenchStoreStats() const
+	{
+		const size_t bytes = trenchTiles.size() * (size_t)kTrenchTileDim * kTrenchTileDim;
+		const size_t swept = trenchStatSweptTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
+		return { trenchTiles.size(), bytes, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
+	}
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

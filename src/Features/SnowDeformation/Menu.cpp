@@ -153,6 +153,12 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store and put back on return. This is in-session only for now - nothing is written to the save, so a reload starts pristine either way. Off restores the old behaviour and frees the store."));
 
+		if (settings.PersistTrenches) {
+			ImGui::SliderFloat(T(TKEY("stored_trench_fade"), "Stored Trench Fade"), &settings.StoredTrenchFadeDays, 0.0f, 30.0f, "%.0f days");
+			if (auto _ttFade = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
+		}
+
 		ImGui::PushID("snow_refill");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
@@ -800,9 +806,13 @@ void SnowDeformation::DrawSettings()
 
 		{
 			// One tile is 512 world units square, only trodden ground has one,
-			// and refill deletes the ones it takes back to bare snow.
-			const auto [tiles, bytes] = GetTrenchStoreStats();
-			ImGui::Text("Trench store: %zu tiles, %.1f KB raw", tiles, (double)bytes / 1024.0);
+			// and refill deletes the ones it takes back to bare snow. Occupancy
+			// separates real trails from tiles a shallow refill residue is
+			// keeping alive: a high thin count wants a bigger store epsilon,
+			// not a faster fade.
+			const auto stats = GetTrenchStoreStats();
+			ImGui::Text("Trench store: %zu tiles, %.1f KB raw, %.1f%% full, %zu thin",
+				stats.tiles, (double)stats.bytes / 1024.0, stats.occupancy * 100.0f, stats.thin);
 		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));

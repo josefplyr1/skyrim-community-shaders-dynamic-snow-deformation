@@ -26,6 +26,7 @@
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
 	X(PersistTrenches) \
+	X(StoredTrenchFadeDays) \
 	X(MeltPersistence) \
 	X(MeltBowlFloor) \
 	X(MeltEdgeIrregularity) \
@@ -565,6 +566,11 @@ void SnowDeformation::Prepass()
 	// read the map BEFORE the ping-pong swap below, and it uses the window
 	// state the map's contents belong to rather than the live one - a clear
 	// arrives here with the worldspace, texel size or both already changed.
+	// Clock first: a tile folded in this frame must be stamped with the decay
+	// the world has already accrued, and a backwards jump has to drop the store
+	// before anything reads it.
+	TickTrenchClock();
+	SweepTrenchStore();
 	DrainTrenchBands();
 	FlushDepartingTrenches(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
 	perFrameData.InjectValid = BuildTrenchInject(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);

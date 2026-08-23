@@ -79,9 +79,138 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	return true;
 }
 
+void SnowDeformation::TickTrenchClock()
+{
+	auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	if (!calendar)
+		return;
+
+	// Waiting works by cranking the timescale enormously for its animation, so
+	// a live reading taken during one is the wait and not the player's setting.
+	// Latch the last plausible value; waited hours then decay at the rate the
+	// same hours would have decayed at if they had been played.
+	const float rawScale = calendar->GetTimescale();
+	if (rawScale >= 1.0f && rawScale <= 100.0f)
+		trenchTimescale = rawScale;
+
+	const float hours = calendar->GetHoursPassed();
+	if (trenchGameHours < 0.0f) {
+		trenchGameHours = hours;
+		return;
+	}
+	const float elapsed = hours - trenchGameHours;
+	trenchGameHours = hours;
+
+	// Backwards is a loaded save: the store belongs to a timeline that no
+	// longer exists, and keeping it would hand a fresh game the last one's
+	// trenches. Same rule the spell system's clocks follow.
+	if (elapsed < -1.0e-4f) {
+		ClearTrenchStore();
+		return;
+	}
+	if (elapsed <= 0.0f)
+		return;
+
+	// Snowfall erases stored trenches at the LIVE REFILL'S OWN RATE rather than
+	// a second number of its own: ground should behave the same whether or not
+	// it is being looked at, and that also makes the away-decay follow the
+	// refill sliders for free. The refill is per RENDER second, so it converts
+	// through the timescale - RefillAmount is deltaTime/kBaseRefillTime scaled
+	// by intensity and the multiplier, and one game hour is 3600/timescale
+	// render seconds.
+	// Elapsed hours telescope, so the calendar's float32 day quantisation
+	// (~2.6-second steps late game) cancels instead of accumulating.
+	const float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
+	const float realSecondsPerGameHour = 3600.0f / std::max(trenchTimescale, 1.0f);
+	const float weather = realSecondsPerGameHour * refillIntensity *
+	                      std::max(settings.RefillRateMultiplier, 0.0f) / kBaseRefillTime;
+	// The floor underneath it: without one, a clear-weather modlist never
+	// prunes and the store only grows.
+	const float floorRate = settings.StoredTrenchFadeDays > 0.01f ?
+	                            1.0f / (settings.StoredTrenchFadeDays * 24.0f) :
+	                            0.0f;
+
+	trenchDecayClock += elapsed * (weather + floorRate);
+}
+
+bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
+{
+	const float pending = trenchDecayClock - a_tile.clock;
+	if (pending <= 0.0f)
+		return true;
+
+	// FLOORED, and the clock advances only by what was actually applied. The
+	// sweep visits a tile every few frames, so rounding each visit's fraction
+	// away and stamping the clock to now would discard the remainder every
+	// time and the store would never decay at all.
+	const int drop = (int)std::floor(pending * 255.0f);
+	if (drop <= 0)
+		return true;
+	a_tile.clock += (float)drop / 255.0f;
+
+	bool alive = false;
+	for (auto& texel : a_tile.depth) {
+		texel = (uint8_t)std::max(0, (int)texel - drop);
+		alive = alive || texel != 0;
+	}
+	return alive;
+}
+
+void SnowDeformation::SweepTrenchStore()
+{
+	if (trenchTiles.empty()) {
+		trenchSweepQueue.clear();
+		trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
+		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		return;
+	}
+
+	if (trenchSweepQueue.empty()) {
+		// Cycle boundary: publish what the last pass measured and start again.
+		trenchStatNonZero = trenchAccumNonZero;
+		trenchStatThin = trenchAccumThin;
+		trenchStatSweptTiles = trenchAccumTiles;
+		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		trenchSweepQueue.reserve(trenchTiles.size());
+		for (const auto& [key, tile] : trenchTiles)
+			trenchSweepQueue.push_back(key);
+	}
+
+	// A slice per frame. The store cycles in well under a second at any size
+	// worth sweeping, and no frame pays for the whole of it.
+	constexpr int kPerFrame = 8;
+	constexpr size_t texels = (size_t)kTrenchTileDim * kTrenchTileDim;
+	for (int i = 0; i < kPerFrame && !trenchSweepQueue.empty(); i++) {
+		const TrenchTileKey key = trenchSweepQueue.back();
+		trenchSweepQueue.pop_back();
+		auto it = trenchTiles.find(key);
+		if (it == trenchTiles.end())
+			continue;
+
+		if (!DecayTrenchTile(it->second)) {
+			// Refill is the reaper: a tile it has taken back to bare ground is
+			// deleted, so the store self-prunes anywhere weather happens.
+			trenchTiles.erase(it);
+			trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
+			trenchSampleTile = nullptr;
+			continue;
+		}
+
+		const size_t nonZero = (size_t)std::count_if(it->second.depth.begin(), it->second.depth.end(),
+			[](uint8_t v) { return v != 0; });
+		trenchAccumNonZero += nonZero;
+		trenchAccumTiles++;
+		if (nonZero * 20 < texels)
+			trenchAccumThin++;
+	}
+}
+
 void SnowDeformation::ClearTrenchStore()
 {
 	trenchTiles.clear();
+	trenchSweepQueue.clear();
+	trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
+	trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
 	// The staged bands describe a map that is about to be wiped; folding them
@@ -119,7 +248,12 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 			continue;
 		const int lx = sx - key.x * kTrenchTileDim;
 		const int ly = sy - key.y * kTrenchTileDim;
-		corner[i] = (*trenchSampleTile)[(size_t)ly * kTrenchTileDim + lx] * (1.0f / 255.0f);
+		// The tile's own pending decay applied at READ time, so a sweep that
+		// has not reached this tile yet cannot hand back a stale depth. The
+		// sweep exists to reclaim memory, never to keep the store correct.
+		corner[i] = std::max(0.0f,
+			trenchSampleTile->depth[(size_t)ly * kTrenchTileDim + lx] * (1.0f / 255.0f) -
+				(trenchDecayClock - trenchSampleTile->clock));
 	}
 
 	return std::lerp(std::lerp(corner[0], corner[1], tx), std::lerp(corner[2], corner[3], tx), ty);
@@ -138,7 +272,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	// row crosses a tile only every 128 store texels, so without this the inner
 	// loop is millions of hash lookups at a loading screen.
 	TrenchTileKey cachedKey{ 0, INT32_MIN, INT32_MIN };
-	std::vector<uint8_t>* cachedTile = nullptr;
+	TrenchTile* cachedTile = nullptr;
 
 	for (int row = 0; row < a_meta.h; row++) {
 		const auto* src = reinterpret_cast<const DirectX::PackedVector::HALF*>(
@@ -173,7 +307,15 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 							// keeps the store sparse, and most of the world is.
 							if (quantised == 0)
 								continue;
-							it = trenchTiles.emplace(key, std::vector<uint8_t>((size_t)kTrenchTileDim * kTrenchTileDim, 0)).first;
+							TrenchTile fresh;
+							fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
+							fresh.clock = trenchDecayClock;
+							it = trenchTiles.emplace(key, std::move(fresh)).first;
+						} else {
+							// Brought up to date before fresh texels mix in, or
+							// the batch's new depths would sit beside stale ones
+							// under a single clock and decay twice.
+							DecayTrenchTile(it->second);
 						}
 						// Re-seated after the insert, which may have rehashed.
 						cachedKey = key;
@@ -182,7 +324,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					}
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
-					(*cachedTile)[(size_t)ly * kTrenchTileDim + lx] = quantised;
+					cachedTile->depth[(size_t)ly * kTrenchTileDim + lx] = quantised;
 				}
 			}
 		}
@@ -192,7 +334,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 		auto it = trenchTiles.find(key);
 		if (it == trenchTiles.end())
 			continue;
-		if (std::all_of(it->second.begin(), it->second.end(), [](uint8_t v) { return v == 0; }))
+		if (std::all_of(it->second.depth.begin(), it->second.depth.end(), [](uint8_t v) { return v == 0; }))
 			trenchTiles.erase(it);
 	}
 
