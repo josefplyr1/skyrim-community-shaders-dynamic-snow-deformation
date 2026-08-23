@@ -74,9 +74,62 @@ bool SnowDeformation::CreateTrenchStoreResources()
 		}
 	}
 
+	// Rolling window mirror: same format, a fixed slice of full-width rows.
+	bandDesc.Width = deformMapDim;
+	bandDesc.Height = (UINT)kTrenchRollRows;
+	for (int ring = 0; ring < 2; ring++) {
+		trenchRollStaging[ring] = nullptr;
+		trenchRollValid[ring] = false;
+		if (FAILED(device->CreateTexture2D(&bandDesc, nullptr, trenchRollStaging[ring].put())))
+			return false;
+		Util::SetResourceName(trenchRollStaging[ring].get(), "SnowDeformation::TrenchRollStaging");
+	}
+	trenchRollRow = 0;
+
 	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim, 0);
 	trenchMapPrimed = false;
 	return true;
+}
+
+void SnowDeformation::RollTrenchWindow()
+{
+	if (!settings.PersistTrenches || !trenchMapPrimed)
+		return;
+
+	auto context = globals::d3d::context;
+	auto* live = deformationTextures[currentTexture];
+	if (!context || !live || !live->resource)
+		return;
+
+	std::scoped_lock lock(trenchStoreMutex);
+
+	const int ring = trenchRollRing;
+	trenchRollRing ^= 1;
+
+	// Same rule as the departing bands: never overwrite an undrained slot,
+	// because losing a slice loses ground the store would then never relearn.
+	if (trenchRollValid[ring]) {
+		D3D11_MAPPED_SUBRESOURCE stale{};
+		if (SUCCEEDED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &stale))) {
+			StoreTrenchBand(trenchRollMeta[ring], stale);
+			context->Unmap(trenchRollStaging[ring].get(), 0);
+		}
+		trenchRollValid[ring] = false;
+	}
+
+	const int dim = (int)deformMapDim;
+	const int rows = std::min(kTrenchRollRows, dim - trenchRollRow);
+	const D3D11_BOX box{ 0, (UINT)trenchRollRow, 0, (UINT)dim, (UINT)(trenchRollRow + rows), 1 };
+	context->CopySubresourceRegion(trenchRollStaging[ring].get(), 0, 0, 0, 0, live->resource.get(), 0, &box);
+
+	// The window state the CONTENTS belong to, not the live values - the same
+	// rule the departing flush follows.
+	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, trenchRollRow, dim, rows };
+	trenchRollValid[ring] = true;
+
+	trenchRollRow += rows;
+	if (trenchRollRow >= dim)
+		trenchRollRow = 0;
 }
 
 void SnowDeformation::TickTrenchClock()
@@ -299,11 +352,13 @@ void SnowDeformation::ClearTrenchStoreLocked()
 	trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
-	// The staged bands describe a map that is about to be wiped; folding them
-	// in afterwards would put the trenches straight back.
-	for (int ring = 0; ring < 2; ring++)
+	// The staged bands and slices describe a map that is about to be wiped;
+	// folding them in afterwards would put the trenches straight back.
+	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++)
 			trenchBandValid[ring][axis] = false;
+		trenchRollValid[ring] = false;
+	}
 	trenchMapPrimed = false;
 }
 
@@ -474,6 +529,17 @@ void SnowDeformation::DrainTrenchBands()
 			context->Unmap(trenchBandStaging[ring][axis].get(), 0);
 			trenchBandValid[ring][axis] = false;
 		}
+	}
+
+	for (int ring = 0; ring < 2; ring++) {
+		if (!trenchRollValid[ring])
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
+			continue;
+		StoreTrenchBand(trenchRollMeta[ring], mapped);
+		context->Unmap(trenchRollStaging[ring].get(), 0);
+		trenchRollValid[ring] = false;
 	}
 }
 

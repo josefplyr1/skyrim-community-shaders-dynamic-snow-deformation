@@ -1746,6 +1746,29 @@ protected:
 	int trenchBandRing = 0;
 
 	/**
+	 * @brief Rolling mirror of the LIVE window into the store.
+	 *
+	 * Scroll-out and the jump path only ever teach the store about ground that
+	 * has LEFT the window, which leaves the case with no trigger at all: dig a
+	 * trench and save without moving, and the trench is still live in the map
+	 * and was never stored. That is not a co-save bug, it is the store being
+	 * defined as "what departed" rather than "what is true".
+	 *
+	 * So a slice of the window is folded in every frame, cycling through the
+	 * whole map every few seconds. The store is then continuously correct and
+	 * no save has to catch a moment.
+	 */
+	static constexpr int kTrenchRollRows = 16;
+	winrt::com_ptr<ID3D11Texture2D> trenchRollStaging[2];
+	bool trenchRollValid[2] = {};
+	TrenchBandCopy trenchRollMeta[2] = {};
+	int trenchRollRing = 0;
+	int trenchRollRow = 0;
+
+	/** @brief Copies the next slice of the live window toward the store. */
+	void RollTrenchWindow();
+
+	/**
 	 * @brief Set by the co-save load to force the next update to rebuild the
 	 * whole window from the store.
 	 *

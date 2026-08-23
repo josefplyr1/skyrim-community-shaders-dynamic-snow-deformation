@@ -580,6 +580,9 @@ void SnowDeformation::Prepass()
 	SweepTrenchStore();
 	DrainTrenchBands();
 	FlushDepartingTrenches(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
+	// Departure is not the only way ground becomes worth storing: dig and save
+	// without moving and nothing ever leaves. This keeps the store true.
+	RollTrenchWindow();
 	perFrameData.InjectValid = BuildTrenchInject(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
 
 	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
