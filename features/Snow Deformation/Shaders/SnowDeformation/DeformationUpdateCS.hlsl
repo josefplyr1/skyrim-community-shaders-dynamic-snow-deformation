@@ -643,16 +643,6 @@ float SlumpTap(int2 p, int2 dims)
 		// so the whole corridor kept a thin deposit and the chunk noise stood
 		// that up as a row of icicles along the path.
 		float wipe = 0.0;
-		// The crest's own footprint, unscaled by strength. Wherever the wave
-		// is CURRENTLY writing, the wipe must not touch - this is the melt
-		// fix (round 8): wipe and write only balance while strength is
-		// constant, so during the fade after the last step the wipe kept
-		// eroding while the rewrite decayed toward zero, and the pile
-		// tracked the fade down to nothing regardless of any setting. With
-		// the claim, a fading wave stops clearing its own pile; when the
-		// wave dies entirely nothing wipes at all, and the high-water mark
-		// stands for good.
-		float claim = 0.0;
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
@@ -696,12 +686,22 @@ float SlumpTap(int2 p, int2 dims)
 			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
 			const float shape = radial * angular;
 			crest = max(crest, shape * DepositShape[w].y);
-			claim = max(claim, shape);
 
-			// Wider than the write (2.1 vs 1.45) so nothing laid down can
-			// escape being cleared once the walker draws level with it, and
-			// strength-scaled so a dying wave clears gently.
-			wipe = max(wipe, (1.0 - smoothstep(1.4, 2.1, t)) * DepositShape[w].y);
+			// THE WIPE NEVER REACHES THE PILE (round 9, the final melt fix).
+			// The wipe is a per-frame MULTIPLICATIVE cut, so any leak onto
+			// the pile compounds at frame rate - round 8's claim mask only
+			// protected where the crest shape was exactly 1, which is almost
+			// nowhere, and the flanks melted within a second of the fade.
+			// No shape algebra survives that; geometry does: the pile lies
+			// AHEAD of the foot by construction, so the wipe is confined to
+			// ground at or BEHIND the leading edge, plus the corridor's
+			// sides. Ground ahead is structurally unreachable by it. When
+			// the walker advances, yesterday's pile falls behind the new
+			// foot and is cleared; when the walker stops, the pile is ahead
+			// of a foot that never comes, and stands for good.
+			const float behind = 1.0 - smoothstep(0.05 * radius, 0.35 * radius, along);
+			const float lateral = 1.0 - smoothstep(1.4, 2.1, abs(across) / radius);
+			wipe = max(wipe, behind * lateral * DepositShape[w].y);
 		}
 		// Clear what the crest region owns, THEN lay this frame's crest into
 		// it. Order matters: the pile ahead of the walker is written after
@@ -710,7 +710,7 @@ float SlumpTap(int2 p, int2 dims)
 		// which is how the corridor behind comes out clean. When the walker
 		// stops, wave strength decays, no crest is emitted, nothing wipes -
 		// and the last pile pushed stands there for good.
-		deposit *= saturate(1.0 - wipe * saturate(1.0 - claim));
+		deposit *= saturate(1.0 - wipe);
 		// Only on snow that is still standing: a crest cannot pile up out of
 		// ground that has already been dug away.
 		deposit = max(deposit, crest * saturate(1.0 - total));
