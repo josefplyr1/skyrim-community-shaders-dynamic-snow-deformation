@@ -1765,7 +1765,23 @@ protected:
 	int trenchRollRing = 0;
 	int trenchRollRow = 0;
 
-	/** @brief Copies the next slice of the live window toward the store. */
+	/**
+	 * @brief Map rows this frame's carve stamps touched, one bit per row.
+	 *
+	 * A plain sequential sweep mirrors the whole map every few seconds, so the
+	 * newest few metres of a trail are the part most likely to be missing from
+	 * a save - which is exactly the ground the player just watched being dug.
+	 * Rolling changed rows FIRST fixes that at the source rather than by
+	 * spending bandwidth on ground nothing has touched.
+	 *
+	 * Marked after the stamps are gathered and consumed by the NEXT frame's
+	 * roll, which is when the map holding them becomes the one being copied.
+	 */
+	std::vector<uint32_t> trenchDirtyRows;
+
+	/** @brief Flags the rows this frame's carve stamps will write, for the next roll to prioritise. */
+	void MarkTrenchDirtyRows(const PerFrame& a_data);
+	/** @brief Copies the next slice of the live window toward the store, changed rows first. */
 	void RollTrenchWindow();
 
 	/**

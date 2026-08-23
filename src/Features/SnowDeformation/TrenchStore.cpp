@@ -91,6 +91,41 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	return true;
 }
 
+void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
+{
+	if (!settings.PersistTrenches)
+		return;
+
+	const int dim = (int)deformMapDim;
+	if (trenchDirtyRows.size() != (size_t)(dim + 31) / 32)
+		trenchDirtyRows.assign((size_t)(dim + 31) / 32, 0u);
+
+	const float texel = a_data.TexelSize;
+	if (texel <= 0.0f)
+		return;
+
+	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
+		// Carves only. A melt stamp's depth is subtracted out of what the
+		// store keeps anyway, so mirroring its rows early buys nothing.
+		if (a_data.StampEnds[i].z > 0.5f)
+			continue;
+
+		// The capsule spans segStart to tip, so take both ends plus the radius.
+		const float radius = a_data.Stamps[i].w;
+		const float minY = std::min(a_data.Stamps[i].y, a_data.StampEnds[i].y) - radius;
+		const float maxY = std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + radius;
+
+		// Against the CURRENT origin: these rows are consumed next frame, by
+		// which time the map being copied is the one this frame wrote.
+		int row0 = (int)std::floor((minY - a_data.WindowOrigin.y) / texel);
+		int row1 = (int)std::floor((maxY - a_data.WindowOrigin.y) / texel);
+		row0 = std::max(row0, 0);
+		row1 = std::min(row1, dim - 1);
+		for (int row = row0; row <= row1; row++)
+			trenchDirtyRows[(size_t)row >> 5] |= 1u << (row & 31);
+	}
+}
+
 void SnowDeformation::RollTrenchWindow()
 {
 	if (!settings.PersistTrenches || !trenchMapPrimed)
@@ -118,18 +153,46 @@ void SnowDeformation::RollTrenchWindow()
 	}
 
 	const int dim = (int)deformMapDim;
-	const int rows = std::min(kTrenchRollRows, dim - trenchRollRow);
-	const D3D11_BOX box{ 0, (UINT)trenchRollRow, 0, (UINT)dim, (UINT)(trenchRollRow + rows), 1 };
+
+	// Freshly dug rows first, then the sequential sweep. Without the priority
+	// the newest metres of a trail are the likeliest to be missing from a save
+	// - the reindeer that ran past just before Josef saved, and whose last few
+	// metres came back gone.
+	int start = -1;
+	if (trenchDirtyRows.size() == (size_t)(dim + 31) / 32) {
+		for (size_t word = 0; word < trenchDirtyRows.size() && start < 0; word++) {
+			if (!trenchDirtyRows[word])
+				continue;
+			unsigned long bit = 0;
+			_BitScanForward(&bit, trenchDirtyRows[word]);
+			start = (int)(word * 32 + bit);
+		}
+	}
+	if (start < 0)
+		start = trenchRollRow;
+	start = std::min(start, dim - 1);
+
+	const int rows = std::min(kTrenchRollRows, dim - start);
+	// Cleared whether they were dirty or swept: this slice is now mirrored.
+	for (int row = start; row < start + rows; row++)
+		if (trenchDirtyRows.size() == (size_t)(dim + 31) / 32)
+			trenchDirtyRows[(size_t)row >> 5] &= ~(1u << (row & 31));
+
+	const D3D11_BOX box{ 0, (UINT)start, 0, (UINT)dim, (UINT)(start + rows), 1 };
 	context->CopySubresourceRegion(trenchRollStaging[ring].get(), 0, 0, 0, 0, live->resource.get(), 0, &box);
 
 	// The window state the CONTENTS belong to, not the live values - the same
 	// rule the departing flush follows.
-	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, trenchRollRow, dim, rows };
+	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, start, dim, rows };
 	trenchRollValid[ring] = true;
 
-	trenchRollRow += rows;
-	if (trenchRollRow >= dim)
-		trenchRollRow = 0;
+	// The sequential sweep advances only when it was the one that ran; a
+	// priority slice must not let untouched ground go unmirrored for ever.
+	if (start == trenchRollRow) {
+		trenchRollRow += rows;
+		if (trenchRollRow >= dim)
+			trenchRollRow = 0;
+	}
 }
 
 void SnowDeformation::TickTrenchClock()
@@ -460,29 +523,37 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			for (int gy = gy0; gy <= gy1; gy++) {
 				for (int gx = gx0; gx <= gx1; gx++) {
 					const TrenchTileKey key{ a_meta.worldspace, FloorDiv(gx, kTrenchTileDim), FloorDiv(gy, kTrenchTileDim) };
-					if (key != cachedKey || !cachedTile) {
+					// The MISS is cached too, not just the hit. Most of the map
+					// is untrodden, and a cache that only remembers tiles that
+					// exist does a fresh hash lookup for every texel of empty
+					// ground - which the rolling mirror now walks tens of
+					// thousands of times a frame.
+					if (key != cachedKey) {
 						auto it = trenchTiles.find(key);
-						if (it == trenchTiles.end()) {
-							// Untrodden ground never allocates: this is what
-							// keeps the store sparse, and most of the world is.
-							if (quantised == 0)
-								continue;
-							TrenchTile fresh;
-							fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
-							fresh.clock = trenchDecayClock;
-							it = trenchTiles.emplace(key, std::move(fresh)).first;
-						} else {
-							// Written to, so it is recent ground whatever the
-							// LRU thought a moment ago.
+						cachedKey = key;
+						cachedTile = it == trenchTiles.end() ? nullptr : &it->second;
+						if (cachedTile) {
 							// Brought up to date before fresh texels mix in, or
 							// the batch's new depths would sit beside stale ones
 							// under a single clock and decay twice.
-							DecayTrenchTile(it->second);
+							DecayTrenchTile(*cachedTile);
+							// Written to, so it is recent ground whatever the
+							// LRU thought a moment ago.
+							cachedTile->lastTouch = trenchGameHours;
+							touched.insert(key);
 						}
+					}
+					if (!cachedTile) {
+						// Untrodden ground never allocates: this is what keeps
+						// the store sparse, and most of the world is.
+						if (quantised == 0)
+							continue;
+						TrenchTile fresh;
+						fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
+						fresh.clock = trenchDecayClock;
+						fresh.lastTouch = trenchGameHours;
 						// Re-seated after the insert, which may have rehashed.
-						cachedKey = key;
-						cachedTile = &it->second;
-						cachedTile->lastTouch = trenchGameHours;
+						cachedTile = &trenchTiles.emplace(key, std::move(fresh)).first->second;
 						touched.insert(key);
 					}
 					const int lx = gx - key.x * kTrenchTileDim;

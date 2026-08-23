@@ -600,6 +600,10 @@ void SnowDeformation::Prepass()
 	GatherStamps(perFrameData);
 	globals::profiler->EndPass();
 
+	// Marked here, consumed by NEXT frame's roll: the map these stamps are
+	// about to be written into is the one that frame will be copying.
+	MarkTrenchDirtyRows(perFrameData);
+
 	// Bow-wave crests, deposited into the map's .w so they PERSIST on the
 	// ground rather than following the feet that made them (ROADMAP #35).
 	// GatherStamps has just sorted them nearest-first, so the slots go to the
