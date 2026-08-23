@@ -485,8 +485,6 @@ public:
 		float BowWaveForward = 1.00f;
 		/** @brief Bow wave: how far the crest breaks into uneven lumps rather than a smooth swell (P6's clod octave, world-anchored). 0 = smooth. */
 		float BowWaveChunk = 0.40f;
-		/** @brief Bow wave: seconds the pushed crest holds its height after the actor stops, before sinking back. Displaced snow does not un-displace; this is the closest a live-computed crest gets to that (see ROADMAP #35's deposit-field note). */
-		float BowWaveSettle = 0.1f;
 		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
 		float BowWaveFullSpeed = 200.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */

@@ -112,7 +112,6 @@
 	X(BowWaveReach) \
 	X(BowWaveForward) \
 	X(BowWaveChunk) \
-	X(BowWaveSettle) \
 	X(BowWaveFullSpeed) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
@@ -579,7 +578,9 @@ void SnowDeformation::Prepass()
 		perFrameData.DepositParams = { settings.BowWaveHeight > 0.001f ? (float)waveCount : 0.0f,
 			std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
 			std::clamp(settings.BowWaveForward, 0.0f, 1.0f),
-			std::clamp(settings.BowWaveSettle, 0.1f, 30.0f) };
+			// w retired with the Settle slider (round 8); trench-spoil decay
+			// is a fixed clock in the CS now.
+			0.0f };
 		for (uint i = 0; i < waveCount; i++) {
 			const auto& wave = bowWaves[i];
 			perFrameData.DepositPosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };

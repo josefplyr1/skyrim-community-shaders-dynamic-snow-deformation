@@ -341,8 +341,11 @@ float SlumpTap(int2 p, int2 dims)
 		// ALREADY been carved, and that is what was thickening the trench's
 		// own spiky edges; there the settle clock clears it fast. One field,
 		// two lifetimes, told apart by whether the ground under it was dug.
+		// Fixed 0.35 s: the Settle slider is RETIRED (round 8, Josef's call
+		// - it never had a visible job once the melt was traced to the wipe,
+		// and trench-spoil cleanup has one right answer: fast).
 		const float dugHere = saturate(deformation * 3.0);
-		deposit = max(deposit - refill - dugHere * DeltaTime / max(DepositParams.w, 0.05), 0.0);
+		deposit = max(deposit - refill - dugHere * DeltaTime / 0.35, 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
 		// design. Runs on the PREVIOUS map at the scrolled position, like
@@ -640,6 +643,16 @@ float SlumpTap(int2 p, int2 dims)
 		// so the whole corridor kept a thin deposit and the chunk noise stood
 		// that up as a row of icicles along the path.
 		float wipe = 0.0;
+		// The crest's own footprint, unscaled by strength. Wherever the wave
+		// is CURRENTLY writing, the wipe must not touch - this is the melt
+		// fix (round 8): wipe and write only balance while strength is
+		// constant, so during the fade after the last step the wipe kept
+		// eroding while the rewrite decayed toward zero, and the pile
+		// tracked the fade down to nothing regardless of any setting. With
+		// the claim, a fading wave stops clearing its own pile; when the
+		// wave dies entirely nothing wipes at all, and the high-water mark
+		// stands for good.
+		float claim = 0.0;
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
@@ -656,39 +669,39 @@ float SlumpTap(int2 p, int2 dims)
 			const float2 onPath = prevPos + seg * segT;
 			const float radius = max(DepositShape[w].x, 1e-3);
 
-			// REACH IS DISTANCE AHEAD, NOT SIZE (Josef, round 7). It used to
-			// scale the radius, so turning it up simply inflated the whole
-			// mound. Now it pushes the lobe's CENTRE forward along travel and
-			// stretches it along the same axis, so more reach makes the hill
-			// in front LONGER and further out while its width stays put -
-			// which is what a body ploughing a furrow actually leaves.
+			// ANCHORED AT THE FOOT, STRETCHED FORWARD (Josef, round 8): the
+			// wave starts where the trench ends, always. Round 7 offset the
+			// lobe's centre forward, which detached the mound from the
+			// trench mouth as Reach went up. Now the shape's near edge stays
+			// pinned at the foot and Reach only DIVIDES the forward axis, so
+			// turning it up extends the hill onward from the same start
+			// instead of moving it away.
 			const float reach = max(DepositParams.y, 0.25);
-			const float2 relC = worldPos - (onPath + fwd * (radius * reach));
-			const float along = dot(relC, fwd);
-			const float across = dot(relC, sideDir);
-			const float d = length(float2(along / reach, across));
+			const float2 rel = worldPos - onPath;
+			const float along = dot(rel, fwd);
+			const float across = dot(rel, sideDir);
+			// Forward distances are compressed by Reach - the lobe covers
+			// [0 .. ~1.45 x radius x reach] ahead; behind is left at true
+			// scale and the angular term kills it anyway.
+			const float2 shaped = float2(along > 0.0 ? along / reach : along, across);
+			const float d = length(shaped);
 			[branch] if (d > radius * 1.45)
 				continue;
 			const float t = d / radius;
+			// Zero AT the foot (the walker stands in the trench they just
+			// cut), rising to the crest ahead.
 			const float radial = smoothstep(0.25, 0.85, t) * (1.0 - smoothstep(0.95, 1.45, t));
-			const float forward = d > 1e-3 ? (along / reach) / (d) : 1.0;
+			const float forward = d > 1e-3 ? shaped.x / d : 1.0;
 			const float halfAngle = saturate(forward * 0.5 + 0.5);
 			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
-			crest = max(crest, radial * angular * DepositShape[w].y);
+			const float shape = radial * angular;
+			crest = max(crest, shape * DepositShape[w].y);
+			claim = max(claim, shape);
 
-			// The wipe reaches WIDER than the write (1.45 -> 2.1) so nothing
-			// the crest has laid down can escape being cleared once the
-			// walker draws level with it - the lateral lobes surviving out
-			// past the wipe were the spikes strung along the trail.
-			//
-			// And it is scaled by the wave's own STRENGTH, which is the fix
-			// for the pile melting when you stop: strength fades over ~0.4 s
-			// after the last step, and an unscaled wipe went on erasing at
-			// full force while the crest being written faded to nothing, so
-			// the mound was rubbed out no matter what Settle said. A wave
-			// that is no longer pushing no longer clears.
-			const float tWipe = length(float2(along / reach, across)) / radius;
-			wipe = max(wipe, (1.0 - smoothstep(1.4, 2.1, tWipe)) * DepositShape[w].y);
+			// Wider than the write (2.1 vs 1.45) so nothing laid down can
+			// escape being cleared once the walker draws level with it, and
+			// strength-scaled so a dying wave clears gently.
+			wipe = max(wipe, (1.0 - smoothstep(1.4, 2.1, t)) * DepositShape[w].y);
 		}
 		// Clear what the crest region owns, THEN lay this frame's crest into
 		// it. Order matters: the pile ahead of the walker is written after
@@ -697,7 +710,7 @@ float SlumpTap(int2 p, int2 dims)
 		// which is how the corridor behind comes out clean. When the walker
 		// stops, wave strength decays, no crest is emitted, nothing wipes -
 		// and the last pile pushed stands there for good.
-		deposit *= saturate(1.0 - wipe);
+		deposit *= saturate(1.0 - wipe * saturate(1.0 - claim));
 		// Only on snow that is still standing: a crest cannot pile up out of
 		// ground that has already been dug away.
 		deposit = max(deposit, crest * saturate(1.0 - total));
