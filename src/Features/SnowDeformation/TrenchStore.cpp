@@ -351,7 +351,26 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 		const int gy1 = (int)std::floor((worldY + half - 0.001f) / storeTexel);
 
 		for (int col = 0; col < a_meta.w; col++) {
-			const float depth = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4]);
+			// DISPLACED depth, not total - the shell's own definition
+			// (SampleDisplacedFast in SnowShell.hlsl), reused verbatim.
+			//
+			// The store keeps depth alone, so a texel's melt classification
+			// cannot come back with it. Storing a melt basin's total depth
+			// would re-inject it as a DUG one: it would grow the berm melted
+			// snow never earns, start casting the shadow melt pits are exempt
+			// from, and refill at trench speed instead of MeltPersistence.
+			// Subtracting the melted part instead means a spell basin is
+			// simply not remembered - which is honest, since what made it a
+			// basin is not remembered either - while a boot print through one
+			// still stores its own displacement.
+			//
+			// Scorch (negative y) is NOT subtracted: it was displaced and
+			// keeps its berm, so its depth is a real dent worth remembering.
+			// Campfire melt never reaches here at all - that comes from the
+			// exclusion field, rederived each frame from live fire positions.
+			const float total = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4]);
+			const float melted = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4 + 1]);
+			const float depth = std::clamp(total - std::max(melted, 0.0f), 0.0f, 1.0f);
 			// Written, not maxed: the store is the map's record, so snow the
 			// refill has put back must be able to shallow a stored trench.
 			const uint8_t quantised = depth >= kTrenchStoreEpsilon ?
