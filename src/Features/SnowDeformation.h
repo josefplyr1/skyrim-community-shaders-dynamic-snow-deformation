@@ -479,10 +479,10 @@ public:
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
-		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. A/B toggle, default off. */
-		bool ShellSSSRemarch = false;
-		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. A/B toggle, default off. */
-		bool ShellSSSRemarchThickness = false;
+		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. Default ON since 2026-08-22 (Josef's A/B). */
+		bool ShellSSSRemarch = true;
+		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. Default ON since 2026-08-22 (Josef's A/B). */
+		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). Default 20 (Josef's pick after the round-13 A/B): short grass only. 200 = accept everything. */
 		float ShellSSSRemarchCasterCap = 20.0f;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
