@@ -408,6 +408,22 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("bow_wave_chunk_tooltip"), "How far the pushed snow breaks into uneven lumps instead of a smooth swell. 0 reads as a water wave; higher gives chunks that ride up and tumble aside. The lumps are anchored to the world, so they appear to flow through the crest as you advance rather than travelling with you."));
 
 			ImGui::SliderFloat(T(TKEY("bow_wave_speed"), "Bow Wave Full Speed"), &settings.BowWaveFullSpeed, 40.0f, 500.0f, "%.0f u/s");
+
+			ImGui::Checkbox(T(TKEY("snow_mist"), "Bow Wave Mist"), &settings.EnableSnowMist);
+			if (auto _ttMist = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_mist_tooltip"), "Airborne powder thrown off the wave: the fine snow that goes up while the bulk gets pushed. Rides the wave itself, so it only appears where snow is actually being shouldered - and it is a curtain regenerated every frame, never puffs left behind. Lit by the scene, including nearby fires. A/B this hard: if it reads as SMOKE rather than snow, say so and it goes."));
+
+			ImGui::SliderFloat(T(TKEY("mist_amount"), "Mist Amount"), &settings.MistAmount, 0.0f, 2.0f, "%.2f");
+			if (auto _ttMistA = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("mist_amount_tooltip"), "How thick the airborne powder is. 0 = off without disabling the system."));
+
+			ImGui::SliderFloat(T(TKEY("mist_height"), "Mist Height"), &settings.MistHeight, 0.0f, 3.0f, "%.2f");
+			if (auto _ttMistH = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("mist_height_tooltip"), "How high the curtain of powder stands, as a multiple of the push radius. It is a fixed profile, not a launch - snow is denser than air and does not climb."));
+
+			ImGui::SliderFloat(T(TKEY("mist_brightness"), "Mist Brightness"), &settings.MistBrightness, 0.0f, 4.0f, "%.2f");
+			if (auto _ttMistB = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("mist_brightness_tooltip"), "Calibration for the post-composite colour space: raise if the powder reads grey against sunlit snow, lower if it glows at dusk."));
 			if (auto _ttBwS = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("bow_wave_speed_tooltip"), "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop."));
 

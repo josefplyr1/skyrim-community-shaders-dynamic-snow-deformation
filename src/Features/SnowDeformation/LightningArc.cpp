@@ -1,6 +1,7 @@
 #include "Features/SnowDeformation.h"
 
 #include "Deferred.h"
+#include "Features/LightLimitFix.h"
 #include "Globals.h"
 #include "State.h"
 #include "Util.h"
@@ -243,6 +244,167 @@ void SnowDeformation::DrawLightningArcs()
 	// Leave the pipeline as it was found.
 	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
 	context->PSSetShaderResources(0, 1, nullSRV);
+	context->VSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(nullptr, nullptr, 0);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	context->RSSetState(prevRaster.get());
+	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
+	context->OMSetBlendState(prevBlend.get(), prevBlendFactor, prevSampleMask);
+
+	globals::profiler->EndPass();
+}
+
+/**
+ * Airborne powder off the bow wave (ROADMAP #35 phase two).
+ *
+ * The arc's vehicle, alpha-blended and lit - see SnowMist.hlsl for the three
+ * rules this obeys and why each one exists. It rides the SAME bowWaves list
+ * the crest is written from, so the powder is anchored to real pushed snow
+ * rather than to a guess: that is the whole difference between this and the
+ * retired Stage 4 spray, which modelled emission with nothing pushing.
+ */
+
+ID3D11VertexShader* SnowDeformation::GetSnowMistVS()
+{
+	if (!mistVS) {
+		logger::debug("Compiling SnowMist VS");
+		mistVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(
+			L"Data\\Shaders\\SnowDeformation\\SnowMist.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
+	}
+	return mistVS;
+}
+
+ID3D11PixelShader* SnowDeformation::GetSnowMistPS()
+{
+	if (!mistPS) {
+		logger::debug("Compiling SnowMist PS");
+		mistPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(
+			L"Data\\Shaders\\SnowDeformation\\SnowMist.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+	}
+	return mistPS;
+}
+
+bool SnowDeformation::EnsureSnowMistResources()
+{
+	auto* device = globals::d3d::device;
+	if (!device)
+		return false;
+
+	if (!mistCB)
+		mistCB = new ConstantBuffer(ConstantBufferDesc<MistCB>(), "SnowDeformation::MistCB");
+
+	if (!mistBlendState) {
+		// Ordinary translucency, unlike the arc's additive: powder is a
+		// surface in the air, not light added to the scene.
+		D3D11_BLEND_DESC desc{};
+		desc.RenderTarget[0].BlendEnable = TRUE;
+		desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+		desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+		desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		if (FAILED(device->CreateBlendState(&desc, mistBlendState.put())))
+			return false;
+	}
+
+	// Depth, raster and sampler states are the arc's: same pass, same needs.
+	return EnsureLightningArcResources() && GetSnowMistVS() && GetSnowMistPS();
+}
+
+void SnowDeformation::DrawSnowMist()
+{
+	if (!settings.EnableSnowDeformation || !settings.EnableSnowMist)
+		return;
+	if (bowWaves.empty() || settings.BowWaveHeight <= 0.001f)
+		return;
+	if (!EnsureSnowMistResources())
+		return;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* state = globals::state;
+	if (!context || !renderer || !state)
+		return;
+
+	globals::profiler->BeginPass("SnowDeformation::SnowMist");
+
+	auto& rtData = renderer->GetRuntimeData();
+	ID3D11RenderTargetView* rtv = rtData.renderTargets[RE::RENDER_TARGETS::kMAIN].RTV;
+	auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+
+	winrt::com_ptr<ID3D11BlendState> prevBlend;
+	float prevBlendFactor[4]{};
+	UINT prevSampleMask = 0;
+	context->OMGetBlendState(prevBlend.put(), prevBlendFactor, &prevSampleMask);
+	winrt::com_ptr<ID3D11DepthStencilState> prevDepth;
+	UINT prevStencilRef = 0;
+	context->OMGetDepthStencilState(prevDepth.put(), &prevStencilRef);
+	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
+	context->RSGetState(prevRaster.put());
+
+	context->OMSetRenderTargets(1, &rtv, dsv);
+	context->IASetInputLayout(nullptr);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->RSSetState(arcRasterState.get());
+	context->OMSetDepthStencilState(arcDepthState.get(), 0);
+	const float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	context->OMSetBlendState(mistBlendState.get(), blendFactor, 0xFFFFFFFF);
+
+	context->VSSetShader(GetSnowMistVS(), nullptr, 0);
+	context->PSSetShader(GetSnowMistPS(), nullptr, 0);
+
+	// Shared CS buffers (b4-6) so the PS reads SharedData's sun and ambient,
+	// same slots and same reasoning as the shell pass.
+	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	context->PSSetConstantBuffers(4, 3, sharedBuffers);
+
+	auto& lightLimitFix = globals::features::lightLimitFix;
+	const bool crisp = shadowAtlasCopySRV != nullptr;
+	if (crisp) {
+		ID3D11ShaderResourceView* shadowAtlasSRV = shadowAtlasCopySRV.get();
+		context->PSSetShaderResources(22, 1, &shadowAtlasSRV);
+		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
+		context->PSSetSamplers(2, 1, &cmpSampler);
+	}
+	const bool pointLights = lightLimitFix.loaded && lightLimitFix.lights && lightLimitFix.lightIndexList && lightLimitFix.lightGrid;
+	if (pointLights) {
+		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
+		context->PSSetShaderResources(35, 3, lightSRVs);
+	}
+
+	auto& fb = globals::game::frameBufferCached;
+	MistCB data{};
+	data.CameraViewProj = fb.GetCameraViewProj();
+	data.MistCameraPosAdjust = fb.GetCameraPosAdjust();
+
+	const uint count = std::min((uint)bowWaves.size(), (uint)kMaxBowWaves);
+	data.MistParams = { (float)count,
+		std::clamp(settings.MistAmount, 0.0f, 2.0f),
+		std::clamp(settings.MistHeight, 0.0f, 3.0f),
+		std::clamp(settings.MistBrightness, 0.0f, 4.0f) };
+	data.MistShape = { std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
+		std::clamp(settings.BowWaveForward, 0.0f, 1.0f),
+		1.0f, crisp ? 1.0f : 0.0f };
+	data.MistSlices = { (float)sunCascadeSlice[0], (float)sunCascadeSlice[1],
+		pointLights ? 1.0f : 0.0f, 0.0f };
+	for (uint i = 0; i < count; i++) {
+		const auto& wave = bowWaves[i];
+		data.MistFootRad[i] = { wave.pos.x, wave.pos.y, wave.z, wave.radius };
+		data.MistDirStr[i] = { wave.dir.x, wave.dir.y, wave.strength, 0.0f };
+	}
+	mistCB->Update(data);
+
+	ID3D11Buffer* cbs[1] = { mistCB->CB() };
+	context->VSSetConstantBuffers(0, 1, cbs);
+	context->PSSetConstantBuffers(0, 1, cbs);
+
+	context->Draw(count * kMistSprites * 6, 0);
+
+	ID3D11ShaderResourceView* nullSRVs[1] = { nullptr };
+	context->PSSetShaderResources(22, 1, nullSRVs);
+	// t35-37 stay bound by the same rule as the shell pass.
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->OMSetRenderTargets(0, nullptr, nullptr);

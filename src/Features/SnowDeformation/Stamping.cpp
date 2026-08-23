@@ -737,6 +737,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						bowWaves.size() < kMaxBowWaves) {
 						BowWave wave{};
 						wave.pos = tip;
+						wave.z = footWorld.translate.z;
 						wave.prev = segStart;
 						wave.dir = bowWaveDir;
 						wave.radius = kBowWaveBaseRadius * depthScale;
