@@ -381,18 +381,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttFloatBand = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected line under Spell Integration counts what each value is skipping."));
 
-			ImGui::Checkbox(T(TKEY("snow_spray"), "Snow Spray"), &settings.EnableSnowSpray);
-			if (auto _ttSpray = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_spray_tooltip"), "A soft puff of thrown snow at every foot plant, drifting and fading over a second - snow you walk THROUGH, not over. Only in snow deep enough to throw (bare ground and roads stay quiet). Lit by the scene: sun with real cascade shadows, ambient, and nearby placed lights."));
-
-			ImGui::SliderFloat(T(TKEY("spray_amount"), "Spray Amount"), &settings.SprayAmount, 0.0f, 2.0f, "%.2f");
-			if (auto _ttSprayAmt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("spray_amount_tooltip"), "Opacity of the thrown snow. 0 = off without disabling the system."));
-
-			ImGui::SliderFloat(T(TKEY("spray_brightness"), "Spray Brightness"), &settings.SprayBrightness, 0.0f, 4.0f, "%.2f");
-			if (auto _ttSprayBr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("spray_brightness_tooltip"), "Calibration for the post-composite colour space: raise if puffs read too dark against sunlit snow, lower if they glow."));
-
 			ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
 			if (auto _ttLip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("rim_lip_tooltip"), "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off."));

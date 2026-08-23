@@ -65,9 +65,6 @@
 	X(LiftFrostEffects) \
 	X(FrostTexturePath) \
 	X(EnableLightningArcs) \
-	X(EnableSnowSpray) \
-	X(SprayAmount) \
-	X(SprayBrightness) \
 	X(LightningArcWidth) \
 	X(LightningArcBrightness) \
 	X(LightningArcLife) \
@@ -558,7 +555,6 @@ void SnowDeformation::Prepass()
 	// records and queries land height per source, all on the render thread.
 	// Sequential rather than nested - the profiler tracks one current pass.
 	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
-	UpdateSnowSpray(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 
 	globals::profiler->BeginPass("SnowDeformation::GatherSpells");
 	GatherSpellEmitters();
