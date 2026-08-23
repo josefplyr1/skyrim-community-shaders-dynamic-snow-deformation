@@ -397,7 +397,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("bow_wave_reach"), "Bow Wave Reach"), &settings.BowWaveReach, 0.25f, 3.0f, "%.2fx");
 			if (auto _ttBwR = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("bow_wave_reach_tooltip"), "How far ahead and to the sides the crest reaches. Low = snow heaps tight against the legs; high = a broad wave spread well out in front."));
+				ImGui::Text("%s", T(TKEY("bow_wave_reach_tooltip"), "How far AHEAD of the feet the pushed snow piles, and how far the hill stretches along the direction of travel. It does not make the mound bigger - it moves it out in front and draws it out longer, which is what a body ploughing a furrow leaves. Width is set by Forward Bias."));
 
 			ImGui::SliderFloat(T(TKEY("bow_wave_forward"), "Bow Wave Forward Bias"), &settings.BowWaveForward, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBwF = Util::HoverTooltipWrapper())

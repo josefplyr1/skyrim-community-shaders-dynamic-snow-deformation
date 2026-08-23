@@ -643,37 +643,52 @@ float SlumpTap(int2 p, int2 dims)
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
-			// CAPSULE, not a point (Josef, round 5): the crest hugs the swept
-			// path the foot actually took this frame, which is the same
-			// segStart -> tip capsule the trench stamps use. A point source
-			// threw its whole radius forward from wherever the foot happened
-			// to be, so the far wall of a trench started bulging before the
-			// foot had crossed it.
+			// CAPSULE, not a point (round 5): the crest hugs the swept path
+			// the foot actually took this frame - the same segStart -> tip
+			// capsule the trench stamps use.
 			const float2 tipPos = DepositPosDir[w].xy;
 			const float2 prevPos = DepositShape[w].zw;
+			const float2 fwd = DepositPosDir[w].zw;
+			const float2 sideDir = float2(-fwd.y, fwd.x);
 			const float2 seg = tipPos - prevPos;
 			const float segLenSq = dot(seg, seg);
 			const float segT = segLenSq > 1e-4 ? saturate(dot(worldPos - prevPos, seg) / segLenSq) : 0.0;
-			const float2 rel = worldPos - (prevPos + seg * segT);
-			const float radius = max(DepositShape[w].x * DepositParams.y, 1e-3);
-			const float d = length(rel);
-			// Reach cut back hard from 2.2x: that tail was the early bulge.
+			const float2 onPath = prevPos + seg * segT;
+			const float radius = max(DepositShape[w].x, 1e-3);
+
+			// REACH IS DISTANCE AHEAD, NOT SIZE (Josef, round 7). It used to
+			// scale the radius, so turning it up simply inflated the whole
+			// mound. Now it pushes the lobe's CENTRE forward along travel and
+			// stretches it along the same axis, so more reach makes the hill
+			// in front LONGER and further out while its width stays put -
+			// which is what a body ploughing a furrow actually leaves.
+			const float reach = max(DepositParams.y, 0.25);
+			const float2 relC = worldPos - (onPath + fwd * (radius * reach));
+			const float along = dot(relC, fwd);
+			const float across = dot(relC, sideDir);
+			const float d = length(float2(along / reach, across));
 			[branch] if (d > radius * 1.45)
 				continue;
 			const float t = d / radius;
 			const float radial = smoothstep(0.25, 0.85, t) * (1.0 - smoothstep(0.95, 1.45, t));
-			// Direction is judged from the LEADING end of the capsule, so the
-			// forward lobe sits ahead of the toe rather than ahead of the
-			// swept segment's middle.
-			const float2 relTip = worldPos - tipPos;
-			const float dTip = length(relTip);
-			const float forward = dTip > 1e-3 ? dot(relTip / dTip, DepositPosDir[w].zw) : 1.0;
+			const float forward = d > 1e-3 ? (along / reach) / (d) : 1.0;
 			const float halfAngle = saturate(forward * 0.5 + 0.5);
 			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
 			crest = max(crest, radial * angular * DepositShape[w].y);
-			// Claimed regardless of the forward lobe: the sides of the sweep
-			// are exactly where stale deposit was surviving.
-			wipe = max(wipe, 1.0 - smoothstep(1.05, 1.45, t));
+
+			// The wipe reaches WIDER than the write (1.45 -> 2.1) so nothing
+			// the crest has laid down can escape being cleared once the
+			// walker draws level with it - the lateral lobes surviving out
+			// past the wipe were the spikes strung along the trail.
+			//
+			// And it is scaled by the wave's own STRENGTH, which is the fix
+			// for the pile melting when you stop: strength fades over ~0.4 s
+			// after the last step, and an unscaled wipe went on erasing at
+			// full force while the crest being written faded to nothing, so
+			// the mound was rubbed out no matter what Settle said. A wave
+			// that is no longer pushing no longer clears.
+			const float tWipe = length(float2(along / reach, across)) / radius;
+			wipe = max(wipe, (1.0 - smoothstep(1.4, 2.1, tWipe)) * DepositShape[w].y);
 		}
 		// Clear what the crest region owns, THEN lay this frame's crest into
 		// it. Order matters: the pile ahead of the walker is written after

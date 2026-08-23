@@ -479,7 +479,7 @@ public:
 		float BermClods = 2.0f;
 		/** @brief Bow wave (ROADMAP #35): crest height as a fraction of local snow depth. 0 = off. */
 		float BowWaveHeight = 0.80f;
-		/** @brief Bow wave: multiplier on the push radius, i.e. how far ahead and aside the crest reaches. */
+		/** @brief Bow wave: how far AHEAD of the feet the crest sits, and how far it stretches along travel. NOT a size multiplier - round 7 - width comes from BowWaveForward. */
 		float BowWaveReach = 0.90f;
 		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
 		float BowWaveForward = 1.00f;
