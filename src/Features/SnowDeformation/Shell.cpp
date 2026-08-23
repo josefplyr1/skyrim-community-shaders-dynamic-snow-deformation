@@ -576,7 +576,8 @@ void SnowDeformation::DrawShell()
 	// GetDynamicResolutionAdjustedScreenPosition and take the scale here.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
-		settings.ShellSSSRemarch ? 1.0f : 0.0f, dynRes.x, dynRes.y };
+		settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f,
+		dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old

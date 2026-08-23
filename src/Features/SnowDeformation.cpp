@@ -109,6 +109,7 @@
 	X(ChurnSize) \
 	X(CompactMatte) \
 	X(ShellSSSRemarch) \
+	X(ShellSSSRemarchThickness) \
 	X(ObjBermHeight) \
 	X(ObjChurnHeight) \
 	X(ObjChurnSize) \

@@ -190,9 +190,10 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); y > 0.5 = shell-surface
-	// SSS re-march enabled; zw = dynamic-resolution scale for its
-	// screen-space taps (FrameBuffer b12 is unbound in this pass).
+	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
+	// re-march: 0 off, 1 on, 2 on + occluder-thickness streak fix; zw =
+	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
+	// is unbound in this pass).
 	float4 CompactLook;
 }
 
@@ -1224,8 +1225,19 @@ struct PS_OUTPUT
 // bind FrameBuffer b12 (round 164), so the scale rides CompactLook.zw from
 // the CPU rather than FrameBuffer::GetDynamicResolutionAdjustedScreenPosition.
 #if defined(PSHADER)
-float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes)
+float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow)
 {
+	// Bend SSS's anti-streak device (bend_sss_gpu.hlsli SurfaceThickness):
+	// an occluder is a THIN SHELL, shadowing only samples within a bounded
+	// depth window - never everything behind it. Without the bound, a
+	// character anywhere between the camera and the ray point occludes it
+	// from hundreds of units in front, painting their screen silhouette as
+	// a streak across the snow behind them (round-11 A/B). 48 units ≈
+	// Bend's 0.5%-of-remaining-depth default at Skyrim ranges; thin casters
+	// (grass, rails, limbs) are unaffected, and the known cost is mild
+	// under-shadowing directly behind objects thicker than the window -
+	// the same trade Bend ships with.
+	const float kOccluderThickness = 48.0;
 	// Contact range: grass and rails are short casters, so the steps stay
 	// tight and grow geometrically rather than reaching for distance.
 	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
@@ -1241,8 +1253,10 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes)
 			{
 				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
 				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
-				// Something stands between this step and the camera...
-				[branch] if (occZ < clip.w - 1.0)
+				// Something stands between this step and the camera - and,
+				// with the streak fix on, within the thin-shell window of
+				// the ray point rather than anywhere in front of it.
+				[branch] if (occZ < clip.w - 1.0 && (!thicknessWindow || occZ > clip.w - kOccluderThickness))
 				{
 					// ...and the SAME view ray puts it here in world space
 					// (the depth-ratio reconstruction already used for the
@@ -1982,7 +1996,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
 		shellZ < 9000.0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
-		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw);
+		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5);
 		// Faded out across the band the precomputed mask fades in over, so
 		// the handover is continuous.
 		sunShadow *= lerp(remarch, 1.0, smoothstep(4000.0, 9000.0, shellZ));

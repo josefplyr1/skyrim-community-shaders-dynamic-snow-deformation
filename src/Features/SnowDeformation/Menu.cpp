@@ -393,6 +393,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttRemarch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("sss_remarch_tooltip"), "Screen-Space Shadows are normally marched on the ground BENEATH the snow, so the shell can only use them at distance or they print buried objects through the snow. This re-marches them from the snow surface and accepts only casters standing above the snow line - which brings back near-field grass and contact shadows, including from actors, without the prints. Costs 8 depth taps per lit shell pixel. A/B this against it being off."));
 
+			ImGui::Checkbox(T(TKEY("sss_remarch_thickness"), "Streak Fix (Occluder Thickness)"), &settings.ShellSSSRemarchThickness);
+			if (auto _ttThick = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("sss_remarch_thickness_tooltip"), "The Bend SSS thin-shell rule applied to the re-march: an occluder only shadows ray samples within 48 units of itself, instead of everything behind it on screen - which is what painted a character's silhouette as a long streak across the snow. Grass and other thin casters are unaffected; the trade is slightly lighter shadow directly behind very thick objects. Only does anything with the re-march on."));
+
 			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
