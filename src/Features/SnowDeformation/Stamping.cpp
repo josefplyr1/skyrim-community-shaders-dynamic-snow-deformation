@@ -531,8 +531,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// aside does not shove itself back the moment you stop -
 					// the round-2 quick decay read as the crest morphing back
 					// into flat ground (Josef). The settle time is a crank.
-					const float rate = instant > track.z ? 12.0f :
-					                                       1.0f / std::max(settings.BowWaveSettle, 0.05f);
+					// The deposit field owns persistence now, so this only
+					// has to stop the live crest flickering between strides:
+					// a short release, not the settle time (which decays the
+					// DEPOSIT, in DeformationUpdateCS).
+					const float rate = instant > track.z ? 12.0f : 2.5f;
 					track.z += (instant - track.z) * std::clamp(rate * dtBody, 0.0f, 1.0f);
 				}
 			}

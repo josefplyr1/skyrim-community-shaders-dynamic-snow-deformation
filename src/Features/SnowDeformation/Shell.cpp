@@ -466,18 +466,11 @@ void SnowDeformation::UpdateBowWaveBuffer()
 	if (!bowWaveCB)
 		bowWaveCB = new ConstantBuffer(ConstantBufferDesc<BowWaveCB>(), "SnowDeformation::BowWaveCB");
 
+	// Shape and position now live in the deformation map's deposit channel
+	// (DeformationUpdateCS writes it); the shell only needs the look knobs.
 	BowWaveCB data{};
-	const uint count = std::min((uint)bowWaves.size(), (uint)kMaxBowWaves);
-	data.BowWaveParams = { settings.BowWaveHeight > 0.001f ? (float)count : 0.0f,
-		std::clamp(settings.BowWaveHeight, 0.0f, 1.5f),
-		std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
-		std::clamp(settings.BowWaveForward, 0.0f, 1.0f) };
+	data.BowWaveParams = { 0.0f, std::clamp(settings.BowWaveHeight, 0.0f, 1.5f), 0.0f, 0.0f };
 	data.BowWaveLook = { std::clamp(settings.BowWaveChunk, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
-	for (uint i = 0; i < count; i++) {
-		const auto& wave = bowWaves[i];
-		data.BowWavePosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
-		data.BowWaveShape[i] = { wave.radius, wave.strength, 0.0f, 0.0f };
-	}
 	bowWaveCB->Update(data);
 }
 

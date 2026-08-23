@@ -48,9 +48,25 @@
 //   .z  CRUST: refrozen snow. Resists being carved and shades as ice. Frost
 //       neither removes snow nor throws it, so it is neither of the above and
 //       needed a channel of its own.
-//   .w  unused. Kept deliberately: BLOOD-DESIGN.md needs exactly this kind of
-//       per-texel surface value, and widening again later would cost another
-//       33 MB for one field.
+//   .w  DEPOSIT: snow standing ABOVE the untouched surface, pushed there by
+//       a body moving through cover (ROADMAP #35). This is what makes the
+//       bow wave persistent instead of a shape that follows the feet: the
+//       crest is MAXed into the map every frame at wherever it currently is,
+//       so ground that has been shouldered stays shouldered when the walker
+//       turns, stops or leaves - the failure Josef found by spinning on the
+//       spot. It decays on its own clock (BowWaveSettle) and to the refill,
+//       relaxing into the berm the trail already builds.
+//       CLAIMED FROM BLOOD 2026-08-22. BLOOD-DESIGN.md had reserved .w; it
+//       now needs a field of its own. The channel's old comment already
+//       anticipated this ("whatever claims .w later needs its own debug
+//       view rather than this one") - the ImGui map preview blends by alpha,
+//       so it now reads deposit as transparency.
+
+// Bow-wave crests to deposit this frame. Mirrors kMaxBowWaves in
+// SnowDeformation.h and MAX_BOW_WAVES in SnowShell.hlsl - the SHAPE is
+// evaluated identically in both places, so what the shell draws is what the
+// map remembers.
+#define MAX_DEPOSIT_WAVES 16
 
 #define MAX_STAMPS 256
 
@@ -207,6 +223,12 @@ cbuffer PerFrame : register(b0)
 
 	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
+
+	// Bow wave. x = live count, y = reach scale, z = forward bias, w = settle
+	// seconds (how long a deposit holds before it starts sinking).
+	float4 DepositParams;
+	float4 DepositPosDir[MAX_DEPOSIT_WAVES];   // xy world pos, zw unit travel direction
+	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw spare
 }
 
 Texture2D<float4> PreviousDeformation : register(t0);
@@ -256,6 +278,7 @@ float SlumpTap(int2 p, int2 dims)
 	// melt basin from a dug trench.
 	float melted = 0.0;
 	float crust = 0.0;
+	float deposit = 0.0;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
@@ -271,6 +294,7 @@ float SlumpTap(int2 p, int2 dims)
 			deformation = previous.x;
 			melted = previous.y;
 			crust = previous.z;
+			deposit = previous.w;
 		}
 
 		// Wind-biased refill: recovery scales with the intact snow a few
@@ -305,6 +329,10 @@ float SlumpTap(int2 p, int2 dims)
 		// gives way to temperature besides - so a glaze fades even under a
 		// clear sky, where the refill has stopped entirely.
 		crust = max(crust - refill - CrustThaw * DeltaTime, 0.0);
+		// Deposited snow settles on its own clock and is also buried by
+		// refill, so a snowfall erases a churned approach exactly as it
+		// erases the trench beside it.
+		deposit = max(deposit - refill - DeltaTime / max(DepositParams.w, 0.05), 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
 		// design. Runs on the PREVIOUS map at the scrolled position, like
@@ -584,6 +612,33 @@ float SlumpTap(int2 p, int2 dims)
 	// blood - but the ImGui debug preview blends the map with its alpha, and a
 	// zero there renders the whole thing invisible. Whatever claims .w later
 	// needs its own debug view rather than this one.
+	// Bow-wave deposit. The SAME crescent the shell draws, MAXed in at
+	// wherever the crest stands this frame: max, not accumulate, so passing
+	// twice does not build a wall, and so the field records the high-water
+	// mark of what was shouldered rather than a running total.
+	[branch] if (DepositParams.x > 0.5)
+	{
+		float crest = 0.0;
+		const uint waveCount = (uint)DepositParams.x;
+		[loop] for (uint w = 0; w < waveCount; w++)
+		{
+			const float2 rel = worldPos - DepositPosDir[w].xy;
+			const float radius = max(DepositShape[w].x * DepositParams.y, 1e-3);
+			const float d = length(rel);
+			[branch] if (d > radius * 2.2)
+				continue;
+			const float t = d / radius;
+			const float radial = smoothstep(0.30, 1.0, t) * (1.0 - smoothstep(1.15, 2.2, t));
+			const float forward = d > 1e-3 ? dot(rel / d, DepositPosDir[w].zw) : 1.0;
+			const float halfAngle = saturate(forward * 0.5 + 0.5);
+			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
+			crest = max(crest, radial * angular * DepositShape[w].y);
+		}
+		// Only on snow that is still standing: a crest cannot pile up out of
+		// ground that has already been dug away.
+		deposit = max(deposit, crest * saturate(1.0 - total));
+	}
+
 	CurrentDeformation[pixel] = float4(total,
-		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, 1.0);
+		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
 }

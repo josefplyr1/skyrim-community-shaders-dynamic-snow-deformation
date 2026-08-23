@@ -570,6 +570,23 @@ void SnowDeformation::Prepass()
 	GatherStamps(perFrameData);
 	globals::profiler->EndPass();
 
+	// Bow-wave crests, deposited into the map's .w so they PERSIST on the
+	// ground rather than following the feet that made them (ROADMAP #35).
+	// GatherStamps has just sorted them nearest-first, so the slots go to the
+	// crests the player can actually see.
+	{
+		const uint waveCount = std::min((uint)bowWaves.size(), (uint)kMaxBowWaves);
+		perFrameData.DepositParams = { settings.BowWaveHeight > 0.001f ? (float)waveCount : 0.0f,
+			std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
+			std::clamp(settings.BowWaveForward, 0.0f, 1.0f),
+			std::clamp(settings.BowWaveSettle, 0.1f, 30.0f) };
+		for (uint i = 0; i < waveCount; i++) {
+			const auto& wave = bowWaves[i];
+			perFrameData.DepositPosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
+			perFrameData.DepositShape[i] = { wave.radius, wave.strength, 0.0f, 0.0f };
+		}
+	}
+
 	perFrame->Update(perFrameData);
 
 	uint previousTexture = currentTexture;

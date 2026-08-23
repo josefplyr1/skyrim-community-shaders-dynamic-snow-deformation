@@ -32,6 +32,8 @@ public:
 	// so trench detail coarsens with range.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
+	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
+	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
 	static constexpr float kStampModeCarve = 0.0f;
 	static constexpr float kStampModeMelt = 1.0f;
@@ -606,6 +608,11 @@ public:
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
 		float4 StampEnds[kMaxStamps];
+
+		/** @brief Bow wave, deposited into the map's .w channel so the crest PERSISTS instead of following the feet. x = live count, y = reach, z = forward bias, w = settle seconds. Appended last; BermFieldCS mirrors only the leading rows and is unaffected. */
+		float4 DepositParams;
+		float4 DepositPosDir[kMaxBowWaves];
+		float4 DepositShape[kMaxBowWaves];
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -878,8 +885,6 @@ public:
 		float strength = 0.0f;
 		float distSq = 0.0f;
 	};
-	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl. The 256-stamp cap already means player + near actors; this is tighter still. */
-	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief Layout must match BowWaveCB in SnowShell.hlsl (b1 of the shell pass). Its own buffer: ShellCB is hand-mirrored across two shaders and this is landscape-only. */
 	struct BowWaveCB
 	{
