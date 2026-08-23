@@ -160,7 +160,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.25f, 8.0f, "%.2f MB");
 			if (auto _ttMemory = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB holds roughly the last few areas you travelled through. Raise it to keep trenches around a wider stretch of the map and pay for it in save size; every save file carries its own copy, so a large setting adds up across a big save folder."));
+				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is on the order of a thousand patches of trodden ground, which in practice is more than snowfall usually leaves standing - weather clears old trenches long before this limit is reached, and it is here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down about twenty times over, so it takes roughly twenty times this much RAM while you play, and every save file carries its own copy."));
 		}
 
 		ImGui::PushID("snow_refill");
