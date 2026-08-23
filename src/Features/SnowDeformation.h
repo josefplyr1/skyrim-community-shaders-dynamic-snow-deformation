@@ -276,8 +276,8 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		/** @brief Trenches survive leaving the deformation window: departing texels go to a sparse world-grid tile store and come back when the window returns. In-session only so far - nothing is written to the save (ROADMAP #34 Stage A). Off restores the old behaviour, where walking away discards them. */
 		bool PersistTrenches = true;
-		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. 0 disables the floor and leaves snowfall as the only reaper. */
-		float StoredTrenchFadeDays = 7.0f;
+		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. 3 rather than a cautious 7 per Josef, 2026-08-23: three snowless days running is already an odd week in Skyrim, so the floor almost never decides anything and does not need the headroom. 0 disables the floor and leaves snowfall as the only reaper. */
+		float StoredTrenchFadeDays = 3.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
