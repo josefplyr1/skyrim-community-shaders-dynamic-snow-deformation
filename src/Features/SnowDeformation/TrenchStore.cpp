@@ -592,7 +592,8 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	};
 	Rect rects[2];
 	int rectCount = 0;
-	if (a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim) {
+	const bool full = a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim;
+	if (full) {
 		rects[rectCount++] = { 0, 0, dim, dim };
 	} else {
 		if (a_scroll.x != 0)
@@ -618,13 +619,17 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 		// filling: the store is sparse, so a full rebuild costs the ground you
 		// have walked and not the 4 M texels of the window.
 		bool painted = false;
+		int matched = 0;
+		int reached = 0;
 		for (auto& [key, tile] : trenchTiles) {
 			if (key.worldspace != worldspace)
 				continue;
+			matched++;
 			const float tileX = (float)key.x * kTrenchTileWorld;
 			const float tileY = (float)key.y * kTrenchTileWorld;
 			if (tileX + kTrenchTileWorld <= minX || tileX >= maxX || tileY + kTrenchTileWorld <= minY || tileY >= maxY)
 				continue;
+			reached++;
 
 			// Standing inside the window counts as use: the LRU should forget
 			// where you have not been, not where you happen not to be digging.
@@ -653,6 +658,14 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 				}
 			}
 		}
+
+		// Only on a full rebuild, so this costs nothing per frame. The three
+		// counts separate the failures that otherwise look identical: a store
+		// keyed to another worldspace, tiles keyed outside the window, and a
+		// window that simply had nothing to put back.
+		if (full)
+			logger::info("[SNOW DEFORMATION] trench inject rebuild: {} tiles in store, {} in this worldspace, {} inside the window, painted {}",
+				trenchTiles.size(), matched, reached, painted ? "yes" : "no");
 
 		any = any || painted;
 		// Uploaded even when nothing was painted: with the flag on, an

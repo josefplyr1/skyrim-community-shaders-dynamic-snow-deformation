@@ -3,6 +3,8 @@
 #include "CoSave.h"
 #include "Globals.h"
 
+#include <unordered_set>
+
 // Persistent trenches, Stage C: the tile store on the SKSE co-save channel.
 // Design in PERSISTENT-TRENCHES-PLAN.md; the channel itself is CoSave.h.
 //
@@ -215,7 +217,23 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	}
 
 	trenchStatTiles = trenchTiles.size();
-	logger::info("[SNOW DEFORMATION] trench co-save restored {} of {} tiles", restored, tileCount);
+
+	// The next update rebuilds the whole window from this. Without it the
+	// tiles sit in the store unreachable: injection only touches texels
+	// arriving from outside the window, and the player loads standing on the
+	// ground they describe.
+	trenchReinjectRequested.store(true, std::memory_order_release);
+
+	// The worldspaces restored, against the one the inject will ask for. A
+	// silent mismatch here looks exactly like a store that failed to load.
+	std::unordered_set<uint32_t> worldspaces;
+	for (const auto& [key, tile] : trenchTiles)
+		worldspaces.insert(key.worldspace);
+	std::string spaces;
+	for (uint32_t id : worldspaces)
+		spaces += std::format("{:08X} ", id);
+	logger::info("[SNOW DEFORMATION] trench co-save restored {} of {} tiles across worldspace(s) {}(active {:08X})",
+		restored, tileCount, spaces, activeWorldspace.load(std::memory_order_acquire));
 }
 
 void SnowDeformation::RegisterTrenchCoSave()

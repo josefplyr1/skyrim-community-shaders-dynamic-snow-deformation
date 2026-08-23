@@ -1745,6 +1745,25 @@ protected:
 	TrenchBandCopy trenchBandMeta[2][2] = {};
 	int trenchBandRing = 0;
 
+	/**
+	 * @brief Set by the co-save load to force the next update to rebuild the
+	 * whole window from the store.
+	 *
+	 * Injection only reaches texels arriving from OUTSIDE the window or a full
+	 * clear, so a store restored while the player stands on the ground it
+	 * describes has no route into an already-populated map - nothing scrolls
+	 * in. A worldspace change would normally force the clear, but loading from
+	 * the main menu into the worldspace the menu backdrop already uses is not a
+	 * change, so it never fires.
+	 *
+	 * The clear is right on its own merits too: the map still holds whatever
+	 * was in it before the load, which belongs to another timeline.
+	 *
+	 * Atomic because the co-save callbacks run on the game thread and the
+	 * update consumes this on the render thread.
+	 */
+	std::atomic<bool> trenchReinjectRequested{ false };
+
 	/** @brief Window state the CURRENT map's contents belong to. The flush uses these, never the live values. */
 	float2 trenchMapOrigin = { 0, 0 };
 	float trenchMapTexel = 0.0f;

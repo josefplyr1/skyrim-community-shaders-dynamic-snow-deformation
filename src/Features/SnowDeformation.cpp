@@ -559,6 +559,12 @@ void SnowDeformation::Prepass()
 		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
 
+	// A co-save load has no other way in: nothing scrolls into a window already
+	// sitting over the ground the store describes, and the map still holds the
+	// timeline the player just left.
+	if (trenchReinjectRequested.exchange(false, std::memory_order_acq_rel))
+		clearRequested = true;
+
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
