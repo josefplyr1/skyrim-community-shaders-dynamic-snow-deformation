@@ -151,8 +151,14 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	if (a_intfc->ReadRecordData(&tileCount, sizeof(tileCount)) != sizeof(tileCount) ||
 		a_intfc->ReadRecordData(&tileDim, sizeof(tileDim)) != sizeof(tileDim) ||
 		a_intfc->ReadRecordData(&pad, sizeof(pad)) != sizeof(pad) ||
-		a_intfc->ReadRecordData(&tileWorld, sizeof(tileWorld)) != sizeof(tileWorld))
+		a_intfc->ReadRecordData(&tileWorld, sizeof(tileWorld)) != sizeof(tileWorld)) {
+		// Never silent: a return with no line here is indistinguishable from
+		// the callback not firing at all.
+		logger::warn("[SNOW DEFORMATION] trench co-save header would not read; nothing restored");
 		return;
+	}
+	logger::info("[SNOW DEFORMATION] trench co-save header: {} tiles, {} texels over {} units",
+		tileCount, tileDim, tileWorld);
 
 	if (tileDim != (uint16_t)kTrenchTileDim || std::abs(tileWorld - kTrenchTileWorld) > 0.5f) {
 		logger::warn("[SNOW DEFORMATION] trench co-save was written at {} texels over {} units, this build uses {} over {}; dropped",

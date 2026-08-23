@@ -137,6 +137,16 @@ void MessageHandler(SKSE::MessagingInterface::Message* message)
 
 			break;
 		}
+	// Nothing logs at info during ordinary play, so a log that simply stops at
+	// the main menu cannot be told from a session that never loaded anything.
+	// These two lines are the discriminator, and they bracket the co-save
+	// callbacks so their ORDER against a load is visible.
+	case SKSE::MessagingInterface::kPostLoadGame:
+		logger::info("[COSAVE] Game finished loading a save (success {})", message->data != nullptr);
+		break;
+	case SKSE::MessagingInterface::kNewGame:
+		logger::info("[COSAVE] New game started");
+		break;
 	}
 }
 

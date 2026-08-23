@@ -48,6 +48,7 @@ void CoSave::OnGameSaved(SKSE::SerializationInterface* a_intfc)
 {
 	auto* self = GetSingleton();
 	std::scoped_lock lock(self->channelMutex);
+	logger::info("[COSAVE] Save callback entered with {} registered channel(s)", self->channels.size());
 	for (auto& [type, channel] : self->channels) {
 		if (channel.save)
 			channel.save(a_intfc);
@@ -59,10 +60,17 @@ void CoSave::OnGameLoaded(SKSE::SerializationInterface* a_intfc)
 	auto* self = GetSingleton();
 	std::scoped_lock lock(self->channelMutex);
 
+	// Logged on ENTRY, not only on success. Silence here is otherwise
+	// ambiguous between "the callback never fired", "it fired and saw no
+	// records" and "a handler returned early", which are three different bugs.
+	logger::info("[COSAVE] Load callback entered with {} registered channel(s)", self->channels.size());
+
 	uint32_t type = 0;
 	uint32_t version = 0;
 	uint32_t length = 0;
+	uint32_t seen = 0;
 	while (a_intfc->GetNextRecordInfo(type, version, length)) {
+		seen++;
 		auto found = self->channels.find(type);
 		if (found == self->channels.end()) {
 			// A feature disabled at boot, or one this build does not have. The
@@ -73,8 +81,11 @@ void CoSave::OnGameLoaded(SKSE::SerializationInterface* a_intfc)
 		}
 		if (!found->second.load)
 			continue;
+		logger::info("[COSAVE] Dispatching record '{}' version {} ({} bytes)", RecordName(type), version, length);
 		found->second.load(a_intfc, version, length);
 	}
+
+	logger::info("[COSAVE] Load callback saw {} record(s)", seen);
 }
 
 void CoSave::OnRevert(SKSE::SerializationInterface*)
@@ -83,6 +94,9 @@ void CoSave::OnRevert(SKSE::SerializationInterface*)
 	// fresh game inherits the last one's state.
 	auto* self = GetSingleton();
 	std::scoped_lock lock(self->channelMutex);
+	// Logged so the ORDER against the load callback is visible; a revert
+	// arriving after a load would silently undo it.
+	logger::info("[COSAVE] Revert callback entered");
 	for (auto& [type, channel] : self->channels) {
 		if (channel.revert)
 			channel.revert();
