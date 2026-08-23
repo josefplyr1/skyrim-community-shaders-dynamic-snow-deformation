@@ -741,7 +741,10 @@ float BowWaveHeight(float2 worldXY, float2 gridLocal, float deformation, float u
 		const float peaks = pow(saturate(n1 * 0.55 + n2 * 0.45 + 0.5), 1.9);
 		// Rides the deposit's own shoulder: strongest where the pile is
 		// deepest, tapering out with it so chunks never float on flat ground.
-		crest += peaks * smoothstep(0.05, 0.45, crest) * BowWaveLook.x * 0.85;
+		// Floor raised (round 6): at 0.05 a whisper of leftover deposit was
+		// enough to stand a chunk up, which is what turned the trail into
+		// icicles. Chunks now need a pile with some body to them.
+		crest += peaks * smoothstep(0.30, 0.70, crest) * BowWaveLook.x * 0.85;
 	}
 
 	// Un-dug snow only, and scaled by what is locally there to push.

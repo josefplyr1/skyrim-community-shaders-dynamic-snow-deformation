@@ -629,6 +629,17 @@ float SlumpTap(int2 p, int2 dims)
 	[branch] if (DepositParams.x > 0.5)
 	{
 		float crest = 0.0;
+		// How much of the OLD deposit this frame's crest region owns. The
+		// crest is the current state of the snow it is pushing, so wherever
+		// it reaches, whatever was written there before is stale and must go
+		// before the new value is laid down. This is what tells a WAVE from a
+		// TRENCH (Josef, round 6): ground the crest has already swept over is
+		// walked ground - trench - and gets cleared, while ground it has not
+		// reached yet keeps the pile that was pushed onto it. Without it the
+		// crest wrote its ring at every step and never took any of it back,
+		// so the whole corridor kept a thin deposit and the chunk noise stood
+		// that up as a row of icicles along the path.
+		float wipe = 0.0;
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
@@ -660,7 +671,18 @@ float SlumpTap(int2 p, int2 dims)
 			const float halfAngle = saturate(forward * 0.5 + 0.5);
 			const float angular = pow(halfAngle, lerp(0.35, 3.0, DepositParams.z));
 			crest = max(crest, radial * angular * DepositShape[w].y);
+			// Claimed regardless of the forward lobe: the sides of the sweep
+			// are exactly where stale deposit was surviving.
+			wipe = max(wipe, 1.0 - smoothstep(1.05, 1.45, t));
 		}
+		// Clear what the crest region owns, THEN lay this frame's crest into
+		// it. Order matters: the pile ahead of the walker is written after
+		// the wipe, so it survives; the pile the walker has drawn level with
+		// is wiped and not rewritten (the forward lobe no longer covers it),
+		// which is how the corridor behind comes out clean. When the walker
+		// stops, wave strength decays, no crest is emitted, nothing wipes -
+		// and the last pile pushed stands there for good.
+		deposit *= saturate(1.0 - wipe);
 		// Only on snow that is still standing: a crest cannot pile up out of
 		// ground that has already been dug away.
 		deposit = max(deposit, crest * saturate(1.0 - total));
