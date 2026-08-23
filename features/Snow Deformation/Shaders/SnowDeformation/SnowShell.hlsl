@@ -211,12 +211,14 @@ cbuffer ShellCB : register(b0)
 // velocity, so it cannot leave anything behind. What remains after the
 // walker passes is the berm, which the module already draws - that IS the
 // "settle" in the design, and it is why this needs no per-wave age.
-#define MAX_BOW_WAVES 12
+#define MAX_BOW_WAVES 16
 cbuffer BowWaveCB : register(b1)
 {
 	/// x = live wave count, y = height scale (fraction of local depth),
 	/// z = reach scale on the push radius, w = forward bias 0-1
 	float4 BowWaveParams;
+	/// x = chunkiness 0-1 (how far the crest breaks into lumps), yzw spare
+	float4 BowWaveLook;
 	/// xy = world position, zw = unit travel direction
 	float4 BowWavePosDir[MAX_BOW_WAVES];
 	/// x = push radius (world units), y = strength 0-1 (speed x depth), zw spare
@@ -711,8 +713,28 @@ float BowWaveHeight(float2 worldXY, float deformation, float uncarvedDepth)
 		// cos of the angle to travel: 1 ahead, 0 abeam, -1 behind. Remapped
 		// so abeam keeps half and behind contributes nothing.
 		const float forward = d > 1e-3 ? dot(rel / d, BowWavePosDir[i].zw) : 1.0;
-		const float angular = pow(saturate(forward * BowWaveParams.w + (1.0 - BowWaveParams.w)), 1.3);
+		// Linear, not raised to a power: the exponent pinched the shoulders
+		// to a nose-only arc, which read as a water bow wave rather than
+		// snow shouldered aside (Josef's round-1 verdict).
+		const float angular = saturate(forward * BowWaveParams.w + (1.0 - BowWaveParams.w));
 		crest = max(crest, radial * angular * BowWaveShape[i].y);
+	}
+
+	// CHUNKS. Real displaced snow does not form a smooth swell - it breaks
+	// into uneven lumps that ride up and tumble aside. Reuses P6's clod
+	// octave (kClodSizeScale), which is what ROADMAP #35 called for, and the
+	// noise is WORLD-anchored on purpose: the lumps are made of the snow that
+	// was standing there, so they appear to flow through the advancing crest
+	// instead of riding along with the actor like a rigid attachment. Two
+	// scales - coarse lumps, finer break-up between them - and the low end is
+	// allowed to reach zero, which is what separates chunks rather than
+	// merely rippling one continuous ridge.
+	[branch] if (BowWaveLook.x > 0.001 && crest > 0.001)
+	{
+		const float lump = ChurnNoiseScaled(worldXY, kClodSizeScale);
+		const float fine = ChurnNoiseScaled(worldXY + 137.0, kClodSizeScale * 0.45);
+		const float broken = saturate(0.62 + 0.95 * lump + 0.45 * fine);
+		crest *= lerp(1.0, broken * 1.35, saturate(BowWaveLook.x));
 	}
 
 	// Un-dug snow only, and scaled by what is locally there to push.

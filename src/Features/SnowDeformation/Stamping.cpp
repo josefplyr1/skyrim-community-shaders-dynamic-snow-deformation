@@ -497,10 +497,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 
-		// Bow wave source (ROADMAP #35). One crest per actor, from the BODY's
-		// motion rather than the feet: feet alternate, and a crest that
-		// pulsed with the gait would be the retired spray's per-footfall
-		// rhythm all over again. Rebuilt every frame - nothing persists.
+		// Bow wave (ROADMAP #35). The BODY measures the motion - one smoothed
+		// speed and heading per actor, so the crest never pulses with the
+		// gait - but the FEET carry it (emitted in the foot loop below).
+		// Anchoring to the body put the crest a fixed radius from the actor's
+		// centre, and a sprint throws the lead foot far enough forward to
+		// land inside it: legs clipped through the wave (Josef's round-1
+		// verdict). A crest measured from the foot cannot be reached by that
+		// foot, because it is zero AT the foot and peaks ahead of it.
+		float bowWaveStrength = 0.0f;
+		float2 bowWaveDir = { 0.0f, 0.0f };
 		if (settings.BowWaveHeight > 0.001f && !isDead) {
 			const uint64_t bodyKey = (uint64_t(formID) << 16) | kBodyKeyBit;
 			const float2 here = { position.x, position.y };
@@ -525,17 +531,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					track.z += (instant - track.z) * std::clamp(rate * dtBody, 0.0f, 1.0f);
 				}
 			}
-			const float strength = std::clamp(track.z / std::max(settings.BowWaveFullSpeed, 1.0f), 0.0f, 1.0f);
-			if (strength > 0.02f && (track.x != 0.0f || track.y != 0.0f) && bowWaves.size() < kMaxBowWaves) {
-				BowWave wave{};
-				wave.pos = here;
-				wave.dir = { track.x, track.y };
-				wave.radius = kBowWaveBaseRadius * depthScale;
-				wave.strength = strength;
-				const float cdx = position.x - cameraPosition.x, cdy = position.y - cameraPosition.y;
-				wave.distSq = cdx * cdx + cdy * cdy;
-				bowWaves.push_back(wave);
-			}
+			bowWaveStrength = std::clamp(track.z / std::max(settings.BowWaveFullSpeed, 1.0f), 0.0f, 1.0f);
+			bowWaveDir = { track.x, track.y };
 		}
 
 		StampBones* bones = nullptr;
@@ -693,6 +690,25 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					}
 					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
 						kMinFootStampRadius, kMaxStampShapeRadius);
+
+					// One crest per foot. Both feet always contribute, so the
+					// wave is continuous through the gait rather than pulsing;
+					// what alternates is only WHERE the two lobes are, which
+					// is the shape a walker actually pushes. Emitted before
+					// the swing-phase gate below on purpose: a lifted foot is
+					// still travelling forward into snow it is about to push.
+					if (bowWaveStrength > 0.02f && (bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
+						bowWaves.size() < kMaxBowWaves) {
+						BowWave wave{};
+						wave.pos = tip;
+						wave.dir = bowWaveDir;
+						wave.radius = kBowWaveBaseRadius * depthScale;
+						wave.strength = bowWaveStrength;
+						const float cdx = footWorld.translate.x - cameraPosition.x;
+						const float cdy = footWorld.translate.y - cameraPosition.y;
+						wave.distSq = cdx * cdx + cdy * cdy;
+						bowWaves.push_back(wave);
+					}
 
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh

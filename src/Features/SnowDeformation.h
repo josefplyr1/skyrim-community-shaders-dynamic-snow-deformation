@@ -480,7 +480,9 @@ public:
 		/** @brief Bow wave: multiplier on the push radius, i.e. how far ahead and aside the crest reaches. */
 		float BowWaveReach = 1.0f;
 		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
-		float BowWaveForward = 0.65f;
+		float BowWaveForward = 0.45f;
+		/** @brief Bow wave: how far the crest breaks into uneven lumps rather than a smooth swell (P6's clod octave, world-anchored). 0 = smooth. */
+		float BowWaveChunk = 0.7f;
 		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
 		float BowWaveFullSpeed = 220.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
@@ -875,11 +877,12 @@ public:
 		float distSq = 0.0f;
 	};
 	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl. The 256-stamp cap already means player + near actors; this is tighter still. */
-	static constexpr size_t kMaxBowWaves = 12;
+	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief Layout must match BowWaveCB in SnowShell.hlsl (b1 of the shell pass). Its own buffer: ShellCB is hand-mirrored across two shaders and this is landscape-only. */
 	struct BowWaveCB
 	{
 		float4 BowWaveParams;
+		float4 BowWaveLook;
 		float4 BowWavePosDir[kMaxBowWaves];
 		float4 BowWaveShape[kMaxBowWaves];
 	};

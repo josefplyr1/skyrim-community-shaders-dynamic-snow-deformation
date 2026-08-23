@@ -472,6 +472,7 @@ void SnowDeformation::UpdateBowWaveBuffer()
 		std::clamp(settings.BowWaveHeight, 0.0f, 1.5f),
 		std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
 		std::clamp(settings.BowWaveForward, 0.0f, 1.0f) };
+	data.BowWaveLook = { std::clamp(settings.BowWaveChunk, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
 	for (uint i = 0; i < count; i++) {
 		const auto& wave = bowWaves[i];
 		data.BowWavePosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
