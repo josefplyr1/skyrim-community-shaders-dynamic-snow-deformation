@@ -221,7 +221,12 @@ cbuffer PerFrame : register(b0)
 	// Unsupported-snow slump speed, 0-1; 0 disables the pass entirely.
 	float SlumpRate;
 
-	float4 Stamps[MAX_STAMPS];     // xy: world pos, z: depth (carve) or strength (melt), w: radius
+	// 1 = InjectDepth holds the tile store's memory of the texels arriving
+	// from outside the window. Its own row: Stamps must start 16-byte aligned.
+	uint InjectValid;
+	uint3 InjectPad;
+
+	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 
 	// x = live count, y = reach scale, z = forward bias, w = settle seconds
@@ -234,6 +239,9 @@ cbuffer PerFrame : register(b0)
 
 Texture2D<float4> PreviousDeformation : register(t0);
 RWTexture2D<float4> CurrentDeformation : register(u0);
+// Tile-store depth for this window, resampled on the CPU. Only the texels the
+// scroll brings in from outside actually read it (ROADMAP #34).
+Texture2D<float> InjectDepth : register(t1);
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
 // stamp's falloff distance, so trail edges read as churned snow instead of
@@ -282,6 +290,13 @@ float SlumpTap(int2 p, int2 dims)
 	float deposit = 0.0;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
+
+	// Ground arriving from outside the window is not pristine: the tile store
+	// remembers what was dug there. Seeded here rather than branched below
+	// because the in-window fetch overwrites it, so only the texels that miss
+	// the previous map keep it - which is exactly the arriving band.
+	[branch] if (InjectValid)
+		deformation = InjectDepth[pixel];
 
 	if (!ClearMap) {
 		int2 sourcePixel = int2(pixel) + ScrollDelta;

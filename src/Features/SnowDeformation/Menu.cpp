@@ -148,6 +148,11 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
 
+		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
+			ClearTrenchStore();
+		if (auto _ttPersist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store and put back on return. This is in-session only for now - nothing is written to the save, so a reload starts pristine either way. Off restores the old behaviour and frees the store."));
+
 		ImGui::PushID("snow_refill");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
@@ -786,8 +791,19 @@ void SnowDeformation::DrawSettings()
 			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
 		}
 
-		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map")))
+		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map"))) {
 			clearRequested = true;
+			// Deliberate wipe, so the store goes with it: left alone, the
+			// inject would put every trench back on the very next frame.
+			ClearTrenchStore();
+		}
+
+		{
+			// One tile is 512 world units square, only trodden ground has one,
+			// and refill deletes the ones it takes back to bare snow.
+			const auto [tiles, bytes] = GetTrenchStoreStats();
+			ImGui::Text("Trench store: %zu tiles, %.1f KB raw", tiles, (double)bytes / 1024.0);
+		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));
 		if (auto _ttEmitterCat = Util::HoverTooltipWrapper())

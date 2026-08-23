@@ -274,6 +274,8 @@ public:
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
+		/** @brief Trenches survive leaving the deformation window: departing texels go to a sparse world-grid tile store and come back when the window returns. In-session only so far - nothing is written to the save (ROADMAP #34 Stage A). Off restores the old behaviour, where walking away discards them. */
+		bool PersistTrenches = true;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
@@ -602,6 +604,10 @@ public:
 		float CrustBreakOnCarve;
 		/** @brief Settings::SlumpRate, the unsupported-snow settle speed; 0 disables the pass. Claimed the old pad, so the layout is byte-identical. */
 		float SlumpRate;
+
+		/** @brief 1 = InjectDepth holds the tile store's memory of the texels arriving from outside the window (ROADMAP #34). Its own row: Stamps must start 16-byte aligned. */
+		uint InjectValid;
+		uint InjectPad[3];
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1637,6 +1643,92 @@ protected:
 	/** @brief Deformation map resolution. */
 	uint deformMapDim = kTextureDim;
 	bool rangeInitApplied = false;
+
+	// ---- Persistent trenches: world-anchored sparse tile store (ROADMAP #34 Stage A) ----
+	// The map is a camera-following window and DeformationUpdateCS discards
+	// whatever the scroll pushes past its edge, so trenches die when the player
+	// walks away. Departing texels are read back into tiles on a FIXED world
+	// grid and put back when the window returns. Fixed grid, not texel indices:
+	// RangeTrenchesM changes the map's texel size at runtime (2.0-13.7 units),
+	// so stored indices would be the wrong scale on the way back in.
+
+	/** @brief World units per store tile edge. */
+	static constexpr float kTrenchTileWorld = 512.0f;
+	/** @brief Texels per store tile edge; 512/128 = 4 world units per texel, whatever the range slider is set to. */
+	static constexpr int kTrenchTileDim = 128;
+	/** @brief Depth below which a texel stores as nothing, so refill remnants do not keep tiles alive that hold no trench. */
+	static constexpr float kTrenchStoreEpsilon = 0.02f;
+	/** @brief A scroll wider than this on either axis is a jump: the whole map is flushed instead of an edge band. */
+	static constexpr int kTrenchBandMax = 32;
+
+	struct TrenchTileKey
+	{
+		uint32_t worldspace;
+		int32_t x;
+		int32_t y;
+		bool operator==(const TrenchTileKey&) const = default;
+	};
+
+	struct TrenchTileKeyHash
+	{
+		size_t operator()(const TrenchTileKey& a_key) const noexcept
+		{
+			size_t h = a_key.worldspace * 0x9E3779B9u;
+			h ^= (size_t)(uint32_t)a_key.x + 0x9E3779B9u + (h << 6) + (h >> 2);
+			h ^= (size_t)(uint32_t)a_key.y + 0x9E3779B9u + (h << 6) + (h >> 2);
+			return h;
+		}
+	};
+
+	/** @brief Quantised depth per trodden tile. Untrodden ground has no entry, and a tile that decays to nothing is erased. */
+	std::unordered_map<TrenchTileKey, std::vector<uint8_t>, TrenchTileKeyHash> trenchTiles;
+
+	/** @brief What one staged band covers, captured at copy time: a clear, a worldspace change or a range change all move the live values out from under the map before the readback lands. */
+	struct TrenchBandCopy
+	{
+		float2 origin;
+		float texel;
+		uint32_t worldspace;
+		int32_t x0, y0, w, h;
+	};
+
+	/** @brief R8 depth the update CS reads for texels the scroll brings in from outside the window. Only the arriving band is uploaded; in-window texels overwrite it from the previous map, so the rest may be stale. */
+	winrt::com_ptr<ID3D11Texture2D> trenchInjectTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
+	std::vector<uint8_t> trenchInjectScratch;
+
+	/** @brief One departing band per axis, double buffered; mapped a frame later so the readback never stalls the render thread. */
+	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
+	bool trenchBandValid[2][2] = {};
+	TrenchBandCopy trenchBandMeta[2][2] = {};
+	int trenchBandRing = 0;
+
+	/** @brief Window state the CURRENT map's contents belong to. The flush uses these, never the live values. */
+	float2 trenchMapOrigin = { 0, 0 };
+	float trenchMapTexel = 0.0f;
+	uint32_t trenchMapWorldspace = 0;
+	bool trenchMapPrimed = false;
+
+	/** @brief One-entry tile cache for the inject sampler, which walks a tile's pixel footprint in scan order. */
+	TrenchTileKey trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
+	const std::vector<uint8_t>* trenchSampleTile = nullptr;
+
+	/** @brief Creates the inject texture and the band staging ring. */
+	bool CreateTrenchStoreResources();
+	/** @brief Folds any band copied on an earlier frame into the tile store. */
+	void DrainTrenchBands();
+	/** @brief Stages the texels this frame's scroll or clear is about to discard. */
+	void FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_clearing);
+	/** @brief Fills the inject texture for the texels arriving this frame. Returns 1 when the store had anything to put there. */
+	uint BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing);
+	/** @brief Reads one mapped band into the store, splatting each map texel across the store texels it covers. */
+	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped);
+	/** @brief Bilinear store depth at a world position, crossing tile edges through the one-entry cache. */
+	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY);
+	/** @brief Drops every stored tile and the cache that points into it. */
+	void ClearTrenchStore();
+	/** @brief Live tile count and raw bytes, for the debug readout. */
+	std::pair<size_t, size_t> GetTrenchStoreStats() const { return { trenchTiles.size(), trenchTiles.size() * (size_t)kTrenchTileDim * kTrenchTileDim }; }
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

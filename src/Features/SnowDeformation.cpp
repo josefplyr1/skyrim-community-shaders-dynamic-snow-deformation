@@ -25,6 +25,7 @@
 	X(SlumpRate) \
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
+	X(PersistTrenches) \
 	X(MeltPersistence) \
 	X(MeltBowlFloor) \
 	X(MeltEdgeIrregularity) \
@@ -196,6 +197,11 @@ void SnowDeformation::CreateDeformationTextures()
 		deformationTextures[i] = new Texture2D(texDesc, i == 0 ? "SnowDeformation::DeformationMap0" : "SnowDeformation::DeformationMap1");
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
+	}
+
+	// The tile store's window-sized companions follow the map's dimension.
+	if (!CreateTrenchStoreResources()) {
+		logger::warn("[SNOW DEFORMATION] Trench store resources failed; trenches will not survive leaving the window");
 	}
 
 	// Berm field: a bake of the 17-tap disc average the shells used to run per
@@ -554,6 +560,15 @@ void SnowDeformation::Prepass()
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
+	// Persistent trenches (ROADMAP #34 Stage A). Ordered against the dispatch:
+	// the flush stages what this frame's scroll is about to discard, so it must
+	// read the map BEFORE the ping-pong swap below, and it uses the window
+	// state the map's contents belong to rather than the live one - a clear
+	// arrives here with the worldspace, texel size or both already changed.
+	DrainTrenchBands();
+	FlushDepartingTrenches(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
+	perFrameData.InjectValid = BuildTrenchInject(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
+
 	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
 	// this feature was already timed and neither of these was, which is the
 	// half that grew: the spell branch walks the projectile manager, resolves
@@ -597,7 +612,7 @@ void SnowDeformation::Prepass()
 		ID3D11Buffer* buffers[1] = { perFrame->CB() };
 		context->CSSetConstantBuffers(0, 1, buffers);
 
-		ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get() };
+		ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get(), trenchInjectSRV.get() };
 		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
 		ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get() };
@@ -635,11 +650,20 @@ void SnowDeformation::Prepass()
 	ID3D11Buffer* nullBuffer = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullBuffer);
 
-	ID3D11ShaderResourceView* nullSrvs[1] = { nullptr };
-	context->CSSetShaderResources(0, 1, nullSrvs);
+	ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
+	context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 
 	ID3D11UnorderedAccessView* nullUavs[1] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
+
+	// What the map just written is anchored to. Recorded here because the live
+	// values move ahead of it: the origin advances in GetCommonBufferData, and
+	// a range or worldspace change rewrites the texel size and the key before
+	// the next frame's flush ever sees this content.
+	trenchMapOrigin = windowOrigin;
+	trenchMapTexel = perFrameData.TexelSize;
+	trenchMapWorldspace = activeWorldspace.load(std::memory_order_acquire);
+	trenchMapPrimed = true;
 
 	// Rebind: after the ping-pong flip this points at the freshly written map.
 	deformationSRV = GetDeformationSRV();
@@ -792,6 +816,7 @@ void SnowDeformation::RestoreDefaultSettings()
 	settings = {};
 	trenchRangeDirty = true;
 	clearRequested = true;
+	ClearTrenchStore();
 	RefreshLandTextureDepths();
 	shellDataDirty.store(true, std::memory_order_release);
 }
