@@ -157,6 +157,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("stored_trench_fade"), "Stored Trench Fade"), &settings.StoredTrenchFadeDays, 0.0f, 30.0f, "%.0f days");
 			if (auto _ttFade = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
+
+			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.25f, 8.0f, "%.2f MB");
+			if (auto _ttMemory = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB holds roughly the last few areas you travelled through. Raise it to keep trenches around a wider stretch of the map and pay for it in save size; every save file carries its own copy, so a large setting adds up across a big save folder."));
 		}
 
 		ImGui::PushID("snow_refill");
@@ -813,6 +817,12 @@ void SnowDeformation::DrawSettings()
 			const auto stats = GetTrenchStoreStats();
 			ImGui::Text("Trench store: %zu tiles, %.1f KB raw, %.1f%% full, %zu thin",
 				stats.tiles, (double)stats.bytes / 1024.0, stats.occupancy * 100.0f, stats.thin);
+			// Encoded is the number that matters: it is what a save will cost
+			// once Stage C writes it, and what the budget is spent in.
+			ImGui::Text("Save cost: %.0f KB of %.0f KB budget (%.0fx vs raw)",
+				(double)stats.encoded / 1024.0,
+				(double)settings.TrenchMemoryMB * 1024.0,
+				stats.encoded ? (double)stats.bytes / (double)stats.encoded : 0.0);
 		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));

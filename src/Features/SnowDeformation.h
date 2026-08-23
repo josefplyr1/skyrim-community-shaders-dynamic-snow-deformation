@@ -278,6 +278,8 @@ public:
 		bool PersistTrenches = true;
 		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. 3 rather than a cautious 7 per Josef, 2026-08-23: three snowless days running is already an odd week in Skyrim, so the floor almost never decides anything and does not need the headroom. 0 disables the floor and leaves snowfall as the only reaper. */
 		float StoredTrenchFadeDays = 3.0f;
+		/** @brief Budget for the trench store, in MB of encoded data - which is what a save will cost once #34 Stage C writes it, not the raw in-memory figure. Beyond it, least-recently-visited ground is forgotten first. The cap is the ONLY thing bounding the store: decay alone leaves it unbounded on ground that never sees snowfall, and a fully trodden worldspace would be gigabytes. 1 MB is roughly two to four deformation windows of remembered ground. */
+		float TrenchMemoryMB = 1.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
@@ -1687,7 +1689,16 @@ protected:
 		std::vector<uint8_t> depth;
 		/** @brief Decay clock reading when these bytes were last brought up to date. Per tile, so the sweep can lag without ever being wrong. */
 		float clock = 0.0f;
+		/** @brief Game hours when this tile was last written or last stood inside the window. The LRU key. */
+		float lastTouch = 0.0f;
+		/** @brief Exact encoded size under kTrenchRLE, measured by the sweep. What the budget is spent in - a raw byte count would bound the wrong number. */
+		uint32_t encodedBytes = 0;
 	};
+
+	/** @brief Per-tile co-save header: key, clock and last touch. The encoder's own bytes are counted separately. */
+	static constexpr uint32_t kTrenchTileHeaderBytes = 24;
+	/** @brief Store encoding, fixed here because the budget accounting must agree with the writer byte for byte: byte-oriented RLE, pairs of (count 1-255, value), a run longer than 255 split across pairs, and a tile kept raw if that ever exceeds its raw size. */
+	static constexpr uint32_t kTrenchRLEPairBytes = 2;
 
 	/** @brief Quantised depth per trodden tile. Untrodden ground has no entry, and a tile that decays to nothing is erased. */
 	std::unordered_map<TrenchTileKey, TrenchTile, TrenchTileKeyHash> trenchTiles;
@@ -1707,6 +1718,10 @@ protected:
 	size_t trenchAccumNonZero = 0;
 	size_t trenchAccumThin = 0;
 	size_t trenchAccumTiles = 0;
+	/** @brief Encoded size of every live tile, refreshed each sweep cycle. What the budget is measured against. */
+	size_t trenchEncodedTotal = 0;
+	/** @brief Scratch for the LRU eviction's partial sort; kept so a cap breach does not allocate. */
+	std::vector<std::pair<float, TrenchTileKey>> trenchEvictScratch;
 
 	/** @brief What one staged band covers, captured at copy time: a clear, a worldspace change or a range change all move the live values out from under the map before the readback lands. */
 	struct TrenchBandCopy
@@ -1756,14 +1771,17 @@ protected:
 	void TickTrenchClock();
 	/** @brief Brings one tile's bytes up to the current clock. Returns false when nothing nonzero is left, i.e. the tile should be erased. */
 	bool DecayTrenchTile(TrenchTile& a_tile);
-	/** @brief Decays and prunes a slice of the store, and gathers the occupancy figures. Amortised: correctness never depends on it, only reclaimed memory does. */
+	/** @brief Decays and prunes a slice of the store, and gathers the occupancy and encoded-size figures. Amortised: correctness never depends on it, only reclaimed memory does. */
 	void SweepTrenchStore();
+	/** @brief Evicts least-recently-touched tiles until the store fits the memory budget. Runs at sweep-cycle boundaries, when every tile's encoded size has just been measured. */
+	void EnforceTrenchBudget();
 
-	/** @brief Debug readout: live tiles, raw bytes, mean occupancy 0-1, and how many tiles are under a twentieth full. */
+	/** @brief Debug readout: live tiles, raw bytes, encoded (what a save would cost), mean occupancy 0-1, and how many tiles are under a twentieth full. */
 	struct TrenchStoreStats
 	{
 		size_t tiles;
 		size_t bytes;
+		size_t encoded;
 		float occupancy;
 		size_t thin;
 	};
@@ -1771,7 +1789,7 @@ protected:
 	{
 		const size_t bytes = trenchTiles.size() * (size_t)kTrenchTileDim * kTrenchTileDim;
 		const size_t swept = trenchStatSweptTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
-		return { trenchTiles.size(), bytes, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
+		return { trenchTiles.size(), bytes, trenchEncodedTotal, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
 	}
 
 public:

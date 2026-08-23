@@ -166,11 +166,17 @@ void SnowDeformation::SweepTrenchStore()
 	}
 
 	if (trenchSweepQueue.empty()) {
-		// Cycle boundary: publish what the last pass measured and start again.
+		// Cycle boundary: publish what the last pass measured, then spend the
+		// budget while every tile's encoded size is freshly known.
 		trenchStatNonZero = trenchAccumNonZero;
 		trenchStatThin = trenchAccumThin;
 		trenchStatSweptTiles = trenchAccumTiles;
 		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		trenchEncodedTotal = 0;
+		for (const auto& [key, tile] : trenchTiles)
+			trenchEncodedTotal += tile.encodedBytes + kTrenchTileHeaderBytes;
+		EnforceTrenchBudget();
+
 		trenchSweepQueue.reserve(trenchTiles.size());
 		for (const auto& [key, tile] : trenchTiles)
 			trenchSweepQueue.push_back(key);
@@ -196,12 +202,75 @@ void SnowDeformation::SweepTrenchStore()
 			continue;
 		}
 
-		const size_t nonZero = (size_t)std::count_if(it->second.depth.begin(), it->second.depth.end(),
-			[](uint8_t v) { return v != 0; });
+		// One pass over the tile counts BOTH figures: how full it is, and
+		// exactly what it will cost to write. The encoded size has to be exact
+		// rather than estimated, or the budget bounds a number that is not the
+		// one landing in the save.
+		const auto& bytes = it->second.depth;
+		size_t nonZero = 0;
+		size_t pairs = 0;
+		size_t run = 0;
+		uint8_t previous = bytes[0];
+		for (size_t b = 0; b < bytes.size(); b++) {
+			if (bytes[b] != 0)
+				nonZero++;
+			if (bytes[b] == previous) {
+				run++;
+			} else {
+				// A run longer than 255 splits across pairs; the count field
+				// is one byte.
+				pairs += (run + 254) / 255;
+				previous = bytes[b];
+				run = 1;
+			}
+		}
+		pairs += (run + 254) / 255;
+
+		const uint32_t encoded = (uint32_t)(pairs * kTrenchRLEPairBytes);
+		// A tile the encoder would make bigger is kept raw, so a pathological
+		// pattern costs its raw size and never more.
+		it->second.encodedBytes = std::min(encoded, (uint32_t)bytes.size());
+
 		trenchAccumNonZero += nonZero;
 		trenchAccumTiles++;
 		if (nonZero * 20 < texels)
 			trenchAccumThin++;
+	}
+}
+
+void SnowDeformation::EnforceTrenchBudget()
+{
+	const size_t budget = (size_t)(std::max(settings.TrenchMemoryMB, 0.05f) * 1024.0f * 1024.0f);
+	if (trenchEncodedTotal <= budget)
+		return;
+
+	// Least-recently-touched ground goes first: the store should hold where you
+	// have BEEN, and the places you have not returned to are the ones whose
+	// trenches you are least likely to walk back into.
+	trenchEvictScratch.clear();
+	trenchEvictScratch.reserve(trenchTiles.size());
+	for (const auto& [key, tile] : trenchTiles)
+		trenchEvictScratch.emplace_back(tile.lastTouch, key);
+	std::sort(trenchEvictScratch.begin(), trenchEvictScratch.end(),
+		[](const auto& a, const auto& b) { return a.first < b.first; });
+
+	size_t evicted = 0;
+	for (const auto& [touch, key] : trenchEvictScratch) {
+		if (trenchEncodedTotal <= budget)
+			break;
+		auto it = trenchTiles.find(key);
+		if (it == trenchTiles.end())
+			continue;
+		trenchEncodedTotal -= std::min(trenchEncodedTotal, (size_t)it->second.encodedBytes + kTrenchTileHeaderBytes);
+		trenchTiles.erase(it);
+		evicted++;
+	}
+
+	if (evicted) {
+		trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
+		trenchSampleTile = nullptr;
+		logger::debug("[SNOW DEFORMATION] trench store over budget: evicted {} tiles, {} KB encoded remain",
+			evicted, trenchEncodedTotal / 1024);
 	}
 }
 
@@ -312,6 +381,8 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 							fresh.clock = trenchDecayClock;
 							it = trenchTiles.emplace(key, std::move(fresh)).first;
 						} else {
+							// Written to, so it is recent ground whatever the
+							// LRU thought a moment ago.
 							// Brought up to date before fresh texels mix in, or
 							// the batch's new depths would sit beside stale ones
 							// under a single clock and decay twice.
@@ -320,6 +391,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 						// Re-seated after the insert, which may have rehashed.
 						cachedKey = key;
 						cachedTile = &it->second;
+						cachedTile->lastTouch = trenchGameHours;
 						touched.insert(key);
 					}
 					const int lx = gx - key.x * kTrenchTileDim;
@@ -497,13 +569,17 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 		// filling: the store is sparse, so a full rebuild costs the ground you
 		// have walked and not the 4 M texels of the window.
 		bool painted = false;
-		for (const auto& [key, tile] : trenchTiles) {
+		for (auto& [key, tile] : trenchTiles) {
 			if (key.worldspace != worldspace)
 				continue;
 			const float tileX = (float)key.x * kTrenchTileWorld;
 			const float tileY = (float)key.y * kTrenchTileWorld;
 			if (tileX + kTrenchTileWorld <= minX || tileX >= maxX || tileY + kTrenchTileWorld <= minY || tileY >= maxY)
 				continue;
+
+			// Standing inside the window counts as use: the LRU should forget
+			// where you have not been, not where you happen not to be digging.
+			tile.lastTouch = trenchGameHours;
 
 			// Texel centres inside this tile's world span, widened by one so a
 			// texel just outside still picks up the tile's edge through the

@@ -27,6 +27,7 @@
 	X(RefillOnlyWhenSnowing) \
 	X(PersistTrenches) \
 	X(StoredTrenchFadeDays) \
+	X(TrenchMemoryMB) \
 	X(MeltPersistence) \
 	X(MeltBowlFloor) \
 	X(MeltEdgeIrregularity) \
