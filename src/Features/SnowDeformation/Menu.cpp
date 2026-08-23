@@ -389,6 +389,26 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttTeeth = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
+			ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
+
+			ImGui::SliderFloat(T(TKEY("bow_wave_height"), "Bow Wave Height"), &settings.BowWaveHeight, 0.0f, 1.5f, "%.2f");
+			if (auto _ttBwH = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("bow_wave_height_tooltip"), "How high a moving body heaps the snow it is pushing, as a fraction of local snow depth. This is the crest that rides ahead of and beside the legs and relaxes into the berm behind. 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("bow_wave_reach"), "Bow Wave Reach"), &settings.BowWaveReach, 0.25f, 3.0f, "%.2fx");
+			if (auto _ttBwR = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("bow_wave_reach_tooltip"), "How far ahead and to the sides the crest reaches. Low = snow heaps tight against the legs; high = a broad wave spread well out in front."));
+
+			ImGui::SliderFloat(T(TKEY("bow_wave_forward"), "Bow Wave Forward Bias"), &settings.BowWaveForward, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBwF = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("bow_wave_forward_tooltip"), "0 = snow heaps evenly all around the actor; 1 = only dead ahead. Middle values give the crescent - pushed mostly forward but shouldered aside too."));
+
+			ImGui::SliderFloat(T(TKEY("bow_wave_speed"), "Bow Wave Full Speed"), &settings.BowWaveFullSpeed, 40.0f, 500.0f, "%.0f u/s");
+			if (auto _ttBwS = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("bow_wave_speed_tooltip"), "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop."));
+
+			ImGui::SeparatorText(T(TKEY("bow_wave_group_end"), "Trench Detail"));
+
 			ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
 			if (auto _ttClods = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("berm_clods_tooltip"), "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off."));

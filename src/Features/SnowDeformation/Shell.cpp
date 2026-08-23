@@ -453,6 +453,33 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	};
 }
 
+/**
+ * This frame's bow-wave crests, uploaded to b1 of the shell pass.
+ *
+ * Rebuilt from scratch every frame from live actor positions and velocities
+ * (ROADMAP #35): nothing is stored between frames except the smoothed speed
+ * that lets a crest ease out, so no crest can ever be left behind. That is
+ * the structural fix for what killed the Stage 4 spray.
+ */
+void SnowDeformation::UpdateBowWaveBuffer()
+{
+	if (!bowWaveCB)
+		bowWaveCB = new ConstantBuffer(ConstantBufferDesc<BowWaveCB>(), "SnowDeformation::BowWaveCB");
+
+	BowWaveCB data{};
+	const uint count = std::min((uint)bowWaves.size(), (uint)kMaxBowWaves);
+	data.BowWaveParams = { settings.BowWaveHeight > 0.001f ? (float)count : 0.0f,
+		std::clamp(settings.BowWaveHeight, 0.0f, 1.5f),
+		std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
+		std::clamp(settings.BowWaveForward, 0.0f, 1.0f) };
+	for (uint i = 0; i < count; i++) {
+		const auto& wave = bowWaves[i];
+		data.BowWavePosDir[i] = { wave.pos.x, wave.pos.y, wave.dir.x, wave.dir.y };
+		data.BowWaveShape[i] = { wave.radius, wave.strength, 0.0f, 0.0f };
+	}
+	bowWaveCB->Update(data);
+}
+
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
@@ -739,9 +766,20 @@ void SnowDeformation::DrawShell()
 		ps = shellLODPS;
 	}
 
+	UpdateBowWaveBuffer();
+
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
+	// Bow wave crests (b1). VS displaces by them, PS differences them for the
+	// normal, DS evaluates the surface on the tessellated path - all three
+	// must see the same buffer or shape and shading disagree.
+	if (bowWaveCB) {
+		ID3D11Buffer* waveCB[1] = { bowWaveCB->CB() };
+		context->VSSetConstantBuffers(1, 1, waveCB);
+		context->PSSetConstantBuffers(1, 1, waveCB);
+		context->DSSetConstantBuffers(1, 1, waveCB);
+	}
 	// SharedData (b5) supplies SH ambient + sun for the PS lighting; rebind
 	// the b4-b6 triple exactly as Deferred does for its own passes.
 	auto state = globals::state;

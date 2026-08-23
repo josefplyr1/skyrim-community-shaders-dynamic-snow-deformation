@@ -475,6 +475,14 @@ public:
 		float RimTeeth = 0.33f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
+		/** @brief Bow wave (ROADMAP #35): crest height as a fraction of local snow depth. 0 = off. */
+		float BowWaveHeight = 0.35f;
+		/** @brief Bow wave: multiplier on the push radius, i.e. how far ahead and aside the crest reaches. */
+		float BowWaveReach = 1.0f;
+		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
+		float BowWaveForward = 0.65f;
+		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
+		float BowWaveFullSpeed = 220.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -856,6 +864,31 @@ public:
 	static constexpr uint kLightningArcSegments = 32;
 	std::vector<LightningArc> lightningArcs;
 	uint32_t lightningArcSeed = 0;
+
+	/** @brief One actor's push crest for this frame. Rebuilt every frame from live position and velocity - nothing persists, so nothing can be left behind (the retired spray's failure). */
+	struct BowWave
+	{
+		float2 pos{};
+		float2 dir{};
+		float radius = 24.0f;
+		float strength = 0.0f;
+		float distSq = 0.0f;
+	};
+	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl. The 256-stamp cap already means player + near actors; this is tighter still. */
+	static constexpr size_t kMaxBowWaves = 12;
+	/** @brief Layout must match BowWaveCB in SnowShell.hlsl (b1 of the shell pass). Its own buffer: ShellCB is hand-mirrored across two shaders and this is landscape-only. */
+	struct BowWaveCB
+	{
+		float4 BowWaveParams;
+		float4 BowWavePosDir[kMaxBowWaves];
+		float4 BowWaveShape[kMaxBowWaves];
+	};
+	ConstantBuffer* bowWaveCB = nullptr;
+	std::vector<BowWave> bowWaves;
+	/** @brief Smoothed speed + last travel direction per actor, so the crest eases in and OUT rather than snapping off the instant someone stops - the "settles after a brief moment" half of the design - and keeps pointing the right way while it eases. xy = unit direction, z = smoothed speed. Keyed by formID. */
+	std::unordered_map<uint32_t, float4> bowWaveSpeed;
+	/** @brief Uploads this frame's crests to b1 of the shell pass. */
+	void UpdateBowWaveBuffer();
 
 	/** @brief Layout must match ArcCB in LightningArc.hlsl. Its own buffer, NOT part of ShellCB, which is hand-mirrored across two shaders and must not grow for a cosmetic pass. */
 	struct ArcCB

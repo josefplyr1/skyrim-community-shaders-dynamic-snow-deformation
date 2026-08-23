@@ -55,6 +55,12 @@ static constexpr float kMinFootStampRadius = 5.0f;
 // Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
+/** Body key for the bow wave's own previous-position entry (ROADMAP #35). */
+static constexpr uint64_t kBodyKeyBit = 0x2000;
+/** Push radius of a human-sized actor before the Reach crank, in world units. */
+static constexpr float kBowWaveBaseRadius = 30.0f;
+/** A jump this big in one frame is a teleport, a fast travel or a cell load, not a stride. */
+static constexpr float kBowWaveTeleport = 400.0f;
 // Limb stamps below this carve fraction are invisible; skip them.
 static constexpr float kMinLimbCarve = 0.05f;
 // Prop stamps floor here so small dropped items (daggers, gems) stay visible
@@ -396,6 +402,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
 	corpseMoundSpheres.clear();
+	bowWaves.clear();
+	if (bowWaveSpeed.size() > 512)
+		bowWaveSpeed.clear();
 	stampStats = {};
 
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
@@ -487,6 +496,47 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
+
+		// Bow wave source (ROADMAP #35). One crest per actor, from the BODY's
+		// motion rather than the feet: feet alternate, and a crest that
+		// pulsed with the gait would be the retired spray's per-footfall
+		// rhythm all over again. Rebuilt every frame - nothing persists.
+		if (settings.BowWaveHeight > 0.001f && !isDead) {
+			const uint64_t bodyKey = (uint64_t(formID) << 16) | kBodyKeyBit;
+			const float2 here = { position.x, position.y };
+			auto prevBody = stampPrevPositions.find(bodyKey);
+			currentPositions[bodyKey] = here;
+			auto& track = bowWaveSpeed[formID];
+			const float dtBody = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
+			if (prevBody != stampPrevPositions.end()) {
+				const float2 step = { here.x - prevBody->second.x, here.y - prevBody->second.y };
+				const float dist = std::sqrt(step.x * step.x + step.y * step.y);
+				// A teleport must not read as a supersonic stride.
+				if (dist < kBowWaveTeleport) {
+					if (dist > 0.5f) {
+						track.x = step.x / dist;
+						track.y = step.y / dist;
+					}
+					// Asymmetric smoothing: the crest builds fast when you set
+					// off and eases out over ~0.3 s when you stop, which IS the
+					// "settles after a brief moment" half of the design.
+					const float instant = dist / dtBody;
+					const float rate = instant > track.z ? 12.0f : 3.5f;
+					track.z += (instant - track.z) * std::clamp(rate * dtBody, 0.0f, 1.0f);
+				}
+			}
+			const float strength = std::clamp(track.z / std::max(settings.BowWaveFullSpeed, 1.0f), 0.0f, 1.0f);
+			if (strength > 0.02f && (track.x != 0.0f || track.y != 0.0f) && bowWaves.size() < kMaxBowWaves) {
+				BowWave wave{};
+				wave.pos = here;
+				wave.dir = { track.x, track.y };
+				wave.radius = kBowWaveBaseRadius * depthScale;
+				wave.strength = strength;
+				const float cdx = position.x - cameraPosition.x, cdy = position.y - cameraPosition.y;
+				wave.distSq = cdx * cdx + cdy * cdy;
+				bowWaves.push_back(wave);
+			}
+		}
 
 		StampBones* bones = nullptr;
 		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
@@ -1136,5 +1186,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	}
 
 	stampPrevPositions = std::move(currentPositions);
+	// Nearest crests win the slots: a crowd cannot each carry one, and the
+	// ones the player can see are the ones worth keeping.
+	if (bowWaves.size() > 1)
+		std::sort(bowWaves.begin(), bowWaves.end(),
+			[](const BowWave& a, const BowWave& b) { return a.distSq < b.distSq; });
 	perFrameData.StampCount = stampCount;
 }

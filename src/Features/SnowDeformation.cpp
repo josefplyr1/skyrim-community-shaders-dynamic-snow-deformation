@@ -108,6 +108,10 @@
 	X(RimLip) \
 	X(RimTeeth) \
 	X(BermClods) \
+	X(BowWaveHeight) \
+	X(BowWaveReach) \
+	X(BowWaveForward) \
+	X(BowWaveFullSpeed) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(CompactMatte) \

@@ -201,6 +201,28 @@ cbuffer ShellCB : register(b0)
 	float4 RimStyle;
 }
 
+// Bow wave (ROADMAP #35 phase one): the crest of snow a body PUSHES as it
+// moves through cover, ahead of and beside the legs, relaxing into the berm
+// behind. Its own buffer rather than a ShellCB row - ShellCB is hand-
+// mirrored across two shaders and this is landscape-only.
+//
+// NOTHING IS BORN here, which is the design rule the retired spray broke:
+// the crest is rebuilt every frame from each actor's CURRENT position and
+// velocity, so it cannot leave anything behind. What remains after the
+// walker passes is the berm, which the module already draws - that IS the
+// "settle" in the design, and it is why this needs no per-wave age.
+#define MAX_BOW_WAVES 12
+cbuffer BowWaveCB : register(b1)
+{
+	/// x = live wave count, y = height scale (fraction of local depth),
+	/// z = reach scale on the push radius, w = forward bias 0-1
+	float4 BowWaveParams;
+	/// xy = world position, zw = unit travel direction
+	float4 BowWavePosDir[MAX_BOW_WAVES];
+	/// x = push radius (world units), y = strength 0-1 (speed x depth), zw spare
+	float4 BowWaveShape[MAX_BOW_WAVES];
+}
+
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> DeformationMap : register(t1);
 Texture2D<float4> SnowDiffuse : register(t2);
@@ -660,6 +682,44 @@ float3 SampleTerrainShaped(float2 gridLocal)
 	return result;
 }
 
+// Bow wave height at a world point, as a fraction of local snow depth.
+//
+// Shape (ROADMAP #35): a CRESCENT, not a dome. Radially it is zero under the
+// actor - they are standing in the trough they just made - rises to a peak at
+// the push radius and dies just beyond it. Angularly it is forward-biased but
+// never zero at the sides, because a body shoulders snow aside as well as
+// ahead; behind is zero, where the berm takes over. Masked by (1 -
+// deformation) like the berm: a wave pushes snow that is still THERE.
+float BowWaveHeight(float2 worldXY, float deformation, float uncarvedDepth)
+{
+	[branch] if (BowWaveParams.x < 0.5 || BowWaveParams.y < 0.001)
+		return 0.0;
+
+	float crest = 0.0;
+	const uint waveCount = (uint)BowWaveParams.x;
+	[loop] for (uint i = 0; i < waveCount; i++)
+	{
+		const float2 rel = worldXY - BowWavePosDir[i].xy;
+		const float radius = max(BowWaveShape[i].x * BowWaveParams.z, 1e-3);
+		const float d = length(rel);
+		[branch] if (d > radius * 1.9)
+			continue;
+
+		const float t = d / radius;
+		// Zero at the feet, peak at the push radius, gone by 1.9x.
+		const float radial = smoothstep(0.30, 1.0, t) * (1.0 - smoothstep(1.0, 1.9, t));
+		// cos of the angle to travel: 1 ahead, 0 abeam, -1 behind. Remapped
+		// so abeam keeps half and behind contributes nothing.
+		const float forward = d > 1e-3 ? dot(rel / d, BowWavePosDir[i].zw) : 1.0;
+		const float angular = pow(saturate(forward * BowWaveParams.w + (1.0 - BowWaveParams.w)), 1.3);
+		crest = max(crest, radial * angular * BowWaveShape[i].y);
+	}
+
+	// Un-dug snow only, and scaled by what is locally there to push.
+	return crest * BowWaveParams.y * uncarvedDepth *
+	       saturate(1.0 - deformation) * BermDepthGate(uncarvedDepth);
+}
+
 // The shell surface: per-texture-class snow depth carved by deformation.
 // Class depths blend by their baked weights on the CPU (window rebuild),
 // so boundaries between differently-deep snows are geometric depth ramps;
@@ -837,6 +897,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// raising Berm Height raised the whole trench with it.
 			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
+			depth += BowWaveHeight(GridOrigin + gridLocal, deformation, uncarved);
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -1585,6 +1646,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float cYP = ChurnNoise(worldXYPS + float2(0.0, cStep));
 		float cYN = ChurnNoise(worldXYPS - float2(0.0, cStep));
 		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * ChurnHeightAmp * churnW;
+	}
+
+	// Bow wave gradient (same field the VS displaces by). Wide step: the
+	// crest is tens of units across, and a short step reads its smooth
+	// flanks as noise.
+	[branch] if (BowWaveParams.x > 0.5 && BowWaveParams.y > 0.001)
+	{
+		const float wStep = 10.0;
+		float wXP = BowWaveHeight(worldXYPS + float2(wStep, 0.0), pixelCarve, pixelDepth);
+		float wXN = BowWaveHeight(worldXYPS - float2(wStep, 0.0), pixelCarve, pixelDepth);
+		float wYP = BowWaveHeight(worldXYPS + float2(0.0, wStep), pixelCarve, pixelDepth);
+		float wYN = BowWaveHeight(worldXYPS - float2(0.0, wStep), pixelCarve, pixelDepth);
+		gradZ += float2(wXP - wXN, wYP - wYN) / (2.0 * wStep);
 	}
 
 	// P6 clod gradient (same field the VS displaces by; centre-weighted
