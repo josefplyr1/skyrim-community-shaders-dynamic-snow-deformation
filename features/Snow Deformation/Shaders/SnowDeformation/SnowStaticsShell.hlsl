@@ -166,6 +166,8 @@ cbuffer ShellCB : register(b0)
 	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
 	// re-march enable, zw = its DR scale (landscape shell only).
 	float4 CompactLook;
+	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
+	float4 RimStyle;
 }
 
 cbuffer StaticCB : register(b1)
@@ -2129,7 +2131,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 				float sampleDeform = SampleDeformation(sampleLocal);
 				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
+				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
 				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 				// Sentinel terrain contributes a hugely negative horizon: a
 				// no-op through the max below, same as the landscape's edge.

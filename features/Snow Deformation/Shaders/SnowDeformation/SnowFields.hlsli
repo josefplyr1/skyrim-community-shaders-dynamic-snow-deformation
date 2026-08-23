@@ -225,14 +225,47 @@ float Undulation(float2 worldXY)
 // update has no depth data and every consumer of the shape - geometry,
 // finite-difference normals, both shells, the self-shadow march - already
 // routes through this one function.
-float CarveProfile(float deformation, float uncarvedDepth)
+// P5 (trench plan Stage 3) rides in here too, for the same reason P7 does:
+// one function, every consumer agrees. Teeth first, then the depth remap,
+// then the lip on the notched value so the teeth break the lip into blocks
+// (RDR2 O1: "irregular teeth and broken blocks" at the rim).
+float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = saturate(deformation);
+
+	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
+	// 8-unit raggedness, HEIGHT-BLEND-PLAN round 18 - reused, not
+	// reinvented), applied to the carve VALUE inside the rim band only.
+	// The contour breaks into teeth; floors (d high) and open snow (d = 0)
+	// sit outside the band and never move. Faded by depthT: teeth are
+	// cut-wall vocabulary, dimples stay smooth.
+	[branch] if (RimStyle.y > 0.001)
+	{
+		float notch = (ShapeNoise(worldXY / 37.0) - 0.5) * 0.8 +
+		              (ShapeNoise(worldXY / 8.0) - 0.5) * 1.2;
+		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
+		d = saturate(d + notch * RimStyle.y * 0.35 * rimBand * depthT);
+	}
+
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
 	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
-	return max(uncarvedDepth * (1.0 - d), floorDepth);
+	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
+
+	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on
+	// the carve skirt, peaking at d ~ 0.1 and gone by mid-wall. Berm
+	// guardrail (the plan's double-ridge warning): at the default 0.10 the
+	// lip is ~1/4 berm height and sits on the berm's INNER flank, so it
+	// reads as the rim rolling into the berm rather than a second ridge -
+	// RimStyle.x is the dial if it ever stacks. Faded by depthT with the
+	// rest of the cut-wall vocabulary.
+	[branch] if (RimStyle.x > 0.001)
+	{
+		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
+		profile += RimStyle.x * uncarvedDepth * hump * depthT;
+	}
+	return profile;
 }
 
 // P7's berm half: spoil needs material. Below ~3 units of cover there is

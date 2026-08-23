@@ -196,6 +196,9 @@ cbuffer ShellCB : register(b0)
 	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
 	// is unbound in this pass).
 	float4 CompactLook;
+	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
+	// teeth strength; zw spare.
+	float4 RimStyle;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -832,7 +835,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// blurred field also lifted the trench floor and walls - a narrow
 			// trail's disc average is well above zero at its own centre, so
 			// raising Berm Height raised the whole trench with it.
-			depth = CarveProfile(deformation, uncarved) +
+			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
@@ -1531,8 +1534,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
 	float pixelDepth = max(pixelRampDepth, 0.0);
 	float2 profileGrad = float2(
-		CarveProfile(saturate(dXP), pixelDepth) - CarveProfile(saturate(dXN), pixelDepth),
-		CarveProfile(saturate(dYP), pixelDepth) - CarveProfile(saturate(dYN), pixelDepth)) / (2.0 * step);
+		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
 	// Berm shading: numerical gradient of the SAME blurred hill the
 	// geometry displaces by, so the light/shadow break sits on the hill's
 	// true flanks (the analytic shortcut put the terminator on the crest).
@@ -1880,7 +1883,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// A/B path skips the term rather than paying 17 taps per march
 			// step, and under-occludes its berms slightly.
 			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-			sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
+			sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
 			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)

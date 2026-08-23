@@ -105,6 +105,8 @@
 	X(ParallaxSteps) \
 	X(TrenchFloorFade) \
 	X(BermHeight) \
+	X(RimLip) \
+	X(RimTeeth) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(CompactMatte) \

@@ -381,6 +381,14 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttFloatBand = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected line under Spell Integration counts what each value is skipping."));
 
+			ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
+			if (auto _ttLip = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("rim_lip_tooltip"), "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("rim_teeth"), "Rim Teeth"), &settings.RimTeeth, 0.0f, 1.0f, "%.2f");
+			if (auto _ttTeeth = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
+
 			ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
 			if (auto _ttCh = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
