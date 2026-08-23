@@ -547,7 +547,8 @@ void SnowDeformation::DrawShell()
 		frostPatternNormalSRV ? 1.0f : 0.0f };
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
 	cbData.RimStyle = { std::clamp(settings.RimLip, 0.0f, 0.3f),
-		std::clamp(settings.RimTeeth, 0.0f, 1.0f), 0.0f, 0.0f };
+		std::clamp(settings.RimTeeth, 0.0f, 1.0f),
+		std::clamp(settings.BermClods, 0.0f, 6.0f), 0.0f };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	// Crisp grain retired 2026-08-22 (real geometry carries the detail);

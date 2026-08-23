@@ -1879,6 +1879,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Centre-masked rather than per-tap: this berm is shading-only, and
 		// the mask's job is just to keep the ridge off the dug floor.
 		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
+		// P6 clods, shading-only like this whole ridge (geometry berm
+		// waits for the skin rework); same weight recipe as the landscape.
+		[branch] if (RimStyle.z > 0.01)
+		{
+			float2 clodXY = GridOrigin + trenchGridLocal;
+			float kXP = ChurnNoiseScaled(clodXY + float2(bStep, 0.0), kClodSizeScale);
+			float kXN = ChurnNoiseScaled(clodXY - float2(bStep, 0.0), kClodSizeScale);
+			float kYP = ChurnNoiseScaled(clodXY + float2(0.0, bStep), kClodSizeScale);
+			float kYN = ChurnNoiseScaled(clodXY - float2(0.0, bStep), kClodSizeScale);
+			normalWS = normalize(normalWS + float3(-float2(kXP - kXN, kYP - kYN) / (2.0 * bStep) *
+				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
+		}
 	}
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).

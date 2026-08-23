@@ -468,11 +468,13 @@ public:
 		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
-		float BermHeight = 0.33f;
+		float BermHeight = 0.20f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
-		float RimLip = 0.10f;
+		float RimLip = 0.05f;
 		/** @brief Stage 3 P5: rim teeth strength - the carve contour breaks into irregular teeth on the border work's two-octave noise. 0 = off. */
-		float RimTeeth = 0.5f;
+		float RimTeeth = 0.33f;
+		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
+		float BermClods = 2.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
@@ -777,7 +779,7 @@ public:
 		float4 BorderStyle;
 		/** @brief x = compaction glint suppression (Stage 1); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12 - round 164). ONE constant for BOTH shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
-		/** @brief Stage 3 P5: x = rim lip height (fraction of local depth), y = rim teeth strength, zw spare. Consumed inside CarveProfile, so both shells and the marches inherit it. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

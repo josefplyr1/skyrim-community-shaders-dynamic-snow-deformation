@@ -91,6 +91,11 @@ float ChurnNoiseScaled(float2 worldXY, float sizeScale)
 	return (n - 0.5) * 2.0;
 }
 
+// P6 clod cells: ~2.8x the default churn rubble (24/10-unit cells at
+// scale 1.5), so berm clods and trench rubble read at visibly different
+// frequencies - the two-scale contrast of RDR2's O3.
+static const float kClodSizeScale = 1.5;
+
 float ChurnWeight(float deformation, float bermDeform)
 {
 	return max(smoothstep(0.05, 0.5, deformation), BermShape(bermDeform));

@@ -107,6 +107,7 @@
 	X(BermHeight) \
 	X(RimLip) \
 	X(RimTeeth) \
+	X(BermClods) \
 	X(ChurnHeight) \
 	X(ChurnSize) \
 	X(CompactMatte) \

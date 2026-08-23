@@ -841,6 +841,16 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
 			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
+			// P6 clods: spoil is thrown CHUNKS, not a smooth mound. A
+			// coarser octave (kClodSizeScale) with its own weight - the
+			// churn weight peaks in the trench, BermShape peaks ON the
+			// crest where the spoil actually lands - masked like the berm
+			// itself and gated on material. The self-shadow march skips it
+			// for the same reason it skips churn: a few units is under its
+			// step resolution.
+			[branch] if (RimStyle.z > 0.01)
+				depth += ChurnNoiseScaled(GridOrigin + gridLocal, kClodSizeScale) * RimStyle.z *
+				         BermShape(bermD) * saturate(1.0 - deformation) * BermDepthGate(uncarved);
 		}
 
 		surfaceZ = terrainHeight + depth;
@@ -1575,6 +1585,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float cYP = ChurnNoise(worldXYPS + float2(0.0, cStep));
 		float cYN = ChurnNoise(worldXYPS - float2(0.0, cStep));
 		gradZ += float2(cXP - cXN, cYP - cYN) / (2.0 * cStep) * ChurnHeightAmp * churnW;
+	}
+
+	// P6 clod gradient (same field the VS displaces by; centre-weighted
+	// like the churn gradient - the clod frequency is far above the berm
+	// field's, so the noise gradient dominates).
+	float clodW = RimStyle.z > 0.01 ? BermShape(bermCenter) * saturate(1.0 - pixelCarve) * BermDepthGate(pixelDepth) : 0.0;
+	[branch] if (clodW > 0.001)
+	{
+		const float kStep = 4.0;
+		float kXP = ChurnNoiseScaled(worldXYPS + float2(kStep, 0.0), kClodSizeScale);
+		float kXN = ChurnNoiseScaled(worldXYPS - float2(kStep, 0.0), kClodSizeScale);
+		float kYP = ChurnNoiseScaled(worldXYPS + float2(0.0, kStep), kClodSizeScale);
+		float kYN = ChurnNoiseScaled(worldXYPS - float2(0.0, kStep), kClodSizeScale);
+		gradZ += float2(kXP - kXN, kYP - kYN) / (2.0 * kStep) * RimStyle.z * clodW;
 	}
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
