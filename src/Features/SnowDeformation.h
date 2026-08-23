@@ -1722,8 +1722,24 @@ protected:
 	size_t trenchStatTiles = 0;
 	/** @brief Encoded size of every live tile, refreshed each sweep cycle. What the budget is measured against. */
 	size_t trenchEncodedTotal = 0;
-	/** @brief Scratch for the LRU eviction's partial sort; kept so a cap breach does not allocate. */
+	/** @brief Scratch for the eviction's sort; kept so a cap breach does not allocate. */
 	std::vector<std::pair<float, TrenchTileKey>> trenchEvictScratch;
+
+	/**
+	 * @brief Squared distance from the window centre beyond which new tiles are
+	 * refused, set by the last eviction to the nearest tile it had to drop.
+	 *
+	 * Without it the writer and the evictor fight: the rolling mirror sweeps the
+	 * WHOLE window and creates a tile for any trodden ground it finds, knowing
+	 * nothing about the budget, while eviction culls the furthest a few frames
+	 * later. Under a budget smaller than the window's own trodden ground that
+	 * thrashes for ever and a save catches an arbitrary mid-thrash spread -
+	 * which is exactly what Josef's 23 tiles across the full window were.
+	 *
+	 * Effectively infinite whenever the store fits, so the default budget never
+	 * feels it.
+	 */
+	float trenchKeepRadiusSq = std::numeric_limits<float>::max();
 
 	/** @brief What one staged band covers, captured at copy time: a clear, a worldspace change or a range change all move the live values out from under the map before the readback lands. */
 	struct TrenchBandCopy

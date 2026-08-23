@@ -371,8 +371,11 @@ void SnowDeformation::EnforceTrenchBudget()
 	// perhaps ten times a busy session, so without a settable floor this whole
 	// path would never run in play and would never be tested either.
 	const size_t budget = (size_t)(std::max(settings.TrenchMemoryMB, 0.01f) * 1024.0f * 1024.0f);
-	if (trenchEncodedTotal <= budget)
+	if (trenchEncodedTotal <= budget) {
+		// Fits, so nothing is out of reach and the writer is unconstrained.
+		trenchKeepRadiusSq = std::numeric_limits<float>::max();
 		return;
+	}
 
 	// FURTHEST ground goes first, not least-recently-touched.
 	//
@@ -411,6 +414,7 @@ void SnowDeformation::EnforceTrenchBudget()
 		[](const auto& a, const auto& b) { return a.first > b.first; });
 
 	size_t evicted = 0;
+	float nearestEvicted = std::numeric_limits<float>::max();
 	for (const auto& [rank, key] : trenchEvictScratch) {
 		if (trenchEncodedTotal <= budget)
 			break;
@@ -420,15 +424,24 @@ void SnowDeformation::EnforceTrenchBudget()
 		trenchEncodedTotal -= std::min(trenchEncodedTotal, (size_t)it->second.encodedBytes + kTrenchTileHeaderBytes);
 		trenchTiles.erase(it);
 		evicted++;
+		// Furthest-first, so the last one dropped is the nearest that had to
+		// go. That distance becomes the frontier the writer must respect, or
+		// the mirror simply recreates everything just culled.
+		nearestEvicted = rank;
 	}
+	trenchKeepRadiusSq = evicted ? nearestEvicted : std::numeric_limits<float>::max();
 
 	if (evicted) {
 		trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 		trenchSampleTile = nullptr;
 		// INFO, not debug: this should be a rare event, and if it is happening
 		// in ordinary play that is the finding, not noise.
-		logger::info("[SNOW DEFORMATION] trench store over budget: evicted {} tiles, {} of {} tiles remain, {} KB encoded",
-			evicted, trenchTiles.size(), trenchEvictScratch.size(), trenchEncodedTotal / 1024);
+		// The keep radius is the number that says whether the store is
+		// SETTLING on the near field or thrashing: it should stabilise, and
+		// the survivors should sit inside it.
+		logger::info("[SNOW DEFORMATION] trench store over budget: evicted {} of {} tiles, {} remain, {} KB encoded, keep radius {:.0f} units",
+			evicted, trenchEvictScratch.size(), trenchTiles.size(), trenchEncodedTotal / 1024,
+			std::sqrt(trenchKeepRadiusSq));
 	}
 }
 
@@ -500,6 +513,10 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 {
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 	const float half = a_meta.texel * 0.5f;
+
+	// Centre of the window these contents belong to, for the keep-radius gate.
+	const float centreX = a_meta.origin.x + a_meta.texel * (float)deformMapDim * 0.5f;
+	const float centreY = a_meta.origin.y + a_meta.texel * (float)deformMapDim * 0.5f;
 
 	// Tiles written this batch, checked for emptiness once at the end: a tile
 	// the refill has taken back to bare ground must not stay in the store.
@@ -581,6 +598,16 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 						// the store sparse, and most of the world is.
 						if (quantised == 0)
 							continue;
+						// Nor does ground the cap has already pushed out of
+						// reach. Creating it would only hand the next eviction
+						// the same tile back, and the store would thrash
+						// instead of settling on the near field.
+						if (trenchKeepRadiusSq < std::numeric_limits<float>::max()) {
+							const float dx = ((float)key.x + 0.5f) * kTrenchTileWorld - centreX;
+							const float dy = ((float)key.y + 0.5f) * kTrenchTileWorld - centreY;
+							if (dx * dx + dy * dy >= trenchKeepRadiusSq)
+								continue;
+						}
 						TrenchTile fresh;
 						fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
 						fresh.clock = trenchDecayClock;
