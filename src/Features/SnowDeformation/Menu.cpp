@@ -158,9 +158,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttFade = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
 
-			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.25f, 8.0f, "%.2f MB");
+			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.02f, 8.0f, "%.2f MB");
 			if (auto _ttMemory = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is on the order of a thousand patches of trodden ground, which in practice is more than snowfall usually leaves standing - weather clears old trenches long before this limit is reached, and it is here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down about twenty times over, so it takes roughly twenty times this much RAM while you play, and every save file carries its own copy."));
+				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is around three thousand patches of trodden ground - far more than snowfall usually leaves standing, so weather normally clears old trenches long before this limit matters and it sits here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down more than forty times over, so it takes far more RAM than this while you play, and every save file carries its own copy."));
 		}
 
 		ImGui::PushID("snow_refill");

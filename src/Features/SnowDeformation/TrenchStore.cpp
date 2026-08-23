@@ -365,7 +365,11 @@ void SnowDeformation::SweepTrenchStore()
 
 void SnowDeformation::EnforceTrenchBudget()
 {
-	const size_t budget = (size_t)(std::max(settings.TrenchMemoryMB, 0.05f) * 1024.0f * 1024.0f);
+	// Floored low enough that the cap can actually be REACHED on a normal
+	// store. At ~354 bytes a tile the 1 MB default holds nearly 3000 of them,
+	// perhaps ten times a busy session, so without a settable floor this whole
+	// path would never run in play and would never be tested either.
+	const size_t budget = (size_t)(std::max(settings.TrenchMemoryMB, 0.01f) * 1024.0f * 1024.0f);
 	if (trenchEncodedTotal <= budget)
 		return;
 
@@ -394,8 +398,10 @@ void SnowDeformation::EnforceTrenchBudget()
 	if (evicted) {
 		trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 		trenchSampleTile = nullptr;
-		logger::debug("[SNOW DEFORMATION] trench store over budget: evicted {} tiles, {} KB encoded remain",
-			evicted, trenchEncodedTotal / 1024);
+		// INFO, not debug: this should be a rare event, and if it is happening
+		// in ordinary play that is the finding, not noise.
+		logger::info("[SNOW DEFORMATION] trench store over budget: evicted {} tiles, {} of {} tiles remain, {} KB encoded",
+			evicted, trenchTiles.size(), trenchEvictScratch.size(), trenchEncodedTotal / 1024);
 	}
 }
 
