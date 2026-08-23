@@ -663,6 +663,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						float2 delta = { heel.x - it->second.x, heel.y - it->second.y };
 						if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
 							segStart = it->second;
+					} else {
+						// The lifted latch: absence from the trail map means
+						// this plant is a fresh discrete print - which is
+						// exactly the moment a step throws snow (Stage 4).
+						// Same gate, so spray and footprint agree by
+						// construction.
+						EmitSnowSpray({ tip.x, tip.y, footWorld.translate.z }, radius, nominalDepth);
 					}
 					currentPositions[key] = heel;
 

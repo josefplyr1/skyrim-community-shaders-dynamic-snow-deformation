@@ -1,6 +1,7 @@
 #include "Features/SnowDeformation.h"
 
 #include "Deferred.h"
+#include "Features/LightLimitFix.h"
 #include "Globals.h"
 #include "State.h"
 #include "Util.h"
@@ -243,6 +244,209 @@ void SnowDeformation::DrawLightningArcs()
 	// Leave the pipeline as it was found.
 	ID3D11ShaderResourceView* nullSRV[1] = { nullptr };
 	context->PSSetShaderResources(0, 1, nullSRV);
+	context->VSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(nullptr, nullptr, 0);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	context->RSSetState(prevRaster.get());
+	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
+	context->OMSetBlendState(prevBlend.get(), prevBlendFactor, prevSampleMask);
+
+	globals::profiler->EndPass();
+}
+
+
+/**
+ * Foot-plant snow spray (trench plan Stage 4). The arc's vehicle - vertex-ID
+ * quads after the composite - but alpha-blended and LIT: airborne snow sits
+ * in the scene's light, so the shader reassembles the same shared-module
+ * recipe CS's own Effect.hlsl uses for game particles. See SnowSpray.hlsl.
+ */
+
+void SnowDeformation::EmitSnowSpray(const RE::NiPoint3& a_pos, float a_radius, float a_snowDepth)
+{
+	if (!settings.EnableSnowSpray)
+		return;
+	// Bare ground and roads throw nothing.
+	if (a_snowDepth < kSprayMinDepth)
+		return;
+	if (sprayBursts.size() >= kMaxSprayBursts)
+		return;
+	// Beyond this the puff is subpixel; the gate also keeps a crowded cell
+	// from spending its whole burst budget offscreen.
+	const auto camera = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const float dx = a_pos.x - camera.x, dy = a_pos.y - camera.y;
+	if (dx * dx + dy * dy > 4096.0f * 4096.0f)
+		return;
+
+	SprayBurst burst{};
+	burst.pos = a_pos;
+	burst.radius = std::clamp(a_radius, 4.0f, 48.0f);
+	burst.seed = static_cast<float>((++spraySeed * 2654435761u) >> 8 & 0xFFFF) / 65535.0f;
+	// Deeper snow throws more: ramps over the gate depth up to double.
+	burst.strength = std::clamp(a_snowDepth / (2.0f * kSprayMinDepth), 0.5f, 1.25f);
+	sprayBursts.push_back(burst);
+}
+
+void SnowDeformation::UpdateSnowSpray(float a_deltaTime)
+{
+	if (sprayBursts.empty())
+		return;
+	if (!settings.EnableSnowSpray) {
+		sprayBursts.clear();
+		return;
+	}
+	for (auto it = sprayBursts.begin(); it != sprayBursts.end();) {
+		it->age += a_deltaTime;
+		it = it->age >= kSprayLife ? sprayBursts.erase(it) : it + 1;
+	}
+}
+
+ID3D11VertexShader* SnowDeformation::GetSnowSprayVS()
+{
+	if (!sprayVS) {
+		logger::debug("Compiling SnowSpray VS");
+		sprayVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(
+			L"Data\\Shaders\\SnowDeformation\\SnowSpray.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
+	}
+	return sprayVS;
+}
+
+ID3D11PixelShader* SnowDeformation::GetSnowSprayPS()
+{
+	if (!sprayPS) {
+		logger::debug("Compiling SnowSpray PS");
+		sprayPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(
+			L"Data\\Shaders\\SnowDeformation\\SnowSpray.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
+	}
+	return sprayPS;
+}
+
+bool SnowDeformation::EnsureSnowSprayResources()
+{
+	auto* device = globals::d3d::device;
+	if (!device)
+		return false;
+
+	if (!sprayCB)
+		sprayCB = new ConstantBuffer(ConstantBufferDesc<SprayCB>(), "SnowDeformation::SprayCB");
+
+	if (!sprayBlendState) {
+		// Ordinary translucency, unlike the arc's additive: a puff of snow is
+		// a surface in the air, not light added to the scene.
+		D3D11_BLEND_DESC desc{};
+		desc.RenderTarget[0].BlendEnable = TRUE;
+		desc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		desc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		desc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		desc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+		desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+		desc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		if (FAILED(device->CreateBlendState(&desc, sprayBlendState.put())))
+			return false;
+	}
+
+	// Depth, raster and sampler states are the arc's: same pass, same needs.
+	return EnsureLightningArcResources() && GetSnowSprayVS() && GetSnowSprayPS();
+}
+
+void SnowDeformation::DrawSnowSpray()
+{
+	if (!settings.EnableSnowDeformation || !settings.EnableSnowSpray)
+		return;
+	if (sprayBursts.empty())
+		return;
+	if (!EnsureSnowSprayResources())
+		return;
+
+	auto* context = globals::d3d::context;
+	auto* renderer = globals::game::renderer;
+	auto* state = globals::state;
+	if (!context || !renderer || !state)
+		return;
+
+	globals::profiler->BeginPass("SnowDeformation::SnowSpray");
+
+	auto& rtData = renderer->GetRuntimeData();
+	ID3D11RenderTargetView* rtv = rtData.renderTargets[RE::RENDER_TARGETS::kMAIN].RTV;
+	auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
+
+	winrt::com_ptr<ID3D11BlendState> prevBlend;
+	float prevBlendFactor[4]{};
+	UINT prevSampleMask = 0;
+	context->OMGetBlendState(prevBlend.put(), prevBlendFactor, &prevSampleMask);
+	winrt::com_ptr<ID3D11DepthStencilState> prevDepth;
+	UINT prevStencilRef = 0;
+	context->OMGetDepthStencilState(prevDepth.put(), &prevStencilRef);
+	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
+	context->RSGetState(prevRaster.put());
+
+	context->OMSetRenderTargets(1, &rtv, dsv);
+	context->IASetInputLayout(nullptr);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->RSSetState(arcRasterState.get());
+	context->OMSetDepthStencilState(arcDepthState.get(), 0);
+	const float blendFactor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	context->OMSetBlendState(sprayBlendState.get(), blendFactor, 0xFFFFFFFF);
+
+	context->VSSetShader(GetSnowSprayVS(), nullptr, 0);
+	context->PSSetShader(GetSnowSprayPS(), nullptr, 0);
+
+	// The shared CS buffers (b4-6), so the PS reads SharedData's sun and
+	// ambient - the same slots and the same reasoning as the shell pass.
+	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	context->PSSetConstantBuffers(4, 3, sharedBuffers);
+
+	// Cascade atlas copy for the sun shadow, LLF clusters for point lights -
+	// the shell pass's own bind blocks, minus the point-shadow table the
+	// shader deliberately does not read (Effect.hlsl's skip-Shadow-lights
+	// convention).
+	auto& lightLimitFix = globals::features::lightLimitFix;
+	const bool crisp = shadowAtlasCopySRV != nullptr;
+	if (crisp) {
+		ID3D11ShaderResourceView* shadowAtlasSRV = shadowAtlasCopySRV.get();
+		context->PSSetShaderResources(22, 1, &shadowAtlasSRV);
+		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
+		context->PSSetSamplers(2, 1, &cmpSampler);
+	}
+	const bool pointLights = lightLimitFix.loaded && lightLimitFix.lights && lightLimitFix.lightIndexList && lightLimitFix.lightGrid;
+	if (pointLights) {
+		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
+		context->PSSetShaderResources(35, 3, lightSRVs);
+	}
+
+	auto& fb = globals::game::frameBufferCached;
+	SprayCB data{};
+	data.CameraViewProj = fb.GetCameraViewProj();
+	data.SprayCameraPosAdjust = fb.GetCameraPosAdjust();
+	data.SprayParams = { std::clamp(settings.SprayAmount, 0.0f, 2.0f),
+		pointLights ? 1.0f : 0.0f, crisp ? 1.0f : 0.0f,
+		std::clamp(settings.SprayBrightness, 0.0f, 4.0f) };
+	data.SpraySlices = { (float)sunCascadeSlice[0], (float)sunCascadeSlice[1], 0.0f, 0.0f };
+
+	// Live bursts pack contiguously and the draw covers exactly that many,
+	// so the shader needs no per-vertex liveness branch.
+	uint count = 0;
+	for (const auto& burst : sprayBursts) {
+		if (count >= kMaxSprayBursts)
+			break;
+		data.BurstPosRad[count] = { burst.pos.x, burst.pos.y, burst.pos.z, burst.radius };
+		data.BurstAnim[count] = { std::clamp(burst.age / kSprayLife, 0.0f, 1.0f),
+			burst.seed, burst.strength, 0.0f };
+		count++;
+	}
+	sprayCB->Update(data);
+
+	ID3D11Buffer* cbs[1] = { sprayCB->CB() };
+	context->VSSetConstantBuffers(0, 1, cbs);
+	context->PSSetConstantBuffers(0, 1, cbs);
+
+	context->Draw(count * kSpraySprites * 6, 0);
+
+	ID3D11ShaderResourceView* nullSRVs[1] = { nullptr };
+	context->PSSetShaderResources(22, 1, nullSRVs);
+	// t35-37 stay bound by the same rule as the shell pass: LLF's own
+	// binding, which this matched exactly.
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->OMSetRenderTargets(0, nullptr, nullptr);

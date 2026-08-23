@@ -287,6 +287,12 @@ public:
 		/** @brief Size of one cloak arc against the cloak's own reach. */
 		float ShockCloakStrikeScale = 0.25f;
 		/** @brief Draw the arc that justifies the pock. The snow already marks where a cloak discharges; without something reaching the spot, the hole reads as a glitch rather than as lightning. Visual only - nothing is spawned into the world. */
+		/** @brief Foot-plant snow spray (trench plan Stage 4): camera-facing puffs at each plant, ~1s, no simulation. */
+		bool EnableSnowSpray = true;
+		/** @brief Spray opacity scale. */
+		float SprayAmount = 1.0f;
+		/** @brief Spray brightness scale - the one calibration knob for the post-composite colour space. */
+		float SprayBrightness = 1.0f;
 		bool EnableLightningArcs = true;
 		float LightningArcWidth = 10.0f;
 		float LightningArcBrightness = 10.0f;
@@ -891,6 +897,51 @@ public:
 	void UpdateLightningArcs(float a_deltaTime);
 	/** @brief Draws the live arcs. Called AFTER the deferred composite - an emissive overlay lit by nothing, which is what a bolt is. */
 	void DrawLightningArcs();
+
+	/** @brief One foot plant's puff of thrown snow (trench plan Stage 4). Same vehicle as the arc, but LIT - see SnowSpray.hlsl. */
+	struct SprayBurst
+	{
+		RE::NiPoint3 pos;
+		float radius = 10.0f;
+		float age = 0.0f;
+		float seed = 0.0f;
+		float strength = 1.0f;
+	};
+	/** @brief Bounded hard, like the arcs: cosmetic, so a stampede drops the excess. Must match SPRAY_MAX_BURSTS in SnowSpray.hlsl. */
+	static constexpr size_t kMaxSprayBursts = 48;
+	/** @brief Sprites per burst. Must match SPRAY_SPRITES in SnowSpray.hlsl. */
+	static constexpr uint kSpraySprites = 12;
+	/** @brief Seconds a burst lives, RENDER time on purpose: the cloak-timer lesson (SPELL-INTEGRATION section 15) bites features that hold GAME-HOUR state across waits; a sub-second visual reads no calendar at all, so a wait or fast travel simply expires it - nothing can stick on. */
+	static constexpr float kSprayLife = 0.9f;
+	/** @brief Local snow depth (units) below which a plant throws nothing - bare ground and roads stay quiet. */
+	static constexpr float kSprayMinDepth = 8.0f;
+	std::vector<SprayBurst> sprayBursts;
+	uint32_t spraySeed = 0;
+
+	/** @brief Layout must match SprayCB in SnowSpray.hlsl. Its own buffer, same reasoning as ArcCB. */
+	struct SprayCB
+	{
+		Matrix CameraViewProj;
+		float4 SprayCameraPosAdjust;
+		float4 SprayParams;
+		float4 SpraySlices;
+		float4 BurstPosRad[kMaxSprayBursts];
+		float4 BurstAnim[kMaxSprayBursts];
+	};
+	ConstantBuffer* sprayCB = nullptr;
+	ID3D11VertexShader* sprayVS = nullptr;
+	ID3D11PixelShader* sprayPS = nullptr;
+	winrt::com_ptr<ID3D11BlendState> sprayBlendState;
+
+	ID3D11VertexShader* GetSnowSprayVS();
+	ID3D11PixelShader* GetSnowSprayPS();
+	bool EnsureSnowSprayResources();
+	/** @brief Records a burst at a fresh foot plant. Gated on local snow depth and camera distance; called from Stamping.cpp's lifted-latch site so spray and footprint agree by construction. */
+	void EmitSnowSpray(const RE::NiPoint3& a_pos, float a_radius, float a_snowDepth);
+	/** @brief Ages the live bursts. Render dt, deliberately - see kSprayLife. */
+	void UpdateSnowSpray(float a_deltaTime);
+	/** @brief Draws the live bursts after the deferred composite, LIT via the shared CS modules (SnowSpray.hlsl header has the recipe). */
+	void DrawSnowSpray();
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
 
