@@ -1903,7 +1903,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// grass shadows on the shell die with it - grass casts only via
 		// this march. If grass shadows are ever missed, this ramp is the
 		// dial.
-		sssBlend *= smoothstep(800.0, 2500.0, shellZ);
+		// 7000 units = 100 m, 14000 = 200 m (kUnitsPerMeter 70). Josef's
+		// gate-view screenshot: the walkway band was GREEN at ~30 m, i.e.
+		// the old 800-2500 ramp had already climbed back to near-full there
+		// and was printing its buried casters. Nothing inside 100 m needs
+		// this mask - the cascades cover that range - and past 200 m it is
+		// the sole carrier of LOD tree shadows (r107).
+		sssBlend *= smoothstep(7000.0, 14000.0, shellZ);
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;
