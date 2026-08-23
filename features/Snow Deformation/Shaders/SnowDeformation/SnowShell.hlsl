@@ -860,9 +860,12 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	float taper = smoothstep(0.0, 0.6, coverage);
 	float coverageAlpha = taper * ShellEdgeFade(gridLocal);
 
-	// Data debug: conforming plane well above the sampled terrain height,
-	// colored by the sampled values.
-	if (ShellDebugData != 0)
+	// Data debug (modes 1-3): conforming plane well above the sampled
+	// terrain height, colored by the sampled values. Modes 4+ diagnose the
+	// REAL surface - lifting them made every depth-relative channel in the
+	// SSS gate view meaningless (round-6 lesson: the first screenshots
+	// measured the gate from a plane 200 units up).
+	if (ShellDebugData != 0 && ShellDebugData < 4)
 		z = terrainHeight + 200.0;
 	// Provenance view: sentinel texels sit ~100k under the world and would be
 	// invisible; raise them to eye level so data gaps read as a red sheet.
@@ -1424,7 +1427,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		if (coverageAlpha < 0.05 || shellZ > sceneZ + 64.0)
 			discard;
 	}
-	else if (ShellDebugData == 0 && ShellLODDebug == 0)
+	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0)
 	{
 		float dust = BorderStyle.x > 0.5
 		                 ? saturate((coverageAlpha - 0.2) * (1.0 / 0.3))
@@ -1625,9 +1628,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Snow material: the modlist's snow diffuse when available, otherwise a
 	// bright, slightly blue constant.
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
+	// Wall-material debug (ShellDebugData 5): the blended two-plane albedo
+	// exactly as sampled, before any lighting, spell mark or compaction
+	// touches it.
+	float3 dbgAlbedoRaw = kSnowAlbedo;
 	[branch] if (HasSnowTexture != 0)
 	{
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
+		dbgAlbedoRaw = kSnowAlbedo;
 		// PBR-authored textures store linear color; the rest of this path works
 		// in the pipeline's gamma space. Auto-enabled when the PBR set resolved.
 		[flatten] if (SnowTextureIsLinear != 0.0)
@@ -2004,6 +2012,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float dbgLift = dbgField > -50000.0 ? max(dbgField - pixelTerrain.x, 0.0) : 0.0;
 		preLit = float3(saturate(dbgLift / 48.0), saturate(dbgMask.y), saturate(dbgMask.x) * 0.7);
 	}
+	else if (ShellDebugData == 5)
+	{
+		// Wall material view, on the REAL surface with real discards: the
+		// raw two-plane albedo, unlit - no sun, no shadows, no glints, no
+		// self-shadow march - plus a red wash showing the side-projection
+		// weight. THE strafe test: if the wall still shifts in THIS view,
+		// the texture path is guilty (taps/uv/projection); if this view is
+		// rock-solid and the normal view shifts, a LIGHTING term is guilty.
+		preLit = lerp(dbgAlbedoRaw, float3(1.0, 0.1, 0.1), snowSteepness * 0.25);
+	}
 	else if (ShellDebugData == 4)
 	{
 		// SSS gate view. RED = the mask's darkness at this shell pixel
@@ -2116,7 +2134,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's
 	// deferred tail encodes it for the temporal resolve.
-	float alpha = (ShellDebugData != 0 || ShellLODDebug != 0) ? 1.0 : coverageAlpha;
+	float alpha = ((ShellDebugData != 0 && ShellDebugData < 4) || ShellLODDebug != 0) ? 1.0 : coverageAlpha;
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
@@ -2151,7 +2169,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// well beyond anything the player stands next to.
 	psout.DepthLE = input.Position.z;
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
-	[branch] if (ShellDebugData == 0 && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
+	[branch] if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 	// Near-field micro-clamp (round 16): the edge zone rides within window
 	// error of the mesh and z-fights as view-dependent holes. 0.75 units is
@@ -2160,7 +2178,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Round 18: carved floors too - pixelEffDepth is the UNCARVED ramp, so
 	// low Trench Floor Height floors were excluded and their wear-through
 	// hole rims shimmered with the camera.
-	else if (ShellDebugData == 0 && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
+	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 
 	return psout;

@@ -770,6 +770,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Shell: Exclusion Debug Plane"), &shellExclusionDebug);
 		ImGui::Checkbox(T(TKEY("shell_border_debug"), "Shell: Border Debug Plane"), &shellBorderDebug);
 		ImGui::Checkbox(T(TKEY("shell_sss_debug"), "Shell: SSS Gate Debug"), &shellSSSDebug);
+		ImGui::Checkbox(T(TKEY("shell_wall_debug"), "Shell: Wall Material Debug"), &shellWallDebug);
+		if (auto _ttWallDbg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
 		if (auto _ttSssDbg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 		if (auto _ttBdbg = Util::HoverTooltipWrapper())
