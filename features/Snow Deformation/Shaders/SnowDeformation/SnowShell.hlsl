@@ -698,6 +698,7 @@ float BowWaveHeight(float2 worldXY, float deformation, float uncarvedDepth)
 		return 0.0;
 
 	float crest = 0.0;
+	float lead = 0.0;
 	const uint waveCount = (uint)BowWaveParams.x;
 	[loop] for (uint i = 0; i < waveCount; i++)
 	{
@@ -713,28 +714,37 @@ float BowWaveHeight(float2 worldXY, float deformation, float uncarvedDepth)
 		// cos of the angle to travel: 1 ahead, 0 abeam, -1 behind. Remapped
 		// so abeam keeps half and behind contributes nothing.
 		const float forward = d > 1e-3 ? dot(rel / d, BowWavePosDir[i].zw) : 1.0;
-		// Linear, not raised to a power: the exponent pinched the shoulders
-		// to a nose-only arc, which read as a water bow wave rather than
-		// snow shouldered aside (Josef's round-1 verdict).
-		const float angular = saturate(forward * BowWaveParams.w + (1.0 - BowWaveParams.w));
+		// Half-angle remap raised to a power: this form is ZERO DIRECTLY
+		// BEHIND at every setting, which the previous linear blend was not -
+		// at Josef's 0.30 bias it still handed 40% to the ground behind the
+		// foot, and that was the "wave behind the character". The exponent
+		// (the Forward Bias crank) now only decides how wide the shoulders
+		// are: low = snow shouldered well out to the sides, high = a narrow
+		// nose. Behind is never pushed, because nothing is there to push.
+		const float half = saturate(forward * 0.5 + 0.5);
+		const float angular = pow(half, lerp(0.35, 3.0, BowWaveParams.w));
 		crest = max(crest, radial * angular * BowWaveShape[i].y);
+		// The leading band, where snow is actively being shouldered up and
+		// therefore where the loose chunks ride.
+		lead = max(lead, smoothstep(0.55, 1.0, t) * (1.0 - smoothstep(1.05, 1.7, t)) *
+		                 angular * BowWaveShape[i].y);
 	}
 
-	// CHUNKS. Real displaced snow does not form a smooth swell - it breaks
-	// into uneven lumps that ride up and tumble aside. Reuses P6's clod
-	// octave (kClodSizeScale), which is what ROADMAP #35 called for, and the
-	// noise is WORLD-anchored on purpose: the lumps are made of the snow that
-	// was standing there, so they appear to flow through the advancing crest
-	// instead of riding along with the actor like a rigid attachment. Two
-	// scales - coarse lumps, finer break-up between them - and the low end is
-	// allowed to reach zero, which is what separates chunks rather than
-	// merely rippling one continuous ridge.
-	[branch] if (BowWaveLook.x > 0.001 && crest > 0.001)
+	// CHUNKS, and they ADD rather than modulate. Carving lumps out of the
+	// swell (round 2) only rippled one continuous ridge; what Josef drew is
+	// many small mountains standing UP at the leading edge, so they are a
+	// positive ridged term layered on top. Two fine octaves - far finer than
+	// P6's berm clods, which were the wrong scale here - powered up so the
+	// field breaks into isolated peaks instead of rolling hills. Still
+	// WORLD-anchored: the lumps are made of the snow that was standing there,
+	// so they flow through the advancing crest and slide off to the sides
+	// rather than riding along rigidly with the actor.
+	[branch] if (BowWaveLook.x > 0.001 && lead > 0.001)
 	{
-		const float lump = ChurnNoiseScaled(worldXY, kClodSizeScale);
-		const float fine = ChurnNoiseScaled(worldXY + 137.0, kClodSizeScale * 0.45);
-		const float broken = saturate(0.62 + 0.95 * lump + 0.45 * fine);
-		crest *= lerp(1.0, broken * 1.35, saturate(BowWaveLook.x));
+		const float n1 = ChurnNoiseScaled(worldXY, kClodSizeScale * 0.30);
+		const float n2 = ChurnNoiseScaled(worldXY + 71.3, kClodSizeScale * 0.13);
+		const float peaks = pow(saturate(n1 * 0.55 + n2 * 0.45 + 0.5), 2.2);
+		crest += peaks * lead * BowWaveLook.x * 0.9;
 	}
 
 	// Un-dug snow only, and scaled by what is locally there to push.

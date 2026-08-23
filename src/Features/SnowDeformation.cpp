@@ -112,6 +112,7 @@
 	X(BowWaveReach) \
 	X(BowWaveForward) \
 	X(BowWaveChunk) \
+	X(BowWaveSettle) \
 	X(BowWaveFullSpeed) \
 	X(ChurnHeight) \
 	X(ChurnSize) \

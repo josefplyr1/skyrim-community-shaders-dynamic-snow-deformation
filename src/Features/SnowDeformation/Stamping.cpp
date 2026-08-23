@@ -527,7 +527,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// off and eases out over ~0.3 s when you stop, which IS the
 					// "settles after a brief moment" half of the design.
 					const float instant = dist / dtBody;
-					const float rate = instant > track.z ? 12.0f : 3.5f;
+					// Builds fast, HOLDS slow. Snow that has been shoved
+					// aside does not shove itself back the moment you stop -
+					// the round-2 quick decay read as the crest morphing back
+					// into flat ground (Josef). The settle time is a crank.
+					const float rate = instant > track.z ? 12.0f :
+					                                       1.0f / std::max(settings.BowWaveSettle, 0.05f);
 					track.z += (instant - track.z) * std::clamp(rate * dtBody, 0.0f, 1.0f);
 				}
 			}
@@ -691,13 +696,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
 						kMinFootStampRadius, kMaxStampShapeRadius);
 
-					// One crest per foot. Both feet always contribute, so the
-					// wave is continuous through the gait rather than pulsing;
-					// what alternates is only WHERE the two lobes are, which
-					// is the shape a walker actually pushes. Emitted before
-					// the swing-phase gate below on purpose: a lifted foot is
-					// still travelling forward into snow it is about to push.
-					if (bowWaveStrength > 0.02f && (bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
+					// Only the LEADING foot pushes. The trailing foot is
+					// standing in the trench its owner already dug, and a
+					// crest around it was the "wave behind the character"
+					// (Josef): snow there has been displaced already, so
+					// there is nothing left to shoulder. This is the same
+					// rule the trenches run on - the foot that is HERE marks,
+					// what it has left behind settles - and because the lead
+					// alternates every stride the crest still never pulses.
+					const float footAhead = (tip.x - position.x) * bowWaveDir.x +
+					                        (tip.y - position.y) * bowWaveDir.y;
+					if (bowWaveStrength > 0.02f && footAhead > -2.0f &&
+						(bowWaveDir.x != 0.0f || bowWaveDir.y != 0.0f) &&
 						bowWaves.size() < kMaxBowWaves) {
 						BowWave wave{};
 						wave.pos = tip;
