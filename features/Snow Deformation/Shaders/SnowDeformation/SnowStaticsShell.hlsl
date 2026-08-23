@@ -163,8 +163,8 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); yzw spare (Stage 1
-	// darken/roughen and Stage 2 combing both retired).
+	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
+	// re-march enable, zw = its DR scale (landscape shell only).
 	float4 CompactLook;
 }
 

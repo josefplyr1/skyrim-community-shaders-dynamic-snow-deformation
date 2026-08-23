@@ -473,6 +473,8 @@ public:
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
+		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. A/B toggle, default off. */
+		bool ShellSSSRemarch = false;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
 		float CompactMatte = 0.6f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
@@ -765,7 +767,7 @@ public:
 		float4 CrustLook2;
 		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = compaction glint suppression (Stage 1); yzw spare (Stage 1 darken/roughen RETIRED - IBL + DALC already darken; Stage 2 P4 combing RETIRED - cm-scale grooves alias into moire at 30 cm walls). ONE constant for BOTH shells. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = compaction glint suppression (Stage 1); y > 0.5 = shell-surface SSS re-march enabled; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12 - round 164). ONE constant for BOTH shells. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

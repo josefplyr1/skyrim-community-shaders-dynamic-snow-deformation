@@ -190,8 +190,9 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); yzw spare (Stage 1
-	// darken/roughen and Stage 2 combing both retired).
+	// x = compaction glint suppression (Stage 1); y > 0.5 = shell-surface
+	// SSS re-march enabled; zw = dynamic-resolution scale for its
+	// screen-space taps (FrameBuffer b12 is unbound in this pass).
 	float4 CompactLook;
 }
 
@@ -1206,6 +1207,63 @@ struct PS_OUTPUT
 #	endif
 };
 
+// SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
+//
+// The precomputed SSS mask can only ever describe the BURIED ground: it is
+// marched on pre-shell depth, before the deferred pass, so no gate can make
+// it mean anything about the snow surface (ledger S4 r17 - DepthSyncCS
+// cannot help for exactly this reason). This marches the SAME depth buffer
+// from the SHELL surface instead, and admits an occluder only if it stands
+// ABOVE the snow line at its own footprint. That is the whole separation
+// the threshold rounds could never find: grass poking through the snow
+// shadows it, a buried plank cannot, and it works on ACTORS too - the
+// caster probe's blind spot - because this tests geometry height, not
+// whether something was captured.
+//
+// Screen-space, so it needs the DR-adjusted pixel: the shell pass does NOT
+// bind FrameBuffer b12 (round 164), so the scale rides CompactLook.zw from
+// the CPU rather than FrameBuffer::GetDynamicResolutionAdjustedScreenPosition.
+#if defined(PSHADER)
+float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes)
+{
+	// Contact range: grass and rails are short casters, so the steps stay
+	// tight and grow geometrically rather than reaching for distance.
+	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
+	float occl = 0.0;
+	[unroll] for (uint i = 0; i < 8; i++)
+	{
+		float3 sampleRel = relPos + L * (kRemarchStep[i] * (0.7 + 0.6 * noise));
+		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
+		[branch] if (clip.w > 1.0)
+		{
+			float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+			[branch] if (all(uv > 0.0) && all(uv < 1.0))
+			{
+				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
+				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
+				// Something stands between this step and the camera...
+				[branch] if (occZ < clip.w - 1.0)
+				{
+					// ...and the SAME view ray puts it here in world space
+					// (the depth-ratio reconstruction already used for the
+					// contact fade), so ask the snow field how high the
+					// surface is under it.
+					float3 occRel = sampleRel * (occZ / max(clip.w, 1e-3));
+					float2 occLocal = occRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
+					float3 st = SampleTerrain(occLocal);
+					float snowTop = st.x + max(st.y, 0.0);
+					// 2 units of slack: coincident surfaces (the shell
+					// itself, actor feet resting on it) must not self-shadow.
+					[flatten] if (occRel.z + ShellCameraPosAdjust.z > snowTop + 2.0)
+						occl = max(occl, 1.0 - float(i) * 0.045);
+				}
+			}
+		}
+	}
+	return 1.0 - occl;
+}
+#endif
+
 PS_OUTPUT main(VS_OUTPUT input)
 {
 	// Same convention as MotionBlur::GetSSMotionVector.
@@ -1903,17 +1961,31 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// grass shadows on the shell die with it - grass casts only via
 		// this march. If grass shadows are ever missed, this ramp is the
 		// dial.
-		// 7000 units = 100 m, 14000 = 200 m (kUnitsPerMeter 70). Josef's
-		// gate-view screenshot: the walkway band was GREEN at ~30 m, i.e.
-		// the old 800-2500 ramp had already climbed back to near-full there
-		// and was printing its buried casters. Nothing inside 100 m needs
-		// this mask - the cascades cover that range - and past 200 m it is
-		// the sole carrier of LOD tree shadows (r107).
-		sssBlend *= smoothstep(7000.0, 14000.0, shellZ);
+		// 4000-9000 units (57-128 m): the ORIGINAL round-108 band, restored
+		// 2026-08-22 after the archive dig showed this exact pair - band
+		// plus hug gate - was the configuration that held all three
+		// properties from 15 to 21 Aug (killed by 937a2279, which deleted
+		// the band to gain near grass shadows). Cascades own everything
+		// inside it; past it SSS is the sole carrier of LOD tree shadows
+		// (r107). The vertical hug metric and the caster probe are round
+		// 5-10 additions the original did not have, so this is the old
+		// architecture plus two safeguards.
+		sssBlend *= smoothstep(4000.0, 9000.0, shellZ);
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;
 		sssDebug.y = sssBlend;
+	}
+
+	// Shell-surface re-march (opt-in): the near-field counterpart to the
+	// mask above. Runs where the band leaves off, so the two never double.
+	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
+		shellZ < 9000.0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw);
+		// Faded out across the band the precomputed mask fades in over, so
+		// the handover is continuous.
+		sunShadow *= lerp(remarch, 1.0, smoothstep(4000.0, 9000.0, shellZ));
 	}
 
 	// Parallax self-shadow on the snow's own grain: Extended Materials'
