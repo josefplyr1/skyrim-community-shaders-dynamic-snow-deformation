@@ -1718,6 +1718,8 @@ protected:
 	size_t trenchAccumNonZero = 0;
 	size_t trenchAccumThin = 0;
 	size_t trenchAccumTiles = 0;
+	/** @brief Live tile count, published rather than read off the container so the menu never races the game thread. */
+	size_t trenchStatTiles = 0;
 	/** @brief Encoded size of every live tile, refreshed each sweep cycle. What the budget is measured against. */
 	size_t trenchEncodedTotal = 0;
 	/** @brief Scratch for the LRU eviction's partial sort; kept so a cap breach does not allocate. */
@@ -1765,8 +1767,32 @@ protected:
 	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped);
 	/** @brief Bilinear store depth at a world position, crossing tile edges through the one-entry cache. */
 	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY);
-	/** @brief Drops every stored tile and the cache that points into it. */
+	/** @brief Co-save record for the trench tiles. '{@link kTrenchRecordVersion}' is written into every chunk; #33's accumulation claims its own type on the same channel. */
+	static constexpr uint32_t kTrenchRecord = 'SNTR';
+	static constexpr uint32_t kTrenchRecordVersion = 1;
+
+	/**
+	 * @brief Guards the tile store. SKSE's save, load and revert callbacks arrive
+	 * on the GAME thread while the flush, sweep and inject run on the render
+	 * thread, so every entry point from either side takes this. The *Locked
+	 * helpers assume it is already held.
+	 */
+	std::mutex trenchStoreMutex;
+
+	/** @brief Claims the co-save record. Called from PostPostLoad, before the main menu. */
+	void RegisterTrenchCoSave();
+	void SaveTrenchStore(const SKSE::SerializationInterface* a_intfc);
+	void LoadTrenchStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
+
+	/** @brief Packs one tile under the pinned RLE rule. Its length MUST equal the tile's measured encodedBytes, or Stage D's budget stops describing the save. */
+	void EncodeTrenchTile(const TrenchTile& a_tile, std::vector<uint8_t>& o_bytes) const;
+	/** @brief Unpacks a payload written by EncodeTrenchTile; false if it is malformed or the wrong length. */
+	bool DecodeTrenchTile(const uint8_t* a_bytes, uint32_t a_length, std::vector<uint8_t>& o_depth) const;
+
+	/** @brief Drops every stored tile and the cache that points into it. Takes the lock. */
 	void ClearTrenchStore();
+	/** @brief As ClearTrenchStore, for callers already holding the lock. */
+	void ClearTrenchStoreLocked();
 	/** @brief Advances the decay clock off game time, and drops the store on a backwards jump. */
 	void TickTrenchClock();
 	/** @brief Brings one tile's bytes up to the current clock. Returns false when nothing nonzero is left, i.e. the tile should be erased. */
@@ -1785,11 +1811,12 @@ protected:
 		float occupancy;
 		size_t thin;
 	};
+	/** @brief Reads only figures the sweep publishes, never the container, so the menu needs no lock against the game thread's save and load callbacks. */
 	TrenchStoreStats GetTrenchStoreStats() const
 	{
-		const size_t bytes = trenchTiles.size() * (size_t)kTrenchTileDim * kTrenchTileDim;
+		const size_t bytes = trenchStatTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
 		const size_t swept = trenchStatSweptTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
-		return { trenchTiles.size(), bytes, trenchEncodedTotal, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
+		return { trenchStatTiles, bytes, trenchEncodedTotal, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
 	}
 
 public:

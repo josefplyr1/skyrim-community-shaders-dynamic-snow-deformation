@@ -85,6 +85,10 @@ void SnowDeformation::TickTrenchClock()
 	if (!calendar)
 		return;
 
+	// The co-save callbacks land on the game thread and can rewrite the clock
+	// and the store mid-frame.
+	std::scoped_lock lock(trenchStoreMutex);
+
 	// Waiting works by cranking the timescale enormously for its animation, so
 	// a live reading taken during one is the wait and not the player's setting.
 	// Latch the last plausible value; waited hours then decay at the rate the
@@ -105,7 +109,7 @@ void SnowDeformation::TickTrenchClock()
 	// longer exists, and keeping it would hand a fresh game the last one's
 	// trenches. Same rule the spell system's clocks follow.
 	if (elapsed < -1.0e-4f) {
-		ClearTrenchStore();
+		ClearTrenchStoreLocked();
 		return;
 	}
 	if (elapsed <= 0.0f)
@@ -158,10 +162,14 @@ bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
 
 void SnowDeformation::SweepTrenchStore()
 {
+	std::scoped_lock lock(trenchStoreMutex);
+
 	if (trenchTiles.empty()) {
 		trenchSweepQueue.clear();
 		trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
 		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		trenchStatTiles = 0;
+		trenchEncodedTotal = 0;
 		return;
 	}
 
@@ -176,6 +184,7 @@ void SnowDeformation::SweepTrenchStore()
 		for (const auto& [key, tile] : trenchTiles)
 			trenchEncodedTotal += tile.encodedBytes + kTrenchTileHeaderBytes;
 		EnforceTrenchBudget();
+		trenchStatTiles = trenchTiles.size();
 
 		trenchSweepQueue.reserve(trenchTiles.size());
 		for (const auto& [key, tile] : trenchTiles)
@@ -276,7 +285,15 @@ void SnowDeformation::EnforceTrenchBudget()
 
 void SnowDeformation::ClearTrenchStore()
 {
+	std::scoped_lock lock(trenchStoreMutex);
+	ClearTrenchStoreLocked();
+}
+
+void SnowDeformation::ClearTrenchStoreLocked()
+{
 	trenchTiles.clear();
+	trenchStatTiles = 0;
+	trenchEncodedTotal = 0;
 	trenchSweepQueue.clear();
 	trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
 	trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
@@ -440,6 +457,10 @@ void SnowDeformation::DrainTrenchBands()
 	if (!context)
 		return;
 
+	// StoreTrenchBand writes the store, which the game thread's save and load
+	// callbacks also touch.
+	std::scoped_lock lock(trenchStoreMutex);
+
 	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++) {
 			if (!trenchBandValid[ring][axis])
@@ -466,6 +487,10 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 	auto* previous = deformationTextures[currentTexture];
 	if (!context || !device || !previous || !previous->resource)
 		return;
+
+	// The jump path folds straight into the store, and the blocking drain below
+	// does too.
+	std::scoped_lock lock(trenchStoreMutex);
 
 	const int dim = (int)deformMapDim;
 
@@ -543,11 +568,16 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing)
 {
-	if (!settings.PersistTrenches || trenchTiles.empty() || !trenchInjectTexture)
+	auto context = globals::d3d::context;
+	if (!settings.PersistTrenches || !trenchInjectTexture || !context)
 		return 0;
 
-	auto context = globals::d3d::context;
-	if (!context)
+	// Taken before the emptiness test, not after: a load on the game thread can
+	// fill the store between the two. Held across the whole tile walk rather
+	// than per sample, because SampleTrenchStore caches a pointer INTO the
+	// store that the same load would invalidate.
+	std::scoped_lock lock(trenchStoreMutex);
+	if (trenchTiles.empty())
 		return 0;
 
 	const int dim = (int)deformMapDim;

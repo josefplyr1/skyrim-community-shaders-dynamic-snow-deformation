@@ -1,3 +1,4 @@
+#include "CoSave.h"
 #include "Deferred.h"
 #include "Features/Upscaling.h"
 #include "FrameAnnotations.h"
@@ -153,6 +154,10 @@ bool Load()
 
 	auto messaging = SKSE::GetMessagingInterface();
 	messaging->RegisterListener("SKSE", MessageHandler);
+
+	// Before anything can load a save. Features claim their records later, in
+	// PostPostLoad, which still precedes the main menu.
+	CoSave::GetSingleton()->Install();
 
 	globals::OnInit();
 	globals::ReInit();

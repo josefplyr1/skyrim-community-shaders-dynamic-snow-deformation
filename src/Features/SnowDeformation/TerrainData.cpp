@@ -724,4 +724,8 @@ void SnowDeformation::PostPostLoad()
 	stl::write_vfunc<0x4, SD_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 	InstallStaticsCaptureHook();
+
+	// Claims the co-save record. Here rather than later because a save can be
+	// loaded straight from the main menu, and an unclaimed record is skipped.
+	RegisterTrenchCoSave();
 }
