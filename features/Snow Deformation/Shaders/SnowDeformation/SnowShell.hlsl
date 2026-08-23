@@ -191,7 +191,8 @@ cbuffer ShellCB : register(b0)
 	// them with the active-light set - round 22).
 	float4 BorderStyle;
 	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
-	// re-march: 0 off, 1 on, 2 on + occluder-thickness streak fix; zw =
+	// re-march, packed: integer part 0 off / 1 on / 2 on + thickness
+	// streak fix, fraction * 1000 = caster height cap in units; zw =
 	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
 	// is unbound in this pass).
 	float4 CompactLook;
@@ -1225,7 +1226,7 @@ struct PS_OUTPUT
 // bind FrameBuffer b12 (round 164), so the scale rides CompactLook.zw from
 // the CPU rather than FrameBuffer::GetDynamicResolutionAdjustedScreenPosition.
 #if defined(PSHADER)
-float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow)
+float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
 {
 	// Bend SSS's anti-streak device (bend_sss_gpu.hlsli SurfaceThickness):
 	// an occluder is a THIN SHELL, shadowing only samples within a bounded
@@ -1266,9 +1267,17 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 					float2 occLocal = occRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
 					float3 st = SampleTerrain(occLocal);
 					float snowTop = st.x + max(st.y, 0.0);
-					// 2 units of slack: coincident surfaces (the shell
-					// itself, actor feet resting on it) must not self-shadow.
-					[flatten] if (occRel.z + ShellCameraPosAdjust.z > snowTop + 2.0)
+					// Band, not just a floor. Lower bound (+2 slack):
+					// coincident surfaces - the shell itself, feet resting
+					// on it - must not self-shadow. Upper bound (the caster
+					// height cap): anything TALLER than the cap above the
+					// snow line already casts through the cascades, so its
+					// re-march shadow is a doubled soft copy - the round-12
+					// "bleeding" from actors and rails. Grass lives under
+					// ~40 units; the cap makes this a grass-and-stubble
+					// march instead of a second shadow map.
+					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
+					[flatten] if (occH > 2.0 && occH < casterCap)
 						occl = max(occl, 1.0 - float(i) * 0.045);
 				}
 			}
@@ -1996,7 +2005,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
 		shellZ < 9000.0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
-		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5);
+		// Packed: integer part = mode (1 march, 2 march + thickness),
+		// fraction * 1000 = the caster height cap in units.
+		float remarchCap = frac(CompactLook.y) * 1000.0;
+		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
 		// Faded out across the band the precomputed mask fades in over, so
 		// the handover is continuous.
 		sunShadow *= lerp(remarch, 1.0, smoothstep(4000.0, 9000.0, shellZ));

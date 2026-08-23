@@ -575,9 +575,12 @@ void SnowDeformation::DrawShell()
 	// b12 (round 164), so the screen-space taps cannot call
 	// GetDynamicResolutionAdjustedScreenPosition and take the scale here.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
+	// y packs mode + caster cap: integer part 0/1/2, fraction = cap/1000
+	// (cap clamped below 1000 so the integer part stays the mode).
+	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
+	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
 	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
-		settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f,
-		dynRes.x, dynRes.y };
+		remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Retired round 18 (layout keeper; the shader hard-codes its old

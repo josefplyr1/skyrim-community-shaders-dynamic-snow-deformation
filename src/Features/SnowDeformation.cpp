@@ -110,6 +110,7 @@
 	X(CompactMatte) \
 	X(ShellSSSRemarch) \
 	X(ShellSSSRemarchThickness) \
+	X(ShellSSSRemarchCasterCap) \
 	X(ObjBermHeight) \
 	X(ObjChurnHeight) \
 	X(ObjChurnSize) \
