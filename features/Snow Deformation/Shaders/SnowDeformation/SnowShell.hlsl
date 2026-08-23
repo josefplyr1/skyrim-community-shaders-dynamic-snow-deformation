@@ -833,7 +833,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// trail's disc average is well above zero at its own centre, so
 			// raising Berm Height raised the whole trench with it.
 			depth = CarveProfile(deformation, uncarved) +
-			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp;
+			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
@@ -1547,7 +1547,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) * saturate(1.0 - dXP) - BermShape(bermXN) * saturate(1.0 - dXN),
 		BermShape(bermYP) * saturate(1.0 - dYP) - BermShape(bermYN) * saturate(1.0 - dYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp;
+	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
@@ -1881,7 +1881,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// step, and under-occludes its berms slightly.
 			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 			sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
-			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
+			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{

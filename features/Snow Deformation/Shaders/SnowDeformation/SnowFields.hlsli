@@ -214,10 +214,35 @@ float Undulation(float2 worldXY)
 
 // Deformation carves the layer toward the trench floor; the floor rides the
 // live Trench Floor Height slider (BorderStyle.y).
+//
+// P7 (trench plan Stage 3): DEPTH PICKS THE PROFILE. The map's carve
+// gradient is depth-blind, so a bootprint in 5 units of cover wore the same
+// normalized cliff walls as a knee-deep trench, miniaturized. The
+// smootherstep remap flattens the response at rim and floor - the rim rolls
+// over, the floor entry rounds, and a shallow print reads as a soft dimple -
+// while deep snow keeps the map-authored cut untouched. Living HERE rather
+// than in the stamp falloff (where the plan first pointed) because the map
+// update has no depth data and every consumer of the shape - geometry,
+// finite-difference normals, both shells, the self-shadow march - already
+// routes through this one function.
 float CarveProfile(float deformation, float uncarvedDepth)
 {
+	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
+	float d = saturate(deformation);
+	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
+	d = lerp(soft, d, depthT);
 	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
-	return max(uncarvedDepth * (1.0 - deformation), floorDepth);
+	return max(uncarvedDepth * (1.0 - d), floorDepth);
+}
+
+// P7's berm half: spoil needs material. Below ~3 units of cover there is
+// nothing to throw and the ridge vanishes; full berms only from ~12 up.
+// Multiply this in wherever BermShape scales by a local depth - geometry,
+// the shading gradient, the shadow-march occluder and the statics ridge
+// must all agree or shape, light and shadow drift apart.
+float BermDepthGate(float depth)
+{
+	return smoothstep(3.0, 12.0, depth);
 }
 
 #if defined(PSHADER)

@@ -477,8 +477,8 @@ public:
 		bool ShellSSSRemarch = false;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. A/B toggle, default off. */
 		bool ShellSSSRemarchThickness = false;
-		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails); grass lives under ~40. 200 = accept everything. */
-		float ShellSSSRemarchCasterCap = 40.0f;
+		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). Default 20 (Josef's pick after the round-13 A/B): short grass only. 200 = accept everything. */
+		float ShellSSSRemarchCasterCap = 20.0f;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
 		float CompactMatte = 0.6f;
 		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */

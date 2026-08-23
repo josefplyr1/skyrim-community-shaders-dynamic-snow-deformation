@@ -1876,7 +1876,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
 		// Centre-masked rather than per-tap: this berm is shading-only, and
 		// the mask's job is just to keep the ridge off the dug floor.
-		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp, 0.0));
+		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
 	}
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
@@ -2130,7 +2130,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				float sampleDeform = SampleDeformation(sampleLocal);
 				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 				sampleDepth = CarveProfile(sampleDeform, sampleDepth) +
-				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp;
+				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 				// Sentinel terrain contributes a hugely negative horizon: a
 				// no-op through the max below, same as the landscape's edge.
 				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);

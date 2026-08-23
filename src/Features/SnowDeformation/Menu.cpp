@@ -399,7 +399,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("sss_remarch_cap"), "Caster Height Cap"), &settings.ShellSSSRemarchCasterCap, 10.0f, 200.0f, "%.0f units");
 			if (auto _ttCap = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. ~40 = grass and stubble only (recommended); 200 = accept everything. Only does anything with the re-march on."));
+				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
 			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCm = Util::HoverTooltipWrapper())
