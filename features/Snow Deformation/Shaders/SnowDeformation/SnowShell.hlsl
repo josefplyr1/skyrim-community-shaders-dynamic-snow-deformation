@@ -837,6 +837,10 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// between two resolutions, and never slide geometry across the
 		// terrain. Coarse taps are unshaped (border noise is near-field
 		// cosmetics).
+		// Effective lattice step at this point, blended across the owning band
+		// toward the next one. Shared by the data morph and the clearance pad
+		// below, so both describe the same surface.
+		float padWeight;
 		{
 			float2 centeredM = gridLocal - WarpedHalfSpan;
 			float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
@@ -867,21 +871,35 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				[flatten] if (minTap > -50000.0)
 					terrain = lerp(terrain, lerp(lerp(t00, t10, cFrac.x), lerp(t01, t11, cFrac.x), cFrac.y), morphT);
 			}
+
+			// Clearance-pad weight: how far this vertex's own lattice step has
+			// outgrown a terrain texel, i.e. how much data the shell is
+			// skipping here. Zero while the lattice is at or finer than the
+			// data, one once it spans two texels or more. The effective step
+			// carries the band fraction, so this is continuous in RADIUS and
+			// crosses band boundaries without a step.
+			float effStep = max(ringStepM.x, ringStepM.y) * lerp(1.0, 2.0, morphT);
+			padWeight = saturate((effStep - TerrainTexelSize) / TerrainTexelSize);
 		}
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
 		coverage = saturate(terrain.z);
 
-		// Slim anti-pinhole at distance (restored after in-game holes): a
-		// 4-tap axis max of height+coverage with a CAPPED ridge pad fills the
-		// flickering pinholes where bilinear dips under the mesh's triangle
-		// diagonals or single texels read bare. The heavy 8-tap/150-unit-pad/
-		// 8-unit-float stack stays gone — the seam caps the range this runs at.
-		float camDist = length(gridLocal - WarpedHalfSpan);
-		[branch] if (camDist > 3000.0 && DebugNoFarPad < 0.5)
+		// Clearance pad: a 4-tap axis max of height+coverage with a CAPPED ridge
+		// pad, filling the pinholes where the bilinear surface dips under the
+		// mesh's triangle diagonals or a single texel reads bare. Load-bearing -
+		// disabling it exposes holes immediately (Josef, C3 round 1).
+		//
+		// Keyed on the vertex's own LATTICE STEP, never on camera distance. The
+		// old smoothstep(3000, 8000, camDist) made a fixed patch of ground rise
+		// and fall purely because the viewer approached it, and once the origin
+		// snap coarsened to 256 units that ramp quantised with it and the sink
+		// became visible STEPS. Undersampling is a property of the lattice, not
+		// of where anyone is standing, so the pad follows the lattice.
+		[branch] if (padWeight > 0.001 && DebugNoFarPad < 0.5)
 		{
-			float farBlend = smoothstep(3000.0, 8000.0, camDist);
+			float farBlend = padWeight;
 			float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));
 			float3 n1 = SampleTerrain(gridLocal - float2(TerrainTexelSize, 0.0));
 			float3 n2 = SampleTerrain(gridLocal + float2(0.0, TerrainTexelSize));
