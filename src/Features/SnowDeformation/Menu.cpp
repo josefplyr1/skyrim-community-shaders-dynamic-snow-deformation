@@ -149,7 +149,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
 
 		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
-			ClearTrenchStore();
+			ClearTrenchStore("the Remember Trenches toggle");
 		if (auto _ttPersist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store and put back on return. This is in-session only for now - nothing is written to the save, so a reload starts pristine either way. Off restores the old behaviour and frees the store."));
 
@@ -829,7 +829,7 @@ void SnowDeformation::DrawSettings()
 			clearRequested = true;
 			// Deliberate wipe, so the store goes with it: left alone, the
 			// inject would put every trench back on the very next frame.
-			ClearTrenchStore();
+			ClearTrenchStore("the Clear Deformation Map button");
 		}
 
 		{

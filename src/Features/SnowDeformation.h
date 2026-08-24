@@ -1988,9 +1988,9 @@ protected:
 	bool DecodeTrenchTile(const uint8_t* a_bytes, uint32_t a_length, std::vector<uint8_t>& o_depth) const;
 
 	/** @brief Drops every stored tile and the cache that points into it. Takes the lock. */
-	void ClearTrenchStore();
+	void ClearTrenchStore(const char* a_reason);
 	/** @brief As ClearTrenchStore, for callers already holding the lock. */
-	void ClearTrenchStoreLocked();
+	void ClearTrenchStoreLocked(const char* a_reason);
 	/** @brief Advances the decay clock off game time, and drops the store on a backwards jump. */
 	void TickTrenchClock();
 	/** @brief Brings one tile's bytes up to the current clock. Returns false when nothing nonzero is left, i.e. the tile should be erased. */

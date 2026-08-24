@@ -169,7 +169,7 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	}
 
 	std::scoped_lock lock(trenchStoreMutex);
-	ClearTrenchStoreLocked();
+	ClearTrenchStoreLocked("the co-save load");
 
 	// Restart the clock with the store: every tile's reading was written
 	// relative to it, so a negative clock is exactly the decay it still owes.
@@ -246,7 +246,7 @@ void SnowDeformation::RegisterTrenchCoSave()
 			// Fires before a save is loaded AND on a new game. Without it a
 			// fresh game inherits the last one's trenches.
 			std::scoped_lock lock(trenchStoreMutex);
-			ClearTrenchStoreLocked();
+			ClearTrenchStoreLocked("the co-save revert");
 			// Unarmed so the first tick of the new timeline re-arms instead of
 			// reading its calendar as a jump.
 			gameClockUnarm.store(true, std::memory_order_release);

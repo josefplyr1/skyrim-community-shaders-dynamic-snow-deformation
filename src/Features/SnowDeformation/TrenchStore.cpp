@@ -201,12 +201,22 @@ void SnowDeformation::TickTrenchClock()
 	// mid-frame.
 	std::scoped_lock lock(trenchStoreMutex);
 
-	// The reading itself is TickGameClock's, taken once for every consumer.
-	// Backwards means a loaded save: the store belongs to a timeline that no
-	// longer exists, and keeping it would hand a fresh game the last one's
-	// trenches. Same rule the spell system's clocks follow.
+	// A backwards calendar no longer wipes the store, it just sits the tick out.
+	//
+	// This rule was written in Stage B, when nothing else knew a save had been
+	// loaded. Stage C's revert callback now owns that: SKSE fires it before
+	// every load and on every new game, whether or not our record is in the
+	// file, so the timeline case is covered at its source. Keeping a second
+	// mechanism meant any hiccup in the calendar destroyed the whole store -
+	// and the threshold is a third of a game SECOND, which at a low timescale
+	// is a few dozen milliseconds of real time. Josef's log caught exactly that:
+	// seventeen tiles dropped mid-play with no load anywhere near it.
+	//
+	// Skipping is safe on its own terms. Decay is an integral over elapsed
+	// hours, so a frame contributing nothing costs nothing.
 	if (gameClock.reversed) {
-		ClearTrenchStoreLocked();
+		logger::info("[SNOW DEFORMATION] trench clock went backwards; skipping the tick ({} tiles kept)",
+			trenchTiles.size());
 		return;
 	}
 	const float elapsed = gameClock.elapsedHours;
@@ -446,20 +456,20 @@ void SnowDeformation::EnforceTrenchBudget()
 	}
 }
 
-void SnowDeformation::ClearTrenchStore()
+void SnowDeformation::ClearTrenchStore(const char* a_reason)
 {
 	std::scoped_lock lock(trenchStoreMutex);
-	ClearTrenchStoreLocked();
+	ClearTrenchStoreLocked(a_reason);
 }
 
-void SnowDeformation::ClearTrenchStoreLocked()
+void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 {
 	// Every wipe says so. A clear is the one thing that can empty the store
 	// without passing decay or eviction, so an unlogged one is indistinguishable
 	// from the store losing tiles to a path nobody is watching - which is
 	// exactly the hole the last two rounds were spent inside.
 	if (!trenchTiles.empty())
-		logger::info("[SNOW DEFORMATION] trench store CLEARED, {} tiles dropped", trenchTiles.size());
+		logger::info("[SNOW DEFORMATION] trench store CLEARED by {}, {} tiles dropped", a_reason, trenchTiles.size());
 
 	trenchTiles.clear();
 	trenchStatTiles = 0;

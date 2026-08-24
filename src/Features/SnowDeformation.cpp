@@ -905,7 +905,7 @@ void SnowDeformation::RestoreDefaultSettings()
 	settings = {};
 	trenchRangeDirty = true;
 	clearRequested = true;
-	ClearTrenchStore();
+	ClearTrenchStore("restore defaults");
 	RefreshLandTextureDepths();
 	shellDataDirty.store(true, std::memory_order_release);
 }
