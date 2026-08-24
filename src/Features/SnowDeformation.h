@@ -282,8 +282,8 @@ public:
 		float TrenchMemoryMB = 1.0f;
 		/** @brief Ceiling the accumulated layer grows to, as a multiple of each class's authored depth (ROADMAP #33). 1.5 takes a 30-unit class to 45 and an 18-unit path to 27, so the gap that makes a road readable WIDENS as it snows. 1.0 = accumulation reaches nothing. */
 		float AccumulationPeak = 1.5f;
-		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. */
-		bool EnableSnowAccumulation = false;
+		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. ON by default per Josef, 2026-08-24, once all four Stage C exit tests passed. */
+		bool EnableSnowAccumulation = true;
 		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Walked down 20 -> 4 -> 1 over Josef's three test rounds: the pace has to be visible within a session, and at his timescale of 5 even 4 hours was ~48 real minutes of unbroken snowfall. */
 		float AccumulationHours = 1.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time per Josef, 2026-08-24 - the plan's 2:1 asymmetry was deliberately balanced away in favour of a change the player can actually watch happen. */
