@@ -20,20 +20,26 @@ void SnowDeformation::TickAccumulation()
 	if (elapsed <= 0.0f)
 		return;
 
-	// Interiors freeze it. Weather is an exterior property and the shell is not
-	// drawn in here, so days spent indoors must not strip the world outside the
-	// door - the same reasoning UpdateActiveWorldspace keeps its last exterior
-	// state for. A wait is covered by the same test: the whole waited span
-	// arrives on the first unpaused frame, which is indoors if the wait was.
+	// Indoors the weather is HELD, not frozen and not read live. There is no
+	// snowing weather inside, so a live reading would melt the world outside
+	// the door while the player slept through the blizzard that was burying it.
+	// Holding the last exterior reading instead means the snow keeps rising
+	// while they sleep, and whatever the sky is doing when they step back out
+	// takes over from there.
+	//
+	// TES::interiorCell is the test the rest of CS uses (InteriorSun,
+	// VolumetricLighting). UnifiedWater adds a parent-cell fallback because the
+	// field lags a few frames through a load transition; at these rates a few
+	// frames of held weather is worth nothing, so the bare check is enough here.
 	auto* tes = RE::TES::GetSingleton();
-	if (!tes || !tes->GetRuntimeData2().worldSpace)
-		return;
+	if (!tes || !tes->interiorCell)
+		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 
 	// ONE SIGNED RATE, no threshold on "is it snowing": melt is weighted by
 	// (1 - intensity) so a weather cross-fade turns the curve instead of
 	// putting a kink in it. ComputeSnowfallIntensity already fades across
 	// transitions, and a threshold would throw that away.
-	const float intensity = std::clamp(snowfallIntensity, 0.0f, 1.0f);
+	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 	const float growth = settings.AccumulationHours > 0.01f ?
 	                         intensity / settings.AccumulationHours :
 	                         0.0f;
@@ -61,11 +67,13 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 	}
 
 	const float value = snowAccumulation.load(std::memory_order_relaxed);
-	if (!a_intfc->WriteRecordData(&value, sizeof(value))) {
+	const float weather = accumWeatherIntensity.load(std::memory_order_relaxed);
+	if (!a_intfc->WriteRecordData(&value, sizeof(value)) ||
+		!a_intfc->WriteRecordData(&weather, sizeof(weather))) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save write failed");
 		return;
 	}
-	logger::debug("[SNOW DEFORMATION] accumulation saved at {:.3f}", value);
+	logger::debug("[SNOW DEFORMATION] accumulation saved at {:.3f}, held weather {:.2f}", value, weather);
 }
 
 void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length)
@@ -77,25 +85,30 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 			a_version, kAccumRecordVersion);
 		return;
 	}
-	if (a_length != sizeof(float)) {
+	if (a_length != 2 * sizeof(float)) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save is {} bytes, expected {}; dropped",
-			a_length, sizeof(float));
+			a_length, 2 * sizeof(float));
 		return;
 	}
 
 	// Length-checked, not truthiness-checked: a short read would otherwise
 	// leave the scalar built out of whatever the stack held.
 	float value = 0.0f;
-	if (a_intfc->ReadRecordData(&value, sizeof(value)) != sizeof(value)) {
+	float weather = 0.0f;
+	if (a_intfc->ReadRecordData(&value, sizeof(value)) != sizeof(value) ||
+		a_intfc->ReadRecordData(&weather, sizeof(weather)) != sizeof(weather)) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save short read; dropped");
 		return;
 	}
-	if (!std::isfinite(value)) {
-		logger::warn("[SNOW DEFORMATION] accumulation co-save holds {}; dropped", value);
+	if (!std::isfinite(value) || !std::isfinite(weather)) {
+		logger::warn("[SNOW DEFORMATION] accumulation co-save holds {} / {}; dropped", value, weather);
 		return;
 	}
 
 	snowAccumulation.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
+	// Saved inside during a storm: the sky has not cleared just because the
+	// save was reloaded.
+	accumWeatherIntensity.store(std::clamp(weather, 0.0f, 1.0f), std::memory_order_relaxed);
 	// Same reverting-on-load trap the trench store pays for from both sides:
 	// left armed, the first tick reads the loaded calendar as a backwards jump.
 	gameClockUnarm.store(true, std::memory_order_release);
@@ -112,6 +125,7 @@ void SnowDeformation::RegisterAccumulationCoSave()
 			// Fires before a save is loaded AND on a new game: a fresh game must
 			// not inherit the last one's layer.
 			snowAccumulation.store(0.0f, std::memory_order_relaxed);
+			accumWeatherIntensity.store(0.0f, std::memory_order_relaxed);
 			gameClockUnarm.store(true, std::memory_order_release);
 		});
 }

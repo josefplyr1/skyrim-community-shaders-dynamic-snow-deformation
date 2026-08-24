@@ -852,22 +852,20 @@ void SnowDeformation::DrawSettings()
 			// do what the plan's table says", which needs the arithmetic
 			// visible rather than inferred from watching it drift.
 			const float accum = snowAccumulation.load(std::memory_order_relaxed);
-			const float intensity = std::clamp(snowfallIntensity, 0.0f, 1.0f);
+			const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 			const float growth = settings.AccumulationHours > 0.01f ? intensity / settings.AccumulationHours : 0.0f;
 			const float melt = settings.AccumulationMeltHours > 0.01f ? (1.0f - intensity) / settings.AccumulationMeltHours : 0.0f;
 			const float fade = settings.AccumulationFadeDays > 0.01f ? 1.0f / (settings.AccumulationFadeDays * 24.0f) : 0.0f;
 			const float rate = growth - melt - fade;
 
 			auto* tes = RE::TES::GetSingleton();
-			const bool outdoors = tes && tes->GetRuntimeData2().worldSpace;
+			const bool indoors = tes && tes->interiorCell;
 
-			ImGui::Text("Accumulation: %.3f (depth x%.3f), snowfall %.2f",
-				accum, 1.0f + accum * (settings.AccumulationPeak - 1.0f), intensity);
-			if (!outdoors)
-				ImGui::Text("Rate: frozen (interior)");
-			else
-				ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
-					rate, growth, melt, fade);
+			ImGui::Text("Accumulation: %.3f (depth x%.3f), snowfall %.2f%s",
+				accum, 1.0f + accum * (settings.AccumulationPeak - 1.0f), intensity,
+				indoors ? " (held, indoors)" : "");
+			ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
+				rate, growth, melt, fade);
 			ImGui::Text("Clock: %.2f game hours, timescale %.0f",
 				gameClock.lastHours, gameClock.timescale);
 		}
