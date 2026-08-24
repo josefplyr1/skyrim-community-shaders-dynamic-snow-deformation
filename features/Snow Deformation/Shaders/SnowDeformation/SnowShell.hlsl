@@ -2127,16 +2127,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// grass shadows on the shell die with it - grass casts only via
 		// this march. If grass shadows are ever missed, this ramp is the
 		// dial.
-		// 4000-9000 units (57-128 m): the ORIGINAL round-108 band, restored
-		// 2026-08-22 after the archive dig showed this exact pair - band
-		// plus hug gate - was the configuration that held all three
-		// properties from 15 to 21 Aug (killed by 937a2279, which deleted
-		// the band to gain near grass shadows). Cascades own everything
-		// inside it; past it SSS is the sole carrier of LOD tree shadows
-		// (r107). The vertical hug metric and the caster probe are round
-		// 5-10 additions the original did not have, so this is the old
-		// architecture plus two safeguards.
-		sssBlend *= smoothstep(4000.0, 9000.0, shellZ);
+		// Band restored 2026-08-22 (archive dig: band plus hug gate held all
+		// three properties from 15 to 21 Aug; killed by 937a2279, which
+		// deleted the band to gain near grass shadows). Cascades own
+		// everything inside it; past it SSS is the sole carrier of LOD tree
+		// shadows (r107). The vertical hug metric and the caster probe are
+		// round 5-10 additions the original did not have. Raised from the
+		// round-108 4000-9000 on 2026-08-24: mid-field tree/cliff SSS still
+		// printed through the shell. Constants shared in SnowFields.hlsli.
+		sssBlend *= smoothstep(kSssBandNear, kSssBandFar, shellZ);
 		float sssMask = ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 		sunShadow *= lerp(1.0, sssMask, sssBlend);
 		sssDebug.x = 1.0 - sssMask;
@@ -2146,7 +2145,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Shell-surface re-march (opt-in): the near-field counterpart to the
 	// mask above. Runs where the band leaves off, so the two never double.
 	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
-		shellZ < 9000.0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+		shellZ < kSssBandFar && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Packed: integer part = mode (1 march, 2 march + thickness),
 		// fraction * 1000 = the caster height cap in units.
@@ -2154,7 +2153,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float remarch = ShellRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
 		// Faded out across the band the precomputed mask fades in over, so
 		// the handover is continuous.
-		sunShadow *= lerp(remarch, 1.0, smoothstep(4000.0, 9000.0, shellZ));
+		sunShadow *= lerp(remarch, 1.0, smoothstep(kSssBandNear, kSssBandFar, shellZ));
 	}
 
 	// Parallax self-shadow on the snow's own grain: Extended Materials'
