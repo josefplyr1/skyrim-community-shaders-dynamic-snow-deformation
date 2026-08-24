@@ -86,9 +86,55 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	}
 	trenchRollRow = 0;
 
+	// Honest debug copy of the map's depth. See the header for why the map
+	// itself cannot simply be handed to ImGui.
+	trenchDebugTexture = nullptr;
+	trenchDebugSRV = nullptr;
+	trenchDebugUAV = nullptr;
+	D3D11_TEXTURE2D_DESC debugDesc = injectDesc;
+	debugDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	if (SUCCEEDED(device->CreateTexture2D(&debugDesc, nullptr, trenchDebugTexture.put()))) {
+		Util::SetResourceName(trenchDebugTexture.get(), "SnowDeformation::TrenchDebugDepth");
+		device->CreateShaderResourceView(trenchDebugTexture.get(), nullptr, trenchDebugSRV.put());
+		device->CreateUnorderedAccessView(trenchDebugTexture.get(), nullptr, trenchDebugUAV.put());
+	}
+
 	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim, 0);
 	trenchMapPrimed = false;
 	return true;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetTrenchDebugCS()
+{
+	if (!trenchDebugCS)
+		trenchDebugCS = static_cast<ID3D11ComputeShader*>(
+			Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", {}, "cs_5_0"));
+	return trenchDebugCS;
+}
+
+void SnowDeformation::UpdateTrenchDebugTexture()
+{
+	if (!settings.ShowDebugTexture || !trenchDebugUAV)
+		return;
+
+	auto context = globals::d3d::context;
+	auto* live = deformationTextures[currentTexture];
+	auto* shader = GetTrenchDebugCS();
+	if (!context || !live || !shader)
+		return;
+
+	ID3D11ShaderResourceView* srvs[] = { live->srv.get() };
+	ID3D11UnorderedAccessView* uavs[] = { trenchDebugUAV.get() };
+	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+	context->CSSetShader(shader, nullptr, 0);
+	context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+
+	ID3D11ShaderResourceView* nullSrv[1] = { nullptr };
+	ID3D11UnorderedAccessView* nullUav[1] = { nullptr };
+	context->CSSetShaderResources(0, 1, nullSrv);
+	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
 }
 
 void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)

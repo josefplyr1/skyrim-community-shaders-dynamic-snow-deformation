@@ -827,8 +827,14 @@ void SnowDeformation::DrawSettings()
 			// pushed, whatever the depth channel holds. Right after a load it is
 			// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
 			// were read backwards from this image before anyone noticed.
-			ImGui::Text("%s", T(TKEY("debug_hint"), "Red = compressed snow, but this view is drawn through the deposit channel, so it is TRANSPARENT wherever the bow wave has not pushed snow - blank right after a load. Use the store view below to see what was restored."));
-			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+			// The map's own depth, copied to a single channel so ImGui cannot
+			// draw it through the bow wave's deposit alpha. This is the image
+			// that answers "did the trench reach the map".
+			ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The map follows the camera, so the centre is you."));
+			if (trenchDebugSRV)
+				ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
+			else
+				ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
 
 			// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
 			// can be trusted. It is the store's own answer to "what does the

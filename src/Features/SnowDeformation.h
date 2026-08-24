@@ -1841,6 +1841,16 @@ protected:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
 	std::vector<uint8_t> trenchInjectScratch;
 
+	/** @brief Single-channel copy of the map's displaced depth, for the menu. The map itself cannot be shown honestly: ImGui blends by alpha and the map's .w is the bow wave's deposit, so drawing it directly renders depth through deposit and reads blank right after a load. R8_UNORM samples as (depth,0,0,1), so this one cannot lie. */
+	winrt::com_ptr<ID3D11Texture2D> trenchDebugTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> trenchDebugSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> trenchDebugUAV;
+	ID3D11ComputeShader* trenchDebugCS = nullptr;
+	/** @brief Compiles the debug copy shader on first use. */
+	ID3D11ComputeShader* GetTrenchDebugCS();
+	/** @brief Copies the freshly written map's depth into the debug texture. Only while the menu is showing it. */
+	void UpdateTrenchDebugTexture();
+
 	/** @brief One departing band per axis, double buffered; mapped a frame later so the readback never stalls the render thread. */
 	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
 	bool trenchBandValid[2][2] = {};

@@ -745,6 +745,10 @@ void SnowDeformation::Prepass()
 	ID3D11UnorderedAccessView* nullUavs[1] = { nullptr };
 	context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
 
+	// After the swap, so it copies the map this frame just wrote - including
+	// anything the inject seeded into it.
+	UpdateTrenchDebugTexture();
+
 	// What the map just written is anchored to. Recorded here because the live
 	// values move ahead of it: the origin advances in GetCommonBufferData, and
 	// a range or worldspace change rewrites the texel size and the key before
