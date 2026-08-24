@@ -5,7 +5,6 @@
 
 #include <DirectXPackedVector.h>
 #include <limits>
-#include <unordered_set>
 
 // Persistent trenches, Stage A. Design and staging in PERSISTENT-TRENCHES-PLAN.md;
 // rationale in CODE-NOTES.md.
@@ -278,7 +277,12 @@ void SnowDeformation::SweepTrenchStore()
 		trenchStatNonZero = trenchAccumNonZero;
 		trenchStatThin = trenchAccumThin;
 		trenchStatSweptTiles = trenchAccumTiles;
-		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		// Ground going away is worth a line. Silence here is exactly what hid a
+		// store that was deleting itself.
+		if (trenchAccumErased)
+			logger::info("[SNOW DEFORMATION] trench store: refill erased {} tiles this cycle, {} remain",
+				trenchAccumErased, trenchTiles.size());
+		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = trenchAccumErased = 0;
 		trenchEncodedTotal = 0;
 		for (const auto& [key, tile] : trenchTiles)
 			trenchEncodedTotal += tile.encodedBytes + kTrenchTileHeaderBytes;
@@ -301,12 +305,15 @@ void SnowDeformation::SweepTrenchStore()
 		if (it == trenchTiles.end())
 			continue;
 
+		// Refill is the reaper: a tile it has taken back to bare ground is
+		// deleted, so the store self-prunes anywhere weather happens. This is
+		// the ONLY place a tile dies of emptiness now - writes raise only, so
+		// a blank map can no longer delete ground the store knows is dug.
 		if (!DecayTrenchTile(it->second)) {
-			// Refill is the reaper: a tile it has taken back to bare ground is
-			// deleted, so the store self-prunes anywhere weather happens.
 			trenchTiles.erase(it);
 			trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 			trenchSampleTile = nullptr;
+			trenchAccumErased++;
 			continue;
 		}
 
@@ -500,9 +507,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	const float centreX = a_meta.origin.x + a_meta.texel * (float)deformMapDim * 0.5f;
 	const float centreY = a_meta.origin.y + a_meta.texel * (float)deformMapDim * 0.5f;
 
-	// Tiles written this batch, checked for emptiness once at the end: a tile
-	// the refill has taken back to bare ground must not stay in the store.
-	std::unordered_set<TrenchTileKey, TrenchTileKeyHash> touched;
+	// No emptiness check here any more. Writes raise only, so a batch cannot
+	// empty a tile, and erasure belongs to the sweep, which decides it from the
+	// tile's actual content rather than from what one slice of map happened to
+	// say. That also gives it a log line; this prune had none, which is why it
+	// took a code review rather than a glance at the log to find.
 
 	// One-entry tile cache. The jump path folds in the whole 2048 square, and a
 	// row crosses a tile only every 128 store texels, so without this the inner
@@ -572,7 +581,6 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 							// Written to, so it is recent ground whatever the
 							// LRU thought a moment ago.
 							cachedTile->lastTouch = gameClock.lastHours;
-							touched.insert(key);
 						}
 					}
 					if (!cachedTile) {
@@ -596,25 +604,34 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 						fresh.lastTouch = gameClock.lastHours;
 						// Re-seated after the insert, which may have rehashed.
 						cachedTile = &trenchTiles.emplace(key, std::move(fresh)).first->second;
-						touched.insert(key);
 					}
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
-					cachedTile->depth[(size_t)ly * kTrenchTileDim + lx] = quantised;
+					uint8_t& stored = cachedTile->depth[(size_t)ly * kTrenchTileDim + lx];
+					// RAISE ONLY. The map may teach the store what has been dug;
+					// it may not teach it that snow is gone.
+					//
+					// The map is routinely emptier than the store for reasons
+					// that have nothing to do with the weather: a ClearMap frame
+					// wipes it and only the inject repopulates it, an inject
+					// that reaches nothing leaves it entirely blank, and every
+					// clear has frames where the map is bare ground the store
+					// knows is dug. Letting a write lower the store made all of
+					// those destructive, and the tile then vanished through the
+					// empty-tile prune without a single line in the log.
+					//
+					// Removal is decay's job and always was: Stage B derives the
+					// store's rate from RefillAmount itself, precisely so ground
+					// behaves the same whether or not it is being looked at. In
+					// window and out of window now follow one rule instead of
+					// two that disagree whenever the map is mid-rebuild.
+					stored = std::max(stored, quantised);
 				}
 			}
 		}
 	}
 
-	for (const auto& key : touched) {
-		auto it = trenchTiles.find(key);
-		if (it == trenchTiles.end())
-			continue;
-		if (std::all_of(it->second.depth.begin(), it->second.depth.end(), [](uint8_t v) { return v == 0; }))
-			trenchTiles.erase(it);
-	}
-
-	// Erasing rehashes; the sampler's cached pointer would dangle.
+	// Inserting rehashes; the sampler's cached pointer would dangle.
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
 }
