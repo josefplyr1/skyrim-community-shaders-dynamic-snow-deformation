@@ -2168,7 +2168,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// UNDER the skin, and the crisp cascades already cover the skin).
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
-		float sssBlend = smoothstep(kSssBandNear, kSssBandFar, pixelDist);
+		float sssBlend = SnowShadow::GetSssHandoff(pixelDist);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 	// Parallax self-shadow on the snow grain, same term and constants as the

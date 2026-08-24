@@ -119,6 +119,26 @@ namespace SnowShadow
 		return result;
 	}
 
+	// SSS handoff, shared by both shells and the re-march crossfade. The
+	// exact complement of GetCascadeShadow's distance fade above
+	// (1 - pow(fade^2, 8) at :117), so the mask reaches full strength
+	// precisely as the cascades fade to nothing - at the user's own shadow
+	// distance, whatever it is. Fixed bands failed both ways on 2026-08-24:
+	// 4000-9000 printed the half-strength mask under full cascades (faint
+	// ghosts through the shell), 7000+ left a shadowless ring past the
+	// cascades' end. Only the near floor is a constant: the mask was marched
+	// on the PRE-shell depth, so it never enters the contact field even on a
+	// tiny shadow distance.
+	static const float kSssNearFloorStart = 2500.0;
+	static const float kSssNearFloorEnd = 4000.0;
+
+	float GetSssHandoff(float viewDist)
+	{
+		float fade = saturate(viewDist / max(DirectionalShadowLights[0].EndSplitDistances.y, 1.0));
+		fade = pow(fade * fade, 8);
+		return fade * smoothstep(kSssNearFloorStart, kSssNearFloorEnd, viewDist);
+	}
+
 	static const float kSpotShadowBias = 0.0015;
 	static const float kRadialShadowBias = 0.003;
 

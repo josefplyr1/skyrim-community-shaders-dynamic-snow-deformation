@@ -369,17 +369,6 @@ float SampleTerrainVertexAO(float2 gridLocal)
 static const float kHeightBlendMult = 8.0;
 static const float kHeightBlendPower = 2.0;
 
-// SSS distance band, shared by both shells and the re-march handoff. The
-// ground-marched mask saw the PRE-shell depth, so inside the band the
-// cascades own all shadowing; the mask blends in only where it is the sole
-// carrier of LOD tree shadows. 4000-9000 since round 108; onset pushed to
-// 100 m on 2026-08-24 after mid-field tree/cliff SSS printed through the
-// shell, with a deliberately narrow 25 m crossfade (Josef's numbers). The
-// fade exists only to keep the cut from reading as a line that sweeps the
-// ground with the camera - it can be narrow, not absent.
-static const float kSssBandNear = 7000.0;   // 100 m
-static const float kSssBandFar = 8750.0;    // 125 m
-
 float SnowHeightBlendSharpness(float viewDist)
 {
 	float nearBlendToFar = smoothstep(1024.0 * 1024.0, 2048.0 * 2048.0, viewDist * viewDist);
