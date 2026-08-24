@@ -578,12 +578,26 @@ void SnowDeformation::Prepass()
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 
 	float deltaTime = *globals::game::deltaTime;
+	// Taken here rather than beside the trench work below because the refill is
+	// spent in game time; nothing between the two returns early, so it is still
+	// read exactly once a frame.
+	TickGameClock();
 	// Refill rate follows the weather's snowfall density; interiors have no
 	// snowing weather and do not refill. With RefillOnlyWhenSnowing off the
 	// weather is ignored and the baseline rate applies everywhere.
 	snowfallIntensity = ComputeSnowfallIntensity();
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
-	perFrameData.RefillAmount = deltaTime / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+	// Spent in GAME time, not render time. A wait or a sleep advances the
+	// calendar without rendering the hours it passes, so a render-second refill
+	// left the trenches in front of the player untouched across a night in a
+	// blizzard - while the stored ones behind them, which have always decayed on
+	// the game clock, went away. ONE definition of refill for both. In ordinary
+	// play this is the same number as before: the calendar advances at exactly
+	// timescale x render time, so the conversion cancels.
+	const float refillSeconds = gameClock.lastHours >= 0.0f ?
+	                                gameClock.elapsedHours * 3600.0f / std::max(gameClock.timescale, 1.0f) :
+	                                deltaTime;
+	perFrameData.RefillAmount = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
 
 	// Melt stamps accumulate per second. Persistence is a refill slowdown on
 	// melted ground rather than banked depth, so the bowl profile survives the
@@ -622,10 +636,9 @@ void SnowDeformation::Prepass()
 	// read the map BEFORE the ping-pong swap below, and it uses the window
 	// state the map's contents belong to rather than the live one - a clear
 	// arrives here with the worldspace, texel size or both already changed.
-	// Clock first: a tile folded in this frame must be stamped with the decay
-	// the world has already accrued, and a backwards jump has to drop the store
-	// before anything reads it. One reading serves both consumers.
-	TickGameClock();
+	// The clock was read above; a tile folded in this frame must be stamped with
+	// the decay the world has already accrued, and a backwards jump has to drop
+	// the store before anything reads it.
 	TickTrenchClock();
 	TickAccumulation();
 	SweepTrenchStore();

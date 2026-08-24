@@ -284,10 +284,10 @@ public:
 		float AccumulationPeak = 1.5f;
 		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. */
 		bool EnableSnowAccumulation = false;
-		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. 2 per Josef, 2026-08-24: 20 was long enough that a player never sees the world change, and 4 was still ~48 real minutes at his timescale of 5. */
-		float AccumulationHours = 2.0f;
+		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Walked down 20 -> 4 -> 1 over Josef's three test rounds: the pace has to be visible within a session, and at his timescale of 5 even 4 hours was ~48 real minutes of unbroken snowfall. */
+		float AccumulationHours = 1.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time per Josef, 2026-08-24 - the plan's 2:1 asymmetry was deliberately balanced away in favour of a change the player can actually watch happen. */
-		float AccumulationMeltHours = 2.0f;
+		float AccumulationMeltHours = 1.0f;
 		/** @brief In-game days for the layer to settle on its own, applied in ANY weather including snowfall. This is the guarantee that the world returns to its authored height even through a winter that keeps topping it up; unlike the trench floor it is the same order as the melt, so it also shortens a clear-weather settle. 0 disables it and leaves the melt as the only reaper. */
 		float AccumulationFadeDays = 3.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
