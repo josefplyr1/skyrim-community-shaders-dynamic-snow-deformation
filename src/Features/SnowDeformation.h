@@ -93,9 +93,15 @@ public:
 	// linearity across the span: hundreds of units against a 30-unit snow
 	// layer. That was the distant up/down jumping (C3, measured 2026-08-24).
 	// Must match the kWarpBand tables in SnowShell.hlsl.
-	static constexpr int kShellWarpBands = 6;
-	static constexpr float kShellWarpBandVerts[kShellWarpBands] = { 224.0f, 16.0f, 8.0f, 8.0f, 16.0f, 48.0f };
-	static constexpr float kShellWarpBandMul[kShellWarpBands] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f };
+	// Round 4: the coarsest band is 128 units - EXACTLY the land-vertex
+	// spacing - and it runs from 2432 units all the way to the seam. The shell
+	// therefore samples every terrain texel it covers, so it needs no clearance
+	// pad out there, and with the pad gone so is the stepped sink the pad's
+	// weight was producing. The old 256-unit outer band skipped every other
+	// texel, which is what made a large pad necessary in the first place.
+	static constexpr int kShellWarpBands = 5;
+	static constexpr float kShellWarpBandVerts[kShellWarpBands] = { 192.0f, 8.0f, 8.0f, 8.0f, 104.0f };
+	static constexpr float kShellWarpBandMul[kShellWarpBands] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
 
 	/** @brief Grid origin snap. The coarsest band step, so every vertex lands exactly on its own band's world lattice with no per-vertex rounding left to churn. */
 	static constexpr float kShellOriginSnap = kShellGridSpacing * 32.0f;

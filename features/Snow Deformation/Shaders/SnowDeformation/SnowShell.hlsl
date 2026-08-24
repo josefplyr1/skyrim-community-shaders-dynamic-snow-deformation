@@ -293,9 +293,9 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // quad widths flipped as the camera moved, and the surface inside them jumped
 // by the terrain's nonlinearity across the span. That was the distant up/down
 // jumping (C3, measured 2026-08-24).
-#define kWarpBands 6
-static const float kWarpBandVerts[kWarpBands] = { 224.0, 16.0, 8.0, 8.0, 16.0, 48.0 };
-static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0, 32.0 };
+#define kWarpBands 5
+static const float kWarpBandVerts[kWarpBands] = { 192.0, 8.0, 8.0, 8.0, 104.0 };
+static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };
 
 // Band lookup for vertex |u|: x = step multiplier in GridSpacing units,
 // y = fraction through the band (0 at its inner edge, 1 at its outer). The
@@ -873,13 +873,19 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			}
 
 			// Clearance-pad weight: how far this vertex's own lattice step has
-			// outgrown a terrain texel, i.e. how much data the shell is
-			// skipping here. Zero while the lattice is at or finer than the
-			// data, one once it spans two texels or more. The effective step
-			// carries the band fraction, so this is continuous in RADIUS and
-			// crosses band boundaries without a step.
-			float effStep = max(ringStepM.x, ringStepM.y) * lerp(1.0, 2.0, morphT);
-			padWeight = saturate((effStep - TerrainTexelSize) / TerrainTexelSize);
+			// outgrown a terrain texel, i.e. how much data the shell SKIPS
+			// here. Zero while the lattice is at or finer than the data.
+			//
+			// Deliberately the RAW step, with no band-fraction blend. Blending
+			// it made the weight ramp across a whole band, and because a band's
+			// radius is measured from a centre that snaps in 256-unit jumps,
+			// a ramp is exactly what turns into a visible stepped sink as the
+			// camera approaches (round 3 made the ramp steeper and Josef saw
+			// the steps get STRONGER). A weight that is constant within a band
+			// cannot do that. With the round-4 table the coarsest step is 128 -
+			// the data resolution itself - so this is zero everywhere and the
+			// pad is off; it stays for any future table that skips texels.
+			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
 		}
 
 		terrainHeight = terrain.x;

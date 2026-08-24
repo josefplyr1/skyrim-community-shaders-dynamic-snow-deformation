@@ -962,13 +962,13 @@ void SnowDeformation::DrawSettings()
 			lodModes += '\0';
 			lodModes += T(TKEY("lod_debug_heatmap"), "Depth Delta Heatmap");
 			lodModes += '\0';
-			lodModes += T(TKEY("lod_debug_rings"), "Warp Ring View");
+			lodModes += T(TKEY("lod_debug_rings"), "Vertex Spacing Bands");
 			lodModes += '\0';
 			lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
 			lodModes += '\0';
 			ImGui::Combo(T(TKEY("lod_debug_view"), "Distant Debug View"), &lodDebugView, lodModes.c_str());
 			if (auto _ttLod = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Ring View: warp rings by color, dimmed while still camera-relative. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
+				ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Band View: the shell's VERTEX SPACING, not its depth - gray 8 units, yellow 16, green 32, cyan 64, blue 128 (the landscape's own vertex spacing), magenta coarser still. Each band brightens toward its outer edge. The bands are world-anchored: they must sit still on the ground as you move, and stripes that crawl mean the band table has lost its lattice alignment. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
 
 			// Diagnostics below use plain text by existing convention (no i18n).
 			if (lodDebugView == 1) {
