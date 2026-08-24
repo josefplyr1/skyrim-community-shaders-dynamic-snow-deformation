@@ -165,17 +165,21 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
 		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. These set how far and how fast. The layer itself is not wired to the ground yet - watch the reading under Debugging to see it move."));
+			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth."));
+
+		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
+		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two. The current depth is shown under Debugging."));
 
 		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
 		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("accumulation_peak_tooltip"), "How deep the snow gets after a long storm, as a multiple of its normal depth. Every kind of ground grows by the same proportion, so paths and roads stay lower than the fields around them - in fact the gap between them widens as it snows, which keeps a road readable. 1.00x means snowfall never deepens anything."));
 
-		ImGui::SliderFloat(T(TKEY("accumulation_hours"), "Accumulation Time"), &settings.AccumulationHours, 4.0f, 72.0f, "%.0f game hours");
+		ImGui::SliderFloat(T(TKEY("accumulation_hours"), "Accumulation Time"), &settings.AccumulationHours, 1.0f, 72.0f, "%.0f game hours");
 		if (auto _ttAccumHours = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("accumulation_hours_tooltip"), "How long heavy snowfall takes to build the layer from its normal depth up to the peak. Lighter snow takes proportionally longer, so a thin flurry barely moves it."));
 
-		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 4.0f, 144.0f, "%.0f game hours");
+		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 1.0f, 144.0f, "%.0f game hours");
 		if (auto _ttAccumMelt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. Deliberately longer than the build-up: snow that took a day to fall should not be gone by lunchtime, and the imbalance is what lets a snowy stretch stay deep between storms."));
 
@@ -861,8 +865,12 @@ void SnowDeformation::DrawSettings()
 			auto* tes = RE::TES::GetSingleton();
 			const bool indoors = tes && tes->interiorCell;
 
-			ImGui::Text("Accumulation: %.3f (depth x%.3f), snowfall %.2f%s",
-				accum, 1.0f + accum * (settings.AccumulationPeak - 1.0f), intensity,
+			// The scale the shells are actually handed, not what the peak would
+			// give: with the toggle off it reads x1.000, which is the other
+			// half of the A/B saying so.
+			ImGui::Text("Accumulation: %.3f (depth x%.3f%s), snowfall %.2f%s",
+				accum, GetAccumulationDepthScale(),
+				settings.EnableSnowAccumulation ? "" : ", not applied", intensity,
 				indoors ? " (held, indoors)" : "");
 			ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
 				rate, growth, melt, fade);

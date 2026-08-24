@@ -28,6 +28,7 @@
 	X(PersistTrenches) \
 	X(StoredTrenchFadeDays) \
 	X(TrenchMemoryMB) \
+	X(EnableSnowAccumulation) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
 	X(AccumulationMeltHours) \

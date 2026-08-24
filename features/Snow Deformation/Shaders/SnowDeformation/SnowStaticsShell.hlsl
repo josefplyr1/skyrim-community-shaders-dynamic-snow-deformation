@@ -1365,7 +1365,15 @@ float3 SampleTerrainStatics(float2 gridLocal)
 	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
 	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Same scale as the landscape shell's, and NOT because object snow
+	// accumulates - it does not, the cap stays pinned. These three call sites
+	// are this shader's reference to where the GROUND is: the snow-snow seam
+	// band at object bases, the blanket-normal blend across it, and the march's
+	// ground horizon. Left unscaled they would describe a landscape that is no
+	// longer there, and object bases would seam and sink as it snowed.
+	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
+	return result;
 }
 
 PS_OUTPUT main(VS_OUTPUT input)

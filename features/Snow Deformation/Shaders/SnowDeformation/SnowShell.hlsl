@@ -389,7 +389,14 @@ float3 SampleTerrain(float2 gridLocal)
 	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
 	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
 
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// ROADMAP #33: the accumulated layer scales depth HERE, at the one point
+	// every reader funnels through, so geometry, shading, the berm gate and the
+	// self-shadow march cannot disagree about how deep the snow is. Positive
+	// only - a negative rampDepth is the submerge toward bare ground at a class
+	// border, not snow, and scaling it would move class edges as it snowed.
+	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
+	return result;
 }
 
 // Bilinear helper at fractional texel coordinates (Load-based).

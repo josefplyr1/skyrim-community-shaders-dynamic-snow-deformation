@@ -59,6 +59,18 @@ void SnowDeformation::TickAccumulation()
 		std::memory_order_relaxed);
 }
 
+float SnowDeformation::GetAccumulationDepthScale() const
+{
+	if (!settings.EnableSnowAccumulation)
+		return 1.0f;
+
+	// Clamped at 1 from below: the layer only ever ADDS to what the class
+	// tables author, so a peak under 1 (a hand-edited JSON) must not turn
+	// snowfall into a thaw.
+	const float peak = std::max(settings.AccumulationPeak, 1.0f);
+	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (peak - 1.0f);
+}
+
 void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_intfc)
 {
 	if (!a_intfc->OpenRecord(kAccumRecord, kAccumRecordVersion)) {

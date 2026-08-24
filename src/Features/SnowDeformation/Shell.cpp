@@ -567,9 +567,13 @@ void SnowDeformation::DrawShell()
 		std::max(settings.FrostPatternScale, 4.0f),
 		frostPatternNormalSRV ? 1.0f : 0.0f };
 	cbData.BermHeightAmp = std::clamp(settings.BermHeight, 0.0f, 1.0f);
+	// .w claims RimStyle's documented spare rather than growing ShellCB: the
+	// buffer is hand-mirrored across two shaders and the statics pass binds
+	// this same b0, so one component serves both shells with nothing moving.
 	cbData.RimStyle = { std::clamp(settings.RimLip, 0.0f, 0.3f),
 		std::clamp(settings.RimTeeth, 0.0f, 1.0f),
-		std::clamp(settings.BermClods, 0.0f, 6.0f), 0.0f };
+		std::clamp(settings.BermClods, 0.0f, 6.0f),
+		GetAccumulationDepthScale() };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
 	// Crisp grain retired 2026-08-22 (real geometry carries the detail);

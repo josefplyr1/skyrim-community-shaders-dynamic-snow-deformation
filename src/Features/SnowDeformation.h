@@ -282,10 +282,12 @@ public:
 		float TrenchMemoryMB = 1.0f;
 		/** @brief Ceiling the accumulated layer grows to, as a multiple of each class's authored depth (ROADMAP #33). 1.5 takes a 30-unit class to 45 and an 18-unit path to 27, so the gap that makes a road readable WIDENS as it snows. 1.0 = accumulation reaches nothing. */
 		float AccumulationPeak = 1.5f;
-		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. 4 per Josef, 2026-08-24: 20 was long enough that a player never sees the world change. */
-		float AccumulationHours = 4.0f;
+		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. */
+		bool EnableSnowAccumulation = false;
+		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. 2 per Josef, 2026-08-24: 20 was long enough that a player never sees the world change, and 4 was still ~48 real minutes at his timescale of 5. */
+		float AccumulationHours = 2.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time per Josef, 2026-08-24 - the plan's 2:1 asymmetry was deliberately balanced away in favour of a change the player can actually watch happen. */
-		float AccumulationMeltHours = 4.0f;
+		float AccumulationMeltHours = 2.0f;
 		/** @brief In-game days for the layer to settle on its own, applied in ANY weather including snowfall. This is the guarantee that the world returns to its authored height even through a winter that keeps topping it up; unlike the trench floor it is the same order as the melt, so it also shortens a clear-weather settle. 0 disables it and leaves the melt as the only reaper. */
 		float AccumulationFadeDays = 3.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
@@ -1907,6 +1909,8 @@ protected:
 	std::atomic<float> snowAccumulation{ 0.0f };
 	/** @brief Advances the layer off the shared clock. One signed rate, no thresholds: a weather cross-fade turns the curve instead of putting a kink in it. */
 	void TickAccumulation();
+	/** @brief What the shells multiply the authored depth by: 1.0 when accumulation is off or the layer is at rest, up to AccumulationPeak at full. Never below 1 - a peak under 1 would make snowfall THIN the snow. */
+	float GetAccumulationDepthScale() const;
 	/** @brief Claims 'SNAC' on the co-save channel. */
 	void RegisterAccumulationCoSave();
 	/** @brief Writes the scalar. */
