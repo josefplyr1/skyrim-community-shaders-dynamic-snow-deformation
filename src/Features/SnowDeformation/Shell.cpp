@@ -532,11 +532,14 @@ void SnowDeformation::DrawShell()
 		// into same-material ground beyond it. Ending the fade AT the seam
 		// left a visible unshelled strip of full terrain just inside it.
 		constexpr float kSeamOverlap = 2048.0f;
-		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f - kSeamOverlap, (cellY - halfCells) * 4096.0f - kSeamOverlap,
-			(cellX + halfCells + 1) * 4096.0f + kSeamOverlap, (cellY + halfCells + 1) * 4096.0f + kSeamOverlap };
+		const float target[4] = {
+			(cellX - halfCells) * 4096.0f - kSeamOverlap, (cellY - halfCells) * 4096.0f - kSeamOverlap,
+			(cellX + halfCells + 1) * 4096.0f + kSeamOverlap, (cellY + halfCells + 1) * 4096.0f + kSeamOverlap
+		};
 		cbData.SeamRampInv = 1.0f / 2048.0f;
 		// C3 mechanism 3: the square snaps to the player's cell, so every
-		// crossing rewrites the whole far field's edge fade in one frame.
+		// crossing used to rewrite the whole far field's edge fade in one
+		// frame - measured as one whole-band spike per ~1750 frames of walking.
 		static int lastSeamCellX = INT_MIN, lastSeamCellY = INT_MIN;
 		if (cellX != lastSeamCellX || cellY != lastSeamCellY) {
 			if (lastSeamCellX != INT_MIN)
@@ -544,6 +547,43 @@ void SnowDeformation::DrawShell()
 			lastSeamCellX = cellX;
 			lastSeamCellY = cellY;
 		}
+
+		// Cross-fade: slide the square to its new home over kSeamFadeSeconds
+		// instead of teleporting. The drive is TIME, not camera distance -
+		// before and after the slide the seam is world-anchored exactly as
+		// before, so this cannot reintroduce the class of bug that keying a
+		// height term to viewing distance produced twice in this feature
+		// (rounds 3 and 4). A fade keyed on distance-from-player would have.
+		const bool targetMoved = target[0] != seamTo[0] || target[1] != seamTo[1] ||
+		                         target[2] != seamTo[2] || target[3] != seamTo[3];
+		// Fast travel and worldspace changes move the square across the world;
+		// sliding there would sweep the seam over everything in view.
+		bool snap = !seamAnimValid || !settings.SeamCrossFade;
+		if (targetMoved && !snap)
+			for (int i = 0; i < 4; ++i)
+				snap = snap || std::abs(target[i] - seamTo[i]) > kSeamSnapThreshold;
+
+		if (snap) {
+			for (int i = 0; i < 4; ++i)
+				seamFrom[i] = seamTo[i] = target[i];
+			seamBlend = 1.0f;
+			seamAnimValid = true;
+		} else if (targetMoved) {
+			// Restart from where the slide currently is, not from the previous
+			// target: crossing two cells inside one fade must not rubber-band.
+			const float eased = seamBlend * seamBlend * (3.0f - 2.0f * seamBlend);
+			for (int i = 0; i < 4; ++i) {
+				seamFrom[i] = std::lerp(seamFrom[i], seamTo[i], eased);
+				seamTo[i] = target[i];
+			}
+			seamBlend = 0.0f;
+		}
+
+		const float dt = globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f;
+		seamBlend = std::min(1.0f, seamBlend + dt / kSeamFadeSeconds);
+		const float eased = seamBlend * seamBlend * (3.0f - 2.0f * seamBlend);
+		cbData.SeamBounds = { std::lerp(seamFrom[0], seamTo[0], eased), std::lerp(seamFrom[1], seamTo[1], eased),
+			std::lerp(seamFrom[2], seamTo[2], eased), std::lerp(seamFrom[3], seamTo[3], eased) };
 	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 

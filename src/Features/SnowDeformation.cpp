@@ -98,6 +98,7 @@
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
 	X(SnowBorderDithering) \
+	X(SeamCrossFade) \
 	X(TrenchFloorHeight) \
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \

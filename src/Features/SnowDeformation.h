@@ -481,6 +481,8 @@ public:
 		float TrampleZoneHeight = 50.0f;
 		/** @brief ON (default) = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; OFF = clean binary cut. Round 18 fixed the inverted polarity (the checkbox used to gate a retired cross-fade path, so OFF showed the dust). */
 		bool SnowBorderDithering = true;
+		/** @brief ON (default) = the shell's outer seam slides to its new square over kSeamFadeSeconds when the player crosses a cell, instead of teleporting in one frame. Purely temporal - the seam is world-anchored before and after, so this adds no camera-distance term. Big jumps (fast travel, worldspace change) still snap. */
+		bool SeamCrossFade = true;
 		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Round 18: capped 37-unit wander + fine 8-unit octave; default 16 (Josef, round 19). */
@@ -1094,6 +1096,16 @@ public:
 	uint32_t lodShimmerRunFrames = 0;
 	/** @brief Seam square (SeamBounds) rewrites: it snaps to the PLAYER's cell, so this ticks on cell crossings. C3 mechanism 3's event counter. */
 	uint32_t lodSeamChanges = 0;
+
+	// ---- Seam cross-fade (C3 Stage 3) ----
+	/** @brief Seconds the seam square takes to slide to its new position after a cell crossing. */
+	static constexpr float kSeamFadeSeconds = 0.5f;
+	/** @brief A target jump beyond this (units, per axis) snaps instead of sliding: fast travel and worldspace changes move the square across the world, and dragging it there would sweep the seam over everything in view. 1.5 cells clears an ordinary walking crossing. */
+	static constexpr float kSeamSnapThreshold = 6144.0f;
+	float seamFrom[4] = {};
+	float seamTo[4] = {};
+	float seamBlend = 1.0f;
+	bool seamAnimValid = false;
 	/** @brief Terrain data window rebuilds: a whole-window re-upload of baked heights. C3's other discrete-event suspect. */
 	uint32_t lodWindowRebuilds = 0;
 	float lodShimmerHistoryBuf[kLODHistBands][kLODShimmerHistory] = {};
