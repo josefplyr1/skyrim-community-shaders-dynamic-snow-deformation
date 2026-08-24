@@ -725,7 +725,8 @@ void SnowDeformation::PostPostLoad()
 
 	InstallStaticsCaptureHook();
 
-	// Claims the co-save record. Here rather than later because a save can be
+	// Claims the co-save records. Here rather than later because a save can be
 	// loaded straight from the main menu, and an unclaimed record is skipped.
 	RegisterTrenchCoSave();
+	RegisterAccumulationCoSave();
 }

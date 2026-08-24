@@ -111,7 +111,7 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 		EncodeTrenchTile(tile, payload);
 		const uint32_t payloadBytes = (uint32_t)payload.size();
 		const float clockRel = tile.clock - trenchDecayClock;
-		const float touchRel = tile.lastTouch - trenchGameHours;
+		const float touchRel = tile.lastTouch - gameClockHours.load(std::memory_order_relaxed);
 
 		a_intfc->WriteRecordData(&key.worldspace, sizeof(key.worldspace));
 		a_intfc->WriteRecordData(&key.x, sizeof(key.x));
@@ -177,7 +177,7 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	// UNARM the game-hours watch. Left armed, the first tick would read the
 	// loaded save's calendar as a backwards jump and clear the store just
 	// filled - the reverting-on-load trap arriving from the other side.
-	trenchGameHours = -1.0f;
+	gameClockUnarm.store(true, std::memory_order_release);
 
 	std::vector<uint8_t> payload;
 	uint32_t restored = 0;
@@ -249,7 +249,7 @@ void SnowDeformation::RegisterTrenchCoSave()
 			ClearTrenchStoreLocked();
 			// Unarmed so the first tick of the new timeline re-arms instead of
 			// reading its calendar as a jump.
-			trenchGameHours = -1.0f;
+			gameClockUnarm.store(true, std::memory_order_release);
 			trenchDecayClock = 0.0f;
 		});
 }

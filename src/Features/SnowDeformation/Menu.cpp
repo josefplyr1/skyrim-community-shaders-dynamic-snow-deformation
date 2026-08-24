@@ -163,6 +163,26 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is around three thousand patches of trodden ground - far more than snowfall usually leaves standing, so weather normally clears old trenches long before this limit matters and it sits here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down more than forty times over, so it takes far more RAM than this while you play, and every save file carries its own copy."));
 		}
 
+		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
+		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. These set how far and how fast. The layer itself is not wired to the ground yet - watch the reading under Debugging to see it move."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
+		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_peak_tooltip"), "How deep the snow gets after a long storm, as a multiple of its normal depth. Every kind of ground grows by the same proportion, so paths and roads stay lower than the fields around them - in fact the gap between them widens as it snows, which keeps a road readable. 1.00x means snowfall never deepens anything."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_hours"), "Accumulation Time"), &settings.AccumulationHours, 4.0f, 72.0f, "%.0f game hours");
+		if (auto _ttAccumHours = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_hours_tooltip"), "How long heavy snowfall takes to build the layer from its normal depth up to the peak. Lighter snow takes proportionally longer, so a thin flurry barely moves it."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 4.0f, 144.0f, "%.0f game hours");
+		if (auto _ttAccumMelt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. Deliberately longer than the build-up: snow that took a day to fall should not be gone by lunchtime, and the imbalance is what lets a snowy stretch stay deep between storms."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_fade"), "Accumulated Snow Fade"), &settings.AccumulationFadeDays, 0.0f, 14.0f, "%.0f days");
+		if (auto _ttAccumFade = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_fade_tooltip"), "A slow settling that runs in all weather, snowfall included, so the world always finds its way back to its normal depth instead of climbing for ever through an endless winter. Because it never stops, it also makes clear weather settle somewhat faster than Melt Time alone would. 0 turns it off and leaves clear weather as the only thing that brings the snow back down."));
+
 		ImGui::PushID("snow_refill");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
@@ -823,6 +843,33 @@ void SnowDeformation::DrawSettings()
 				(double)stats.encoded / 1024.0,
 				(double)settings.TrenchMemoryMB * 1024.0,
 				stats.encoded ? (double)stats.bytes / (double)stats.encoded : 0.0);
+		}
+
+		{
+			// ROADMAP #33 Stage B: the layer is tracked but reads nowhere yet,
+			// so this readout IS the feature until Stage C wires the depth.
+			// The rate is spelled out because the exit test is "does the number
+			// do what the plan's table says", which needs the arithmetic
+			// visible rather than inferred from watching it drift.
+			const float accum = snowAccumulation.load(std::memory_order_relaxed);
+			const float intensity = std::clamp(snowfallIntensity, 0.0f, 1.0f);
+			const float growth = settings.AccumulationHours > 0.01f ? intensity / settings.AccumulationHours : 0.0f;
+			const float melt = settings.AccumulationMeltHours > 0.01f ? (1.0f - intensity) / settings.AccumulationMeltHours : 0.0f;
+			const float fade = settings.AccumulationFadeDays > 0.01f ? 1.0f / (settings.AccumulationFadeDays * 24.0f) : 0.0f;
+			const float rate = growth - melt - fade;
+
+			auto* tes = RE::TES::GetSingleton();
+			const bool outdoors = tes && tes->GetRuntimeData2().worldSpace;
+
+			ImGui::Text("Accumulation: %.3f (depth x%.3f), snowfall %.2f",
+				accum, 1.0f + accum * (settings.AccumulationPeak - 1.0f), intensity);
+			if (!outdoors)
+				ImGui::Text("Rate: frozen (interior)");
+			else
+				ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
+					rate, growth, melt, fade);
+			ImGui::Text("Clock: %.2f game hours, timescale %.0f",
+				gameClock.lastHours, gameClock.timescale);
 		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));

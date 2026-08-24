@@ -28,6 +28,10 @@
 	X(PersistTrenches) \
 	X(StoredTrenchFadeDays) \
 	X(TrenchMemoryMB) \
+	X(AccumulationPeak) \
+	X(AccumulationHours) \
+	X(AccumulationMeltHours) \
+	X(AccumulationFadeDays) \
 	X(MeltPersistence) \
 	X(MeltBowlFloor) \
 	X(MeltEdgeIrregularity) \
@@ -420,6 +424,50 @@ void SnowDeformation::ApplyRangeSettings()
 	rangeInitApplied = true;
 }
 
+void SnowDeformation::TickGameClock()
+{
+	gameClock.elapsedHours = 0.0f;
+	gameClock.reversed = false;
+
+	auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
+	if (!calendar)
+		return;
+
+	// The co-save callbacks land on the game thread. They ask rather than
+	// write, so the reading below stays owned by one thread.
+	if (gameClockUnarm.exchange(false, std::memory_order_acq_rel))
+		gameClock.lastHours = -1.0f;
+
+	// Waiting works by cranking the timescale enormously for its animation, so
+	// a live reading taken during one is the wait and not the player's setting.
+	// Latch the last plausible value; waited hours then pass at the rate the
+	// same hours would have passed at if they had been played.
+	const float rawScale = calendar->GetTimescale();
+	if (rawScale >= 1.0f && rawScale <= 100.0f)
+		gameClock.timescale = rawScale;
+
+	// Elapsed hours telescope, so the calendar's float32 day quantisation
+	// (~2.6-second steps late game) cancels instead of accumulating. A wait,
+	// a sleep or a fast travel needs no special case: the next reading carries
+	// the whole elapsed span.
+	const float hours = calendar->GetHoursPassed();
+	gameClockHours.store(hours, std::memory_order_relaxed);
+	if (gameClock.lastHours < 0.0f) {
+		gameClock.lastHours = hours;
+		return;
+	}
+	const float delta = hours - gameClock.lastHours;
+	gameClock.lastHours = hours;
+
+	// Backwards is a loaded save: the consumers' state belongs to a timeline
+	// that no longer exists. Each decides what that means for itself.
+	if (delta < -1.0e-4f) {
+		gameClock.reversed = true;
+		return;
+	}
+	gameClock.elapsedHours = std::max(delta, 0.0f);
+}
+
 float SnowDeformation::ComputeSnowfallIntensity() const
 {
 	auto* sky = RE::Sky::GetSingleton();
@@ -575,8 +623,10 @@ void SnowDeformation::Prepass()
 	// arrives here with the worldspace, texel size or both already changed.
 	// Clock first: a tile folded in this frame must be stamped with the decay
 	// the world has already accrued, and a backwards jump has to drop the store
-	// before anything reads it.
+	// before anything reads it. One reading serves both consumers.
+	TickGameClock();
 	TickTrenchClock();
+	TickAccumulation();
 	SweepTrenchStore();
 	DrainTrenchBands();
 	FlushDepartingTrenches(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);

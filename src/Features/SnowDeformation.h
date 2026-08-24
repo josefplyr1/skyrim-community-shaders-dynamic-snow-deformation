@@ -280,6 +280,14 @@ public:
 		float StoredTrenchFadeDays = 3.0f;
 		/** @brief Budget for the trench store, in MB of encoded data - which is what a save will cost once #34 Stage C writes it, not the raw in-memory figure. Beyond it, least-recently-visited ground is forgotten first. The cap is the ONLY thing bounding the store: decay alone leaves it unbounded on ground that never sees snowfall, and a fully trodden worldspace would be gigabytes. 1 MB is roughly two to four deformation windows of remembered ground. */
 		float TrenchMemoryMB = 1.0f;
+		/** @brief Ceiling the accumulated layer grows to, as a multiple of each class's authored depth (ROADMAP #33). 1.5 takes a 30-unit class to 45 and an 18-unit path to 27, so the gap that makes a road readable WIDENS as it snows. 1.0 = accumulation reaches nothing. */
+		float AccumulationPeak = 1.5f;
+		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the live snowfall intensity, so light snow takes proportionally longer. */
+		float AccumulationHours = 20.0f;
+		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Deliberately about twice the growth time: the asymmetry is what lets a snowy stretch stay deep without continuous snowfall, and it is not to be balanced away. */
+		float AccumulationMeltHours = 40.0f;
+		/** @brief In-game days for the layer to settle on its own, applied in ANY weather including snowfall. This is the guarantee that the world returns to its authored height even through a winter that keeps topping it up; unlike the trench floor it is the same order as the melt, so it also shortens a clear-weather settle. 0 disables it and leaves the melt as the only reaper. */
+		float AccumulationFadeDays = 3.0f;
 		/** @brief How much slower melted ground refills than trampled ground, 0-1. The ground under a fire is warm and wet after the flame is gone, so a melt basin outlasts a footprint of the same depth. Applied as a refill slowdown rather than as banked extra depth: depth must stay within 0-1 or the saturating readers flatten the bowl profile into a walled pit. 0 = melted ground recovers exactly as fast as a footprint. */
 		float MeltPersistence = 0.50f;
 		/** @brief Fraction of a melt bowl's radius held at full depth before the flank begins. 0 = a pure bowl curving from the centre; high = a flat floor with walls. Heat spreads, so low values read as melted and high ones read as blasted. */
@@ -637,6 +645,35 @@ public:
 	float ComputeSnowfallIntensity() const;
 	/** @brief Last computed snowfall intensity, for the debug readout. */
 	float snowfallIntensity = 0.0f;
+
+	/**
+	 * @brief One game-time reading per frame, shared by every subsystem that
+	 * integrates it (trench decay, accumulation). Render-thread owned.
+	 *
+	 * Deliberately shared rather than duplicated: a second copy would tie the
+	 * accumulator's clock to whether trenches happen to be enabled, and two
+	 * clocks reading the same calendar drift apart. Not the spell system's drift
+	 * accumulator - that corrects render-second timers against jumps, a
+	 * different problem.
+	 */
+	struct GameClock
+	{
+		/** @brief Last calendar reading in hours; negative until armed. Elapsed hours telescope, so the calendar's float32 day quantisation cancels rather than accumulating. */
+		float lastHours = -1.0f;
+		/** @brief Last plausible timescale. Waiting cranks the live one enormously for its animation, so a reading taken then is the wait and not the player's setting. */
+		float timescale = 20.0f;
+		/** @brief Game hours since the previous reading. Zero on the arming frame and on a backwards jump. */
+		float elapsedHours = 0.0f;
+		/** @brief The calendar went backwards, which means a save was loaded: this timeline is not the one the consumers' state belongs to. */
+		bool reversed = false;
+	};
+	GameClock gameClock;
+	/** @brief Set by the co-save callbacks on the GAME thread; consumed by the next tick. An unarm request rather than a direct write, so the clock itself stays render-thread owned. */
+	std::atomic<bool> gameClockUnarm{ false };
+	/** @brief The clock's reading published for game-thread readers (the co-save writers), which must not reach into the struct. */
+	std::atomic<float> gameClockHours{ -1.0f };
+	/** @brief Takes this frame's reading. Call once, before anything that consumes it. */
+	void TickGameClock();
 
 	ConstantBuffer* perFrame = nullptr;
 	Texture2D* deformationTextures[2] = { nullptr, nullptr };
@@ -1705,10 +1742,6 @@ protected:
 
 	/** @brief Monotonic "depth removed since the store began", in 0-1 depth units. A tile's decay is the difference between this and its own clock, which is what lets a tile sit out of the window for a week and come back correct. */
 	float trenchDecayClock = 0.0f;
-	/** @brief Last calendar reading in hours; negative until armed. Elapsed hours telescope, so the calendar's float32 day quantisation cancels rather than accumulating. */
-	float trenchGameHours = -1.0f;
-	/** @brief Last plausible timescale. Waiting cranks the live one enormously for its animation, so a reading taken then is the wait and not the player's setting. */
-	float trenchTimescale = 20.0f;
 
 	/** @brief Keys still to visit this sweep cycle; refilled from the store when it empties. Amortised so no frame pays for the whole store. */
 	std::vector<TrenchTileKey> trenchSweepQueue;
@@ -1844,6 +1877,28 @@ protected:
 	/** @brief Co-save record for the trench tiles. '{@link kTrenchRecordVersion}' is written into every chunk; #33's accumulation claims its own type on the same channel. */
 	static constexpr uint32_t kTrenchRecord = 'SNTR';
 	static constexpr uint32_t kTrenchRecordVersion = 1;
+
+	/** @brief Co-save record for the accumulated layer (ROADMAP #33), on the same channel as the trench tiles. Payload is the single scalar. */
+	static constexpr uint32_t kAccumRecord = 'SNAC';
+	static constexpr uint32_t kAccumRecordVersion = 1;
+
+	/**
+	 * @brief Accumulated layer, 0-1: 0 is the authored depth and 1 is
+	 * AccumulationPeak times it (ROADMAP #33, ACCUMULATION-PLAN.md).
+	 *
+	 * Atomic because the co-save writer reads it on the game thread while the
+	 * tick advances it on the render thread. A scalar needs no mutex; the tile
+	 * store does, which is why that one has one.
+	 */
+	std::atomic<float> snowAccumulation{ 0.0f };
+	/** @brief Advances the layer off the shared clock. One signed rate, no thresholds: a weather cross-fade turns the curve instead of putting a kink in it. */
+	void TickAccumulation();
+	/** @brief Claims 'SNAC' on the co-save channel. */
+	void RegisterAccumulationCoSave();
+	/** @brief Writes the scalar. */
+	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
+	/** @brief Reads it back, refusing a version this build does not know. */
+	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
 	/**
 	 * @brief Guards the tile store. SKSE's save, load and revert callbacks arrive

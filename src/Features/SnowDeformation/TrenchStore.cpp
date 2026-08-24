@@ -198,37 +198,19 @@ void SnowDeformation::RollTrenchWindow()
 
 void SnowDeformation::TickTrenchClock()
 {
-	auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
-	if (!calendar)
-		return;
-
-	// The co-save callbacks land on the game thread and can rewrite the clock
-	// and the store mid-frame.
+	// The co-save callbacks land on the game thread and can rewrite the store
+	// mid-frame.
 	std::scoped_lock lock(trenchStoreMutex);
 
-	// Waiting works by cranking the timescale enormously for its animation, so
-	// a live reading taken during one is the wait and not the player's setting.
-	// Latch the last plausible value; waited hours then decay at the rate the
-	// same hours would have decayed at if they had been played.
-	const float rawScale = calendar->GetTimescale();
-	if (rawScale >= 1.0f && rawScale <= 100.0f)
-		trenchTimescale = rawScale;
-
-	const float hours = calendar->GetHoursPassed();
-	if (trenchGameHours < 0.0f) {
-		trenchGameHours = hours;
-		return;
-	}
-	const float elapsed = hours - trenchGameHours;
-	trenchGameHours = hours;
-
-	// Backwards is a loaded save: the store belongs to a timeline that no
+	// The reading itself is TickGameClock's, taken once for every consumer.
+	// Backwards means a loaded save: the store belongs to a timeline that no
 	// longer exists, and keeping it would hand a fresh game the last one's
 	// trenches. Same rule the spell system's clocks follow.
-	if (elapsed < -1.0e-4f) {
+	if (gameClock.reversed) {
 		ClearTrenchStoreLocked();
 		return;
 	}
+	const float elapsed = gameClock.elapsedHours;
 	if (elapsed <= 0.0f)
 		return;
 
@@ -242,7 +224,7 @@ void SnowDeformation::TickTrenchClock()
 	// Elapsed hours telescope, so the calendar's float32 day quantisation
 	// (~2.6-second steps late game) cancels instead of accumulating.
 	const float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
-	const float realSecondsPerGameHour = 3600.0f / std::max(trenchTimescale, 1.0f);
+	const float realSecondsPerGameHour = 3600.0f / std::max(gameClock.timescale, 1.0f);
 	const float weather = realSecondsPerGameHour * refillIntensity *
 	                      std::max(settings.RefillRateMultiplier, 0.0f) / kBaseRefillTime;
 	// The floor underneath it: without one, a clear-weather modlist never
@@ -589,7 +571,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 							DecayTrenchTile(*cachedTile);
 							// Written to, so it is recent ground whatever the
 							// LRU thought a moment ago.
-							cachedTile->lastTouch = trenchGameHours;
+							cachedTile->lastTouch = gameClock.lastHours;
 							touched.insert(key);
 						}
 					}
@@ -611,7 +593,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 						TrenchTile fresh;
 						fresh.depth.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
 						fresh.clock = trenchDecayClock;
-						fresh.lastTouch = trenchGameHours;
+						fresh.lastTouch = gameClock.lastHours;
 						// Re-seated after the insert, which may have rehashed.
 						cachedTile = &trenchTiles.emplace(key, std::move(fresh)).first->second;
 						touched.insert(key);
@@ -830,7 +812,7 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 
 			// Standing inside the window counts as use: the LRU should forget
 			// where you have not been, not where you happen not to be digging.
-			tile.lastTouch = trenchGameHours;
+			tile.lastTouch = gameClock.lastHours;
 
 			// Texel centres inside this tile's world span, widened by one so a
 			// texel just outside still picks up the tile's edge through the
