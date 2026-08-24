@@ -80,19 +80,38 @@ public:
 	// walls into blocky silhouettes.
 	static constexpr float kShellGridSpacing = 8.0f;
 
-	// Distance warp: the inner kShellWarpInnerVerts vertices per side keep
-	// linear kShellGridSpacing; beyond them each ring's spacing grows by
-	// kShellWarpGrowth (~26k units half-span). Must match WarpAxis() in
-	// SnowShell.hlsl.
-	static constexpr float kShellWarpInnerVerts = 256.0f;
-	static constexpr float kShellWarpGrowth = 1.0902f;
+	// Distance warp, power-of-two bands. Each band holds kShellWarpBandVerts
+	// vertices spaced kShellWarpBandMul x kShellGridSpacing apart; steps are
+	// exact powers of two of the base step and every band START is a multiple
+	// of both its own step and kShellOriginSnap.
+	//
+	// That alignment is the whole point. The old continuous 1.0902 growth left
+	// ringStep/fineStep in [1, 2) - never an integer - so snapping put adjacent
+	// vertices either one or two fineSteps apart depending on where the grid
+	// centre happened to sit, quad widths flipped as the camera moved, and the
+	// surface interpolated inside them jumped by the terrain's departure from
+	// linearity across the span: hundreds of units against a 30-unit snow
+	// layer. That was the distant up/down jumping (C3, measured 2026-08-24).
+	// Must match the kWarpBand tables in SnowShell.hlsl.
+	static constexpr int kShellWarpBands = 6;
+	static constexpr float kShellWarpBandVerts[kShellWarpBands] = { 224.0f, 16.0f, 8.0f, 8.0f, 16.0f, 48.0f };
+	static constexpr float kShellWarpBandMul[kShellWarpBands] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 32.0f };
 
-	/** @brief World half-span of the warped shell grid (center to edge) at a given inner spacing. Linear in spacing: the warp shape is unchanged. */
+	/** @brief Grid origin snap. The coarsest band step, so every vertex lands exactly on its own band's world lattice with no per-vertex rounding left to churn. */
+	static constexpr float kShellOriginSnap = kShellGridSpacing * 32.0f;
+
+	/** @brief World half-span of the warped shell grid (center to edge) at a given inner spacing. Linear in spacing: the band shape is unchanged. */
 	static float ShellWarpedHalfSpan(float a_spacing = kShellGridSpacing)
 	{
-		const float outerVerts = kShellGridDim * 0.5f - kShellWarpInnerVerts;
-		const float outer = kShellWarpGrowth * (std::pow(kShellWarpGrowth, outerVerts) - 1.0f) / (kShellWarpGrowth - 1.0f);
-		return (kShellWarpInnerVerts + outer) * a_spacing;
+		float span = 0.0f;
+		float verts = 0.0f;
+		for (int band = 0; band < kShellWarpBands; ++band) {
+			span += kShellWarpBandVerts[band] * kShellWarpBandMul[band];
+			verts += kShellWarpBandVerts[band];
+		}
+		// Any vertices past the table extend at the coarsest step.
+		span += std::max(kShellGridDim * 0.5f - verts, 0.0f) * kShellWarpBandMul[kShellWarpBands - 1];
+		return span * a_spacing;
 	}
 
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),

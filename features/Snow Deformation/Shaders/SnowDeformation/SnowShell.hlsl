@@ -281,22 +281,60 @@ SamplerState SnowSampler : register(s0);
 // SnowStaticsShell.hlsl, SnowDeformation.hlsli and Shell.cpp.
 static const float kSnowUVTile = 4096.0 / 24.0;
 
-// Distance warp: inner kWarpInnerVerts vertices per side keep linear
-// GridSpacing; beyond them each ring's spacing grows by kWarpGrowth so the
-// grid stretches ~26k units from the camera. Must match SnowDeformation.h
-// (kShellWarpInnerVerts / kShellWarpGrowth).
-static const float kWarpInnerVerts = 256.0;
-static const float kWarpGrowth = 1.0902;
+// Distance warp, power-of-two bands: band b holds kWarpBandVerts[b] vertices
+// spaced kWarpBandMul[b] * GridSpacing apart, reaching ~17k units per side.
+// Must match SnowDeformation.h (kShellWarpBandVerts / kShellWarpBandMul).
+//
+// Every step is an exact power of two of the base step and every band start is
+// a multiple of both its own step and the origin snap, so a vertex lands on its
+// band's world lattice with NO rounding left over. The old continuous 1.0902
+// growth could not do that - ringStep/fineStep sat in [1, 2), so snapping left
+// adjacent vertices one or two fineSteps apart depending on the grid centre,
+// quad widths flipped as the camera moved, and the surface inside them jumped
+// by the terrain's nonlinearity across the span. That was the distant up/down
+// jumping (C3, measured 2026-08-24).
+#define kWarpBands 6
+static const float kWarpBandVerts[kWarpBands] = { 224.0, 16.0, 8.0, 8.0, 16.0, 48.0 };
+static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0, 32.0 };
+
+// Band lookup for vertex |u|: x = step multiplier in GridSpacing units,
+// y = fraction through the band (0 at its inner edge, 1 at its outer). The
+// fraction drives the data morph, so a band hand-off is continuous in RADIUS -
+// ground reaches the coarser lattice's surface exactly where it changes bands.
+// Vertices past the table extend at the coarsest step.
+// z = band index, for the ring debug view.
+float3 WarpBand(float au)
+{
+	float3 found = float3(kWarpBandMul[kWarpBands - 1], 1.0, (float)(kWarpBands - 1));
+	bool done = false;
+	float acc = 0.0;
+	[unroll] for (int band = 0; band < kWarpBands; ++band)
+	{
+		float prev = acc;
+		acc += kWarpBandVerts[band];
+		[flatten] if (!done && au < acc)
+		{
+			found = float3(kWarpBandMul[band], saturate((au - prev) / max(kWarpBandVerts[band], 1.0)), (float)band);
+			done = true;
+		}
+	}
+	return found;
+}
 
 // Maps a vertex coordinate relative to the grid center (in vertex units)
 // to a world-unit offset from the center.
 float WarpAxis(float u)
 {
 	float a = abs(u);
-	float lin = min(a, kWarpInnerVerts);
-	float ext = max(a - kWarpInnerVerts, 0.0);
-	float outer = kWarpGrowth * (pow(kWarpGrowth, ext) - 1.0) / (kWarpGrowth - 1.0);
-	return sign(u) * (lin + outer) * GridSpacing;
+	float off = 0.0;
+	[unroll] for (int band = 0; band < kWarpBands; ++band)
+	{
+		float take = min(a, kWarpBandVerts[band]);
+		off += take * kWarpBandMul[band];
+		a -= take;
+	}
+	off += a * kWarpBandMul[kWarpBands - 1];
+	return sign(u) * off * GridSpacing;
 }
 
 // Inverse of WarpAxis: world-unit offset from the grid center back to vertex
@@ -304,10 +342,16 @@ float WarpAxis(float u)
 float InverseWarpAxis(float w)
 {
 	float a = abs(w) / GridSpacing;
-	float ext = 0.0;
-	[flatten] if (a > kWarpInnerVerts)
-		ext = log2((a - kWarpInnerVerts) * (kWarpGrowth - 1.0) / kWarpGrowth + 1.0) / log2(kWarpGrowth);
-	return sign(w) * (min(a, kWarpInnerVerts) + ext);
+	float u = 0.0;
+	[unroll] for (int band = 0; band < kWarpBands; ++band)
+	{
+		float span = kWarpBandVerts[band] * kWarpBandMul[band];
+		float take = min(a, span);
+		u += take / kWarpBandMul[band];
+		a -= take;
+	}
+	u += a / kWarpBandMul[kWarpBands - 1];
+	return sign(w) * u;
 }
 
 // CDLOD-style geomorph for the warped outer rings: each vertex slides
@@ -322,9 +366,7 @@ float InverseWarpAxis(float w)
 // Takes/returns CENTERED coordinates (gridLocal - WarpedHalfSpan).
 float2 GeomorphVertexXY(float2 centered, float2 u)
 {
-	float2 ringStep = GridSpacing * pow(kWarpGrowth, max(abs(u) - kWarpInnerVerts, 0.0));
-	float2 lod = log2(max(ringStep / GridSpacing, 1.0));
-	float2 fineStep = GridSpacing * exp2(floor(lod));
+	float2 fineStep = GridSpacing * float2(WarpBand(abs(u.x)).x, WarpBand(abs(u.y)).x);
 	// PURE world-lattice snap — vertices never slide in XY. Whole ring bands
 	// share one power-of-two lattice snapped on ABSOLUTE world coordinates,
 	// so the set of rendered points (the surface) is world-static; camera
@@ -333,8 +375,12 @@ float2 GeomorphVertexXY(float2 centered, float2 u)
 	// blends terrain data toward the coarser lattice's surface, clipmaps-
 	// style), so nothing crawls across the terrain — which also makes the
 	// motion vectors' zero-motion assertion true by construction.
-	// Inner linear zone is exact: GridOrigin is GridSpacing-snapped and
-	// WarpAxis returns whole steps there, so snapping to fineStep is a no-op.
+	// With power-of-two bands this snap is now a NO-OP everywhere, not just in
+	// the inner zone: GridOrigin is snapped to the coarsest band step and every
+	// band start is a multiple of its own step, so absXY already sits on the
+	// vertex's own lattice. It stays as the invariant's guard rail - if a band
+	// table ever breaks alignment, this keeps the lattice honest rather than
+	// letting vertices slide.
 	float2 absXY = GridOrigin + WarpedHalfSpan + centered;
 	return floor(absXY / fineStep + 0.5) * fineStep - (GridOrigin + WarpedHalfSpan);
 }
@@ -794,12 +840,19 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		{
 			float2 centeredM = gridLocal - WarpedHalfSpan;
 			float2 uAxisM = float2(InverseWarpAxis(centeredM.x), InverseWarpAxis(centeredM.y));
-			float2 ringStepM = GridSpacing * pow(kWarpGrowth, max(abs(uAxisM) - kWarpInnerVerts, 0.0));
-			float2 lodM = log2(max(ringStepM / GridSpacing, 1.0));
-			float morphT = frac(max(lodM.x, lodM.y));
-			[branch] if (max(lodM.x, lodM.y) > 0.0 && morphT > 0.001 && DebugNoDataMorph < 0.5)
+			float3 bandX = WarpBand(abs(uAxisM.x));
+			float3 bandY = WarpBand(abs(uAxisM.y));
+			float2 ringStepM = GridSpacing * float2(bandX.x, bandY.x);
+			// Morph weight is now the fraction through the OWNING BAND, not
+			// frac(lod): with power-of-two steps every lod is a whole number,
+			// so the old expression is identically zero and the morph would
+			// never fire. Band position is continuous in radius, which is what
+			// makes the hand-off seamless when the origin re-snaps and a patch
+			// of ground changes bands.
+			float morphT = max(bandX.y, bandY.y);
+			[branch] if (max(ringStepM.x, ringStepM.y) > GridSpacing && morphT > 0.001 && DebugNoDataMorph < 0.5)
 			{
-				float2 coarseStepM = GridSpacing * exp2(floor(lodM) + 1.0);
+				float2 coarseStepM = ringStepM * 2.0;
 				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
 				float2 cBase = floor(absXYM / coarseStepM) * coarseStepM;
 				float2 cFrac = (absXYM - cBase) / coarseStepM;
@@ -2361,21 +2414,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else if (ShellLODDebug == 2)
 	{
-		// Warp-ring view: inner linear region gray; outer rings cycle six
-		// colors by ring index, dimmed where the world-snap weight is still
-		// partial (the camera-relative morph zone).
+		// Warp-band view: one color per power-of-two band, brightening across
+		// the band so the data morph's hand-off is visible. Band 0 (the 8-unit
+		// linear zone) stays gray. Bands are world-anchored now, so these
+		// stripes must hold still on the ground as the camera moves - stripes
+		// that crawl mean the band table has lost its lattice alignment.
 		float2 uAxis = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
-		float ringF = max(abs(uAxis.x), abs(uAxis.y)) - kWarpInnerVerts;
-		[flatten] if (ringF <= 0.0)
+		float3 band = WarpBand(max(abs(uAxis.x), abs(uAxis.y)));
+		[flatten] if (band.z < 0.5)
 			preLit = float3(0.15, 0.15, 0.15);
 		else
 		{
-			float snapWeight = saturate(pow(kWarpGrowth, ringF) - 1.0);
 			static const float3 kRingColors[6] = {
 				float3(1.0, 0.2, 0.2), float3(1.0, 0.8, 0.2), float3(0.3, 1.0, 0.3),
 				float3(0.2, 0.9, 0.9), float3(0.3, 0.4, 1.0), float3(0.9, 0.3, 0.9)
 			};
-			preLit = kRingColors[(uint)ringF % 6u] * lerp(0.35, 1.0, snapWeight);
+			preLit = kRingColors[(uint)band.z % 6u] * lerp(0.35, 1.0, band.y);
 		}
 	}
 	else if (ShellLODDebug == 3)

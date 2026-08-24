@@ -424,13 +424,20 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	const float shellSpacing = kShellGridSpacing;
 	a_cb.GridSpacing = shellSpacing;
 	a_cb.GridDim = kShellGridDim;
-	// The warped grid is camera-centered: snap the center to the grid step
-	// so inner vertices stay texel-stable, then offset by the warped span.
+	// The warped grid is camera-centered: snap the center to the COARSEST band
+	// step, then offset by the warped span. Snapping to the base 8 units is not
+	// enough - a coarse-band vertex would then need per-vertex rounding onto its
+	// own lattice, and the rounding is what used to flip quad widths as the
+	// camera moved (C3 root cause). At kShellOriginSnap every band start is an
+	// exact multiple of its own step, so every vertex sits on its lattice with
+	// nothing left to round. The cost is that the fine region re-centres in
+	// 256-unit steps, leaving the camera up to ~181 units off centre against a
+	// 1792-unit inner radius.
 	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
 	a_cb.WarpedHalfSpan = warpedHalfSpan;
 	a_cb.GridOrigin = {
-		std::floor(camAdjust.x / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan,
-		std::floor(camAdjust.y / kShellGridSpacing) * kShellGridSpacing - warpedHalfSpan
+		std::floor(camAdjust.x / kShellOriginSnap) * kShellOriginSnap - warpedHalfSpan,
+		std::floor(camAdjust.y / kShellOriginSnap) * kShellOriginSnap - warpedHalfSpan
 	};
 	a_cb.TerrainTexelSize = kShellVertexSpacing;
 	a_cb.TerrainDim = kShellWindowDim;
