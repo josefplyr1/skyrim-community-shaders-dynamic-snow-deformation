@@ -1800,6 +1800,10 @@ protected:
 	size_t trenchAccumTiles = 0;
 	/** @brief Tiles decay erased this sweep cycle. Reported, because the old silent prune is why a store that was deleting itself took a code review rather than a glance at the log to find. */
 	size_t trenchAccumErased = 0;
+	/** @brief Tiles the budget evicted this cycle. */
+	size_t trenchAccumEvicted = 0;
+	/** @brief Tiles created this cycle. Counted so the census can attribute every change rather than only the losses. */
+	size_t trenchAccumAdded = 0;
 	/** @brief Live tile count, published rather than read off the container so the menu never races the game thread. */
 	size_t trenchStatTiles = 0;
 	/** @brief Encoded size of every live tile, refreshed each sweep cycle. What the budget is measured against. */

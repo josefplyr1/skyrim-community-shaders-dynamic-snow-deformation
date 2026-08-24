@@ -277,12 +277,23 @@ void SnowDeformation::SweepTrenchStore()
 		trenchStatNonZero = trenchAccumNonZero;
 		trenchStatThin = trenchAccumThin;
 		trenchStatSweptTiles = trenchAccumTiles;
-		// Ground going away is worth a line. Silence here is exactly what hid a
-		// store that was deleting itself.
-		if (trenchAccumErased)
-			logger::info("[SNOW DEFORMATION] trench store: refill erased {} tiles this cycle, {} remain",
-				trenchAccumErased, trenchTiles.size());
-		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = trenchAccumErased = 0;
+		// A CENSUS, not a report of the paths we know about. Every count that
+		// went missing this cycle is attributed to decay or to eviction, and
+		// anything left over is named as unexplained - because the store has
+		// twice now lost tiles through a path nobody was watching, and a line
+		// that only speaks for the mechanisms already suspected would have
+		// stayed silent both times.
+		const size_t live = trenchTiles.size();
+		if (live != trenchStatTiles) {
+			const long long delta = (long long)live - (long long)trenchStatTiles;
+			const long long accounted = -(long long)(trenchAccumErased + trenchAccumEvicted);
+			const long long unexplained = delta - accounted - (long long)trenchAccumAdded;
+			logger::info("[SNOW DEFORMATION] trench store census: {} -> {} ({:+}), decay -{}, evicted -{}, added +{}{}",
+				trenchStatTiles, live, delta, trenchAccumErased, trenchAccumEvicted, trenchAccumAdded,
+				unexplained ? std::format(", UNEXPLAINED {:+}", unexplained) : "");
+		}
+		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+		trenchAccumErased = trenchAccumEvicted = trenchAccumAdded = 0;
 		trenchEncodedTotal = 0;
 		for (const auto& [key, tile] : trenchTiles)
 			trenchEncodedTotal += tile.encodedBytes + kTrenchTileHeaderBytes;
@@ -419,6 +430,7 @@ void SnowDeformation::EnforceTrenchBudget()
 		nearestEvicted = rank;
 	}
 	trenchKeepRadiusSq = evicted ? nearestEvicted : std::numeric_limits<float>::max();
+	trenchAccumEvicted += evicted;
 
 	if (evicted) {
 		trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
@@ -442,12 +454,20 @@ void SnowDeformation::ClearTrenchStore()
 
 void SnowDeformation::ClearTrenchStoreLocked()
 {
+	// Every wipe says so. A clear is the one thing that can empty the store
+	// without passing decay or eviction, so an unlogged one is indistinguishable
+	// from the store losing tiles to a path nobody is watching - which is
+	// exactly the hole the last two rounds were spent inside.
+	if (!trenchTiles.empty())
+		logger::info("[SNOW DEFORMATION] trench store CLEARED, {} tiles dropped", trenchTiles.size());
+
 	trenchTiles.clear();
 	trenchStatTiles = 0;
 	trenchEncodedTotal = 0;
 	trenchSweepQueue.clear();
 	trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
 	trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
+	trenchAccumErased = trenchAccumEvicted = trenchAccumAdded = 0;
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
 	// The staged bands and slices describe a map that is about to be wiped;
@@ -604,6 +624,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 						fresh.lastTouch = gameClock.lastHours;
 						// Re-seated after the insert, which may have rehashed.
 						cachedTile = &trenchTiles.emplace(key, std::move(fresh)).first->second;
+						trenchAccumAdded++;
 					}
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
