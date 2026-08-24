@@ -830,11 +830,27 @@ void SnowDeformation::DrawSettings()
 			// The map's own depth, copied to a single channel so ImGui cannot
 			// draw it through the bow wave's deposit alpha. This is the image
 			// that answers "did the trench reach the map".
-			ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The map follows the camera, so the centre is you."));
+			ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
+			const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 			if (trenchDebugSRV)
 				ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
 			else
 				ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+
+			// Where the player is, drawn ON the map. Without it "the trench did
+			// not load" and "the trench is eighty metres that way" look
+			// identical: the window is 14000 units across, so a mark 200 px off
+			// centre is most of a hundred metres away.
+			{
+				auto* draw = ImGui::GetWindowDrawList();
+				const ImVec2 centre{ imageTopLeft.x + 256.0f, imageTopLeft.y + 256.0f };
+				const float pixelsPerUnit = 512.0f / std::max(deformWorldSize, 1.0f);
+				const float ring = 25.0f * kUnitsPerMeter * pixelsPerUnit;
+				const ImU32 ink = IM_COL32(80, 220, 255, 220);
+				draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
+				draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
+				draw->AddCircle(centre, ring, IM_COL32(80, 220, 255, 90), 0, 1.0f);
+			}
 
 			// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
 			// can be trusted. It is the store's own answer to "what does the
