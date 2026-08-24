@@ -821,8 +821,22 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
 		if (settings.ShowDebugTexture) {
-			ImGui::Text("%s", T(TKEY("debug_hint"), "White = compressed snow. The map follows the camera."));
+			// The honest caption. ImGui blends by the texture's alpha, and this
+			// map's .w was claimed by the bow wave's deposit field, so the view
+			// is drawn through deposit: transparent wherever nothing has been
+			// pushed, whatever the depth channel holds. Right after a load it is
+			// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
+			// were read backwards from this image before anyone noticed.
+			ImGui::Text("%s", T(TKEY("debug_hint"), "Red = compressed snow, but this view is drawn through the deposit channel, so it is TRANSPARENT wherever the bow wave has not pushed snow - blank right after a load. Use the store view below to see what was restored."));
 			ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+
+			// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
+			// can be trusted. It is the store's own answer to "what does the
+			// window look like", which is exactly the question a reload raises.
+			if (trenchInjectSRV) {
+				ImGui::Text("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
+				ImGui::Image(trenchInjectSRV.get(), { 512.0f, 512.0f });
+			}
 		}
 
 		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map"))) {
