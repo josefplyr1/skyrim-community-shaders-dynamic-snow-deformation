@@ -810,9 +810,10 @@ public:
 		float ChurnHeightAmp;
 		/** @brief Multiplier on the churn lump wavelengths. */
 		float ChurnSizeScale;
-		/** @brief RETIRED 2026-08-22 (crisp grain removed; layout keepers, uploaded 1/0). */
-		float CrispScaleV;
-		float CrispStrengthV;
+		/** @brief C3 A/B: >0.5 disables the camera-keyed far-field height pad in ShellSurfaceZ. Reuses a retired keeper row, so the CB layout is unchanged. */
+		float DebugNoFarPad;
+		/** @brief C3 A/B: >0.5 disables the coarse-lattice data morph in ShellSurfaceZ. Same retired keeper row. */
+		float DebugNoDataMorph;
 
 		/** @brief Object-snow variants of the trench-detail knobs (independent of the landscape set). The two ObjCrisp rows are RETIRED layout keepers like the pair above. */
 		float ObjBermHeightAmp;
@@ -1019,6 +1020,10 @@ public:
 	int lodDebugView = 0;
 	/** @brief Shimmer meter: a probe CS evaluates the shell mesh surface at world-anchored points each frame; the CPU tracks frame-to-frame height deltas per distance band. */
 	bool lodShimmerMeter = false;
+	/** @brief C3 discriminator D2: drop the camera-keyed far-field height pad. Expect holes back if it was carrying them. */
+	bool lodDebugNoFarPad = false;
+	/** @brief C3 discriminator D3: drop the coarse-lattice data morph, leaving the fine lattice everywhere. */
+	bool lodDebugNoDataMorph = false;
 
 	static constexpr uint32_t kLODHistBands = 4;
 	static constexpr uint32_t kLODHistBuckets = 8;
@@ -1053,6 +1058,19 @@ public:
 	float lodShimmerAvg[kLODHistBands] = {};
 	uint32_t lodShimmerHops[kLODHistBands] = {};
 	uint32_t lodShimmerValid[kLODHistBands] = {};
+
+	// Windowed shimmer accumulators: the per-frame row is a sample, not a
+	// measurement. Reset, walk, then read - a screenshot of one frame is what
+	// voided the first C3 A/B round.
+	float lodShimmerRunMax[kLODHistBands] = {};
+	double lodShimmerRunSum[kLODHistBands] = {};
+	uint64_t lodShimmerRunCnt[kLODHistBands] = {};
+	uint32_t lodShimmerRunHops[kLODHistBands] = {};
+	uint32_t lodShimmerRunFrames = 0;
+	/** @brief Seam square (SeamBounds) rewrites: it snaps to the PLAYER's cell, so this ticks on cell crossings. C3 mechanism 3's event counter. */
+	uint32_t lodSeamChanges = 0;
+	/** @brief Terrain data window rebuilds: a whole-window re-upload of baked heights. C3's other discrete-event suspect. */
+	uint32_t lodWindowRebuilds = 0;
 	float lodShimmerHistoryBuf[kLODHistBands][kLODShimmerHistory] = {};
 	int lodShimmerHistoryIdx = 0;
 

@@ -138,9 +138,9 @@ cbuffer ShellCB : register(b0)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
-	// Crisp grain retired 2026-08-22; layout keepers.
-	float CrispScaleV;
-	float CrispStrengthV;
+	// C3 A/B flags on the retired crisp-grain keeper row; layout unchanged.
+	float DebugNoFarPad;
+	float DebugNoDataMorph;
 
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
@@ -797,7 +797,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float2 ringStepM = GridSpacing * pow(kWarpGrowth, max(abs(uAxisM) - kWarpInnerVerts, 0.0));
 			float2 lodM = log2(max(ringStepM / GridSpacing, 1.0));
 			float morphT = frac(max(lodM.x, lodM.y));
-			[branch] if (max(lodM.x, lodM.y) > 0.0 && morphT > 0.001)
+			[branch] if (max(lodM.x, lodM.y) > 0.0 && morphT > 0.001 && DebugNoDataMorph < 0.5)
 			{
 				float2 coarseStepM = GridSpacing * exp2(floor(lodM) + 1.0);
 				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
@@ -826,7 +826,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// diagonals or single texels read bare. The heavy 8-tap/150-unit-pad/
 		// 8-unit-float stack stays gone — the seam caps the range this runs at.
 		float camDist = length(gridLocal - WarpedHalfSpan);
-		[branch] if (camDist > 3000.0)
+		[branch] if (camDist > 3000.0 && DebugNoFarPad < 0.5)
 		{
 			float farBlend = smoothstep(3000.0, 8000.0, camDist);
 			float3 n0 = SampleTerrain(gridLocal + float2(TerrainTexelSize, 0.0));

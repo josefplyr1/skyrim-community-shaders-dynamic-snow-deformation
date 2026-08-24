@@ -1012,21 +1012,45 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("Rows: camera distance bands. Columns: shell minus rendered ground, world units (share of band pixels).");
 			}
 
+			ImGui::Checkbox(T(TKEY("lod_no_far_pad"), "A/B: No Far Height Pad"), &lodDebugNoFarPad);
+			if (auto _ttNoPad = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("lod_no_far_pad_tooltip"), "Disables the far-field height pad (the neighbour-max plus ridge pad past 3000 units), which scales with VIEWING DISTANCE and so moves distant ground as you walk toward it. Off is the shipped behaviour. Expect pinholes to come back if the pad was the thing hiding them - read the shimmer meter, not the holes."));
+
+			ImGui::Checkbox(T(TKEY("lod_no_data_morph"), "A/B: No Data Morph"), &lodDebugNoDataMorph);
+			if (auto _ttNoMorph = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("lod_no_data_morph_tooltip"), "Disables the coarse-lattice data morph, so every shell vertex reads its own fine-lattice terrain height. Off is the shipped behaviour. The morph blends height by ring index, which is a camera-distance term, so this is the other half of the distant up/down test."));
+
 			ImGui::Checkbox(T(TKEY("lod_shimmer"), "Far-Field Shimmer Meter"), &lodShimmerMeter);
 			if (auto _ttShimmer = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("lod_shimmer_tooltip"), "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field."));
 			if (lodShimmerMeter) {
 				static const char* kShimmerBands[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
+				if (ImGui::Button("Reset Shimmer Window")) {
+					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+						lodShimmerRunMax[bandI] = 0.0f;
+						lodShimmerRunSum[bandI] = 0.0;
+						lodShimmerRunCnt[bandI] = 0;
+						lodShimmerRunHops[bandI] = 0;
+					}
+					lodShimmerRunFrames = 0;
+					lodSeamChanges = 0;
+					lodWindowRebuilds = 0;
+				}
+				ImGui::SameLine();
+				ImGui::Text("%u frames measured", lodShimmerRunFrames);
 				for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-					char overlay[96];
-					snprintf(overlay, sizeof(overlay), "%s: max %.2f avg %.3f hops %u/%u", kShimmerBands[bandI],
-						lodShimmerMax[bandI], lodShimmerAvg[bandI], lodShimmerHops[bandI], lodShimmerValid[bandI]);
+					const double runAvg = lodShimmerRunCnt[bandI] ? lodShimmerRunSum[bandI] / (double)lodShimmerRunCnt[bandI] : 0.0;
+					char overlay[128];
+					snprintf(overlay, sizeof(overlay), "%s: PEAK %.2f  mean %.3f  hops %u  (now %.2f, %u valid)",
+						kShimmerBands[bandI], lodShimmerRunMax[bandI], runAvg, lodShimmerRunHops[bandI],
+						lodShimmerMax[bandI], lodShimmerValid[bandI]);
 					char plotId[16];
 					snprintf(plotId, sizeof(plotId), "##shim%u", bandI);
 					ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
 						overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
 				}
-				ImGui::Text("Per-frame max |dZ| (units, 0-25 scale). Deltas pause for one frame when the probe anchor requantizes (every 512 units of travel).");
+				ImGui::Text("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
+				ImGui::Text("Discrete events since reset: seam square %u, terrain window rebuilds %u", lodSeamChanges, lodWindowRebuilds);
 			}
 		}
 

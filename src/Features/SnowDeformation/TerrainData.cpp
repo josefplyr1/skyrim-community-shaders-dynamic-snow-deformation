@@ -454,6 +454,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
 		return;
 
+	lodWindowRebuilds++;  // C3 event counter: whole-window height re-upload.
 	shellWindowCellX = desiredOriginX;
 	shellWindowCellY = desiredOriginY;
 	shellWindowWorldspace = worldspace;

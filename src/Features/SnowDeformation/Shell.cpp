@@ -528,6 +528,15 @@ void SnowDeformation::DrawShell()
 		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f - kSeamOverlap, (cellY - halfCells) * 4096.0f - kSeamOverlap,
 			(cellX + halfCells + 1) * 4096.0f + kSeamOverlap, (cellY + halfCells + 1) * 4096.0f + kSeamOverlap };
 		cbData.SeamRampInv = 1.0f / 2048.0f;
+		// C3 mechanism 3: the square snaps to the player's cell, so every
+		// crossing rewrites the whole far field's edge fade in one frame.
+		static int lastSeamCellX = INT_MIN, lastSeamCellY = INT_MIN;
+		if (cellX != lastSeamCellX || cellY != lastSeamCellY) {
+			if (lastSeamCellX != INT_MIN)
+				lodSeamChanges++;
+			lastSeamCellX = cellX;
+			lastSeamCellY = cellY;
+		}
 	}
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
@@ -576,10 +585,10 @@ void SnowDeformation::DrawShell()
 		GetAccumulationDepthScale() };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
-	// Crisp grain retired 2026-08-22 (real geometry carries the detail);
-	// the four rows are layout keepers.
-	cbData.CrispScaleV = 1.0f;
-	cbData.CrispStrengthV = 0.0f;
+	// Crisp grain retired 2026-08-22 (real geometry carries the detail); its
+	// landscape pair now carries the C3 A/B flags, the Obj pair stays a keeper.
+	cbData.DebugNoFarPad = lodDebugNoFarPad ? 1.0f : 0.0f;
+	cbData.DebugNoDataMorph = lodDebugNoDataMorph ? 1.0f : 0.0f;
 	cbData.ObjBermHeightAmp = std::clamp(settings.ObjBermHeight, 0.0f, 1.0f);
 	cbData.ObjChurnHeightAmp = std::clamp(settings.ObjChurnHeight, 0.0f, 8.0f);
 	cbData.ObjChurnSizeScale = std::clamp(settings.ObjChurnSize, 0.25f, 4.0f);
@@ -1243,14 +1252,33 @@ void SnowDeformation::ReadbackLODDiagnostics()
 	}
 	context->Unmap(lodProbeStaging[mapRing].get(), 0);
 
-	for (uint32_t band = 0; band < kLODHistBands; ++band) {
-		lodShimmerMax[band] = mx[band];
-		lodShimmerAvg[band] = cnt[band] ? sum[band] / cnt[band] : 0.0f;
-		lodShimmerHops[band] = hops[band];
+	// Pause frames (anchor requantized, cnt 0) publish NOTHING. Writing their
+	// zeros used to land a full row of 0.00 in a readout that is per-frame, so
+	// a screenshot taken on one read as a perfectly stable far field while the
+	// valid counts stayed populated - the exact false negative that voided the
+	// first C3 A/B round.
+	for (uint32_t band = 0; band < kLODHistBands; ++band)
 		lodShimmerValid[band] = validCnt[band];
-		lodShimmerHistoryBuf[band][lodShimmerHistoryIdx] = mx[band];
+	uint32_t totalCnt = 0;
+	for (uint32_t band = 0; band < kLODHistBands; ++band)
+		totalCnt += cnt[band];
+
+	if (totalCnt != 0) {
+		for (uint32_t band = 0; band < kLODHistBands; ++band) {
+			lodShimmerMax[band] = mx[band];
+			lodShimmerAvg[band] = cnt[band] ? sum[band] / cnt[band] : 0.0f;
+			lodShimmerHops[band] = hops[band];
+			lodShimmerHistoryBuf[band][lodShimmerHistoryIdx] = mx[band];
+			// Windowed accumulators: a single frame is not a measurement, and
+			// the readout is what gets screenshotted.
+			lodShimmerRunMax[band] = std::max(lodShimmerRunMax[band], mx[band]);
+			lodShimmerRunSum[band] += sum[band];
+			lodShimmerRunCnt[band] += cnt[band];
+			lodShimmerRunHops[band] += hops[band];
+		}
+		lodShimmerRunFrames++;
+		lodShimmerHistoryIdx = (lodShimmerHistoryIdx + 1) % kLODShimmerHistory;
 	}
-	lodShimmerHistoryIdx = (lodShimmerHistoryIdx + 1) % kLODShimmerHistory;
 	lodProbePrevValid = true;
 	lodProbeAnchor = anchor;
 }

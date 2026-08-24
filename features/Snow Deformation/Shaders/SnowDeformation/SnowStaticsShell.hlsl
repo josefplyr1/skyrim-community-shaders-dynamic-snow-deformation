@@ -128,9 +128,9 @@ cbuffer ShellCB : register(b0)
 
 	float ChurnHeightAmp;
 	float ChurnSizeScale;
-	// Crisp grain retired 2026-08-22; layout keepers.
-	float CrispScaleV;
-	float CrispStrengthV;
+	// Landscape-shell C3 A/B flags; declared so ShellCB's layout matches.
+	float DebugNoFarPad;
+	float DebugNoDataMorph;
 
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
