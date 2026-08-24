@@ -598,6 +598,11 @@ void SnowDeformation::Prepass()
 	                                gameClock.elapsedHours * 3600.0f / std::max(gameClock.timescale, 1.0f) :
 	                                deltaTime;
 	perFrameData.RefillAmount = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+	// The same span, for the world's other self-driven clocks: the glaze thaw
+	// (which runs under a clear sky, so waiting skipped it entirely) and the
+	// unsupported-snow settle. NOT for stamp application - a fire must not
+	// carve its whole basin in the one frame after a night's sleep.
+	perFrameData.GameDeltaTime = refillSeconds;
 
 	// Melt stamps accumulate per second. Persistence is a refill slowdown on
 	// melted ground rather than banked depth, so the bowl profile survives the

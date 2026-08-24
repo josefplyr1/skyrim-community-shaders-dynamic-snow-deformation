@@ -621,7 +621,9 @@ public:
 
 		/** @brief 1 = InjectDepth holds the tile store's memory of the texels arriving from outside the window (ROADMAP #34). Its own row: Stamps must start 16-byte aligned. */
 		uint InjectValid;
-		uint InjectPad[3];
+		/** @brief The frame's span in GAME time, expressed in the seconds DeltaTime is measured in. Equal to DeltaTime during ordinary play; a wait or a sleep passes hours without rendering them, and the world's own clocks (glaze thaw, slump) must not sit those hours out. Stamp application deliberately keeps DeltaTime - a fire must not carve its whole basin in the single frame after a wait. Claimed a pad slot, so the layout is byte-identical. */
+		float GameDeltaTime;
+		uint InjectPad[2];
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */

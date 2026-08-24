@@ -224,7 +224,11 @@ cbuffer PerFrame : register(b0)
 	// 1 = InjectDepth holds the tile store's memory of the texels arriving
 	// from outside the window. Its own row: Stamps must start 16-byte aligned.
 	uint InjectValid;
-	uint3 InjectPad;
+	// This frame's span in GAME time, in the same seconds DeltaTime uses. Equal
+	// to DeltaTime in ordinary play; a wait or a sleep passes hours without
+	// rendering them, and the world's own clocks must not sit those hours out.
+	float GameDeltaTime;
+	uint2 InjectPad;
 
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -344,7 +348,10 @@ float SlumpTap(int2 p, int2 dims)
 		// Fresh snow buries a crust as readily as it fills a trench, and ice
 		// gives way to temperature besides - so a glaze fades even under a
 		// clear sky, where the refill has stopped entirely.
-		crust = max(crust - refill - CrustThaw * DeltaTime, 0.0);
+		// GAME time: this is the one decay that keeps running under a clear sky,
+		// so it is also the one a night spent waiting would otherwise skip
+		// entirely - the glaze was still there in the morning.
+		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
 		// SETTLE IS A TRENCH CLOCK, NOT A WAVE CLOCK (Josef, round 5).
 		// Snow shouldered onto untouched cover has been MOVED, and moving
 		// itself back is not something snow does - so out there the only
@@ -399,7 +406,11 @@ float SlumpTap(int2 p, int2 dims)
 			// strip's berm through the (1 - deformation) mask for free.
 			[branch] if (slumpTarget > deformation)
 			{
-				deformation = min(deformation + SlumpRate * SLUMP_SPEED * (1.0 - crust) * DeltaTime,
+				// GAME time, like the refill and the thaw: settling is
+				// something the world does to itself over hours, and it is
+				// clamped to the target, so a night waited through arrives at
+				// the same place standing there for it would have.
+				deformation = min(deformation + SlumpRate * SLUMP_SPEED * (1.0 - crust) * GameDeltaTime,
 					slumpTarget);
 			}
 		}
