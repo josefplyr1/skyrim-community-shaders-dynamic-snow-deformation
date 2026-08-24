@@ -109,9 +109,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("lod_replace_legacy"), "Legacy Horizon Shading"), &settings.LODReplaceLegacy);
 			if (auto _ttLrl = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("lod_replace_legacy_tooltip"), "A/B comparison: shade horizon snow with the old recolor (vanilla LOD lighting math) instead of the snow shell's own recipe. The old math reads brighter and bluer than the shell, peaking at golden hour. Leave off unless comparing."));
-			ImGui::Checkbox(T(TKEY("seam_cross_fade"), "Smooth Seam Hand-off"), &settings.SeamCrossFade);
-			if (auto _ttScf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("seam_cross_fade_tooltip"), "Where the shell hands off to horizon snow is a square around your cell, so it jumps a whole cell the moment you cross one - about once a minute of walking, redrawing the far edge in a single frame. This slides it across instead, over half a second. Purely a timing change: the seam sits still before and after, so it adds no distance-dependent term. Fast travel and worldspace changes still snap, since dragging the seam across the world would sweep it over everything in view."));
 			ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
 
 			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");
