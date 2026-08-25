@@ -169,7 +169,7 @@ cbuffer ShellCB : register(b0)
 
 	// Parallax: x = HeightScale (PBR JSON displacementScale), y = self-shadow
 	// strength (0 disables), z = occlusion depth multiplier (0 disables the
-	// march), w = coarse march steps.
+	// march), w = spare (the march takes Extended Materials' step budget).
 	float4 SnowParallax;
 
 	// x = scorch darkening strength, y = crust shading strength,

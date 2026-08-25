@@ -562,11 +562,13 @@ void SnowDeformation::DrawShell()
 	// kSnowUVTile now equals the game's landscape tiling, so the UV-space slab
 	// depth Extended Materials derives from it lands on the same world depth
 	// the ground beside us gets. No correction factor.
+	// w is a documented spare: the march runs Extended Materials' own step
+	// budget since M4, so the old step count read nowhere and was retired.
 	cbData.SnowParallax = {
 		snowDisplacementScale,
 		std::clamp(settings.ParallaxShadowStrength, 0.0f, 2.0f),
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
-		(float)std::clamp(settings.ParallaxSteps, 4, 16)
+		0.0f
 	};
 	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f),
 		std::clamp(settings.CrustGloss, 0.0f, 1.0f),

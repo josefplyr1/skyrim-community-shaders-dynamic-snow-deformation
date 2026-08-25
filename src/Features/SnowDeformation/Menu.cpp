@@ -175,10 +175,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttUsp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
 
-		ImGui::SliderInt(T(TKEY("parallax_steps"), "Parallax Steps"), &settings.ParallaxSteps, 4, 16);
-		if (auto _ttPs2 = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_steps_tooltip"), "Coarse steps in the parallax march, before contact refinement re-marches the hit interval at the same budget (so 8 resolves roughly like 64). Scaled down with distance and off entirely past the band where the snow grain stops being drawn. This is a ceiling, not a fixed count - the march exits on first contact, so most pixels never reach it. Measured at Dawnstar, 8 and 16 cost the same to within noise, so raise it freely if you see stepping."));
-
 		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
@@ -388,6 +384,14 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttIncorp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal. The Detected readout under Debugging Options reports what the nearest actor scores under both."));
 
+			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
+			if (auto _ttCm = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
+
+			ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
+			if (auto _ttDetail = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The shape and surface of disturbed snow: how finely it is resolved, the raised berm along trench edges, the chunky churned surface and the broken rim. Snow sitting on objects follows these too."));
+
 			ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 			if (auto _ttTess = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on. Off costs nothing but leaves every trench as angular as the grid beneath it."));
@@ -395,22 +399,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 1.0f, "%.2f");
 			if (auto _ttIrr = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
-
-			ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
-			if (auto _ttLip = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("rim_lip_tooltip"), "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off."));
-
-			ImGui::SliderFloat(T(TKEY("rim_teeth"), "Rim Teeth"), &settings.RimTeeth, 0.0f, 1.0f, "%.2f");
-			if (auto _ttTeeth = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
-
-			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
-			if (auto _ttCm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
-
-			ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
-			if (auto _ttDetail = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The look of disturbed snow: the raised berm along trench edges and the chunky churned surface. Snow sitting on objects follows these too."));
 
 			ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
 			if (auto _ttBh = Util::HoverTooltipWrapper())
@@ -427,6 +415,14 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
 			if (auto _ttCs = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
+
+			ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
+			if (auto _ttLip = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("rim_lip_tooltip"), "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("rim_teeth"), "Rim Teeth"), &settings.RimTeeth, 0.0f, 1.0f, "%.2f");
+			if (auto _ttTeeth = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
 
 			ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
 

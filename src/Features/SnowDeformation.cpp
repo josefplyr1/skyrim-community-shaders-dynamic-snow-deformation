@@ -111,7 +111,6 @@
 	X(ReliefDepth) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
-	X(ParallaxSteps) \
 	X(TrenchFloorFade) \
 	X(BermHeight) \
 	X(RimLip) \
