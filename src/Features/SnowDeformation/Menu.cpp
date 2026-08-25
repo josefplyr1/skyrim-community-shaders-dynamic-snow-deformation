@@ -362,6 +362,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttOt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
 
+			ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
+			if (auto _ttRhf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Experimental. Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
+
 			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
 			if (auto _ttFloat = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));

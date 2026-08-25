@@ -620,34 +620,43 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// ('RoadChunk...:0', ':2'), and only some wear road textures; matching
 	// textures alone splits one road across two depth settings, stacking a
 	// second hovering shell.
+	// `bridge` is tracked apart from `road` for the road heightfield only:
+	// both classes share RoadMeshesDepth exactly as before.
 	bool road = false;
+	bool bridge = false;
 	{
 		std::string loweredName(a_pass->geometry->name.c_str());
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
-		road = loweredName.find("road") != std::string::npos || loweredName.find("bridge") != std::string::npos;
+		bridge = loweredName.find("bridge") != std::string::npos;
+		road = bridge || loweredName.find("road") != std::string::npos;
 	}
 	if (!road) {
 		if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
-			static std::unordered_map<const void*, bool> roadMaterialCache;
+			// 0 = no match, 1 = road, 2 = bridge.
+			static std::unordered_map<const void*, uint8_t> roadMaterialCache;
 			if (roadMaterialCache.size() > 4096)
 				roadMaterialCache.clear();
-			auto [roadIt, roadInserted] = roadMaterialCache.try_emplace(roadMaterial, false);
+			auto [roadIt, roadInserted] = roadMaterialCache.try_emplace(roadMaterial, uint8_t(0));
 			if (roadInserted) {
 				if (auto textureSet = roadMaterial->textureSet.get()) {
 					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 						std::string lowered(path);
 						std::transform(lowered.begin(), lowered.end(), lowered.begin(),
 							[](unsigned char c) { return (char)std::tolower(c); });
-						roadIt->second = lowered.find("road") != std::string::npos || lowered.find("bridge") != std::string::npos;
+						if (lowered.find("bridge") != std::string::npos)
+							roadIt->second = 2;
+						else if (lowered.find("road") != std::string::npos)
+							roadIt->second = 1;
 					}
 				}
 			}
-			road = roadIt->second;
+			road = roadIt->second != 0;
+			bridge = roadIt->second == 2;
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -929,10 +938,13 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
 	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
 
-	// Skin-depth raster: R16F, SRV+RTV only (cleared and re-rasterized fresh
-	// every frame).
+	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
+	// frame). TWO channels, same rationale as the shelter mask above:
+	// R = the class layer depth this texel wears, G = the road-heightfield
+	// bit. A single winner-takes-all channel cannot answer "is this column
+	// road?", which is what lets the patch own the surface outright.
 	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
-	skinDepthDesc.Format = DXGI_FORMAT_R16_FLOAT;
+	skinDepthDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
 	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 	D3D11_SHADER_RESOURCE_VIEW_DESC skinDepthSrvDesc = heightSrvDesc;
 	skinDepthSrvDesc.Format = skinDepthDesc.Format;
@@ -1336,6 +1348,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1861,6 +1874,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.SkinDistantBareness = settings.SkinDistantBareness;
+		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		context->DrawIndexed(indexCount, 0, 0);
@@ -1952,6 +1966,9 @@ void SnowDeformation::DrawCapturedStatics()
 		// The patch only has texels where the raster already permitted carving,
 		// so the per-pixel trench terms must not gate it a second time.
 		scb.ObjectTrenches = 1.0f;
+		// Global gate here, not a per-draw class: the patch is one draw and
+		// reads the road bit per texel from the raster's G channel.
+		scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };

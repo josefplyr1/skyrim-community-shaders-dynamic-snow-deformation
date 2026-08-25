@@ -31,6 +31,13 @@ cbuffer StaticCB : register(b1)
 	// >0.5: this object may be trenched. Zero skin depth makes the patch's
 	// texels dead for it, which is how a class is switched off.
 	float ObjectTrenches;
+
+	float SkinDistantBareness;  // layout sync with SnowStaticsShell; unused here
+	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
+	// >0.5: this draw is a road-heightfield object; RT2.g carries the bit so
+	// the patch can own the column outright.
+	float RoadField;
+	float padStatics;
 }
 
 struct VS_INPUT
@@ -43,7 +50,8 @@ struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
-	float SkinDepth : TEXCOORD1;
+	// x = class layer depth, y = road-heightfield bit.
+	float2 SkinDepth : TEXCOORD1;
 	float2 WorldXY : TEXCOORD2;
 };
 
@@ -80,7 +88,7 @@ VS_OUTPUT main(VS_INPUT input)
 	VS_OUTPUT vsout;
 	vsout.Position = float4(ndc.x, ndc.y, 0.5, 1.0);
 	vsout.WorldZ = worldAbs.z;
-	vsout.SkinDepth = skinDepth;
+	vsout.SkinDepth = float2(skinDepth, RoadField > 0.5 ? 1.0 : 0.0);
 	vsout.WorldXY = worldAbs.xy;
 	return vsout;
 }
@@ -122,10 +130,11 @@ float CaptureTerrainHeight(float2 worldXY)
 struct PS_OUTPUT
 {
 	// RT0 blends MAX (object top surface), RT1 blends MIN (object bottom),
-	// RT2 blends MAX (the snow-layer depth this texel's class wears).
+	// RT2 blends MAX on BOTH channels (x = the snow-layer depth this texel's
+	// class wears, y = road-heightfield bit, so MAX reads "any road here").
 	float Top : SV_Target0;
 	float Bottom : SV_Target1;
-	float SkinDepth : SV_Target2;
+	float2 SkinDepth : SV_Target2;
 };
 
 PS_OUTPUT main(VS_OUTPUT input)

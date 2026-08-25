@@ -1562,6 +1562,8 @@
     "feature.snow_deformation.rim_lip_tooltip": "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off.",
     "feature.snow_deformation.rim_teeth": "Rim Teeth",
     "feature.snow_deformation.rim_teeth_tooltip": "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off.",
+    "feature.snow_deformation.road_heightfield": "Road Snow As One Surface",
+    "feature.snow_deformation.road_heightfield_tooltip": "Experimental. Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path.",
     "feature.snow_deformation.road_meshes_depth": "Road Meshes",
     "feature.snow_deformation.road_meshes_depth_tooltip": "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield.",
     "feature.snow_deformation.scorch_strength": "Lightning Scorch",

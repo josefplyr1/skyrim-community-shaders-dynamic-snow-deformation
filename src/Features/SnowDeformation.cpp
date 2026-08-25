@@ -132,6 +132,7 @@
 	X(RangeSkinsGeometryM) \
 	X(SkinDistantBareness) \
 	X(ObjectTrenches) \
+	X(RoadHeightfield) \
 	X(DistantSnowLineZ) \
 	X(DistantSnowNorthDrop) \
 	X(DistantSnowLineFade) \
@@ -306,7 +307,11 @@ void SnowDeformation::SetupResources()
 			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
-			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
+			// RT2 carries a second channel (G = road-heightfield bit); MAX on
+			// it means "any road wrote this texel".
+			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = i == 2 ?
+			                                                            (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN) :
+			                                                            D3D11_COLOR_WRITE_ENABLE_RED;
 		}
 		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&minmaxBlendDesc, heightMaxBlendState.put()));
 		Util::SetResourceName(heightMaxBlendState.get(), "SnowDeformation::HeightMinMaxBlend");

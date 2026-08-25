@@ -448,6 +448,8 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
+		/** @brief S0 spike (ROAD-HEIGHTFIELD-PLAN): roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Bridges excluded pending #9e. */
+		bool RoadHeightfield = false;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
@@ -1202,6 +1204,8 @@ public:
 		RE::NiTransform world;
 		/** @brief Road/bridge match: this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
 		bool road;
+		/** @brief Matched on "bridge" rather than "road". Held apart from `road` only to keep bridges out of the road heightfield (S0): their deck is elevated, and the stamp map has no z channel to tell a deck trail from the ground below it (#9e). */
+		bool bridge;
 		/** @brief Glacier/iceberg family: captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
 		bool fadeExempt;
 	};
@@ -1338,7 +1342,9 @@ public:
 		float SkinDistantBareness;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
 		float FadeExempt;
-		float padStatics[2];
+		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float RoadField;
+		float padStatics;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

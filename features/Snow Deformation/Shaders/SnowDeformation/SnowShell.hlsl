@@ -223,7 +223,8 @@ Texture2D<float2> ObjectBottoms : register(t5);
 // layer wears the object's own skin depth instead of the landscape class
 // depth.
 Texture2D<float> ObjectTopsRaw : register(t11);
-Texture2D<float> ObjectSkinDepthMap : register(t12);
+// x = layer depth (all this shell reads), y = the patch's road-heightfield bit.
+Texture2D<float2> ObjectSkinDepthMap : register(t12);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
@@ -619,8 +620,8 @@ float SampleObjectDepthCap(float2 worldXY)
 	[flatten] if (all(tops < -50000.0))
 		return 1e6;
 	return max(
-		max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0))),
-		max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0))));
+		max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)).x, ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0)).x),
+		max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)).x, ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0)).x));
 }
 
 // ---- Surface undulation: wind-settled dunes ----

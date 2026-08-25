@@ -209,7 +209,12 @@ cbuffer StaticCB : register(b1)
 	// whose own baked snow never matches the shell). Mirror in
 	// SnowDeformation.h StaticsCB.
 	float FadeExempt;
-	float2 padStatics;
+	// >0.5: road heightfield on. On skin draws it also means THIS draw is a
+	// road-heightfield object, so the skin steps aside for the patch; on the
+	// patch's own draw it is the global gate and the per-texel bit comes from
+	// the skin-depth raster's y channel. Mirror in SnowDeformation.h.
+	float RoadField;
+	float padStatics;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -418,7 +423,8 @@ Texture2D<float> ObjectTopRaw : register(t11);
 Texture2D<float> ObjectSnowCone : register(t13);
 #endif
 #ifdef PATCH
-Texture2D<float> ObjectSkinDepth : register(t12);
+// x = class layer depth, y = road-heightfield bit.
+Texture2D<float2> ObjectSkinDepth : register(t12);
 #endif
 
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
@@ -479,7 +485,9 @@ float ObjectConeDepth(float2 worldXY)
 
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
-float PatchSkinDepth(float2 worldXY)
+// x = layer depth, y = road bit. MAX-of-4 on both, matching PatchTop: a
+// sentinel neighbour must not drag the column off the road.
+float2 PatchSkinDepth(float2 worldXY)
 {
 	float2 dims;
 	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
@@ -517,6 +525,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	float top;
 	float skinDepth;
 	float skinEdgeMin;
+	// >0.5 anywhere in this cell: a road-heightfield column. Road texels drop
+	// the trample gate below, so the patch owns the whole road surface rather
+	// than appearing only around trails.
+	float roadBit;
 	[branch] if (dense)
 	{
 		// Tessellated vertices sample BETWEEN the 8-unit raster texels,
@@ -542,19 +554,24 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float tMax = max(max(t00, t10), max(t01, t11));
 		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
 			top = PatchTop(worldXY);
-		float s00 = PatchSkinDepth(base);
-		float s10 = PatchSkinDepth(base + float2(kHeightTexel, 0.0));
-		float s01 = PatchSkinDepth(base + float2(0.0, kHeightTexel));
-		float s11 = PatchSkinDepth(base + float2(kHeightTexel, kHeightTexel));
-		skinDepth = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		float2 s00 = PatchSkinDepth(base);
+		float2 s10 = PatchSkinDepth(base + float2(kHeightTexel, 0.0));
+		float2 s01 = PatchSkinDepth(base + float2(0.0, kHeightTexel));
+		float2 s11 = PatchSkinDepth(base + float2(kHeightTexel, kHeightTexel));
+		skinDepth = lerp(lerp(s00.x, s10.x, f.x), lerp(s01.x, s11.x, f.x), f.y);
 		// Weakest lattice corner: a footprint boundary crossing this cell.
-		skinEdgeMin = min(min(s00, s10), min(s01, s11));
+		skinEdgeMin = min(min(s00.x, s10.x), min(s01.x, s11.x));
+		// MAX, not the bilinear: a cell straddling the road edge must resolve
+		// as road for every one of its vertices or the gate splits the cell.
+		roadBit = max(max(s00.y, s10.y), max(s01.y, s11.y));
 	}
 	else
 	{
+		float2 skin = PatchSkinDepth(worldXY);
 		top = PatchTop(worldXY);
-		skinDepth = PatchSkinDepth(worldXY);
+		skinDepth = skin.x;
 		skinEdgeMin = skinDepth;
+		roadBit = skin.y;
 	}
 	float2 gridLocal = v.GridLocal;
 
@@ -643,9 +660,16 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 			aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + kAliveRays[rayI]));
 	}
 
+	// Road heightfield: the patch IS the road's snow, so it must exist over
+	// the whole surface, not just around trails. Untrampled road resolves to
+	// deform 0 below, i.e. a flat full-depth surface - the same expression,
+	// evaluated everywhere.
+	bool roadField = RoadField > 0.5 && roadBit > 0.5;
+	bool trampled = aliveDeform >= 0.005 || roadField;
+
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
-	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && aliveDeform >= 0.005)
+	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled)
 	{
 		// Bicubic, like the landscape shell; rounded trench walls.
 		float deform = saturate(SampleDeformationSmooth(gridLocal));
@@ -808,7 +832,7 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 	[unroll] for (uint i = 0; i < 4; i++)
 	{
 		float2 w = patch[i].WorldXY;
-		if (PatchTop(w) > -50000.0 && PatchSkinDepth(w) >= 1.0)
+		if (PatchTop(w) > -50000.0 && PatchSkinDepth(w).x >= 1.0)
 			anyLive = true;
 	}
 	if (!anyLive) {
@@ -1481,6 +1505,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// 0 means no carve; drives the SV_Depth push at the end.
 	float trenchHitS = 0.0;
 #	ifndef PATCH
+	// Road heightfield: this draw has no snow of its own - the patch carries
+	// the whole surface, trampled or not - so the skin leaves outright
+	// instead of dithering out over trails. Same two structural gates as the
+	// trail hand-off below: up-facing only (the patch cannot represent a kerb
+	// face) and inside the patch grid (past 950 there is nothing behind the
+	// hole; the range hand-off is S2, ROAD-HEIGHTFIELD-PLAN D).
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 && length(input.WorldPos.xy) < 950.0)
+		discard;
+
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
 	// dissolve out so the patch's real carved geometry beneath shows
 	// through. Three gates keep the hand-off airtight:
