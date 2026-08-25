@@ -184,6 +184,42 @@ void SnowDeformation::RollTrenchWindow()
 
 	std::scoped_lock lock(trenchStoreMutex);
 
+	// The ring is only claimed once a slice is actually going to be copied, so
+	// an idle frame neither flips it nor blocks on a drain.
+	const int dim = (int)deformMapDim;
+	const bool haveMarks = trenchDirtyRows.size() == (size_t)(dim + 31) / 32;
+
+	// A CURSOR THAT ONLY EVER MOVES FORWARD, skipping rows nothing has dug
+	// since they were last mirrored.
+	//
+	// The predecessor sought the lowest dirty row instead, and that starved the
+	// sweep: every carve stamp in the window marks rows, NPC traffic included,
+	// so in a populated area far more rows are marked each frame than a slice
+	// can clear, the scan restarts low every time something moves south of the
+	// player, and the cursor never climbs to where the player actually is. It
+	// also never meant "freshest" - the lowest row index is the SOUTH edge of
+	// the window, which coincides with newest only when walking south.
+	//
+	// So dirtiness now chooses what to IGNORE, never where to go. Coverage is
+	// guaranteed again because the cursor is monotonic, and it is fast because
+	// clean rows cost a bit test instead of a copy.
+	//
+	// Skipping clean rows is only safe since writes became raise-only: a row
+	// nothing has dug has nothing to add, and the refill that lowered it is
+	// decay's business, not the mirror's.
+	if (haveMarks) {
+		int skipped = 0;
+		while (skipped < dim && !(trenchDirtyRows[(size_t)trenchRollRow >> 5] & (1u << (trenchRollRow & 31)))) {
+			if (++trenchRollRow >= dim)
+				trenchRollRow = 0;
+			skipped++;
+		}
+		// Nothing dug anywhere in the window: the store is already current, and
+		// standing still costs one pass of bit tests.
+		if (skipped >= dim)
+			return;
+	}
+
 	const int ring = trenchRollRing;
 	trenchRollRing ^= 1;
 
@@ -198,31 +234,27 @@ void SnowDeformation::RollTrenchWindow()
 		trenchRollValid[ring] = false;
 	}
 
-	const int dim = (int)deformMapDim;
+	const int start = trenchRollRow;
+	int rows = std::min(kTrenchRollRows, dim - start);
 
-	// Freshly dug rows first, then the sequential sweep. Without the priority
-	// the newest metres of a trail are the likeliest to be missing from a save
-	// - the reindeer that ran past just before Josef saved, and whose last few
-	// metres came back gone.
-	int start = -1;
-	if (trenchDirtyRows.size() == (size_t)(dim + 31) / 32) {
-		for (size_t word = 0; word < trenchDirtyRows.size() && start < 0; word++) {
-			if (!trenchDirtyRows[word])
-				continue;
-			unsigned long bit = 0;
-			_BitScanForward(&bit, trenchDirtyRows[word]);
-			start = (int)(word * 32 + bit);
-		}
-	}
-	if (start < 0)
-		start = trenchRollRow;
-	start = std::min(start, dim - 1);
+	// TRIMMED to the last dug row inside the slice. Without this the slice
+	// width sets the cost outright: one dug row would drag 127 clean ones
+	// through the readback with it, and a wide slice would be a flat per-frame
+	// charge instead of a budget spent only where something was carved.
+	// Clean rows INSIDE the trimmed span still ride along - they are part of
+	// one contiguous copy, and splitting that to dodge them would cost more
+	// than it saves.
+	if (haveMarks) {
+		int last = start;
+		for (int row = start; row < start + rows; row++)
+			if (trenchDirtyRows[(size_t)row >> 5] & (1u << (row & 31)))
+				last = row;
+		rows = last - start + 1;
 
-	const int rows = std::min(kTrenchRollRows, dim - start);
-	// Cleared whether they were dirty or swept: this slice is now mirrored.
-	for (int row = start; row < start + rows; row++)
-		if (trenchDirtyRows.size() == (size_t)(dim + 31) / 32)
+		// Everything copied is now mirrored, dug or merely swept up with it.
+		for (int row = start; row < start + rows; row++)
 			trenchDirtyRows[(size_t)row >> 5] &= ~(1u << (row & 31));
+	}
 
 	const D3D11_BOX box{ 0, (UINT)start, 0, (UINT)dim, (UINT)(start + rows), 1 };
 	context->CopySubresourceRegion(trenchRollStaging[ring].get(), 0, 0, 0, 0, live->resource.get(), 0, &box);
@@ -232,13 +264,11 @@ void SnowDeformation::RollTrenchWindow()
 	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, start, dim, rows };
 	trenchRollValid[ring] = true;
 
-	// The sequential sweep advances only when it was the one that ran; a
-	// priority slice must not let untouched ground go unmirrored for ever.
-	if (start == trenchRollRow) {
-		trenchRollRow += rows;
-		if (trenchRollRow >= dim)
-			trenchRollRow = 0;
-	}
+	// UNCONDITIONAL. Nothing may hold the cursor still, which is the whole
+	// difference from what this replaces.
+	trenchRollRow = start + rows;
+	if (trenchRollRow >= dim)
+		trenchRollRow = 0;
 }
 
 void SnowDeformation::TickTrenchClock()

@@ -1869,8 +1869,15 @@ protected:
 	 * So a slice of the window is folded in every frame, cycling through the
 	 * whole map every few seconds. The store is then continuously correct and
 	 * no save has to catch a moment.
+	 *
+	 * The slice is WIDE because the cursor skips rows nothing has dug and the
+	 * copy is trimmed to the last dug row inside it, so the cost tracks how
+	 * much has actually been carved rather than the slice size. A quiet window
+	 * costs a pass of bit tests; a busy one pays for the ground that changed.
+	 * Sizing it for the busy case is what keeps a fresh trench out of the gap
+	 * between digging and saving.
 	 */
-	static constexpr int kTrenchRollRows = 16;
+	static constexpr int kTrenchRollRows = 128;
 	winrt::com_ptr<ID3D11Texture2D> trenchRollStaging[2];
 	bool trenchRollValid[2] = {};
 	TrenchBandCopy trenchRollMeta[2] = {};
@@ -1878,13 +1885,22 @@ protected:
 	int trenchRollRow = 0;
 
 	/**
-	 * @brief Map rows this frame's carve stamps touched, one bit per row.
+	 * @brief Map rows dug since they were last mirrored, one bit per row.
 	 *
-	 * A plain sequential sweep mirrors the whole map every few seconds, so the
-	 * newest few metres of a trail are the part most likely to be missing from
-	 * a save - which is exactly the ground the player just watched being dug.
-	 * Rolling changed rows FIRST fixes that at the source rather than by
-	 * spending bandwidth on ground nothing has touched.
+	 * A SKIP hint, never a seek target. The mirror's cursor only ever moves
+	 * forward; these bits let it step over rows that have nothing to add,
+	 * which is most of the window most of the time, so the sweep completes in
+	 * a fraction of a second at roughly the cost of one slice.
+	 *
+	 * It is deliberately NOT a priority queue. Seeking to the lowest marked row
+	 * starved the sweep outright: every carve stamp marks rows, NPC traffic
+	 * included, so a populated area marks far more rows per frame than a slice
+	 * can clear, and the cursor never climbs to where the player is. The lowest
+	 * row index is also the window's SOUTH edge, which is not "freshest" unless
+	 * you happen to be walking south.
+	 *
+	 * Safe only because writes are raise-only: a row nothing has dug has
+	 * nothing to add, and the refill that lowered it is decay's business.
 	 *
 	 * Marked after the stamps are gathered and consumed by the NEXT frame's
 	 * roll, which is when the map holding them becomes the one being copied.
