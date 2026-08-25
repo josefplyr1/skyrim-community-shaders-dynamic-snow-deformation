@@ -49,17 +49,15 @@
 //       neither removes snow nor throws it, so it is neither of the above and
 //       needed a channel of its own.
 //   .w  DEPOSIT: snow standing ABOVE the untouched surface, pushed there by
-//       a body moving through cover (ROADMAP #35). This is what makes the
+//       a body moving through cover. This is what makes the
 //       bow wave persistent instead of a shape that follows the feet: the
 //       crest is MAXed into the map every frame at wherever it currently is,
 //       so ground that has been shouldered stays shouldered when the walker
-//       turns, stops or leaves - the failure Josef found by spinning on the
-//       spot. It decays on its own clock (BowWaveSettle) and to the refill,
+//       turns, stops or leaves. It decays on its own clock (BowWaveSettle)
+//       and to the refill,
 //       relaxing into the berm the trail already builds.
-//       CLAIMED FROM BLOOD 2026-08-22. BLOOD-DESIGN.md had reserved .w; it
-//       now needs a field of its own. The channel's old comment already
-//       anticipated this ("whatever claims .w later needs its own debug
-//       view rather than this one") - the ImGui map preview blends by alpha,
+//       Claimed from blood: BLOOD-DESIGN.md had reserved .w and now needs a
+//       field of its own. The ImGui map preview blends by alpha,
 //       so it now reads deposit as transparency.
 
 // Bow-wave crests to deposit this frame. Mirrors kMaxBowWaves in
@@ -154,8 +152,8 @@
 static const float kSlumpRadius[SLUMP_RADII] = { 16.0, 32.0, 64.0 };
 static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
 // A strip settles PARTWAY toward its neighbors' floor, not onto it - about
-// half. Josef's cross-section: the fin survives as a low bump inside the
-// channel, it does not melt to the bottom.
+// half: the fin survives as a low bump inside the channel rather than
+// melting to the bottom.
 #define SLUMP_SETTLE 0.5
 // Least min-support inside the gate radii that engages an axis. Well above
 // refill remnants and trench shoulders, well below a walked trail's floor.
@@ -244,7 +242,7 @@ cbuffer PerFrame : register(b0)
 Texture2D<float4> PreviousDeformation : register(t0);
 RWTexture2D<float4> CurrentDeformation : register(u0);
 // Tile-store depth for this window, resampled on the CPU. Only the texels the
-// scroll brings in from outside actually read it (ROADMAP #34).
+// scroll brings in from outside actually read it.
 Texture2D<float> InjectDepth : register(t1);
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
@@ -352,7 +350,7 @@ float SlumpTap(int2 p, int2 dims)
 		// so it is also the one a night spent waiting would otherwise skip
 		// entirely - the glaze was still there in the morning.
 		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
-		// SETTLE IS A TRENCH CLOCK, NOT A WAVE CLOCK (Josef, round 5).
+		// SETTLE IS A TRENCH CLOCK, NOT A WAVE CLOCK.
 		// Snow shouldered onto untouched cover has been MOVED, and moving
 		// itself back is not something snow does - so out there the only
 		// thing that takes a deposit away is refill, i.e. fresh snowfall
@@ -363,9 +361,7 @@ float SlumpTap(int2 p, int2 dims)
 		// ALREADY been carved, and that is what was thickening the trench's
 		// own spiky edges; there the settle clock clears it fast. One field,
 		// two lifetimes, told apart by whether the ground under it was dug.
-		// Fixed 0.35 s: the Settle slider is RETIRED (round 8, Josef's call
-		// - it never had a visible job once the melt was traced to the wipe,
-		// and trench-spoil cleanup has one right answer: fast).
+		// Fixed 0.35 s: the Settle slider is RETIRED.
 		const float dugHere = saturate(deformation * 3.0);
 		deposit = max(deposit - refill - dugHere * DeltaTime / 0.35, 0.0);
 
@@ -662,7 +658,7 @@ float SlumpTap(int2 p, int2 dims)
 		// crest is the current state of the snow it is pushing, so wherever
 		// it reaches, whatever was written there before is stale and must go
 		// before the new value is laid down. This is what tells a WAVE from a
-		// TRENCH (Josef, round 6): ground the crest has already swept over is
+		// TRENCH: ground the crest has already swept over is
 		// walked ground - trench - and gets cleared, while ground it has not
 		// reached yet keeps the pile that was pushed onto it. Without it the
 		// crest wrote its ring at every step and never took any of it back,
@@ -672,7 +668,7 @@ float SlumpTap(int2 p, int2 dims)
 		const uint waveCount = (uint)DepositParams.x;
 		[loop] for (uint w = 0; w < waveCount; w++)
 		{
-			// CAPSULE, not a point (round 5): the crest hugs the swept path
+			// CAPSULE, not a point: the crest hugs the swept path
 			// the foot actually took this frame - the same segStart -> tip
 			// capsule the trench stamps use.
 			const float2 tipPos = DepositPosDir[w].xy;
@@ -685,10 +681,10 @@ float SlumpTap(int2 p, int2 dims)
 			const float2 onPath = prevPos + seg * segT;
 			const float radius = max(DepositShape[w].x, 1e-3);
 
-			// ANCHORED AT THE FOOT, STRETCHED FORWARD (Josef, round 8): the
-			// wave starts where the trench ends, always. Round 7 offset the
-			// lobe's centre forward, which detached the mound from the
-			// trench mouth as Reach went up. Now the shape's near edge stays
+			// ANCHORED AT THE FOOT, STRETCHED FORWARD: the
+			// wave starts where the trench ends, always. Offsetting the lobe's
+			// centre forward instead detaches the mound from the trench mouth
+			// as Reach goes up. The shape's near edge stays
 			// pinned at the foot and Reach only DIVIDES the forward axis, so
 			// turning it up extends the hill onward from the same start
 			// instead of moving it away.
@@ -713,11 +709,11 @@ float SlumpTap(int2 p, int2 dims)
 			const float shape = radial * angular;
 			crest = max(crest, shape * DepositShape[w].y);
 
-			// THE WIPE NEVER REACHES THE PILE (round 9, the final melt fix).
+			// THE WIPE NEVER REACHES THE PILE (the final melt fix).
 			// The wipe is a per-frame MULTIPLICATIVE cut, so any leak onto
-			// the pile compounds at frame rate - round 8's claim mask only
-			// protected where the crest shape was exactly 1, which is almost
-			// nowhere, and the flanks melted within a second of the fade.
+			// the pile compounds at frame rate. A claim mask keyed to the crest
+			// shape being exactly 1 protects almost nowhere, and the flanks melt
+			// within a second of the fade.
 			// No shape algebra survives that; geometry does: the pile lies
 			// AHEAD of the foot by construction, so the wipe is confined to
 			// ground at or BEHIND the leading edge, plus the corridor's

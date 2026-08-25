@@ -55,7 +55,7 @@ static constexpr float kMinFootStampRadius = 5.0f;
 // Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
-/** Body key for the bow wave's own previous-position entry (ROADMAP #35). */
+/** Body key for the bow wave's own previous-position entry. */
 static constexpr uint64_t kBodyKeyBit = 0x2000;
 /** Push radius of a human-sized actor before the Reach crank, in world units. */
 static constexpr float kBowWaveBaseRadius = 30.0f;
@@ -496,14 +496,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 
-		// Bow wave (ROADMAP #35). The BODY measures the motion - one smoothed
-		// speed and heading per actor, so the crest never pulses with the
-		// gait - but the FEET carry it (emitted in the foot loop below).
-		// Anchoring to the body put the crest a fixed radius from the actor's
-		// centre, and a sprint throws the lead foot far enough forward to
-		// land inside it: legs clipped through the wave (Josef's round-1
-		// verdict). A crest measured from the foot cannot be reached by that
-		// foot, because it is zero AT the foot and peaks ahead of it.
+		// Bow wave. The body measures the motion - one smoothed speed and
+		// heading per actor, so the crest never pulses with the gait - but the
+		// feet carry it (emitted in the foot loop below). Anchoring the crest
+		// to the body places it a fixed radius from the actor's centre, which
+		// a sprinting lead foot can reach and clip through. A crest measured
+		// from the foot is zero at the foot and peaks ahead of it.
 		float bowWaveStrength = 0.0f;
 		float2 bowWaveDir = { 0.0f, 0.0f };
 		if (settings.BowWaveHeight > 0.001f && !isDead) {
@@ -527,9 +525,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// "settles after a brief moment" half of the design.
 					const float instant = dist / dtBody;
 					// Builds fast, HOLDS slow. Snow that has been shoved
-					// aside does not shove itself back the moment you stop -
-					// the round-2 quick decay read as the crest morphing back
-					// into flat ground (Josef). The settle time is a crank.
+					// aside does not shove itself back the moment you stop;
+					// too quick a decay reads as the crest morphing back into
+					// flat ground. The settle time is a crank.
 					// The deposit field owns persistence now, so this only
 					// has to stop the live crest flickering between strides:
 					// a short release, not the settle time (which decays the
@@ -728,7 +726,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// uses rather than radiating from a point: a point source
 					// threw its whole radius ahead of wherever the foot was,
 					// which bulged the far wall of a trench before the foot
-					// had crossed it (Josef, round 5).
+					// had crossed it.
 					const float footAhead = (tip.x - position.x) * bowWaveDir.x +
 					                        (tip.y - position.y) * bowWaveDir.y;
 					if (bowWaveStrength > 0.02f && footAhead > -2.0f &&

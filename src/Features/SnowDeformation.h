@@ -91,9 +91,9 @@ public:
 	// centre happened to sit, quad widths flipped as the camera moved, and the
 	// surface interpolated inside them jumped by the terrain's departure from
 	// linearity across the span: hundreds of units against a 30-unit snow
-	// layer. That was the distant up/down jumping (C3, measured 2026-08-24).
+	// layer. That was the distant up/down jumping.
 	// Must match the kWarpBand tables in SnowShell.hlsl.
-	// Round 4: the coarsest band is 128 units - EXACTLY the land-vertex
+	// The coarsest band is 128 units - exactly the land-vertex
 	// spacing - and it runs from 2432 units all the way to the seam. The shell
 	// therefore samples every terrain texel it covers, so it needs no clearance
 	// pad out there, and with the pad gone so is the stepped sink the pad's
@@ -299,21 +299,21 @@ public:
 		float RefillRateMultiplier = 1.0f;
 		/** @brief Refill rate follows the current weather's snowfall density; clear spells and interiors do not refill. Off: constant baseline rate in any weather. */
 		bool RefillOnlyWhenSnowing = true;
-		/** @brief Trenches survive leaving the deformation window: departing texels go to a sparse world-grid tile store and come back when the window returns. In-session only so far - nothing is written to the save (ROADMAP #34 Stage A). Off restores the old behaviour, where walking away discards them. */
+		/** @brief Trenches survive leaving the deformation window: departing texels go to a sparse world-grid tile store and are re-injected when the window returns. Off discards them on departure. */
 		bool PersistTrenches = true;
-		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. 3 rather than a cautious 7 per Josef, 2026-08-23: three snowless days running is already an odd week in Skyrim, so the floor almost never decides anything and does not need the headroom. 0 disables the floor and leaves snowfall as the only reaper. */
+		/** @brief In-game days for a stored trench to fade with no snowfall at all. Snowfall does the real erasing, at the live refill's own rate so ground behaves the same whether or not it is being looked at; this is the floor underneath it, so a clear-weather modlist still prunes its store instead of growing one for ever. The floor rarely decides anything, since three snowless days running is unusual. 0 disables it and leaves snowfall as the only reaper. */
 		float StoredTrenchFadeDays = 3.0f;
 		/** @brief Budget for the trench store, in MB of encoded data - which is what a save will cost once #34 Stage C writes it, not the raw in-memory figure. Beyond it, least-recently-visited ground is forgotten first. The cap is the ONLY thing bounding the store: decay alone leaves it unbounded on ground that never sees snowfall, and a fully trodden worldspace would be gigabytes. 1 MB is roughly two to four deformation windows of remembered ground. */
 		float TrenchMemoryMB = 1.0f;
-		/** @brief Ceiling the accumulated layer grows to, as a multiple of each class's authored depth (ROADMAP #33). 1.5 takes a 30-unit class to 45 and an 18-unit path to 27, so the gap that makes a road readable WIDENS as it snows. 1.0 = accumulation reaches nothing. */
+		/** @brief Ceiling the accumulated layer grows to, as a multiple of each class's authored depth. Scaling is proportional, so the gap between a road and the field beside it widens as it snows. 1.0 = accumulation reaches nothing. */
 		float AccumulationPeak = 1.5f;
-		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. ON by default per Josef, 2026-08-24, once all four Stage C exit tests passed. */
+		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth. */
 		bool EnableSnowAccumulation = true;
 		/** @brief Carry the accumulated layer through save/load on the 'SNAC' co-save record. Off, the record is written zeroed and every load starts at the authored depth. */
 		bool PersistAccumulation = true;
-		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Walked down 20 -> 4 -> 1 over Josef's three test rounds: the pace has to be visible within a session, and at his timescale of 5 even 4 hours was ~48 real minutes of unbroken snowfall. */
+		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Tuned low so the change is visible within a session at typical timescales. */
 		float AccumulationHours = 1.0f;
-		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time per Josef, 2026-08-24 - the plan's 2:1 asymmetry was deliberately balanced away in favour of a change the player can actually watch happen. */
+		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time rather than asymmetric, so the change stays watchable. */
 		float AccumulationMeltHours = 1.0f;
 		/** @brief In-game days for the layer to settle on its own, applied in ANY weather including snowfall. This is the guarantee that the world returns to its authored height even through a winter that keeps topping it up; unlike the trench floor it is the same order as the melt, so it also shortens a clear-weather settle. 0 disables it and leaves the melt as the only reaper. */
 		float AccumulationFadeDays = 3.0f;
@@ -339,7 +339,7 @@ public:
 		std::array<float, 3> LightningArcTint = { 0.698f, 0.620f, 1.0f };
 		/** @brief DDS for the bolt, relative to Data. The shader draws a real core-and-falloff channel on its own, so a path that fails to resolve costs detail rather than leaving a black band in the air - which is why a default can be shipped at all. Verified present in Skyrim's own effects set. */
 		std::string LightningArcTexturePath = "Textures\\Effects\\fxlightningbolt01.dds";
-		/** @brief OFF by default, per Josef: the procedural core-and-falloff channel is the look; the texture is the alternate. The path above stays filled so switching this on needs no typing. */
+		/** @brief Off by default: the procedural core-and-falloff channel is the primary look and the texture is the alternate. The path above stays filled so enabling this needs no typing. */
 		bool LightningArcUseTexture = false;
 		/** @brief How dark a discharge burns the snow it struck. 0 removes the scorch and leaves the pocking alone. */
 		float ScorchStrength = 0.85f;
@@ -481,15 +481,15 @@ public:
 		float TrampleZoneScale = 0.75f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
 		float TrampleZoneHeight = 50.0f;
-		/** @brief ON (default) = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; OFF = clean binary cut. Round 18 fixed the inverted polarity (the checkbox used to gate a retired cross-fade path, so OFF showed the dust). */
+		/** @brief On = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; off = a clean binary cut. */
 		bool SnowBorderDithering = true;
-		/** @brief Minimum snow left on carved trench floors, in units above the terrain. The old hard-coded 5 guaranteed solid snow floors against the terrain window's bilinear error. Default 3 (Josef): wear-through to real ground is gated on shell shadow casting + two-sided height blending landing first — until then low floors expose a bright, unblended pit. */
+		/** @brief Minimum snow left on carved trench floors, in units above the terrain. Values near 0 let trampling wear through to the ground, which needs shell shadow casting and two-sided height blending to read correctly; until then a low floor exposes a bright, unblended pit. */
 		float TrenchFloorHeight = 3.0f;
-		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Round 18: capped 37-unit wander + fine 8-unit octave; default 16 (Josef, round 19). */
+		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
 		float SnowBorderNoise = 16.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
 		float SnowBorderSmoothness = 32.0f;
-		/** @brief Border Fade, in PERCENT (round 18: the old 2..64-unit band read as a big move when it mainly sets how visible the outward dust is). Remapped to the internal 2..64 contact-term band on upload; 100% = the old 64. */
+		/** @brief Border Fade, as a percent. Remapped to the internal 2..64 contact-term band on upload; it mainly sets how visible the outward dust is. */
 		float SnowBorderFade = 100.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
@@ -497,16 +497,16 @@ public:
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
-		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth since 2026-08-17. */
+		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth. */
 		bool Tessellation = true;
-		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
+		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. No menu control; inert at its default and read from JSON only. */
 		float ReliefDepth = 0.0f;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
 		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
 		float ParallaxDepth = 1.0f;
-		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
+		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. No menu control; inert at its default and read from JSON only. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.20f;
@@ -516,9 +516,9 @@ public:
 		float RimTeeth = 0.33f;
 		/** @brief Stage 3 P6: berm clod amplitude in world units - the crest breaks into coarse thrown chunks at kClodSizeScale cells. 0 = off. */
 		float BermClods = 2.0f;
-		/** @brief Bow wave (ROADMAP #35): crest height as a fraction of local snow depth. 0 = off. */
+		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
 		float BowWaveHeight = 0.30f;
-		/** @brief Bow wave: how far AHEAD of the feet the crest sits, and how far it stretches along travel. NOT a size multiplier - round 7 - width comes from BowWaveForward. */
+		/** @brief Bow wave: how far ahead of the feet the crest sits, and how far it stretches along travel. Not a size multiplier; width comes from BowWaveForward. */
 		float BowWaveReach = 1.30f;
 		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
 		float BowWaveForward = 0.80f;
@@ -530,13 +530,13 @@ public:
 		float ChurnHeight = 4.0f;
 		/** @brief Multiplier on the churn lump wavelengths (larger = broader chunks). */
 		float ChurnSize = 0.25f;
-		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. Default ON since 2026-08-22 (Josef's A/B). */
+		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. */
 		bool ShellSSSRemarch = true;
-		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. Default ON since 2026-08-22 (Josef's A/B). */
+		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
 		bool ShellSSSRemarchThickness = true;
-		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). Default 20 (Josef's pick after the round-13 A/B): short grass only. 200 = accept everything. */
+		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
 		float ShellSSSRemarchCasterCap = 20.0f;
-		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
+		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
 		float CompactMatte = 0.6f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 125.0f;
@@ -561,7 +561,7 @@ public:
 		bool LODReplaceLegacy = false;
 		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
 		bool ProjSnowMatch = true;
-		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is EXCLUDED from the geometry skin — the skin conforms through the object raster, whose 4096-unit window can never cover a glacier (Josef's 70 m ceiling), and its mesh-facet lift produced square patches, dual class layers and rim gaps on them. */
+		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
 		bool GlacierSnowMatch = true;
 	};
 
@@ -638,7 +638,7 @@ public:
 		/** @brief Settings::SlumpRate, the unsupported-snow settle speed; 0 disables the pass. Claimed the old pad, so the layout is byte-identical. */
 		float SlumpRate;
 
-		/** @brief 1 = InjectDepth holds the tile store's memory of the texels arriving from outside the window (ROADMAP #34). Its own row: Stamps must start 16-byte aligned. */
+		/** @brief 1 = InjectDepth holds the tile store's memory of texels arriving from outside the window. Its own row: Stamps must start 16-byte aligned. */
 		uint InjectValid;
 		/** @brief The frame's span in GAME time, expressed in the seconds DeltaTime is measured in. Equal to DeltaTime during ordinary play; a wait or a sleep passes hours without rendering them, and the world's own clocks (glaze thaw, slump) must not sit those hours out. Stamp application deliberately keeps DeltaTime - a fire must not carve its whole basin in the single frame after a wait. Claimed a pad slot, so the layout is byte-identical. */
 		float GameDeltaTime;
@@ -789,7 +789,7 @@ public:
 
 		float BorderTrampledFade;
 		float BorderUntrampledFade;
-		/** @brief UNUSED since 2026-08-25 (the object <-> landscape seam cross-fade and its pair-3 contest were removed); layout keeper, uploaded as 0. */
+		/** @brief Unused: the object/landscape seam cross-fade was removed. Layout keeper, uploaded as 0. */
 		float SeamFadeUnused;
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
 		float SkinFadeStart;
@@ -863,9 +863,9 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (round 22: the shared atlas moves the sun's slices with the active-light set; the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x = compaction glint suppression (Stage 1); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12 - round 164). ONE constant for BOTH shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = compaction glint suppression (Stage 1); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12). One constant serves both shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1267,7 +1267,7 @@ public:
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
-	/** @brief Full-resolution COPY of the game's raw sun-shadow cascade atlas, taken during the shadow-mask pass. The copy is mandatory: by deferred time the engine has reused the live target, and sampling it live produces garbage flicker. Taken AFTER the shell is injected as a caster (round 21), so the snowfield receives its own banks' shadows; acne is held off by the caster's depth push. */
+	/** @brief Full-resolution COPY of the game's raw sun-shadow cascade atlas, taken during the shadow-mask pass. The copy is mandatory: by deferred time the engine has reused the live target, and sampling it live produces garbage flicker. Taken after the shell is injected as a caster, so the snowfield receives its own banks' shadows; acne is held off by the caster's depth push. */
 	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
 	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
@@ -1285,7 +1285,7 @@ public:
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
 	std::unique_ptr<ShellCB> lastShellCBData;
 
-	/** @brief Per-descriptor DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only) and by the REAL slice each descriptor renders to (shadowmapIndex — the atlas is shared with local shadow lights and the sun's slices move with the active-light set). Four entries (round 26): the sun owns MORE shadowmaps than the two cascades (the focus map is in the family, and descriptor order is not guaranteed), so the shell is injected into every one — each descriptor carries its own transform and slice, making the ordering irrelevant. Truncated shadows (near lobe present, far lobe missing, boundary sweeping with the view) were the two-descriptor assumption missing the far cascade. */
+	/** @brief Per-descriptor DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only) and by the REAL slice each descriptor renders to (shadowmapIndex — the atlas is shared with local shadow lights and the sun's slices move with the active-light set). Four entries: the sun owns more shadowmaps than the two cascades (the focus map is in the family, and descriptor order is not guaranteed), so the shell is injected into every one — each descriptor carries its own transform and slice, making the ordering irrelevant. Truncated shadows (near lobe present, far lobe missing, boundary sweeping with the view) were the two-descriptor assumption missing the far cascade. */
 	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[4];
 	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
 	uint32_t shadowAtlasDSVSlice[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
@@ -1529,7 +1529,7 @@ public:
 		bool smoothEdge = false;
 	};
 	static constexpr TrampleSpec kTrampleSpecs[] = {
-		{ "smelter", 300.0f, 0.0f, true },  // smelters/forges are workspaces per Josef's call: both sliders apply, and their own flames must not add melt spots
+		{ "smelter", 300.0f, 0.0f, true },  // smelters and forges count as workspaces: both sliders apply, and their own flames must not add melt spots
 		{ "forge", 260.0f, 0.0f, true },
 		{ "sawmill", 220.0f, 0.0f },
 		{ "millsaw", 220.0f, 0.0f },
@@ -1537,7 +1537,7 @@ public:
 		{ "chopping", 150.0f, 50.0f },  // wood chopping blocks
 		{ "enchanting", 110.0f, 60.0f },
 		{ "alchemy", 110.0f, 60.0f },
-		{ "workbench", 140.0f, 0.0f },         // symmetric: workbench facing disagreed with itself across refs (round 230 behind, round 232 right) - a centered bowl cannot be wrong-sided
+		{ "workbench", 140.0f, 0.0f },         // symmetric: workbench facing disagrees with itself across refs, and a centred bowl cannot be wrong-sided
 		{ "sharpeningwheel", 130.0f, 60.0f },  // grindstones: furniture\clutter\blacksmithsharpeningwheelanimating.nif - no "grind" anywhere in the path
 		{ "tanningrack", 120.0f, 60.0f },
 		{ "anvil", 120.0f, 50.0f },
@@ -1719,7 +1719,7 @@ protected:
 	uint deformMapDim = kTextureDim;
 	bool rangeInitApplied = false;
 
-	// ---- Persistent trenches: world-anchored sparse tile store (ROADMAP #34 Stage A) ----
+	// ---- Persistent trenches: world-anchored sparse tile store ----
 	// The map is a camera-following window and DeformationUpdateCS discards
 	// whatever the scroll pushes past its edge, so trenches die when the player
 	// walks away. Departing texels are read back into tiles on a FIXED world
@@ -1806,8 +1806,8 @@ protected:
 	 * WHOLE window and creates a tile for any trodden ground it finds, knowing
 	 * nothing about the budget, while eviction culls the furthest a few frames
 	 * later. Under a budget smaller than the window's own trodden ground that
-	 * thrashes for ever and a save catches an arbitrary mid-thrash spread -
-	 * which is exactly what Josef's 23 tiles across the full window were.
+	 * thrashes for ever and a save catches an arbitrary mid-thrash spread,
+	 * measured as a couple of dozen tiles scattered across the whole window.
 	 *
 	 * Effectively infinite whenever the store fits, so the default budget never
 	 * feels it.
@@ -1944,7 +1944,7 @@ protected:
 	static constexpr uint32_t kTrenchRecord = 'SNTR';
 	static constexpr uint32_t kTrenchRecordVersion = 1;
 
-	/** @brief Co-save record for the accumulated layer (ROADMAP #33), on the same channel as the trench tiles. Version 2 carries the held weather beside the scalar. */
+	/** @brief Co-save record for the accumulated layer, on the same channel as the trench tiles. Version 2 carries the held weather beside the scalar. */
 	static constexpr uint32_t kAccumRecord = 'SNAC';
 	static constexpr uint32_t kAccumRecordVersion = 2;
 
@@ -1964,7 +1964,7 @@ protected:
 
 	/**
 	 * @brief Accumulated layer, 0-1: 0 is the authored depth and 1 is
-	 * AccumulationPeak times it (ROADMAP #33, ACCUMULATION-PLAN.md).
+	 * AccumulationPeak times it. See ACCUMULATION-PLAN.md.
 	 *
 	 * Atomic because the co-save writer reads it on the game thread while the
 	 * tick advances it on the render thread. A scalar needs no mutex; the tile

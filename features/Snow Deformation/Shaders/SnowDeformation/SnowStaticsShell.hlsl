@@ -89,7 +89,7 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;
 	float BorderUntrampledFade;
-	float SeamFadeUnused;  // UNUSED since 2026-08-25 (seam cross-fade removed); layout keeper
+	float SeamFadeUnused;  // Unused (seam cross-fade removed); layout keeper
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;
@@ -156,7 +156,7 @@ cbuffer ShellCB : register(b0)
 
 	// Landscape-shell rows declared only so BorderStyle lands on ShellCB's
 	// offset (624): SnowShadow.hlsli reads its zw for the sun cascades'
-	// REAL atlas slices (round 22). Do not drop them.
+	// REAL atlas slices. Do not drop them.
 	float4 SpellShading;
 	float4 CrustLook;
 	float4 CrustLook2;
@@ -219,7 +219,7 @@ Texture2D<float4> DeformationMap : register(t1);
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
 // Wide exclusion field + frost crystal patterns; the landscape shell's slots
-// (t15-t17) and readers, bound by the skin draw since round 35.
+// (t15-t17) and readers, bound by the skin draw.
 Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
@@ -328,7 +328,7 @@ float ChurnNoise(float2 worldXY)
 
 // Spell-mark readers (SampleScorch/SampleCrust/SampleMelted), the wide
 // exclusion field, kFireMeltFloor, Undulation, CarveProfile and the frost
-// pattern all live in SnowFields.hlsli (round 37), shared with the
+// pattern all live in SnowFields.hlsli, shared with the
 // landscape shell.
 
 #ifdef PATCH
@@ -1614,7 +1614,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeBlend = SnowHeightBlendSharpness(pixelDist);
 	// STABLE grid position, not the trench-POM-corrected one: these fetches
 	// decide alpha survival, and a cut keyed to a parallax hit swims with
-	// the camera (round 31: trench walls crawled under camera-only motion
+	// the camera (trench walls crawled under camera-only motion
 	// once the EM un-gate activated this shaping; the round-16 hLand lesson,
 	// same class). Parallax positions are for texture detail only.
 	float2 edgeSnowUV = (SnowUVOffset + input.GridLocal) / kSnowUVTile;
@@ -1628,15 +1628,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells meet as one
-	// blanket. One construction since 2026-08-25 - the analytic band against
-	// the terrain window's shell top, which is also the whole story for pair
-	// 4's bare-land hand-off.
-	//
-	// The depth-ray pair (a smooth SnowSnowFade band, and the near-field
-	// pair-3 geometric contest that superseded it) was REMOVED with its
-	// slider: the slider gated both, Josef ran a build with it at 0 and the
-	// seam read correctly on the band alone. Restoring either means restoring
-	// the post-shell depth copy with it - see HEIGHT-BLEND-PLAN.md pair 3.
+	// blanket. One construction: the analytic band against the terrain
+	// window's shell top, which is also the whole story for pair 4's
+	// bare-land hand-off. The depth-ray pair that used to sit here (a smooth
+	// fade band and the near-field pair-3 geometric contest) was removed with
+	// its slider; restoring either needs the post-shell depth copy back
+	// first. See HEIGHT-BLEND-PLAN.md pair 3.
 	float pixelAbsZ = input.WorldPos.z + ShellCameraPosAdjust.z;
 	float seamTotal = 1.0;
 	float3 groundData = SampleTerrainStatics(input.GridLocal);
@@ -1644,11 +1641,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		float groundShellZ = groundData.x + max(groundData.y, 0.0);
 		// Pinned band, decoupled from the Border Noise / Border Smoothness
-		// sliders (round 31, Josef's finding: noise 0 + smoothness 64 is
-		// the look for THIS seam - noise detaches the band from the real
-		// meeting line, and the wide band gives the soft rise of ground
-		// snow up the object - while the landscape class border wants the
-		// sliders). Values are the slider math at exactly 0 / 64.
+		// sliders. Values are the slider math at exactly 0 / 64.
 		const float kSeamBandLow = -36.0;
 		const float kSeamBandHigh = 10.0;
 		float groundBand = smoothstep(kSeamBandLow, kSeamBandHigh, pixelAbsZ - groundShellZ);
@@ -1662,7 +1655,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha *= seamTotal;
 	dbgSeam *= seamTotal;
 
-	// Shading continuity across the meeting line (round 30, "still very
+	// Shading continuity across the meeting line ("still very
 	// edgy"): with the cut committed, what remains visible of the seam is
 	// the LIGHTING discontinuity - the skin's macro normal against the
 	// blanket's. Ease the skin's normal toward the blanket's analytic
@@ -1679,7 +1672,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
 		float dzTop = pixelAbsZ - blanketTopZ;
-		// TWO-SIDED thin band, up-facing pixels only (round 32, settled by
+		// TWO-SIDED thin band, up-facing pixels only (settled by
 		// the RenderDoc receiver replay): the one-sided full-strength blend
 		// hijacked everything BELOW the blanket top - carved walls, floors,
 		// and the rock's sun-facing flank at the seam, whose true normal
@@ -1809,7 +1802,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// The distance fade WITHOUT the crust flattening applied: the frost
 	// crystal replacing the powder grain must not fade with it.
 	const float bumpFadeRaw = bumpFade;
-	// Spell marks (round 35, landscape parity): crust flattens the powder
+	// Spell marks (landscape parity): crust flattens the powder
 	// grain here; albedo/polish/grazing terms follow below. Stable grid
 	// position for the fetch (round-31 lesson).
 	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
@@ -2012,7 +2005,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF; same path as the terrain shell.
-		// (Round 32: the round-31 seamShadowLift receiver raise is REVERTED -
+		// (the round-31 seamShadowLift receiver raise is REVERTED -
 		// the RenderDoc replay proved no cascade shadow was missing at the
 		// seam, so the lift only risked boundary drift.)
 		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
@@ -2024,7 +2017,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
-	// (round 35): hills, berms and drift rims cast the same soft shadows onto
+	//: hills, berms and drift rims cast the same soft shadows onto
 	// object snow as onto the ground beside it, and a trench's own rim
 	// darkens its interior. Same tap ring, same carved-surface rule; the
 	// melt term reads the wide exclusion field alone (no near mask bound
@@ -2041,8 +2034,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// The top raster stores only the HIGHEST surface per texel, so under
 		// a multi-level object's overhang it records the deck ABOVE the
 		// receiver and every tap reads "inside a hill" — full shadow in
-		// raster-texel steps on surfaces plainly in the sun (round 37,
-		// Josef's glacier-ledge evidence). The raster cannot see under
+		// raster-texel steps on surfaces plainly in the sun. The raster
+		// cannot see under
 		// roofs: where it stands well above the surface being shaded, drop
 		// its term and let the cascades/SSS own the shading here.
 		bool objectTopUsable = HasObjectTop > 0.5;
@@ -2055,8 +2048,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
 				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
 				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				// 6 units, walked down 32 -> 12 -> 6 on Josef's evidence.
-				// On normal tops the raster sits AT or BELOW the lifted skin
+				// 6 units: about one raster texel above the floor.
+				// On normal tops the raster sits at or below the lifted skin
 				// surface (selfTop - surfZ is negative by the skin depth),
 				// so a small positive margin only fires under genuine upper
 				// decks; 32 missed low ledges, 12 still missed some.
@@ -2093,7 +2086,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 						// fabricated a snow slab a class depth above every
 						// skin, and the round-35 top term then stacked the
 						// ramp on the top as well - object snow fell into
-						// shadow at any low sun (round 36, Josef's screens).
+						// shadow at any low sun.
 						sh = topH + 2.0;
 						tapOnObject = true;
 					}

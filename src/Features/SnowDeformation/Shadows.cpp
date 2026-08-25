@@ -12,8 +12,8 @@ void SnowDeformation::CaptureShadowAtlas()
 	// captured a 128px BC7 diffuse). Copy it immediately: by deferred time
 	// the engine has reused the live target. (The old second copy of the
 	// volumetric-lighting ESRAM shadowmap, min'd in VolumetricShadows-style,
-	// was removed round 38: the round-33 capture showed it near-empty, and
-	// the shader sampled it through the SUN atlas's transforms besides.)
+	// was removed: it captured near-empty, and the shader sampled it through
+	// the sun atlas's transforms besides.)
 	//
 	// When a frame skips this pass, the previous copy is kept; one-frame-
 	// stale cascades are invisible, but flapping between the crisp and VSM
@@ -28,7 +28,7 @@ void SnowDeformation::CaptureShadowAtlas()
 	globals::d3d::context->PSGetShaderResources(4, 1, liveAtlasSRV.put());
 
 	if (liveAtlasSRV) {
-		// Inject BEFORE taking the copies (round 21): copies taken pre-shell
+		// Inject before taking the copies: copies taken pre-shell
 		// meant the shell shaded itself from a shell-less atlas, so a bank's
 		// shadow fell on characters and dirt but stopped dead at the snow
 		// line. Copying after the injection lets the snowfield receive its
@@ -252,7 +252,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return;
 	}
 	auto& lightRuntime = sunShadowLight->GetRuntimeData();
-	// EVERY sun shadowmap gets the shell (round 26): the descriptor list is
+	// Every sun shadowmap gets the shell: the descriptor list is
 	// larger than the two cascades (the focus map is in the family) and its
 	// order is not guaranteed - the old min(2) assumption left whichever
 	// real cascade sat past index 1 shell-less, presenting as a shadow
@@ -301,14 +301,14 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// (desc.shadowmapIndex): the atlas is SHARED with local shadow lights,
 	// and the sun's cascades move slices as the active-light set changes
 	// with the view. Assuming slices 0/1 made the shell's shadow vanish at
-	// some camera angles while stamping into other lights' maps (round 22,
-	// Josef's angle A/B; the point-light path at the top of this file
-	// always honored shadowmapIndex). The slices are also recorded for the
-	// PS receiving path, which had the same assumption.
+	// some camera angles while stamping into other lights' maps; the
+	// point-light path at the top of this file always honoured
+	// shadowmapIndex. The slices are also recorded for the PS receiving
+	// path, which had the same assumption.
 	bool sliceFallback = false;
 	for (uint32_t i = 0; i < cascadeCount; i++) {
 		uint32_t slice = lightRuntime.shadowmapDescriptors[i].shadowmapIndex;
-		// FAIL SAFE (round 24): an out-of-range shadowmapIndex means the
+		// Fail-safe: an out-of-range shadowmapIndex means the
 		// descriptor is not live at this instant for this view state; the
 		// old silent `continue` here was an appear/disappear shadow keyed
 		// to view direction. Fall back to the legacy cascade==slice
@@ -343,10 +343,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		logOnce("skip: DSV creation failed");
 		return;
 	}
-	// Change-driven layout log (round 24): the one-shot version stopped
-	// after startup and missed exactly the view-dependent reallocation we
-	// are hunting. One line per CHANGE of the slice pair / raw descriptor
-	// indices / fallback state - reproduce the disappearing shadow and the
+	// Change-driven layout log: a one-shot version stops after startup and
+	// misses view-dependent reallocation. One line per change of the slice
+	// pair, raw descriptor indices or fallback state - reproduce the
+	// disappearing shadow and the
 	// log names the moment.
 	{
 		const uint32_t raw0 = lightRuntime.shadowmapDescriptors[0].shadowmapIndex;
@@ -502,7 +502,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 		// ShellCB matrices are row_major with mul(M, v): store the transpose.
 		ShellCB shadowCB = *lastShellCBData;
-		// Re-anchor the grid to THIS frame's camera (round 23): the snapshot
+		// Re-anchor the grid to this frame's camera: the snapshot
 		// is last frame's, and a one-frame-stale grid slides a crisp
 		// full-surface shadow whenever the camera moves.
 		RefreshShellGridPlacement(shadowCB);

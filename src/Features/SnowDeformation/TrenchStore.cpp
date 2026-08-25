@@ -285,8 +285,8 @@ void SnowDeformation::TickTrenchClock()
 	// file, so the timeline case is covered at its source. Keeping a second
 	// mechanism meant any hiccup in the calendar destroyed the whole store -
 	// and the threshold is a third of a game SECOND, which at a low timescale
-	// is a few dozen milliseconds of real time. Josef's log caught exactly that:
-	// seventeen tiles dropped mid-play with no load anywhere near it.
+	// is a few dozen milliseconds of real time - observed dropping the whole
+	// store mid-play with no load anywhere near it.
 	//
 	// Skipping is safe on its own terms. Decay is an integral over elapsed
 	// hours, so a frame contributing nothing costs nothing.
@@ -469,9 +469,8 @@ void SnowDeformation::EnforceTrenchBudget()
 	// rewrites every tile in the window every few seconds, so it touches
 	// nearly everything and the timestamps stop discriminating. Eviction then
 	// picked arbitrarily, and the ground the player was standing on was as
-	// likely to go as an NPC trail on the far side of the hold - which is
-	// exactly what Josef saw when a store larger than the budget was culled on
-	// load and his trenches were among the casualties.
+	// likely to go as an NPC trail on the far side of the hold, so a store
+	// larger than the budget lost arbitrary tiles on load.
 	//
 	// Distance from the window centre cannot degenerate that way, and it
 	// matches what the feature is for: snow is only ever SEEN nearby, so when

@@ -14,7 +14,7 @@
 // LIGHTING shadowmap (kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM) - the round-33
 // RenderDoc capture showed it near-empty, and it was sampled through the
 // SUN atlas's per-slice transforms besides: it could only ever duplicate or
-// wrongly darken, at ten comparison taps per pixel (round 38, removed).
+// wrongly darken, at ten comparison taps per pixel (removed).
 // Cascade selection, blend and distance fade mirror
 // VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
 // about where shadows exist.
@@ -123,8 +123,8 @@ namespace SnowShadow
 	// exact complement of GetCascadeShadow's distance fade above
 	// (1 - pow(fade^2, 8) at :117), so the mask reaches full strength
 	// precisely as the cascades fade to nothing - at the user's own shadow
-	// distance, whatever it is. Fixed bands failed both ways on 2026-08-24:
-	// 4000-9000 printed the half-strength mask under full cascades (faint
+	// distance, whatever it is. Fixed bands fail both ways: 4000-9000
+	// prints the half-strength mask under full cascades (faint
 	// ghosts through the shell), 7000+ left a shadowless ring past the
 	// cascades' end. Only the near floor is a constant: the mask was marched
 	// on the PRE-shell depth, so it never enters the contact field even on a

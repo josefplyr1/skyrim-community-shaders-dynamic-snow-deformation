@@ -119,10 +119,9 @@ namespace
 	};
 
 	// The reference's STAT directional-material record vetoes non-snow
-	// projections. NEGATIVE keywords only (round 6): requiring "snow" in the
-	// path vetoed every MATO whose replacer names it differently — the
-	// magenta debug view showed the fence never classifying, and its MATO
-	// was the last gate standing. Sand/moss/ash keep their veto; an
+	// projections. Negative keywords only: requiring "snow" in the path
+	// vetoed every MATO whose replacer names it differently.
+	// Sand/moss/ash keep their veto; an
 	// unrecognized path passes. Cached per base form; each new entry is
 	// logged so the modlist's actual MATO names are in CommunityShaders.log.
 	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
@@ -188,19 +187,18 @@ namespace
 		bool base = false;
 		// The glacier/iceberg family wears baked snow the projected match
 		// can never recolor. "ice" is deliberately NOT matched (hits
-		// lattice/office/service); "mountain" was dropped 2026-08-22 (shore
-		// rocks share the diffuse, their LOD hangs off no reference, and
-		// distant snowy mountainsides are Horizon Snow's job). The merged-
+		// lattice/office/service); "mountain" is not matched either, since
+		// shore rocks share the diffuse, their LOD hangs off no reference, and
+		// distant snowy mountainsides are Horizon Snow's job. The merged-
 		// DynDOLOD-atlas experiment was retired the same day.
 		bool naturalFeature = false;
 	};
 
 	// Pointer-identity ownership: does any loaded reference's 3D subtree
 	// contain this geometry? The userData walk fails on some real meshes
-	// (glaciers — their bases never reached the MATO log despite Josef
-	// standing beside them), and ff2dacc1's unreferenced check then mistook
-	// them for merged Windhelm sheets whenever the camera stood inside
-	// their footprint — for a glacier underfoot, always. Exact and
+	// (a glacier's base never reaches the MATO log), and the unreferenced
+	// check then mistook them for merged Windhelm sheets whenever the camera
+	// stood inside their footprint - for a glacier underfoot, always. Exact and
 	// heuristic-free; merged LOD genuinely belongs to no reference. Only
 	// candidates already big + camera-inside + walk-unreferenced get here;
 	// cached per geometry, render thread only like the other caches.
@@ -244,9 +242,9 @@ namespace
 		return found;
 	}
 
-	// Mesh-name ice family (Josef's console sweep, 2026-08-22: Iceberg*,
-	// Glacier*, IcePile* — texture paths alone missed several). Bare "ice"
-	// is only safe as a NAME PREFIX: as a substring it hits Cornice/Device.
+	// Mesh-name ice family (Iceberg*, Glacier*, IcePile*): texture paths alone
+	// miss several. Bare "ice" is only safe as a name prefix - as a substring
+	// it hits Cornice/Device.
 	bool IsIceFamilyGeometry(RE::BSGeometry* a_geometry)
 	{
 		if (!a_geometry || a_geometry->name.empty())
@@ -439,10 +437,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, "rejected: skinned geometry");
 		return;
 	}
-	// Ice-family meshes keep their skins at EVERY range (Josef's verdict,
-	// 2026-08-22 round 2: the LOD family look — always covered — is the
-	// acceptance criterion, and a skinless loaded glacier reads as having
-	// no snow even with the baked-snow recolor active). The recolor rides
+	// Ice-family meshes keep their skins at every range: the always-covered
+	// LOD family look is the acceptance criterion, and a skinless loaded
+	// glacier reads as having no snow even with the baked-snow recolor
+	// active. The recolor rides
 	// underneath as a second layer: it tints the baked snow that shows
 	// through skin gaps and beyond the raster window. The skin's
 	// structural limits here (58 m conforming window, facet squares,
@@ -460,9 +458,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// asset class as Windhelm's sheets (objSnow-LargeRef / objSnowHD-LargeRef)
 	// at the same sizes - so neither the LOD flags nor worldBound.radius can
 	// separate the two. Rejecting on either killed distant object snow
-	// outright (RenderDoc pixel history, 2026-08-17: a distant rock was
-	// written by objSnowHD-LargeRef DrawIndexed(60276) and NO event from our
-	// statics pass ever touched that pixel).
+	// outright: pixel history showed a distant rock written by
+	// objSnowHD-LargeRef with no event from our statics pass touching it.
 	//
 	// What actually separates them is whether the LOD is REDUNDANT. Inside the
 	// loaded region the real meshes are drawn too, so a skin on the co-drawn
@@ -485,16 +482,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 				referenced = node->GetUserData() != nullptr;
 			// The userData walk is a fallible proxy: real glacier meshes walk
 			// as unreferenced too, and this rejection then ate them whenever
-			// the camera stood inside their footprint (Josef's Saarthal
-			// evidence + the MATO log's silence on glacier bases). Settle it
-			// exactly before rejecting.
+			// the camera stood inside their footprint. Settle it exactly
+			// before rejecting.
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
 			// Ice-family sheets are exempt: the containment rule protects
 			// Windhelm's stone sheets, but a glacier LOD batch is rejected
-			// exactly while the camera stands inside its span (the single
-			// containment line in Josef's cliff log, r=13068) — precisely
-			// where the glacier field below must stay skinned — and on the
+			// exactly while the camera stands inside its span - precisely
+			// where the glacier field below must stay skinned - and on the
 			// world map the panning camera strobed the whole field on and
 			// off across sheet boundaries.
 			bool iceSheet = false;
@@ -520,8 +515,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 		const SnowPathMatch& pathMatch = ClassifySnowPath(material);
 		// Texture family OR mesh-name family: several glacier/ice meshes
-		// carry non-family texture paths (Josef's console sweep). The MATO
-		// only VETOES (kNotSnow — the sand-shore rocks); requiring positive
+		// carry non-family texture paths. The MATO only vetoes (kNotSnow,
+		// the sand-shore rocks); requiring positive
 		// snow MATOs wrongly rejected glaciers, whose snow is baked and
 		// needs no projection record.
 		bool naturalFeature = pathMatch.naturalFeature || IsIceFamilyGeometry(a_pass->geometry);
@@ -530,11 +525,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			naturalFeature = false;
 			matoVetoed = true;
 		}
-		// Family accepts at ANY range, not just LOD (journey log, Josef's
-		// cliff run 2026-08-22: all 119 rejections were loaded glacier/ice
-		// meshes with NO proj/snow flags — this modlist's PBR glacier
-		// textures replace the vanilla projected-snow setup — while their
-		// LOD counterparts all captured; LOD-only acceptance was the whole
+		// Family accepts at any range, not just LOD: loaded glacier/ice meshes
+		// carry no proj/snow flags when PBR glacier textures replace the
+		// vanilla projected-snow setup, while their LOD counterparts capture
+		// normally. LOD-only acceptance was the whole
 		// bare-glacier bug). The MATO veto stands.
 		if (!(pathMatch.base || naturalFeature)) {
 			if (matoVetoed)
@@ -547,15 +541,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	// One skin per family mesh (Josef's stacked-layer evidence + the log:
-	// EVERY trishape of an ice pile captured — slab, ice wall AND snow cap
-	// — so the tops wore several stacked skins and read brighter than the
-	// shell, with layers that moved independently under the sliders).
-	// Loaded family trishapes skin only where their own diffuse IS snow
-	// (the sculpted caps — exactly where a skin belongs); slab and ice
-	// trishapes go skinless and the baked-snow recolor owns their embedded
-	// snow patches. LOD family batches keep their skins (Josef verified
-	// that look).
+	// One skin per family mesh. Every trishape of an ice pile otherwise
+	// captures - slab, ice wall and snow cap - so the tops wear stacked skins,
+	// read brighter than the shell, and move independently under the sliders.
+	// Loaded family trishapes skin only where their own diffuse is snow (the
+	// sculpted caps); slab and ice trishapes go skinless and the baked-snow
+	// recolor owns their embedded snow patches. LOD family batches keep their
+	// skins.
 	if (settings.GlacierSnowMatch && !flags.any(Flag::kLODObjects, Flag::kHDLODObjects)) {
 		auto* familyMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (IceFamilySignal(a_pass->geometry, familyMaterial)) {
@@ -582,9 +574,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Twig-card shape class (branch piles, shore driftwood): vanilla flags
 	// them snow-projected so they pass the flag gate, but the capture sees
-	// sparse cards and the skin wraps them into broken shards (Josef's
-	// TreeReachBranchPile01 evidence, 2026-08-22). Name-matched on the
-	// diffuse path; extend the list as offenders surface.
+	// sparse cards and the skin wraps them into broken shards. Name-matched
+	// on the diffuse path; extend the list as offenders surface.
 	if (auto* shardMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
 		static std::unordered_map<const void*, bool> shardMaterialCache;
 		if (shardMaterialCache.size() > 4096)
@@ -609,8 +600,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
 	// everywhere in Skyrim; the skin only matters within the chosen range.
-	// Glacier/iceberg captures are EXEMPT (Josef's Saarthal evidence,
-	// 2026-08-22): their baked snow is far whiter than the shell and no
+	// Glacier/iceberg captures are exempt: their baked snow is far whiter
+	// than the shell and no
 	// projection exists for the match to recolor, so between the skin range
 	// and cell unload they stood out bright; the skin now covers them at
 	// every loaded distance and skips the fade to match.

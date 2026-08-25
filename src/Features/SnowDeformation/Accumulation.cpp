@@ -3,16 +3,14 @@
 #include "CoSave.h"
 #include "Globals.h"
 
-// Progressive snow accumulation, Stage B: the scalar and its co-save record.
-// Design in ACCUMULATION-PLAN.md; rationale in CODE-NOTES.md.
-//
-// One global scalar, 0 = the authored per-class depth and 1 = AccumulationPeak
-// times it. Stage B only tracks it; nothing reads it yet.
+// Progressive snow accumulation: one global scalar, 0 = the authored per-class
+// depth, 1 = AccumulationPeak times it. Co-save record 'SNAC'.
+// Design in ACCUMULATION-PLAN.md, rationale in CODE-NOTES.md.
 
 void SnowDeformation::TickAccumulation()
 {
-	// A loaded save. The co-save has already supplied this timeline's value, so
-	// the jump is consumed and nothing integrates across it.
+	// Loaded save: the co-save already supplied this timeline's value, so the
+	// calendar jump must not be integrated.
 	if (gameClock.reversed)
 		return;
 
@@ -20,25 +18,17 @@ void SnowDeformation::TickAccumulation()
 	if (elapsed <= 0.0f)
 		return;
 
-	// Indoors the weather is HELD, not frozen and not read live. There is no
-	// snowing weather inside, so a live reading would melt the world outside
-	// the door while the player slept through the blizzard that was burying it.
-	// Holding the last exterior reading instead means the snow keeps rising
-	// while they sleep, and whatever the sky is doing when they step back out
-	// takes over from there.
-	//
-	// TES::interiorCell is the test the rest of CS uses (InteriorSun,
-	// VolumetricLighting). UnifiedWater adds a parent-cell fallback because the
-	// field lags a few frames through a load transition; at these rates a few
-	// frames of held weather is worth nothing, so the bare check is enough here.
+	// Indoors holds the last exterior intensity rather than reading live: no
+	// interior weather snows, so a live reading would melt the exterior while
+	// the player sleeps. TES::interiorCell is the test the rest of CS uses; its
+	// few-frame lag through a load transition is immaterial at these rates.
 	auto* tes = RE::TES::GetSingleton();
 	if (!tes || !tes->interiorCell)
 		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 
-	// ONE SIGNED RATE, no threshold on "is it snowing": melt is weighted by
-	// (1 - intensity) so a weather cross-fade turns the curve instead of
-	// putting a kink in it. ComputeSnowfallIntensity already fades across
-	// transitions, and a threshold would throw that away.
+	// One signed rate. Melt is weighted by (1 - intensity) rather than gated on
+	// a snowing threshold, so a weather cross-fade turns the curve instead of
+	// stepping it; ComputeSnowfallIntensity already fades across transitions.
 	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 	const float growth = settings.AccumulationHours > 0.01f ?
 	                         intensity / settings.AccumulationHours :
@@ -46,10 +36,9 @@ void SnowDeformation::TickAccumulation()
 	const float melt = settings.AccumulationMeltHours > 0.01f ?
 	                       (1.0f - intensity) / settings.AccumulationMeltHours :
 	                       0.0f;
-	// Applied in ANY weather, snowfall included: this is the guarantee that the
-	// layer returns to the authored height even through a winter that keeps
-	// topping it up. Unlike the trench store's floor it is the same order as
-	// the melt, so it shortens a clear-weather settle as well.
+	// Applied in all weather including snowfall, so the layer is bounded at the
+	// authored height. Same order as the melt, so it also shortens a
+	// clear-weather settle.
 	const float fade = settings.AccumulationFadeDays > 0.01f ?
 	                       1.0f / (settings.AccumulationFadeDays * 24.0f) :
 	                       0.0f;
@@ -64,9 +53,8 @@ float SnowDeformation::GetAccumulationDepthScale() const
 	if (!settings.EnableSnowAccumulation)
 		return 1.0f;
 
-	// Clamped at 1 from below: the layer only ever ADDS to what the class
-	// tables author, so a peak under 1 (a hand-edited JSON) must not turn
-	// snowfall into a thaw.
+	// Peak clamped at 1 from below: accumulation only adds, so a hand-edited
+	// peak below 1 must not turn snowfall into a thaw.
 	const float peak = std::max(settings.AccumulationPeak, 1.0f);
 	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (peak - 1.0f);
 }
@@ -78,9 +66,8 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// Zeroed rather than skipped when the toggle is off, so the record's shape
-	// never depends on a setting: a save written with it off still loads on a
-	// build that reads the record, and lands on the authored depth.
+	// Written zeroed rather than skipped when off, so the record layout does not
+	// depend on a setting.
 	const float value = settings.PersistAccumulation ? snowAccumulation.load(std::memory_order_relaxed) : 0.0f;
 	const float weather = settings.PersistAccumulation ? accumWeatherIntensity.load(std::memory_order_relaxed) : 0.0f;
 	if (!a_intfc->WriteRecordData(&value, sizeof(value)) ||
@@ -93,8 +80,7 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 
 void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length)
 {
-	// A future layout read as version 1 is corrupt state, which is worse than
-	// none: refuse rather than parse.
+	// Refuse an unrecognised version rather than parsing it as this one.
 	if (a_version != kAccumRecordVersion) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save is version {}, this build reads {}; dropped",
 			a_version, kAccumRecordVersion);
@@ -106,8 +92,8 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// Length-checked, not truthiness-checked: a short read would otherwise
-	// leave the scalar built out of whatever the stack held.
+	// Length-checked, not truthiness-checked: a short read would leave stack
+	// contents in the scalar.
 	float value = 0.0f;
 	float weather = 0.0f;
 	if (a_intfc->ReadRecordData(&value, sizeof(value)) != sizeof(value) ||
@@ -120,8 +106,8 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// The toggle is read on the way in too: a save written while it was on must
-	// not resurrect its layer after the player turns it off.
+	// Gated on load as well as save: a record written while the toggle was on
+	// must not restore after it is turned off.
 	if (!settings.PersistAccumulation) {
 		gameClockUnarm.store(true, std::memory_order_release);
 		logger::info("[SNOW DEFORMATION] accumulation co-save ignored, Remember Snow Accumulation is off");
@@ -129,11 +115,10 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 	}
 
 	snowAccumulation.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
-	// Saved inside during a storm: the sky has not cleared just because the
-	// save was reloaded.
+	// Held weather rides the record; an indoor save must not resume as clear sky.
 	accumWeatherIntensity.store(std::clamp(weather, 0.0f, 1.0f), std::memory_order_relaxed);
-	// Same reverting-on-load trap the trench store pays for from both sides:
-	// left armed, the first tick reads the loaded calendar as a backwards jump.
+	// Unarm the clock, or the first tick reads the loaded calendar as a
+	// backwards jump.
 	gameClockUnarm.store(true, std::memory_order_release);
 	logger::info("[SNOW DEFORMATION] accumulation restored at {:.3f}", value);
 }
@@ -145,8 +130,7 @@ void SnowDeformation::RegisterAccumulationCoSave()
 		[this](const SKSE::SerializationInterface* a_intfc) { SaveAccumulation(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadAccumulation(a_intfc, a_version, a_length); },
 		[this]() {
-			// Fires before a save is loaded AND on a new game: a fresh game must
-			// not inherit the last one's layer.
+			// Fires before a load and on a new game; state must not cross timelines.
 			snowAccumulation.store(0.0f, std::memory_order_relaxed);
 			accumWeatherIntensity.store(0.0f, std::memory_order_relaxed);
 			gameClockUnarm.store(true, std::memory_order_release);

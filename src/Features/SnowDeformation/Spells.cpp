@@ -35,10 +35,9 @@ static constexpr float kHazardPieceRadius = 6.0f;
 // to hide a burial, and a big one starts reading as the effect floating.
 static constexpr float kLiftFraction = 0.5f;
 static constexpr float kMaxLiftHeight = 60.0f;
-// And only HALF way up, per Josef after seeing it in game. A wall standing on
-// top of the snow reads as balanced on it; half sunk it reads as standing IN
-// it, which is what a wall of frost should look like - and the crust pattern
-// laid around its feet closes the join.
+// Only half way up: a wall standing on top of the snow reads as balanced on
+// it, half sunk it reads as standing in it. The crust pattern laid around its
+// feet closes the join.
 static constexpr float kHazardRadiusMin = 40.0f;
 static constexpr float kHazardRadiusMax = 260.0f;
 // Same for a blast. The ceiling matters more here: a modded explosion with an
@@ -155,9 +154,8 @@ static constexpr float kShoutMaxPitchDeg = 40.0f;
 // A stagger's magnitude is a FRACTION in Skyrim - how much of a stagger, 0 to
 // 1. Unrelenting Force authors 0.75 and Bend Will the same. Anything far above
 // that is not a stagger amount at all; the archetype is being borrowed for
-// something else, and it always turns out to be sound rather than shove -
-// Dismay and Dragonrend author 25, and a werewolf's howl 5. Josef put it
-// better: a howl is sound, not power.
+// something else, and it is sound rather than shove - Dismay and Dragonrend
+// author 25, a werewolf's howl 5.
 static constexpr float kStaggerFraction = 1.0f;
 // Impact force that the shared push projectile carries no matter what the
 // shout does with it. VoicePushProjectile01 is 50 and is thrown by Unrelenting

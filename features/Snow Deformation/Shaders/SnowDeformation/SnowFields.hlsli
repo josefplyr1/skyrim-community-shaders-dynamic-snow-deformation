@@ -3,7 +3,7 @@
 
 // Trench-detail shaping, spell-mark readers and shared field surfaces,
 // verbatim-identical in SnowShell.hlsl and SnowStaticsShell.hlsl
-// (ROUTING-ROADMAP M8; readers folded here round 37), so landscape and
+// (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
 // UndulationAmp/Scale, BorderStyle), DeformationMap (t1), BermFieldMap
@@ -37,8 +37,8 @@ float ShapeNoise(float2 p)
 // (1 - deformation) mask at every call site, which also lets the strip
 // between two adjacent trails pile a proper ridge (the cut used to kill it).
 // And a rise that kept climbing to 0.6 meant a rim point's berm grew for as
-// long as the trail kept extending within the 40-unit disc - Josef watched
-// ground he had already passed "morph" upward, which snow does not do. With
+// long as the trail kept extending within the 40-unit disc, so ground already
+// passed appeared to morph upward, which snow does not do. With
 // the early plateau, the berm is at full height by the time the trail REACHES
 // a point, and the walker meets a full lip ahead of the leading edge instead
 // of raising one behind. Tail still reaches zero with zero slope.
@@ -240,8 +240,8 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 	float d = saturate(deformation);
 
 	// P5 teeth: the border work's own two-octave recipe (37-unit wander +
-	// 8-unit raggedness, HEIGHT-BLEND-PLAN round 18 - reused, not
-	// reinvented), applied to the carve VALUE inside the rim band only.
+	// 8-unit raggedness, HEIGHT-BLEND-PLAN - reused, not reinvented),
+	// applied to the carve value inside the rim band only.
 	// The contour breaks into teeth; floors (d high) and open snow (d = 0)
 	// sit outside the band and never move. Faded by depthT: teeth are
 	// cut-wall vocabulary, dimples stay smooth.
@@ -362,7 +362,7 @@ float SampleTerrainVertexAO(float2 gridLocal)
 // ProcessTerrainHeightWeights) specialized to two surfaces: an edge fade
 // contests by height instead of cross-fading through translucency. Same
 // log2-space formula and near/far sharpness ramp; constants mirror EM's
-// HEIGHT_MULT/HEIGHT_POWER. EM-checkbox-INDEPENDENT (round 18: the Snow
+// HEIGHT_MULT/HEIGHT_POWER. EM-checkbox-INDEPENDENT (the Snow
 // Borders dials are the only owners of the snow border; the checkbox
 // consult here silently disabled the statics rim/ground shaping and the
 // DS skirt descent).

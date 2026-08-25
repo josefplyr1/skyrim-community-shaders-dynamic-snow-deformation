@@ -408,8 +408,7 @@ void SnowDeformation::BindSeamShield()
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 {
 	// Grid placement re-derived from THIS frame's camera; shared by
-	// DrawShell and the shadow-caster injection (round 23: the injection
-	// used last frame's snapshot, and a one-frame-stale grid slides a
+	// DrawShell and the shadow-caster injection: a one-frame-stale grid slides a
 	// crisp full-surface shadow whenever the camera moves - the old blob
 	// caster hid it). Spacing is FIXED at 8 units: the shell ends at the
 	// loaded-cell seam (ShellEdgeFade), so range no longer scales density;
@@ -464,7 +463,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
  * This frame's bow-wave crests, uploaded to b1 of the shell pass.
  *
  * Rebuilt from scratch every frame from live actor positions and velocities
- * (ROADMAP #35): nothing is stored between frames except the smoothed speed
+ * Nothing is stored between frames except the smoothed speed
  * that lets a crest ease out, so no crest can ever be left behind. That is
  * the structural fix for what killed the Stage 4 spray.
  */
@@ -594,12 +593,12 @@ void SnowDeformation::DrawShell()
 		GetAccumulationDepthScale() };
 	cbData.ChurnHeightAmp = std::clamp(settings.ChurnHeight, 0.0f, 8.0f);
 	cbData.ChurnSizeScale = std::clamp(settings.ChurnSize, 0.25f, 4.0f);
-	// Crisp grain retired 2026-08-22 (real geometry carries the detail); its
-	// landscape pair now carries the C3 A/B flags, the Obj pair stays a keeper.
+	// The retired crisp-grain pair: the landscape half now carries the A/B
+	// flags, the Obj half is a layout keeper.
 	cbData.DebugNoFarPad = lodDebugNoFarPad ? 1.0f : 0.0f;
 	cbData.DebugNoDataMorph = lodDebugNoDataMorph ? 1.0f : 0.0f;
-	// Object trench detail follows the landscape set; the separate Obj* sliders
-	// were retired 2026-08-25. The CB rows stay, both shells read them.
+	// Object trench detail follows the landscape set. The CB rows stay because
+	// both shells read them.
 	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
 	cbData.ObjChurnHeightAmp = cbData.ChurnHeightAmp;
 	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;
@@ -620,7 +619,7 @@ void SnowDeformation::DrawShell()
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	// x compaction matte; y the shell-surface SSS re-march toggle; zw its
 	// dynamic-resolution scale - the shell pass does not bind FrameBuffer
-	// b12 (round 164), so the screen-space taps cannot call
+	// b12, so the screen-space taps cannot call
 	// GetDynamicResolutionAdjustedScreenPosition and take the scale here.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	// y packs mode + caster cap: integer part 0/1/2, fraction = cap/1000
@@ -631,11 +630,9 @@ void SnowDeformation::DrawShell()
 		remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
-	// Retired round 18 (layout keeper; the shader hard-codes its old
-	// default-0 resolution).
+	// Layout keeper; the shader hard-codes its old default-0 resolution.
 	cbData.BorderTrampledFade = 0.0f;
-	// Retired 2026-08-25 with the object <-> landscape seam cross-fade
-	// (layout keeper).
+	// Layout keeper, retired with the object/landscape seam cross-fade.
 	cbData.SeamFadeUnused = 0.0f;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
@@ -856,8 +853,8 @@ void SnowDeformation::DrawShell()
 	// GetWorldShadow reads both, and the Prepass-time binds do not survive
 	// to this pass (the t102 lesson). Unbound t60 reads zeros, which the
 	// helper's ramp maps to shadow 1.0 — the far shell stood bright while
-	// the LOD terrain past the seam wore the mountain shadow (Josef's
-	// Throat of the World pair). The statics skin inherits these like t22.
+	// the LOD terrain past the seam wore the mountain shadow. The statics
+	// skin inherits these like t22.
 	if (globals::features::terrainShadows.loaded && globals::features::terrainShadows.texShadowHeight) {
 		ID3D11ShaderResourceView* terrainShadowSRV = globals::features::terrainShadows.texShadowHeight->srv.get();
 		context->PSSetShaderResources(60, 1, &terrainShadowSRV);
@@ -866,10 +863,8 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* cloudShadowSRV = globals::features::cloudShadows.texCubemapCloudOccCopy->srv.get();
 		context->PSSetShaderResources(25, 1, &cloudShadowSRV);
 	}
-	// One-shot audit: Josef reports the far shell still missing the LOD
-	// terrain shadow after the t60 bind landed — this settles whether the
-	// bind even fires on his setup (feature off? texture absent?) before
-	// reaching for a capture.
+	// One-shot audit: settles whether the t60 bind fires at all (feature off,
+	// texture absent) before reaching for a capture.
 	{
 		static std::atomic<bool> loggedShadowBind{ false };
 		if (!loggedShadowBind.exchange(true))
@@ -994,10 +989,9 @@ void SnowDeformation::DrawShell()
 		lodHistStagingValid[lodReadbackRing] = true;
 	}
 
-	// The post-shell depth copy that used to run here was REMOVED 2026-08-25
-	// with the seam cross-fade it existed for: a full-resolution CopyResource
-	// of the main depth, plus its texture, every shell pass. Restoring the
-	// pair-3 contest means restoring this first (HEIGHT-BLEND-PLAN.md).
+	// The post-shell depth copy that used to run here went with the seam
+	// cross-fade it served. Restoring the pair-3 contest needs it back first;
+	// see HEIGHT-BLEND-PLAN.md.
 
 	// Captured projected-snow statics, inflated with the same material.
 	// Inherits this pass's bindings (b0, t0-t8, s0, b4-b6, RTs, depth).

@@ -396,8 +396,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.BakedSnowEnable = (settings.EnableSnowDeformation && settings.GlacierSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
-	// (Josef's ON/OFF map pair); skins are gated the same way in
-	// DrawCapturedStatics. The map's consistent look is the untouched one.
+	// skins are gated the same way in DrawCapturedStatics.
 	if (globals::state->isMapMenuOpen) {
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
@@ -632,7 +631,7 @@ void SnowDeformation::Prepass()
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
-	// Persistent trenches (ROADMAP #34 Stage A). Ordered against the dispatch:
+	// Persistent trenches. Ordered against the dispatch:
 	// the flush stages what this frame's scroll is about to discard, so it must
 	// read the map BEFORE the ping-pong swap below, and it uses the window
 	// state the map's contents belong to rather than the live one - a clear
@@ -670,7 +669,7 @@ void SnowDeformation::Prepass()
 	MarkTrenchDirtyRows(perFrameData);
 
 	// Bow-wave crests, deposited into the map's .w so they PERSIST on the
-	// ground rather than following the feet that made them (ROADMAP #35).
+	// ground rather than following the feet that made them.
 	// GatherStamps has just sorted them nearest-first, so the slots go to the
 	// crests the player can actually see.
 	{
@@ -678,8 +677,7 @@ void SnowDeformation::Prepass()
 		perFrameData.DepositParams = { settings.BowWaveHeight > 0.001f ? (float)waveCount : 0.0f,
 			std::clamp(settings.BowWaveReach, 0.25f, 3.0f),
 			std::clamp(settings.BowWaveForward, 0.0f, 1.0f),
-			// w retired with the Settle slider (round 8); trench-spoil decay
-			// is a fixed clock in the CS now.
+			// w unused: trench-spoil decay is a fixed clock in the CS.
 			0.0f };
 		for (uint i = 0; i < waveCount; i++) {
 			const auto& wave = bowWaves[i];

@@ -97,9 +97,9 @@ cbuffer ShellCB : register(b0)
 	float BorderNoise;   // world-unit domain-warp jitter of class-depth borders
 	float BorderSmooth;  // world-unit ramp-widening radius between classes
 
-	float BorderTrampledFade;    // UNUSED since round 18 (slider retired); layout keeper
+	float BorderTrampledFade;    // Unused (slider retired); layout keeper
 	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
-	float SeamFadeUnused;        // UNUSED since 2026-08-25 (seam cross-fade removed); layout keeper
+	float SeamFadeUnused;        // Unused (seam cross-fade removed); layout keeper
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
@@ -188,7 +188,7 @@ cbuffer ShellCB : register(b0)
 	float4 CrustLook2;
 	// x > 0.5 = outward dust beyond the committed edge; y = trench floor
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
-	// them with the active-light set - round 22).
+	// them with the active-light set).
 	float4 BorderStyle;
 	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
 	// re-march, packed: integer part 0 off / 1 on / 2 on + thickness
@@ -201,7 +201,7 @@ cbuffer ShellCB : register(b0)
 	float4 RimStyle;
 }
 
-// Bow wave (ROADMAP #35 phase one): the crest of snow a body PUSHES as it
+// Bow wave: the crest of snow a body PUSHES as it
 // moves through cover, ahead of and beside the legs, relaxing into the berm
 // behind. Its own buffer rather than a ShellCB row - ShellCB is hand-
 // mirrored across two shaders and this is landscape-only.
@@ -271,12 +271,12 @@ SamplerState SnowSampler : register(s0);
 
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the
 // frost pattern - the verbatim-identical pieces of both shells live in one
-// file (M8; readers folded round 37).
+// file.
 #include "SnowDeformation/SnowFields.hlsli"
 
 
 // The game's own landscape tiling: 24 texture repeats per 4096-unit cell,
-// measured in-game 2026-08-17 (tiling ruler). Same texture at the same world
+// measured in-game with the tiling ruler. Same texture at the same world
 // rate as the ground beside us; see CODE-NOTES.md. Mirrored in
 // SnowStaticsShell.hlsl, SnowDeformation.hlsli and Shell.cpp.
 static const float kSnowUVTile = 4096.0 / 24.0;
@@ -292,7 +292,7 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // adjacent vertices one or two fineSteps apart depending on the grid centre,
 // quad widths flipped as the camera moved, and the surface inside them jumped
 // by the terrain's nonlinearity across the span. That was the distant up/down
-// jumping (C3, measured 2026-08-24).
+// jumping.
 #define kWarpBands 5
 static const float kWarpBandVerts[kWarpBands] = { 192.0, 8.0, 8.0, 8.0, 104.0 };
 static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };
@@ -436,7 +436,7 @@ float3 SampleTerrain(float2 gridLocal)
 	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
 
 	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	// ROADMAP #33: the accumulated layer scales depth HERE, at the one point
+	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
 	// self-shadow march cannot disagree about how deep the snow is. Positive
 	// only - a negative rampDepth is the submerge toward bare ground at a class
@@ -555,7 +555,7 @@ float SampleDisplacedFast(float2 gridLocal)
 }
 
 // SampleMelted / SampleScorch / SampleCrust live in SnowFields.hlsli
-// (round 37): both shells read the surface-state channels identically.
+//: both shells read the surface-state channels identically.
 
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
 // the sum provides the smoothness and bicubic per tap would be waste.
@@ -600,7 +600,7 @@ float SampleObjectHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// SampleExclusionField lives in SnowFields.hlsli (round 37).
+// SampleExclusionField lives in SnowFields.hlsli.
 
 float2 SampleObjectBottom(float2 worldXY)
 {
@@ -674,7 +674,7 @@ float SampleObjectDepthCap(float2 worldXY)
 // window's bilinear error so the mesh never poked through; low values let
 // deep trampling wear through to the real ground on purpose.
 // Undulation, CarveProfile and kFireMeltFloor live in SnowFields.hlsli
-// (round 37): the surface, the shading gradient and BOTH shells' self-shadow
+//: the surface, the shading gradient and BOTH shells' self-shadow
 // marches see the same shape.
 
 // Edge berm: displaced snow piles as a rounded hill along the trench rim;
@@ -708,7 +708,7 @@ float BermField(float2 gridLocal)
 
 // ---- Trench churn: chunky broken snow in disturbed zones ----
 // Short-wavelength noise added as real geometry where snow was carved or
-// piled (RDR2 reference, Josef's design): trench walls, floors and berms
+// piled: trench walls, floors and berms
 // get ~10-unit lumps; the weight comes from the same carve/berm terms the
 // profile uses, so churn dies at the untouched surface with no boundary.
 // The self-shadow march skips it: a few units is under its step
@@ -730,11 +730,11 @@ float3 SampleTerrainShaped(float2 gridLocal)
 	[branch] if (BorderNoise >= 0.01 || BorderSmooth >= 0.01)
 	{
 		float2 worldXY = GridOrigin + gridLocal;
-		// Coarse wander + fine raggedness (round 18): the coarse octave is
+		// Coarse wander + fine raggedness: the coarse octave is
 		// the ORIGINAL 37-unit model but capped at the strength its old 16
 		// setting had - enough organic wander, never the lobes/islands the
 		// uncapped version folded into; the fine 8-unit octave scales on
-		// with the slider for the ragged detail (Josef's sketch).
+		// with the slider for the ragged detail.
 		float coarseAmp = min(BorderNoise, 16.0);
 		float2 jitter = float2(
 							ShapeNoise(worldXY / 37.0) - 0.5,
@@ -765,9 +765,9 @@ float3 SampleTerrainShaped(float2 gridLocal)
 //
 // The SHAPE is no longer computed here - DeformationUpdateCS evaluates the
 // crescent and MAXes it into the map's deposit channel, so this reads a
-// PERSISTENT field. That is the whole difference between round 3 and round 4:
-// a live crest followed the feet, so turning on the spot dragged a mound
-// around the actor and standing still morphed the ground under them (Josef).
+// persistent field. A live crest follows the feet instead, so turning on the
+// spot drags a mound around the actor and standing still morphs the ground
+// under them.
 // Deposited snow belongs to the GROUND it was pushed onto and stays there.
 //
 // What is still analytic is the chunk detail, because the map is ~6.8 units
@@ -784,7 +784,7 @@ float BowWaveHeight(float2 worldXY, float2 gridLocal, float deformation, float u
 	// CHUNKS: many small mountains standing up out of the pushed snow, over
 	// the WHOLE deposit rather than a thin leading band - the round-3 band was
 	// so narrow that the lumps read as occasional hills instead of a field of
-	// broken snow (Josef). Additive ridged noise at two fine octaves, powered
+	// broken snow. Additive ridged noise at two fine octaves, powered
 	// into isolated peaks, WORLD-anchored so the lumps belong to the ground
 	// like the deposit itself does.
 	[branch] if (BowWaveLook.x > 0.001)
@@ -794,9 +794,9 @@ float BowWaveHeight(float2 worldXY, float2 gridLocal, float deformation, float u
 		const float peaks = pow(saturate(n1 * 0.55 + n2 * 0.45 + 0.5), 1.9);
 		// Rides the deposit's own shoulder: strongest where the pile is
 		// deepest, tapering out with it so chunks never float on flat ground.
-		// Round 8: the round-6 floor (0.30-0.70) over-corrected - typical
-		// pile values sit around 0.4-0.7, so the gate ate most of the lumps
-		// and Chunkiness read as dead. The wipe now owns trail cleanliness
+		// A 0.30-0.70 floor over-corrects: typical pile values sit around
+		// 0.4-0.7, so the gate eats most of the lumps and Chunkiness reads as
+		// dead. The wipe owns trail cleanliness
 		// (nothing thin survives behind the walker), so the floor can sit
 		// low again without icicles; the gate only keeps chunks off the
 		// faintest skims.
@@ -880,9 +880,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// it made the weight ramp across a whole band, and because a band's
 			// radius is measured from a centre that snaps in 256-unit jumps,
 			// a ramp is exactly what turns into a visible stepped sink as the
-			// camera approaches (round 3 made the ramp steeper and Josef saw
-			// the steps get STRONGER). A weight that is constant within a band
-			// cannot do that. With the round-4 table the coarsest step is 128 -
+			// camera approaches - a steeper ramp only makes the steps stronger.
+			// A weight that is constant within a band cannot do that. With the
+			// current table the coarsest step is 128 -
 			// the data resolution itself - so this is zero everywhere and the
 			// pad is off; it stays for any future table that skips texels.
 			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
@@ -895,7 +895,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// Clearance pad: a 4-tap axis max of height+coverage with a CAPPED ridge
 		// pad, filling the pinholes where the bilinear surface dips under the
 		// mesh's triangle diagonals or a single texel reads bare. Load-bearing -
-		// disabling it exposes holes immediately (Josef, C3 round 1).
+		// disabling it exposes holes immediately.
 		//
 		// Keyed on the vertex's own LATTICE STEP, never on camera distance. The
 		// old smoothstep(3000, 8000, camDist) made a fixed patch of ground rise
@@ -950,8 +950,8 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				// alone missed bare LANDSCAPE classes: the drift raised a rim
 				// right where the shell meets the dirt and hung a coverage-
 				// forced slab whose shadow caster scaled with Wall Drift
-				// Height (castVis crosses its 0.35 cull near WDH 10 — Josef's
-				// lever point). Supersedes the wall-base failsafe design pin:
+				// Height, whose castVis crosses its 0.35 cull near WDH 10.
+				// Supersedes the wall-base failsafe design pin:
 				// banks stop at the coverage edge instead of forcing snow
 				// onto bare ground.
 				float groundSnow = smoothstep(0.1, 0.45, coverage) * (1.0 - saturate(shelterMask.x));
@@ -1127,7 +1127,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// overshoots, leaving false shadow blotches on open ground. The caster
 	// also requires solid snow coverage, so field raises whose visible snow
 	// is dithered away never cast from invisible snow.
-	// Round 21 (Josef's hill + beach evidence): game casters are real
+	// game casters are real
 	// geometry at real positions; the old surrogate was neither. Its
 	// excess-only rule cast nothing from smooth raised snow (a snowfield's
 	// surface IS the ambient depth - zero excess), while its sunk remainder
@@ -1139,7 +1139,7 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// no sun angle can resurrect them. The world under the layer never
 	// sees these shadows: the shell covers it.
 	float3 rawTerrainCast = SampleTerrain(gridLocal);
-	// Round 33 (Josef's Pale beach phantom shadows): the far anti-pinhole
+	// the far anti-pinhole
 	// pass dilates coverage AND height (4-tap max + ridge pad), so beyond
 	// ~3000 units a ring around every patch passes both castVis terms while
 	// the main view discards those pixels per-texel — and this depth-only
@@ -1153,11 +1153,11 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// mismatched rim printed a static blocky shadow onto the revealed
 	// ground. The wide exclusion field already sinks static clearings;
 	// this is the stamped (spell) melt, ring included. Thresholds sit WELL
-	// above the residue floor (round 32): the refill decays .y every frame,
+	// above the residue floor: the refill decays .y every frame,
 	// and a 0.05 lower edge put decaying residue on the castVis NaN cliff -
 	// caster triangles over every old melt site flipped once a second.
 	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));
-	// Round 34 (Josef's call): the far field keeps printing blotches from
+	// the far field keeps printing blotches from
 	// residual data/geometry mismatches the near gates cannot see, and the
 	// shell's crisp shadows only matter near the camera anyway — the far
 	// field is diffuse-dominated and terrain shadows carry the rest. Fade
@@ -1303,7 +1303,7 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	// out there and full-res sampling shimmers.
 	float snowMip = clamp(log2(max(camDist, 64.0) / 128.0), 0.0, 6.0);
 
-	// Grain-driven skirt descent (HEIGHT-BLEND-PLAN round 5): EM's boundary
+	// Grain-driven skirt descent (HEIGHT-BLEND-PLAN): EM's boundary
 	// look is sharpened weights + the parallax march displacing the boundary
 	// per view ray; the shell's analog is real geometry. Across the coverage
 	// edge band the surface descends to the ground in grain-shaped tongues
@@ -1321,7 +1321,7 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		z = terrainHeight + (z - terrainHeight) * descent;
 	}
 
-	// Edge grain (round 15, Josef's diagram): the sheet's visible border is
+	// Edge grain: the sheet's visible border is
 	// often the GEOMETRIC clip of the skirt against the ground, and with
 	// relief retired the skirt is smooth - a featureless clip line no
 	// matter what the alpha does. Displace the edge zone by the same
@@ -1329,9 +1329,9 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	// grainy, and geometry and alpha agree by construction. Exempt: carved
 	// trenches and melt floors stay calm; fades out one band above ground
 	// and with the same 1024-2048 distance range as the contest.
-	// FIXED amplitude and reach (round 16): scaling these by the Untrampled
-	// band displaced the whole sheet by half the slider - Josef's wave
-	// field. Grain relief is a physical ~2 units whatever the dials say.
+	// FIXED amplitude and reach: scaling these by the Untrampled
+	// band displaces the whole sheet by half the slider. Grain relief is a
+	// physical ~2 units whatever the dials say.
 	const float kEdgeGrainAmp = 2.0;
 	float edgeGrainH = z - terrainHeight;
 	[branch] if (HasSnowHeight > 0.5 && edgeGrainH > -2.0 && edgeGrainH < 6.0)
@@ -1348,8 +1348,8 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 
 	// Real relief from the PBR displacement map, through the SAME anti-tiling
 	// taps the PS shades with, so the normal map's shading and the geometry
-	// describe one surface. (Until 2026-08-17 this took a single un-offset
-	// tap while the PS blended three at random per-cell offsets: the two
+	// describe one surface. (A single un-offset tap here against the PS's
+	// three random per-cell offsets decorrelates the two
 	// fields were decorrelated, so geometry bumps sat where the texture had
 	// none. That is what made the relief read wrong against its own shading.)
 	// Gated by local depth (thin cover and carved floors stay flat), by the
@@ -1416,7 +1416,7 @@ struct PS_OUTPUT
 // whether something was captured.
 //
 // Screen-space, so it needs the DR-adjusted pixel: the shell pass does NOT
-// bind FrameBuffer b12 (round 164), so the scale rides CompactLook.zw from
+// bind FrameBuffer b12, so the scale rides CompactLook.zw from
 // the CPU rather than FrameBuffer::GetDynamicResolutionAdjustedScreenPosition.
 #if defined(PSHADER)
 float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
@@ -1540,7 +1540,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Mirror of the VS touch-down toe, so the alpha reads the sheet's
 	// ACTUAL height above ground: without it the alpha cut lands while the
 	// geometry still has height left, and the committed edge dies in
-	// mid-air as a floating rim (round 10, Josef's hover screenshots).
+	// mid-air as a floating rim.
 	float pixelEffDepth = pixelRampDepth > 0.0 ? pixelRampDepth * smoothstep(0.0, 5.0, pixelRampDepth) : pixelRampDepth;
 	// Two factors doing the two jobs the old smoothstep(0, band, depth) did
 	// with one number (which is why fixing its floating cut flooded the
@@ -1574,7 +1574,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// something stands above the terrain data - planks, rocks, the fade's
 	// actual clients. Sentinel terrain (-50000) reads as objectness 1, so
 	// data gaps keep the plain fade.
-	// Distance-gated like the contest (round 18: this previously keyed off
+	// Distance-gated like the contest (this previously keyed off
 	// EM's height-blending checkbox via SnowHeightBlendSharpness).
 	[branch] if (HasSnowHeight > 0.5 && shellZ < 2048.0)
 	{
@@ -1609,7 +1609,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// without an override the proximity fade dithers them into translucency
 	// like any other near-coincident surface.
 	float pixelMelt = saturate(pixelShelter.y);
-	// Trampled Border Fade retired (round 18): its default-0 behavior is the
+	// Trampled Border Fade retired: its default-0 behavior is the
 	// keeper, so the window is the constant it resolved to.
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, 1.0, pixelTerrain.y);
 	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift) + smoothstep(0.1, 0.4, pixelMelt)));
@@ -1625,7 +1625,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// blending on and the height map bound.
 	float2 edgeSnowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	float edgeSnowMip = SnowHeightMip(edgeSnowUV);
-	// Geometric edge contest (round 15, Josef's two-layer discovery): the
+	// Geometric edge contest: the
 	// slice layer proved the look, and it never consulted EM's
 	// height-blending checkbox - while this block did (edgeBlend), so with
 	// that checkbox off the sheet silently fell back to a smooth hard cut
@@ -1641,7 +1641,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		// Fixed amplitudes (round 16: band-scaled grain magnified the
+		// Fixed amplitudes (band-scaled grain magnified the
 		// contest with the slider). The land's grain is the POM hit -
 		// view-dependent - so it weighs in at HALF strength around neutral:
 		// half the camera breathing, most of the detail; the snow-side
@@ -1655,7 +1655,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha *= lerp(1.0, win, contestFade);
 	}
 
-	// Trench-floor contest (round 27, the second floor->0 gate): heavily
+	// Trench-floor contest (the second floor->0 gate): heavily
 	// trampled floors run the SAME geometric contest as the edge - the
 	// REMAINING snow (the carve profile's floor, the exact math the
 	// geometry uses) against the dirt's grain - so wear-through opens
@@ -1688,9 +1688,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// .w outputs below. Border Dithering ON scatters a whisker of
 	// stochastic snow just BEYOND the cut (the 0.2..0.5 alpha tail) - dust
 	// from the intersection onto the ground, never upward into the
-	// committed sheet; OFF is a clean binary cut. (Round 18: the checkbox
-	// previously gated a retired cross-fade path, which inverted its
-	// apparent meaning - OFF showed the dust, ON showed nothing.)
+	// committed sheet; off is a clean binary cut.
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	[branch] if (ShellLODDebug == 1)
 	{
@@ -1879,13 +1877,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
-		// Trench walls march NOTHING (round 3). A march is only honest when
+		// Trench walls march NOTHING. A march is only honest when
 		// the surface lies in its projection plane; a 40-60 degree wall lies
 		// in neither the top plane nor the side plane, so BOTH marches
 		// resolve the view through a mismatched frame and redraw the wall
-		// whenever the camera changes position (round 2's steepness scale
-		// still left 40-90% of the top march live on exactly those walls -
-		// the smoothstep only saturates near vertical). The hard tilt cut
+		// whenever the camera changes position. A steepness scale still
+		// leaves 40-90% of the top march live on exactly those walls, since
+		// the smoothstep only saturates near vertical. The hard tilt cut
 		// below keeps the full march on the gentle slopes that always had
 		// it, kills it by ~40 degrees, and the side plane samples UNMARCHED
 		// - at a 21-unit wall, stability is worth far more than parallax.
@@ -2095,8 +2093,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// used to read the RAW deformation, and BermShape of a raw value
 			// peaks across the trench's sloping wall - so the march saw every
 			// trail ringed by a phantom ridge and laid shadow bands on flat,
-			// sun-facing snow beside it: Josef's "shadows where there should
-			// be none". One bilinear tap when the bake is live; the unbaked
+			// sun-facing snow beside it. One bilinear tap when the bake is
+			// live; the unbaked
 			// A/B path skips the term rather than paying 17 taps per march
 			// step, and under-occludes its berms slightly.
 			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
@@ -2139,7 +2137,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow source and the shell hugs the very ground the march ran on.
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
-		// Depth agreement is the gate (round 18): the march ran on the
+		// Depth agreement is the gate: the march ran on the
 		// PRE-shell depth, so trust the mask only where the shell hugs the
 		// surface the march actually saw. Measured VERTICALLY, not along
 		// the view ray: the along-ray gap is snow depth / sin(elevation),
@@ -2196,16 +2194,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 			}
 		}
-		// The near field takes NO SSS at all (Josef's call after seeing the
-		// 35% contact version: still reads as shadows from under the snow).
-		// Casters' true shadows come from the cascades near; the mask only
-		// earns its keep past 2500, where it is the sole source of LOD
-		// tree shadows (r107). KNOWN TRADE, chosen deliberately: near-field
-		// grass shadows on the shell die with it - grass casts only via
-		// this march. If grass shadows are ever missed, this ramp is the
-		// dial.
-		// Distance gate pinned to the cascades themselves (2026-08-24,
-		// replacing the round-108 fixed band): cascades own everything until
+		// The near field takes no SSS at all: even a 35% contact version
+		// still reads as shadows from under the snow. Casters' true shadows
+		// come from the cascades near; the mask only earns its keep past
+		// 2500, where it is the sole source of LOD tree shadows. Known
+		// trade: near-field grass shadows on the shell die with it, since
+		// grass casts only via this march. This ramp is the dial.
+		// Distance gate pinned to the cascades themselves rather than a
+		// fixed band: cascades own everything until
 		// their own distance fade, the mask ramps in as its exact complement
 		// (GetSssHandoff), so the handoff tracks the user's shadow distance
 		// with no gap and no ghost overlap. The vertical hug metric and the
@@ -2517,13 +2513,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
 	[branch] if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
-	// Near-field micro-clamp (round 16): the edge zone rides within window
+	// Near-field micro-clamp: the edge zone rides within window
 	// error of the mesh and z-fights as view-dependent holes. 0.75 units is
 	// too thin to overdraw feet or props, wide enough to settle coincident
 	// surfaces; edge zone only, so deep interiors keep the raw depth.
-	// Round 18: carved floors too - pixelEffDepth is the UNCARVED ramp, so
-	// low Trench Floor Height floors were excluded and their wear-through
-	// hole rims shimmered with the camera.
+	// Carved floors too: pixelEffDepth is the uncarved ramp, so low Trench
+	// Floor Height floors were excluded and their wear-through hole rims
+	// shimmered with the camera.
 	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
 
