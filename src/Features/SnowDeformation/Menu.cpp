@@ -2,6 +2,7 @@
 
 #include <imgui_stdlib.h>
 
+#include "Features/SnowDeformation/AlphaBuild.h"
 #include "Utils/Game.h"
 #include "Utils/UI.h"
 
@@ -68,7 +69,7 @@ void SnowDeformation::DrawSettings()
 
 		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttLss = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view (brown = bare, blue-white = snow); the same setting drives the Horizon Snow recolor."));
+			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. The same setting drives the Horizon Snow recolor, so it decides where snow sits on the far terrain as well as how the shell reads it."));
 
 		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
 		if (ImGui::IsItemDeactivatedAfterEdit())
@@ -139,7 +140,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
 		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two. The current depth is shown under Debugging."));
+			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two."));
 
 		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
 		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())
@@ -367,7 +368,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("floating_band"), "Floating Actor Clearance"), &settings.FloatingActorBand, 4.0f, 80.0f, "%.0f units");
 			if (auto _ttFloatBand = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected readout under Debugging Options counts what each value is skipping."));
+				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride."));
 
 			{
 				std::string incorporealModes;
@@ -382,7 +383,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Combo(T(TKEY("incorporeal_mode"), "Ghosts Leave No Trench"), &settings.IncorporealMode, incorporealModes.c_str());
 			}
 			if (auto _ttIncorp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal. The Detected readout under Debugging Options reports what the nearest actor scores under both."));
+				ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal."));
 
 			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCm = Util::HoverTooltipWrapper())
@@ -710,6 +711,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
+#if !SNOW_ALPHA_BUILD
 	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
 
@@ -1110,4 +1112,5 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::TreePop();
 	}
+#endif
 }
