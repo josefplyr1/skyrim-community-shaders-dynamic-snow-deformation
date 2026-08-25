@@ -2103,12 +2103,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
 				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
 				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				// 12 units: on normal tops the raster sits AT or BELOW the
-				// lifted skin surface (selfTop - surfZ is negative by the
-				// skin depth), so even a small positive margin only fires
-				// under genuine upper decks — 32 missed low ledges (Josef's
-				// cliff evidence).
-				if (selfTop > -50000.0 && selfTop > surfZ + 12.0)
+				// 6 units, walked down 32 -> 12 -> 6 on Josef's evidence.
+				// On normal tops the raster sits AT or BELOW the lifted skin
+				// surface (selfTop - surfZ is negative by the skin depth),
+				// so a small positive margin only fires under genuine upper
+				// decks; 32 missed low ledges, 12 still missed some.
+				// FLOOR: the raster is 4-unit texels holding the HIGHEST
+				// surface per texel, so on a steep facet a tap can legitimately
+				// read a few units above its receiver. Below ~5 the guard
+				// starts firing on that quantisation alone and object tops
+				// stop shadowing themselves at all — do not go lower without
+				// a finer raster.
+				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
 					objectTopUsable = false;
 			}
 		}
