@@ -24,57 +24,27 @@ void SnowDeformation::DrawSettings()
 			shellSnowTextureAttempted = false;
 		}
 
-		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
-		if (auto _ttStamp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
+		ImGui::Checkbox(T(TKEY("snow_texture_linear"), "Linear (PBR) Texture"), &settings.SnowTextureLinear);
+		if (auto _ttLin = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_texture_linear_tooltip"), "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored."));
 
-		ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
-		if (auto _ttFw = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
-
-		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
-		if (auto _ttSharp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
-
-		ImGui::SliderFloat(T(TKEY("snow_slumping"), "Snow Slumping"), &settings.SlumpRate, 0.0f, 1.0f, "%.2f");
-		if (auto _ttSlump = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_slumping_tooltip"), "Snow dug away on BOTH sides loses its support and settles about halfway into a low uneven bump, so heavy traffic reads as one churned channel instead of a comb of full-height fins. Trench walls and open snow never move. 0 = off; higher = faster settling."));
+		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Match Projected Snow"), &settings.ProjSnowMatch);
+		if (auto _ttPsm = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
 
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::Checkbox(T(TKEY("snow_texture_linear"), "Linear (PBR) Texture"), &settings.SnowTextureLinear);
-			if (auto _ttLin = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_texture_linear_tooltip"), "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored."));
+			ImGui::Checkbox(T(TKEY("sss_remarch"), "Re-march Shadows on the Shell"), &settings.ShellSSSRemarch);
+			if (auto _ttRemarch = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("sss_remarch_tooltip"), "Screen-Space Shadows are normally marched on the ground BENEATH the snow, so the shell can only use them at distance or they print buried objects through the snow. This re-marches them from the snow surface and accepts only casters standing above the snow line - which brings back near-field grass and contact shadows, including from actors, without the prints. Costs 8 depth taps per lit shell pixel. A/B this against it being off."));
 
-			ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 1.0f, "%.2f");
-			if (auto _ttIrr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
+			ImGui::Checkbox(T(TKEY("sss_remarch_thickness"), "Streak Fix (Occluder Thickness)"), &settings.ShellSSSRemarchThickness);
+			if (auto _ttThick = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("sss_remarch_thickness_tooltip"), "The Bend SSS thin-shell rule applied to the re-march: an occluder only shadows ray samples within 48 units of itself, instead of everything behind it on screen - which is what painted a character's silhouette as a long streak across the snow. Grass and other thin casters are unaffected; the trade is slightly lighter shadow directly behind very thick objects. Only does anything with the re-march on."));
 
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttRd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost. The snow shell itself auto-sizes to the game's loaded-cell grid and hands off to Horizon Snow beyond it."));
-		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			trenchRangeDirty = true;
-		if (auto _ttRt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
-
-		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
-		if (auto _ttRk = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
-
-		ImGui::PushID("render_distance");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
-			if (auto _ttRkf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects."));
+			ImGui::SliderFloat(T(TKEY("sss_remarch_cap"), "Caster Height Cap"), &settings.ShellSSSRemarchCasterCap, 10.0f, 200.0f, "%.0f units");
+			if (auto _ttCap = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
 			ImGui::TreePop();
 		}
@@ -85,31 +55,54 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttDs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead."));
+			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead. The sliders here also set how far each snow system reaches; higher = more VRAM and GPU cost."));
+		bool distantChanged = false;
+
 		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
 		if (auto _ttHs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
-		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Match Projected Snow"), &settings.ProjSnowMatch);
-		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
+
 		ImGui::Checkbox(T(TKEY("glacier_snow_match"), "Match Glacier Snow"), &settings.GlacierSnowMatch);
 		if (auto _ttGsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("glacier_snow_match_tooltip"), "Glaciers and icebergs carry snow baked into their meshes, which never matches the shell's material. This recolors their up-facing snow to the shell's own set at every distance, and stops the object snow shell from trying to wrap these huge meshes — its conforming window can't cover them, which produced square patches, doubled layers and rim gaps."));
-		bool distantChanged = false;
 
-		distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
-		if (auto _ttDsl = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered, where no LOD terrain texture exists to read the answer from."));
+		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
+		if (auto _ttLss = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view (brown = bare, blue-white = snow); the same setting drives the Horizon Snow recolor."));
+
+		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			trenchRangeDirty = true;
+		if (auto _ttRt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+
+		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+		if (auto _ttRk = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs). Applies live."));
+
+		ImGui::SliderFloat(T(TKEY("range_skins_geometry"), "Object Snow Geometry Range"), &settings.RangeSkinsGeometryM, 10.0f, 200.0f, "%.0f m");
+		if (auto _ttRkg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before Distant Snow Blend starts dissolving it, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
+
+		ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
+		if (auto _ttSdb = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour."));
+
+		ImGui::SliderFloat(T(TKEY("range_skins_fade"), "Distant Snow Blend"), &settings.RangeSkinsFadeM, 29.0f, 750.0f, "%.0f m");
+		if (auto _ttRkf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects. Set level with Object Snow to keep the skins solid all the way out."));
 
 		ImGui::PushID("distant_snow");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
-			if (auto _ttLss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. Check with the Terrain Data Provenance debug view (brown = bare, blue-white = snow); the same setting drives the Horizon Snow recolor."));
 			ImGui::Checkbox(T(TKEY("lod_replace_legacy"), "Legacy Horizon Shading"), &settings.LODReplaceLegacy);
 			if (auto _ttLrl = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("lod_replace_legacy_tooltip"), "A/B comparison: shade horizon snow with the old recolor (vanilla LOD lighting math) instead of the snow shell's own recipe. The old math reads brighter and bluer than the shell, peaking at golden hour. Leave off unless comparing."));
+
 			ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
+
+			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
+			if (auto _ttDsl = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered, where no LOD terrain texture exists to read the answer from."));
 
 			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");
 			if (auto _ttDsn = Util::HoverTooltipWrapper())
@@ -118,28 +111,20 @@ void SnowDeformation::DrawSettings()
 			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_fade"), "Snow Line Fade"), &settings.DistantSnowLineFade, 100.0f, 6000.0f, "%.0f units");
 			if (auto _ttDsf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the fallback snow line."));
-			if (distantChanged)
-				shellDataDirty.store(true, std::memory_order_release);
-			ImGui::Separator();
-
-			ImGui::SliderFloat(T(TKEY("range_skins_geometry"), "Object Snow Geometry Range"), &settings.RangeSkinsGeometryM, 10.0f, 200.0f, "%.0f m");
-			if (auto _ttRkg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before Distant Snow Blend starts dissolving it, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
-
-			ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
-			if (auto _ttSdb = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour."));
 
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
+
+		if (distantChanged)
+			shellDataDirty.store(true, std::memory_order_release);
 
 		ImGui::TreePop();
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers and how raised snow settles."));
+			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers, and how deep the layer grows while it snows."));
 		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
 		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing, faster in denser snowfall. Trails and trenches persist through clear weather. Off: snow recovers at the baseline rate in any weather."));
@@ -148,21 +133,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRefill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
 
-		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
-			ClearTrenchStore("the Remember Trenches toggle");
-		if (auto _ttPersist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store and put back on return. This is in-session only for now - nothing is written to the save, so a reload starts pristine either way. Off restores the old behaviour and frees the store."));
-
-		if (settings.PersistTrenches) {
-			ImGui::SliderFloat(T(TKEY("stored_trench_fade"), "Stored Trench Fade"), &settings.StoredTrenchFadeDays, 0.0f, 30.0f, "%.0f days");
-			if (auto _ttFade = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
-
-			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.02f, 8.0f, "%.2f MB");
-			if (auto _ttMemory = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is around three thousand patches of trodden ground - far more than snowfall usually leaves standing, so weather normally clears old trenches long before this limit matters and it sits here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down more than forty times over, so it takes far more RAM than this while you play, and every save file carries its own copy."));
-		}
-
 		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
 		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth."));
@@ -170,6 +140,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
 		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two. The current depth is shown under Debugging."));
+
+		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
+		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("persist_accumulation_tooltip"), "How deep the layer has grown is written to the save and comes back with it, so loading in the middle of a week-long winter finds the world as deep as you left it. Off, every load starts at the authored depth and the layer has to build again from whatever the sky is doing - which is also what to use when comparing, since the depth then depends only on the weather since the load."));
 
 		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
 		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
@@ -187,51 +161,31 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttAccumFade = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("accumulation_fade_tooltip"), "A slow settling that runs in all weather, snowfall included, so the world always finds its way back to its normal depth instead of climbing for ever through an endless winter. Because it never stops, it also makes clear weather settle somewhat faster than Melt Time alone would. 0 turns it off and leaves clear weather as the only thing that brings the snow back down."));
 
-		ImGui::PushID("snow_refill");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
-			if (auto _ttSteep = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
-
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Surface Undulation"), ImGuiTreeNodeFlags_Framed)) {
+	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Snow Undulation"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttUnd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
 		ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
 		if (auto _ttUs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
 
+		ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
+		if (auto _ttUsp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
+
+		ImGui::SliderInt(T(TKEY("parallax_steps"), "Parallax Steps"), &settings.ParallaxSteps, 4, 16);
+		if (auto _ttPs2 = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("parallax_steps_tooltip"), "Coarse steps in the parallax march, before contact refinement re-marches the hit interval at the same budget (so 8 resolves roughly like 64). Scaled down with distance and off entirely past the band where the snow grain stops being drawn. This is a ceiling, not a fixed count - the march exits on first contact, so most pixels never reach it. Measured at Dawnstar, 8 and 16 cost the same to within noise, so raise it freely if you see stepping."));
+
 		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. Unlike Relief Depth this moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
+			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
 
-		ImGui::PushID("undulation");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
-			if (auto _ttUsp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
-
-			ImGui::SliderFloat(T(TKEY("relief_depth"), "Relief Depth"), &settings.ReliefDepth, 0.0f, 12.0f, "%.1f units");
-			if (auto _ttRd2 = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("relief_depth_tooltip"), "Geometric relief from the snow texture's displacement map on UNTRAMPLED snow, tessellated near the camera. Trenches never receive it (carved ground is excluded), so this costs vertices only on open snowfields: at 0 they stop being subdivided at all, which is most of the Shell pass's tessellation cost, and trench smoothing is unaffected. Note the relief currently samples the displacement map without the anti-tiling offsets the shading uses, so its bumps do not sit where the texture's bumps are."));
-
-			ImGui::SliderInt(T(TKEY("parallax_steps"), "Parallax Steps"), &settings.ParallaxSteps, 4, 16);
-			if (auto _ttPs2 = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("parallax_steps_tooltip"), "Coarse steps in the parallax march, before contact refinement re-marches the hit interval at the same budget (so 8 resolves roughly like 64). Scaled down with distance and off entirely past the band where the snow grain stops being drawn. This is a ceiling, not a fixed count - the march exits on first contact, so most pixels never reach it. Measured at Dawnstar, 8 and 16 cost the same to within noise, so raise it freely if you see stepping."));
-
-			ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
-			if (auto _ttPss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
+		ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
+		if (auto _ttPss = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
 
 		ImGui::TreePop();
 	}
@@ -240,6 +194,8 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttModels = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh."));
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttRoad = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 
 		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
 		if (auto _ttObj = Util::HoverTooltipWrapper())
@@ -248,22 +204,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 		if (auto _ttMesh = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
-
-		ImGui::PushID("model_depths");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
-			if (auto _ttOt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
-			if (auto _ttRoad = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
-
-			ImGui::SliderFloat(T(TKEY("floor_see_through"), "Trench Floor See-Through"), &settings.TrenchFloorFade, 0.0f, 1.0f, "%.2f");
-			if (auto _ttFloor = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("floor_see_through_tooltip"), "How much a heavily trampled trench floor on an object (rock, log, walkway) wears through to the object's own surface instead of holding solid snow."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
 
 		ImGui::TreePop();
 	}
@@ -347,10 +287,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("border_dithering_tooltip"), "Scatters a thin dusting of snow just beyond the committed edge onto the ground, like windblown spill. Off = a clean binary cut. Border Fade controls how far the dust reaches."));
 
-		ImGui::SliderFloat(T(TKEY("trench_floor_height"), "Trench Floor Height"), &settings.TrenchFloorHeight, 0.0f, 8.0f, "%.1f units");
-		if (auto _ttTfh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_floor_height_tooltip"), "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors."));
-
 		ImGui::SliderFloat(T(TKEY("workspace_clearing_size"), "Workspace Clearing Size"), &settings.TrampleZoneScale, 0.25f, 2.0f, "%.2fx");
 		if (auto _ttWcs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("workspace_clearing_size_tooltip"), "Radius multiplier for the snow bowls around workstations, smelters, forges, stalls, wells and shrines. Applies within a second."));
@@ -373,10 +309,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("border_fade_tooltip"), "How much of the snow's edge takes part in the height contest against the ground - higher values make the scattered dust past the edge broader and more visible. Border Dithering must be on for the dust itself."));
 
-			ImGui::SliderFloat(T(TKEY("snow_snow_fade"), "Snow <-> Snow Fade"), &settings.SnowSnowFade, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttSs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_snow_fade_tooltip"), "Cross-fade between OBJECT snow and LANDSCAPE snow where their surfaces run close in height (road meshes, low platforms). Wider = the two snow kinds dither into each other instead of meeting at a hard seam."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -384,41 +316,85 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("trench_detail"), "Landscape Trenches"), ImGuiTreeNodeFlags_Framed)) {
+	if (ImGui::TreeNodeEx(T(TKEY("snow_trenches"), "Snow Trenches"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttTd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_tooltip"), "The look of disturbed snow: the raised berm along trench edges, the chunky churned surface, and the matte compacted finish. Untouched snow is never affected."));
-		ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
-		if (auto _ttFloat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));
+			ImGui::Text("%s", T(TKEY("snow_trenches_tooltip"), "Everything about the ground being walked through: how long a trench is remembered, how wide and how sharply it cuts, and the look of the disturbed snow around it. Untouched snow is never affected."));
 
-		{
-			std::string incorporealModes;
-			incorporealModes += T(TKEY("incorporeal_off"), "Off");
-			incorporealModes += '\0';
-			incorporealModes += T(TKEY("incorporeal_translucent"), "See-through bodies");
-			incorporealModes += '\0';
-			incorporealModes += T(TKEY("incorporeal_flag"), "Actors marked Ghost");
-			incorporealModes += '\0';
-			incorporealModes += T(TKEY("incorporeal_either"), "Either");
-			incorporealModes += '\0';
-			ImGui::Combo(T(TKEY("incorporeal_mode"), "Ghosts Leave No Trench"), &settings.IncorporealMode, incorporealModes.c_str());
+		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
+			ClearTrenchStore("the Remember Trenches toggle");
+		if (auto _ttPersist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store, put back on return, and written to the save so it is still there after a reload. Off restores the old behaviour and frees the store."));
+
+		if (settings.PersistTrenches) {
+			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.02f, 8.0f, "%.2f MB");
+			if (auto _ttMemory = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is around three thousand patches of trodden ground - far more than snowfall usually leaves standing, so weather normally clears old trenches long before this limit matters and it sits here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down more than forty times over, so it takes far more RAM than this while you play, and every save file carries its own copy."));
+
+			ImGui::SliderFloat(T(TKEY("stored_trench_fade"), "Stored Trench Fade"), &settings.StoredTrenchFadeDays, 0.0f, 30.0f, "%.0f days");
+			if (auto _ttFade = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
 		}
-		if (auto _ttIncorp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal. The Detected line under Spell Integration reports what the nearest actor scores under both."));
 
-		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
-		if (auto _ttTess = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on - Relief Depth only sets how far the extra vertices are then displaced on untrampled snow. Off costs nothing but leaves every trench as angular as the grid beneath it."));
+		ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
+		if (auto _ttStamp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
 
-		ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
-		if (auto _ttBh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));
+		ImGui::SliderFloat(T(TKEY("footprint_width"), "Footprint Width"), &settings.FootPrintScale, 0.5f, 3.0f, "%.2f x");
+		if (auto _ttFw = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("footprint_width_tooltip"), "Width multiplier on foot prints; length follows the skeleton. Snow collapses wider than the foot, so above 1.0 usually reads best."));
 
-		ImGui::PushID("trench_detail");
+		ImGui::SliderFloat(T(TKEY("snow_slumping"), "Snow Slumping"), &settings.SlumpRate, 0.0f, 1.0f, "%.2f");
+		if (auto _ttSlump = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_slumping_tooltip"), "Snow dug away on BOTH sides loses its support and settles about halfway into a low uneven bump, so heavy traffic reads as one churned channel instead of a comb of full-height fins. Trench walls and open snow never move. 0 = off; higher = faster settling."));
+
+		ImGui::SliderFloat(T(TKEY("trench_sharpness"), "Trench Wall Sharpness"), &settings.TrenchWallSharpness, 0.0f, 100.0f, "%.0f %%");
+		if (auto _ttSharp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
+
+		ImGui::SliderFloat(T(TKEY("trench_floor_height"), "Trench Floor Height"), &settings.TrenchFloorHeight, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttTfh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_floor_height_tooltip"), "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors."));
+
+		ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
+		if (auto _ttSteep = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
+
+		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
+			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
+			if (auto _ttOt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
+
+			ImGui::Checkbox(T(TKEY("no_carve_floating"), "Floating Actors Leave No Trench"), &settings.NoCarveFloatingActors);
+			if (auto _ttFloat = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("no_carve_floating_tooltip"), "Stops things that never touch the ground from digging it: atronachs, wisps, ghosts, anything that hovers. Nothing is named - an actor is judged by whether its own lowest part ever comes down to its footing, so modded levitators are covered too."));
+
 			ImGui::SliderFloat(T(TKEY("floating_band"), "Floating Actor Clearance"), &settings.FloatingActorBand, 4.0f, 80.0f, "%.0f units");
 			if (auto _ttFloatBand = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected line under Spell Integration counts what each value is skipping."));
+				ImGui::Text("%s", T(TKEY("floating_band_tooltip"), "How far an actor's lowest part may sit above its footing and still count as standing on it. Lower values catch things that only just hover, at the risk of dropping a normal creature's tracks mid-stride; the Detected readout under Debugging Options counts what each value is skipping."));
+
+			{
+				std::string incorporealModes;
+				incorporealModes += T(TKEY("incorporeal_off"), "Off");
+				incorporealModes += '\0';
+				incorporealModes += T(TKEY("incorporeal_translucent"), "See-through bodies");
+				incorporealModes += '\0';
+				incorporealModes += T(TKEY("incorporeal_flag"), "Actors marked Ghost");
+				incorporealModes += '\0';
+				incorporealModes += T(TKEY("incorporeal_either"), "Either");
+				incorporealModes += '\0';
+				ImGui::Combo(T(TKEY("incorporeal_mode"), "Ghosts Leave No Trench"), &settings.IncorporealMode, incorporealModes.c_str());
+			}
+			if (auto _ttIncorp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("incorporeal_mode_tooltip"), "Stops things with no substance from digging the snow. This is a separate question from hovering, and has to be: a ghost stands with its feet on the ground like the Nord it otherwise is, so no clearance measurement will ever catch one. See-through bodies judges an actor by whether it is drawn solid, which needs no list and covers modded ghosts; actors marked Ghost reads the flag on the record instead, which never misses a ghost but also catches anything the game made unkillable rather than incorporeal. The Detected readout under Debugging Options reports what the nearest actor scores under both."));
+
+			ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
+			if (auto _ttTess = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the shell and the object trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the coarse grid. This is what trench smoothness actually depends on. Off costs nothing but leaves every trench as angular as the grid beneath it."));
+
+			ImGui::SliderFloat(T(TKEY("trail_irregularity"), "Trail Irregularity"), &settings.TrailIrregularity, 0.0f, 1.0f, "%.2f");
+			if (auto _ttIrr = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trail_irregularity_tooltip"), "World-anchored noise wobbling every stamp's edge, so trails read as churned snow instead of swept circles."));
 
 			ImGui::SliderFloat(T(TKEY("rim_lip"), "Rim Lip"), &settings.RimLip, 0.0f, 0.3f, "%.2f");
 			if (auto _ttLip = Util::HoverTooltipWrapper())
@@ -427,6 +403,30 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("rim_teeth"), "Rim Teeth"), &settings.RimTeeth, 0.0f, 1.0f, "%.2f");
 			if (auto _ttTeeth = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("rim_teeth_tooltip"), "Breaks the trench edge into irregular teeth and blocks instead of a clean curve, using the border system's noise. Deep snow only. Too high eats the trench's readable width - back off if trails start looking chewed. 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
+			if (auto _ttCm = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
+
+			ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
+			if (auto _ttDetail = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The look of disturbed snow: the raised berm along trench edges and the chunky churned surface. Snow sitting on objects follows these too."));
+
+			ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
+			if (auto _ttBh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm. On objects the same value shades a ridge rather than raising one."));
+
+			ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
+			if (auto _ttClods = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("berm_clods_tooltip"), "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off."));
+
+			ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
+			if (auto _ttCh = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
+
+			ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
+			if (auto _ttCs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
 
 			ImGui::SeparatorText(T(TKEY("bow_wave_group"), "Bow Wave"));
 
@@ -450,60 +450,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBwS = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("bow_wave_speed_tooltip"), "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop."));
 
-			ImGui::SeparatorText(T(TKEY("bow_wave_group_end"), "Trench Detail"));
-
-			ImGui::SliderFloat(T(TKEY("berm_clods"), "Berm Clods"), &settings.BermClods, 0.0f, 6.0f, "%.1f units");
-			if (auto _ttClods = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("berm_clods_tooltip"), "Breaks the berm crest into coarse thrown chunks - spoil is clumps, not a smooth mound. Coarser than the trench's churn rubble on purpose, so berm and trench read at different scales. 0 = off."));
-
-			ImGui::SliderFloat(T(TKEY("churn_height"), "Churn Height"), &settings.ChurnHeight, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttCh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("churn_height_tooltip"), "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth."));
-
-			ImGui::SliderFloat(T(TKEY("churn_size"), "Churn Size"), &settings.ChurnSize, 0.25f, 4.0f, "%.2fx");
-			if (auto _ttCs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("churn_size_tooltip"), "Size of the broken snow lumps: smaller = finer rubble, larger = broad clods."));
-
-			ImGui::Checkbox(T(TKEY("sss_remarch"), "Re-march Shadows on the Shell"), &settings.ShellSSSRemarch);
-			if (auto _ttRemarch = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_tooltip"), "Screen-Space Shadows are normally marched on the ground BENEATH the snow, so the shell can only use them at distance or they print buried objects through the snow. This re-marches them from the snow surface and accepts only casters standing above the snow line - which brings back near-field grass and contact shadows, including from actors, without the prints. Costs 8 depth taps per lit shell pixel. A/B this against it being off."));
-
-			ImGui::Checkbox(T(TKEY("sss_remarch_thickness"), "Streak Fix (Occluder Thickness)"), &settings.ShellSSSRemarchThickness);
-			if (auto _ttThick = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_thickness_tooltip"), "The Bend SSS thin-shell rule applied to the re-march: an occluder only shadows ray samples within 48 units of itself, instead of everything behind it on screen - which is what painted a character's silhouette as a long streak across the snow. Grass and other thin casters are unaffected; the trade is slightly lighter shadow directly behind very thick objects. Only does anything with the re-march on."));
-
-			ImGui::SliderFloat(T(TKEY("sss_remarch_cap"), "Caster Height Cap"), &settings.ShellSSSRemarchCasterCap, 10.0f, 200.0f, "%.0f units");
-			if (auto _ttCap = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
-
-			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
-			if (auto _ttCm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("obj_trench_detail"), "Object Trenches"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttOtd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("obj_trench_detail_tooltip"), "The same disturbed-snow detail for snow on objects (roads, rocks, logs), independent of the landscape set. The berm is shading-only here."));
-		ImGui::SliderFloat(T(TKEY("obj_berm_height"), "Berm Height"), &settings.ObjBermHeight, 0.0f, 1.0f, "%.2fx");
-		if (auto _ttObh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("obj_berm_height_tooltip"), "Strength of the shaded snow ridge along object trails. 0 removes it."));
-
-		ImGui::SliderFloat(T(TKEY("obj_churn_height"), "Churn Height"), &settings.ObjChurnHeight, 0.0f, 8.0f, "%.1f units");
-		if (auto _ttOch = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("obj_churn_height_tooltip"), "How tall the broken lumps are in object trench walls. Floors keep their thin cover regardless."));
-
-		ImGui::PushID("obj_trench_detail");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::SliderFloat(T(TKEY("obj_churn_size"), "Churn Size"), &settings.ObjChurnSize, 0.25f, 4.0f, "%.2fx");
-			if (auto _ttOcs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("obj_churn_size_tooltip"), "Size of the broken lumps: smaller = finer rubble, larger = broad clods."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -526,54 +472,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("corpse_seconds"), "Body Mark Duration"), &settings.CorpseEffectSeconds, 0.0f, 30.0f, "%.1f s");
 		if (auto _ttCorpseSecs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("corpse_seconds_tooltip"), "How long a body goes on marking after it falls. Vanilla death effects fade in a couple of seconds; mods that leave a corpse visibly burning or frozen run far longer, so match this to what you can actually see rather than to anything physical."));
-
-		if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
-			// Diagnostics use plain text by existing convention (no i18n).
-			ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
-				spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
-				spellStats.groundContacts, spellStats.trails);
-			ImGui::Text("blasts: armed %u | detonations %u | casts %u | shouts %u (%u discs)   [totals since load]",
-				spellStats.armed, spellStats.detonations, spellStats.casts,
-				spellStats.shouts, spellStats.shoutDiscs);
-			ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
-				spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks, spellStats.lifted);
-			if (spellStats.lastShoutVerdict) {
-				static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
-				static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
-				ImGui::Text("last shout: %s | proj speed %.0f | impact force %.0f | %s",
-					spellStats.lastShoutElement < IM_ARRAYSIZE(kElem) ? kElem[spellStats.lastShoutElement] : "?",
-					spellStats.lastShoutSpeed, spellStats.lastShoutForce,
-					spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
-			}
-			ImGui::Text("rejected: no element %u | no blast form %u",
-				spellStats.rejectedElement, spellStats.rejectedNoBlast);
-			ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",
-				spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating, stampStats.incorporeal);
-			ImGui::Text("death events seen %u | death blasts opened %u",
-				spellStats.deathsSeen, spellStats.deathBlasts);
-			if (stampStats.nearestValid) {
-				static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
-				const uint state = stampStats.nearestState;
-				ImGui::Text("nearest actor: %s | gap to its own footing %.0f | gap to land %.0f | state %s",
-					stampStats.nearestFloating ? "FLOATING" : "touching",
-					stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
-					state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
-				ImGui::Text("             bones: feet %u | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u)",
-					stampStats.nearestFeet, stampStats.nearestLimbs,
-					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props);
-			ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
-					stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
-					stampStats.nearestGhostFlag ? "yes" : "no",
-					stampStats.nearestIncorporeal ? "INCORPOREAL" :
-						(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));
-			}
-			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
-				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
-			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u",
-				stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
-				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled);
-			ImGui::TreePop();
-		}
 
 		ImGui::SeparatorText(T(TKEY("spell_cat_force"), "Force (Shouts)"));
 		if (auto _ttForce = Util::HoverTooltipWrapper())
@@ -885,9 +783,9 @@ void SnowDeformation::DrawSettings()
 				stats.encoded ? (double)stats.bytes / (double)stats.encoded : 0.0);
 		}
 
+		ImGui::SeparatorText(T(TKEY("debug_cat_accumulation"), "Snow Accumulation"));
+
 		{
-			// ROADMAP #33 Stage B: the layer is tracked but reads nowhere yet,
-			// so this readout IS the feature until Stage C wires the depth.
 			// The rate is spelled out because the exit test is "does the number
 			// do what the plan's table says", which needs the arithmetic
 			// visible rather than inferred from watching it drift.
@@ -912,6 +810,57 @@ void SnowDeformation::DrawSettings()
 				rate, growth, melt, fade);
 			ImGui::Text("Clock: %.2f game hours, timescale %.0f",
 				gameClock.lastHours, gameClock.timescale);
+			ImGui::Text("Co-save: %s", settings.PersistAccumulation ? "remembered" : "not written");
+		}
+
+		ImGui::SeparatorText(T(TKEY("debug_cat_spells"), "Spell Integration"));
+
+		if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
+			// Diagnostics use plain text by existing convention (no i18n).
+			ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
+				spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
+				spellStats.groundContacts, spellStats.trails);
+			ImGui::Text("blasts: armed %u | detonations %u | casts %u | shouts %u (%u discs)   [totals since load]",
+				spellStats.armed, spellStats.detonations, spellStats.casts,
+				spellStats.shouts, spellStats.shoutDiscs);
+			ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
+				spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks, spellStats.lifted);
+			if (spellStats.lastShoutVerdict) {
+				static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
+				static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
+				ImGui::Text("last shout: %s | proj speed %.0f | impact force %.0f | %s",
+					spellStats.lastShoutElement < IM_ARRAYSIZE(kElem) ? kElem[spellStats.lastShoutElement] : "?",
+					spellStats.lastShoutSpeed, spellStats.lastShoutForce,
+					spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
+			}
+			ImGui::Text("rejected: no element %u | no blast form %u",
+				spellStats.rejectedElement, spellStats.rejectedNoBlast);
+			ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",
+				spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating, stampStats.incorporeal);
+			ImGui::Text("death events seen %u | death blasts opened %u",
+				spellStats.deathsSeen, spellStats.deathBlasts);
+			if (stampStats.nearestValid) {
+				static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
+				const uint state = stampStats.nearestState;
+				ImGui::Text("nearest actor: %s | gap to its own footing %.0f | gap to land %.0f | state %s",
+					stampStats.nearestFloating ? "FLOATING" : "touching",
+					stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
+					state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
+				ImGui::Text("             bones: feet %u | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u)",
+					stampStats.nearestFeet, stampStats.nearestLimbs,
+					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props);
+				ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
+					stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
+					stampStats.nearestGhostFlag ? "yes" : "no",
+					stampStats.nearestIncorporeal ? "INCORPOREAL" :
+						(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));
+			}
+			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
+				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
+			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u",
+				stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
+				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled);
+			ImGui::TreePop();
 		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));

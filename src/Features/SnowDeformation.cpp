@@ -29,6 +29,7 @@
 	X(StoredTrenchFadeDays) \
 	X(TrenchMemoryMB) \
 	X(EnableSnowAccumulation) \
+	X(PersistAccumulation) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
 	X(AccumulationMeltHours) \
@@ -127,9 +128,6 @@
 	X(ShellSSSRemarch) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
-	X(ObjBermHeight) \
-	X(ObjChurnHeight) \
-	X(ObjChurnSize) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsFadeM) \

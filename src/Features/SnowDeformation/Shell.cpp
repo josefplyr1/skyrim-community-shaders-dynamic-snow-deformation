@@ -596,9 +596,11 @@ void SnowDeformation::DrawShell()
 	// landscape pair now carries the C3 A/B flags, the Obj pair stays a keeper.
 	cbData.DebugNoFarPad = lodDebugNoFarPad ? 1.0f : 0.0f;
 	cbData.DebugNoDataMorph = lodDebugNoDataMorph ? 1.0f : 0.0f;
-	cbData.ObjBermHeightAmp = std::clamp(settings.ObjBermHeight, 0.0f, 1.0f);
-	cbData.ObjChurnHeightAmp = std::clamp(settings.ObjChurnHeight, 0.0f, 8.0f);
-	cbData.ObjChurnSizeScale = std::clamp(settings.ObjChurnSize, 0.25f, 4.0f);
+	// Object trench detail follows the landscape set; the separate Obj* sliders
+	// were retired 2026-08-25. The CB rows stay, both shells read them.
+	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
+	cbData.ObjChurnHeightAmp = cbData.ChurnHeightAmp;
+	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;
 	cbData.ObjCrispScaleV = 1.0f;
 	cbData.ObjCrispStrengthV = 0.0f;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;

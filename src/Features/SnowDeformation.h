@@ -309,6 +309,8 @@ public:
 		float AccumulationPeak = 1.5f;
 		/** @brief The accumulated layer scales the shell's depth. Off pins it at the authored depth, which is the pre-#33 look and the other half of the A/B. ON by default per Josef, 2026-08-24, once all four Stage C exit tests passed. */
 		bool EnableSnowAccumulation = true;
+		/** @brief Carry the accumulated layer through save/load on the 'SNAC' co-save record. Off, the record is written zeroed and every load starts at the authored depth. */
+		bool PersistAccumulation = true;
 		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Walked down 20 -> 4 -> 1 over Josef's three test rounds: the pace has to be visible within a session, and at his timescale of 5 even 4 hours was ~48 real minutes of unbroken snowfall. */
 		float AccumulationHours = 1.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time per Josef, 2026-08-24 - the plan's 2:1 asymmetry was deliberately balanced away in favour of a change the player can actually watch happen. */
@@ -489,8 +491,8 @@ public:
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief Border Fade, in PERCENT (round 18: the old 2..64-unit band read as a big move when it mainly sets how visible the outward dust is). Remapped to the internal 2..64 contact-term band on upload; 100% = the old 64. */
 		float SnowBorderFade = 100.0f;
-		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
-		float SnowSnowFade = 10.0f;
+		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
+		float SnowSnowFade = 0.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -499,7 +501,7 @@ public:
 		float UndulationSpacing = 1.0f;
 		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth since 2026-08-17. */
 		bool Tessellation = true;
-		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. */
+		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
 		float ReliefDepth = 0.0f;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
@@ -508,7 +510,7 @@ public:
 		float ParallaxDepth = 1.0f;
 		/** @brief Coarse steps in the parallax march before contact refinement (which re-marches the hit interval at the same budget, so N resolves like N*N). Scaled down with distance. The main quality/cost dial. */
 		int ParallaxSteps = 8;
-		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Default 0 until the projected snow diffuse beneath can be hidden. */
+		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
 		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.20f;
@@ -540,15 +542,11 @@ public:
 		float ShellSSSRemarchCasterCap = 20.0f;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. Compaction Shading and the Grain (crisp) sliders were RETIRED 2026-08-22, Josef's verdict: IBL + DALC already darken trenches, and real geometry carries the detail the crisp layer faked. */
 		float CompactMatte = 0.6f;
-		/** @brief Object-snow trench detail: same knobs as the landscape set, independent so tuning one never disturbs the other. Berm is shading-only on objects (geometry berm waits for the skin rework). */
-		float ObjBermHeight = 0.35f;
-		float ObjChurnHeight = 5.0f;
-		float ObjChurnSize = 0.25f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
-		float RangeTrenchesM = 100.0f;
+		float RangeTrenchesM = 125.0f;
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
-		float RangeSkinsFadeM = 100.0f;
+		float RangeSkinsFadeM = 750.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Strength of the far-field facing handover: as a pixel grows past the edge taper's own width the coverage test hands over to the true face normal, so distant objects keep bare rock on steep faces instead of collapsing to white. Scales against kFacingLODMax; 0 disables it. The near-field rim-contour push is deliberately NOT on this dial (see the PS). */

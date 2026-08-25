@@ -78,8 +78,11 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	const float value = snowAccumulation.load(std::memory_order_relaxed);
-	const float weather = accumWeatherIntensity.load(std::memory_order_relaxed);
+	// Zeroed rather than skipped when the toggle is off, so the record's shape
+	// never depends on a setting: a save written with it off still loads on a
+	// build that reads the record, and lands on the authored depth.
+	const float value = settings.PersistAccumulation ? snowAccumulation.load(std::memory_order_relaxed) : 0.0f;
+	const float weather = settings.PersistAccumulation ? accumWeatherIntensity.load(std::memory_order_relaxed) : 0.0f;
 	if (!a_intfc->WriteRecordData(&value, sizeof(value)) ||
 		!a_intfc->WriteRecordData(&weather, sizeof(weather))) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save write failed");
@@ -114,6 +117,14 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 	}
 	if (!std::isfinite(value) || !std::isfinite(weather)) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save holds {} / {}; dropped", value, weather);
+		return;
+	}
+
+	// The toggle is read on the way in too: a save written while it was on must
+	// not resurrect its layer after the player turns it off.
+	if (!settings.PersistAccumulation) {
+		gameClockUnarm.store(true, std::memory_order_release);
+		logger::info("[SNOW DEFORMATION] accumulation co-save ignored, Remember Snow Accumulation is off");
 		return;
 	}
 
