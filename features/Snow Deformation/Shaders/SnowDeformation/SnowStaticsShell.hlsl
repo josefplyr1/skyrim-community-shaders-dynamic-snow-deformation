@@ -2,18 +2,16 @@
 // drifts, roofs, logs) inflated along their vertex normals, with the same
 // snow material as the terrain shell so the two read as one blanket.
 //
-// Drawn inside SnowDeformation::DrawShell right after the terrain shell, so
-// it inherits that pass's bindings: ShellCB (b0), terrain window (t0),
-// deformation map (t1), snow maps (t2/t6/t7), sampler s0 and the b4-b6 shared
-// data. Only the input layout, vertex/index buffers, shaders and StaticCB
-// (b1) change per object.
+// Drawn inside DrawShell right after the terrain shell, inheriting its
+// bindings: ShellCB (b0), terrain window (t0), deformation map (t1), snow maps
+// (t2/t6/t7), s0 and the b4-b6 shared data. Only the input layout, buffers,
+// shaders and StaticCB (b1) change per object.
 //
-// The VS consumes only POSITION and NORMAL; D3D11 accepts input layouts
-// carrying more elements than the shader reads, so one layout per vertex
-// descriptor covers every static mesh format.
+// The VS consumes only POSITION and NORMAL, and D3D11 accepts layouts with
+// more elements than the shader reads, so one layout per vertex descriptor
+// covers every mesh format.
 //
-// cbuffer ShellCB must stay layout-identical to SnowShell.hlsl (and ShellCB
-// in SnowDeformation.h).
+// ShellCB must stay layout-identical to SnowShell.hlsl and SnowDeformation.h.
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
@@ -560,15 +558,11 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	}
 	float2 gridLocal = v.GridLocal;
 
-	// Rim test: a vertex whose column towers over any neighbor column is
-	// the top edge of a tall structure (roof or wall rim); its triangles
-	// stretch down the facade as giant white sheets. valid neighbors only:
-	// a sentinel neighbor (off the footprint) must NOT count as a rim;
-	// that culls the patch's edge ring along every road chunk, punching
-	// trench holes at road edges. Facade sheets still die: an off-footprint
-	// vertex is killed by its own sentinel top (outline-spanning triangles
-	// go with it), and within-footprint roof-to-ground drops are caught by
-	// the height delta.
+	// Rim test: a vertex whose column towers over a neighbour is the top edge
+	// of a tall structure, whose triangles stretch down the facade as white
+	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
+	// rim, or the patch's edge ring is culled along every road chunk. Facade
+	// sheets still die by their own sentinel top.
 	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
 	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
 	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
@@ -931,19 +925,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, smoothWS.z);
 	float depth = depthBase * upFacing;
 
-	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
-	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
-	// snow has no silhouette left to pop. Range scales with class depth against
-	// the depth sliders' 25-unit maximum.
-	// Roads are exempt: their height must stay in step with the landscape
-	// shell they meet at the verge, and that shell does not collapse.
-	// Edge taper: the cone field already holds the highest snow surface the
-	// angle of repose permits at each column, so the layer thins toward every
-	// rim and keeps full depth in the middle. Sampling a grid transform is
-	// isotropic; the ring walk it replaces approximated the same distance from
-	// eight directions and faceted every curved rim into spikes.
-	// Both classes read the field, but they read different SHAPES out of it.
-	// The depth guard skips the read wherever the layer is already gone.
+	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
+	// the hand-off to the object's own projected snow has no silhouette to pop.
+	// Range scales with class depth against the sliders' 25-unit maximum. Roads
+	// are exempt - their height must stay in step with the landscape shell at
+	// the verge, and that does not collapse.
+	//
+	// Edge taper: the cone field holds the highest surface the angle of repose
+	// permits per column, so the layer thins toward every rim. Isotropic, unlike
+	// a ring walk, which facets curved rims into spikes.
 	float support = 1.0;
 	float rimT = 1.0;
 	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
@@ -956,14 +946,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float allowed;
 		[flatten] if (isFlat > 0.5)
 		{
-			// Cornice. Snow on a thin plate has the cohesion to carry full
-			// depth out to the rim and roll over in the last sliver; slumping
-			// it across the plate would erase the overhang that makes a
-			// snowed plank or eave read correctly. Quarter-circle rollover.
-			// The roll is a FIXED world width, not a fraction of the ramp:
-			// the ramp's length scales with depth, so a proportional roll is
-			// wider than the plank itself at deep settings and the whole
-			// plate turns into rollover.
+			// Cornice: snow on a thin plate carries full depth to the rim and
+			// rolls over in the last sliver, which is the overhang that makes a
+			// snowed plank read correctly. Quarter-circle. The roll is a FIXED
+			// world width - the ramp scales with depth, so a proportional roll
+			// exceeds the plank itself at deep settings.
 			float rollFrac = saturate(kCorniceRoll * steep / coneSeed);
 			float u = saturate(rimT / max(rollFrac, 1e-3));
 			float toRim = 1.0 - u;
@@ -1379,14 +1366,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
 
-	// Rim wall: the band where a lifted cap reaches back down to the object's
-	// edge is near-vertical whatever the depth (its geometry is the object's
-	// own side face with the top edge dragged up), so the steepness gates
-	// below erase it and the cap loses its side. The object's top raster
-	// separates the two cases exactly: shell ABOVE the object's own top
-	// surface is rim wall, shell at or below it is a bare object face.
-	// View-independent, and it leaves house walls and boulder flanks (both
-	// far below their object's top) to the gates.
+	// Rim wall: where a lifted cap reaches back down to the object's edge it is
+	// near-vertical at any depth, so the steepness gates below would erase it
+	// and the cap would lose its side. The object's top raster separates the
+	// cases exactly: shell ABOVE the object's own top is rim wall, at or below
+	// it is a bare face. View-independent, and it leaves house walls and
+	// boulder flanks to the gates.
 	float shoulderWall = 0.0;
 	// Gate inputs kept at function scope for the debug view below.
 	float wallClearance = 0.0;
@@ -1420,16 +1405,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// pins shell edges to the mesh; only the lip's visibility fades here.
 	float pixelCoverage = smoothstep(0.4, 0.7, input.Coverage);
 #	ifndef PATCH
-	// Geometric steepness gate; one fix for three symptoms (wall fog,
-	// boulder-flank sheets, trunk-bark streaks): on huge low-poly triangles
-	// the interpolated normal smears one top vertex's up-ness down the whole
-	// face, and sloped faces (30-60 degrees) sail over the vertical sliver
-	// cull below. The derivative normal knows each pixel's true facing:
-	// snow sheds off anything steeper than ~65 degrees regardless of
-	// interpolation. The band sits below the interpolated gate's range, so
-	// rounded snow edges (z 0.4+) stay interpolation-shaped and per-face
-	// blockiness cannot return. The PATCH is exempt: its trench walls are
-	// legitimately steep real geometry.
+	// Geometric steepness gate: on huge low-poly triangles the interpolated
+	// normal smears one top vertex's up-ness down the whole face, so sloped
+	// faces sail over the vertical sliver cull below. The derivative normal
+	// knows each pixel's true facing, and snow sheds past ~65 degrees. The band
+	// sits below the interpolated gate's range, so rounded edges stay
+	// interpolation-shaped. The PATCH is exempt - its walls are legitimately
+	// steep real geometry.
 	float3 dPosX = ddx(input.WorldPos);
 	float3 dPosY = ddy(input.WorldPos);
 	float3 geoFacing = normalize(cross(dPosY, dPosX));
@@ -1438,17 +1420,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float footprint = length(abs(dPosX) + abs(dPosY));
 	float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
 
-	// Facing LOD. The interpolated normal over-reports up-ness on low-poly
-	// meshes (one top vertex's up-ness smeared down a whole face), which is
-	// why a distant rock reads as solid white: every flank passes the gate
-	// below. geoFacing is the true face orientation. It was rejected for near
-	// coverage because it is constant per triangle and quantizes rims into
-	// sawtooth, but that is a NEAR-field artifact: once a pixel spans the
-	// taper the facets are sub-pixel, and the face normal is the only slope
-	// signal left. Handover scales with the taper's own world length
-	// (coneSeed / steepness), so it follows the depth and repose sliders.
-	// The blend is capped short of 1: interpolation always contributes, which
-	// keeps the facet contours soft through the transition.
+	// Facing LOD: the interpolated normal over-reports up-ness on low-poly
+	// meshes, so every flank passes the gate below and a distant rock reads as
+	// solid white. geoFacing is the true face orientation - unusable near,
+	// where it is constant per triangle and quantises rims into sawtooth, but
+	// once a pixel spans the taper those facets are sub-pixel and it is the
+	// only slope signal left. Handover scales with the taper's world length, so
+	// it follows the depth and repose sliders. Capped short of 1 so
+	// interpolation always contributes and facet contours stay soft.
 	float coneRamp = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) / clamp(MoundSteepness, 0.5, 3.0);
 	float faceLOD = kFacingLODMax * SkinDistantBareness * smoothstep(0.5, 2.0, footprint / max(coneRamp, 1.0));
 	[branch] if (faceLOD > 0.001)
@@ -1459,29 +1438,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		pixelCoverage = smoothstep(0.4, 0.7, lerp(input.Coverage, geoUp, faceLOD));
 	}
 
-	// Coverage follows the layer's own HEIGHT, not the geometric face normal.
-	// geoFacing is a screen-derivative of world position and therefore
-	// constant across a triangle, so thresholding it quantizes coverage per
-	// triangle and tears every rim into sawtooth teeth at any tessellation
-	// density. Interpolated lift varies smoothly, and the edge taper already
-	// drives it to zero on rims and vertical faces, so walls stay bare
-	// without a facing test.
-	// Narrow band, and jittered in world space. A wide ramp puts a broad area
-	// into partial alpha, which the dither resolves into the translucent film
-	// that used to sheet down house walls; and a clean threshold on a linearly
-	// interpolated field traces the mesh's own polygons, so the contour comes
-	// out faceted. The jitter breaks that contour without widening the band.
+	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
+	// geoFacing is constant across a triangle, so thresholding it tears every
+	// rim into sawtooth. Interpolated lift varies smoothly and the edge taper
+	// already drives it to zero on rims, so walls stay bare without a facing
+	// test. Narrow band, jittered in world space - a wide ramp dithers into a
+	// translucent film, and a clean threshold traces the mesh's own polygons.
 	float liftEdge = 0.06 * liftBase * (0.6 + 0.8 * CoverageNoise(worldXY * 3.0));
-	// Rim contour LOD. The band is a contour of an interpolated field, so its
-	// screen width is liftEdge / fwidth(Lift): it thins below a pixel and
-	// averages into the blanket while the taper still has run left. Push the
-	// contour inboard to hold roughly a pixel, keeping the partial-alpha width
-	// FIXED - widening that is what dithers into a translucent film. Capped,
-	// because the taper is all the range this field has: past it the facing
-	// LOD above is the only source of bare surface.
-	// Not scaled by SkinDistantBareness: that slider tunes the facing handover
-	// in the far field, and sharing it here silently drops the contour below a
-	// pixel (its whole point) at any setting that suits the far field.
+	// Rim contour LOD: the band's screen width is liftEdge / fwidth(Lift), so
+	// it thins below a pixel and averages into the blanket while the taper
+	// still has run left. Push the contour inboard to hold roughly a pixel and
+	// keep the partial-alpha width FIXED. Capped, since the taper is all the
+	// range this field has. NOT scaled by SkinDistantBareness - that tunes the
+	// far-field facing handover, and sharing it drops the contour below a pixel.
 	float liftBand = 0.45 * liftEdge;
 	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * fwidth(input.Lift)), kRimBandMax * liftBase);
 	float liftCoverage = smoothstep(liftEdgeLOD - liftBand, liftEdgeLOD, input.Lift);
@@ -1655,31 +1624,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 	coverageAlpha *= seamTotal;
 	dbgSeam *= seamTotal;
 
-	// Shading continuity across the meeting line ("still very
-	// edgy"): with the cut committed, what remains visible of the seam is
-	// the LIGHTING discontinuity - the skin's macro normal against the
-	// blanket's. Ease the skin's normal toward the blanket's analytic
-	// surface normal through the last units above the blanket top, so the
-	// two surfaces agree by the line and the crease reads as one snowfield.
-	// Micro detail stays continuous by construction: both sides sample the
-	// same world-anchored snow normal map, applied after this. Keyed to the
-	// analytic height field, not the ray gate - the gate's boundary (the
-	// blanket's silhouette behind the pixel) would print its own edge into
-	// a normal blend. Blanket depth > 0.5 keeps pair 4's bare-ground
-	// hand-off out of this: flattening the rim toward bare dirt is not
-	// continuity, there is no blanket to agree with.
+	// Shading continuity across the meeting line: with the cut committed, what
+	// remains visible is the LIGHTING discontinuity between the skin's macro
+	// normal and the blanket's. Ease the skin's normal toward the blanket's
+	// analytic surface normal through the last units above the blanket top.
+	// Micro detail is continuous by construction - both sides sample the same
+	// world-anchored normal map. Keyed to the analytic height field, NOT the
+	// ray gate, whose boundary would print its own edge into a normal blend.
+	// Blanket depth > 0.5 keeps pair 4's bare-ground hand-off out.
 	[branch] if (HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
 		float dzTop = pixelAbsZ - blanketTopZ;
-		// TWO-SIDED thin band, up-facing pixels only (settled by
-		// the RenderDoc receiver replay): the one-sided full-strength blend
-		// hijacked everything BELOW the blanket top - carved walls, floors,
-		// and the rock's sun-facing flank at the seam, whose true normal
-		// catches the low sun exactly like the blanket rim beside it.
-		// Flattening it printed a dim skin stripe against a glowing rim -
-		// the "bright seam band". Flanks and recesses keep their normals;
-		// only near-top, up-facing pixels ease into the blanket.
+		// TWO-SIDED thin band, up-facing pixels only. A one-sided full-strength
+		// blend hijacks everything below the blanket top - carved walls, floors
+		// and the sun-facing flank at the seam - and flattening those prints a
+		// dim stripe against a glowing rim. Flanks and recesses keep their
+		// normals.
 		float normalBand = smoothstep(-6.0, -2.0, dzTop) * (1.0 - smoothstep(0.5, 6.0, dzTop));
 		normalBand *= smoothstep(0.3, 0.6, normalWS.z);
 		[branch] if (normalBand > 0.001)
@@ -1775,14 +1736,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (screenNoise * screenNoise >= coverageAlpha)
 		discard;
 
-	// Snow texture taps; shared by albedo, normal and RMAOS, sampled at the
-	// parallax-corrected position so the texture rides the relief. Steep
-	// drape sides re-project along the facing wall plane: the top-down
-	// projection stretches down a puffed shell's flanks.
-	// Two projections, blended as SAMPLES rather than as coordinates. Lerping
-	// the UVs produces a coordinate field that belongs to neither plane, so
-	// the whole transition band smears; the sides are also where the shell's
-	// rim lives, which is where that smear reads as streaks.
+	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
+	// parallax-corrected position. Steep drape sides re-project along the
+	// facing wall plane, since the top-down projection stretches down flanks.
+	// Blended as SAMPLES, never as coordinates: lerping UVs gives a field
+	// belonging to neither plane, so the whole transition band smears.
 	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
 	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;

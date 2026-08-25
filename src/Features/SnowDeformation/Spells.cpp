@@ -183,15 +183,12 @@ static constexpr float kShoutRangeMax = 12000.0f;
 // Travel speed if a shout's projectile names none. Vanilla authors 1536 for
 // Unrelenting Force and 1200 for the breaths.
 static constexpr float kShoutDefaultSpeed = 1400.0f;
-// The front's reach on the very first frame is one frame of travel and no more.
-// A floor here was a mistake worth remembering: at eight percent of the wedge
-// it meant the first stretch in front of the shouter simply EXISTED, and the
-// travel only began beyond it.
-// Rate a BLAST sets its crust at. The crust rate in settings is tuned for a
-// sustained source - a frost cloak standing over one spot for seconds - and at
-// 0.6 a second it reached barely a fifth of a glaze inside a blast's window,
-// which is why Frost Breath was all but invisible while Fire Breath cut to the
-// floor. A blast has one moment, so it has to arrive within it.
+// The front's reach on the first frame is one frame of travel, with no floor -
+// a floor makes the first stretch in front of the shouter simply exist, with
+// travel only beginning beyond it.
+// Rate a BLAST sets its crust at. The settings rate is tuned for a sustained
+// source and reaches barely a fifth of a glaze inside a blast's window; a blast
+// has one moment, so it has to arrive within it.
 static constexpr float kBlastCrustRate = 4.0f;
 // How long a self-delivered shout is watched for a dash. The dash itself is
 // over well inside this; the window only has to outlast the wind-up.
@@ -290,19 +287,15 @@ SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_elemen
 	}
 }
 
-// Strength and footprint for a source at a_heightAbove over the land it marks.
-// Resting on the snow marks it fully; hovering above only warms what passes
-// beneath, weaker and broader the higher it runs. Shared deliberately: every
-// detector that marks the ground from an airborne source needs this, and the
-// first one to skip it produced marks so weak they were invisible.
+// Strength and footprint for a source at a_heightAbove over the land it marks:
+// resting on the snow marks fully, hovering only warms what passes beneath,
+// weaker and broader with height. Shared by every airborne-source detector.
 //
-// What the returned strength MEANS depends on how long the source lasts, and
-// getting that backwards leaves a mark that can never deepen:
-//   INSTANTANEOUS (a blast) - fade the TARGET. It has no time to dig, so a
-//     detonation high above the snow leaves a shallow scorch and that is that.
-//   SUSTAINED (a cloak, a wall) - fade the RATE and keep the target full. Heat
-//     held near snow melts through eventually however far above it sits; being
-//     further away makes it slower, not permanently shallower.
+// CONTRACT - what the strength means depends on the source's duration, and
+// reversing it leaves a mark that can never deepen:
+//   INSTANTANEOUS (a blast) - fade the TARGET; it has no time to dig.
+//   SUSTAINED (a cloak, a wall) - fade the RATE, keep the target full. Height
+//     makes it slower, not permanently shallower.
 static bool GroundMark(float a_heightAbove, float a_contactRadius, float& a_strength, float& a_radius)
 {
 	a_heightAbove = std::max(a_heightAbove, 0.0f);
@@ -552,17 +545,11 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 		if (!base || base->data.delivery != RE::MagicSystem::Delivery::kSelf)
 			continue;
 
-		// A cloak declares itself by ARCHETYPE. A self-centred AREA spell -
-		// Blizzard and its like - does not, but behaves the same way for our
-		// purposes: it sits on the caster and works the ground around them for
-		// a duration.
-		//
-		// DURATION is what makes it cloak-like, and area alone is not enough.
-		// Firestorm is self-delivered over an area of 100 and lasts no time at
-		// all: it is a detonation, and treating it as a cloak both invented a
-		// minute-long aura and skipped past the explosion collection below, so
-		// its blast stopped being queued entirely. Blizzard authors 40 over ten
-		// seconds and is the real thing.
+		// A cloak declares itself by archetype; a self-centred AREA spell does
+		// not, but behaves the same way. DURATION is what makes it cloak-like -
+		// area alone is not enough. Firestorm is self-delivered over an area of
+		// 100 and lasts no time at all, and treating it as a cloak invents an
+		// aura and skips the explosion collection below.
 		const bool selfArea = item->effectItem.area > 0 && item->effectItem.duration > 0;
 		if (base->data.archetype == RE::EffectSetting::Archetype::kCloak || selfArea) {
 			const SpellElement candidate = ClassifyElement(base);
@@ -831,16 +818,13 @@ void SnowDeformation::ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectR
 		return;
 	}
 
-	// A shove that TRAVELS is not a shockwave and gets no wedge. It is an
-	// object making its way across the ground, and what it leaves is the line
-	// it took - which the projectile route follows for real, so it need not be
-	// guessed at from the caster's facing here.
+	// A shove that TRAVELS is not a shockwave and gets no wedge: it leaves the
+	// line it took, which the projectile route already follows for real.
 	//
-	// Two independent readings, and either is enough, because they are two
-	// ways of noticing the same thing and one of them failing quietly would
-	// hand a cyclone a wedge. Speed: every shockwave crosses its reach in about
-	// a second, a cyclone crawls for four. Impact force: no shockwave in either
-	// master authors above 85, and a cyclone authors 1000.
+	// Two independent readings, either sufficient, so one failing quietly
+	// cannot hand a cyclone a wedge. Speed: a shockwave crosses its reach in
+	// about a second, a cyclone crawls for four. Impact force: no shockwave in
+	// either master authors above 85, a cyclone authors 1000.
 	if (element == SpellElement::Force && IsTravellingShove(projectile, shoveForce)) {
 		spellStats.lastShoutVerdict = 2;
 		return;
@@ -1036,33 +1020,25 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 
 // The aura an actor was BORN with, off its own records.
 //
-// Step 7's cast sink cannot see this one: nothing casts it. What it needs is
-// not a race list - the aura is a real SpellItem on the race's spell list, and
-// its cloak effect carries the same four axes every other detector classifies
-// through. Verified against Skyrim.esm: AbFlameAtronach holds AbAtronachCloakFire
-// with archetype Cloak, resist variable ResistFire and magnitude 10, and the
-// frost and storm races hold the matching pair. So a modded atronach works for
-// the same reason a modded Flames clone does.
+// The cast sink cannot see this one: nothing casts it. Not a race list - the
+// aura is a real SpellItem on the race's spell list, and its cloak effect
+// carries the same four axes every other detector classifies through
+// (AbFlameAtronach holds AbAtronachCloakFire: archetype Cloak, resist
+// ResistFire, magnitude 10). Modded atronachs work for the same reason.
 //
-// The read is of FORMS only - a race and a base object, both static for the
-// run - never of a live actor's effect list, which is the thing that crashed
-// three times in Step 7.
+// Reads FORMS only - a race and a base object, both static for the run - never
+// a live actor's effect list, which crashes.
 bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out)
 {
 	const auto* effects = a_list ? a_list->actorEffects : nullptr;
 	if (!effects || !effects->spells)
 		return false;
 
-	// An ELEMENTAL AFFINITY, gathered as we go: near-total immunity to one
-	// element paired with a weakness to another is the engine's own way of
-	// saying a creature is MADE of that element. It is the fallback for the
-	// ones that radiate without carrying a cloak - an ice wraith is as much a
-	// thing of frost as an atronach is, and says so in its records, but it has
-	// no cloak effect for the walk below to find.
-	//
-	// Both halves are needed. Immunity alone catches the Dwarven automatons,
-	// which are authored at 100 frost resistance and are machines rather than
-	// ice; none of them carries a weakness, so the pair separates them cleanly.
+	// An elemental affinity: near-total immunity to one element paired with a
+	// weakness to another is the engine's way of saying a creature is MADE of
+	// it. The fallback for things that radiate without carrying a cloak, like
+	// ice wraiths. BOTH halves are needed - immunity alone catches Dwarven
+	// automatons at 100 frost resistance, and none of those carries a weakness.
 	float immunity[4] = {};
 	bool weakness[4] = {};
 	auto elementOfAV = [](RE::ActorValue a_av) {
@@ -1082,17 +1058,11 @@ bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAu
 		const RE::SpellItem* spell = effects->spells[i];
 		if (!spell)
 			continue;
-		// An ABILITY only. A spell list mixes three things that read alike and
-		// mean different things: an ability is something the actor IS, a power
-		// is something it USES once a day, and a spell is something it can
-		// cast. The Dunmer's Ancestor's Wrath is a genuine fire cloak owned by
-		// DarkElfRace as a POWER, and reading it as innate made every Dark Elf
-		// in the game radiate fire permanently, vampire variants included.
-		//
-		// Verified across all 159 races in Skyrim, Dawnguard and Dragonborn:
-		// every innate aura is kAbility, Ancestor's Wrath is kPower, and the
-		// cloaks a mage merely knows are kSpell. This is also the axis that
-		// would let the NPC-record read come back safely - see Step 13.
+		// kAbility ONLY. A spell list mixes three meanings: an ability is what
+		// the actor IS, a power is what it uses once a day, a spell is what it
+		// can cast. Ancestor's Wrath is a real fire cloak owned by DarkElfRace
+		// as a POWER, and reading it as innate makes every Dark Elf radiate.
+		// Across all 159 vanilla races every innate aura is kAbility.
 		if (spell->data.spellType != RE::MagicSystem::SpellType::kAbility)
 			continue;
 		for (const auto* item : spell->effects) {
@@ -1164,15 +1134,13 @@ bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord&
 	auto* race = a_actor ? a_actor->GetRace() : nullptr;
 	if (!race)
 		return false;
-	// The race first, which is where every vanilla innate aura lives; then the
-	// actor's base, because a mod is free to put the ability on the NPC record
-	// and reuse a stock race.
+	// Race first, where every vanilla innate aura lives, then the actor's base,
+	// since a mod may put the ability on the NPC record and reuse a stock race.
 	//
-	// Reading the NPC record is only safe because AuraFromSpellList now takes
-	// kAbility alone. That list is a LOADOUT as well as an ability list, and
-	// 193 vanilla NPCs carry a cloak they have never cast; without the type
-	// test every one of them radiated. The caller must also cache each answer
-	// under the record it came from - see ResolveInnateAura.
+	// Reading the NPC record is safe ONLY because AuraFromSpellList takes
+	// kAbility alone: that list is a loadout too, and 193 vanilla NPCs carry a
+	// cloak they have never cast. The caller must cache each answer under the
+	// record it came from.
 	return AuraFromSpellList(race, a_out) || AuraFromSpellList(a_actor->GetActorBase(), a_out);
 }
 
@@ -1182,15 +1150,11 @@ const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::
 	if (!race)
 		return nullptr;
 
-	// Cached per form, and each answer under the record it was READ from.
-	// Races and base records do not change while the game runs, and the
-	// alternative is walking two spell lists for every actor every frame.
-	// A miss is cached too, so a wolf costs one hash lookup.
+	// Cached per form, each answer under the record it was READ from. Misses
+	// are cached too, so a wolf costs one hash lookup.
 	//
-	// The two caches are not one cache. Keying an NPC-derived answer by race
-	// is what made a single Ice Warlock give every Nord in the game a frost
-	// aura, every High Elf and Breton one from a Storm Warlock, and every fox
-	// one from GuardWinterholdCollege, which is authored on FoxRace.
+	// The two caches must stay separate: keying an NPC-derived answer by race
+	// gives every member of that race the aura of one warlock standing in it.
 	auto raceIt = innateAuraByRace.find(race->formID);
 	if (raceIt == innateAuraByRace.end()) {
 		InnateAuraRecord record{};
@@ -1243,16 +1207,12 @@ void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoin
 	if (tes)
 		tes->GetLandHeight(a_position, groundZ);
 	const float scaled = authored * std::max(settings.BlastRadiusScale, 0.0f);
-	// NOT GroundMark. That fade is authored for a SOURCE hanging above the
-	// ground - a hovering body only warms what passes beneath it. A death
-	// explosion is a sphere with an authored radius, and a Flame Atronach dies
-	// hovering ~45 units up, which is well inside its own blast: GroundMark
-	// read that hover height as weakness and turned the explosion into a
-	// barely-there smudge. "Atronachs do not melt the snow when they explode"
-	// was this line, not the event plumbing - the counters prove the event
-	// fires and the blast opens. The ground takes the chord the sphere cuts
-	// through it, at full strength, fading only as the CENTRE climbs out of
-	// its own reach.
+	// NOT GroundMark: that fade is authored for a source hanging above the
+	// ground. A death explosion is a sphere with an authored radius, and an
+	// atronach dies ~45 units up, well inside its own blast - GroundMark reads
+	// that as weakness and reduces it to a smudge. The ground takes the chord
+	// the sphere cuts through it, at full strength, fading only as the CENTRE
+	// climbs out of its own reach.
 	const float height = std::max(a_position.z - groundZ, 0.0f);
 	if (height >= scaled) {
 		logger::info("[SNOW DEFORMATION] death blast skipped: {:.0f} above ground, reach {:.0f}", height, scaled);

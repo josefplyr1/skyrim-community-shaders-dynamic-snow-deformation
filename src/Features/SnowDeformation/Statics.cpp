@@ -454,21 +454,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
-	// Distant objects are drawn as merged LargeRef LOD batches - the SAME
-	// asset class as Windhelm's sheets (objSnow-LargeRef / objSnowHD-LargeRef)
-	// at the same sizes - so neither the LOD flags nor worldBound.radius can
-	// separate the two. Rejecting on either killed distant object snow
-	// outright: pixel history showed a distant rock written by
-	// objSnowHD-LargeRef with no event from our statics pass touching it.
-	//
-	// What actually separates them is whether the LOD is REDUNDANT. Inside the
-	// loaded region the real meshes are drawn too, so a skin on the co-drawn
-	// LOD is a second surface at the LOD height cutting through them - the
-	// Windhelm sheet. Outside it, the LOD is the object's only representation
-	// and must be skinned or distant scenery has no snow. "Am I standing
-	// inside the thing" is the test; the unreferenced check stays as the
-	// second half, since merged LOD hangs off no TESObjectREFR while a real
-	// reference's geometry always has one.
+	// Distant objects and Windhelm's sheets are the same asset class at the
+	// same sizes, so neither the LOD flags nor worldBound.radius separates
+	// them. What does is whether the LOD is REDUNDANT: inside the loaded
+	// region the real meshes draw too, so a skin on the co-drawn LOD is a
+	// second surface cutting through them; outside it the LOD is the object's
+	// only representation and must be skinned. "Am I standing inside it" is
+	// the test, with the unreferenced check as the second half - merged LOD
+	// hangs off no TESObjectREFR.
 	{
 		const auto& wb = a_pass->geometry->worldBound;
 		const float bx = wb.center.x - eye.x;

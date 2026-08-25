@@ -1,64 +1,37 @@
 // Persistent snow deformation map update.
 //
-// The map is a square world-space window following the camera in whole-texel
-// steps. Each frame the previous map is re-read at a scrolled offset, snow
-// refill is applied, and this frame's stamps are blended in.
-// Texel value = normalized depression depth (0 = untouched, 1 = ground).
+// A square world-space window following the camera in whole-texel steps. Each
+// frame the previous map is re-read at a scrolled offset, refill is applied,
+// and this frame's stamps are blended in.
 //
-// Three stamp classes share the buffer, selected per stamp by StampEnds[i].z:
-//   CARVE (0) - a shape displaces snow. Instantaneous depth, max-blended:
-//               standing in a trench does not deepen it.
-//   MELT  (1) - a heat source removes snow while it stands there. Additive
-//               and dt-scaled, so DWELL TIME is what deepens the bowl.
-//   PIT   (2) - a discharge throws snow aside. Follows CARVE, not melt: the
-//               displacement is instantaneous, so a lightning cloak standing
-//               over one spot pocks it once rather than boring downward. It
-//               also SCORCHES, and scorched snow is displaced snow - it keeps
-//               its berm, where melted snow has none.
-// A stamp may also be a CONE rather than a capsule, flagged by adding
-// STAMP_MODE_CONE to its mode. It needs no extra fields: a capsule is already
-// two points and a radius, and a cone is the same three read differently -
-// apex at the segment start, axis to the segment end, radius = the half-width
-// it has opened to by the far end. Only shouts use it, because a shout is the
-// one source whose footprint is a wedge, and a row of overlapping discs cannot
-// stand in for one: every stamp holds full depth only across the inner tenth
-// of its radius, so ten discs read as ten craters with shallow gaps.
+// Stamp classes, selected per stamp by StampEnds[i].z:
+//   CARVE (0) - instantaneous depth, max-blended, so standing in a trench
+//               does not deepen it.
+//   MELT  (1) - additive and dt-scaled, so dwell time deepens the bowl.
+//   PIT   (2) - instantaneous like CARVE, and scorches. Scorched snow is
+//               displaced snow and keeps its berm; melted snow has none.
+//   CRUST (3) - sustained, approaching a target at a rate. Moves no snow.
+// Adding STAMP_MODE_CONE reinterprets the same three fields as a wedge: apex
+// at the segment start, axis to its end, radius = the half-width at the far
+// end. Shouts only. A row of discs cannot stand in for it - each stamp holds
+// full depth across the inner tenth of its radius, so they read as craters.
 //
-//   CRUST (3) - frost refreezes the surface. Sustained, so it follows MELT:
-//               approaches a target at a rate, and a wall glazing for ten
-//               seconds sets harder than one that flickered. It moves no snow
-//               at all - depth is untouched - it only hardens what is there.
-// Melted ground stays bare longer than trampled ground, because the ground
-// under a fire is warm and wet after the flame is gone. That is applied as a
-// SLOWER REFILL on melted texels, not as extra depth: depth is capped at 1.0
-// so the bowl profile below survives intact. Banking the persistence as
-// over-depth instead would flatten it - every consumer saturates at 1.0, so
-// the whole over-melted core collapses onto one plateau and the bowl becomes
-// a flat-floored pit with walls.
+// Melted ground refills SLOWER rather than carrying extra depth: depth is
+// capped at 1.0, and banking persistence as over-depth flattens the bowl into
+// a walled pit once consumers saturate.
 //
 // Channels:
-//   .x  total depression depth.
-//   .y  SIGNED surface state, because the two things it records are mutually
-//       exclusive - snow that melted away cannot also be scorched solid:
-//         > 0  the portion of .x that was MELTED rather than displaced. Melted
-//              snow leaves no spoil, so the berm field subtracts it.
-//         < 0  SCORCH, from a shock discharge. Displaced, so it keeps its full
-//              berm, and its magnitude darkens the shell.
+//   .x  total depression depth (0 = untouched, 1 = ground).
+//   .y  SIGNED surface state - the two are mutually exclusive.
+//         > 0  the portion of .x that was melted; the berm field subtracts it.
+//         < 0  scorch, which keeps its berm and darkens the shell.
 //       Berm reads x - max(y, 0); scorch reads max(-y, 0).
-//   .z  CRUST: refrozen snow. Resists being carved and shades as ice. Frost
-//       neither removes snow nor throws it, so it is neither of the above and
-//       needed a channel of its own.
-//   .w  DEPOSIT: snow standing ABOVE the untouched surface, pushed there by
-//       a body moving through cover. This is what makes the
-//       bow wave persistent instead of a shape that follows the feet: the
-//       crest is MAXed into the map every frame at wherever it currently is,
-//       so ground that has been shouldered stays shouldered when the walker
-//       turns, stops or leaves. It decays on its own clock (BowWaveSettle)
-//       and to the refill,
-//       relaxing into the berm the trail already builds.
-//       Claimed from blood: BLOOD-DESIGN.md had reserved .w and now needs a
-//       field of its own. The ImGui map preview blends by alpha,
-//       so it now reads deposit as transparency.
+//   .z  crust: refrozen snow, resists carving and shades as ice.
+//   .w  deposit: snow standing above the untouched surface. MAXed in every
+//       frame at the crest's current position, so shouldered ground stays
+//       shouldered after the walker leaves. Decays on BowWaveSettle and to
+//       the refill. The ImGui map preview blends by alpha and so reads
+//       deposit as transparency.
 
 // Bow-wave crests to deposit this frame. Mirrors kMaxBowWaves in
 // SnowDeformation.h and MAX_BOW_WAVES in SnowShell.hlsl - the SHAPE is
@@ -119,33 +92,22 @@
 // carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
 
-// Unsupported-snow slump (TRENCH-REALISM-PLAN.md Stage 3b). A strip of snow
-// left standing between two separate trails has had its support dug away on
-// BOTH sides, so it settles toward its neighbors' floor; a trench WALL is
-// carved on one side only, so its support test reads ~0 and it never moves.
-// That asymmetry is the whole design - this is a support test, NOT a blur.
-// Per axis at radius R: support = min(carve at +R, carve at -R); the settle
-// target is the max over axes and radii. It has a fixed point by
-// construction: once the strip reaches its neighbors' depth the min equals
-// its own value, and open snow never starts because one side is always
-// pristine - so the collapse cannot creep outward.
+// Unsupported-snow slump (TRENCH-REALISM-PLAN.md Stage 3b): a support test,
+// not a blur. Per axis at radius R, support = min(carve at +R, carve at -R);
+// the settle target is the max over axes and radii. A strip dug on both sides
+// settles toward its neighbours' floor; a trench wall, carved on one side
+// only, reads ~0 and never moves. Fixed point by construction, and open snow
+// never starts, so the collapse cannot creep outward.
 //
-// Radii are WORLD units (converted through the live TexelSize - the window
-// resizes with the Trenches range slider). An axis contributes NOTHING
-// unless it finds real support (SLUMP_MIN_SUPPORT) within the two GATE
-// radii - that bound is what contains the effect to the trenches: only a
-// strip narrower than twice the outer gate radius can settle at all, and a
-// settled strip cannot hand support onward to open snow, because the texel
-// past its edge still has one pristine side inside the gate. The third,
-// longer radius never gates; it only reads the flanking trenches' floor
-// depth for texels that already qualified, so 24-unit taps landing on a
-// shallow trench SHOULDER do not understate the target.
+// Radii are world units via the live TexelSize. An axis contributes nothing
+// without SLUMP_MIN_SUPPORT inside the two GATE radii - that bound is what
+// confines the effect to trenches. The third, longer radius never gates; it
+// only reads the flanking floor depth for texels that already qualified.
 //
-// Support is DISPLACED, UNSCORCHED depth - x minus |y| - never raw x.
-// Melt basins and lightning scorch are spell-authored marks; counting them
-// here would let a campfire or a strike settle the pristine snow around it
-// (diverges from the berm field's Displaced(), which keeps scorch: a berm
-// is about spoil thrown, this is about ground bearing weight).
+// Support is displaced, unscorched depth (x - |y|), never raw x: counting
+// spell marks would let a campfire settle the snow around it. The berm field's
+// Displaced() keeps scorch instead - a berm is spoil thrown, this is ground
+// bearing weight.
 #define SLUMP_RADII 3
 // Radii up to this index gate; beyond it they only deepen.
 #define SLUMP_GATE_RADII 2

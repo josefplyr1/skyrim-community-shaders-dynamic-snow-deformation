@@ -15,14 +15,11 @@
 //   tile   { u32 worldspace, i32 x, i32 y, f32 clockRel, f32 touchRel,
 //            u32 payloadBytes }  followed by payloadBytes of payload
 //
-// Clock and touch are stored RELATIVE to this session's own, so nothing
-// depends on two playthroughs sharing a calendar: both are <= 0 and mean "this
-// far behind now". On load the decay clock restarts at zero, and a tile's
-// negative clock is then exactly the decay it still owes.
-//
-// tileDim and tileWorldSize are written so a future resolution change is
-// DETECTED rather than silently misread at the wrong scale - the same failure
-// storing texel indices would have caused across a range-slider change.
+// Clock and touch are RELATIVE to this session's own (both <= 0, meaning "this
+// far behind now"), so nothing depends on two playthroughs sharing a calendar.
+// On load the decay clock restarts at zero and a tile's negative clock is the
+// decay it still owes. tileDim and tileWorldSize are written so a resolution
+// change is detected rather than misread at the wrong scale.
 
 void SnowDeformation::EncodeTrenchTile(const TrenchTile& a_tile, std::vector<uint8_t>& o_bytes) const
 {

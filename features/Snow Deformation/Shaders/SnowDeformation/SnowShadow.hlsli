@@ -1,23 +1,14 @@
 // Crisp cascaded shadows for the snow shell.
 //
-// The Volumetric Shadows feature exposes the sun cascades only as a 512px
-// blurred VSM moments copy; fine for volumetrics, but on the shell it turns
-// tree branches and actor silhouettes into smudges while the bare ground next
-// to it (vanilla forward path) shows crisp cascade shadows. This samples the
-// game's raw shadow atlas instead: cascade = array slice, per-slice [0,1] UVs
-// matching the ShadowProj matrices from DirectionalShadowLights (t98), with
-// hardware comparison PCF at full atlas resolution.
-//
-// One source texture: the sun cascade atlas, captured as a copy during the
-// game's shadow-mask pass (see SnowDeformation::CaptureShadowAtlas). The
-// old second source min'd in VolumetricShadows-style was the VOLUMETRIC
-// LIGHTING shadowmap (kVOLUMETRIC_LIGHTING_SHADOWMAPS_ESRAM) - the round-33
-// RenderDoc capture showed it near-empty, and it was sampled through the
-// SUN atlas's per-slice transforms besides: it could only ever duplicate or
-// wrongly darken, at ten comparison taps per pixel (removed).
-// Cascade selection, blend and distance fade mirror
-// VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
-// about where shadows exist.
+// Volumetric Shadows exposes the sun cascades only as a 512px blurred VSM,
+// which smudges branches and actors on the shell while the ground beside it
+// shows crisp cascades. This samples the game's raw shadow atlas instead:
+// cascade = array slice, per-slice [0,1] UVs matching the ShadowProj matrices
+// from DirectionalShadowLights (t98), hardware comparison PCF at full
+// resolution. Source is a copy taken during the shadow-mask pass (see
+// SnowDeformation::CaptureShadowAtlas). Cascade selection, blend and distance
+// fade mirror VolumetricShadows::GetVSMShadow2D so the crisp and fallback
+// paths agree about where shadows exist.
 //
 // Include after Common/ShadowSampling.hlsli; needs DirectionalShadowLights,
 // SharedData and FrameBuffer from it.

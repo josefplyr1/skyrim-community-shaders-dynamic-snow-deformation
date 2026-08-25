@@ -189,24 +189,12 @@ void SnowDeformation::RollTrenchWindow()
 	const int dim = (int)deformMapDim;
 	const bool haveMarks = trenchDirtyRows.size() == (size_t)(dim + 31) / 32;
 
-	// A CURSOR THAT ONLY EVER MOVES FORWARD, skipping rows nothing has dug
-	// since they were last mirrored.
-	//
-	// The predecessor sought the lowest dirty row instead, and that starved the
-	// sweep: every carve stamp in the window marks rows, NPC traffic included,
-	// so in a populated area far more rows are marked each frame than a slice
-	// can clear, the scan restarts low every time something moves south of the
-	// player, and the cursor never climbs to where the player actually is. It
-	// also never meant "freshest" - the lowest row index is the SOUTH edge of
-	// the window, which coincides with newest only when walking south.
-	//
-	// So dirtiness now chooses what to IGNORE, never where to go. Coverage is
-	// guaranteed again because the cursor is monotonic, and it is fast because
-	// clean rows cost a bit test instead of a copy.
-	//
-	// Skipping clean rows is only safe since writes became raise-only: a row
-	// nothing has dug has nothing to add, and the refill that lowered it is
-	// decay's business, not the mirror's.
+	// A cursor that only ever moves forward, skipping rows nothing has dug.
+	// Dirtiness chooses what to IGNORE, never where to go: seeking the lowest
+	// dirty row starves the sweep, since stamps mark rows faster than a slice
+	// can clear them and the cursor never reaches the player. Coverage comes
+	// from the cursor being monotonic; speed from clean rows costing a bit
+	// test. Safe only because writes are raise-only.
 	if (haveMarks) {
 		int skipped = 0;
 		while (skipped < dim && !(trenchDirtyRows[(size_t)trenchRollRow >> 5] & (1u << (trenchRollRow & 31)))) {
@@ -635,20 +623,13 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			// DISPLACED depth, not total - the shell's own definition
 			// (SampleDisplacedFast in SnowShell.hlsl), reused verbatim.
 			//
-			// The store keeps depth alone, so a texel's melt classification
-			// cannot come back with it. Storing a melt basin's total depth
-			// would re-inject it as a DUG one: it would grow the berm melted
-			// snow never earns, start casting the shadow melt pits are exempt
-			// from, and refill at trench speed instead of MeltPersistence.
-			// Subtracting the melted part instead means a spell basin is
-			// simply not remembered - which is honest, since what made it a
-			// basin is not remembered either - while a boot print through one
-			// still stores its own displacement.
-			//
-			// Scorch (negative y) is NOT subtracted: it was displaced and
-			// keeps its berm, so its depth is a real dent worth remembering.
-			// Campfire melt never reaches here at all - that comes from the
-			// exclusion field, rederived each frame from live fire positions.
+			// The store keeps depth alone, so melt classification cannot come
+			// back with it; storing a basin's total depth would re-inject it as
+			// a dug one, growing a berm it never earned and refilling at trench
+			// speed. A boot print through a basin still stores its own
+			// displacement. Scorch (negative y) is NOT subtracted - it was
+			// displaced and keeps its berm. Campfire melt never reaches here;
+			// that is the exclusion field, rederived each frame.
 			const float total = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4]);
 			const float melted = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4 + 1]);
 			const float depth = std::clamp(total - std::max(melted, 0.0f), 0.0f, 1.0f);
@@ -718,19 +699,11 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					// it may not teach it that snow is gone.
 					//
 					// The map is routinely emptier than the store for reasons
-					// that have nothing to do with the weather: a ClearMap frame
-					// wipes it and only the inject repopulates it, an inject
-					// that reaches nothing leaves it entirely blank, and every
-					// clear has frames where the map is bare ground the store
-					// knows is dug. Letting a write lower the store made all of
-					// those destructive, and the tile then vanished through the
-					// empty-tile prune without a single line in the log.
-					//
-					// Removal is decay's job and always was: Stage B derives the
-					// store's rate from RefillAmount itself, precisely so ground
-					// behaves the same whether or not it is being looked at. In
-					// window and out of window now follow one rule instead of
-					// two that disagree whenever the map is mid-rebuild.
+					// unrelated to weather: ClearMap frames, an inject that
+					// reaches nothing, and the frames between a clear and the
+					// inject landing. Removal is decay's job - the store derives
+					// its rate from RefillAmount, so ground behaves the same
+					// whether or not it is being looked at.
 					stored = std::max(stored, quantised);
 				}
 			}

@@ -50,23 +50,18 @@ public:
 	/**
 	 * @brief How many emitters may be GATHERED before the distance sort trims to kMaxSpellEmitters.
 	 *
-	 * Producers run in a fixed order - cloaks, then projectiles, then hazards,
-	 * then blasts - so a cap enforced while gathering drops whatever happens to
-	 * run last, wherever it is. A firewall burning across the valley outranks
-	 * the bolt landing at your feet purely because cloaks are read first.
-	 * Gather wide, then keep the nearest, which is what the exclusion field
-	 * already does when it overflows.
+	 * Producers run in a fixed order, so a cap enforced while gathering drops
+	 * whatever runs last regardless of distance. Gather wide, then keep the
+	 * nearest - the same policy the exclusion field uses when it overflows.
 	 */
 	static constexpr size_t kSpellEmitterCeiling = 192;
 	/**
 	 * @brief Slots of kMaxStamps that only spells may take.
 	 *
-	 * Actors and props are gathered first and in engine order, so a mass
-	 * ragdoll - a dozen bodies each stamping every limb - can fill all 256
-	 * before one emitter is read, and a fireball at the player's feet then
-	 * leaves nothing at all. Small enough that giving it up costs a few limb
-	 * prints inside a pile nobody is looking at; large enough that every
-	 * school still marks during the fight that caused the pile.
+	 * Actors and props are gathered first, so a mass ragdoll can fill every
+	 * slot before one emitter is read. Small enough that the reservation costs
+	 * only a few limb prints inside a pile; large enough that spells still
+	 * mark during the fight that caused it.
 	 */
 	static constexpr uint kSpellStampReserve = 48;
 
@@ -85,20 +80,15 @@ public:
 	// exact powers of two of the base step and every band START is a multiple
 	// of both its own step and kShellOriginSnap.
 	//
-	// That alignment is the whole point. The old continuous 1.0902 growth left
-	// ringStep/fineStep in [1, 2) - never an integer - so snapping put adjacent
-	// vertices either one or two fineSteps apart depending on where the grid
-	// centre happened to sit, quad widths flipped as the camera moved, and the
-	// surface interpolated inside them jumped by the terrain's departure from
-	// linearity across the span: hundreds of units against a 30-unit snow
-	// layer. That was the distant up/down jumping.
+	// INVARIANT: break the alignment and adjacent vertices snap one or two
+	// fineSteps apart depending on the grid centre, so quad widths flip as the
+	// camera moves and the surface inside them jumps (distant up/down jumping).
 	// Must match the kWarpBand tables in SnowShell.hlsl.
-	// The coarsest band is 128 units - exactly the land-vertex
-	// spacing - and it runs from 2432 units all the way to the seam. The shell
-	// therefore samples every terrain texel it covers, so it needs no clearance
-	// pad out there, and with the pad gone so is the stepped sink the pad's
-	// weight was producing. The old 256-unit outer band skipped every other
-	// texel, which is what made a large pad necessary in the first place.
+	//
+	// The coarsest band is 128 units - exactly the land-vertex spacing - from
+	// 2432 out to the seam, so the shell samples every terrain texel it covers
+	// and needs no clearance pad. A 256-unit outer band would skip every other
+	// texel, which is what made a pad necessary.
 	static constexpr int kShellWarpBands = 5;
 	static constexpr float kShellWarpBandVerts[kShellWarpBands] = { 192.0f, 8.0f, 8.0f, 8.0f, 104.0f };
 	static constexpr float kShellWarpBandMul[kShellWarpBands] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
@@ -376,15 +366,11 @@ public:
 		/**
 		 * @brief How an actor with no substance is recognised, so it stops carving. 0 off, 1 by translucency, 2 by the record flag, 3 either.
 		 *
-		 * Separate from the floating gate because it is a different question.
-		 * A ghost is not hovering - measured in game it stands with a 7 unit
-		 * gap to its own footing, feet on the ground like any Nord, because
-		 * that is exactly what it is. No measurement will ever catch one.
-		 *
-		 * Translucency is the honest test: a ghost is drawn see-through, and
-		 * that is the whole of what makes it a ghost. It also needs no list.
-		 * The record flag is the fallback - broader than it sounds, since
-		 * Bethesda's "Is Ghost" means invulnerable rather than incorporeal.
+		 * A separate question from the floating gate: a ghost stands with its
+		 * feet on the ground, so no clearance measurement can catch one.
+		 * Translucency needs no list and is the honest test. The record flag is
+		 * the fallback, and broader than it sounds - "Is Ghost" means
+		 * invulnerable.
 		 */
 		int IncorporealMode = 1;
 		/** @brief Let shouts plough the snow in front of the shouter. Off, a shout still marks through whatever projectile it throws, which is why the breaths already made a mark or two before this existed. */
@@ -396,17 +382,11 @@ public:
 		/**
 		 * @brief DDS the frost pattern is drawn from, relative to Data.
 		 *
-		 * Must be a TILEABLE surface, which is why it defaults to a LANDSCAPE
-		 * texture. The first attempt used the game's own frost impact decal and
-		 * that was the wrong kind of image entirely: a decal has its content in
-		 * the middle and nothing at the edges because it is printed once, so
-		 * blending two offset copies of it can only ever give clumps with gaps
-		 * between them. Landscape textures are authored to meet themselves on
-		 * every side, which is exactly what the stochastic sampler assumes.
-		 *
-		 * Editable for the same reason the shell's snow texture is: every
-		 * modlist has different ice, and this should match the one in front of
-		 * you. The `_n` companion beside it carries the crystal structure.
+		 * Must be a TILEABLE surface, hence a landscape texture rather than a
+		 * decal: a decal carries its content in the middle and nothing at the
+		 * edges, so the stochastic sampler can only produce clumps with gaps.
+		 * Editable because every modlist has different ice. The `_n` companion
+		 * beside it carries the crystal structure.
 		 */
 		std::string FrostTexturePath = "Textures\\Landscape\\frozenmarshice01.dds";
 		/** @brief How strongly the frost pattern shows on crusted snow. This is the CRYSTAL detail; the polish, colour and sheen that make it read as ice are the knobs below and are untouched by it. */
@@ -416,15 +396,10 @@ public:
 		/**
 		 * @brief Raise buried frost effects onto the snow surface instead of leaving them under it.
 		 *
-		 * Anything the game places at terrain height is swallowed by the shell
-		 * floating above it. FROST is the only school where that matters: fire
-		 * melts its own hole and lightning pits one, so those effects sit in
-		 * snow they have already removed, while frost only hardens what is
-		 * there and leaves the layer at full height on top of itself.
-		 *
-		 * The ONLY thing in the feature that moves a game object. Everything
-		 * else reads game state and writes nothing but its own textures, so
-		 * this is deliberately narrow and deliberately switchable.
+		 * Effects placed at terrain height are swallowed by the shell above
+		 * them. Frost is the only school where that matters - fire and lightning
+		 * remove the snow they sit in, frost only hardens it. The ONLY thing in
+		 * the feature that moves a game object, so it is narrow and switchable.
 		 */
 		bool LiftFrostEffects = true;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
@@ -673,11 +648,9 @@ public:
 	 * @brief One game-time reading per frame, shared by every subsystem that
 	 * integrates it (trench decay, accumulation). Render-thread owned.
 	 *
-	 * Deliberately shared rather than duplicated: a second copy would tie the
-	 * accumulator's clock to whether trenches happen to be enabled, and two
-	 * clocks reading the same calendar drift apart. Not the spell system's drift
-	 * accumulator - that corrects render-second timers against jumps, a
-	 * different problem.
+	 * Shared, not duplicated: a second copy would tie the accumulator's clock to
+	 * whether trenches are enabled, and two clocks on one calendar drift. Not
+	 * the spell system's drift accumulator, which corrects render-second timers.
 	 */
 	struct GameClock
 	{
@@ -1802,15 +1775,11 @@ protected:
 	 * @brief Squared distance from the window centre beyond which new tiles are
 	 * refused, set by the last eviction to the nearest tile it had to drop.
 	 *
-	 * Without it the writer and the evictor fight: the rolling mirror sweeps the
-	 * WHOLE window and creates a tile for any trodden ground it finds, knowing
-	 * nothing about the budget, while eviction culls the furthest a few frames
-	 * later. Under a budget smaller than the window's own trodden ground that
-	 * thrashes for ever and a save catches an arbitrary mid-thrash spread,
-	 * measured as a couple of dozen tiles scattered across the whole window.
-	 *
-	 * Effectively infinite whenever the store fits, so the default budget never
-	 * feels it.
+	 * Without it the writer and evictor thrash: the mirror creates a tile for
+	 * any trodden ground it finds, knowing nothing about the budget, and
+	 * eviction culls the furthest a few frames later. A save then catches an
+	 * arbitrary mid-thrash spread. Effectively infinite whenever the store
+	 * fits, so the default budget never feels it.
 	 */
 	float trenchKeepRadiusSq = std::numeric_limits<float>::max();
 
@@ -1847,22 +1816,14 @@ protected:
 	/**
 	 * @brief Rolling mirror of the LIVE window into the store.
 	 *
-	 * Scroll-out and the jump path only ever teach the store about ground that
-	 * has LEFT the window, which leaves the case with no trigger at all: dig a
-	 * trench and save without moving, and the trench is still live in the map
-	 * and was never stored. That is not a co-save bug, it is the store being
-	 * defined as "what departed" rather than "what is true".
+	 * Scroll-out and the jump path only teach the store about ground that has
+	 * LEFT the window, so a trench dug and saved without moving is never stored.
+	 * Folding a slice in every frame keeps the store continuously correct
+	 * instead, so no save has to catch a moment.
 	 *
-	 * So a slice of the window is folded in every frame, cycling through the
-	 * whole map every few seconds. The store is then continuously correct and
-	 * no save has to catch a moment.
-	 *
-	 * The slice is WIDE because the cursor skips rows nothing has dug and the
-	 * copy is trimmed to the last dug row inside it, so the cost tracks how
-	 * much has actually been carved rather than the slice size. A quiet window
-	 * costs a pass of bit tests; a busy one pays for the ground that changed.
-	 * Sizing it for the busy case is what keeps a fresh trench out of the gap
-	 * between digging and saving.
+	 * The slice is wide because the cursor skips rows nothing has dug and the
+	 * copy is trimmed to the last dug row, so cost tracks carved ground rather
+	 * than slice size.
 	 */
 	static constexpr int kTrenchRollRows = 128;
 	winrt::com_ptr<ID3D11Texture2D> trenchRollStaging[2];
@@ -1874,23 +1835,14 @@ protected:
 	/**
 	 * @brief Map rows dug since they were last mirrored, one bit per row.
 	 *
-	 * A SKIP hint, never a seek target. The mirror's cursor only ever moves
-	 * forward; these bits let it step over rows that have nothing to add,
-	 * which is most of the window most of the time, so the sweep completes in
-	 * a fraction of a second at roughly the cost of one slice.
+	 * A SKIP hint, never a seek target: the cursor only moves forward and these
+	 * bits let it step over rows with nothing to add. Seeking to the lowest
+	 * marked row instead starves the sweep - stamps mark rows faster than a
+	 * slice can clear them, so the cursor never reaches the player, and the
+	 * lowest index is the window's south edge rather than the freshest row.
 	 *
-	 * It is deliberately NOT a priority queue. Seeking to the lowest marked row
-	 * starved the sweep outright: every carve stamp marks rows, NPC traffic
-	 * included, so a populated area marks far more rows per frame than a slice
-	 * can clear, and the cursor never climbs to where the player is. The lowest
-	 * row index is also the window's SOUTH edge, which is not "freshest" unless
-	 * you happen to be walking south.
-	 *
-	 * Safe only because writes are raise-only: a row nothing has dug has
-	 * nothing to add, and the refill that lowered it is decay's business.
-	 *
-	 * Marked after the stamps are gathered and consumed by the NEXT frame's
-	 * roll, which is when the map holding them becomes the one being copied.
+	 * Safe only because writes are raise-only. Marked after stamps are gathered
+	 * and consumed by the next frame's roll.
 	 */
 	std::vector<uint32_t> trenchDirtyRows;
 
@@ -1903,18 +1855,15 @@ protected:
 	 * @brief Set by the co-save load to force the next update to rebuild the
 	 * whole window from the store.
 	 *
-	 * Injection only reaches texels arriving from OUTSIDE the window or a full
+	 * Injection only reaches texels arriving from outside the window or a full
 	 * clear, so a store restored while the player stands on the ground it
-	 * describes has no route into an already-populated map - nothing scrolls
-	 * in. A worldspace change would normally force the clear, but loading from
-	 * the main menu into the worldspace the menu backdrop already uses is not a
-	 * change, so it never fires.
+	 * describes has no route into an already-populated map. A worldspace change
+	 * would force the clear, but loading into the worldspace the main-menu
+	 * backdrop already uses is not a change. The clear is correct regardless -
+	 * the map still holds another timeline's data.
 	 *
-	 * The clear is right on its own merits too: the map still holds whatever
-	 * was in it before the load, which belongs to another timeline.
-	 *
-	 * Atomic because the co-save callbacks run on the game thread and the
-	 * update consumes this on the render thread.
+	 * Atomic: co-save callbacks run on the game thread, the update on the
+	 * render thread.
 	 */
 	std::atomic<bool> trenchReinjectRequested{ false };
 
@@ -1952,13 +1901,10 @@ protected:
 	 * @brief Snowfall intensity the accumulator integrates, held at its last
 	 * EXTERIOR reading while the player is indoors.
 	 *
-	 * There is no snowing weather inside, so integrating the live value would
-	 * melt the world outside the door while the player slept through the
-	 * blizzard burying it. Persisted with the scalar: saving in an inn during a
-	 * storm and reloading must not resume as though the sky had cleared.
-	 *
-	 * Atomic for the same reason the scalar is: the co-save writer reads it on
-	 * the game thread while the tick advances it on the render thread.
+	 * No interior weather snows, so integrating the live value would melt the
+	 * exterior while the player sleeps. Persisted with the scalar, or an indoor
+	 * save resumes as clear sky. Atomic: the co-save writer reads it on the
+	 * game thread while the tick advances it on the render thread.
 	 */
 	std::atomic<float> accumWeatherIntensity{ 0.0f };
 
@@ -2064,11 +2010,9 @@ protected:
 	/**
 	 * @brief One spell-driven mark, gathered fresh each frame.
 	 *
-	 * Decoupling detection from effect is the point: several detectors
-	 * (projectiles, hazards, explosions, actor auras) fill this list, and one
-	 * consumer turns it into stamps. Positions are already ground-projected -
-	 * the deformation map is 2D, so an emitter must carry where it marks the
-	 * GROUND, not where the source happens to float.
+	 * Several detectors fill this list and one consumer turns it into stamps.
+	 * Positions are already ground-projected: the map is 2D, so an emitter
+	 * carries where it marks the GROUND, not where the source floats.
 	 */
 	struct SpellEmitter
 	{
@@ -2131,33 +2075,25 @@ protected:
 	/**
 	 * @brief True when nothing this actor carries comes down to its footing.
 	 *
-	 * Measured, not listed. Bethesda does not flag a hovering creature - the
-	 * atronach races are all authored `Walks` and none sets `kFlies` - so a
-	 * flag lookup would find nothing and a race table would miss every modded
-	 * levitator. The lowest thing an actor could carve with, against the
-	 * ground it stands on, answers the question directly and covers wisps and
-	 * ghosts for free.
+	 * Measured, not listed: the atronach races are authored `Walks` and none
+	 * sets `kFlies`, so a flag lookup finds nothing and a race table misses
+	 * every modded levitator. The lowest thing an actor could carve with,
+	 * against the ground it stands on, answers it directly.
 	 *
-	 * Reads the cached bones where there are any and falls back to the
-	 * collision shapes, which is the pair the stamping paths below already
-	 * choose between.
+	 * Reads cached bones where there are any, else the collision shapes.
 	 */
 	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ, float* a_gapOut = nullptr) const;
 
 	/**
 	 * @brief True when this actor has no substance, so nothing it does should cut snow.
 	 *
-	 * A separate axis from floating, and it has to be: a ghost walks with its
-	 * feet on the ground, so no gap measurement can see one.
+	 * A separate axis from floating: a ghost walks with its feet on the ground.
 	 *
-	 * Translucency routes through Community Shaders' own definition of a
-	 * see-through surface - the pair of tests ExtendedTranslucency runs on
-	 * every geometry it shades - rather than inventing a second one. Narrowed
-	 * to SKINNED geometry with a material alpha below full, because plain
-	 * alpha BLENDING catches every NPC's hair and eyes.
-	 *
-	 * The record flag is a static read of the actor's base, not the runtime
-	 * call: the same answer without a relocation.
+	 * Translucency routes through ExtendedTranslucency's own see-through tests
+	 * rather than inventing a second definition, narrowed to SKINNED geometry
+	 * with material alpha below full - plain alpha blending catches every NPC's
+	 * hair and eyes. The record flag is a static read of the base, not the
+	 * runtime call.
 	 */
 	bool ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root, StampBones* a_bones,
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
@@ -2165,12 +2101,10 @@ protected:
 	/**
 	 * @brief Raises one buried effect onto the snow above it, on the GAME thread.
 	 *
-	 * The detection runs where every other detector runs - the per-frame
-	 * reference scan, on the render thread - but the write does not. Moving a
-	 * node in the game's scene graph from a render pass is precisely the shape
-	 * of thing that crashed this feature three times in Step 7, and that was
-	 * only READING. So the lift is handed to the SKSE task interface, which is
-	 * how the rest of this codebase mutates a reference.
+	 * Detection runs on the render thread with every other detector; the write
+	 * must not. Mutating the game's scene graph from a render pass is the shape
+	 * of thing that crashed this feature repeatedly when it was only reading,
+	 * so the lift goes through the SKSE task interface.
 	 */
 	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift);
 
@@ -2198,11 +2132,10 @@ protected:
 	 * @brief What a projectile will leave behind when it dies, recorded while
 	 * it is still alive.
 	 *
-	 * A projectile that drops out of Projectile::Manager has detonated, and
-	 * its own effect already told us the element - so this path needs neither
-	 * the explosion reference nor the explosion-to-element table. It is also
-	 * the only route that works if spawned explosions never reach a cell's
-	 * reference list at all.
+	 * A projectile leaving Projectile::Manager has detonated, and its own effect
+	 * already gave the element, so this needs neither the explosion reference
+	 * nor an explosion-to-element table. Also the only route that works when
+	 * spawned explosions never reach a cell's reference list.
 	 */
 	struct PendingBlast
 	{
@@ -2230,11 +2163,9 @@ protected:
 	/**
 	 * @brief A detonation's mark, held open for a fraction of a second.
 	 *
-	 * A blast is one instant, but a stamp only deepens while its emitter
-	 * exists, so a single frame of any sane rate is a single frame of melt and
-	 * therefore nothing. Either the rate is made effectively infinite and the
-	 * crater simply appears, or the emitter is held for a moment and the snow
-	 * is seen to give way. This is the second.
+	 * A blast is one instant, but a stamp only deepens while its emitter exists,
+	 * so one frame at any sane rate marks nothing. Held for a moment instead, so
+	 * the snow is seen to give way rather than the crater simply appearing.
 	 */
 	struct ActiveBlast
 	{
@@ -2284,14 +2215,12 @@ protected:
 	/**
 	 * @brief Death sink, because an atronach's death cannot be polled for.
 	 *
-	 * It is UNSUMMONED when it dies rather than left as a corpse, so by the
-	 * time any per-frame sweep looks it is already out of the high-process
-	 * list, out of its 3D, or both - and waiting for its handle to go stale
-	 * takes far longer than the window that separates a death from the player
-	 * simply walking away. The engine says exactly when it happened, so ask it.
+	 * An atronach is unsummoned on death rather than left as a corpse, so by the
+	 * time a per-frame sweep looks it is out of the high-process list, its 3D,
+	 * or both. The engine reports the moment exactly.
 	 *
-	 * The sink reads the actor's POSITION and its RACE's spell list, which is
-	 * static form data. Nothing here walks a live actor's effects.
+	 * Reads the actor's POSITION and its RACE's spell list - static form data.
+	 * Nothing here walks a live actor's effects.
 	 */
 	class DeathSink : public RE::BSTEventSink<RE::TESDeathEvent>
 	{
@@ -2304,11 +2233,9 @@ protected:
 	/**
 	 * @brief A shout, queued by the cast sink for the gather to lay down.
 	 *
-	 * Shouts are the one source whose shape the deformation map cannot express
-	 * as a single stamp: a cone is not a capsule. It is laid down as a row of
-	 * discs of growing radius along the shout's axis instead, which needs no
-	 * new stamp mode, no shader change and no constant-buffer field - the
-	 * thing this project would otherwise have had to grow for one spell.
+	 * A cone is not a capsule, so a shout cannot be one stamp. Laid down as a
+	 * row of discs of growing radius along its axis instead, which needs no new
+	 * stamp mode, shader change or constant-buffer field.
 	 */
 	struct QueuedCone
 	{
@@ -2330,17 +2257,14 @@ protected:
 	/**
 	 * @brief A shout that moves its own caster, watched rather than classified.
 	 *
-	 * Whirlwind Sprint and Storm Call cannot be told apart by their records:
-	 * both are voice powers, both self-delivered, both carry a script effect
-	 * and a projectile, and Storm Call carries the stagger besides. Impact
-	 * force is no better - Marked for Death throws the very same 50-force push
-	 * projectile Unrelenting Force does.
+	 * The records cannot separate Whirlwind Sprint from Storm Call: both are
+	 * self-delivered voice powers with a script effect and a projectile, and
+	 * impact force is no better (Marked for Death throws the same 50-force push
+	 * projectile as Unrelenting Force).
 	 *
-	 * So the question is not asked of the records at all. A self-delivered
-	 * shout opens a short watch on its caster, and what marks the snow is the
-	 * caster MOVING faster than anything on foot can. Storm Call leaves them
-	 * standing and so marks nothing, without ever being named or excluded; a
-	 * modded dash shout works for the same reason.
+	 * So the records are not asked. A self-delivered shout opens a short watch
+	 * on its caster, and what marks the snow is the caster moving faster than
+	 * anything on foot can. Nothing is named or excluded.
 	 */
 	struct DashWatch
 	{
@@ -2390,11 +2314,9 @@ protected:
 	/**
 	 * @brief What last struck an actor, so a body knows what it is still burning with.
 	 *
-	 * A corpse that is alight, crackling or frozen stiff should go on marking
-	 * the snow under it - but what a corpse is DOING is exactly the sort of
-	 * live-actor state this feature refuses to poll for. The element does not
-	 * have to be read off the body at all: the effect that hit it announced
-	 * itself on the way in, and the effect record is static data.
+	 * A corpse still alight or frozen should go on marking, but what a corpse is
+	 * doing is live-actor state this feature refuses to poll. The effect that
+	 * hit it announced itself on the way in, and that record is static data.
 	 */
 	class MagicApplySink : public RE::BSTEventSink<RE::TESMagicEffectApplyEvent>
 	{
@@ -2450,16 +2372,13 @@ protected:
 	/**
 	 * @brief A cloak, known from the cast that started it.
 	 *
-	 * Deliberately NOT read off the actor. Three attempts to walk an actor's
-	 * active effects crashed - the last inside GetActiveEffectList itself, on
-	 * a console-spawned actor, with a null vtable entry. The spell RECORD
-	 * carries everything needed (element, magnitude, duration) and is static
-	 * data, so the cast tells us what began and its own duration tells us when
-	 * it ends. Nothing here ever reaches into a live actor for state.
+	 * NOT read off the actor: walking an actor's active effects crashes, most
+	 * reliably inside GetActiveEffectList on console-spawned actors. The spell
+	 * RECORD carries element, magnitude and duration and is static data, so the
+	 * cast says what began and its duration says when it ends.
 	 *
-	 * The cost is honest: a cloak dispelled early keeps marking until its
-	 * timer runs out, and an innate aura that is never cast - an atronach's -
-	 * is not seen at all. Step 10 owns atronachs regardless.
+	 * The cost: a cloak dispelled early keeps marking until its timer expires,
+	 * and an innate aura that is never cast is not seen here at all.
 	 */
 	struct CloakState
 	{
@@ -2494,18 +2413,14 @@ protected:
 	/**
 	 * @brief What an actor's own records say it radiates, with nothing cast.
 	 *
-	 * An atronach's aura is INNATE, so the cast sink of Step 7 never sees it -
-	 * nothing ever casts it. The answer is not a race list and not a keyword
-	 * table: the aura is a real SpellItem sitting on the race's own spell list,
-	 * and its cloak effect carries the same four axes every other detector
-	 * classifies through. Verified against Skyrim.esm - AbFlameAtronach carries
-	 * AbAtronachCloakFire (archetype Cloak, resist ResistFire, magnitude 10),
-	 * and the frost and storm races carry the matching pair.
+	 * An innate aura is never cast, so the cast sink never sees it. Not a race
+	 * list or keyword table: the aura is a real SpellItem on the race's own
+	 * spell list, and its cloak effect carries the same four axes every other
+	 * detector classifies through (AbFlameAtronach carries AbAtronachCloakFire,
+	 * archetype Cloak, resist ResistFire, magnitude 10; frost and storm match).
 	 *
-	 * So it is derived exactly like a cast spell, and modded atronachs work for
-	 * the same reason modded Flames clones do. Every read here is of a static
-	 * FORM, never of a live actor's effect list - the thing that crashed three
-	 * times in Step 7 and must not come back.
+	 * Derived exactly like a cast spell, so modded atronachs work too. Every
+	 * read is of a static FORM, never a live actor's effect list.
 	 */
 	struct InnateAuraRecord
 	{

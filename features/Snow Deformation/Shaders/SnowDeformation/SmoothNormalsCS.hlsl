@@ -1,14 +1,10 @@
 // Smoothed-normal builder for the statics snow skin.
 //
-// Flat hard-edged meshes (walkway planks, roofs, fence pole caps) carry SPLIT
-// normals: every face's vertices point along that face alone. Inflating snow
-// along split normals turns a flat top into a rigid parallel sheet with an
-// air gap at the rim, because the side faces' twin vertices never rise.
-// Averaging normals across all vertices that SHARE A POSITION produces the
-// smooth normals such meshes lack: shared-position twins displace to the
-// same point (the crack is sealed by construction), plank edges tilt
-// outward and mushroom like pole caps, and already-smooth meshes (rocks)
-// are unchanged since their normals already agree.
+// Flat hard-edged meshes carry split normals, and inflating snow along them
+// leaves a rigid parallel sheet with an air gap at the rim, since the side
+// faces' twin vertices never rise. Averaging across vertices that share a
+// position seals the crack by construction and lets plank edges mushroom;
+// already-smooth meshes are unchanged.
 //
 // Three passes over a copy of the mesh's vertex buffer:
 //   AccumulateCS; quantized-position hash table accumulates fixed-point

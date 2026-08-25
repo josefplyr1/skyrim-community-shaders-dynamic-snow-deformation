@@ -5,17 +5,12 @@
 //            must not depend on what the camera renders this frame; the
 //            capture list is frustum-culled, and rebuilding from it alone
 //            makes object heights vanish behind the camera.
-// CombineCS  builds the base snow-height field (terrain) and the shelter
-//            mask: where the raw maps
-//            show a structure floating well above the ground (walkways,
-//            roofs, bridges, tents), the ground beneath is sheltered from
-//            snowfall - a soft melt down to a light dusting, never a
-//            coverage kill.
-//            Exclusion zones: doors clear the field and add to the mask
-//            (coverage fades to bare ground); fires write NEGATIVE mask
-//            values instead - a melt fraction that thins the shell's depth
-//            toward a floor, so fire pits keep a thin snow floor that never
-//            vanishes or sinks below terrain.
+// CombineCS  builds the base snow-height field and the shelter mask: a
+//            structure floating well above the ground shelters what is under
+//            it, as a soft melt to a dusting rather than a coverage kill.
+//            Doors clear the field and add to the mask; fires write NEGATIVE
+//            mask values, a melt fraction that thins depth toward a floor, so
+//            fire pits keep a thin floor instead of sinking below terrain.
 // ConeCS     angle of repose: iterative min-plus cone transform. No point of
 //            the field may rise steeper than SlopePerUnit from its
 //            neighbors, so thin or tall features barely lift the field while

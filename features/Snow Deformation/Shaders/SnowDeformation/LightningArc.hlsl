@@ -2,21 +2,13 @@
  * @file LightningArc.hlsl
  * @brief The visible arc between a shock cloak's wearer and the ground it just struck.
  *
- * The snow already pocks where a cloak discharges. What was missing was any
- * reason for the pock: a hole appearing in the ground with nothing reaching
- * it reads as a glitch rather than as lightning. This draws the reach.
+ * Purely visual, and it must stay that way: blasts are detected by watching a
+ * projectile leave the projectile manager, so a real bolt spawned for the look
+ * would be read as a detonation, pock the snow and arc again.
  *
- * It is purely visual and writes NOTHING to the game world. That is not
- * fastidiousness - this feature detects a blast by watching the projectile
- * manager and treating a projectile's disappearance as a detonation, so
- * spawning a real bolt for the look would be seen by our own detector, become
- * a blast, pock the snow, and arc again. A ribbon we draw ourselves cannot
- * feed that loop.
- *
- * Geometry comes from SV_VertexID alone, as the shell's does: a strip of
- * quads from the caster to the strike, each joint pushed off the straight
- * line by a hash so the bolt forks rather than rules. Camera-facing, so it
- * has no thickness to see edge-on.
+ * Geometry comes from SV_VertexID alone, as the shell's does: a strip of quads
+ * from caster to strike, each joint pushed off the straight line by a hash so
+ * the bolt forks. Camera-facing, so it has no thickness to see edge-on.
  */
 
 #define ARC_SEGMENTS 32

@@ -2,15 +2,11 @@
 // (PBR::GetDirectLightInput / GetIndirectLobeWeights via LightingEval),
 // shared by SnowShell.hlsl and SnowStaticsShell.hlsl. ROUTING-ROADMAP M1.
 //
-// MUST BE THE LAST INCLUDE of each shell's PSHADER block. TRUE_PBR is
-// defined here and only here: the includes before this one must compile
-// WITHOUT it (ExtendedMaterials' TRUE_PBR branches read Lighting.hlsl
-// cbuffers; Color.hlsli was already frozen by its include guard), and
-// LightingCommon/PBR below require it. Because Color.hlsli is compiled
-// without TRUE_PBR, its Light() applies no pi compensation - it is applied
-// explicitly here via Color::PBRLightingCompensation, which Color.hlsli
-// defines unconditionally. See PI-CONVENTION-SPIKE.md for the convention
-// audit this implements.
+// MUST BE THE LAST INCLUDE of each shell's PSHADER block. TRUE_PBR is defined
+// here and only here: earlier includes must compile without it, and
+// LightingCommon/PBR below require it. Color.hlsli therefore compiles without
+// TRUE_PBR and its Light() applies no pi compensation, so this applies
+// Color::PBRLightingCompensation explicitly. See PI-CONVENTION-SPIKE.md.
 //
 // Units contract with the callers: outputs are Lighting.hlsl-internal
 // units. The write tail must multiply directDiffuse, directSpecular, the
