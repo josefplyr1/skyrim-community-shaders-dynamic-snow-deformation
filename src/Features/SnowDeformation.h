@@ -136,6 +136,8 @@ public:
 		float SnowBorderUntrampledFade = 5.0f;
 		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it, killing the hard seam where their surfaces run close in height (road meshes, low platforms). */
 		float SnowSnowFade = 10.0f;
+		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
+		float SnowMoundSteepness = 1.0f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). Shell scales the warped grid's spacing and applies live; Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeShellM = 375.0f;
 		float RangeTrenchesM = 100.0f;
@@ -270,7 +272,16 @@ public:
 		float SkinFadeStart;
 
 		float SkinFadeEnd;
-		float3 padShell;
+		/** @brief Also the enable gate for the object height field in the shader (>0 = field bound). */
+		float ObjectLiftCap;
+		float2 ObjectHeightCenter;
+
+		float ObjectHeightHalfExtent;
+		/** @brief Raw cascade-atlas copies are bound at t22/t23 this frame (else the shader falls back to the blurred VSM path). */
+		float CrispShadows;
+		/** @brief Screen-Space Shadows output bound at t45: the long-range depth-marched shadows carrying distant LOD tree shadows beyond the cascades. */
+		float ScreenSpaceShadowsActive;
+		float padShell;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -365,6 +376,46 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
 
+	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
+	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
+		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
+
+	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
+
+	/** @brief Full-resolution COPIES of the game's raw sun-shadow cascade atlas and its ESRAM partner, taken during the shadow-mask pass. Copies are mandatory: by deferred time the engine has reused the live targets (ESRAM is aliased scratch memory), and sampling them live produces garbage flicker. Taken before the shell is injected as a caster, so the shell's receiver path never sees itself (no self-shadow acne). */
+	winrt::com_ptr<ID3D11Texture2D> shadowAtlasCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowAtlasCopySRV;
+	winrt::com_ptr<ID3D11Texture2D> shadowEsramCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> shadowEsramCopySRV;
+	/** @brief LESS_EQUAL comparison sampler for the atlas copies (s2). */
+	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
+	/** @brief Linear-clamp sampler standing in as ShadowSampling.hlsli's LinearSampler (s1). */
+	winrt::com_ptr<ID3D11SamplerState> shellLinearSampler;
+
+	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Copies it and the ESRAM partner for crisp shell shadows, then injects the shell as a caster. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
+	void CaptureShadowAtlas();
+
+	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height; mounds, drifts; casts. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11VertexShader* GetShellShadowVS();
+	ID3D11VertexShader* shellShadowVS = nullptr;
+
+	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
+	std::unique_ptr<ShellCB> lastShellCBData;
+
+	/** @brief Per-cascade DSVs created on the LIVE atlas texture, cached by texture pointer (not owned; key only). */
+	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[2];
+	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
+	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
+
+	/** @brief Depth-renders the terrain shell into both live cascade slices so the world receives snow-mound shadows. The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas after the receiver copies are taken. Implemented in SnowDeformation/Shadows.cpp. */
+	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
+
+	/** @brief Shadow-source diagnostics for the settings UI (kept permanently; they answer "where do this scene's shadows come from" without a debugger): cascade descriptor count, the three end-split distances, and the copied atlas's slice count. */
+	uint32_t dbgLodDescriptorCount = 0;
+	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
+	uint32_t dbgLodAtlasSlices = 0;
+
 	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
 	struct alignas(16) StaticsCB
 	{
@@ -427,9 +478,19 @@ public:
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
 
+	/** @brief Raised snow more than this far above the terrain does not lift the height field (buildings must not become snow tents). Also doubles as the shader-side field-enable gate. */
+	static constexpr float kObjectLiftCap = 150.0f;
+	/** @brief Corpse burial: mounds cap this far above the terrain (a mammoth makes a bump, not a hill), from at most this many resting collision spheres per frame. */
+	static constexpr float kCorpseMoundCap = 20.0f;
+	static constexpr uint kMaxCorpseSpheres = 32;
+
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
+	/** @brief Processed maps the shell samples (t4/t5): the slope-limited snow-height field and the smooth shelter/suppression mask, plus a cone-iteration scratch. */
+	Texture2D* heightTopFiltered = nullptr;
+	Texture2D* heightBottomFiltered = nullptr;
+	Texture2D* heightScratch = nullptr;
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
@@ -441,17 +502,63 @@ public:
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
+	ID3D11ComputeShader* heightCombineCS = nullptr;
+	ID3D11ComputeShader* heightConeCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
+		/** @brief Texel step for the current cone iteration. */
+		uint ConeStep;
+
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
+		/** @brief Max field rise per world unit (1.0 = 45 degrees), from SnowMoundSteepness. */
+		float SlopePerUnit;
+
+		/** @brief Terrain window addressing so the compute passes can sample ground heights. */
+		float2 TerrainWindowOrigin;
+		float TerrainTexelSize;
+		uint TerrainDim;
+
 		/** @brief Units/frame the accumulated tops/bottoms drift toward empty; stale object imprints (disabled/moved/harvested) melt instead of persisting until scrolled out. */
 		float GhostDecay;
+		/** @brief Deformation-map addressing for the corpse-mound refill gate (same mapping the shell's deformation samplers use). */
+		float2 DeformWindowOriginH;
+		float DeformInvWorldSizeH;
+
+		/** @brief Dead actors at rest, as collision spheres (xyz world center, w radius): CombineCS raises capped snow mounds over them, gated by local refill. */
+		uint32_t CorpseSphereCount;
+		float CorpseMoundCap;
+		float2 padH;
+		float4 CorpseSpheres[kMaxCorpseSpheres];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
+
+	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
+
+	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger); campfires get noisy-edged full clears. Applied in CombineCS before the cone transform, so surrounding snow re-slopes into every clearing at the angle of repose. */
+	static constexpr uint kMaxExclusions = 96;
+	static constexpr float kDoorClearRadius = 110.0f;
+	static constexpr float kDoorForwardExtent = 70.0f;
+	static constexpr float kLoadDoorClearRadius = 150.0f;
+	static constexpr float kLoadDoorForwardExtent = 150.0f;
+	static constexpr float kFireClearRadius = 70.0f;
+
+	/** @brief Layout must match DoorCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) ExclusionsCB
+	{
+		float4 PosRadius[kMaxExclusions];   ///< xyz = position, w = radius
+		float4 DirExtType[kMaxExclusions];  ///< xy = facing dir, z = forward extent, w = type (0 door, 1 fire)
+		uint ExclusionCount;
+		float pad[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
+	ConstantBuffer* doorsCB = nullptr;
+	uint32_t doorRefreshCounter = 0;
 
 	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
 	void CreateHeightFieldResources();
@@ -525,6 +632,9 @@ public:
 protected:
 	/** @brief Trail history per collision shape: key = (formID << 16) | traversal index. */
 	std::unordered_map<uint64_t, float2> stampPrevPositions;
+
+	/** @brief Rebuilt each frame in GatherStamps: resting dead actors' collision spheres, consumed by CombineCS as capped snow mounds (buried-corpse bumps). */
+	std::vector<float4> corpseMoundSpheres;
 
 	/** @brief Last 3D-root position per loose prop (formID), rebuilt every frame from the in-range scan. The position gate runs before any collision traversal, so resting clutter costs one hash lookup per frame. */
 	std::unordered_map<uint32_t, RE::NiPoint3> propPrevPositions;

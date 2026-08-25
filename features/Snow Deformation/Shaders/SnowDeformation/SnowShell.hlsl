@@ -22,6 +22,20 @@
 // Needs only the shared 128px noise texture at t20, which the CPU side binds
 // for this pass (EnableGlints gates the path when it is unavailable).
 #	include "Common/Glints/Glints2023.hlsli"
+// Shadow sampling for the shell surface: terrain/cloud shadows via
+// GetWorldShadow, dynamic (actor) shadows via the raw cascade atlas copies
+// (SnowShadow.hlsli) with the VolumetricShadows shared VSM as the fallback
+// when the copies are unavailable. (The screen-space shadow mask was tried
+// and rejected: it holds values for the terrain BEHIND the shell along the
+// view ray, so shadows slide with camera movement.)
+#	define TERRAIN_SHADOWS
+#	define CLOUD_SHADOWS
+#	define VOLUMETRIC_SHADOWS
+SamplerState ShellLinearSampler : register(s1);
+#	define LinearSampler ShellLinearSampler
+#	include "Common/ShadowSampling.hlsli"
+#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
+#	include "SnowDeformation/SnowShadow.hlsli"
 #endif
 
 cbuffer ShellCB : register(b0)
@@ -72,7 +86,19 @@ cbuffer ShellCB : register(b0)
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
-	float3 padShell;
+	// Also the enable gate for the object height field (>0 = field bound).
+	float ObjectLiftCap;
+	float2 ObjectHeightCenter;
+
+	float ObjectHeightHalfExtent;
+	// Raw cascade-atlas copies are bound at t22/t23 this frame (else the
+	// shader falls back to the blurred VSM path).
+	float CrispShadows;
+	// Screen-Space Shadows output is bound at t45: the long-range
+	// depth-marched shadows that carry distant LOD tree shadows beyond the
+	// two cascades.
+	float ScreenSpaceShadowsActive;
+	float padShell;
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -81,6 +107,11 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
+// Processed top-down object maps: the slope-limited snow-height FIELD (world
+// Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
+// no snow beneath walkways, roofs and bridges).
+Texture2D<float> ObjectHeights : register(t4);
+Texture2D<float> ObjectBottoms : register(t5);
 // TruePBR snow companion maps (auto-resolved from the Textures\PBR\ variant
 // of the snow path): tangent-space normals (_n) and roughness/metal/AO/spec
 // (_rmaos). Gated by HasSnowNormal / HasSnowRmaos.
@@ -192,6 +223,59 @@ float SampleDeformation(float2 gridLocal)
 	float v11 = SampleDeformationBilinear(float2(h1.x, h1.y), dims);
 
 	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
+}
+
+// Bilinear samples of the object field maps at absolute world XY. The raster
+// pass maps +worldY to +ndcY = texture v0 (top), so v mirrors.
+float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
+{
+	float2 local = (worldXY - ObjectHeightCenter) / ObjectHeightHalfExtent;
+	valid = all(abs(local) < 0.98);
+	ObjectHeights.GetDimensions(dims.x, dims.y);
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+float SampleObjectHeight(float2 worldXY)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	if (!valid)
+		return -100000.0;
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = ObjectHeights.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectHeights.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectHeights.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectHeights.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float SampleObjectBottom(float2 worldXY)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	// t5 is a 0-1 suppression MASK: outside the window there is no shelter
+	// knowledge, so nothing is suppressed. (A raw-height sentinel here
+	// zeroed the VS coverage on every out-of-window vertex, flipping the
+	// bare-submerge term on all distant shell geometry.)
+	if (!valid)
+		return 0.0;
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = ObjectBottoms.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectBottoms.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectBottoms.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectBottoms.Load(int3(t1.x, t1.y, 0));
+
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 // World-anchored value noise, shared by the border domain warp (and any
@@ -325,6 +409,21 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		terrainHeight += farBlend * 8.0 * saturate(coverage);
 	}
 
+	// Object height field: t4 holds the SLOPE-LIMITED snow-height field
+	// (terrain run through the angle-of-repose cone transform), t5 the
+	// shelter mask; 1 under floating structures, so walkways, roofs and
+	// bridges keep the ground beneath them bare.
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float2 worldXY = GridOrigin + gridLocal;
+		float field = SampleObjectHeight(worldXY);
+		[flatten] if (field > -50000.0)
+			terrainHeight = max(terrainHeight, field);
+		// Suppression is smooth (0-1), so sheltered clearings fade at their
+		// edges instead of cutting.
+		coverage *= saturate(1.0 - SampleObjectBottom(worldXY));
+	}
+
 	// Fade toward the grid boundary so the shell melts into the terrain.
 	float2 delta = abs(gridLocal - WarpedHalfSpan);
 	float edgeFade = saturate((WarpedHalfSpan - max(delta.x, delta.y)) / 2048.0);
@@ -391,6 +490,25 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	float coverage;
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
+
+#ifdef SNOW_SHADOW_CAST
+	// Shadow-caster variant: only the excess height above the ambient snow
+	// depth casts. Casting the full shell shadows every receiver inside or
+	// beneath the layer (the terrain it visually replaces, wading actor
+	// legs, grass), which reads as the whole landscape darkening.
+	//
+	// The base is sunk far below the terrain, not merely flattened: the
+	// terrain window is bilinear-approximate, and writing it at ground level
+	// out-depths the game's true terrain mesh wherever the approximation
+	// overshoots, leaving false shadow blotches on open ground. The caster
+	// also requires solid snow coverage, so field raises whose visible snow
+	// is dithered away never cast from invisible snow.
+	float3 rawTerrainCast = SampleTerrain(gridLocal);
+	float castBase = rawTerrainCast.x + max(rawTerrainCast.y, 0.0);
+	float castExcess = max(0.0, z - castBase);
+	float castGate = smoothstep(3.0, 8.0, castExcess) * smoothstep(0.2, 0.5, coverage);
+	z = rawTerrainCast.x + lerp(-64.0, castExcess, castGate);
+#endif
 
 	// Smooth terrain normal per-vertex: wide 32-unit differences bridge the
 	// 128-unit data texels, and interpolation removes the faceting of the
@@ -516,7 +634,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Same convention as MotionBlur::GetSSMotionVector.
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
-	// Coverage alpha recomputed PER PIXEL from the terrain field (Terrain
+	// Coverage alpha recomputed per PIXEL from the terrain field (Terrain
 	// Blending-style): smooth at texture resolution, independent of vertex
 	// interpolation. The temporally-varying stochastic test then dithers the
 	// boundary and TAA resolves it into a true cross-fade.
@@ -558,15 +676,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// with camera tilt even up close.
 	float objectFadeBand = 10.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
-	// Carved trench floors hug the geometry behind them (terrain, actor feet)
-	// and must override the fade, or they get view-dependently dithered away.
-	// The override is also what makes trenches end hard at class borders
-	// while untrampled snow dissolves softly; Trampled Border Fade scales the
-	// override away as the uncarved ramp thins, so walked snow rejoins the
-	// soft dissolve at borders.
+	// Two situations hug the geometry behind them and must override the
+	// fade: carved trench floors (terrain, actor feet in the trench) and the
+	// shell riding a raised height field a few units above the surface
+	// beneath. Without the override they get view-dependently dithered away.
+	// The carve override is also what makes trenches end hard at class
+	// borders while untrampled snow dissolves softly; Trampled Border Fade
+	// scales the override away as the uncarved ramp thins, so walked snow
+	// rejoins the soft dissolve at borders.
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
+	float pixelLift = 0.0;
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
+		[flatten] if (fieldHeight > -50000.0)
+			pixelLift = fieldHeight - pixelTerrain.x;
+	}
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, max(BorderTrampledFade, 1.0), pixelTerrain.y);
-	coverageAlpha *= max(proximityFade, carveOverride);
+	coverageAlpha *= max(proximityFade, saturate(carveOverride + smoothstep(2.0, 10.0, pixelLift)));
 
 	// Stochastic discard dither: writing alpha without discarding blends
 	// nothing in this pass; TB's alpha path runs through depth-prepass
@@ -685,9 +812,84 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satNdotH = saturate(dot(normalWS, H));
 	float satVdotH = saturate(dot(V, H));
 
-	// Unshadowed sun for now: shadow sampling on the shell lands with the
-	// shadow layers.
-	float3 sunLight = SharedData::DirLightColor.xyz;
+	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	// Distant shadow softening: the far cascade's texels quantize into hard
+	// blocky patches on distant snow. The cascades must NOT be faded out;
+	// LOD trees cast into them and bare ground keeps their shadows at range;
+	// so the crisp path instead WIDENS its PCF ring with distance: same
+	// shadows, soft penumbra blobs instead of blocks.
+	float farShadowT = smoothstep(6000.0, 15000.0, length(input.WorldPos));
+	float sunShadow;
+	[branch] if (CrispShadows > 0.5)
+	{
+		// Full-resolution comparison PCF against the game's raw cascade
+		// atlas: the same crisp tree/actor shadows bare ground receives.
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT));
+	}
+	else
+	{
+		// Fallback: the Volumetric Shadows 512px VSM moments copy (blurry).
+		float detailedShadow;
+		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+
+	// Heightfield self-shadowing: the shell is a heightfield, so march it
+	// toward the sun and find the horizon this pixel must clear. Hills,
+	// mounds, field raises and the dune undulation all cast soft shadows
+	// onto the snow behind them; contact detail the game's cascades cannot
+	// hold. Geometric growth in the tap distances gives sharp close shadows
+	// and long soft ones at low sun angles.
+	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
+		float sunLen2D = max(length(L.xy), 1e-4);
+		float sunTan = L.z / sunLen2D;
+		float2 stepDir = L.xy / sunLen2D;
+		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float horizonTan = -10.0;
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			float d = kMarchDist[marchI];
+			float2 sampleLocal = gridLocal + stepDir * d;
+			float3 st = SampleTerrain(sampleLocal);
+			float sampleDepth = max(st.y, 0.0);
+			// The march must see the CARVED surface (same floor rule as the
+			// geometry): without the carve, a wide trench reads as ringed by
+			// full-height snow and sits in permanent shadow even facing the
+			// sun.
+			float sampleDeform = saturate(SampleDeformation(sampleLocal));
+			sampleDepth = max(sampleDepth * (1.0 - sampleDeform), min(sampleDepth, kTrenchFloor * smoothstep(0.5, 8.0, sampleDepth)));
+			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			[branch] if (ObjectLiftCap > 0.0)
+			{
+				float sf = SampleObjectHeight(GridOrigin + sampleLocal);
+				[flatten] if (sf > -50000.0)
+					sh = max(sh, sf + sampleDepth);
+			}
+			horizonTan = max(horizonTan, (sh - surfZ) / d);
+		}
+		// Near: a crisp penumbra band. Far: a much wider penumbra plus
+		// attenuated strength; the march's per-texel horizon steps stop
+		// reading as hard-edged blocks on distant snow.
+		float soft = lerp(0.06, 0.35, farShadowT);
+		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+	}
+
+	// Screen-Space Shadows (the integrated long-range depth march): these
+	// carry the distant LOD tree shadows far beyond the two cascades. The
+	// texture was marched on the prepass depth (the ground under the
+	// shell), so applying it near paints barrel/object shadows straight
+	// through the snow. Near, the crisp cascades already shadow the shell
+	// correctly; SSS blends in only beyond them, where it is the only
+	// shadow source and the shell hugs the very ground the march ran on.
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	{
+		float sssBlend = smoothstep(4000.0, 9000.0, length(input.WorldPos));
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
+
+	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
 
 	float3 F = BRDF::F_Schlick(snowF0, satVdotH);
 	float specD = BRDF::D_GGX(snowRoughness, satNdotH);

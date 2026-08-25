@@ -83,6 +83,15 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("snow_mounds"), "Snow Mounds"), ImGuiTreeNodeFlags_Framed)) {
+			if (auto _ttMounds = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("snow_mounds_tooltip"), "How raised snow settles around whatever lifts it."));
+			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
+			if (auto _ttSteep = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("render_distance"), "Render Distance"), ImGuiTreeNodeFlags_Framed)) {
 			if (auto _ttRd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("render_distance_tooltip"), "How far each snow system reaches. Higher = more VRAM and GPU cost."));
@@ -132,6 +141,8 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
 			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
 			shellStatMinHeight, shellStatMaxHeight);
+		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
+			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 
 		ImGui::TreePop();
 	}

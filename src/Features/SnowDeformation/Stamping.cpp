@@ -23,6 +23,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	uint stampCount = 0;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
+	corpseMoundSpheres.clear();
 
 	// Stamps come from actors' Havok collision shapes (Util::GetShapeBound
 	// over TraverseScenegraphCollision), so feet, legs and ragdoll limbs
@@ -105,8 +106,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				if (isDead && (firstSight || !moved || (rest->settled && !woken))) {
 					// At rest: no stamp. Keep the old anchor so micro-jitter
-					// cannot hold the trench open.
+					// cannot hold the trench open. The resting shapes feed the
+					// burial mounds instead.
 					currentPositions[key] = firstSight ? current : it->second;
+					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
+						corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				currentPositions[key] = current;

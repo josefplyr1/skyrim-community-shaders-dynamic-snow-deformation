@@ -22,6 +22,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
 	SnowBorderTrampledFade,
 	SnowBorderUntrampledFade,
 	SnowSnowFade,
+	SnowMoundSteepness,
 	RangeShellM,
 	RangeTrenchesM,
 	RangeSkinsM,
@@ -90,12 +91,13 @@ void SnowDeformation::SetupResources()
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
+	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 
 	CreateHeightFieldResources();
 
 	{
 		// RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth): the
-		// extreme surfaces win per texel in any draw order — no depth buffer.
+		// extreme surfaces win per texel in any draw order; no depth buffer.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 3; i++) {
@@ -137,6 +139,15 @@ void SnowDeformation::SetupResources()
 	samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
 	DX::ThrowIfFailed(device->CreateSamplerState(&samplerDesc, shellSnowSampler.put()));
 	Util::SetResourceName(shellSnowSampler.get(), "SnowDeformation::ShellSnowSampler");
+
+	D3D11_SAMPLER_DESC linearDesc{};
+	linearDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	linearDesc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+	linearDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	DX::ThrowIfFailed(device->CreateSamplerState(&linearDesc, shellLinearSampler.put()));
+	Util::SetResourceName(shellLinearSampler.get(), "SnowDeformation::ShellLinearSampler");
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -289,6 +300,9 @@ void SnowDeformation::ClearShaderCache()
 	if (shellVS)
 		shellVS->Release();
 	shellVS = nullptr;
+	if (shellShadowVS)
+		shellShadowVS->Release();
+	shellShadowVS = nullptr;
 	if (shellPS)
 		shellPS->Release();
 	shellPS = nullptr;
@@ -328,6 +342,12 @@ void SnowDeformation::ClearShaderCache()
 	if (heightScrollCS)
 		heightScrollCS->Release();
 	heightScrollCS = nullptr;
+	if (heightCombineCS)
+		heightCombineCS->Release();
+	heightCombineCS = nullptr;
+	if (heightConeCS)
+		heightConeCS->Release();
+	heightConeCS = nullptr;
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
