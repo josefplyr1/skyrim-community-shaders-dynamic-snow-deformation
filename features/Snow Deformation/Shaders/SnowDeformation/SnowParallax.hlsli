@@ -2,7 +2,7 @@
 //
 // Lives here rather than duplicated per shell so the landscape shell and the
 // object skins cannot drift apart: identical parallax response either side of
-// the SnowSnowFade cross-fade is the entire point of the exercise.
+// the seam where the two shells meet is the entire point of the exercise.
 //
 // Requires, already declared by the includer: SnowHeightMap (t8),
 // SnowSampler (s0), ShellCB's SnowParallax, and under PSHADER also

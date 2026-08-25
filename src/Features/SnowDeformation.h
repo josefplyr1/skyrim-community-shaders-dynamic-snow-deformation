@@ -491,8 +491,6 @@ public:
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief Border Fade, in PERCENT (round 18: the old 2..64-unit band read as a big move when it mainly sets how visible the outward dust is). Remapped to the internal 2..64 contact-term band on upload; 100% = the old 64. */
 		float SnowBorderFade = 100.0f;
-		/** @brief View-ray band (units) over which the object snow skin cross-fades into the landscape shell behind it. Retired from the menu 2026-08-25 and inert at its default; still read, so a hand-edited JSON can bring it back. */
-		float SnowSnowFade = 0.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -791,8 +789,8 @@ public:
 
 		float BorderTrampledFade;
 		float BorderUntrampledFade;
-		/** @brief View-ray band over which the statics skin cross-fades into the landscape shell behind it. */
-		float SnowSnowFade;
+		/** @brief UNUSED since 2026-08-25 (the object <-> landscape seam cross-fade and its pair-3 contest were removed); layout keeper, uploaded as 0. */
+		float SeamFadeUnused;
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
 		float SkinFadeStart;
 
@@ -1259,9 +1257,6 @@ public:
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
 
-	/** @brief Depth copy taken after the terrain shell draw (shell surface included), so the statics skin can measure its view-ray gap to the landscape shell; Terrain Blending's technique adapted to the two snow kinds. */
-	winrt::com_ptr<ID3D11Texture2D> shellDepthCopyTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> shellDepthCopySRV;
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;

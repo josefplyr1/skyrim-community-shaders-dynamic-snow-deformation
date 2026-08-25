@@ -89,7 +89,7 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;
 	float BorderUntrampledFade;
-	float SnowSnowFade;   // object-skin <-> landscape-shell cross-fade band
+	float SeamFadeUnused;  // UNUSED since 2026-08-25 (seam cross-fade removed); layout keeper
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;
@@ -229,8 +229,6 @@ Texture2D<float4> FrostPatternDiffuse : register(t17);
 #if defined(PSHADER) || defined(DOMAINSHADER)
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> SnowDiffuse : register(t2);
-// Full-scene depth copy taken before the shell pass (see SnowShell.hlsl).
-Texture2D<float> SceneDepth : register(t3);
 // TruePBR snow companion maps (see SnowShell.hlsl); inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
@@ -238,9 +236,6 @@ Texture2D<float4> SnowRmaosMap : register(t7);
 // self-shadow. float4 to match Extended Materials' TexParallaxSampler
 // convention; the SRV is single-channel, so only .x carries data.
 Texture2D<float4> SnowHeightMap : register(t8);
-// Depth after the terrain shell drew (its surface included); the skin's
-// view-ray reference for cross-fading into the landscape shell.
-Texture2D<float> ShellDepthCopy : register(t9);
 SamplerState SnowSampler : register(s0);
 #endif
 
@@ -1633,79 +1628,36 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Blend into the ground shell: where this pixel sits at or below the
 	// terrain shell's snow surface, dissolve so the two shells meet as one
-	// blanket. Two constructions, near to far.
+	// blanket. One construction since 2026-08-25 - the analytic band against
+	// the terrain window's shell top, which is also the whole story for pair
+	// 4's bare-land hand-off.
 	//
-	// PAIR-3 CONTEST (HEIGHT-BLEND-PLAN, near field): where the landscape
-	// shell VISIBLY renders behind this pixel (pre-vs-post shell depth
-	// divergence - the one gate that can only ever dissolve snow into snow;
-	// a height band alone could dissolve the skin over its own mesh and
-	// expose the bare road beneath), the cut is geometric: the skin
-	// survives where its surface stands above the blanket surface
-	// reconstructed along the view ray, the crossing displaced by the
-	// world-anchored grain so the meeting line runs in grain fingers
-	// instead of a level contour. Both sides sample the SAME snow field -
-	// a two-sided grain difference cancels exactly at the crease - so the
-	// one-sided displacement IS the raggedness. No BorderNoise here: the
-	// cut belongs on the visible crease (the round-10 touchdown lesson),
-	// grain supplies the wander. Committed 0/1 (Border Dithering ON keeps
-	// a dust tail below the crossing, outward-only) because every .w
-	// output feeds the deferred temporal resolve, which re-dithers any
-	// partial alpha whatever shaped it. Reconstruction error at grazing
-	// angles is self-correcting: it grows with the ray gap, and a large
-	// gap means the skin stands proud and wins outright anyway.
-	//
-	// FALLBACK (far field, no height map, or shell not visibly behind):
-	// the analytic band vs the terrain window's shell top (Border
-	// Smoothness / Border Noise dials, one-sided shaping) times the smooth
-	// SnowSnowFade ray band - the prior construction, unchanged, and still
-	// the whole story for pair 4's bare-land hand-off.
-	float postShellZ = SharedData::GetScreenDepth(ShellDepthCopy.Load(int3(input.Position.xy, 0)));
-	float preShellZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-	float skinZ = input.CurrentClip.w;
+	// The depth-ray pair (a smooth SnowSnowFade band, and the near-field
+	// pair-3 geometric contest that superseded it) was REMOVED with its
+	// slider: the slider gated both, Josef ran a build with it at 0 and the
+	// seam read correctly on the band alone. Restoring either means restoring
+	// the post-shell depth copy with it - see HEIGHT-BLEND-PLAN.md pair 3.
 	float pixelAbsZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-	bool shellBehind = preShellZ - postShellZ > 1.0;
-	float contestFade = (SnowSnowFade > 0.01 && HasSnowHeight > 0.5 && shellBehind)
-	                        ? 1.0 - smoothstep(1024.0, 2048.0, pixelDist)
-	                        : 0.0;
 	float seamTotal = 1.0;
 	float3 groundData = SampleTerrainStatics(input.GridLocal);
-	[branch] if (contestFade < 0.999)
+	[flatten] if (groundData.x > -50000.0)
 	{
-		[flatten] if (groundData.x > -50000.0)
+		float groundShellZ = groundData.x + max(groundData.y, 0.0);
+		// Pinned band, decoupled from the Border Noise / Border Smoothness
+		// sliders (round 31, Josef's finding: noise 0 + smoothness 64 is
+		// the look for THIS seam - noise detaches the band from the real
+		// meeting line, and the wide band gives the soft rise of ground
+		// snow up the object - while the landscape class border wants the
+		// sliders). Values are the slider math at exactly 0 / 64.
+		const float kSeamBandLow = -36.0;
+		const float kSeamBandHigh = 10.0;
+		float groundBand = smoothstep(kSeamBandLow, kSeamBandHigh, pixelAbsZ - groundShellZ);
+		if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
 		{
-			float groundShellZ = groundData.x + max(groundData.y, 0.0);
-			// Pinned band, decoupled from the Border Noise / Border Smoothness
-			// sliders (round 31, Josef's finding: noise 0 + smoothness 64 is
-			// the look for THIS seam - noise detaches the band from the real
-			// meeting line, and the wide band gives the soft rise of ground
-			// snow up the object - while the landscape class border wants the
-			// sliders). Values are the slider math at exactly 0 / 64.
-			const float kSeamBandLow = -36.0;
-			const float kSeamBandHigh = 10.0;
-			float groundBand = smoothstep(kSeamBandLow, kSeamBandHigh, pixelAbsZ - groundShellZ);
-			if (edgeBlendOn && groundBand > 0.001 && groundBand < 0.999)
-			{
-				float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
-				groundBand = SnowHeightBlendOneSided(groundBand, edgeSnowH, edgeBlend);
-			}
-			seamTotal = groundBand;
+			float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
+			groundBand = SnowHeightBlendOneSided(groundBand, edgeSnowH, edgeBlend);
 		}
-		[branch] if (SnowSnowFade > 0.01 && shellBehind)
-			seamTotal *= smoothstep(0.0, max(SnowSnowFade, 1.0), postShellZ - skinZ);
-	}
-	[branch] if (contestFade > 0.001)
-	{
-		float shellSurfZ = ShellCameraPosAdjust.z + input.WorldPos.z * (postShellZ / max(skinZ, 1e-3));
-		float grainSkin = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, worldXY), 0.0.xx, edgeSnowMip);
-		// One grain scale and one dust reach across every snow border
-		// (kEdgeGrainAmp and the landscape edge's tail).
-		const float kSeamGrainAmp = 2.0;
-		const float kSeamDustReach = 2.0;
-		float margin = pixelAbsZ - shellSurfZ + (grainSkin - 0.5) * kSeamGrainAmp;
-		float seamContest = BorderStyle.x > 0.5
-		                        ? saturate(margin / kSeamDustReach + 1.0)
-		                        : (margin >= 0.0 ? 1.0 : 0.0);
-		seamTotal = lerp(seamTotal, seamContest, contestFade);
+		seamTotal = groundBand;
 	}
 	coverageAlpha *= seamTotal;
 	dbgSeam *= seamTotal;
@@ -2179,7 +2131,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// Parallax self-shadow on the snow grain, same term and constants as the
 	// terrain shell so object snow and ground snow shadow identically across
-	// the SnowSnowFade cross-fade. Object snow needs it in both projections:
+	// the seam where they meet. Object snow needs it in both projections:
 	// a rock's flank is exactly where the side plane owns the pixel.
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.y > 0.001 && bumpFade > 0.001 &&
 		sunShadow > 0.01 && satNdotL > 0.001)
@@ -2200,7 +2152,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
 	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
-	// ground snow shade identically across the SnowSnowFade cross-fade.
+	// ground snow shade identically across the seam where they meet.
 	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
@@ -2243,7 +2195,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 ambientPart = ambientColor * diffuseLobe;
 	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
 	// on a rock in a dark grove shares the grove's baked shade, and using the
-	// same source as the terrain shell keeps the SnowSnowFade cross-fade flat.
+	// same source as the terrain shell keeps the seam flat.
 	float2 terrainLocal = (input.WorldPos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
 	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);

@@ -99,7 +99,7 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;    // UNUSED since round 18 (slider retired); layout keeper
 	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
-	float SnowSnowFade;          // statics skin: object <-> landscape snow cross-fade band
+	float SeamFadeUnused;        // UNUSED since 2026-08-25 (seam cross-fade removed); layout keeper
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;

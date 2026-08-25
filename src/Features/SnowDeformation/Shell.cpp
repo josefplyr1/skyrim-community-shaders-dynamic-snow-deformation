@@ -634,7 +634,9 @@ void SnowDeformation::DrawShell()
 	// Retired round 18 (layout keeper; the shader hard-codes its old
 	// default-0 resolution).
 	cbData.BorderTrampledFade = 0.0f;
-	cbData.SnowSnowFade = settings.SnowSnowFade;
+	// Retired 2026-08-25 with the object <-> landscape seam cross-fade
+	// (layout keeper).
+	cbData.SeamFadeUnused = 0.0f;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
 	// the smoothstep never degenerates when the sliders cross).
@@ -992,36 +994,13 @@ void SnowDeformation::DrawShell()
 		lodHistStagingValid[lodReadbackRing] = true;
 	}
 
-	// Post-shell depth copy (Terrain Blending's technique adapted): the main
-	// depth now contains the landscape shell's surface. The statics skin
-	// samples this at t9 to measure its view-ray gap to the shell and cross-
-	// fade into it; fading toward what is actually behind the pixel, which
-	// a height-based band cannot guarantee (it can expose the bare mesh
-	// beneath the skin instead). Targets must be unbound around CopyResource
-	// of a bound DSV.
-	{
-		auto& mainDepthDS = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-		if (mainDepthDS.depthSRV) {
-			ID3D11RenderTargetView* boundRTVs[8] = {};
-			ID3D11DepthStencilView* boundDSV = nullptr;
-			context->OMGetRenderTargets(8, boundRTVs, &boundDSV);
-			context->OMSetRenderTargets(0, nullptr, nullptr);
-			CopySRVResource(mainDepthDS.depthSRV, "SnowDeformation::ShellDepthCopy", shellDepthCopyTex, shellDepthCopySRV);
-			context->OMSetRenderTargets(8, boundRTVs, boundDSV);
-			for (auto* rtv : boundRTVs)
-				if (rtv)
-					rtv->Release();
-			if (boundDSV)
-				boundDSV->Release();
-		}
-		if (shellDepthCopySRV) {
-			ID3D11ShaderResourceView* copySRV = shellDepthCopySRV.get();
-			context->PSSetShaderResources(9, 1, &copySRV);
-		}
-	}
+	// The post-shell depth copy that used to run here was REMOVED 2026-08-25
+	// with the seam cross-fade it existed for: a full-resolution CopyResource
+	// of the main depth, plus its texture, every shell pass. Restoring the
+	// pair-3 contest means restoring this first (HEIGHT-BLEND-PLAN.md).
 
 	// Captured projected-snow statics, inflated with the same material.
-	// Inherits this pass's bindings (b0, t0-t9, s0, b4-b6, RTs, depth).
+	// Inherits this pass's bindings (b0, t0-t8, s0, b4-b6, RTs, depth).
 	DrawCapturedStatics();
 
 	// Restore everything we changed. DS/HS state is cleared unconditionally:

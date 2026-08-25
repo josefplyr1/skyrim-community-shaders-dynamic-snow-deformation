@@ -103,7 +103,6 @@
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
 	X(SnowBorderFade) \
-	X(SnowSnowFade) \
 	X(SnowMoundSteepness) \
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
@@ -1020,17 +1019,16 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	                         TextureBytes(texOf(heightScratch)) + TextureBytes(texOf(heightSkinDepth));
 	const uint64_t shadowCopies = TextureBytes(shadowAtlasCopyTex.get());
 	const uint64_t pointCopy = TextureBytes(pointShadowAtlasCopyTex.get());
-	const uint64_t sceneCopies = TextureBytes(shellDepthCopyTex.get());
 	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
 	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());
 
-	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + sceneCopies + snowTex;
+	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex;
 
 	char line[256];
-	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, depthCopy %llu, snowTex %llu (MB)",
+	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, snowTex %llu (MB)",
 		(unsigned long long)(deform >> 20), (unsigned long long)(terrain >> 20), (unsigned long long)(heights >> 20),
 		(unsigned long long)(shadowCopies >> 20), (unsigned long long)(pointCopy >> 20),
-		(unsigned long long)(sceneCopies >> 20), (unsigned long long)(snowTex >> 20));
+		(unsigned long long)(snowTex >> 20));
 	a_breakdown = line;
 	return total;
 }
