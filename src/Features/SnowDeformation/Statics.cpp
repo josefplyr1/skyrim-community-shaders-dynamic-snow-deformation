@@ -1006,6 +1006,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		staticExclusions.clear();
 		uint32_t gatherTrampleCount = 0;
+		uint32_t gatherSealedCount = 0;
 		// Generic-flame entries by exclusion index, and the footprints of
 		// stations that own their flames (smelters, forges): a flame inside
 		// such a station must not add a melt spot on top of the
@@ -1143,6 +1144,45 @@ void SnowDeformation::RenderObjectHeightMap()
 							}
 						}
 
+						// Sealed containers (draugr sarcophagi): an oriented
+						// rectangle that kills coverage inside the footprint,
+						// so an opened coffin is bare rather than holding a
+						// sheet of snow it could not have collected. Placed
+						// after the tables above because a sarcophagus matches
+						// neither: they melt depth, this one suppresses.
+						if (!lowered.empty()) {
+							bool sealed = false;
+							for (const char* substring : kSealedContainerSubstrings)
+								sealed |= lowered.find(substring) != std::string::npos;
+							auto* sealedBound = sealed ? base->As<RE::TESBoundObject>() : nullptr;
+							if (sealedBound) {
+								const auto& bounds = sealedBound->boundData;
+								const float scale = a_ref->GetScale();
+								const float halfX = (bounds.boundMax.x - bounds.boundMin.x) * 0.5f * scale;
+								const float halfY = (bounds.boundMax.y - bounds.boundMin.y) * 0.5f * scale;
+								// A degenerate bound would collapse the rectangle
+								// to a line and clear nothing; skip rather than
+								// substitute a guessed size.
+								if (halfX >= 1.0f && halfY >= 1.0f) {
+									const float angleZ = a_ref->GetAngleZ();
+									const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
+									// Bounds are model-space and need not straddle
+									// the origin, so the box CENTRE rides the ref's
+									// own rotation (+Y is the facing, matching the
+									// workspace forward bias above).
+									const float localX = (bounds.boundMax.x + bounds.boundMin.x) * 0.5f * scale;
+									const float localY = (bounds.boundMax.y + bounds.boundMin.y) * 0.5f * scale;
+									auto pos = a_ref->GetPosition();
+									staticExclusions.push_back({ { pos.x + localX * cosZ + localY * sinZ,
+																	 pos.y - localX * sinZ + localY * cosZ,
+																	 pos.z, halfX },
+										{ sinZ, cosZ, halfY, 3.0f } });
+									gatherSealedCount++;
+								}
+								return RE::BSContainer::ForEachResult::kContinue;
+							}
+						}
+
 						// Survival warm-up formlist: heat neither table named.
 						// Modest circle when grounded (the list also holds
 						// candelabras), footprint-sized spot when raised.
@@ -1179,6 +1219,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				}
 
 				statTrampleCount = gatherTrampleCount;
+				statSealedCount = gatherSealedCount;
 
 				// Overflow: keep the sources nearest the player.
 				if (staticExclusions.size() > kMaxExclusions) {

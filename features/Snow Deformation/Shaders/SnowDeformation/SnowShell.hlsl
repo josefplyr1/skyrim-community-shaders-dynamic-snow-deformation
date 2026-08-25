@@ -607,7 +607,7 @@ float2 SampleObjectBottom(float2 worldXY)
 	float2 dims;
 	bool valid;
 	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	// t5 is the TWO-CHANNEL mask: x = door suppression 0-1, y = melt
+	// t5 is the TWO-CHANNEL mask: x = coverage suppression 0-1, y = melt
 	// fraction 0-1 (fires, workspaces, sheltered ground) - independent
 	// channels, so a door's influence tail cannot discard the melt around
 	// it. Outside the window there is no knowledge, so nothing is
@@ -926,7 +926,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			terrainHeight += farBlend * 3.0 * saturate(coverage);
 		}
 
-		// The mask carries two independent channels. x = door suppression,
+		// The mask carries two independent channels. x = coverage suppression,
 		// smooth 0-1, so doorstep clearings fade at their edges instead of
 		// cutting. y = melt fraction: depth thins toward kFireMeltFloor
 		// (coverage untouched), so melted ground keeps a thin snow floor
@@ -2347,8 +2347,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (ShellDebugData == 2)
 	{
 		// Exclusion debug: R = drift field lift (48 units = full red),
-		// G = melt fraction (fires, workspaces, shelter), B = door
-		// suppression. Black = untouched by any of them.
+		// G = melt fraction (fires, workspaces, shelter), B = coverage
+		// suppression - the sealed-container rectangles read here, so
+		// this is the view that shows where a sarcophagus footprint
+		// actually landed. Black = untouched by any of them.
 		float2 dbgWorldXY = GridOrigin + gridLocal;
 		float2 dbgMask = SampleExclusionMask(dbgWorldXY);
 		float dbgField = SampleObjectHeight(dbgWorldXY);

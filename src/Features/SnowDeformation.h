@@ -1561,6 +1561,15 @@ public:
 	/** @brief Workspace clearings in the last gather, for the debug readout. */
 	uint32_t statTrampleCount = 0;
 
+	// ---- Sealed containers: boxes that have been shut for centuries ----
+
+	/** @brief Lowercase model-path substrings whose references get a SEALED-CONTAINER exclusion (shader type 3): an oriented rectangle, taken from the reference's own bounds, that kills shell coverage inside its footprint. Draugr sarcophagi are the case that motivated it - one opens, the draugr steps out, and the landscape shell is standing inside a coffin that was shut for centuries. This is the ONLY exclusion that suppresses rather than melts: a melt bowl thins depth toward a floor, and a floor is still a sheet of snow lying in an open box. Matched against the same lowered model path the heat and workspace tables use, so it costs nothing extra per reference. */
+	static constexpr const char* kSealedContainerSubstrings[] = {
+		"sarcophagus",  // dungeons\nordic\ruins\ruinssarcophagus__bottom01.nif and the lid/whole variants
+	};
+	/** @brief Sealed containers in the last gather, for the debug readout. */
+	uint32_t statSealedCount = 0;
+
 	/** @brief Heat within this height of the land counts as a ground fire (full basin); higher sources melt only their footprint spot. */
 	static constexpr float kGroundFireBand = 40.0f;
 

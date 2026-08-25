@@ -79,6 +79,16 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 		float2 tileMin = FieldTexelWorldXY(gid.xy * TILE_DIM, dims) - FieldTexelSize * 0.5;
 		float2 tileMax = tileMin + FieldTexelSize * TILE_DIM;
 		for (uint testI = gindex; testI < ExclusionCount; testI += TILE_DIM * TILE_DIM) {
+			// Sealed containers (type 3) are deliberately NEAR-ONLY. Every
+			// other clearing is 100-450 units across, which a 32-unit texel
+			// resolves with room to spare; a sarcophagus footprint is around
+			// 50, so this field cannot represent one, and bilinear spread
+			// would ring it with bare ground WIDER than the coffin itself -
+			// a worse artefact than the snow it removes. The near mask runs
+			// at 4-unit texels and owns them; nobody reads the inside of a
+			// coffin from 60 m out.
+			if (ExclusionDirExtType[testI].w > 2.5)
+				continue;
 			float3 center = ExclusionPosRadius[testI].xyz;
 			// Widest reach any type can have from its centre: doors extend by
 			// their forward extent, fire bowls by their noise (0.7 + 0.35 +

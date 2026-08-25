@@ -1,7 +1,8 @@
 // Exclusion zone evaluation, shared by the near mask and the wide field.
 //
 // Exclusions are the places snow should NOT lie: doors, fires, worked
-// stations, bedding. Each is nothing but a position, a radius and a type, so
+// stations, bedding, sealed containers. Each is nothing but a position, a
+// radius, a direction and a type, so
 // the answer at a point is pure arithmetic over the constant buffer - no
 // geometry involved. That is why this can be evaluated at any range, unlike
 // the SHELTER term (roofs, tents, walkways), which needs a top-down render of
@@ -10,6 +11,9 @@
 // CombineCS (HeightMapProcessCS) evaluates this at the near window's
 // resolution; ExclusionFieldCS bakes it over a far wider, coarser window. Both
 // call the same function so the two can never disagree about a bowl's shape.
+// ONE exception, and it is a deliberate one: sealed containers (type 3) are
+// too small for the wide field's 32-unit texel to represent, so that pass
+// skips them and the near mask alone owns them. See ExclusionFieldCS.
 
 #ifndef SNOW_EXCLUSIONS_HLSLI
 #define SNOW_EXCLUSIONS_HLSLI
@@ -20,8 +24,8 @@
 
 cbuffer ExclusionCB : register(b1)
 {
-	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius
-	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // doors (w=0): xy = facing, z = forward extent. Fires (w=1 noisy, w=2 smooth): xy = elongation axis x (aspect-1), z = melt strength
+	float4 ExclusionPosRadius[MAX_EXCLUSIONS];   // xyz = position, w = radius (rects: half-extent ACROSS the facing)
+	float4 ExclusionDirExtType[MAX_EXCLUSIONS];  // doors (w=0): xy = facing, z = forward extent. Fires (w=1 noisy, w=2 smooth): xy = elongation axis x (aspect-1), z = melt strength. Sealed containers (w=3): xy = unit facing, z = half-extent ALONG it
 	uint ExclusionCount;
 	float3 exclusionPad;
 }
@@ -58,6 +62,12 @@ struct ExclusionResult
 // Z-gated at 300 units so an upper-floor door does not clear ground snow far
 // below, while sunken cave entrances still qualify. Exposed separately so the
 // field bake can drive it from a per-tile culled list.
+//
+// Sealed containers use a TIGHTER band. The band is not a tolerance here, it
+// is the condition itself: the shell rides the terrain, so it can only push
+// up inside a coffin that sits ON the ground. One standing on a ruin's raised
+// floor is out of the shell's reach already, and a 300-unit gate would answer
+// it by clearing a rectangle of ground far below instead.
 ExclusionResult EvaluateExclusionAt(uint index, float2 worldXY, float terrain)
 {
 	ExclusionResult result;
@@ -68,11 +78,29 @@ ExclusionResult EvaluateExclusionAt(uint index, float2 worldXY, float terrain)
 	float3 center = ExclusionPosRadius[index].xyz;
 	float radius = ExclusionPosRadius[index].w;
 	float4 dirExtType = ExclusionDirExtType[index];
-	[branch] if (abs(center.z - terrain) < 300.0)
+	float zBand = dirExtType.w > 2.5 ? 120.0 : 300.0;
+	[branch] if (abs(center.z - terrain) < zBand)
 	{
 		float2 d = worldXY - center.xy;
 		float influence = 0.0;
-		[branch] if (dirExtType.w < 0.5)
+		[branch] if (dirExtType.w > 2.5)
+		{
+			// Sealed container (draugr sarcophagi): an oriented RECTANGLE
+			// that kills coverage outright rather than thinning depth. A
+			// coffin shut for centuries holds no snow, and melting toward a
+			// floor would still leave a white sheet lying in the open box.
+			//
+			// The rectangle is the reference's own footprint and the edge
+			// fades across its outer 15%, so the falloff band lands under
+			// the stone walls. An exclusion that reached its full strength
+			// at the silhouette would ring every coffin with bare ground.
+			float u = dot(d, dirExtType.xy);
+			float v = dot(d, float2(-dirExtType.y, dirExtType.x));
+			float e = max(abs(u) / max(dirExtType.z, 1.0), abs(v) / max(radius, 1.0));
+			influence = 1.0 - smoothstep(0.85, 1.0, e);
+			result.Suppress = influence;
+		}
+		else if (dirExtType.w < 0.5)
 		{
 			// Door: symmetric ellipse, long axis along the facing, edge
 			// perturbed by the same noise as fire clearings so no two
