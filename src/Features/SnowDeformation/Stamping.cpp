@@ -401,7 +401,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
 	std::unordered_map<uint64_t, float2> currentPositions;
-	corpseMoundSpheres.clear();
 	bowWaves.clear();
 	if (bowWaveSpeed.size() > 512)
 		bowWaveSpeed.clear();
@@ -839,7 +838,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
 					kMinStampShapeRadius, kMaxStampShapeRadius);
 				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;
-				const float halfLen = aWorld.translate.GetDistance(bWorld.translate) * 0.5f;
 
 				float2 current = { center.x, center.y };
 				const uint64_t key = (uint64_t(formID) << 16) | (kLimbKeyBit | uint64_t(thisIndex & 0x3FFF));
@@ -854,11 +852,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
 				anyShapeWoken |= woken;
 				if (firstSight || (rest->settled && !woken)) {
-					// First sight baselines only; settled corpses keep the
-					// frozen anchor and feed the burial mounds instead.
+					// First sight baselines only; a settled corpse keeps its
+					// frozen anchor and stops carving.
 					currentPositions[key] = firstSight ? current : it->second;
-					if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
-						corpseMoundSpheres.push_back({ center.x, center.y, center.z, halfLen + radius });
 					continue;
 				}
 				currentPositions[key] = current;
@@ -925,11 +921,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						anyShapeWoken |= woken;
 					}
 					if (isDead && (firstSight || (rest->settled && !woken))) {
-						// First sight baselines only; settled corpses keep the
-						// frozen anchor and feed the burial mounds instead.
+						// First sight baselines only; a settled corpse keeps
+						// its frozen anchor and stops carving.
 						currentPositions[key] = firstSight ? current : it->second;
-						if (corpseMoundSpheres.size() < kMaxCorpseSpheres)
-							corpseMoundSpheres.push_back({ centerPos.x, centerPos.y, centerPos.z, radius });
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 					// Unsettled dead stamp every frame, exactly like the living:

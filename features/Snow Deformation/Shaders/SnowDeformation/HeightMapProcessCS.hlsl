@@ -5,8 +5,8 @@
 //            must not depend on what the camera renders this frame; the
 //            capture list is frustum-culled, and rebuilding from it alone
 //            makes object heights vanish behind the camera.
-// CombineCS  builds the base snow-height field (terrain, lifted only by
-//            corpse burial mounds) and the shelter mask: where the raw maps
+// CombineCS  builds the base snow-height field (terrain) and the shelter
+//            mask: where the raw maps
 //            show a structure floating well above the ground (walkways,
 //            roofs, bridges, tents), the ground beneath is sheltered from
 //            snowfall - a soft melt down to a light dusting, never a
@@ -38,17 +38,8 @@ cbuffer HeightProcessCB : register(b0)
 	uint TerrainDim;
 
 	float GhostDecay;  // units/frame the accumulated maps drift toward empty
-	float2 DeformWindowOriginH;  // deformation-map addressing (refill gate)
-	float DeformInvWorldSizeH;
-
-	uint CorpseSphereCount;  // resting dead actors' collision spheres
-	float CorpseMoundCap;    // max mound height above terrain
-	float2 padWind;
-	float4 CorpseSpheres[64];  // xyz world center, w radius
-
-	// Rounded-class depth, for the object snow cone seed.
-	float ObjectSnowDepth;
-	float3 padObs;
+	float ObjectSnowDepth;  // rounded-class depth, for the object snow cone seed
+	float2 padHeight;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -67,7 +58,6 @@ cbuffer HeightProcessCB : register(b0)
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
 Texture2D<float4> TerrainWindow : register(t2);
-Texture2D<float> DeformMap : register(t3);  // CombineCS: corpse-mound refill gate
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
 // CombineCS only: the shelter mask, TWO independent channels (R = door
@@ -200,41 +190,6 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		field = lerp(field, terrain, exclusion.Flatten);
 		suppress = max(suppress, exclusion.Suppress);
 		melt = max(melt, exclusion.Melt);
-	}
-
-	// Corpse burial mounds: resting dead actors inject their collision-
-	// sphere caps as field tops; CAPPED above terrain so a mammoth makes a
-	// bump, not a hill; gated by the LOCAL REFILL state so the story reads
-	// fall -> imprint -> snow closes -> mound swells over the buried body.
-	// Stateless: loot or move the corpse and the mound is gone next frame.
-	// The cone transform downstream rounds every mound into a natural lump.
-	for (uint corpseI = 0; corpseI < CorpseSphereCount; corpseI++) {
-		float4 sphere = CorpseSpheres[corpseI];
-		float2 dc = worldXY - sphere.xy;
-		float sqDist = dot(dc, dc);
-		[branch] if (sqDist < sphere.w * sphere.w)
-		{
-			// Grounded corpses only: a body on a high ledge must not mound
-			// the snow far below it.
-			[branch] if (sphere.z - sphere.w - terrain < 40.0)
-			{
-				float capZ = sphere.z + sqrt(sphere.w * sphere.w - sqDist);
-				float mound = min(capZ, terrain + CorpseMoundCap);
-
-				float deform = 0.0;
-				float2 deformUV = (worldXY - DeformWindowOriginH) * DeformInvWorldSizeH;
-				[branch] if (all(deformUV >= 0.0) && all(deformUV <= 1.0))
-				{
-					float2 deformDims;
-					DeformMap.GetDimensions(deformDims.x, deformDims.y);
-					deform = DeformMap.Load(int3(int2(deformUV * deformDims), 0));
-				}
-				// Refill first, then the mound: no mound while the death
-				// imprint is still carved open.
-				float refillGate = 1.0 - saturate(deform / 0.3);
-				field = max(field, lerp(terrain, mound, refillGate));
-			}
-		}
 	}
 
 	OutA[dtid.xy] = field;

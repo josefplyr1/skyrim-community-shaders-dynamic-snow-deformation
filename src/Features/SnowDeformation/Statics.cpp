@@ -987,12 +987,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
-	processData.DeformWindowOriginH = windowOrigin;
-	processData.DeformInvWorldSizeH = 1.0f / deformWorldSize;
-	processData.CorpseSphereCount = (uint32_t)corpseMoundSpheres.size();
-	processData.CorpseMoundCap = kCorpseMoundCap;
-	for (size_t sphereI = 0; sphereI < corpseMoundSpheres.size(); sphereI++)
-		processData.CorpseSpheres[sphereI] = corpseMoundSpheres[sphereI];
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1350,9 +1344,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(2, 1, &terrainSRV);
-	// Deformation map (t3): CombineCS gates corpse mounds on local refill.
-	ID3D11ShaderResourceView* deformSRV = GetDeformationSRV();
-	context->CSSetShaderResources(3, 1, &deformSRV);
 	{
 		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
 		// Field at u0, two-channel mask at u2 (u1 belongs to ScrollCS's raw
