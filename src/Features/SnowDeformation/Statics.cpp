@@ -2041,9 +2041,12 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		// The march's footprint test (see the t11 bind above).
 		scb.HasObjectTop = 1.0f;
-		// The patch only has texels where the raster already permitted carving,
-		// so the per-pixel trench terms must not gate it a second time.
-		scb.ObjectTrenches = 1.0f;
+		// The REAL setting, not the forced 1.0 this used to carry: the patch VS
+		// needs it to tell a road-owned column from a rock that only inherited
+		// a carvable depth through the raster's MAX blend. The per-pixel gate
+		// that the 1.0 was suppressing is now a compile-time constant in the
+		// PATCH pixel shader instead.
+		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		// Global gate here, not a per-draw class: the patch is one draw and
 		// reads the road bit per texel from the raster's G channel.
 		scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;

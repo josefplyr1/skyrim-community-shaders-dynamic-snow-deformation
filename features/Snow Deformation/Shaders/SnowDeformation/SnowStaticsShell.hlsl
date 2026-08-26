@@ -527,6 +527,13 @@ float ObjectConeDepth(float2 worldXY)
 // sentinel neighbour must not drag the column off the road.
 float2 PatchSkinDepth(float2 worldXY)
 {
+	// Outside the window, sentinel - PatchTexel CLAMPS, so without this the
+	// read returns an unrelated edge texel. PatchTop guards itself the same
+	// way; the two must agree or a comparison between them is meaningless.
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return float2(0.0, kNoRoadTop);
+
 	float2 dims;
 	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
 	float2 t = PatchTexel(worldXY, dims);
@@ -541,8 +548,15 @@ float2 PatchSkinDepth(float2 worldXY)
 // column the patch declined.
 bool RoadOwnsColumn(float2 worldXY)
 {
+	// The top MUST be real. A sentinel top (outside the window, or no object
+	// captured here) makes top - roadTop hugely negative, which passes the
+	// height test for free - and the skin then steps aside for a patch that
+	// cannot draw, stripping distant roads of snow entirely.
+	float top = PatchTop(worldXY);
+	if (top < -50000.0)
+		return false;
 	float roadTop = PatchSkinDepth(worldXY).y;
-	return roadTop > kNoRoadTop * 0.5 && (PatchTop(worldXY) - roadTop) < kRoadOwnsTop;
+	return roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 }
 #endif
 
@@ -635,6 +649,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	bool rim = false;
 	float aliveDeform = 0.0;
 	bool roadField = false;
+	bool owns = false;
 	[branch] if (top > -50000.0 && skinDepth >= 1.0)
 	{
 
@@ -735,11 +750,25 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// where the column's top IS the road.
 	// Same predicate as RoadOwnsColumn, run against this vertex's own already
 	// sampled top/roadTop rather than re-reading the raster.
-	roadField = RoadField > 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+	owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+	roadField = RoadField > 0.5 && owns;
 
 	}  // end cheap gate
 
-	bool trampled = aliveDeform >= 0.005 || roadField;
+	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
+	// MAX-blends its class depth across every column it overlaps, so a rock or
+	// cairn standing on a road inherits a carvable depth it was never granted
+	// (its own capture writes zero while Trenches on Objects is off). Ownership
+	// fixed the untrampled case; without it here too, walking on such a rock
+	// still cut a trench into it.
+	//
+	// So while the heightfield owns roads, a road is the only thing allowed to
+	// carve, and a trampled column no road owns is raster bleed. Trenches on
+	// Objects re-opens the old path deliberately - it is the experimental
+	// toggle this whole plan is the rework of - and turning the heightfield OFF
+	// restores the pre-heightfield behaviour exactly, so the A/B stays honest.
+	bool mayTrample = (RoadField < 0.5) || ObjectTrenches > 0.5 || owns;
+	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample);
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
@@ -1578,7 +1607,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
 	// Object trenching is parked until it can be done properly; roads keep
 	// theirs, since theirs is the tuned case.
+#ifdef PATCH
+	// The patch only has texels where the VS already permitted carving, so the
+	// per-pixel gate would only re-ask a settled question. Constant here so
+	// StaticsCB.ObjectTrenches can carry the REAL setting for the VS, which
+	// needs it to tell a road-owned column from raster bleed.
+	bool carveObject = true;
+#else
 	bool carveObject = ObjectTrenches > 0.5 || LegacySkin > 0.5;
+#endif
 	float2 trenchGridLocal = input.GridLocal;
 	float3 viewDirWS = normalize(input.WorldPos);
 	// Ray parameter (world units along the view ray) to the parallax hit;
