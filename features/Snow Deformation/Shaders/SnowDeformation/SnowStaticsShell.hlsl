@@ -510,6 +510,8 @@ struct PatchVertex
 	float SkinDepth;
 	float Deform;
 	float Killed;
+	// Debug view only; see FinishPatchVertex.
+	float RoadBit;
 };
 
 PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
@@ -521,6 +523,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	v.SkinDepth = 0.0;
 	v.Deform = 0.0;
 	v.Killed = 1.0;
+	v.RoadBit = 0.0;
 
 	float top;
 	float skinDepth;
@@ -666,6 +669,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// evaluated everywhere.
 	bool roadField = RoadField > 0.5 && roadBit > 0.5;
 	bool trampled = aliveDeform >= 0.005 || roadField;
+	v.RoadBit = roadBit;
 
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
@@ -733,9 +737,14 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.NormalWS = v.NormalWS;
 	vsout.GridLocal = v.GridLocal;
 	// Debug view: smuggle the decision data through the PS interpolants the
-	// patch does not otherwise use for shading.
+	// patch does not otherwise use for shading. Green carries skin depth in
+	// its lower half and the ROAD BIT in its upper: >= 0.5 means this column
+	// is road-classified, which is what separates a misclassified rock from
+	// a road bleeding its bit into a neighbouring column.
 	vsout.Coverage = StaticsDebugView != 0.0 ? v.Deform : 1.0;
-	vsout.Flat = StaticsDebugView != 0.0 ? saturate(v.SkinDepth / 8.0) : 0.0;
+	vsout.Flat = StaticsDebugView != 0.0 ?
+	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
+	                 0.0;
 	// The patch is exempt from the lift gates; its walls are real geometry.
 	vsout.Lift = 1e6;
 	[branch] if (v.Killed > 0.5)

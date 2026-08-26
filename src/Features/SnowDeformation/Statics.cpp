@@ -624,12 +624,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// both classes share RoadMeshesDepth exactly as before.
 	bool road = false;
 	bool bridge = false;
+	// Which signal decided it, for the road-classification log below.
+	const char* roadVia = "no";
+	std::string roadTexPath;
 	{
 		std::string loweredName(a_pass->geometry->name.c_str());
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
 		bridge = loweredName.find("bridge") != std::string::npos;
 		road = bridge || loweredName.find("road") != std::string::npos;
+		if (road)
+			roadVia = "name";
 	}
 	if (!road) {
 		if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
@@ -648,11 +653,33 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 							roadIt->second = 2;
 						else if (lowered.find("road") != std::string::npos)
 							roadIt->second = 1;
+						if (roadIt->second != 0)
+							roadTexPath = lowered;
 					}
 				}
 			}
 			road = roadIt->second != 0;
 			bridge = roadIt->second == 2;
+			if (road)
+				roadVia = "texture";
+		}
+	}
+
+	// Road-classification log: the road heightfield hands a whole object to a
+	// top-down heightfield, so a false positive is no longer a slightly wrong
+	// depth - it is a flat plate over a rock. One line per unique geometry
+	// name, so a session's log names every mesh the class accepted.
+	if (road) {
+		static std::unordered_set<std::string> loggedRoadNames;
+		std::string name(a_pass->geometry->name.c_str());
+		if (loggedRoadNames.size() > 4096)
+			loggedRoadNames.clear();
+		if (loggedRoadNames.insert(name).second) {
+			logger::info("[SNOW DEFORMATION] road class '{}' via {}{} -> heightfield={}",
+				name, roadVia, bridge ? " (BRIDGE)" : "",
+				(!bridge && settings.RoadHeightfield) ? "yes" : "no");
+			if (!roadTexPath.empty())
+				logger::info("[SNOW DEFORMATION]   road texture: '{}'", roadTexPath);
 		}
 	}
 
