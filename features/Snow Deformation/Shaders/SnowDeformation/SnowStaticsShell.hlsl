@@ -87,7 +87,7 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;
 	float BorderUntrampledFade;
-	float SeamFadeUnused;  // Unused (seam cross-fade removed); layout keeper
+	float ShellCullBare;   // was SeamFadeUnused; landscape shell only, unread here
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;

@@ -931,6 +931,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
+		ImGui::Checkbox(T(TKEY("shell_bare_cull_disabled"), "Shell: Disable Bare-Ground Cull"), &shellBareCullDisabled);
+		if (auto _ttBare = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_bare_cull_disabled_tooltip"), "Measurement aid: stops the shell skipping patches whose depth has reached -8, the floor ground hits when every layer under it is a non-snow class. Those sit below the terrain and cannot produce a pixel, but without early-Z they were shaded before the depth test threw them away. The cull tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. The snow looks the same either way; toggle to read what it is worth."));
+
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));

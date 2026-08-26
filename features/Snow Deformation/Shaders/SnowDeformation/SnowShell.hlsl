@@ -86,7 +86,7 @@ cbuffer ShellCB : register(b0)
 
 	float BorderTrampledFade;    // Unused (slider retired); layout keeper
 	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
-	float SeamFadeUnused;        // Unused (seam cross-fade removed); layout keeper
+	float ShellCullBare;         // was SeamFadeUnused: cull fully-bare patches
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
@@ -586,6 +586,41 @@ float SampleObjectHeight(float2 worldXY)
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
+
+// Fully-bare test. ShellSurfaceZ's depth is rampDepth + (-8) * bare, so -8 is
+// the floor: it is what ground reaches when EVERY layer under it is a non-snow
+// class, and no blend can go below it. Anything above -8 is still on the ramp
+// that climbs to the +14..+30 of a snow class, and culling there would cut the
+// transition and leave a gap where the layer rises out of the ground - so the
+// test is against the floor and not a threshold part-way up.
+//
+// Cheap on purpose: this runs per patch, and the full ShellSurfaceZ carries the
+// clearance pad, exclusion mask and object lift. Everything it omits either
+// LOWERS depth (the melt and shelter terms) or is checked separately, so the
+// estimate never claims bare ground that is not.
+static const float kBareDepthFloor = -7.9;
+
+bool ShellFullyBareAt(float2 gridLocal)
+{
+	float3 terrain = SampleTerrain(gridLocal);
+	// Sentinel texels carry no data; leave them to the full evaluation.
+	[branch] if (terrain.x < -50000.0)
+		return false;
+	// A captured object can lift depth back above the floor, and this estimate
+	// cannot see how much, so any object data over the patch vetoes the cull.
+	[branch] if (ObjectLiftCap > 0.0 && SampleObjectHeight(GridOrigin + gridLocal) > -50000.0)
+		return false;
+	float bare = saturate(1.0 - saturate(terrain.z));
+	return terrain.y + (-8.0) * bare <= kBareDepthFloor;
+}
+
+bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
+{
+	float2 mid = 0.25 * (a + b + c + d);
+	return ShellFullyBareAt(a) && ShellFullyBareAt(b) && ShellFullyBareAt(c) &&
+	       ShellFullyBareAt(d) && ShellFullyBareAt(mid);
+}
+
 
 // SampleExclusionField lives in SnowFields.hlsli.
 
@@ -1231,6 +1266,8 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 	// Tested before the edge factors: a culled patch must not pay for the
 	// three bicubic deformation taps per edge that EdgeTessFactor can take.
 	bool culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
+	[branch] if (!culled && ShellCullBare > 0.5)
+		culled = ShellFullyBare(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 #if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
 	culled = culled || ShellPatchSplitCulled(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 #endif

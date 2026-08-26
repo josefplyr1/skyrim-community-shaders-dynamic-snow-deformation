@@ -774,7 +774,8 @@ public:
 		float BorderTrampledFade;
 		float BorderUntrampledFade;
 		/** @brief Unused: the object/landscape seam cross-fade was removed. Layout keeper, uploaded as 0. */
-		float SeamFadeUnused;
+		/** @brief Cull landscape-shell patches whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
+		float ShellCullBare;
 		/** @brief Camera-distance band (world units) over which the statics skin dissolves back to the object's own material; start of the fade and the hard end (the capture range). */
 		float SkinFadeStart;
 
@@ -1032,6 +1033,9 @@ public:
 
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
+
+	/** @brief A/B measurement: stops culling landscape-shell patches that have reached the -8 bare floor, so what the cull is worth can be read against it. Runtime-only. */
+	bool shellBareCullDisabled = false;
 
 	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;
@@ -1706,8 +1710,12 @@ protected:
 	/** @brief Cells in the current window whose blended depth goes positive somewhere, keyed like shellCells. Rebuilt with the window; read per frame by DeformationWindowHasSnow. */
 	std::unordered_set<uint64_t> shellSnowyCells;
 	mutable std::shared_mutex shellSnowyCellMutex;
-	/** @brief Whether any cell overlapping the deformation window carries positive snow depth. False means nothing can read the map here, so its passes are skipped. Implemented in SnowDeformation/TerrainData.cpp. */
-	bool DeformationWindowHasSnow() const;
+	/** @brief Whether any cell within a_halfExtentUnits of the deformation window's centre carries positive snow depth, plus two cells of lead so the answer flips before the player arrives. Implemented in SnowDeformation/TerrainData.cpp. */
+	bool WindowHasSnow(float a_halfExtentUnits) const;
+	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. */
+	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f); }
+	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
+	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */
 	bool deformSuspended = false;
 	std::shared_mutex shellCellMutex;

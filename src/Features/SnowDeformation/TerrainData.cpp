@@ -746,7 +746,7 @@ void SnowDeformation::PostPostLoad()
 // readback would cost more than the passes this saves. Cells are 4096 units
 // against a deformation window of a few hundred metres, so the overlap set is
 // tiny and the test errs toward "has snow".
-bool SnowDeformation::DeformationWindowHasSnow() const
+bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits) const
 {
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	// Two cells of lead beyond the window. The snowy set only refreshes when
@@ -755,10 +755,14 @@ bool SnowDeformation::DeformationWindowHasSnow() const
 	// for the first footprint. The margin resumes while the snow is still
 	// ~120 m off and the map is warm by the time it is stood on.
 	constexpr float kResumeMargin = kCellSize * 2.0f;
-	const float minX = windowOrigin.x - kResumeMargin;
-	const float minY = windowOrigin.y - kResumeMargin;
-	const float maxX = minX + deformWorldSize + 2.0f * kResumeMargin;
-	const float maxY = minY + deformWorldSize + 2.0f * kResumeMargin;
+	// Centre of the deformation window, which every caller measures out from.
+	const float centreX = windowOrigin.x + deformWorldSize * 0.5f;
+	const float centreY = windowOrigin.y + deformWorldSize * 0.5f;
+	const float reach = a_halfExtentUnits + kResumeMargin;
+	const float minX = centreX - reach;
+	const float minY = centreY - reach;
+	const float maxX = centreX + reach;
+	const float maxY = centreY + reach;
 
 	const int cellMinX = (int)std::floor(minX / kCellSize);
 	const int cellMaxX = (int)std::floor(maxX / kCellSize);

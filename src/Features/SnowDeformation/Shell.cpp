@@ -704,7 +704,9 @@ void SnowDeformation::DrawShell()
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
 	cbData.BorderTrampledFade = 0.0f;
 	// Layout keeper, retired with the object/landscape seam cross-fade.
-	cbData.SeamFadeUnused = 0.0f;
+	// Gated on the terrain window existing: without it the cull's SampleTerrain
+	// reads zeros, which look like fully bare ground everywhere.
+	cbData.ShellCullBare = (!shellBareCullDisabled && shellTerrainTexture) ? 1.0f : 0.0f;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
 	// the smoothstep never degenerates when the sliders cross).
@@ -1029,9 +1031,11 @@ void SnowDeformation::DrawShell()
 		// SharedData (b5): the skirt descent reads the EM height-blending
 		// gate; bind the b4-b6 triple exactly as the PS gets it above.
 		context->DSSetConstantBuffers(4, 3, sharedBuffers);
-		// The hull shader reads the deformation map for trench-aware factors.
-		ID3D11ShaderResourceView* hsDeformSRV = GetDeformationSRV();
-		context->HSSetShaderResources(1, 1, &hsDeformSRV);
+		// t0-t5, not just the deformation map at t1: the bare-ground cull reads
+		// the terrain window (t0) and the object height field (t4), and an
+		// unbound t0 samples as zeros - which reads as fully bare and would
+		// cull the entire shell.
+		context->HSSetShaderResources(0, 6, shellSRVs);
 		context->DSSetShaderResources(0, 6, shellSRVs);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
