@@ -2025,11 +2025,15 @@ void SnowDeformation::DrawCapturedStatics()
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
 
 		StaticsCB scb{};
-		// WorldRow0.xy = snapped patch origin (256 quads x 8 units = +-1024
-		// around the height-window center, which tracks the camera).
+		// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
+		// kPatchBandVerts in SnowStaticsShell.hlsl), so the vertex shader
+		// places about the centre rather than stepping from a corner, and the
+		// snap has to be the COARSEST band step - snapping to the fine step
+		// would leave outer vertices off their own band's lattice and quad
+		// widths would flip as the camera moves.
 		scb.WorldRow0 = {
-			std::floor((heightWindowCenter.x - 1024.0f) / 8.0f) * 8.0f,
-			std::floor((heightWindowCenter.y - 1024.0f) / 8.0f) * 8.0f, 0.0f, 0.0f
+			std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
+			std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
 		};
 		scb.ObjectsDepth = settings.ObjectsSnowDepth;
 		scb.RoundedDepth = settings.SnowMeshesDepth;
@@ -2048,12 +2052,12 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
 		if (tessellatePatch) {
-			context->Draw(256 * 256 * 4, 0);
+			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		} else {
-			context->Draw(256 * 256 * 6, 0);
+			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
 		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };

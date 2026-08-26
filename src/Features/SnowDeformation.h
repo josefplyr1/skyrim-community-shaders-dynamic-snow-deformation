@@ -1502,6 +1502,11 @@ public:
 
 	/** @brief Sentinel in the skin-depth raster's G channel (road top): no road drew in this column. Mirrored as kNoRoadTop in SnowHeightCapture.hlsl and SnowStaticsShell.hlsl. */
 	static constexpr float kNoRoadTop = -1000000.0f;
+
+	/** @brief Trench-patch grid quads per axis. Mirrors kPatchGridDim in SnowStaticsShell.hlsl, whose band table it is derived from: 2 x (128 + 8 + 8 + 8 + 18). */
+	static constexpr uint32_t kPatchGridDim = 340;
+	/** @brief World-unit snap for the patch centre. MUST be the coarsest band step in use (kPatchBandMul's last entry x kPatchStep = 16 x 8), or vertices stop landing on their band's lattice and quad widths flip as the camera moves - the invariant SnowGrid.hlsli warns about. */
+	static constexpr float kPatchSnap = 128.0f;
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;

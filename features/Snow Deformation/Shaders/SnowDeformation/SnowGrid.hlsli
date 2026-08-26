@@ -44,8 +44,35 @@ float3 WarpBand(float au)
 	return found;
 }
 
+// Table-driven form: same walk, on a caller-supplied band table and base step.
+// The trench patch runs its own table (a fine core sized to the object raster
+// rather than to the horizon) through this, so there is one implementation of
+// the walk and not two.
+float WarpAxisT(float u, float bandVerts[kWarpBands], float bandMul[kWarpBands], float spacing)
+{
+	float a = abs(u);
+	float off = 0.0;
+	[unroll] for (int band = 0; band < kWarpBands; ++band)
+	{
+		float take = min(a, bandVerts[band]);
+		off += take * bandMul[band];
+		a -= take;
+	}
+	off += a * bandMul[kWarpBands - 1];
+	return sign(u) * off * spacing;
+}
+
 // Maps a vertex coordinate relative to the grid center (in vertex units)
-// to a world-unit offset from the center.
+// to a world-unit offset from the center, on the shell's own table.
+//
+// Deliberately NOT `return WarpAxisT(u, kWarpBandVerts, kWarpBandMul,
+// GridSpacing)`, which is what it looks like it should be. Routing the shell
+// through the table-driven form costs the shadow-cast VS one instruction and
+// reshuffles 451 asm lines - a change the DXBC harness cannot certify as a
+// no-op, on the caster that has already been parked once for cascade bugs.
+// The twin is 10 lines and the two must be edited together; that is a smaller
+// risk than an unverifiable change to the caster. Revisit with the runtime A/B
+// harness (docs/development/shader-runtime-ab.md), not by "tidying" this away.
 float WarpAxis(float u)
 {
 	float a = abs(u);

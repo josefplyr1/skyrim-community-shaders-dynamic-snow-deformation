@@ -246,6 +246,33 @@ SamplerState SnowSampler : register(s0);
 // verbatim-identical pieces of both shells live in one file (M8).
 #include "SnowDeformation/SnowFields.hlsli"
 
+// Warped band grid, shared with the landscape shell.
+#include "SnowDeformation/SnowGrid.hlsli"
+
+// The patch's own band table, run through the shell's walk (WarpAxisT).
+// Sized to the OBJECT RASTER, not to the horizon: past HeightHalfExtent there
+// is no top surface to drape on, so reach beyond it buys nothing.
+//
+// 8-unit core out to 1024 - unchanged from the flat grid it replaces, and
+// already at the 4-unit raster's resolution - then power-of-two steps out to
+// 4224, which covers the raster's 4096 with slack for the centre snap:
+//   1024 (128 x 8) | 1152 | 1408 | 1920 | 4224 (18 x 128)
+// INVARIANT (see SnowGrid.hlsli): every band start is a multiple of its own
+// step and of the origin snap. 1024/16, 1152/32, 1408/64, 1920/128 are all
+// exact, and the CPU snaps the patch centre to kPatchSnap.
+static const float kPatchBandVerts[kWarpBands] = { 128.0, 8.0, 8.0, 8.0, 18.0 };
+static const float kPatchBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };
+static const float kPatchStep = 8.0;
+// Quads per axis; mirrored as kPatchGridDim in SnowDeformation.h, which sizes
+// the draw. 2 x (128 + 8 + 8 + 8 + 18).
+#define kPatchGridDim 340
+
+float2 PatchWarpXY(float2 u)
+{
+	return float2(WarpAxisT(u.x, kPatchBandVerts, kPatchBandMul, kPatchStep),
+		WarpAxisT(u.y, kPatchBandVerts, kPatchBandMul, kPatchStep));
+}
+
 // Must match kSnowUVTile in SnowShell.hlsl (the game's landscape tiling:
 // 24 repeats per 4096-unit cell).
 static const float kSnowUVTile = 4096.0 / 24.0;
@@ -601,6 +628,16 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	}
 	float2 gridLocal = v.GridLocal;
 
+	// Everything below reads the raster 30-50 more times per vertex, and on a
+	// grid that now reaches the raster's full extent MOST vertices stand over
+	// nothing. Two loads already answered that, so gate on them: a sentinel
+	// top or a dead class depth can never reach the carve branch anyway.
+	bool rim = false;
+	float aliveDeform = 0.0;
+	bool roadField = false;
+	[branch] if (top > -50000.0 && skinDepth >= 1.0)
+	{
+
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
@@ -622,7 +659,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// 100 units: house facades still cull (wall drops are 300+), but steep
 	// boulder crests do not lose their trench-edge vertices (small notch
 	// triangles at rock rims).
-	bool rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
+	rim = minNeighborTop < 1e8 && (top - minNeighborTop) > 100.0;
 	// Facade slope kill: tall walls whose raster drop is SMEARED over
 	// several texels evade the single-step rim threshold (the debug view
 	// showed the patch draped down building walls as sawtooth sheets). A
@@ -669,7 +706,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// radius 12 the rays sit 22.5 degrees apart, so even the thinnest trail
 	// cannot slip between rays); dense tessellated vertices sit a unit or
 	// two apart and a 5-tap cross covers their footprint.
-	float aliveDeform = SampleDeformation(gridLocal);
+	aliveDeform = SampleDeformation(gridLocal);
 	if (dense) {
 		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal + float2(6.0, 0.0)));
 		aliveDeform = max(aliveDeform, SampleDeformation(gridLocal - float2(6.0, 0.0)));
@@ -698,7 +735,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// where the column's top IS the road.
 	// Same predicate as RoadOwnsColumn, run against this vertex's own already
 	// sampled top/roadTop rather than re-reading the raster.
-	bool roadField = RoadField > 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+	roadField = RoadField > 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+
+	}  // end cheap gate
+
 	bool trampled = aliveDeform >= 0.005 || roadField;
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
@@ -799,19 +839,19 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 #endif
 
 #if defined(VSHADER) && defined(PATCH) && !defined(SNOW_TESS)
-// Trench patch (PATCH define): the landscape shell's recipe applied to objects; a dense
-// 8-unit grid (256x256 quads, +-1024 units around the camera) draped over
-// the top-down object height raster and carved per vertex by the
-// deformation map. real geometry: real silhouettes, floors that hold at
-// every camera angle, no parallax. The skin dithers itself away over
-// trails to hand off (see the PS).
+// Trench patch (PATCH define): the landscape shell's recipe applied to objects,
+// on the landscape shell's own warped lattice - an 8-unit core stepping out to
+// the object raster's full +-4096, draped over the top-down height raster and
+// carved per vertex by the deformation map. Real geometry: real silhouettes,
+// floors that hold at every camera angle, no parallax. The skin steps aside
+// wherever the patch owns the column (see the PS).
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
 	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	uint quadIndex = vertexID / 6;
-	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kCorners[vertexID % 6];
-	// WorldRow0.xy carries the snapped patch origin (see the CPU fill).
-	float2 worldXY = WorldRow0.xy + gridXY * 8.0;
+	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kCorners[vertexID % 6];
+	// WorldRow0.xy carries the snapped patch CENTRE (see the CPU fill).
+	float2 worldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
 	return FinishPatchVertex(BuildPatchVertex(worldXY, false));
 }
 #elif defined(VSHADER) && defined(PATCH)
@@ -825,9 +865,9 @@ TessControlPointPatch main(uint vertexID : SV_VertexID)
 {
 	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	uint quadIndex = vertexID / 4;
-	float2 gridXY = float2(quadIndex % 256, quadIndex / 256) + kPatchCorners[vertexID % 4];
+	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kPatchCorners[vertexID % 4];
 	TessControlPointPatch cp;
-	cp.WorldXY = WorldRow0.xy + gridXY * 8.0;
+	cp.WorldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
 	return cp;
 }
 #endif
@@ -1555,8 +1595,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// skin cannot discard into a column the patch declined - a rock standing
 	// on the road takes its column back, and the road's skin has to stay
 	// under it or the rock's footprint becomes a hole.
-	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 &&
-		length(input.WorldPos.xy) < 950.0 && RoadOwnsColumn(worldXY))
+	//
+	// No distance gate any more: the patch reaches the object raster's full
+	// extent, and RoadOwnsColumn reads that same raster, so it already returns
+	// false everywhere the patch cannot draw. One predicate owns the hand-off
+	// instead of a radius that had to be kept in step with the grid by hand.
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 && RoadOwnsColumn(worldXY))
 		discard;
 
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
