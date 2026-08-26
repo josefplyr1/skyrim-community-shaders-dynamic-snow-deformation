@@ -792,11 +792,24 @@ bool SnowDeformation::EnsureStaticsShaders()
 
 	if (!staticsPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		const char* earlyZDefine = staticsEarlyZSpike ? "SNOW_STATICS_NO_DEPTH_EXPORT" : nullptr;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, earlyZDefine));
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
 				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
+		}
+	}
+
+	// No-depth-export twin. Only the parallax carve needs SV_Depth, and it is
+	// gated on ObjectTrenches or the draw being a road, so at default settings
+	// every other captured static writes back the depth the rasteriser already
+	// had - paying the loss of early-Z across the whole pass for nothing.
+	// A compile failure here is not fatal: the draw falls back to staticsPS.
+	if (!staticsPSNoDepth) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSNoDepth)))
+				Util::SetResourceName(staticsPSNoDepth, "SnowDeformation::StaticsShellPS NoDepth");
 		}
 	}
 
@@ -1690,7 +1703,9 @@ void SnowDeformation::DrawCapturedStatics()
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
 
+	// Per-draw PS choice below; bound here so a fallback path still has one.
 	context->PSSetShader(staticsPS, nullptr, 0);
+	ID3D11PixelShader* boundStaticsPS = staticsPS;
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
@@ -1877,6 +1892,19 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.SkinDistantBareness = settings.SkinDistantBareness;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
+
+		// Depth export only where the carve can fire: SnowStaticsShell's
+		// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
+		// cap.road. Everything else writes back the rasterised depth, so
+		// dropping the export leaves the same number in the buffer and hands
+		// early-Z rejection back to the whole pass. The debug spike forces the
+		// no-depth path on every draw, roads included.
+		const bool needsDepth = !staticsEarlyZSpike && (settings.ObjectTrenches || cap.road);
+		ID3D11PixelShader* wantPS = (!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS;
+		if (wantPS != boundStaticsPS) {
+			context->PSSetShader(wantPS, nullptr, 0);
+			boundStaticsPS = wantPS;
+		}
 
 		context->DrawIndexed(indexCount, 0, 0);
 	}

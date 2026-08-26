@@ -749,10 +749,16 @@ void SnowDeformation::PostPostLoad()
 bool SnowDeformation::DeformationWindowHasSnow() const
 {
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
-	const float minX = windowOrigin.x;
-	const float minY = windowOrigin.y;
-	const float maxX = minX + deformWorldSize;
-	const float maxY = minY + deformWorldSize;
+	// Two cells of lead beyond the window. The snowy set only refreshes when
+	// the terrain window rebuilds, which waits on the bake thread, so testing
+	// the window exactly meant walking onto snow and waiting about a second
+	// for the first footprint. The margin resumes while the snow is still
+	// ~120 m off and the map is warm by the time it is stood on.
+	constexpr float kResumeMargin = kCellSize * 2.0f;
+	const float minX = windowOrigin.x - kResumeMargin;
+	const float minY = windowOrigin.y - kResumeMargin;
+	const float maxX = minX + deformWorldSize + 2.0f * kResumeMargin;
+	const float maxY = minY + deformWorldSize + 2.0f * kResumeMargin;
 
 	const int cellMinX = (int)std::floor(minX / kCellSize);
 	const int cellMaxX = (int)std::floor(maxX / kCellSize);

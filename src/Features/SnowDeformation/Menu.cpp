@@ -935,14 +935,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
 
-		if (ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike)) {
-			if (staticsPS) {
-				staticsPS->Release();
-				staticsPS = nullptr;
-			}
-		}
+		ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike);
 		if (auto _ttEZS = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_earlyz_spike_tooltip"), "Same measurement for Object Snow, which writes a plain SV_Depth and so has early-Z fully off. UPPER BOUND, not a clean A/B: the carve projects its parallax hit into that depth, so dropping it changes which pixels survive as well as what they cost. Read it as 'no more than this much', and expect the trench relief to go flat while it is on."));
+			ImGui::Text("%s", T(TKEY("statics_earlyz_spike_tooltip"), "Measurement aid: forces the no-depth pixel shader onto EVERY object-snow draw, roads included. Normally only draws that can carve keep the depth export, which is already the bulk of the win at no visual cost; this shows the remaining ceiling. UPPER BOUND, not a clean A/B - the carve projects its parallax hit into that depth, so on roads this changes which pixels survive as well as what they cost, and their trench relief goes flat while it is on."));
 
 		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
 		if (auto _tt = Util::HoverTooltipWrapper())

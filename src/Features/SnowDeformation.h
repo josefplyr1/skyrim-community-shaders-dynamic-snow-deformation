@@ -1636,6 +1636,8 @@ public:
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
+	/** @brief Statics PS with the SV_Depth export compiled out, chosen per draw for captures that cannot carve. Only the parallax carve pushes depth, and it is gated on ObjectTrenches or the draw being a road. */
+	ID3D11PixelShader* staticsPSNoDepth = nullptr;
 	/** @brief Tessellated skin stages (optional; legacy path is the fallback): control-point VS, hull (edge-length/distance factors) and domain (displacement-map relief along the inflate normal). */
 	ID3D11VertexShader* staticsTessVS = nullptr;
 	ID3D11HullShader* staticsHS = nullptr;
