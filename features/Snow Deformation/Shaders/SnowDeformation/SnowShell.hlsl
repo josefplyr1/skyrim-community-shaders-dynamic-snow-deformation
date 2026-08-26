@@ -1142,19 +1142,22 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// GeomorphVertexXY) — vertices slide instead of hopping ring steps.
 	gridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
 
-#ifndef SNOW_SHADOW_CAST
 	// Seam cull, per vertex because this path has no patch scope. A NaN kills
 	// every triangle touching the vertex, which is safe here for the reason in
 	// ShellBeyondSeam: at zero fade the surface is 32 units under the LOD
 	// terrain, and just inside it is still at -8 and only climbs as the fade
 	// does, so the triangles this drops are submerged along their whole span.
+	//
+	// The shadow caster takes it too: geometry that far under the terrain is
+	// occluded from the sun by the ground above it, so it contributes nothing
+	// to the cascade. Its own base sinks further still (see below). Costs no
+	// bindings either - ShellEdgeFade is constant-buffer maths, no texture.
 	[branch] if (ShellEdgeFade(gridLocal) <= 0.0)
 	{
 		VS_OUTPUT culled = (VS_OUTPUT)0;
 		culled.Position = asfloat(0x7FC00000).xxxx;
 		return culled;
 	}
-#endif
 
 	float coverage;
 	float terrainHeight;
