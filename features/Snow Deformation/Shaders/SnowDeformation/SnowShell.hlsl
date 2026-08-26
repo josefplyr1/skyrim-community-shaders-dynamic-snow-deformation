@@ -593,25 +593,52 @@ float SampleObjectHeight(float2 worldXY)
 // that climbs to the +14..+30 of a snow class, and culling there would cut the
 // transition and leave a gap where the layer rises out of the ground - so the
 // test is against the floor and not a threshold part-way up.
-//
-// Cheap on purpose: this runs per patch, and the full ShellSurfaceZ carries the
-// clearance pad, exclusion mask and object lift. Everything it omits either
-// LOWERS depth (the melt and shelter terms) or is checked separately, so the
-// estimate never claims bare ground that is not.
 static const float kBareDepthFloor = -7.9;
+
+// The one thing in ShellSurfaceZ that can raise depth back off the floor:
+//   float liftForce = smoothstep(6.0, 20.0, field - terrainHeight);
+//   rampDepth = max(rampDepth, liftForce * 6.0);
+// so a patch is only safe to cull while the object field stands less than 6
+// units proud. Tested with margin.
+//
+// NOT a test for "the field has data": t4 is terrain run through the cone
+// transform, so it holds a real height across the whole object window and a
+// data test vetoes every near patch - which is where the pixels are.
+static const float kBareLiftMargin = 4.0;
+
+// Point loads, not the bilinear samplers: this runs per patch, and the answer
+// is a conservative "is every sample bare", not a filtered value. Five taps of
+// one load each rather than five of four.
+float3 LoadTerrainPoint(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	return TerrainWindow.Load(int3((int2)t, 0)).xyz;
+}
 
 bool ShellFullyBareAt(float2 gridLocal)
 {
-	float3 terrain = SampleTerrain(gridLocal);
+	float3 terrain = LoadTerrainPoint(gridLocal);
 	// Sentinel texels carry no data; leave them to the full evaluation.
 	[branch] if (terrain.x < -50000.0)
 		return false;
-	// A captured object can lift depth back above the floor, and this estimate
-	// cannot see how much, so any object data over the patch vetoes the cull.
-	[branch] if (ObjectLiftCap > 0.0 && SampleObjectHeight(GridOrigin + gridLocal) > -50000.0)
-		return false;
 	float bare = saturate(1.0 - saturate(terrain.z));
-	return terrain.y + (-8.0) * bare <= kBareDepthFloor;
+	[branch] if (terrain.y + (-8.0) * bare > kBareDepthFloor)
+		return false;
+
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float2 dims;
+		bool valid;
+		float2 t = ObjectMapTexel(GridOrigin + gridLocal, dims, valid);
+		[branch] if (valid)
+		{
+			float field = ObjectHeights.Load(int3((int2)t, 0));
+			if (field - terrain.x > kBareLiftMargin)
+				return false;
+		}
+	}
+	return true;
 }
 
 bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
