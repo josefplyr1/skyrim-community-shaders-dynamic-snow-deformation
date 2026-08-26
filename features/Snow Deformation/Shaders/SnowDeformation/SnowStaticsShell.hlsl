@@ -543,6 +543,30 @@ float2 PatchSkinDepth(float2 worldXY)
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
 
+// How far this column's supporting top stands below the highest of its four
+// texels. The patch dissolves on this (its silhouette clip): the max-of-4
+// placement extends object tops up to a texel past the real silhouette, and
+// the bilinear top's drop below the max marks that overhang.
+//
+// Shared with RoadOwnsColumn because it is the SECOND reason the patch may
+// not draw, and the skin has to know about both.
+float PatchSilhouetteDrop(float2 worldXY)
+{
+	float2 dims;
+	ObjectTopRaw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 c0 = (int2)t;
+	float2 cf = t - c0;
+	int2 c1 = min(c0 + 1, int2(dims) - 1);
+	float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
+	float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
+	float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
+	float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+	float maxTop = max(max(top00, top10), max(top01, top11));
+	float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
+	return lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
+}
+
 // Does the road own this column? The single predicate the patch's carve gate
 // and the skin's step-aside both run, so the skin can never discard into a
 // column the patch declined.
@@ -556,7 +580,16 @@ bool RoadOwnsColumn(float2 worldXY)
 	if (top < -50000.0)
 		return false;
 	float roadTop = PatchSkinDepth(worldXY).y;
-	return roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+	if (roadTop <= kNoRoadTop * 0.5 || (top - roadTop) >= kRoadOwnsTop)
+		return false;
+	// The silhouette clip is the other way the patch declines a column it
+	// otherwise owns, and it fires on the road's own edge texels - where the
+	// road IS the supporting top, so the ownership test above passes happily.
+	// Stepping aside there left a hole straight through to the road mesh.
+	// 8.0 is where the clip's smoothstep starts biting; below it the patch is
+	// at full coverage. In the 8-24 band both draw and the patch wins on top,
+	// which is a thin double layer rather than a hole.
+	return PatchSilhouetteDrop(worldXY) < 8.0;
 }
 #endif
 
@@ -1854,25 +1887,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// toward the low/sentinel neighbors, and its drop below the max-based
 	// placement marks the overhang. Dissolve on that drop, so the patch
 	// ends where the object ends (to raster resolution).
-	{
-		float2 clipDims;
-		ObjectTopRaw.GetDimensions(clipDims.x, clipDims.y);
-		float2 clipLocal = (worldXY - HeightWindowCenter) / HeightHalfExtent;
-		float2 clipUV = float2(clipLocal.x * 0.5 + 0.5, 0.5 - clipLocal.y * 0.5);
-		float2 clipT = clamp(clipUV * clipDims - 0.5, 0.0, clipDims.x - 1.001);
-		int2 c0 = (int2)clipT;
-		float2 cf = clipT - c0;
-		int2 c1 = min(c0 + 1, int2(clipDims) - 1);
-		float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
-		float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
-		float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
-		float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
-		float maxTop = max(max(top00, top10), max(top01, top11));
-		// Per-texel drop vs the supporting top, sentinel-clamped.
-		float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
-		float drop = lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
-		coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, drop);
-	}
+	// PatchSilhouetteDrop is shared with RoadOwnsColumn, which has to decline
+	// exactly the columns this dissolves or the skin steps aside into a hole.
+	coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
