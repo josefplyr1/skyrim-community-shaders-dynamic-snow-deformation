@@ -35,6 +35,32 @@ float ShapeNoise(float2 p)
 		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
+// Two-octave domain warp for snow boundaries: a capped 37-unit coarse wander
+// plus a fine 8-unit octave for raggedness. Moves WHERE a border falls without
+// touching what is sampled there, so a boundary stops following the data
+// lattice and reads as an organic edge instead of a staircase.
+//
+// The trench patch warps its silhouette with a scaled-down version of this, an
+// object footprint being a hard geometric edge rather than a soft data one.
+//
+// SnowShell.hlsl's SampleTerrainShaped holds the SAME expression inline and
+// deliberately still does: routing it through this call changes 5 of its 14
+// permutations (shadow VS and four PS variants), which the DXBC harness cannot
+// certify as a no-op. Same call as WarpAxis - see the note there. Edit the two
+// together; do not "tidy" one away without the runtime A/B harness.
+float2 BorderJitter(float2 worldXY)
+{
+	float coarseAmp = min(BorderNoise, 16.0);
+	return float2(
+			   ShapeNoise(worldXY / 37.0) - 0.5,
+			   ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
+	           (2.0 * coarseAmp) +
+	       float2(
+			   ShapeNoise(worldXY / 8.0) - 0.5,
+			   ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
+	           (1.2 * BorderNoise);
+}
+
 // Saturates EARLY (full height once the disc is a third carved), and the old
 // high-field cut is gone - both for the same reported reason. The cut's job,
 // keeping berms out of carved interiors, is now done exactly by the explicit
