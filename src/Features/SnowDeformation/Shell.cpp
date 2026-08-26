@@ -310,6 +310,10 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 	if (!shellPS) {
 		logger::debug("Compiling SnowShell PS");
 		auto defines = ShellPSDefines();
+		// Applied here, not in ShellPSDefines: that is static and the LOD
+		// histogram variant has no reason to carry the spike.
+		if (shellEarlyZSpike)
+			defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
 		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;

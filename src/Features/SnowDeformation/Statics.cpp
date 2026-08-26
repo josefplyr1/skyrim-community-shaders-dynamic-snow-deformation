@@ -792,7 +792,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 
 	if (!staticsPS) {
 		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine));
+		const char* earlyZDefine = staticsEarlyZSpike ? "SNOW_STATICS_NO_DEPTH_EXPORT" : nullptr;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, earlyZDefine));
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
 				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");

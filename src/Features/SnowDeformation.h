@@ -1004,6 +1004,12 @@ public:
 	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
 	bool shellBermBakeDisabled = false;
 
+	/** @brief A/B measurement: drops the shell PS's SV_DepthLessEqual export, restoring early-Z rejection for the pass. Z-fighting in the far field and at edges is expected - the point is the timing. Runtime-only; forces a PS recompile. */
+	bool shellEarlyZSpike = false;
+
+	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Runtime-only; forces a PS recompile. */
+	bool staticsEarlyZSpike = false;
+
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
 	int staticsDebugView = 0;

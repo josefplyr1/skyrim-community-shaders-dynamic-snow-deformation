@@ -914,6 +914,26 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
+		// Both drop a depth export, so the PS permutation changes: release the
+		// cached shader and let the next frame's getter recompile it.
+		if (ImGui::Checkbox(T(TKEY("shell_earlyz_spike"), "Shell: Drop Depth Export (early-Z spike)"), &shellEarlyZSpike)) {
+			if (shellPS) {
+				shellPS->Release();
+				shellPS = nullptr;
+			}
+		}
+		if (auto _ttEZ = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_earlyz_spike_tooltip"), "Measurement aid: drops the shell's SV_DepthLessEqual export. That export moves depth TOWARD the camera, which can turn a failing fragment into a passing one - so with this pass's LESS_EQUAL depth test it disables early-Z REJECTION for the whole draw, and every shell pixel hidden behind terrain, a building or an NPC still runs the full shader. Expect z-fighting in the far field and at trench edges while this is on; the point is the Shell timing. Hold the camera still and toggle."));
+
+		if (ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike)) {
+			if (staticsPS) {
+				staticsPS->Release();
+				staticsPS = nullptr;
+			}
+		}
+		if (auto _ttEZS = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("statics_earlyz_spike_tooltip"), "Same measurement for Object Snow, which writes a plain SV_Depth and so has early-Z fully off. UPPER BOUND, not a clean A/B: the carve projects its parallax hit into that depth, so dropping it changes which pixels survive as well as what they cost. Read it as 'no more than this much', and expect the trench relief to go flat while it is on."));
+
 		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
 		if (auto _tt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));

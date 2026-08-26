@@ -1290,9 +1290,14 @@ RWStructuredBuffer<uint> LODHistogram : register(u1);
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
-	// Conservative depth (may only move toward the camera): carries the
-	// anti-z-fight clamp while keeping early-Z alive.
+	// Conservative depth carrying the anti-z-fight clamp. NOTE: LessEqual moves
+	// depth TOWARD the camera, which can turn a failing fragment into a passing
+	// one - so with the pass's LESS_EQUAL depth state this DISABLES early-Z
+	// rejection for the whole draw. SNOW_SHELL_NO_DEPTH_EXPORT drops it to
+	// measure what that costs.
+#	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
 	float DepthLE : SV_DepthLessEqual;
+#	endif
 #	ifndef SNOW_LOD_HISTOGRAM
 	float4 MotionVectors : SV_Target1;
 	float4 NormalGlossiness : SV_Target2;
@@ -2307,6 +2312,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// window behind the surface, and is skipped in debug views.
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
+#	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
 	psout.DepthLE = input.Position.z;
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
 	[branch] if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
@@ -2320,6 +2326,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shimmered with the camera.
 	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
 		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
+#	endif
 
 	return psout;
 }

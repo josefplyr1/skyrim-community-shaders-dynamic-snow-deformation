@@ -1329,7 +1329,7 @@ struct PS_OUTPUT
 	float4 Reflectance : SV_Target5;
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
-#	ifndef PATCH
+#	if !defined(PATCH) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
 	// Written so the parallax trench relief is real to the depth buffer:
 	// the carved floor's projected depth replaces the flat top's, so feet
 	// and props z-test against the trench instead of vanishing under it,
@@ -2236,7 +2236,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float stochasticBlend = (screenNoise * screenNoise) < coverageAlpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
-#	ifndef PATCH
+#	if !defined(PATCH) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
 	// Depth: unchanged pixels echo the rasterized depth; carved pixels
 	// project the parallax hit point through the same (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
