@@ -368,6 +368,28 @@ float ShellEdgeFade(float2 gridLocal)
 	return fade;
 }
 
+// Past the seam ShellSurfaceZ parks the surface 32 units under the LOD terrain
+// and the fade has already reached zero, so no pixel here can survive; just
+// inside it the surface is still at -8 and climbs only as the fade does. Both
+// are submerged, so dropping geometry that touches this band cannot remove a
+// visible pixel - it removes geometry the depth test was going to reject after
+// the pixel shader had already run.
+//
+// NOT the culling that was rejected on measurement: that one culled inside a
+// drawn shell, where the cost is per-pixel tap count. This drops patches that
+// produce no pixels at all.
+//
+// Centre as well as corners: the fade's zero region is the OUTSIDE of a
+// rectangle and so is not convex, and a patch can clip a rectangle corner with
+// all four of its own corners outside it.
+bool ShellBeyondSeam(float2 a, float2 b, float2 c, float2 d)
+{
+	float2 mid = 0.25 * (a + b + c + d);
+	return ShellEdgeFade(a) <= 0.0 && ShellEdgeFade(b) <= 0.0 &&
+	       ShellEdgeFade(c) <= 0.0 && ShellEdgeFade(d) <= 0.0 &&
+	       ShellEdgeFade(mid) <= 0.0;
+}
+
 struct VS_OUTPUT
 {
 	// noperspective centroid: required interpolation for SV_Position when
@@ -1032,6 +1054,20 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 	// GeomorphVertexXY) — vertices slide instead of hopping ring steps.
 	gridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
 
+#ifndef SNOW_SHADOW_CAST
+	// Seam cull, per vertex because this path has no patch scope. A NaN kills
+	// every triangle touching the vertex, which is safe here for the reason in
+	// ShellBeyondSeam: at zero fade the surface is 32 units under the LOD
+	// terrain, and just inside it is still at -8 and only climbs as the fade
+	// does, so the triangles this drops are submerged along their whole span.
+	[branch] if (ShellEdgeFade(gridLocal) <= 0.0)
+	{
+		VS_OUTPUT culled = (VS_OUTPUT)0;
+		culled.Position = asfloat(0x7FC00000).xxxx;
+		return culled;
+	}
+#endif
+
 	float coverage;
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
@@ -1164,6 +1200,21 @@ float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 {
+	TessFactors f;
+
+	// Tested before the edge factors: a culled patch must not pay for the
+	// three bicubic deformation taps per edge that EdgeTessFactor can take.
+	[branch] if (ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal))
+	{
+		f.Edge[0] = 0.0;
+		f.Edge[1] = 0.0;
+		f.Edge[2] = 0.0;
+		f.Edge[3] = 0.0;
+		f.Inside[0] = 0.0;
+		f.Inside[1] = 0.0;
+		return f;
+	}
+
 	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
 	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
 	float4 edges = float4(
@@ -1173,7 +1224,6 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal));
 	float inner = max(max(edges.x, edges.y), max(edges.z, edges.w));
 
-	TessFactors f;
 	f.Edge[0] = edges.x;
 	f.Edge[1] = edges.y;
 	f.Edge[2] = edges.z;
