@@ -706,7 +706,7 @@ void SnowDeformation::DrawShell()
 	// Layout keeper, retired with the object/landscape seam cross-fade.
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.
-	cbData.ShellCullBare = (!shellBareCullDisabled && shellTerrainTexture) ? 1.0f : 0.0f;
+	cbData.ShellCullBare = (shellBareCullEnabled && shellTerrainTexture) ? 1.0f : 0.0f;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
 	// the smoothstep never degenerates when the sliders cross).

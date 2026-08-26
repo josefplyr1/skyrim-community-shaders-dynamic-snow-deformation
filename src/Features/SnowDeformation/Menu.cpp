@@ -931,9 +931,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
-		ImGui::Checkbox(T(TKEY("shell_bare_cull_disabled"), "Shell: Disable Bare-Ground Cull"), &shellBareCullDisabled);
+		ImGui::Checkbox(T(TKEY("shell_bare_cull_enabled"), "Shell: Enable Bare-Ground Cull"), &shellBareCullEnabled);
 		if (auto _ttBare = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_bare_cull_disabled_tooltip"), "Measurement aid: stops the shell skipping patches whose depth has reached -8, the floor ground hits when every layer under it is a non-snow class. Those sit below the terrain and cannot produce a pixel, but without early-Z they were shaded before the depth test threw them away. The cull tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. The snow looks the same either way; toggle to read what it is worth."));
+			ImGui::Text("%s", T(TKEY("shell_bare_cull_enabled_tooltip"), "KNOWN BROKEN, off by default, kept only to A/B the idea. Skips shell patches whose depth has reached -8, the floor ground hits when every layer under it is a non-snow class - those sit below the terrain and cannot produce a pixel. The flaw is that it estimates the surface from the terrain texels the PATCH covers, while the surface itself is shaped by samples up to 256 units away (border shaping plus the coarse-lattice data morph). So it can cull ground that snow reaches by a route the test never looked at, which shows up as holes on mountainsides. Worth about 0.2-0.3 ms when it behaves."));
 
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())

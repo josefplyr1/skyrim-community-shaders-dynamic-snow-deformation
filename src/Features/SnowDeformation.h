@@ -1034,8 +1034,8 @@ public:
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
 
-	/** @brief DEFAULTS ON, i.e. the bare cull is OFF. The cull's texel-range test does not cover how far ShellSurfaceZ actually samples: the border shaping jitters up to ~58 units and the data morph reads a 2x-coarser quad up to 256 away, so a patch can read snow the test never looked at and be culled out of visible ground. Covering both conservatively costs more loads than the cull saved. Untick to A/B it. */
-	bool shellBareCullDisabled = true;
+	/** @brief OFF by default, and left in only to A/B the idea. The cull's texel-range test does not cover how far ShellSurfaceZ actually samples: the border shaping jitters up to ~26 units and then averages BorderSmooth around that, and the data morph reads a 2x-coarser quad up to 256 units away. So a patch can be shaped by snow the test never looked at, and culling it removes visible ground - which is what put holes in the Dawnstar mountainside. Covering both reaches conservatively costs ~64 texel loads per patch against a 0.2-0.3 ms saving. */
+	bool shellBareCullEnabled = false;
 
 	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;
