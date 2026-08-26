@@ -1701,6 +1701,13 @@ protected:
 
 	/** @brief Baked cells keyed by (cellX << 32) | cellY; entries carry their worldspace, which the window rebuild must match. */
 	std::unordered_map<uint64_t, ShellCellData> shellCells;
+	/** @brief Cells in the current window whose blended depth goes positive somewhere, keyed like shellCells. Rebuilt with the window; read per frame by DeformationWindowHasSnow. */
+	std::unordered_set<uint64_t> shellSnowyCells;
+	mutable std::shared_mutex shellSnowyCellMutex;
+	/** @brief Whether any cell overlapping the deformation window carries positive snow depth. False means nothing can read the map here, so its passes are skipped. Implemented in SnowDeformation/TerrainData.cpp. */
+	bool DeformationWindowHasSnow() const;
+	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */
+	bool deformSuspended = false;
 	std::shared_mutex shellCellMutex;
 	std::atomic<bool> shellDataDirty{ true };
 	/** @brief Landscape textures discovered by the bake; indices are stable for the session and are what the baked cells store. */

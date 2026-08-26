@@ -466,6 +466,10 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	const std::vector<float> textureDepths = LandTextureDepthSnapshot();
 
 	uint32_t statSnowTexels = 0;
+	// Cells whose blended depth goes positive somewhere: the only ground the
+	// deformation map can ever show. Filled from this loop's own arithmetic,
+	// so it costs one comparison per texel.
+	std::unordered_set<uint64_t> snowyCells;
 	float statMinH = FLT_MAX;
 	float statMaxH = -FLT_MAX;
 	std::unordered_set<uint64_t> statCells;
@@ -516,6 +520,8 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
 
 					statCells.insert(rowKey);
+					if (rampDepth > 0.0f)
+						snowyCells.insert(rowKey);
 					statMinH = std::min(statMinH, texel[0]);
 					statMaxH = std::max(statMaxH, texel[0]);
 					if (texel[2] > 0.05f)
@@ -530,6 +536,10 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		}
 	}
 
+	{
+		const std::unique_lock snowLock(shellSnowyCellMutex);
+		shellSnowyCells = std::move(snowyCells);
+	}
 	shellStatCellsInWindow = (uint32_t)statCells.size();
 	shellStatSnowTexels = statSnowTexels;
 	shellStatMinHeight = statMinH == FLT_MAX ? 0.0f : statMinH;
@@ -730,4 +740,36 @@ void SnowDeformation::PostPostLoad()
 	// loaded straight from the main menu, and an unclaimed record is skipped.
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
+}
+
+// Cell-granular on purpose: the per-texel answer lives in a GPU texture, and a
+// readback would cost more than the passes this saves. Cells are 4096 units
+// against a deformation window of a few hundred metres, so the overlap set is
+// tiny and the test errs toward "has snow".
+bool SnowDeformation::DeformationWindowHasSnow() const
+{
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const float minX = windowOrigin.x;
+	const float minY = windowOrigin.y;
+	const float maxX = minX + deformWorldSize;
+	const float maxY = minY + deformWorldSize;
+
+	const int cellMinX = (int)std::floor(minX / kCellSize);
+	const int cellMaxX = (int)std::floor(maxX / kCellSize);
+	const int cellMinY = (int)std::floor(minY / kCellSize);
+	const int cellMaxY = (int)std::floor(maxY / kCellSize);
+
+	const std::shared_lock lock(shellSnowyCellMutex);
+	// No cells in the window means it has not been built yet (or holds no
+	// terrain at all); answer conservatively rather than skipping on no data.
+	if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
+		return true;
+	for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+		for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (shellSnowyCells.find(key) != shellSnowyCells.end())
+				return true;
+		}
+	}
+	return false;
 }

@@ -565,6 +565,29 @@ void SnowDeformation::Prepass()
 	if (ui && ui->GameIsPaused())
 		return;
 
+	// No ground in the deformation window carries positive snow depth, so both
+	// dispatches would produce a map no pixel can sample. Placed with the other
+	// early-outs rather than at the dispatch: everything below it - the trench
+	// store sweep, the flush, the inject build, the stamp gather - is work in
+	// service of that map, and the scroll delta must keep accumulating rather
+	// than be consumed, exactly as it does while the feature is switched off.
+	//
+	// Resuming forces a clear instead of trusting a delta that may now exceed
+	// the map. Trenches come back through the tile store's re-inject, the same
+	// path a worldspace change already uses.
+	if (!DeformationWindowHasSnow()) {
+		if (!deformSuspended) {
+			deformSuspended = true;
+			logger::debug("[SNOW DEFORMATION] Deformation passes suspended: no snow depth in window");
+		}
+		return;
+	}
+	if (deformSuspended) {
+		deformSuspended = false;
+		clearRequested = true;
+		logger::debug("[SNOW DEFORMATION] Deformation passes resumed, clearing map");
+	}
+
 	PerFrame perFrameData{};
 
 	// The window origin was advanced in GetCommonBufferData (during
