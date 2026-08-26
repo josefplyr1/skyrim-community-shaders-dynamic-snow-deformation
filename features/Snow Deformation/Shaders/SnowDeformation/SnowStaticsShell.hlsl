@@ -870,9 +870,20 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// smooth by the same term. floorRef mirrors CarveProfile's own floorDepth
 		// expression - reading its inputs, not re-deriving its profile.
 		float floorRef = max(pad, min(skinDepth, BorderStyle.y * smoothstep(0.5, 8.0, skinDepth)));
-		float churnW = smoothstep(0.05, 0.5, deform) * saturate((depth - floorRef) / 10.0);
+		// ChurnWeight is the landscape shell's own weighting, shared: churn peaks
+		// in the trench and backs off on the berm crest. The room factor is the
+		// object-specific half and stays - the ground can churn into itself, this
+		// cannot dig past the object it stands on.
+		float churnW = ChurnWeight(deform, bermD) * saturate((depth - floorRef) / 10.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 			depth += ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW;
+
+		// Berm clods: a coarser octave weighted by BermShape rather than the churn
+		// weight, since spoil lands on the crest while churn peaks in the trench.
+		// Mirrors ShellSurfaceZ; the self-shadow march skips it, as it skips churn.
+		[branch] if (RimStyle.z > 0.01 && bermD > 0.003)
+			depth += ChurnNoiseScaled(worldXY, kClodSizeScale) * RimStyle.z *
+			         BermShape(bermD) * saturate(1.0 - deform) * BermDepthGate(skinDepth);
 
 		// Undulation, on the landscape shell's own terms (SnowShell.hlsl's
 		// ShellSurfaceZ): same shared field, same depth scaling. Without it
@@ -2294,14 +2305,38 @@ PS_OUTPUT main(VS_OUTPUT input)
 					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
 					[flatten] if (topH > -50000.0)
 					{
-						// Inside an object's footprint the surface is its top
-						// plus a skin dusting. The terrain window's class-ramp
-						// surface does not exist here: marching against it
-						// fabricated a snow slab a class depth above every
-						// skin, and the round-35 top term then stacked the
-						// ramp on the top as well - object snow fell into
-						// shadow at any low sun.
-						sh = topH + 2.0;
+						// Inside an object's footprint the surface is its
+						// top plus the object's OWN layer. The terrain
+						// window's class-ramp surface does not exist here:
+						// marching against it fabricated a snow slab a class
+						// depth above every skin, and the round-35 top term
+						// then stacked the ramp on the top as well - object
+						// snow fell into shadow at any low sun.
+						//
+						// The flat 2-unit dusting this used to assume was
+						// written when object snow WAS a dusting. The patch
+						// now carries a full layer with trench walls and a
+						// berm, and a march that cannot see them leaves the
+						// trench floor unshadowed by its own walls - a bright
+						// seam straight down the middle of every object trail.
+						// Reconstruct the same surface the geometry builds,
+						// from the same per-texel depth; churn and clods are
+						// skipped here exactly as the landscape march skips
+						// them.
+						float2 tapWorld = GridOrigin + sampleLocal;
+						float tapDepth = PatchSkinDepth(tapWorld).x;
+						[branch] if (tapDepth >= 1.0)
+						{
+							float tapDeform = SampleDeformation(sampleLocal);
+							float tapBerm = BermField(sampleLocal);
+							sh = topH + CarveProfile(tapDeform, tapDepth, tapWorld) +
+							     BermShape(tapBerm) * saturate(1.0 - tapDeform) * tapDepth *
+							         ObjBermHeightAmp * BermDepthGate(tapDepth);
+						}
+						else
+						{
+							sh = topH + 2.0;
+						}
 						tapOnObject = true;
 					}
 				}
