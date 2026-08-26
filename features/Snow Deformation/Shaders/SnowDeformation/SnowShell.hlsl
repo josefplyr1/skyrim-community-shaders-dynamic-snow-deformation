@@ -1198,13 +1198,43 @@ float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
 }
 
+// Split gate. The PS's far-field depth clamp only fires past kClampFarStart, so
+// the pass can be drawn twice: NEAR patches take a PS with no depth export and
+// get early-Z rejection back, FAR patches keep the export and the clamp.
+//
+// Boundary: NEAR drops a patch when ANY corner is far, FAR keeps a patch unless
+// ALL corners are near - so a straddling patch lands in exactly one pass, with
+// no gap and no double-draw. Its near pixels are unaffected either way, because
+// the clamp is gated per pixel on the same distance.
+#if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
+static const float kClampFarStart = 4000.0;
+
+bool ShellPatchSplitCulled(float2 a, float2 b, float2 c, float2 d)
+{
+	float2 cam = ShellCameraPosAdjust.xy;
+	float da = length(GridOrigin + a - cam);
+	float db = length(GridOrigin + b - cam);
+	float dc = length(GridOrigin + c - cam);
+	float dd = length(GridOrigin + d - cam);
+#	ifdef SNOW_SPLIT_NEAR
+	return max(max(da, db), max(dc, dd)) > kClampFarStart;
+#	else
+	return max(max(da, db), max(dc, dd)) <= kClampFarStart;
+#	endif
+}
+#endif
+
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 {
 	TessFactors f;
 
 	// Tested before the edge factors: a culled patch must not pay for the
 	// three bicubic deformation taps per edge that EdgeTessFactor can take.
-	[branch] if (ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal))
+	bool culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
+#if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
+	culled = culled || ShellPatchSplitCulled(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
+#endif
+	[branch] if (culled)
 	{
 		f.Edge[0] = 0.0;
 		f.Edge[1] = 0.0;

@@ -372,6 +372,35 @@ ID3D11HullShader* SnowDeformation::GetShellHS()
 	return shellHS;
 }
 
+ID3D11HullShader* SnowDeformation::GetShellHSNear()
+{
+	if (!shellHSNear) {
+		logger::debug("Compiling SnowShell HS (split near)");
+		shellHSNear = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_NEAR", "" } }, "hs_5_0"));
+	}
+	return shellHSNear;
+}
+
+ID3D11HullShader* SnowDeformation::GetShellHSFar()
+{
+	if (!shellHSFar) {
+		logger::debug("Compiling SnowShell HS (split far)");
+		shellHSFar = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_FAR", "" } }, "hs_5_0"));
+	}
+	return shellHSFar;
+}
+
+ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
+{
+	if (!shellPSNoDepth) {
+		logger::debug("Compiling SnowShell PS (no depth export)");
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
+		shellPSNoDepth = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+	}
+	return shellPSNoDepth;
+}
+
 ID3D11DomainShader* SnowDeformation::GetShellDS()
 {
 	if (!shellDS) {
@@ -1011,7 +1040,27 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
-		context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+
+		// Split draw: only the far field needs the depth clamp, so draw the
+		// near half with the export compiled out and get early-Z rejection
+		// back for the pixels that actually have occluders in front of them.
+		// Skipped when the clamp is already off (one pass, nothing to keep) or
+		// when the LOD heatmap owns the PS, and it falls back to the single
+		// draw if either variant failed to compile.
+		auto* hsNear = (settings.ShellDepthClamp && !lodHeatmap && !shellSplitDisabled) ? GetShellHSNear() : nullptr;
+		auto* hsFar = hsNear ? GetShellHSFar() : nullptr;
+		auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
+		if (hsNear && hsFar && psNear) {
+			context->HSSetShader(hsNear, nullptr, 0);
+			context->PSSetShader(psNear, nullptr, 0);
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+
+			context->HSSetShader(hsFar, nullptr, 0);
+			context->PSSetShader(ps, nullptr, 0);
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+		} else {
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+		}
 		// The statics pass and everything after run the normal pipeline.
 		context->HSSetShader(nullptr, nullptr, 0);
 		context->DSSetShader(nullptr, nullptr, 0);

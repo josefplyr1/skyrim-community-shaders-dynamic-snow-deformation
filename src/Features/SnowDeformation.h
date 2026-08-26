@@ -901,6 +901,14 @@ public:
 	ID3D11VertexShader* shellTessVS = nullptr;
 	ID3D11HullShader* shellHS = nullptr;
 	ID3D11DomainShader* shellDS = nullptr;
+	/** @brief Hull variants for the split draw: NEAR keeps patches inside the PS's far-clamp distance, FAR keeps the rest. A straddling patch lands in exactly one of them. */
+	ID3D11HullShader* shellHSNear = nullptr;
+	ID3D11HullShader* shellHSFar = nullptr;
+	ID3D11HullShader* GetShellHSNear();
+	ID3D11HullShader* GetShellHSFar();
+	/** @brief Shell PS with the depth export compiled out, used for the split's NEAR pass while the clamp is on. Distinct from shellPS, which follows the ShellDepthClamp setting. */
+	ID3D11PixelShader* shellPSNoDepth = nullptr;
+	ID3D11PixelShader* GetShellPSNoDepth();
 
 	ConstantBuffer* shellCB = nullptr;
 
@@ -1021,6 +1029,9 @@ public:
 	/** @brief Bias values shellRasterState was built with, so it is rebuilt only when they actually move. */
 	float shellRasterBias = 0.0f;
 	float shellRasterSlopeBias = 0.0f;
+
+	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
+	bool shellSplitDisabled = false;
 
 	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;
