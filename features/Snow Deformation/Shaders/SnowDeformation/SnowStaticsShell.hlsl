@@ -839,6 +839,17 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float churnW = smoothstep(0.05, 0.5, deform) * saturate((depth - floorMin) / 10.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 			depth += ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW;
+
+		// Undulation, on the landscape shell's own terms (SnowShell.hlsl's
+		// ShellSurfaceZ): same shared field, same depth scaling. Without it
+		// the patch is geometrically DEAD FLAT while the ground beside it
+		// carries two octaves of dunes, and the two then disagree about light
+		// in a way that only shows with the sun BEHIND the camera - a rough
+		// surface shows its sun-facing faces and reads brighter, a flat one
+		// cannot. Looking into the sun the dunes turn their shadowed sides
+		// and the difference closes, which is exactly what Josef reported.
+		depth += Undulation(worldXY) * saturate(depth / 8.0);
+
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
 		// Carved-surface shading normal from the SMOOTH deformation gradient;
@@ -856,7 +867,20 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 				ChurnNoise(worldXY + float2(cs, 0.0)) - ChurnNoise(worldXY - float2(cs, 0.0)),
 				ChurnNoise(worldXY + float2(0.0, cs)) - ChurnNoise(worldXY - float2(0.0, cs))) / (2.0 * cs) * ObjChurnHeightAmp * churnW;
 		}
-		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad, 1.0));
+		// Undulation gradient, the same field the depth above displaced by -
+		// mirrors SnowShell.hlsl's PS block. The geometry alone is not enough:
+		// at patch vertex spacing the dunes are far coarser than the shading
+		// needs, and it is the NORMAL that carries the sun-direction response.
+		float2 undGrad = float2(0.0, 0.0);
+		float undScale = saturate(depth / 8.0);
+		[branch] if (undScale > 0.001)
+		{
+			const float uStep = 12.0;
+			undGrad = float2(
+				Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
+				Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) / (2.0 * uStep) * undScale;
+		}
+		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad - undGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
