@@ -129,6 +129,7 @@
 	X(ShellDepthClamp) \
 	X(ShellDepthBias) \
 	X(ShellSlopeDepthBias) \
+	X(ShellBareGroundCull) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsFadeM) \

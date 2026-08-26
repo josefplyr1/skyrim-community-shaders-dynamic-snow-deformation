@@ -47,6 +47,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttCap = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
+			ImGui::Checkbox(T(TKEY("shell_bare_ground_cull"), "Bare-Ground Cull"), &settings.ShellBareGroundCull);
+			if (auto _ttBare = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_bare_ground_cull_tooltip"), "Stops drawing the snow layer over ground that has no snow class under it at all - sand, riverbed, road, seafloor. There the layer sits below the terrain and cannot produce a pixel, so skipping it is free. The test is the -8 floor, the depth ground reaches only when every texture under it is a non-snow class, so the ramp that climbs into a snow layer is never cut and edges are unaffected. Leave on."));
+
 			ImGui::SeparatorText(T(TKEY("shell_depth_group"), "Shell Depth"));
 
 			ImGui::Checkbox(T(TKEY("shell_depth_clamp"), "Depth Clamp (costs early-Z)"), &settings.ShellDepthClamp);
@@ -931,9 +935,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
-		ImGui::Checkbox(T(TKEY("shell_bare_cull_enabled"), "Shell: Enable Bare-Ground Cull"), &shellBareCullEnabled);
-		if (auto _ttBare = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_bare_cull_enabled_tooltip"), "KNOWN BROKEN, off by default, kept only to A/B the idea. Skips shell patches whose depth has reached -8, the floor ground hits when every layer under it is a non-snow class - those sit below the terrain and cannot produce a pixel. The flaw is that it estimates the surface from the terrain texels the PATCH covers, while the surface itself is shaped by samples up to 256 units away (border shaping plus the coarse-lattice data morph). So it can cull ground that snow reaches by a route the test never looked at, which shows up as holes on mountainsides. Worth about 0.2-0.3 ms when it behaves."));
+		ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Shell: Bilinear Terrain Height"), &shellBilinearHeight);
+		if (auto _ttBilin = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
 
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())

@@ -522,6 +522,8 @@ public:
 		float ShellDepthBias = 0.0f;
 		/** @brief Slope-scaled companion to ShellDepthBias; grazing-angle surfaces need more offset than head-on ones. Applied only when the clamp is off. */
 		float ShellSlopeDepthBias = 0.0f;
+		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
+		bool ShellBareGroundCull = true;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
 		float CompactMatte = 0.6f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -771,7 +773,8 @@ public:
 		float BorderNoise;
 		float BorderSmooth;
 
-		float BorderTrampledFade;
+		/** @brief Terrain height follows the landscape mesh's triangulation instead of bilinear, which averages the two and sits below both. Claims the retired BorderTrampledFade slot, so the buffer layout is untouched. */
+		float ShellTriHeight;
 		float BorderUntrampledFade;
 		/** @brief Unused: the object/landscape seam cross-fade was removed. Layout keeper, uploaded as 0. */
 		/** @brief Cull landscape-shell patches whose depth has reached the -8 bare floor everywhere. Claims the retired SeamFadeUnused slot, so the buffer layout is untouched. */
@@ -1034,8 +1037,8 @@ public:
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
 
-	/** @brief OFF by default, and left in only to A/B the idea. The cull's texel-range test does not cover how far ShellSurfaceZ actually samples: the border shaping jitters up to ~26 units and then averages BorderSmooth around that, and the data morph reads a 2x-coarser quad up to 256 units away. So a patch can be shaped by snow the test never looked at, and culling it removes visible ground - which is what put holes in the Dawnstar mountainside. Covering both reaches conservatively costs ~64 texel loads per patch against a 0.2-0.3 ms saving. */
-	bool shellBareCullEnabled = false;
+	/** @brief A/B measurement: returns terrain height to plain bilinear, which averages the mesh's two triangulations and so sits below both. Turning it on should bring back the poke-through on steep ground. Runtime-only. */
+	bool shellBilinearHeight = false;
 
 	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;

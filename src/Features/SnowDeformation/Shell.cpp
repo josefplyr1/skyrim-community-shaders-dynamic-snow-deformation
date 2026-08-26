@@ -702,11 +702,11 @@ void SnowDeformation::DrawShell()
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
-	cbData.BorderTrampledFade = 0.0f;
+	cbData.ShellTriHeight = shellBilinearHeight ? 0.0f : 1.0f;
 	// Layout keeper, retired with the object/landscape seam cross-fade.
 	// Gated on the terrain window existing: without it the cull's SampleTerrain
 	// reads zeros, which look like fully bare ground everywhere.
-	cbData.ShellCullBare = (shellBareCullEnabled && shellTerrainTexture) ? 1.0f : 0.0f;
+	cbData.ShellCullBare = (settings.ShellBareGroundCull && shellTerrainTexture) ? 1.0f : 0.0f;
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
 	// the smoothstep never degenerates when the sliders cross).

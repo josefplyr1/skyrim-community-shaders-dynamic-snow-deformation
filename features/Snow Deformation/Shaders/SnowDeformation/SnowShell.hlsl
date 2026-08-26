@@ -84,7 +84,7 @@ cbuffer ShellCB : register(b0)
 	float BorderNoise;   // world-unit domain-warp jitter of class-depth borders
 	float BorderSmooth;  // world-unit ramp-widening radius between classes
 
-	float BorderTrampledFade;    // Unused (slider retired); layout keeper
+	float ShellTriHeight;        // was BorderTrampledFade: mesh-matched terrain height
 	float BorderUntrampledFade;  // contact-term slope / outward-dust reach (Border Fade %, remapped 2..64 on upload)
 	float ShellCullBare;         // was SeamFadeUnused: cull fully-bare patches
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
@@ -409,6 +409,41 @@ struct VS_OUTPUT
 // Returns (height, rampDepth, coverage): rampDepth is the per-texture-class
 // depth blend in world units, precomputed at window-rebuild time on the CPU.
 // gridLocal = world XY relative to GridOrigin (small, precision-safe).
+// Height at a fractional position inside a terrain quad, matching the LANDSCAPE
+// MESH rather than averaging it.
+//
+// Bilinear is exactly the mean of a quad's two possible triangulations, so it
+// sits BELOW whichever one the mesh actually uses by the saddle term
+// (h00 + h11 - h10 - h01) / 4 at the centre. Flat ground: zero. A steep saddle
+// at 128-unit spacing with a few hundred units of corner variation: tens of
+// units - deeper than the snow layer - and the shell sinks through the mesh and
+// shows bare rock.
+//
+// The clearance pad used to hide this; its own comment names the case
+// ("filling pinholes where the bilinear surface dips under triangle diagonals").
+// Round 4 of the distant-shell work made the coarsest band 128 units, which
+// drives padWeight to zero in EVERY band, so the pad is off and this half of its
+// job went with it. Round 4 retired it for UNDERSAMPLING, which a 1:1 lattice
+// genuinely does fix; the triangulation mismatch is a separate defect that a 1:1
+// lattice does not touch.
+//
+// Taking the max of both triangulations is >= whichever the mesh uses, so the
+// shell can no longer sink beneath it. Costs only ALU on corners already
+// fetched, and collapses to bilinear wherever the quad is planar - flat ground
+// does not move at all.
+float TriangulatedHeight(float h00, float h10, float h01, float h11, float2 f)
+{
+	// Diagonal h00-h11, split along f.y == f.x.
+	float triA = f.y <= f.x ?
+	                 h00 + (h10 - h00) * f.x + (h11 - h10) * f.y :
+	                 h00 + (h01 - h00) * f.y + (h11 - h01) * f.x;
+	// Diagonal h10-h01, split along f.x + f.y == 1.
+	float triB = (f.x + f.y) <= 1.0 ?
+	                 h00 + (h10 - h00) * f.x + (h01 - h00) * f.y :
+	                 h11 + (h10 - h11) * (1.0 - f.y) + (h01 - h11) * (1.0 - f.x);
+	return max(triA, triB);
+}
+
 float3 SampleTerrain(float2 gridLocal)
 {
 	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
@@ -423,6 +458,13 @@ float3 SampleTerrain(float2 gridLocal)
 	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
 
 	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Height follows the mesh's triangulation; depth and coverage stay bilinear,
+	// being material blends rather than geometry. Skipped where any corner is the
+	// missing-data sentinel: bilinear poisons the result so callers can detect it
+	// with `< -50000`, and a max would pick the surviving triangle and hide the
+	// gap instead.
+	[flatten] if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
+		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
 	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
 	// self-shadow march cannot disagree about how deep the snow is. Positive
