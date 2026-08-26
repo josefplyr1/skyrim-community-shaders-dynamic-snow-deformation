@@ -981,11 +981,20 @@ void SnowDeformation::CreateHeightFieldResources()
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
-	// R = the class layer depth this texel wears, G = the road-heightfield
-	// bit. A single winner-takes-all channel cannot answer "is this column
-	// road?", which is what lets the patch own the surface outright.
+	// R = the class layer depth this texel wears, G = the world Z of the
+	// ROAD surface in this column (sentinel where no road drew).
+	//
+	// G holds a height rather than a road/not-road bit because the channels
+	// MAX-blend INDEPENDENTLY: a bare bit went true wherever a road's
+	// footprint reached, including columns whose top belongs to a taller
+	// object standing on or beside the road, and the patch then draped
+	// road-depth snow over that object (rocks, cairns, walls, a farmhouse
+	// over its own walkway). Comparing the road's own top against the
+	// column's top settles who OWNS the column, which is the question.
+	// R32G32 so the height is exact -- R16F's ulp at Skyrim world Z is
+	// coarser than the ownership epsilon.
 	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
-	skinDepthDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
+	skinDepthDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
 	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 	D3D11_SHADER_RESOURCE_VIEW_DESC skinDepthSrvDesc = heightSrvDesc;
 	skinDepthSrvDesc.Format = skinDepthDesc.Format;
@@ -1317,7 +1326,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	// Rasterize this frame's captures on top of the scrolled maps.
-	const float skinDepthClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	// G = road top, so it clears to the no-road sentinel, not to zero: zero is
+	// a legal world Z and would read as a road at sea level.
+	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
 	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
 	context->OMSetRenderTargets(3, heightRTVs, nullptr);
@@ -1786,6 +1797,13 @@ void SnowDeformation::DrawCapturedStatics()
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
+	// Skin-depth raster (PS t12): the road skin runs the patch's own
+	// RoadOwnsColumn test before stepping aside, so it never discards into a
+	// column the patch declined.
+	ID3D11ShaderResourceView* skinDepthPSSRV = (heightSkinDepth && heightSkinDepth->srv) ?
+	                                               heightSkinDepth->srv.get() :
+	                                               nullptr;
+	context->PSSetShaderResources(12, 1, &skinDepthPSSRV);
 	// IBL SH textures (t76/t77): the skins draw standalone from the landscape
 	// shell, so slot state from its pass is not guaranteed here.
 	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {

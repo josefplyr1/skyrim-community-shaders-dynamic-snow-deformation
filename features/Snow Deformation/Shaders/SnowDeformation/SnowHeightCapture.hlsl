@@ -50,7 +50,8 @@ struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
-	// x = class layer depth, y = road-heightfield bit.
+	// x = class layer depth, y = >0.5 when this draw is a road-heightfield
+	// object (the PS turns it into the road's top height).
 	float2 SkinDepth : TEXCOORD1;
 	float2 WorldXY : TEXCOORD2;
 };
@@ -130,12 +131,17 @@ float CaptureTerrainHeight(float2 worldXY)
 struct PS_OUTPUT
 {
 	// RT0 blends MAX (object top surface), RT1 blends MIN (object bottom),
-	// RT2 blends MAX on BOTH channels (x = the snow-layer depth this texel's
-	// class wears, y = road-heightfield bit, so MAX reads "any road here").
+	// RT2 blends MAX on BOTH channels: x = the snow-layer depth this texel's
+	// class wears, y = the highest ROAD surface in the column (kNoRoadTop
+	// where no road drew). The patch compares y against RT0 to decide whether
+	// the road actually owns the column, rather than merely reaching it.
 	float Top : SV_Target0;
 	float Bottom : SV_Target1;
 	float2 SkinDepth : SV_Target2;
 };
+
+// Mirror of SnowDeformation.h kNoRoadTop.
+static const float kNoRoadTop = -1000000.0;
 
 PS_OUTPUT main(VS_OUTPUT input)
 {
@@ -148,7 +154,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the bottom-empty sentinel, a no-op under MIN blending.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
 	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
-	psout.SkinDepth = input.SkinDepth;
+	psout.SkinDepth = float2(input.SkinDepth.x,
+		input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
 	return psout;
 }
 #endif

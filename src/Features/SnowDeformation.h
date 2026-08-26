@@ -1499,6 +1499,9 @@ public:
 	static constexpr float kTorchClearRadius = 40.0f;
 	/** @brief Living actors this far above the LAND height stand on an elevated structure and do not stamp (2D-map interim gate; drift tops below this keep trails). */
 	static constexpr float kElevatedStampCutoff = 70.0f;
+
+	/** @brief Sentinel in the skin-depth raster's G channel (road top): no road drew in this column. Mirrored as kNoRoadTop in SnowHeightCapture.hlsl and SnowStaticsShell.hlsl. */
+	static constexpr float kNoRoadTop = -1000000.0f;
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;

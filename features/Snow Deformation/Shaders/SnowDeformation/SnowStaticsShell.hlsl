@@ -422,9 +422,20 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
 #endif
-#ifdef PATCH
-// x = class layer depth, y = road-heightfield bit.
+// Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
+// ownership test the patch does, to the skin PS as well: the skin must step
+// aside exactly where the patch draws and nowhere else.
+#if defined(PATCH) || defined(PSHADER)
+// x = class layer depth, y = the highest ROAD surface in the column
+// (kNoRoadTop where no road drew).
 Texture2D<float2> ObjectSkinDepth : register(t12);
+// Mirror of SnowDeformation.h kNoRoadTop.
+static const float kNoRoadTop = -1000000.0;
+// How far the column's top may stand above the road's own top and still count
+// as road-owned. One raster texel is 4 units, so this is two texels of slack
+// for camber and for the max-of-4 sampling; anything standing proud of a road
+// by more than this is a rock, a wall or a building, not the road.
+static const float kRoadOwnsTop = 8.0;
 #endif
 
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
@@ -483,9 +494,9 @@ float ObjectConeDepth(float2 worldXY)
 }
 #endif
 
-#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
+#if ((defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)) || defined(PSHADER)
 
-// x = layer depth, y = road bit. MAX-of-4 on both, matching PatchTop: a
+// x = layer depth, y = road top. MAX-of-4 on both, matching PatchTop: a
 // sentinel neighbour must not drag the column off the road.
 float2 PatchSkinDepth(float2 worldXY)
 {
@@ -497,6 +508,18 @@ float2 PatchSkinDepth(float2 worldXY)
 	return max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
+
+// Does the road own this column? The single predicate the patch's carve gate
+// and the skin's step-aside both run, so the skin can never discard into a
+// column the patch declined.
+bool RoadOwnsColumn(float2 worldXY)
+{
+	float roadTop = PatchSkinDepth(worldXY).y;
+	return roadTop > kNoRoadTop * 0.5 && (PatchTop(worldXY) - roadTop) < kRoadOwnsTop;
+}
+#endif
+
+#if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
@@ -528,10 +551,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	float top;
 	float skinDepth;
 	float skinEdgeMin;
-	// >0.5 anywhere in this cell: a road-heightfield column. Road texels drop
-	// the trample gate below, so the patch owns the whole road surface rather
-	// than appearing only around trails.
-	float roadBit;
+	// Highest road surface in this cell, kNoRoadTop where no road drew. Tested
+	// against `top` below: a road-OWNED column drops the trample gate, so the
+	// patch covers the whole road surface rather than only trails.
+	float roadTop;
 	[branch] if (dense)
 	{
 		// Tessellated vertices sample BETWEEN the 8-unit raster texels,
@@ -566,7 +589,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		skinEdgeMin = min(min(s00.x, s10.x), min(s01.x, s11.x));
 		// MAX, not the bilinear: a cell straddling the road edge must resolve
 		// as road for every one of its vertices or the gate splits the cell.
-		roadBit = max(max(s00.y, s10.y), max(s01.y, s11.y));
+		roadTop = max(max(s00.y, s10.y), max(s01.y, s11.y));
 	}
 	else
 	{
@@ -574,7 +597,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		top = PatchTop(worldXY);
 		skinDepth = skin.x;
 		skinEdgeMin = skinDepth;
-		roadBit = skin.y;
+		roadTop = skin.y;
 	}
 	float2 gridLocal = v.GridLocal;
 
@@ -667,9 +690,17 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// the whole surface, not just around trails. Untrampled road resolves to
 	// deform 0 below, i.e. a flat full-depth surface - the same expression,
 	// evaluated everywhere.
-	bool roadField = RoadField > 0.5 && roadBit > 0.5;
+	//
+	// OWNERSHIP, not presence: a road's footprint reaches every column it
+	// overlaps in plan view, including those whose top belongs to a rock,
+	// cairn, wall or building standing on it - and draping road-depth snow
+	// over those was the plate regression. The road owns the column only
+	// where the column's top IS the road.
+	// Same predicate as RoadOwnsColumn, run against this vertex's own already
+	// sampled top/roadTop rather than re-reading the raster.
+	bool roadField = RoadField > 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 	bool trampled = aliveDeform >= 0.005 || roadField;
-	v.RoadBit = roadBit;
+	v.RoadBit = roadField ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
@@ -738,9 +769,9 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.GridLocal = v.GridLocal;
 	// Debug view: smuggle the decision data through the PS interpolants the
 	// patch does not otherwise use for shading. Green carries skin depth in
-	// its lower half and the ROAD BIT in its upper: >= 0.5 means this column
-	// is road-classified, which is what separates a misclassified rock from
-	// a road bleeding its bit into a neighbouring column.
+	// its lower half and ROAD OWNERSHIP in its upper: >= 0.5 means the road
+	// owns this column, so green on top of a rock is the bleed regression
+	// and green confined to the road surface is correct.
 	vsout.Coverage = StaticsDebugView != 0.0 ? v.Deform : 1.0;
 	vsout.Flat = StaticsDebugView != 0.0 ?
 	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
@@ -1520,7 +1551,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// trail hand-off below: up-facing only (the patch cannot represent a kerb
 	// face) and inside the patch grid (past 950 there is nothing behind the
 	// hole; the range hand-off is S2, ROAD-HEIGHTFIELD-PLAN D).
-	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 && length(input.WorldPos.xy) < 950.0)
+	// RoadOwnsColumn is the same predicate the patch's carve gate runs, so the
+	// skin cannot discard into a column the patch declined - a rock standing
+	// on the road takes its column back, and the road's skin has to stay
+	// under it or the rock's footprint becomes a hole.
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 &&
+		length(input.WorldPos.xy) < 950.0 && RoadOwnsColumn(worldXY))
 		discard;
 
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
