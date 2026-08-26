@@ -835,7 +835,23 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// does instead of a bespoke constant. This shader's own self-shadow march
 		// already assumed this shape - it calls CarveProfile - while the geometry
 		// was cutting a raw linear ramp, so shape and shadow disagreed.
-		float depth = CarveProfile(deform, skinDepth, worldXY);
+		// Geometric berm: spoil piled along the trench rim, mirroring
+		// ShellSurfaceZ. Deferred until now for two stated reasons - irregular
+		// skin topology with no vertices to carry a ridge, and a berm crossing
+		// the patch/skin height seam - and S0-S2 removed both: roads have no skin
+		// left and the patch stands on a uniform lattice. This is the shape the
+		// deferral itself recommended, patch geometry with the skin still
+		// shading-only.
+		//
+		// Scaled by the per-texel skinDepth, NOT the draw's class constant: the
+		// patch draw carries SnowMeshesDepth (3) in RoundedDepth, and
+		// BermDepthGate(3) is exactly zero - which is why the pixel shader's
+		// shading berm has been silently inert on the patch as well.
+		float bermD = 0.0;
+		[branch] if (ObjBermHeightAmp > 0.005)
+			bermD = BermField(gridLocal);
+		float depth = CarveProfile(deform, skinDepth, worldXY) +
+		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
 		// a fully worn floor has to clear the object under it or the two z-fight,
@@ -898,7 +914,18 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 				Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
 				Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) / (2.0 * uStep) * undScale;
 		}
-		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad - undGrad, 1.0));
+		// Berm gradient, the same field the depth above piled by. The pixel
+		// shader's berm is skipped for the patch now that the geometry owns it.
+		float2 bermGrad = float2(0.0, 0.0);
+		[branch] if (ObjBermHeightAmp > 0.005 && bermD > 0.003)
+		{
+			const float bStep = 4.0;
+			bermGrad = float2(
+				BermShape(BermField(gridLocal + float2(bStep, 0.0))) - BermShape(BermField(gridLocal - float2(bStep, 0.0))),
+				BermShape(BermField(gridLocal + float2(0.0, bStep))) - BermShape(BermField(gridLocal - float2(0.0, bStep)))) / (2.0 * bStep) *
+			          saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
+		}
+		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
@@ -2002,7 +2029,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float bermC = 0.0;
 	[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.x > 0.001)
 		bermC = BermField(trenchGridLocal);
+#ifdef PATCH
+	// The patch's berm is real geometry (BuildPatchVertex), shaded by the
+	// vertex normal it displaced. Adding the shading ridge here too would
+	// double it.
+	[branch] if (false)
+#else
 	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
+#endif
 	{
 		const float bStep = 4.0;
 		float2 bermGrad = float2(
