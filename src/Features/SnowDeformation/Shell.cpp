@@ -506,8 +506,12 @@ void SnowDeformation::EnsureShellRasterState()
 	rasterDesc.FillMode = D3D11_FILL_SOLID;
 	rasterDesc.CullMode = D3D11_CULL_NONE;
 	rasterDesc.DepthClipEnable = TRUE;
-	rasterDesc.DepthBias = (INT)wantBias;
-	rasterDesc.SlopeScaledDepthBias = wantSlope;
+	// NEGATED: both sliders read as "toward the camera", which is the direction
+	// the clamp pulled. D3D adds its bias to depth and this pass is standard-Z
+	// under LESS_EQUAL, so a positive value would push the shell BEHIND the
+	// ground and make it lose the test - snow receding and holes, not fewer.
+	rasterDesc.DepthBias = -(INT)wantBias;
+	rasterDesc.SlopeScaledDepthBias = -wantSlope;
 
 	winrt::com_ptr<ID3D11RasterizerState> state;
 	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put())))

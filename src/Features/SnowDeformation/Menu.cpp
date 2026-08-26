@@ -57,11 +57,11 @@ void SnowDeformation::DrawSettings()
 				auto biasGuard = Util::DisableGuard(settings.ShellDepthClamp);
 				ImGui::SliderFloat(T(TKEY("shell_depth_bias"), "Depth Bias"), &settings.ShellDepthBias, 0.0f, 5000.0f, "%.0f");
 				if (auto _ttBias = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("shell_depth_bias_tooltip"), "Nudges the whole shell toward the camera at rasterisation time, which is free and keeps early-Z. Stands in for the clamp's near-field half. Raw hardware units scaled by the depth format, so raise it until coincident-surface shimmer stops and no further - too much floats the snow in front of things standing in it. Only active with the clamp off."));
+					ImGui::Text("%s", T(TKEY("shell_depth_bias_tooltip"), "Nudges the whole shell TOWARD the camera at rasterisation time, which is free and keeps early-Z. Stands in for the clamp's near-field half, so higher = the shell wins more depth ties. Raw hardware units scaled by the depth format: raise it until coincident-surface shimmer stops and no further - too much floats the snow in front of things standing in it. Only active with the clamp off."));
 
 				ImGui::SliderFloat(T(TKEY("shell_slope_depth_bias"), "Slope Depth Bias"), &settings.ShellSlopeDepthBias, 0.0f, 16.0f, "%.2f");
 				if (auto _ttSlope = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("shell_slope_depth_bias_tooltip"), "Adds bias in proportion to how steeply the surface is angled away from the camera, where a flat offset does least good. Usually the one that fixes grazing-angle shimmer on slopes. Only active with the clamp off."));
+					ImGui::Text("%s", T(TKEY("shell_slope_depth_bias_tooltip"), "Adds pull toward the camera in proportion to how steeply the surface is angled away from it, where a flat offset does least good. Usually the one that fixes grazing-angle shimmer on slopes. Only active with the clamp off."));
 			}
 
 			ImGui::TreePop();
