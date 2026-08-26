@@ -604,48 +604,74 @@ static const float kBareDepthFloor = -7.9;
 // NOT a test for "the field has data": t4 is terrain run through the cone
 // transform, so it holds a real height across the whole object window and a
 // data test vetoes every near patch - which is where the pixels are.
-static const float kBareLiftMargin = 4.0;
+static const float kBareLiftMargin = 2.0;
 
-// Point loads, not the bilinear samplers: this runs per patch, and the answer
-// is a conservative "is every sample bare", not a filtered value. Five taps of
-// one load each rather than five of four.
-float3 LoadTerrainPoint(float2 gridLocal)
+// Conservative over the whole patch, which point sampling is NOT: the shell's
+// surface is the BILINEAR blend of the terrain texels, so a patch whose corners
+// all land in one bare texel can still rise to a snowy neighbour across its
+// span. Truncating to the nearest texel misses exactly those, and culling them
+// punched holes in open snow.
+//
+// So take the MAX effective depth over every texel the patch's bilinear can
+// reach - floor(min) through floor(max)+1 - and cull only if even that is on
+// the floor. Cheap where it matters: patches in the fine bands sit inside one
+// texel and cost a single load, and the coarsest band is 128 units against a
+// 128-unit texel, so the range is 2x2. The clamp is a loop bound, not a limit
+// any real patch reaches.
+bool ShellTerrainAllBare(float2 lo, float2 hi)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	return TerrainWindow.Load(int3((int2)t, 0)).xyz;
-}
+	float2 tLo = (GridToTerrainOffset + lo) / TerrainTexelSize;
+	float2 tHi = (GridToTerrainOffset + hi) / TerrainTexelSize;
+	float maxTexel = (float)(TerrainDim - 1);
+	int2 i0 = (int2)clamp(floor(tLo), 0.0, maxTexel);
+	int2 i1 = (int2)clamp(floor(tHi) + 1.0, 0.0, maxTexel);
+	i1 = min(i1, i0 + 3);
 
-bool ShellFullyBareAt(float2 gridLocal)
-{
-	float3 terrain = LoadTerrainPoint(gridLocal);
-	// Sentinel texels carry no data; leave them to the full evaluation.
-	[branch] if (terrain.x < -50000.0)
-		return false;
-	float bare = saturate(1.0 - saturate(terrain.z));
-	[branch] if (terrain.y + (-8.0) * bare > kBareDepthFloor)
-		return false;
-
-	[branch] if (ObjectLiftCap > 0.0)
+	float maxDepth = -1e9;
+	[loop] for (int y = i0.y; y <= i1.y; ++y)
 	{
-		float2 dims;
-		bool valid;
-		float2 t = ObjectMapTexel(GridOrigin + gridLocal, dims, valid);
-		[branch] if (valid)
+		[loop] for (int x = i0.x; x <= i1.x; ++x)
 		{
-			float field = ObjectHeights.Load(int3((int2)t, 0));
-			if (field - terrain.x > kBareLiftMargin)
+			float3 t = TerrainWindow.Load(int3(x, y, 0)).xyz;
+			// Sentinel texels carry no data; leave them to the full evaluation.
+			[branch] if (t.x < -50000.0)
 				return false;
+			maxDepth = max(maxDepth, t.y + (-8.0) * saturate(1.0 - saturate(t.z)));
 		}
 	}
-	return true;
+	return maxDepth <= kBareDepthFloor;
+}
+
+// Object-lift veto, sampled at corners and centre. The cone field is slope
+// limited and changes slowly, and the margin sits well under the 6 units where
+// the lift actually starts, so a few taps carry it.
+bool ShellObjectLiftsAt(float2 gridLocal)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(GridOrigin + gridLocal, dims, valid);
+	[branch] if (!valid)
+		return false;
+	float field = ObjectHeights.Load(int3((int2)t, 0));
+	float ground = TerrainWindow.Load(int3((int2)clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1)), 0)).x;
+	return field - ground > kBareLiftMargin;
 }
 
 bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
 {
-	float2 mid = 0.25 * (a + b + c + d);
-	return ShellFullyBareAt(a) && ShellFullyBareAt(b) && ShellFullyBareAt(c) &&
-	       ShellFullyBareAt(d) && ShellFullyBareAt(mid);
+	float2 lo = min(min(a, b), min(c, d));
+	float2 hi = max(max(a, b), max(c, d));
+	[branch] if (!ShellTerrainAllBare(lo, hi))
+		return false;
+
+	[branch] if (ObjectLiftCap > 0.0)
+	{
+		float2 mid = 0.25 * (a + b + c + d);
+		if (ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) ||
+			ShellObjectLiftsAt(d) || ShellObjectLiftsAt(mid))
+			return false;
+	}
+	return true;
 }
 
 
