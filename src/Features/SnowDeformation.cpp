@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #include "SnowDeformation.h"
 
 #include "Globals.h"
@@ -223,6 +227,8 @@ void SnowDeformation::CreateDeformationTextures()
 
 void SnowDeformation::SetupResources()
 {
+	logger::info("[SNOW DEFORMATION] {}", kAttribution);
+
 	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
 
 	CreateDeformationTextures();

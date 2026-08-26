@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 // Snow shell renderer: a vertex-buffer-less camera-following grid built from
 // SV_VertexID, conformed to the baked terrain window, displaced by per-class
 // snow depth and carved by the deformation map. Per-pixel normals come from

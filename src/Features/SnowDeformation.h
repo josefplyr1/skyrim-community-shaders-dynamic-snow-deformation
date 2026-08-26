@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #pragma once
 
 #include "Buffer.h"
@@ -25,6 +29,10 @@ public:
 				T("feature.snow_deformation.key_feature_3", "Snowfall-driven snow refill"),
 				T("feature.snow_deformation.key_feature_4", "Compute-shader based, low performance impact") } };
 	};
+
+	/** @brief Attribution, compiled into any DLL built from this source and emitted once at startup. Kept as a referenced constant rather than a comment because comments do not survive a build - this is what makes a redistributed copy identifiable with `strings`. */
+	static constexpr const char* kAttribution =
+		"Snow Deformation for Community Shaders - (c) 2026 josefplyr1 - GPL-3.0-or-later - github.com/community-shaders/skyrim-community-shaders/pull/2659";
 
 	// Square world-space deformation window following the camera in whole-texel
 	// steps. Texel value = normalized depression depth, 0 = untouched snow,

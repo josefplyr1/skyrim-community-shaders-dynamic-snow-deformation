@@ -1451,6 +1451,7 @@
     "feature.snow_deformation.distant_snow_north": "North Snow Drop",
     "feature.snow_deformation.distant_snow_north_tooltip": "How far the fallback snow line sinks toward the map's north edge, so the northern coast is snowy at sea level while southern plains at the same elevation stay bare.",
     "feature.snow_deformation.distant_snow_tooltip": "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead. The sliders here also set how far each snow system reaches; higher = more VRAM and GPU cost.",
+    "feature.snow_deformation.credit": "Snow Deformation - by josefplyr1",
     "feature.snow_deformation.enable": "Enable Snow Deformation",
     "feature.snow_deformation.enable_accumulation": "Snow Accumulation",
     "feature.snow_deformation.enable_accumulation_tooltip": "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two.",

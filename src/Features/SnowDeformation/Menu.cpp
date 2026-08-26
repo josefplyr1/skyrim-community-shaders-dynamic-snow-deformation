@@ -10,6 +10,11 @@
 
 void SnowDeformation::DrawSettings()
 {
+	ImGui::TextDisabled("%s", T(TKEY("credit"), "Snow Deformation - by josefplyr1"));
+	if (auto _ttCredit = Util::HoverTooltipWrapper())
+		ImGui::Text("%s", kAttribution);
+	ImGui::Separator();
+
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {

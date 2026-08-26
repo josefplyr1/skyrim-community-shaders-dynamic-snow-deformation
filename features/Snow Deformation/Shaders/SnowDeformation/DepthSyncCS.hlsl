@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 // Syncs the snow shell's depth writes into Terrain Blending's blended depth
 // copies. Screen-space passes that run after the shell (Screen Space GI in
 // particular) consume the blended depth, finalized during opaque rendering;

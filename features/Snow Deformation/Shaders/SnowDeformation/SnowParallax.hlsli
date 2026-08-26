@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 // Snow parallax and anti-tiling tap machinery, shared by BOTH shells.
 //
 // Lives here rather than duplicated per shell so the landscape shell and the

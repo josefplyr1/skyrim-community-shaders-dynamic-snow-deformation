@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 // Statics snow skin: re-draws captured projected-snow statics (cliffs, rocks,
 // drifts, roofs, logs) inflated along their vertex normals, with the same
 // snow material as the terrain shell so the two read as one blanket.
