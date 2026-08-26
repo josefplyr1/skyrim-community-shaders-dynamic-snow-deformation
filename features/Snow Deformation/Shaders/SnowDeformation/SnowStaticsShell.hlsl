@@ -829,28 +829,32 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// Bicubic, like the landscape shell; rounded trench walls.
 		float deform = saturate(SampleDeformationSmooth(gridLocal));
 
-		// Minimum snow floor: the legacy full-carve sank trampled floors
-		// under the object, which the coarse 8-unit grid's interpolation
-		// happened to hide; dense tessellated evaluation honors the sink
-		// exactly and erased whole road-trail floors. Trampled floors now
-		// hold a thin snow cover ABOVE the object, precision-padded with
-		// distance so neither side ever z-fights; exposing the object
-		// through worn floors is the Trench Floor See-Through slider's job.
-		float depth = skinDepth * (1.0 - deform);
-		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
-		// The minimum floor tapers away where the raster data thins (the
-		// footprint boundary): held at full strength there, the raised
-		// floor ends in an 8-unit staircase rim along the footprint edge.
-		// The weakest-corner term catches boundaries that jump 0-to-full
-		// inside one texel, which the interpolated depth alone never sees.
-		float floorMin = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(1.0, 4.0, skinDepth) * smoothstep(0.25, 2.0, skinEdgeMin);
-		depth = max(depth, floorMin);
+		// Carve through the SHARED profile, so object trenches and landscape
+		// trenches are one shape: the depth remap, the rim teeth and the lip all
+		// arrive, and the floor rides Trench Floor Height exactly as the ground's
+		// does instead of a bespoke constant. This shader's own self-shadow march
+		// already assumed this shape - it calls CarveProfile - while the geometry
+		// was cutting a raw linear ramp, so shape and shadow disagreed.
+		float depth = CarveProfile(deform, skinDepth, worldXY);
 
-		// Churn: broken lumps on the carved walls. The room factor keeps the
-		// dig under 80% of the cover above the minimum floor even at the
-		// slider maximum, so lumps can never expose the object beneath; fully
-		// trampled floors (depth = floorMin) stay smooth by the same term.
-		float churnW = smoothstep(0.05, 0.5, deform) * saturate((depth - floorMin) / 10.0);
+		// Precision pad, NOT a floor. The patch stands on real geometry, so even
+		// a fully worn floor has to clear the object under it or the two z-fight,
+		// and the margin grows with distance. Tapered where the raster data thins
+		// (the footprint boundary): held at full strength there, the raised floor
+		// ends in an 8-unit staircase rim along the object's edge. Wearing
+		// through to the object stays the Trench Floor See-Through slider's job,
+		// which dissolves coverage rather than moving geometry.
+		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
+		float pad = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(0.25, 2.0, skinEdgeMin);
+		depth = max(depth, pad);
+
+		// Churn: broken lumps on the carved walls. The room factor keeps the dig
+		// under 80% of the cover above the floor even at the slider maximum, so
+		// lumps can never expose the object beneath; fully trampled floors stay
+		// smooth by the same term. floorRef mirrors CarveProfile's own floorDepth
+		// expression - reading its inputs, not re-deriving its profile.
+		float floorRef = max(pad, min(skinDepth, BorderStyle.y * smoothstep(0.5, 8.0, skinDepth)));
+		float churnW = smoothstep(0.05, 0.5, deform) * saturate((depth - floorRef) / 10.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 			depth += ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW;
 
