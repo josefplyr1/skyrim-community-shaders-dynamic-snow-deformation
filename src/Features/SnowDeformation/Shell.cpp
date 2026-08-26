@@ -307,13 +307,21 @@ ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 
 ID3D11PixelShader* SnowDeformation::GetShellPS()
 {
+	// Setting changes reach here from the menu, a settings load and a preset
+	// alike, so the permutation is keyed off the compiled-against value rather
+	// than off any one of those paths noticing.
+	if (shellPS && shellDepthClampCompiled != settings.ShellDepthClamp) {
+		shellPS->Release();
+		shellPS = nullptr;
+	}
 	if (!shellPS) {
 		logger::debug("Compiling SnowShell PS");
 		auto defines = ShellPSDefines();
-		// Applied here, not in ShellPSDefines: that is static and the LOD
-		// histogram variant has no reason to carry the spike.
-		if (shellEarlyZSpike)
+		// Applied here, not in ShellPSDefines: that is static, and the LOD
+		// histogram variant has no reason to carry this.
+		if (!settings.ShellDepthClamp)
 			defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
+		shellDepthClampCompiled = settings.ShellDepthClamp;
 		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;
@@ -482,6 +490,32 @@ void SnowDeformation::UpdateBowWaveBuffer()
 	data.BowWaveParams = { 0.0f, std::clamp(settings.BowWaveHeight, 0.0f, 1.5f), 0.0f, 0.0f };
 	data.BowWaveLook = { std::clamp(settings.BowWaveChunk, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f };
 	bowWaveCB->Update(data);
+}
+
+// Bias applies only with the clamp off: with it on the clamp already settles
+// coincident surfaces, and stacking the two would push the shell in front of
+// things it should lose to.
+void SnowDeformation::EnsureShellRasterState()
+{
+	const float wantBias = settings.ShellDepthClamp ? 0.0f : settings.ShellDepthBias;
+	const float wantSlope = settings.ShellDepthClamp ? 0.0f : settings.ShellSlopeDepthBias;
+	if (shellRasterState && wantBias == shellRasterBias && wantSlope == shellRasterSlopeBias)
+		return;
+
+	D3D11_RASTERIZER_DESC rasterDesc{};
+	rasterDesc.FillMode = D3D11_FILL_SOLID;
+	rasterDesc.CullMode = D3D11_CULL_NONE;
+	rasterDesc.DepthClipEnable = TRUE;
+	rasterDesc.DepthBias = (INT)wantBias;
+	rasterDesc.SlopeScaledDepthBias = wantSlope;
+
+	winrt::com_ptr<ID3D11RasterizerState> state;
+	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put())))
+		return;  // keep the previous state rather than drawing with none
+	shellRasterState = state;
+	Util::SetResourceName(shellRasterState.get(), "SnowDeformation::ShellRasterState");
+	shellRasterBias = wantBias;
+	shellRasterSlopeBias = wantSlope;
 }
 
 void SnowDeformation::DrawShell()
@@ -769,6 +803,7 @@ void SnowDeformation::DrawShell()
 
 	context->IASetInputLayout(nullptr);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	EnsureShellRasterState();
 	context->RSSetState(shellRasterState.get());
 	context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);

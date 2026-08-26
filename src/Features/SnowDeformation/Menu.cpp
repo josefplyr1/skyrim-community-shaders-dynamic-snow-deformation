@@ -47,6 +47,23 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttCap = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
+			ImGui::SeparatorText(T(TKEY("shell_depth_group"), "Shell Depth"));
+
+			ImGui::Checkbox(T(TKEY("shell_depth_clamp"), "Depth Clamp (costs early-Z)"), &settings.ShellDepthClamp);
+			if (auto _ttClamp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_depth_clamp_tooltip"), "The shell writes its own depth so it can settle against ground it lands just behind - the z-fight and pinhole class. The catch is that writing depth TOWARD the camera means the GPU cannot reject a hidden shell pixel before shading it, so every pixel behind terrain, a building or an actor pays full price: measured 32% of the Shell pass at Dawnstar, 50% at Riften. Turning it OFF buys that back and costs distant z-fighting; use the two bias sliders to settle the near-field case. The recompile takes a moment."));
+
+			{
+				auto biasGuard = Util::DisableGuard(settings.ShellDepthClamp);
+				ImGui::SliderFloat(T(TKEY("shell_depth_bias"), "Depth Bias"), &settings.ShellDepthBias, 0.0f, 5000.0f, "%.0f");
+				if (auto _ttBias = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("shell_depth_bias_tooltip"), "Nudges the whole shell toward the camera at rasterisation time, which is free and keeps early-Z. Stands in for the clamp's near-field half. Raw hardware units scaled by the depth format, so raise it until coincident-surface shimmer stops and no further - too much floats the snow in front of things standing in it. Only active with the clamp off."));
+
+				ImGui::SliderFloat(T(TKEY("shell_slope_depth_bias"), "Slope Depth Bias"), &settings.ShellSlopeDepthBias, 0.0f, 16.0f, "%.2f");
+				if (auto _ttSlope = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("shell_slope_depth_bias_tooltip"), "Adds bias in proportion to how steeply the surface is angled away from the camera, where a flat offset does least good. Usually the one that fixes grazing-angle shimmer on slopes. Only active with the clamp off."));
+			}
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -913,17 +930,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("shell_berm_bake_disabled"), "Shell: Disable Berm Bake"), &shellBermBakeDisabled);
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
-
-		// Both drop a depth export, so the PS permutation changes: release the
-		// cached shader and let the next frame's getter recompile it.
-		if (ImGui::Checkbox(T(TKEY("shell_earlyz_spike"), "Shell: Drop Depth Export (early-Z spike)"), &shellEarlyZSpike)) {
-			if (shellPS) {
-				shellPS->Release();
-				shellPS = nullptr;
-			}
-		}
-		if (auto _ttEZ = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_earlyz_spike_tooltip"), "Measurement aid: drops the shell's SV_DepthLessEqual export. That export moves depth TOWARD the camera, which can turn a failing fragment into a passing one - so with this pass's LESS_EQUAL depth test it disables early-Z REJECTION for the whole draw, and every shell pixel hidden behind terrain, a building or an NPC still runs the full shader. Expect z-fighting in the far field and at trench edges while this is on; the point is the Shell timing. Hold the camera still and toggle."));
 
 		if (ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike)) {
 			if (staticsPS) {

@@ -516,6 +516,12 @@ public:
 		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
 		float ShellSSSRemarchCasterCap = 20.0f;
+		/** @brief Shell PS exports SV_DepthLessEqual carrying the anti-z-fight clamp. That export moves depth toward the camera, which defeats early-Z REJECTION for the whole draw under the pass's LESS_EQUAL test - so every shell pixel behind terrain, a building or an actor still runs the full shader. Measured 2026-08-26: off is 32% cheaper at Dawnstar, 50% at Riften. Off relies on the depth bias below for the near-field coincident-surface case and gives up the far-field clamp entirely. */
+		bool ShellDepthClamp = true;
+		/** @brief Constant rasteriser depth bias applied ONLY when the clamp is off, standing in for the 0.75-unit near-field clamp. Raw D3D11_RASTERIZER_DESC::DepthBias units; scaled by the depth format's exponent, so the useful magnitude is found by eye. */
+		float ShellDepthBias = 0.0f;
+		/** @brief Slope-scaled companion to ShellDepthBias; grazing-angle surfaces need more offset than head-on ones. Applied only when the clamp is off. */
+		float ShellSlopeDepthBias = 0.0f;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
 		float CompactMatte = 0.6f;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -874,6 +880,8 @@ public:
 	 * Implemented in SnowDeformation/Shell.cpp.
 	 */
 	void DrawShell();
+	/** @brief Rebuilds shellRasterState when the depth-bias settings change. Bias is forced to zero while ShellDepthClamp is on. Implemented in SnowDeformation/Shell.cpp. */
+	void EnsureShellRasterState();
 
 	/** @brief Returns the shell vertex/pixel shaders, compiling them on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellVS();
@@ -1007,10 +1015,14 @@ public:
 	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
 	bool shellBermBakeDisabled = false;
 
-	/** @brief A/B measurement: drops the shell PS's SV_DepthLessEqual export, restoring early-Z rejection for the pass. Z-fighting in the far field and at edges is expected - the point is the timing. Runtime-only; forces a PS recompile. */
-	bool shellEarlyZSpike = false;
+	/** @brief Settings::ShellDepthClamp the cached shellPS was compiled against; a mismatch releases it. Catches every path that can change the setting, not just the menu checkbox. */
+	bool shellDepthClampCompiled = true;
 
-	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Runtime-only; forces a PS recompile. */
+	/** @brief Bias values shellRasterState was built with, so it is rebuilt only when they actually move. */
+	float shellRasterBias = 0.0f;
+	float shellRasterSlopeBias = 0.0f;
+
+	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;
 
 	/** @brief Object-snow debug view: skins and trench patch render decision variables as colors with dithering disabled. Runtime-only diagnostic. */

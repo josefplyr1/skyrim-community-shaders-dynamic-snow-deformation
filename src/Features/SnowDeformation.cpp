@@ -126,6 +126,9 @@
 	X(ShellSSSRemarch) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
+	X(ShellDepthClamp) \
+	X(ShellDepthBias) \
+	X(ShellSlopeDepthBias) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsFadeM) \
