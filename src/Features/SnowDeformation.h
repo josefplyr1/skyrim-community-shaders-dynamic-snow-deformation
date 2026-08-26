@@ -141,13 +141,16 @@ public:
 		{ "Snowy Rocks", "snowrocks", 30.0f },
 		{ "Snow 01", "snow01", 30.0f },
 		{ "Snow 02", "snow02", 30.0f },
-		{ "Roads", "road", -5.0f },
-		{ "Dirt", "dirt", -5.0f },
-		{ "Grass & Fields", "grass", -5.0f },
-		{ "Rocks & Cliffs", "rock", -5.0f },
-		{ "Coast & Beach", "coast", -5.0f },
-		{ "Mud & Rivers", "mud", -5.0f },
-		{ "Other", "", -5.0f },
+		// Non-snow classes sit at -8, matching the fully-bare submerge in
+		// ShellSurfaceZ, so every bare texel reaches one depth instead of
+		// stopping short of it.
+		{ "Roads", "road", -8.0f },
+		{ "Dirt", "dirt", -8.0f },
+		{ "Grass & Fields", "grass", -8.0f },
+		{ "Rocks & Cliffs", "rock", -8.0f },
+		{ "Coast & Beach", "coast", -8.0f },
+		{ "Mud & Rivers", "mud", -8.0f },
+		{ "Other", "", -8.0f },
 	};
 
 	// Textures whose family default is wrong for them: frozen marsh ice is
@@ -437,7 +440,7 @@ public:
 		/** @brief How far a melt bowl's rim wanders, as a fraction of its radius. Coarse-celled on purpose: it moves the OUTLINE without chipping the surface, which is what separates a melt basin from a crater. */
 		float MeltEdgeIrregularity = 0.15f;
 		/** @brief Per-class shell depths, indexed like kSnowClasses (defaults duplicated from the table). The default for any texture without its own entry in TextureDepths. */
-		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f, -5.0f };
+		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
