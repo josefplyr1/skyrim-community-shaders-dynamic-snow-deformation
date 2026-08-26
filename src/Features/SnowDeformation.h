@@ -1034,8 +1034,8 @@ public:
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
 
-	/** @brief A/B measurement: stops culling landscape-shell patches that have reached the -8 bare floor, so what the cull is worth can be read against it. Runtime-only. */
-	bool shellBareCullDisabled = false;
+	/** @brief DEFAULTS ON, i.e. the bare cull is OFF. The cull's texel-range test does not cover how far ShellSurfaceZ actually samples: the border shaping jitters up to ~58 units and the data morph reads a 2x-coarser quad up to 256 away, so a patch can read snow the test never looked at and be culled out of visible ground. Covering both conservatively costs more loads than the cull saved. Untick to A/B it. */
+	bool shellBareCullDisabled = true;
 
 	/** @brief A/B measurement: drops the statics PS's SV_Depth export. UPPER BOUND only - the carve reads that depth, so the surviving pixel set differs. Not shippable; stays a debug toggle. Runtime-only; forces a PS recompile. */
 	bool staticsEarlyZSpike = false;
