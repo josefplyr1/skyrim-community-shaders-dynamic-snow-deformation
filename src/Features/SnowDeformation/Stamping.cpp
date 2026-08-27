@@ -55,6 +55,16 @@ static constexpr float kHoofRadius = 7.0f;
 // Below ~1.5 deformation texels a print aliases away; snow prints collapse
 // wider than the foot anyway.
 static constexpr float kMinFootStampRadius = 5.0f;
+// Edited-skeleton failsafe. A healthy walker plants each foot every ~60 units
+// of travel; ground travel with zero prints past the first threshold buys one
+// bone re-collection (the editor may have replaced the nodes), past the second
+// it latches the actor onto collision stamping for this 3D.
+static constexpr float kFootDryRecollect = 150.0f;
+static constexpr float kFootDryFallback = 300.0f;
+// Per-frame travel above this is a teleport, not a stride.
+static constexpr float kFootDryTeleport = 200.0f;
+// Cadence for re-verifying cached feet are still attached to the root.
+static constexpr uint16_t kFootAttachRecheckFrames = 60;
 // Trail keys for foot/limb stamps set these bits so they never collide with
 // Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
@@ -165,6 +175,16 @@ static bool NameStartsWith(const RE::BSFixedString& a_name, const char* a_prefix
 {
 	const char* hay = a_name.c_str();
 	return hay && _strnicmp(hay, a_prefix, strlen(a_prefix)) == 0;
+}
+
+// Parent-walk: a cached node an editor detached no longer reaches the root,
+// and its world transform is frozen wherever it was left.
+static bool NodeAttachedTo(const RE::NiAVObject* a_node, const RE::NiAVObject* a_root)
+{
+	for (auto* p = a_node; p; p = p->parent)
+		if (p == a_root)
+			return true;
+	return false;
 }
 
 static RE::NiAVObject* FindToeBone(RE::NiNode* a_node)
@@ -336,10 +356,12 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 }
 
 bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root,
-	const StampBones* a_bones, float a_groundZ, float* a_gapOut) const
+	const StampBones* a_bones, bool a_useFeet, float a_groundZ, float* a_gapOut, bool* a_byFeetOut) const
 {
 	if (a_gapOut)
 		*a_gapOut = 0.0f;
+	if (a_byFeetOut)
+		*a_byFeetOut = false;
 	if (!a_actor)
 		return false;
 	const float band = std::max(settings.FloatingActorBand, 0.0f);
@@ -349,9 +371,10 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 	// actor that has them stamps from them; then limb undersides; and only
 	// when a skeleton offers neither is the collision tree walked.
 	if (a_bones) {
-		for (const auto& foot : a_bones->feet)
-			if (auto* node = foot.node.get(); node && node->world.scale >= 0.01f)
-				lowest = std::min(lowest, node->world.translate.z);
+		if (a_useFeet)
+			for (const auto& foot : a_bones->feet)
+				if (auto* node = foot.node.get(); node && node->world.scale >= 0.01f)
+					lowest = std::min(lowest, node->world.translate.z);
 		if (lowest == FLT_MAX)
 			for (const auto& limb : a_bones->limbs) {
 				auto* nodeA = limb.a.get();
@@ -368,7 +391,9 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 	// flat-footed in the snow. So a footless skeleton is also measured by its
 	// COLLISION, which reaches its legs, and the lower of the two answers.
 	// Wisps stay caught: their collision is their floating body.
-	const bool measuredByFeet = lowest != FLT_MAX && a_bones && !a_bones->feet.empty();
+	const bool measuredByFeet = lowest != FLT_MAX && a_bones && a_useFeet && !a_bones->feet.empty();
+	if (a_byFeetOut)
+		*a_byFeetOut = measuredByFeet;
 	if (!measuredByFeet && a_root)
 		RE::BSVisit::TraverseScenegraphCollision(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
@@ -455,11 +480,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// it - no measurement, no threshold. It does not cover everything: the
 		// atronach races are all authored Walks and hover by animation instead,
 		// which is what ActorIsFloating below is for.
-		if (!isDead)
-			if (auto* charController = actor->GetCharController(); charController &&
-																   (charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
-																	   charController->context.currentState == RE::hkpCharacterStateType::kFlying))
-				return;
+		auto* charController = actor->GetCharController();
+		if (!isDead && charController &&
+			(charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
+				charController->context.currentState == RE::hkpCharacterStateType::kFlying))
+			return;
 
 		// Living actors on ELEVATED structures (walkways, roofs, bridges) do
 		// not stamp either: the deformation map is 2D, so their trails would
@@ -548,14 +573,74 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
 			stampBoneCache.clear();
 		auto& cache = stampBoneCache[formID];
-		if (cache.root.get() != root) {
+		auto recollectBones = [&] {
 			cache.root = RE::NiPointer<RE::NiAVObject>(root);
 			cache.feet.clear();
 			cache.limbs.clear();
 			CollectStampBones(root, nullptr, 0.0f, cache);
+			cache.attachRecheck = kFootAttachRecheckFrames;
+		};
+		if (cache.root.get() != root) {
+			recollectBones();
+			cache.dryTravel = 0.0f;
+			cache.hasPrevPos = false;
+			cache.dryRecollected = false;
+			cache.collisionFallback = false;
 		}
+
+		// Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor)
+		// edit the live tree without swapping the root, so the root key alone
+		// cannot vouch for a cached foot: re-verify attachment on a cadence.
+		if (!cache.feet.empty()) {
+			if (cache.attachRecheck > 0) {
+				cache.attachRecheck--;
+			} else {
+				cache.attachRecheck = kFootAttachRecheckFrames;
+				for (const auto& foot : cache.feet)
+					if (auto* n = foot.node.get(); n && !NodeAttachedTo(n, root)) {
+						recollectBones();
+						break;
+					}
+			}
+		}
+		// A matched foot detached or zero-scaled is not a foot this frame; an
+		// actor with none usable must not take the bone path, or the collision
+		// fallback its skeleton needs is unreachable.
+		uint usableFeet = 0;
+		for (const auto& foot : cache.feet)
+			if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f)
+				usableFeet++;
 		if (!cache.feet.empty() || !cache.limbs.empty())
 			bones = &cache;
+		const bool footPath = !isDead && usableFeet > 0 && !cache.collisionFallback;
+
+		// Watchdog: ground travel with zero foot prints. Only strides count -
+		// not teleports, and not frames off the ground or in a saddle.
+		float dryStep = 0.0f;
+		if (cache.hasPrevPos) {
+			const float dx = position.x - cache.prevPosX;
+			const float dy = position.y - cache.prevPosY;
+			const float d = std::sqrt(dx * dx + dy * dy);
+			if (d < kFootDryTeleport)
+				dryStep = d;
+		}
+		cache.prevPosX = position.x;
+		cache.prevPosY = position.y;
+		cache.hasPrevPos = true;
+		const bool walkingOnGround = !isDead && charController &&
+		                             charController->context.currentState == RE::hkpCharacterStateType::kOnGround &&
+		                             !actor->IsOnMount();
+		auto accumulateDry = [&](float a_step) {
+			if (!walkingOnGround || !footPath)
+				return;
+			cache.dryTravel += a_step;
+			if (!cache.dryRecollected && cache.dryTravel > kFootDryRecollect) {
+				recollectBones();
+				cache.dryRecollected = true;
+			}
+			if (cache.dryTravel > kFootDryFallback)
+				cache.collisionFallback = true;
+		};
 
 		// Floating actors carve nothing. Atronachs, wisps and ghosts never
 		// touch the ground, so every mark they leave today is one the snow
@@ -565,7 +650,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// how high it is. Corpses are exempt: a body that has fallen is lying
 		// in the snow, and its dent is correct.
 		float floatingGap = 0.0f;
-		const bool floating = !isDead && ActorIsFloating(actor.get(), root, bones, groundZ, &floatingGap);
+		bool floatingByFeet = false;
+		const bool floating = !isDead &&
+		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ, &floatingGap, &floatingByFeet);
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
 		// A thing made of an element has a body however transparent it is, and
@@ -603,6 +690,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestElemental = elemental;
 				stampStats.nearestFeet = bones ? static_cast<uint>(bones->feet.size()) : 0;
 				stampStats.nearestLimbs = bones ? static_cast<uint>(bones->limbs.size()) : 0;
+				stampStats.nearestUsableFeet = usableFeet;
+				stampStats.nearestFallback = cache.collisionFallback;
+				stampStats.nearestDryTravel = cache.dryTravel;
 				stampStats.nearestBodyAlpha = bodyAlpha;
 				stampStats.nearestGhostFlag = ghostFlag;
 				stampStats.nearestIncorporeal = incorporeal;
@@ -620,6 +710,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// which one fired sends you to the wrong slider.
 		if (floating && settings.NoCarveFloatingActors) {
 			stampStats.floating++;
+			// A hover verdict cast by feet alone is the frozen-foot signature
+			// (foot z stuck, actor gone): dry travel accrues so the watchdog
+			// can break out of it. Collision-measured hovering is trusted.
+			if (floatingByFeet)
+				accumulateDry(dryStep);
 			return;
 		}
 		if (incorporeal) {
@@ -640,10 +735,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
-		// Living actors need matched feet to take the bone path: a limbs-only
-		// match (creature spines/necks) would steal the collision-shape
-		// fallback while its high segments carve nothing.
-		if (!isDead && bones && !bones->feet.empty()) {
+		// Living actors need matched USABLE feet to take the bone path: a
+		// limbs-only match (creature spines/necks) would steal the
+		// collision-shape fallback while its high segments carve nothing, and
+		// so would feet an editor broke or a watchdog already gave up on.
+		if (footPath && bones) {
+			bool footStamped = false;
 			{
 				float minFootZ = FLT_MAX;
 				float minFootScale = 1.0f;
@@ -761,6 +858,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.feet++;
+					footStamped = true;
 				}
 			}
 
@@ -800,8 +898,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampCount++;
 				stampStats.limbs++;
 			}
+			if (footStamped) {
+				cache.dryTravel = 0.0f;
+				cache.dryRecollected = false;
+			} else {
+				accumulateDry(dryStep);
+			}
 			return;
 		}
+
+		if (!isDead && cache.collisionFallback)
+			stampStats.fallbackActors++;
 
 		// Corpses with cached bones imprint body-shaped: the same limb
 		// segments, run through the shape path's settle latch per limb.

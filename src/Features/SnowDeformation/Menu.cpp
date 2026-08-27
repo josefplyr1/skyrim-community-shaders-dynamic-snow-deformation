@@ -975,9 +975,12 @@ void SnowDeformation::DrawSettings()
 					stampStats.nearestFloating ? "FLOATING" : "touching",
 					stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
 					state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
-				ImGui::Text("             bones: feet %u | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u)",
-					stampStats.nearestFeet, stampStats.nearestLimbs,
-					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props);
+				ImGui::Text("             bones: feet %u usable %u%s | dry travel %.0f | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u | failsafe actors %u)",
+					stampStats.nearestFeet, stampStats.nearestUsableFeet,
+					stampStats.nearestFallback ? " FAILSAFE" : "",
+					stampStats.nearestDryTravel, stampStats.nearestLimbs,
+					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
+					stampStats.fallbackActors);
 				ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
 					stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
 					stampStats.nearestGhostFlag ? "yes" : "no",

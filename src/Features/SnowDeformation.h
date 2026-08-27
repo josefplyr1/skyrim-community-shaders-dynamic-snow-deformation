@@ -281,6 +281,17 @@ public:
 		uint16_t alphaRecheck = 0;
 		/** @brief How many times the body alpha has been read. The first reads of a freshly spawned actor cannot be trusted, so they are taken quickly and often before the cadence drops to kBodyAlphaRecheckFrames. */
 		uint16_t alphaSettle = 0;
+		/** @brief Frames until cached feet are re-verified as still attached to the root. Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor) edit the live tree without swapping the root, so the root key alone cannot vouch for a cached node: a detached foot's world transform freezes and it never plants again. */
+		uint16_t attachRecheck = 0;
+		/** @brief XY units walked on the ground with zero foot prints. A healthy walker plants each foot every ~60 units, so a growing figure here means the cached feet no longer speak for the skeleton, whatever edited them. */
+		float dryTravel = 0.0f;
+		float prevPosX = 0.0f;
+		float prevPosY = 0.0f;
+		bool hasPrevPos = false;
+		/** @brief The one mid-dry re-collection has been spent; the next threshold latches the fallback. */
+		bool dryRecollected = false;
+		/** @brief Latched demotion to collision-shape stamping (and collision-measured floating), cleared when the 3D root changes. The failsafe for skeletons whose feet exist but never plant. */
+		bool collisionFallback = false;
 	};
 
 	struct Settings
@@ -2306,8 +2317,11 @@ protected:
 	 * against the ground it stands on, answers it directly.
 	 *
 	 * Reads cached bones where there are any, else the collision shapes.
+	 * a_useFeet false skips the foot bones (limbs and collision still measure):
+	 * feet an editor detached or zero-scaled must not decide the verdict.
+	 * a_byFeetOut reports whether feet alone decided it.
 	 */
-	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, float a_groundZ, float* a_gapOut = nullptr) const;
+	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, bool a_useFeet, float a_groundZ, float* a_gapOut = nullptr, bool* a_byFeetOut = nullptr) const;
 
 	/**
 	 * @brief True when this actor has no substance, so nothing it does should cut snow.
@@ -2775,6 +2789,14 @@ protected:
 		/** @brief What the nearest actor's skeleton offered the stamper. Feet decide the path outright: with them an actor prints heel-to-toe, without them it falls to its collision shapes, and an actor that passes every gate and still marks nothing is one of those two coming up empty. */
 		uint nearestFeet = 0;
 		uint nearestLimbs = 0;
+		/** @brief Of the nearest actor's matched feet, how many are attached and scaled this frame. Matched-but-unusable is the edited-skeleton signature. */
+		uint nearestUsableFeet = 0;
+		/** @brief Nearest actor is on the collision-stamping failsafe. */
+		bool nearestFallback = false;
+		/** @brief Nearest actor's ground travel with zero foot prints; resets on every plant. */
+		float nearestDryTravel = 0.0f;
+		/** @brief Living actors stamping through the collision failsafe this frame. */
+		uint fallbackActors = 0;
 		/** @brief Nearest actor is MADE of an element, so the translucency test was skipped rather than passed. Without this the panel reports alpha 1.00 for an actor whose alpha was never read, which reads as "measured opaque". */
 		bool nearestElemental = false;
 		/** @brief Actors whose lowest contact never reached their footing this frame, so they carved nothing. */
