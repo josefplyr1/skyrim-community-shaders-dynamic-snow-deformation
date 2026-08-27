@@ -377,6 +377,11 @@ namespace SharedData
 		// snow set is bound at t102.
 		float BakedSnowEnable;
 		float padLod2;
+
+		// Toroidal deformation-map addressing: physical position of logical
+		// texel (0,0); every map Load adds this and masks by dim-1.
+		int2 DeformMapOrigin;
+		int2 DeformTorusPad;
 	};
 
 	cbuffer FeatureData : register(b6)

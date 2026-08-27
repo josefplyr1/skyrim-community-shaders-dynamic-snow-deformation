@@ -587,6 +587,10 @@ public:
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
 		float BakedSnowEnable;
 		float padLod;
+
+		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
+		DirectX::XMINT2 DeformMapOrigin;
+		DirectX::XMINT2 DeformTorusPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -603,7 +607,8 @@ public:
 	struct alignas(16) PerFrame
 	{
 		float2 WindowOrigin;
-		DirectX::XMINT2 ScrollDelta;
+		/** @brief Toroidal store: physical position of logical texel (0,0). A scroll advances this and RingCS rewrites the reassigned band; nothing else moves. */
+		DirectX::XMINT2 MapOrigin;
 
 		float TexelSize;
 		uint StampCount;
@@ -641,6 +646,12 @@ public:
 		/** @brief 1 = the CS paints the per-texel activity view (u2): which texels changed at stored precision, and in which channel. Claimed a pad slot, layout unchanged. */
 		uint DebugActivityView;
 		uint InjectPad;
+
+		/** @brief Arriving-band rects in LOGICAL texel space (x0, y0, w, h); RingCS covers their union by flat index. Two at most: one band per scrolled axis, or one full-map rect on a clear. */
+		DirectX::XMINT4 RingRects[2];
+		uint RingRectCount;
+		uint RingTotalTexels;
+		uint RingPad[2];
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -695,14 +706,14 @@ public:
 	void TickGameClock();
 
 	ConstantBuffer* perFrame = nullptr;
+	/** @brief [0] = THE map (single canonical texture, toroidal layout); [1] = EvolveCS's snapshot scratch, copied from the map just before that pass. The ping-pong is retired: consumers always read [0]. */
 	Texture2D* deformationTextures[2] = { nullptr, nullptr };
-	uint currentTexture = 0;
 
 	/** @brief Baked berm field: the 17-tap disc average of the deformation map, rebuilt from the current map every frame so the shells read it with one bilinear tap instead of 68 loads per call. */
 	Texture2D* bermFieldTexture = nullptr;
 
-	/** @brief SRV of the most recently written deformation map, for shader sampling and debug UI. */
-	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[currentTexture]->srv.get(); }
+	/** @brief SRV of the deformation map (the single canonical texture), for shader sampling and debug UI. Physical (toroidal) layout - readers translate through DeformMapOrigin. */
+	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0]->srv.get(); }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
 	/** @brief World XY of the corner of texel (0,0) of the current deformation window. */
@@ -720,12 +731,26 @@ public:
 	 */
 	virtual void Prepass() override;
 
-	/** @brief Returns the map-evolution compute shader (scroll/inject/refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
+	/** @brief Returns the ring compute shader (rewrites the texels a scroll reassigned: inject or pristine), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationRingCS();
+	/** @brief Returns the map-evolution compute shader (refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationEvolveCS();
 	/** @brief Returns the stamp compute shader (stamps + bow waves, in-place RMW), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationStampCS();
+	ID3D11ComputeShader* deformationRingCS = nullptr;
 	ID3D11ComputeShader* deformationEvolveCS = nullptr;
 	ID3D11ComputeShader* deformationStampCS = nullptr;
+
+	/** @brief Arriving-band rect in logical texel space; see ComputeArrivalRects. */
+	struct ArrivalRect
+	{
+		int x0, y0, w, h;
+	};
+	/** @brief The rects whose world assignment changes under this frame's scroll (or the full map on a clear). ONE definition shared by RingCS's dispatch and BuildTrenchInject, so the ring pass and the inject upload can never disagree about which texels are arriving. Returns the rect count (0-2). */
+	int ComputeArrivalRects(DirectX::XMINT2 a_scroll, bool a_clearing, ArrivalRect a_rects[2]) const;
+
+	/** @brief Copies a LOGICAL-space box out of the toroidal map into a staging texture laid out logically: up to four physical segments split at the wrap seam, each landing at its logical offset in the destination. Every CPU read of the map routes through this so no site does its own torus arithmetic. a_physOrigin is the MapOrigin the source content was written under. */
+	void CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_src, int a_x0, int a_y0, int a_w, int a_h, DirectX::XMINT2 a_physOrigin);
 	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldCS();
 	ID3D11ComputeShader* bermFieldCS = nullptr;
@@ -870,6 +895,10 @@ public:
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
+
+		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		DirectX::XMINT2 DeformMapOrigin;
+		DirectX::XMINT2 DeformTorusPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -1766,6 +1795,8 @@ protected:
 
 	float2 windowOrigin = { 0, 0 };
 	DirectX::XMINT2 pendingScrollDelta = { 0, 0 };
+	/** @brief Physical position of logical texel (0,0) in the toroidal map. Advanced with windowOrigin (same site, same gate) so every consumer CB filled afterwards carries the pair consistently; kept masked to [0, dim). */
+	DirectX::XMINT2 mapOrigin = { 0, 0 };
 	bool clearRequested = true;
 
 	// ---- Runtime render-distance state (driven by the Range* settings) ----
@@ -2019,6 +2050,8 @@ protected:
 	float2 trenchMapOrigin = { 0, 0 };
 	float trenchMapTexel = 0.0f;
 	uint32_t trenchMapWorldspace = 0;
+	/** @brief MapOrigin the current map CONTENT was written under. The live mapOrigin advances ahead of it at frame start; the flush and the mirror read content that still belongs to this one. */
+	DirectX::XMINT2 trenchMapPhysOrigin = { 0, 0 };
 	bool trenchMapPrimed = false;
 
 	/** @brief One-entry tile cache for the inject sampler, which walks a tile's pixel footprint in scan order. */

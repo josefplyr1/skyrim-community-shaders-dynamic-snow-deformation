@@ -10,7 +10,8 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale, BorderStyle), DeformationMap (t1), BermFieldMap
+// UndulationAmp/Scale, BorderStyle), DeformationMap (t1) with the shell's
+// DeformTexel torus helper, BermFieldMap
 // (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
@@ -149,10 +150,10 @@ float SampleMelted(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	return saturate(v.y);
 }
@@ -172,10 +173,10 @@ float SampleScorch(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	return saturate(-v.y);
 }
@@ -194,10 +195,10 @@ float SampleCrust(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float c00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).z;
-	float c10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).z;
-	float c01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).z;
-	float c11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).z;
+	float c00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).z;
+	float c10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).z;
+	float c01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).z;
+	float c11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).z;
 	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
 }
 

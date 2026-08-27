@@ -2,15 +2,21 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-// Persistent snow deformation map update, split into two passes.
+// Persistent snow deformation map update, split into three passes over a
+// TOROIDAL store.
 //
 // A square world-space window following the camera in whole-texel steps.
+// Texels never move: the map is addressed physically as
+// (logical + MapOrigin) & (dim - 1), and a scroll advances MapOrigin instead
+// of copying 4M texels through a ping-pong.
 //
-//   EvolveCS - the world acting on the map: scroll copy from the previous
-//              frame, tile-store inject, wind-biased refill, melt/crust/
+//   RingCS   - writes the ring of texels whose world assignment changed
+//              (tile-store inject or pristine zero). Dispatch sized to the
+//              ring, so a walking-speed scroll costs a few thousand threads.
+//   EvolveCS - the world acting on the map: wind-biased refill, melt/crust/
 //              deposit decay, unsupported-snow slump. The only pass that
-//              reads NEIGHBOUR texels, so it is the only one that needs a
-//              consistent previous-frame snapshot.
+//              reads NEIGHBOUR texels, so it reads a snapshot copy taken
+//              after RingCS and writes the map in place.
 //   StampCS  - actors acting on the map: stamp capsules and bow-wave
 //              deposits, read-modify-write on the texel EvolveCS just wrote.
 //              Per-texel only, so it can later be tile-dispatched over the
@@ -19,6 +25,9 @@
 // Splitting at the stamp boundary is safe because every stamp/wave term is a
 // function of the texel's own value; the one storage round between the passes
 // only touches texels a stamp is about to overwrite anyway.
+//
+// ClearMap rides in the CB for layout stability but the CPU expresses it as
+// a full-map ring rect; no pass branches on it.
 //
 // Stamp classes, selected per stamp by StampEnds[i].z:
 //   CARVE (0) - instantaneous depth, max-blended, so standing in a trench
@@ -154,7 +163,10 @@ static const float2 kSlumpAxis[SLUMP_AXES] = {
 cbuffer PerFrame : register(b0)
 {
 	float2 WindowOrigin;
-	int2 ScrollDelta;
+	// Toroidal store: where logical texel (0,0) sits physically. A scroll
+	// advances this instead of copying the map; only the reassigned ring of
+	// texels is rewritten (RingCS).
+	int2 MapOrigin;
 
 	float TexelSize;
 	uint StampCount;
@@ -208,6 +220,15 @@ cbuffer PerFrame : register(b0)
 	uint DebugActivityView;
 	uint InjectPad;
 
+	// Ring of texels whose world assignment changed this frame, in LOGICAL
+	// texel space (x0, y0, w, h). Two rects at most: the leading band per
+	// scrolled axis, or one full-map rect on a clear. RingCS covers their
+	// union by a flat texel index.
+	int4 RingRects[2];
+	uint RingRectCount;
+	uint RingTotalTexels;
+	uint2 RingPad;
+
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
 
@@ -219,15 +240,28 @@ cbuffer PerFrame : register(b0)
 	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw previous foot position
 }
 
+// EvolveCS's snapshot of the map, copied on the CPU just before the pass so
+// its neighbour reads (slump support, upwind supply) see one consistent
+// frame. Physical layout, like the map it was copied from.
 Texture2D<float4> PreviousDeformation : register(t0);
-// EvolveCS writes each texel from the previous frame; StampCS then
-// read-modify-writes the same texel (typed UAV load - the codebase-wide
-// assumption GrassCollision's CollisionUpdateCS already relies on for the
-// same RGBA16F format).
+// THE map - single texture, physical (toroidal) layout. RingCS writes the
+// reassigned band, EvolveCS rewrites in place from the snapshot, StampCS
+// read-modify-writes (typed UAV load - the codebase-wide assumption
+// GrassCollision's CollisionUpdateCS already relies on for the same RGBA16F
+// format).
 RWTexture2D<float4> CurrentDeformation : register(u0);
-// Tile-store depth for this window, resampled on the CPU. Only the texels the
-// scroll brings in from outside actually read it.
+// Tile-store depth for the arriving ring, resampled on the CPU. LOGICAL
+// layout - RingCS translates when it writes the map.
 Texture2D<float> InjectDepth : register(t1);
+
+// Logical -> physical texel. The dim is a power of two (1024/2048/4096), so
+// the wrap is a mask. Callers clamp in LOGICAL space first - the map border
+// is the window's world border; the physical seam is meaningless to the
+// simulation and must never see a neighbour read across it.
+int2 TorusPhys(int2 logical, int2 dims)
+{
+	return (logical + MapOrigin) & (dims - 1);
+}
 
 // Idle-skip activity flag: ORed to 1 when any texel's STORED value moved this
 // frame. Compared at the R16 map's own precision - a half quantum - or a
@@ -353,21 +387,53 @@ float StampNoise(float2 p)
 		lerp(StampNoiseHash(i + float2(0, 1)), StampNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
-// Support depth of a previous-map texel for the slump test: displaced,
-// unscorched carve only (see the SLUMP_* block). Outside the window counts
-// as PRISTINE, not as carved: a border texel then has one untouched side
-// and stands, which errs toward doing nothing at the edge.
+// Support depth of a snapshot texel for the slump test: displaced,
+// unscorched carve only (see the SLUMP_* block). Takes a LOGICAL texel;
+// outside the window counts as PRISTINE, not as carved: a border texel then
+// has one untouched side and stands, which errs toward doing nothing at the
+// edge.
 float SlumpTap(int2 p, int2 dims)
 {
 	if (any(p < 0) || any(p >= dims))
 		return 0.0;
-	float4 t = PreviousDeformation[uint2(p)];
+	float4 t = PreviousDeformation[uint2(TorusPhys(p, dims))];
 	return saturate(t.x - abs(t.y));
 }
 
-// The world acting on the map: scroll, inject, refill, decay, slump. The
-// neighbour reads (slump support, upwind refill supply) all go to the
-// previous-frame snapshot, so tile edges cannot see half-updated texels.
+// The scroll made free: texels whose world assignment changed this frame get
+// their stored memory (or pristine zero) written directly; every other texel
+// is simply left where it physically stands. Flat index over the rect union,
+// so the dispatch is sized to the ring and not the map.
+[numthreads(64, 1, 1)] void RingCS(uint3 DTid
+								   : SV_DispatchThreadID) {
+	uint id = DTid.x;
+	if (id >= RingTotalTexels || RingRectCount == 0)
+		return;
+
+	uint2 dims;
+	CurrentDeformation.GetDimensions(dims.x, dims.y);
+
+	int4 rect = RingRects[0];
+	const uint rect0Texels = (uint)(rect.z * rect.w);
+	if (id >= rect0Texels) {
+		id -= rect0Texels;
+		rect = RingRects[1];
+	}
+	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
+
+	// Arriving ground is not pristine: the tile store remembers what was dug
+	// there. Everything else - melt, crust, deposit - is not stored, exactly
+	// as the old scroll path's out-of-window seed behaved.
+	float depth = 0.0;
+	[branch] if (InjectValid)
+		depth = InjectDepth[logical];
+	CurrentDeformation[TorusPhys(logical, int2(dims))] = float4(depth, 0.0, 0.0, 0.0);
+}
+
+// The world acting on the map: refill, decay, slump. The neighbour reads
+// (slump support, upwind refill supply) all go to the previous-frame
+// snapshot, so tile edges cannot see half-updated texels. No scroll: texels
+// never move, RingCS already rewrote the reassigned band.
 [numthreads(8, 8, 1)] void EvolveCS(uint3 DTid
 									: SV_DispatchThreadID, uint GIdx
 									: SV_GroupIndex) {
@@ -375,43 +441,23 @@ float SlumpTap(int2 p, int2 dims)
 
 	ActivityReset(GIdx);
 
-	float deformation = 0.0;
-	// Melted portion of `deformation`, carried so the shells can tell a
-	// melt basin from a dug trench.
-	float melted = 0.0;
-	float crust = 0.0;
-	float deposit = 0.0;
+	uint2 dims;
+	PreviousDeformation.GetDimensions(dims.x, dims.y);
+	const int2 phys = TorusPhys(int2(pixel), int2(dims));
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
-	// Ground arriving from outside the window is not pristine: the tile store
-	// remembers what was dug there. Seeded here rather than branched below
-	// because the in-window fetch overwrites it, so only the texels that miss
-	// the previous map keep it - which is exactly the arriving band.
-	[branch] if (InjectValid)
-		deformation = InjectDepth[pixel];
-
 	// What this texel would hold if the pass had not run - the activity
-	// comparison baseline. Meaningful only when the skip could engage (no
-	// scroll, no clear); on other frames the flag is computed but unread.
-	float4 carried = float4(deformation, 0.0, 0.0, 0.0);
+	// comparison baseline.
+	const float4 carried = PreviousDeformation[uint2(phys)];
+	float deformation = carried.x;
+	// Melted portion of `deformation`, carried so the shells can tell a
+	// melt basin from a dug trench.
+	float melted = carried.y;
+	float crust = carried.z;
+	float deposit = carried.w;
 
-	if (!ClearMap) {
-		int2 sourcePixel = int2(pixel) + ScrollDelta;
-
-		uint2 dims;
-		PreviousDeformation.GetDimensions(dims.x, dims.y);
-
-		[branch] if (all(sourcePixel >= 0) && all(sourcePixel < int2(dims)))
-		{
-			float4 previous = PreviousDeformation[uint2(sourcePixel)];
-			deformation = previous.x;
-			melted = previous.y;
-			crust = previous.z;
-			deposit = previous.w;
-		}
-		carried = float4(deformation, melted, crust, deposit);
-
+	{
 		// Wind-biased refill: recovery scales with the intact snow a few
 		// texels upwind (the drift supply), so carved areas fill from their
 		// upwind edge and the fill front marches downwind. Calm weather
@@ -420,11 +466,11 @@ float SlumpTap(int2 p, int2 dims)
 		float windStrength = length(WindBias);
 		[branch] if (refill > 0.0 && windStrength > 0.001)
 		{
-			int2 upwindPixel = sourcePixel - int2(round(WindBias / windStrength * DRIFT_FETCH_TEXELS));
+			int2 upwindPixel = int2(pixel) - int2(round(WindBias / windStrength * DRIFT_FETCH_TEXELS));
 			float upwindDeformation = deformation;
 			[branch] if (all(upwindPixel >= 0) && all(upwindPixel < int2(dims)))
 			{
-				upwindDeformation = PreviousDeformation[uint2(upwindPixel)].x;
+				upwindDeformation = PreviousDeformation[uint2(TorusPhys(upwindPixel, int2(dims)))].x;
 			}
 			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
 		}
@@ -463,11 +509,11 @@ float SlumpTap(int2 p, int2 dims)
 		deposit = max(deposit - refill - dugHere * DeltaTime / 0.35, 0.0);
 
 		// Unsupported-snow slump: see the SLUMP_* block up top for the
-		// design. Runs on the PREVIOUS map at the scrolled position, like
-		// the drift fetch above, and RAISES deformation toward the settle
-		// target at a rate - so it composes with the refill (which is
-		// pulling the other way on both the strip and its neighbors) and
-		// with this frame's stamps, which max-blend over it in StampCS.
+		// design. Runs on the snapshot, like the drift fetch above, and
+		// RAISES deformation toward the settle target at a rate - so it
+		// composes with the refill (which is pulling the other way on both
+		// the strip and its neighbors) and with this frame's stamps, which
+		// max-blend over it in StampCS.
 		// The receiving texel is skipped outright while it carries any melt
 		// or scorch of its own: those marks are spell-authored shapes, and
 		// deepening one - even toward a correct neighbor floor - redraws it.
@@ -481,8 +527,8 @@ float SlumpTap(int2 p, int2 dims)
 				[unroll] for (uint r = 0; r < SLUMP_RADII; r++)
 				{
 					int2 off = int2(round(kSlumpAxis[axis] * (kSlumpRadius[r] / max(TexelSize, 1e-4))));
-					float support = min(SlumpTap(sourcePixel + off, int2(dims)),
-						SlumpTap(sourcePixel - off, int2(dims)));
+					float support = min(SlumpTap(int2(pixel) + off, int2(dims)),
+						SlumpTap(int2(pixel) - off, int2(dims)));
 					if (r < SLUMP_GATE_RADII)
 						gate = max(gate, support);
 					axisTarget = max(axisTarget, support * kSlumpReach[r]);
@@ -518,7 +564,7 @@ float SlumpTap(int2 p, int2 dims)
 	// map's .w as alpha except the ImGui preview, which the deposit channel
 	// claimed; see TrenchDebugCS for the honest view.
 	float4 result = float4(deformation, melted, crust, deposit);
-	CurrentDeformation[pixel] = result;
+	CurrentDeformation[uint2(phys)] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
 	ActivityPublish(GIdx);
@@ -536,7 +582,11 @@ float SlumpTap(int2 p, int2 dims)
 
 	ActivityReset(GIdx);
 
-	const float4 carried = CurrentDeformation[pixel];
+	uint2 dims;
+	CurrentDeformation.GetDimensions(dims.x, dims.y);
+	const int2 phys = TorusPhys(int2(pixel), int2(dims));
+
+	const float4 carried = CurrentDeformation[uint2(phys)];
 	float deformation = carried.x;
 	float melted = carried.y;
 	float crust = carried.z;
@@ -868,7 +918,7 @@ float SlumpTap(int2 p, int2 dims)
 
 	float4 result = float4(total,
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
-	CurrentDeformation[pixel] = result;
+	CurrentDeformation[uint2(phys)] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
 	ActivityPublish(GIdx);

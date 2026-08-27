@@ -29,6 +29,53 @@ namespace
 	}
 }
 
+int SnowDeformation::ComputeArrivalRects(DirectX::XMINT2 a_scroll, bool a_clearing, ArrivalRect a_rects[2]) const
+{
+	const int dim = (int)deformMapDim;
+	// The texels whose world assignment the scroll changed are the leading
+	// band on each axis (in the NEW logical frame); a clear reassigns
+	// everything.
+	if (a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim) {
+		a_rects[0] = { 0, 0, dim, dim };
+		return 1;
+	}
+	int count = 0;
+	if (a_scroll.x != 0)
+		a_rects[count++] = { a_scroll.x > 0 ? dim - a_scroll.x : 0, 0, std::abs(a_scroll.x), dim };
+	if (a_scroll.y != 0)
+		a_rects[count++] = { 0, a_scroll.y > 0 ? dim - a_scroll.y : 0, dim, std::abs(a_scroll.y) };
+	return count;
+}
+
+// The one place CPU code crosses the torus: a logical box becomes up to four
+// physical segments (one wrap split per axis), each landing at its logical
+// offset in the destination, so every staging texture stays LOGICALLY laid
+// out and StoreTrenchBand never learns the map rotated under it.
+void SnowDeformation::CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_src,
+	int a_x0, int a_y0, int a_w, int a_h, DirectX::XMINT2 a_physOrigin)
+{
+	auto context = globals::d3d::context;
+	if (!context)
+		return;
+	const int dim = (int)deformMapDim;
+	const int mask = dim - 1;
+
+	int yDone = 0;
+	while (yDone < a_h) {
+		const int py = (a_y0 + yDone + a_physOrigin.y) & mask;
+		const int yRun = std::min(a_h - yDone, dim - py);
+		int xDone = 0;
+		while (xDone < a_w) {
+			const int px = (a_x0 + xDone + a_physOrigin.x) & mask;
+			const int xRun = std::min(a_w - xDone, dim - px);
+			const D3D11_BOX box{ (UINT)px, (UINT)py, 0, (UINT)(px + xRun), (UINT)(py + yRun), 1 };
+			context->CopySubresourceRegion(a_dst, 0, (UINT)xDone, (UINT)yDone, 0, a_src, 0, &box);
+			xDone += xRun;
+		}
+		yDone += yRun;
+	}
+}
+
 bool SnowDeformation::CreateTrenchStoreResources()
 {
 	auto device = globals::d3d::device;
@@ -122,11 +169,17 @@ void SnowDeformation::UpdateTrenchDebugTexture()
 		return;
 
 	auto context = globals::d3d::context;
-	auto* live = deformationTextures[currentTexture];
+	auto* live = deformationTextures[0];
 	auto* shader = GetTrenchDebugCS();
 	if (!context || !live || !shader)
 		return;
 
+	// The CS de-rotates: it reads the map physically (MapOrigin from the
+	// PerFrame CB, which holds this frame's values on every executed frame
+	// and the still-current ones on skipped frames) and writes the debug
+	// view logically, so the preview stays world-aligned.
+	ID3D11Buffer* cb = perFrame->CB();
+	context->CSSetConstantBuffers(0, 1, &cb);
 	ID3D11ShaderResourceView* srvs[] = { live->srv.get() };
 	ID3D11UnorderedAccessView* uavs[] = { trenchDebugUAV.get() };
 	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
@@ -136,6 +189,8 @@ void SnowDeformation::UpdateTrenchDebugTexture()
 
 	ID3D11ShaderResourceView* nullSrv[1] = { nullptr };
 	ID3D11UnorderedAccessView* nullUav[1] = { nullptr };
+	ID3D11Buffer* nullCB = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullCB);
 	context->CSSetShaderResources(0, 1, nullSrv);
 	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -182,7 +237,7 @@ void SnowDeformation::RollTrenchWindow()
 		return;
 
 	auto context = globals::d3d::context;
-	auto* live = deformationTextures[currentTexture];
+	auto* live = deformationTextures[0];
 	if (!context || !live || !live->resource)
 		return;
 
@@ -248,8 +303,9 @@ void SnowDeformation::RollTrenchWindow()
 			trenchDirtyRows[(size_t)row >> 5] &= ~(1u << (row & 31));
 	}
 
-	const D3D11_BOX box{ 0, (UINT)start, 0, (UINT)dim, (UINT)(start + rows), 1 };
-	context->CopySubresourceRegion(trenchRollStaging[ring].get(), 0, 0, 0, 0, live->resource.get(), 0, &box);
+	// Logical rows out of the toroidal map; the staging slice stays laid out
+	// logically so the unpack below is untouched.
+	CopyLogicalBox(trenchRollStaging[ring].get(), live->resource.get(), 0, start, dim, rows, trenchMapPhysOrigin);
 
 	// The window state the CONTENTS belong to, not the live values - the same
 	// rule the departing flush follows.
@@ -763,7 +819,10 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
-	auto* previous = deformationTextures[currentTexture];
+	// The map still holds last frame's final content here (nothing has
+	// written it yet this frame), anchored to trenchMapOrigin and
+	// trenchMapPhysOrigin.
+	auto* previous = deformationTextures[0];
 	if (!context || !device || !previous || !previous->resource)
 		return;
 
@@ -794,7 +853,10 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		if (FAILED(device->CreateTexture2D(&fullDesc, nullptr, fullStaging.put())))
 			return;
 		Util::SetResourceName(fullStaging.get(), "SnowDeformation::TrenchFullStaging");
-		context->CopyResource(fullStaging.get(), previous->resource.get());
+		// De-rotated during the copy, so the CPU unpack (and through it the
+		// co-save format) stays layout-independent: saves never encode the
+		// map origin.
+		CopyLogicalBox(fullStaging.get(), previous->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
 
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(fullStaging.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
@@ -838,8 +900,8 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 			trenchBandValid[ring][axis] = false;
 		}
 
-		const D3D11_BOX box{ (UINT)meta.x0, (UINT)meta.y0, 0, (UINT)(meta.x0 + meta.w), (UINT)(meta.y0 + meta.h), 1 };
-		context->CopySubresourceRegion(trenchBandStaging[ring][axis].get(), 0, 0, 0, 0, previous->resource.get(), 0, &box);
+		CopyLogicalBox(trenchBandStaging[ring][axis].get(), previous->resource.get(),
+			meta.x0, meta.y0, meta.w, meta.h, trenchMapPhysOrigin);
 		trenchBandMeta[ring][axis] = meta;
 		trenchBandValid[ring][axis] = true;
 	}
@@ -863,29 +925,17 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	const float texel = deformWorldSize / (float)deformMapDim;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 
-	// Destination texel p reads previous p + scroll; the ones that miss are
-	// the trailing band on each axis. A clear misses everywhere.
-	struct Rect
-	{
-		int x0, y0, w, h;
-	};
-	Rect rects[2];
-	int rectCount = 0;
-	const bool full = a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim;
-	if (full) {
-		rects[rectCount++] = { 0, 0, dim, dim };
-	} else {
-		if (a_scroll.x != 0)
-			rects[rectCount++] = { a_scroll.x > 0 ? dim - a_scroll.x : 0, 0, std::abs(a_scroll.x), dim };
-		if (a_scroll.y != 0)
-			rects[rectCount++] = { 0, a_scroll.y > 0 ? dim - a_scroll.y : 0, dim, std::abs(a_scroll.y) };
-	}
+	// The SAME rects RingCS is dispatched over (one function serves both), so
+	// the inject upload and the ring consumption can never disagree.
+	ArrivalRect rects[2];
+	const int rectCount = ComputeArrivalRects(a_scroll, a_clearing, rects);
 	if (rectCount == 0)
 		return 0;
+	const bool full = rectCount == 1 && rects[0].w == dim && rects[0].h == dim;
 
 	bool any = false;
 	for (int i = 0; i < rectCount; i++) {
-		const Rect& rect = rects[i];
+		const ArrivalRect& rect = rects[i];
 		const size_t bytes = (size_t)rect.w * rect.h;
 		std::fill_n(trenchInjectScratch.begin(), bytes, (uint8_t)0);
 

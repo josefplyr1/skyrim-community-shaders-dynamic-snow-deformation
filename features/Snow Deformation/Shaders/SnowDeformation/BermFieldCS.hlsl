@@ -25,7 +25,8 @@ RWTexture2D<float> OutBermField : register(u0);
 cbuffer PerFrame : register(b0)
 {
 	float2 WindowOrigin;
-	int2 ScrollDelta;
+	// Toroidal map addressing (see DeformationUpdateCS.hlsl).
+	int2 MapOrigin;
 
 	float TexelSize;
 	uint StampCount;
@@ -58,6 +59,14 @@ float Displaced(float4 texel)
 	return saturate(texel.x - max(texel.y, 0.0));
 }
 
+// The map is toroidal; the berm field is NOT - it is rebuilt from scratch
+// every frame, so it stays logically laid out and its consumers are
+// untouched. Only the map fetch translates.
+int3 DeformTexel(int2 t, int2 dims)
+{
+	return int3((t + MapOrigin) & (dims - 1), 0);
+}
+
 // Bilinear tap in texel coordinates, clamped to the edge - the Load-based
 // filtering SampleDeformationBilinear performs in the shells.
 float TapBilinear(float2 t, float2 dims)
@@ -72,10 +81,10 @@ float TapBilinear(float2 t, float2 dims)
 	// reach the field at all. Subtracting here rather than scaling the berm
 	// down afterwards also keeps a boot print through a melt basin throwing
 	// its own proper ridge.
-	float s00 = Displaced(DeformationMap.Load(int3(t0.x, t0.y, 0)));
-	float s10 = Displaced(DeformationMap.Load(int3(t1.x, t0.y, 0)));
-	float s01 = Displaced(DeformationMap.Load(int3(t0.x, t1.y, 0)));
-	float s11 = Displaced(DeformationMap.Load(int3(t1.x, t1.y, 0)));
+	float s00 = Displaced(DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))));
+	float s10 = Displaced(DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))));
+	float s01 = Displaced(DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))));
+	float s11 = Displaced(DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))));
 
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }

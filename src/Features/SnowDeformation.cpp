@@ -205,8 +205,10 @@ void SnowDeformation::CreateDeformationTextures()
 		.Texture2D = { .MipSlice = 0 }
 	};
 
+	// [0] is THE map; [1] is EvolveCS's snapshot scratch (the retired
+	// ping-pong partner, kept at identical spec for the pre-evolve copy).
 	for (uint i = 0; i < 2; i++) {
-		deformationTextures[i] = new Texture2D(texDesc, i == 0 ? "SnowDeformation::DeformationMap0" : "SnowDeformation::DeformationMap1");
+		deformationTextures[i] = new Texture2D(texDesc, i == 0 ? "SnowDeformation::DeformationMap" : "SnowDeformation::EvolveScratch");
 		deformationTextures[i]->CreateSRV(srvDesc);
 		deformationTextures[i]->CreateUAV(uavDesc);
 	}
@@ -421,13 +423,23 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 			std::floor((eyePosFB.y - deformWorldSize * 0.5f) / deformTexel) * deformTexel
 		};
 
-		pendingScrollDelta.x += (int)std::lround((desiredOrigin.x - windowOrigin.x) / deformTexel);
-		pendingScrollDelta.y += (int)std::lround((desiredOrigin.y - windowOrigin.y) / deformTexel);
+		const int scrollX = (int)std::lround((desiredOrigin.x - windowOrigin.x) / deformTexel);
+		const int scrollY = (int)std::lround((desiredOrigin.y - windowOrigin.y) / deformTexel);
+		pendingScrollDelta.x += scrollX;
+		pendingScrollDelta.y += scrollY;
+		// The toroidal origin advances HERE, with the window, so every
+		// consumer CB filled after this point carries the pair consistently.
+		// The map itself catches up in Prepass (RingCS), before anything
+		// renders. The dim is a power of two, so the wrap is a mask.
+		const int originMask = (int)deformMapDim - 1;
+		mapOrigin.x = (mapOrigin.x + scrollX) & originMask;
+		mapOrigin.y = (mapOrigin.y + scrollY) & originMask;
 		windowOrigin = desiredOrigin;
 	}
 
 	SettingsGPU data{};
 	data.WindowOrigin = windowOrigin;
+	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugGlacierView ? 8u : 0u);
@@ -474,10 +486,15 @@ void SnowDeformation::ApplyRangeSettings()
 	// resolution-relative, so the pair recreates (with the store's window-sized
 	// companions) and clears, and the store re-injects what it holds.
 	if (deformMapDimDirty) {
-		const uint desired = std::clamp(deformMapDimRequest, 1024u, 4096u);
+		// Snapped to a power of two - the toroidal mask requires it. The
+		// combo only offers these three; this guards any other writer.
+		const uint clamped = std::clamp(deformMapDimRequest, 1024u, 4096u);
+		const uint desired = clamped >= 4096u ? 4096u : (clamped >= 2048u ? 2048u : 1024u);
 		if (desired != deformMapDim) {
 			deformMapDim = desired;
 			CreateDeformationTextures();
+			mapOrigin.x &= (int)deformMapDim - 1;
+			mapOrigin.y &= (int)deformMapDim - 1;
 			clearRequested = true;
 		}
 		deformMapDimDirty = false;
@@ -715,11 +732,14 @@ void SnowDeformation::Prepass()
 
 	PerFrame perFrameData{};
 
-	// The window origin was advanced in GetCommonBufferData (during
-	// UpdateSharedData); only consume the stored state here.
-	perFrameData.ScrollDelta = pendingScrollDelta;
+	// The window origin and the toroidal map origin were advanced in
+	// GetCommonBufferData (during UpdateSharedData); only consume the stored
+	// state here. The scroll stays CPU-side: the GPU expresses it as the
+	// arriving-ring rects below.
+	const DirectX::XMINT2 scroll = pendingScrollDelta;
 	pendingScrollDelta = { 0, 0 };
 
+	perFrameData.MapOrigin = mapOrigin;
 	perFrameData.WindowOrigin = windowOrigin;
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
@@ -787,6 +807,20 @@ void SnowDeformation::Prepass()
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
+	// The texels whose world assignment this frame's scroll (or clear)
+	// changed - RingCS's dispatch domain. Same rects BuildTrenchInject fills,
+	// through the same function, so the two cannot disagree.
+	{
+		ArrivalRect arriving[2];
+		const int arrivingCount = ComputeArrivalRects(scroll, perFrameData.ClearMap != 0, arriving);
+		perFrameData.RingRectCount = (uint)arrivingCount;
+		perFrameData.RingTotalTexels = 0;
+		for (int i = 0; i < arrivingCount; i++) {
+			perFrameData.RingRects[i] = { arriving[i].x0, arriving[i].y0, arriving[i].w, arriving[i].h };
+			perFrameData.RingTotalTexels += (uint)(arriving[i].w * arriving[i].h);
+		}
+	}
+
 	// Persistent trenches. Ordered against the dispatch:
 	// the flush stages what this frame's scroll is about to discard, so it must
 	// read the map BEFORE the ping-pong swap below, and it uses the window
@@ -799,11 +833,11 @@ void SnowDeformation::Prepass()
 	TickAccumulation();
 	SweepTrenchStore();
 	DrainTrenchBands();
-	FlushDepartingTrenches(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
+	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);
 	// Departure is not the only way ground becomes worth storing: dig and save
 	// without moving and nothing ever leaves. This keeps the store true.
 	RollTrenchWindow();
-	perFrameData.InjectValid = BuildTrenchInject(perFrameData.ScrollDelta, perFrameData.ClearMap != 0);
+	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
 
 	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
 	// this feature was already timed and neither of these was, which is the
@@ -920,7 +954,7 @@ void SnowDeformation::Prepass()
 	}
 
 	const bool inputsIdle =
-		perFrameData.ScrollDelta.x == 0 && perFrameData.ScrollDelta.y == 0 &&
+		scroll.x == 0 && scroll.y == 0 &&
 		stampsQuiet &&
 		perFrameData.DepositParams.x < 0.5f &&
 		perFrameData.InjectValid == 0 &&
@@ -928,7 +962,7 @@ void SnowDeformation::Prepass()
 		perFrameData.ClearMap == 0;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
 	deformIdleBlockers =
-		((perFrameData.ScrollDelta.x != 0 || perFrameData.ScrollDelta.y != 0) ? 1u : 0u) |
+		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
 		(!stampsQuiet ? 2u : 0u) |
 		(perFrameData.DepositParams.x >= 0.5f ? 4u : 0u) |
 		(perFrameData.InjectValid != 0 ? 8u : 0u) |
@@ -962,6 +996,7 @@ void SnowDeformation::Prepass()
 		// Skipping IS the measurement. Without an explicit zero the profiler
 		// keeps publishing the stale pre-skip window (or retires the row), so
 		// an idle pass still reads as costing full price.
+		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationRing");
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
@@ -970,15 +1005,19 @@ void SnowDeformation::Prepass()
 	if (!deformIdleSkipped) {
 		perFrame->Update(perFrameData);
 
-		uint previousTexture = currentTexture;
-		currentTexture = 1 - currentTexture;
+		auto* map = deformationTextures[0];
+		auto* scratch = deformationTextures[1];
 
 		{
 			ID3D11Buffer* buffers[1] = { perFrame->CB() };
 			context->CSSetConstantBuffers(0, 1, buffers);
 
-			ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get(), trenchInjectSRV.get() };
-			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+			// The single map is about to be written; the frame-start t101 bind
+			// aliases it and the UAV bind would force-null it anyway - done
+			// explicitly so the debug layer stays quiet. Rebound at the end of
+			// Prepass as before.
+			ID3D11ShaderResourceView* nullPS = nullptr;
+			context->PSSetShaderResources(101, 1, &nullPS);
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
@@ -988,15 +1027,41 @@ void SnowDeformation::Prepass()
 				context->ClearUnorderedAccessViewFloat(activityViewUAV.get(), zeroView);
 			}
 
-			ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get(), deformActivityUAV.get(),
+			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),
 				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr };
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			// Evolve owns the scroll copy, so it runs on every executed frame.
-			context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::DeformationEvolve");
-			context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
-			globals::profiler->EndPass();
+			// Ring: rewrite only the texels the scroll (or clear) reassigned.
+			// This is the whole scroll cost now - a walking-speed frame is a
+			// few thousand threads instead of a 4M-texel copy.
+			if (perFrameData.RingTotalTexels > 0) {
+				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
+				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
+				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::DeformationRing");
+				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
+				globals::profiler->EndPass();
+			} else {
+				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationRing");
+			}
+
+			// Evolve reads a snapshot so its neighbour taps (slump support,
+			// upwind supply) see one consistent frame. The copy must follow
+			// the ring, or arriving texels would evolve from the departed
+			// ground that used to stand at their physical position.
+			{
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				context->CopyResource(scratch->resource.get(), map->resource.get());
+
+				ID3D11ShaderResourceView* srvs[2] = { scratch->srv.get(), trenchInjectSRV.get() };
+				context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+				context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::DeformationEvolve");
+				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+				globals::profiler->EndPass();
+			}
 
 			// Stamps + waves RMW the texels evolve just wrote. Sustained
 			// stamps (melt, crust) must re-apply even when the set is quiet -
@@ -1019,7 +1084,7 @@ void SnowDeformation::Prepass()
 			globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
 		if (!shellBermBakeDisabled && bermFieldTexture) {
 			if (auto* bermCS = GetBermFieldCS()) {
-				ID3D11ShaderResourceView* bermSrvs[] = { deformationTextures[currentTexture]->srv.get() };
+				ID3D11ShaderResourceView* bermSrvs[] = { map->srv.get() };
 				ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
 				// The freshly written map is still bound as a UAV; a texture cannot
 				// be read and written at once, so drop that binding first.
@@ -1067,20 +1132,21 @@ void SnowDeformation::Prepass()
 		}
 	}
 
-	// After the swap, so it copies the map this frame just wrote - including
-	// anything the inject seeded into it.
+	// After the passes, so it copies the map this frame just wrote - including
+	// anything the ring injected into it.
 	UpdateTrenchDebugTexture();
 
 	// What the map just written is anchored to. Recorded here because the live
-	// values move ahead of it: the origin advances in GetCommonBufferData, and
+	// values move ahead of it: the origins advance in GetCommonBufferData, and
 	// a range or worldspace change rewrites the texel size and the key before
 	// the next frame's flush ever sees this content.
 	trenchMapOrigin = windowOrigin;
 	trenchMapTexel = perFrameData.TexelSize;
 	trenchMapWorldspace = activeWorldspace.load(std::memory_order_acquire);
+	trenchMapPhysOrigin = mapOrigin;
 	trenchMapPrimed = true;
 
-	// Rebind: after the ping-pong flip this points at the freshly written map.
+	// Rebind: the dispatch block nulled t101 while the map was a UAV target.
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 }
@@ -1103,6 +1169,15 @@ ID3D11ComputeShader* SnowDeformation::GetBermFieldCS()
 	return bermFieldCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetDeformationRingCS()
+{
+	if (!deformationRingCS) {
+		logger::debug("Compiling DeformationUpdateCS:RingCS");
+		deformationRingCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "RingCS"));
+	}
+	return deformationRingCS;
+}
+
 ID3D11ComputeShader* SnowDeformation::GetDeformationEvolveCS()
 {
 	if (!deformationEvolveCS) {
@@ -1123,6 +1198,9 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
 
 void SnowDeformation::ClearShaderCache()
 {
+	if (deformationRingCS)
+		deformationRingCS->Release();
+	deformationRingCS = nullptr;
 	if (deformationEvolveCS)
 		deformationEvolveCS->Release();
 	deformationEvolveCS = nullptr;

@@ -495,6 +495,12 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 		a_cb.GridOrigin.x - windowOrigin.x,
 		a_cb.GridOrigin.y - windowOrigin.y
 	};
+	// Toroidal addressing pairs with the same live window state; refreshed
+	// here so the shadow-caster snapshot cannot go stale against a map that
+	// scrolled after it was taken. One b0 serves both shells and the
+	// shadow/probe passes.
+	a_cb.DeformMapOrigin = mapOrigin;
+	a_cb.DeformTorusPad = { 0, 0 };
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
 	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;

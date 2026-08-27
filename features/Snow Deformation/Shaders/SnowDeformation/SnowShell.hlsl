@@ -190,6 +190,11 @@ cbuffer ShellCB : register(b0)
 	// Stage 3 P5: x = rim lip height (fraction of local depth), y = rim
 	// teeth strength; zw spare.
 	float4 RimStyle;
+
+	// Toroidal deformation-map addressing: physical position of logical
+	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
+	int2 DeformMapOrigin;
+	int2 DeformTorusPad;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -213,6 +218,16 @@ cbuffer BowWaveCB : register(b1)
 
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> DeformationMap : register(t1);
+
+// Toroidal map fetch: logical texel (already clamped by the caller) to
+// physical. The map's dim is a power of two, so the wrap is a mask. Hardware
+// samplers cannot do this - bilinear across the physical seam would mix two
+// unrelated world locations - so every read stays Load-based, per tap.
+int3 DeformTexel(int2 t, int2 dims)
+{
+	return int3((t + DeformMapOrigin) & (dims - 1), 0);
+}
+
 Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
@@ -404,10 +419,10 @@ float SampleDeformationBilinear(float2 t, float2 dims)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
 
 	// Clamped here rather than at each call site: melt writes past 1.0 into
 	// the refill headroom, and this is the single tap every consumer goes
@@ -433,10 +448,10 @@ float SampleDeposit(float2 gridLocal)
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).w;
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).w;
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).w;
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).w;
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).w;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).w;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).w;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).w;
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }
 
@@ -495,10 +510,10 @@ float SampleDisplacedFast(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float4 s00 = DeformationMap.Load(int3(t0.x, t0.y, 0));
-	float4 s10 = DeformationMap.Load(int3(t1.x, t0.y, 0));
-	float4 s01 = DeformationMap.Load(int3(t0.x, t1.y, 0));
-	float4 s11 = DeformationMap.Load(int3(t1.x, t1.y, 0));
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	// Only MELTED depth is spoil-free. Channel y is signed and negative means
 	// scorch, which was displaced and keeps its berm.

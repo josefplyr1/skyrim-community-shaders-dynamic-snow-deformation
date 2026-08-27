@@ -170,6 +170,10 @@ cbuffer ShellCB : register(b0)
 	float4 CompactLook;
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
+
+	// Toroidal deformation-map addressing (see SnowShell.hlsl).
+	int2 DeformMapOrigin;
+	int2 DeformTorusPad;
 }
 
 cbuffer StaticCB : register(b1)
@@ -222,6 +226,15 @@ cbuffer StaticCB : register(b1)
 }
 
 Texture2D<float4> DeformationMap : register(t1);
+
+// Toroidal map fetch: logical texel (already clamped by the caller) to
+// physical; wrap is a mask (pow2 dim). Load-based on purpose - a hardware
+// sampler would bilinear across the physical seam. Mirror of SnowShell.hlsl.
+int3 DeformTexel(int2 t, int2 dims)
+{
+	return int3((t + DeformMapOrigin) & (dims - 1), 0);
+}
+
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -353,10 +366,10 @@ float SampleDeformation(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
 
 	// Saturated: melt writes past 1.0 into the refill headroom.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
@@ -406,10 +419,10 @@ float PatchDeformBilinear(float2 t, float2 dims)
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = DeformationMap.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = DeformationMap.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = DeformationMap.Load(int3(t1.x, t1.y, 0)).x;
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
 	// Saturated: melt writes past 1.0 into the refill headroom.
 	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 }

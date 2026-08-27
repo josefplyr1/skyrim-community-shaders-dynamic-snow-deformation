@@ -17,10 +17,22 @@
 Texture2D<float4> DeformationMap : register(t0);
 RWTexture2D<float> DebugDepth : register(u0);
 
+// Leading rows of DeformationUpdateCS's PerFrame; only MapOrigin is read,
+// but the prefix layout must match it exactly.
+cbuffer PerFrame : register(b0)
+{
+	float2 WindowOrigin;
+	int2 MapOrigin;
+}
+
 [numthreads(8, 8, 1)] void main(uint3 dtid
 								: SV_DispatchThreadID) {
 	// Displaced depth, matching what the store keeps and what the shells carve
 	// from: melted ground leaves no spoil and is not a trench.
-	const float4 texel = DeformationMap[dtid.xy];
+	// De-rotated: the map is toroidal, the debug view stays world-aligned.
+	uint2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	const uint2 phys = (dtid.xy + uint2(MapOrigin)) & (dims - 1);
+	const float4 texel = DeformationMap[phys];
 	DebugDepth[dtid.xy] = saturate(texel.x - max(texel.y, 0.0));
 }
