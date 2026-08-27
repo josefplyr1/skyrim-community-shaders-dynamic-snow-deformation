@@ -771,6 +771,22 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 	return blob;
 }
 
+ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
+{
+	// Lazy like GetShellShadowVS: the shadow pass runs before DrawShell has
+	// had a chance to create the statics shaders on early frames.
+	if (!patchShadowVS) {
+		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchShadowVS)))
+				Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
+		}
+	}
+	return patchShadowVS;
+}
+
 bool SnowDeformation::EnsureStaticsShaders()
 {
 	if (staticsVS && staticsPS)

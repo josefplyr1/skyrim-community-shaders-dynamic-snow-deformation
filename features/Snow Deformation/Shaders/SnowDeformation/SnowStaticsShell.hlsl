@@ -908,7 +908,15 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// ends in an 8-unit staircase rim along the object's edge. Wearing
 		// through to the object stays the Trench Floor See-Through slider's job,
 		// which dissolves coverage rather than moving geometry.
+#ifdef SNOW_SHADOW_CAST
+		// Caster pass renders in absolute world with ShellCameraPosAdjust
+		// zeroed; measured against it, every vertex sits ~80k units away and
+		// the pad balloons to full depth - an uncarved slab shadowing the
+		// whole trench. The patch centre snaps to the camera; use it.
+		float camDist = length(worldXY - WorldRow0.xy);
+#else
 		float camDist = length(float3(worldXY, top) - ShellCameraPosAdjust.xyz);
+#endif
 		float pad = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(0.25, 2.0, skinEdgeMin);
 		depth = max(depth, pad);
 
@@ -944,6 +952,20 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		depth += Undulation(worldXY) * saturate(depth / 8.0);
 
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
+
+#ifdef SNOW_SHADOW_CAST
+		// The landscape caster's conventions (SnowShell.hlsl SNOW_SHADOW_CAST):
+		// only snow standing meaningfully above its ground casts - a dusting
+		// shadowing the object beneath it reads as the object darkening - and
+		// the caster fades out over the same 40-70 m band so the two
+		// surfaces' shadows end together at the verge. Distance from the
+		// patch centre, which tracks the camera; killed vertices take the
+		// same NaN path as dead ones.
+		float castVis = smoothstep(2.0, 5.0, depth) *
+		                (1.0 - smoothstep(2800.0, 4900.0, length(worldXY - WorldRow0.xy)));
+		[flatten] if (castVis < 0.35)
+			v.Killed = 1.0;
+#endif
 
 		// Carved-surface shading normal: finite differences of the SAME
 		// function the depth uses, exactly as the landscape PS differences

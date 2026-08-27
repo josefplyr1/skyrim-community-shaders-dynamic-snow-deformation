@@ -1304,6 +1304,9 @@ public:
 
 	/** @brief SNOW_SHADOW_CAST shell VS variant: flattens the base layer (sunk below terrain) so only excess height; mounds, drifts; casts. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellShadowVS();
+
+	/** @brief Lazily compiles the trench patch's shadow-caster VS. Implemented in SnowDeformation/Statics.cpp. */
+	ID3D11VertexShader* GetPatchShadowVS();
 	ID3D11VertexShader* shellShadowVS = nullptr;
 
 	/** @brief Last frame's fully-computed ShellCB (heap-held: ShellCB is over-aligned and embedding it pads the class). The caster injection runs at the shadow-mask pass, before this frame's DrawShell recomputes the windows; one-frame-stale grid placement is invisible in a shadow. Null until the first DrawShell. */
@@ -1667,6 +1670,8 @@ public:
 	ID3D11DomainShader* staticsDS = nullptr;
 	/** @brief Trench patch (PATCH define): the landscape shell's dense-grid carve applied to OBJECT tops; real geometry where parallax cannot notch silhouettes or hold floors angle-stably. */
 	ID3D11VertexShader* patchVS = nullptr;
+	/** @brief Depth-only caster variant of the patch VS (PATCH + SNOW_SHADOW_CAST); drawn into the sun cascade slices by InjectShellShadowCasters. */
+	ID3D11VertexShader* patchShadowVS = nullptr;
 	/** @brief Tessellated patch stages (optional; legacy path is the fallback). */
 	ID3D11VertexShader* patchTessVS = nullptr;
 	ID3D11HullShader* patchHS = nullptr;

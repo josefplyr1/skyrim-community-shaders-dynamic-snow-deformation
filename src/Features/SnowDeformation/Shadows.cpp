@@ -493,6 +493,37 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+	// Trench patch caster: road snow's walls must shadow actors standing in
+	// the trench, exactly as the landscape shell's do - Josef verified the
+	// landscape caster healthy before this was added. Same slices, same
+	// depth-only state; the patch VS runs its own SNOW_SHADOW_CAST gates
+	// (excess height, the 40-70 m fade) and NaN-kills what may not cast.
+	ID3D11VertexShader* patchCastVS = GetPatchShadowVS();
+	const bool castPatch = patchCastVS && heightTopRaw[heightCurrent] && heightSkinDepth && objectSnowCone &&
+	                       (settings.SnowMeshesDepth > 0.5f || settings.RoadMeshesDepth > 0.5f);
+	if (castPatch) {
+		StaticsCB scb{};
+		scb.WorldRow0 = {
+			std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
+			std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
+		};
+		scb.ObjectsDepth = settings.ObjectsSnowDepth;
+		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.HasObjectTop = 1.0f;
+		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+		scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+		staticsCB->Update(scb);
+		ID3D11Buffer* cb1 = staticsCB->CB();
+		context->VSSetConstantBuffers(1, 1, &cb1);
+		// t11/t12 rasters + t13 cone; t0 terrain, t1 deformation and t14 berm
+		// are already in the shell's caster set above.
+		ID3D11ShaderResourceView* patchCastSRVs[3] = { heightTopRaw[heightCurrent]->srv.get(),
+			heightSkinDepth->srv.get(), objectSnowCone->srv.get() };
+		context->VSSetShaderResources(11, 3, patchCastSRVs);
+	}
+
 	globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
 	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
 		if (!shadowAtlasDSV[cascade])
@@ -536,6 +567,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
 		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+
+		if (castPatch) {
+			context->VSSetShader(patchCastVS, nullptr, 0);
+			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		}
 	}
 	globals::profiler->EndPass();
 
@@ -577,6 +613,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
+		// The patch caster's rasters and cone, same treatment.
+		ID3D11ShaderResourceView* nullPatchSRVs[3] = { nullptr, nullptr, nullptr };
+		context->VSSetShaderResources(11, 3, nullPatchSRVs);
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();
