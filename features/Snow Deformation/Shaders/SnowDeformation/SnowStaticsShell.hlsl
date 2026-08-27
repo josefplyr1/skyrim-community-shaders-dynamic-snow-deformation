@@ -2248,6 +2248,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// melt term reads the wide exclusion field alone (no near mask bound
 	// here). Object tops from the skin's own raster window join the horizon.
 	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
+	// March diagnostics for debug view 4: x = how much the march darkened
+	// this pixel, y = fraction of taps that rebuilt the road's carved
+	// surface, z = fraction that used the flat dusting. Ran = the guard
+	// below passed at all (a pixel the cascades already darkened, or a sun
+	// too low, never marches - the view paints those dim magenta so "march
+	// skipped" cannot be misread as "march found nothing").
+	float3 dbgMarch = float3(0.0, 0.0, 0.0);
+	float dbgMarchRan = 0.0;
 	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
@@ -2313,6 +2321,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 						// ramp on the top as well - object snow fell into
 						// shadow at any low sun.
 						sh = topH + 2.0;
+						dbgMarch.z += 0.2;
 
 						// Except on ROAD-OWNED columns, which carry a full
 						// carved layer: a dusting occluder leaves the trench
@@ -2358,6 +2367,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
 								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
 								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								dbgMarch.y += 0.2;
+								dbgMarch.z -= 0.2;
 							}
 						}
 						tapOnObject = true;
@@ -2383,7 +2394,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
 		float soft = lerp(0.06, 0.35, farShadowT);
-		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		float marchFactor = lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		sunShadow *= marchFactor;
+		dbgMarch.x = 1.0 - marchFactor;
+		dbgMarchRan = 1.0;
 	}
 	// Screen-Space Shadows: same long-range term bare ground multiplies in,
 	// distance-blended past the cascades like the landscape shell (the SSS
@@ -2486,9 +2500,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH
-		preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
+		[branch] if (StaticsDebugView > 3.5)
+		{
+			// March mode. R = march darkening, G = road-surface taps,
+			// B = dusting taps; dim magenta = the march never ran here.
+			preLit = dbgMarchRan > 0.5 ? saturate(dbgMarch) : float3(0.15, 0.0, 0.15);
+		}
+		else
+		{
+			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
+		}
 #else
-		[branch] if (StaticsDebugView > 2.5)
+		[branch] if (StaticsDebugView > 3.5)
+		{
+			// March mode, identical encoding to the patch: the march is
+			// shared, and a skin pixel beside a patch pixel must be
+			// comparable in one screenshot.
+			preLit = dbgMarchRan > 0.5 ? saturate(dbgMarch) : float3(0.15, 0.0, 0.15);
+		}
+		else [branch] if (StaticsDebugView > 2.5)
 		{
 			// Normals mode. R = smoothed normal z remapped (0.5 = horizontal,
 			// 1 = straight up), G = the flat/rounded class. An up-facing
