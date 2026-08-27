@@ -318,6 +318,12 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	if (!painted && maxHeight - minHeight < 1.0f) {
 		const std::unique_lock lock(shellCellMutex);
 		uint64_t fillerKey = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+		// Tombstone: the snow-presence gate fails open on cells it has never
+		// looked at, and without this record a city's whole floor would read
+		// as never-looked-at and keep the deformation passes running there.
+		if (shellFillerCells.size() > 4096)
+			shellFillerCells.clear();
+		shellFillerCells[fillerKey] = data.worldspaceID;
 		if (auto it = shellCells.find(fillerKey); it != shellCells.end() && it->second.worldspaceID == data.worldspaceID) {
 			shellCells.erase(it);
 			shellDataDirty.store(true, std::memory_order_release);
@@ -338,6 +344,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO)
 			return;
 		shellCells[key] = data;
+		// A real bake supersedes this worldspace's filler tombstone. Another
+		// worldspace's tombstone at the same coords (city vs its parent) stands.
+		if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == data.worldspaceID)
+			shellFillerCells.erase(ft);
 	}
 	shellDataDirty.store(true, std::memory_order_release);
 }
@@ -745,7 +755,7 @@ void SnowDeformation::PostPostLoad()
 // readback would cost more than the passes this saves. Cells are 4096 units
 // against a deformation window of a few hundred metres, so the overlap set is
 // tiny and the test errs toward "has snow".
-bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits) const
+bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy, uint32_t* a_verdictOut) const
 {
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	// Two cells of lead beyond the window. The snowy set only refreshes when
@@ -768,16 +778,48 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits) const
 	const int cellMinY = (int)std::floor(minY / kCellSize);
 	const int cellMaxY = (int)std::floor(maxY / kCellSize);
 
-	const std::shared_lock lock(shellSnowyCellMutex);
-	// No cells in the window means it has not been built yet (or holds no
-	// terrain at all); answer conservatively rather than skipping on no data.
-	if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
-		return true;
-	for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
-		for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
-			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
-			if (shellSnowyCells.find(key) != shellSnowyCells.end())
+	if (a_verdictOut)
+		*a_verdictOut = kSnowGateBare;
+	{
+		const std::shared_lock lock(shellSnowyCellMutex);
+		// No cells in the window means it has not been built yet (or holds no
+		// terrain at all); answer conservatively rather than skipping on no data.
+		if (shellSnowyCells.empty() && shellStatCellsInWindow == 0) {
+			if (a_verdictOut)
+				*a_verdictOut = kSnowGateUnknown;
+			return true;
+		}
+		for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+			for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				if (shellSnowyCells.find(key) != shellSnowyCells.end()) {
+					if (a_verdictOut)
+						*a_verdictOut = kSnowGateSnowy;
+					return true;
+				}
+			}
+		}
+	}
+
+	// No snowy cell in reach. "Bare" may only be claimed about ground actually
+	// looked at: a cell neither baked for the active worldspace nor tombstoned
+	// as filler has simply not been seen yet - after a city gate, a door or
+	// fast travel that state lasts seconds, and failing closed on it suspends
+	// stamping while the player already stands on snow.
+	if (a_unknownIsSnowy) {
+		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+		const std::shared_lock lock(shellCellMutex);
+		for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
+			for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
+				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				if (auto it = shellCells.find(key); it != shellCells.end() && it->second.worldspaceID == worldspace)
+					continue;
+				if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == worldspace)
+					continue;
+				if (a_verdictOut)
+					*a_verdictOut = kSnowGateUnknown;
 				return true;
+			}
 		}
 	}
 	return false;

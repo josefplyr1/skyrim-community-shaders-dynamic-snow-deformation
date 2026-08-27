@@ -1809,18 +1809,42 @@ protected:
 
 	/** @brief Baked cells keyed by (cellX << 32) | cellY; entries carry their worldspace, which the window rebuild must match. */
 	std::unordered_map<uint64_t, ShellCellData> shellCells;
+	/** @brief Cells whose land was rejected as dead-flat filler (city worldspaces), keyed like shellCells, value = the worldspace that looked. A tombstone: "looked, no real land here", so the snow-presence gate can tell known-bare from never-baked without keeping the filler data. */
+	std::unordered_map<uint64_t, uint32_t> shellFillerCells;
 	/** @brief Cells in the current window whose blended depth goes positive somewhere, keyed like shellCells. Rebuilt with the window; read per frame by DeformationWindowHasSnow. */
 	std::unordered_set<uint64_t> shellSnowyCells;
 	mutable std::shared_mutex shellSnowyCellMutex;
-	/** @brief Whether any cell within a_halfExtentUnits of the deformation window's centre carries positive snow depth, plus two cells of lead so the answer flips before the player arrives. Implemented in SnowDeformation/TerrainData.cpp. */
-	bool WindowHasSnow(float a_halfExtentUnits) const;
-	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. */
-	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f); }
+	/** @brief Snow-presence verdicts, for the gate readout and the fail-open rule. */
+	enum SnowGateVerdict : uint32_t
+	{
+		kSnowGateSnowy = 0,
+		kSnowGateUnknown = 1,
+		kSnowGateBare = 2,
+	};
+	/**
+	 * @brief Whether any cell within a_halfExtentUnits of the deformation window's centre carries positive snow depth, plus two cells of lead so the answer flips before the player arrives.
+	 *
+	 * Three-way underneath: a cell can be known snowy, known bare (baked for the
+	 * active worldspace, or tombstoned as city filler), or never looked at. With
+	 * a_unknownIsSnowy the never-looked-at case answers true - after a city gate,
+	 * a door, or fast travel the surrounding cells take seconds to bake, and a
+	 * gate that fails closed on that ignorance suspends stamping while the player
+	 * already stands on snow. Steady state is unaffected: once baked, the verdict
+	 * is honest and the skip engages as before. The shell-footprint caller keeps
+	 * a_unknownIsSnowy false - at shell-span reach, unbaked cells are the norm
+	 * (land past uGrids never loads), so failing open there would never suspend.
+	 * Implemented in SnowDeformation/TerrainData.cpp.
+	 */
+	bool WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy = false, uint32_t* a_verdictOut = nullptr) const;
+	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. Never-baked ground counts as possibly snowy, and the verdict lands in deformSnowVerdict for the debug readout. */
+	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
 	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
+	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
+	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */
 	bool deformSuspended = false;
-	std::shared_mutex shellCellMutex;
+	mutable std::shared_mutex shellCellMutex;
 	std::atomic<bool> shellDataDirty{ true };
 	/** @brief Landscape textures discovered by the bake; indices are stable for the session and are what the baked cells store. */
 	std::vector<LandTextureEntry> landTextures;

@@ -1195,6 +1195,14 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
 		ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
 			settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");
+		{
+			static const char* kSnowGateNames[] = {
+				"running (snowy cell in reach)",
+				"running (unbaked ground in reach, assumed snow)",
+				"suspended (all ground in reach known bare)"
+			};
+			ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
+		}
 		if (auto* sky = RE::Sky::GetSingleton())
 			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
 				Util::Units::RadiansToDegrees(sky->windAngle));
