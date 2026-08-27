@@ -897,13 +897,28 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
-		// Carved-surface shading normal from the SMOOTH deformation gradient;
-		// the geometry carries the shape, this rounds the shading with the
-		// same curve the depth uses. The churn term shades at vertex rate:
-		// dense patch vertices sit 1-2 units apart near the camera.
-		float2 grad = float2(
-			SampleDeformationSmooth(gridLocal + float2(4.0, 0.0)) - SampleDeformationSmooth(gridLocal - float2(4.0, 0.0)),
-			SampleDeformationSmooth(gridLocal + float2(0.0, 4.0)) - SampleDeformationSmooth(gridLocal - float2(0.0, 4.0))) / 8.0;
+		// Carved-surface shading normal: finite differences of the SAME
+		// function the depth uses, exactly as the landscape PS differences
+		// CarveProfile. S1 moved the depth onto CarveProfile but left this
+		// on the raw deformation gradient x 0.6, and the two curves
+		// disagree hardest at mid-wall: the remap's slope reaches 1.875
+		// where the old factor was 0.6, so at depth 30 the wall was lit as
+		// if ~3x flatter than it stands - the bright band along road
+		// trench walls. At 64 the raw term saturated the tilt regardless,
+		// which is why the band vanished there; at 10 the profile is
+		// genuinely soft and the two curves agree. The march debug view
+		// cleared the shadow path first: engagement green, wall-base
+		// shadow landing - the band was never the march's.
+		// Churn shades at vertex rate: dense patch vertices sit 1-2 units
+		// apart near the camera.
+		const float gStep = 4.0;
+		float dXP = saturate(SampleDeformationSmooth(gridLocal + float2(gStep, 0.0)));
+		float dXN = saturate(SampleDeformationSmooth(gridLocal - float2(gStep, 0.0)));
+		float dYP = saturate(SampleDeformationSmooth(gridLocal + float2(0.0, gStep)));
+		float dYN = saturate(SampleDeformationSmooth(gridLocal - float2(0.0, gStep)));
+		float2 profGrad = float2(
+			CarveProfile(dXP, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, skinDepth, worldXY - float2(gStep, 0.0)),
+			CarveProfile(dYP, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, skinDepth, worldXY - float2(0.0, gStep))) / (2.0 * gStep);
 		float2 churnGrad = float2(0.0, 0.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
 		{
@@ -936,7 +951,9 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 				BermShape(BermField(gridLocal + float2(0.0, bStep))) - BermShape(BermField(gridLocal - float2(0.0, bStep)))) / (2.0 * bStep) *
 			          saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 		}
-		v.NormalWS = normalize(float3(grad * skinDepth * 0.6 - churnGrad - undGrad - bermGrad, 1.0));
+		// Surface z = top + profile, so normal.xy = -d(profile); the other
+		// fields RAISE the surface and subtract for the same reason.
+		v.NormalWS = normalize(float3(-profGrad - churnGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
