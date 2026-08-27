@@ -427,7 +427,12 @@ float SlumpTap(int2 p, int2 dims)
 			// channel is left alone: raising depth only loosens its clamp,
 			// so the added depth reads as DISPLACED - which also sheds the
 			// strip's berm through the (1 - deformation) mask for free.
-			[branch] if (slumpTarget > deformation)
+			// Dead-zone at the R16 map's own resolution: chasing a
+			// sub-quantum gap cannot change what the stored map renders, but
+			// it holds the activity verdict hot - the settle front then
+			// crawls one ULP a frame for minutes and the idle skip never
+			// engages. One quantum short of target is pixel-identical.
+			[branch] if (slumpTarget - deformation > max(slumpTarget, deformation) * exp2(-10.0) + 1e-6)
 			{
 				// GAME time, like the refill and the thaw: settling is
 				// something the world does to itself over hours, and it is
