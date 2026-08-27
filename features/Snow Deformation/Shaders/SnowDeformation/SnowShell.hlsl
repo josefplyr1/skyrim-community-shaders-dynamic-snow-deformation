@@ -676,9 +676,24 @@ float2 SampleExclusionMask(float2 worldXY)
 	return max(nearMask, SampleExclusionField(worldXY));
 }
 
+// Mirrors of SnowDeformation.h kNoRoadTop / SnowStaticsShell.hlsl kRoadOwnsTop.
+static const float kNoRoadTop = -1000000.0;
+static const float kRoadOwnsTop = 8.0;
+
 // The object-layer depth cap: the skin depth (max of 4 texels; the raster is
 // sentinel-free, 0 where nothing wrote) where a captured object covers the
 // texel, or a huge no-cap value where none does or the window does not reach.
+//
+// Road-owned columns cap to ZERO: the trench patch owns road snow outright
+// (ROAD-HEIGHTFIELD-PLAN), and a shell layer drawn there at its own class
+// depth is a second surface through one snow layer - Josef's depth sweep
+// caught it slicing across the patch's trench walls as a bright ledge
+// wherever the two depths disagree. Cap 0 takes the shell's existing
+// step-aside path (coverage dies with the depth), which the patch then fills
+// by construction. ALL FOUR texels must be road-owned - one-texel erosion, so
+// the verge keeps today's overlap and a jitter-shaped gap cannot open at the
+// road edge. The G channel is written only while the road heightfield is on,
+// so this path is inert with the feature off.
 float SampleObjectDepthCap(float2 worldXY)
 {
 	float2 dims;
@@ -693,9 +708,14 @@ float SampleObjectDepthCap(float2 worldXY)
 		ObjectTopsRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t1.y, 0)));
 	[flatten] if (all(tops < -50000.0))
 		return 1e6;
-	return max(
-		max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)).x, ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0)).x),
-		max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)).x, ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0)).x));
+	float2 sd00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
+	float2 sd10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
+	float2 sd01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
+	float2 sd11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
+	float4 roadTops = float4(sd00.y, sd10.y, sd01.y, sd11.y);
+	[branch] if (all(roadTops > kNoRoadTop * 0.5) && all(tops - roadTops < kRoadOwnsTop))
+		return 0.0;
+	return max(max(sd00.x, sd10.x), max(sd01.x, sd11.x));
 }
 
 // ---- Surface undulation: wind-settled dunes ----
