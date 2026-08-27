@@ -2019,7 +2019,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Blended as SAMPLES, never as coordinates: lerping UVs gives a field
 	// belonging to neither plane, so the whole transition band smears.
 	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
+#ifdef PATCH
+	// The landscape ramp, not the statics one. The patch is the landscape
+	// recipe on objects and its trench walls live in the same 40-65 degree
+	// band the shell's comment describes - at 30-unit depth a wall's n.z is
+	// ~0.45, which the shell hands fully to the side plane while the statics
+	// ramp below leaves it two-thirds top-projected: stretched grain, a
+	// grain-shadow march over stretched UVs, the bright warped band along
+	// road trench walls. At 64 the wall is steep enough that both ramps
+	// agree, which is why the band vanished there; at 10 neither engages.
+	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
+#else
+	// Skins keep the later ramp: they wrap real 3D meshes whose mid-slope
+	// shoulders (rock flanks at n.z 0.4-0.7) are tuned around the top
+	// projection holding on longer.
 	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+#endif
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
 	// Captured, not recomputed: normalWS is perturbed further below (berm
 	// ridge, normal map), and the parallax shadow must resolve the light into
