@@ -863,10 +863,15 @@ void SnowDeformation::Prepass()
 	// Matched within a tolerance rather than hashed on a grid: a swaying foot
 	// straddling any quantization boundary reads as change every few frames,
 	// and each flicker costs dispatch + verdict latency - measured as a
-	// permanent 0% skip under `tai`. Sub-tolerance drift while skipping goes
-	// unapplied; half a texel inside an already-carved print is invisible.
-	constexpr float kStampTol = 2.0f;
-	constexpr float kStampTolSq = kStampTol * kStampTol;
+	// permanent 0% skip under `tai`. One TEXEL of tolerance: movement under a
+	// texel cannot change which texels a print covers, and max-blend keeps the
+	// high-water mark, so snapping it is visually free - while idle-animation
+	// weight shifts (2+ units, measured at 116-161/300 frames) stay absorbed.
+	// Safe for real walkers: drift is measured against the BASELINE, so a
+	// walking foot accumulates past a texel within a frame or two and carves
+	// normally.
+	const float kStampTol = std::max(2.0f, perFrameData.TexelSize);
+	const float kStampTolSq = kStampTol * kStampTol;
 	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
 	if (!stampsQuiet)
 		stampSetTallyCount++;
