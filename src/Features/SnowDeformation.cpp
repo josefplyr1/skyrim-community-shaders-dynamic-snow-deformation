@@ -962,7 +962,8 @@ void SnowDeformation::Prepass()
 		// Skipping IS the measurement. Without an explicit zero the profiler
 		// keeps publishing the stale pre-skip window (or retires the row), so
 		// an idle pass still reads as costing full price.
-		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationUpdate");
+		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
+		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
 	}
 
@@ -981,15 +982,34 @@ void SnowDeformation::Prepass()
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
+			// Max-composed by the passes, so it needs a fresh canvas each frame.
+			if (perFrameData.DebugActivityView) {
+				const FLOAT zeroView[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				context->ClearUnorderedAccessViewFloat(activityViewUAV.get(), zeroView);
+			}
 
 			ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get(), deformActivityUAV.get(),
 				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			context->CSSetShader(GetDeformationUpdateCS(), nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::DeformationUpdate");
+			// Evolve owns the scroll copy, so it runs on every executed frame.
+			context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::DeformationEvolve");
 			context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 			globals::profiler->EndPass();
+
+			// Stamps + waves RMW the texels evolve just wrote. Sustained
+			// stamps (melt, crust) must re-apply even when the set is quiet -
+			// dwell time is their input - so the gate is presence, not change.
+			const bool stampWork = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f;
+			if (stampWork) {
+				context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::DeformationStamps");
+				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+				globals::profiler->EndPass();
+			} else {
+				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
+			}
 		}
 
 		// Berm bake, reading the map the pass above just wrote. Skipped while the
@@ -1083,20 +1103,32 @@ ID3D11ComputeShader* SnowDeformation::GetBermFieldCS()
 	return bermFieldCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetDeformationUpdateCS()
+ID3D11ComputeShader* SnowDeformation::GetDeformationEvolveCS()
 {
-	if (!deformationUpdateCS) {
-		logger::debug("Compiling DeformationUpdateCS");
-		deformationUpdateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0"));
+	if (!deformationEvolveCS) {
+		logger::debug("Compiling DeformationUpdateCS:EvolveCS");
+		deformationEvolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "EvolveCS"));
 	}
-	return deformationUpdateCS;
+	return deformationEvolveCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
+{
+	if (!deformationStampCS) {
+		logger::debug("Compiling DeformationUpdateCS:StampCS");
+		deformationStampCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampCS"));
+	}
+	return deformationStampCS;
 }
 
 void SnowDeformation::ClearShaderCache()
 {
-	if (deformationUpdateCS)
-		deformationUpdateCS->Release();
-	deformationUpdateCS = nullptr;
+	if (deformationEvolveCS)
+		deformationEvolveCS->Release();
+	deformationEvolveCS = nullptr;
+	if (deformationStampCS)
+		deformationStampCS->Release();
+	deformationStampCS = nullptr;
 	if (bermFieldCS)
 		bermFieldCS->Release();
 	bermFieldCS = nullptr;

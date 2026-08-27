@@ -2,11 +2,23 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-// Persistent snow deformation map update.
+// Persistent snow deformation map update, split into two passes.
 //
-// A square world-space window following the camera in whole-texel steps. Each
-// frame the previous map is re-read at a scrolled offset, refill is applied,
-// and this frame's stamps are blended in.
+// A square world-space window following the camera in whole-texel steps.
+//
+//   EvolveCS - the world acting on the map: scroll copy from the previous
+//              frame, tile-store inject, wind-biased refill, melt/crust/
+//              deposit decay, unsupported-snow slump. The only pass that
+//              reads NEIGHBOUR texels, so it is the only one that needs a
+//              consistent previous-frame snapshot.
+//   StampCS  - actors acting on the map: stamp capsules and bow-wave
+//              deposits, read-modify-write on the texel EvolveCS just wrote.
+//              Per-texel only, so it can later be tile-dispatched over the
+//              stamps' bounding boxes.
+//
+// Splitting at the stamp boundary is safe because every stamp/wave term is a
+// function of the texel's own value; the one storage round between the passes
+// only touches texels a stamp is about to overwrite anyway.
 //
 // Stamp classes, selected per stamp by StampEnds[i].z:
 //   CARVE (0) - instantaneous depth, max-blended, so standing in a trench
@@ -208,6 +220,10 @@ cbuffer PerFrame : register(b0)
 }
 
 Texture2D<float4> PreviousDeformation : register(t0);
+// EvolveCS writes each texel from the previous frame; StampCS then
+// read-modify-writes the same texel (typed UAV load - the codebase-wide
+// assumption GrassCollision's CollisionUpdateCS already relies on for the
+// same RGBA16F format).
 RWTexture2D<float4> CurrentDeformation : register(u0);
 // Tile-store depth for this window, resampled on the CPU. Only the texels the
 // scroll brings in from outside actually read it.
@@ -223,7 +239,8 @@ Texture2D<float> InjectDepth : register(t1);
 // Raw layout mirrored in SnowDeformation.cpp: [0] flag, [4] count,
 // [8]/[12] complemented min X/Y (min as InterlockedMax of 65535-coord, so an
 // all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
-// per-channel counts (depth, melt/scorch, crust/deposit).
+// per-channel counts (depth, melt/scorch, crust/deposit). Both passes OR
+// into the same buffer; the CPU clears it once per executed frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
@@ -235,12 +252,14 @@ groupshared uint gMaxX;
 groupshared uint gMaxY;
 // Sum of the largest per-texel delta, fixed-point 1e6. The MEAN delta is a
 // term's fingerprint: the slump step is SlumpRate x 0.5 x dt and scales with
-// the slider; half-ULP creep is an order smaller and scales with nothing.
+// the slider; storage-precision creep is an order smaller and scales with
+// nothing.
 groupshared uint gDeltaSum;
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
-// stored precision the change is.
+// stored precision the change is. Max-composed: the CPU clears it once per
+// frame and each executed pass folds its own delta in.
 RWTexture2D<float4> ActivityView : register(u2);
 
 // Per-channel excess beyond what the R16 map's storage precision can express;
@@ -250,6 +269,65 @@ float4 StoredDelta(float4 a, float4 b)
 	float4 d = abs(a - b);
 	float4 tol = max(abs(a), abs(b)) * exp2(-11.0) + 1e-6;
 	return max(d - tol, 0.0);
+}
+
+void ActivityReset(uint GIdx)
+{
+	if (GIdx == 0) {
+		gActivity = 0;
+		gCountR = 0;
+		gCountG = 0;
+		gCountB = 0;
+		gCMinX = 0;
+		gCMinY = 0;
+		gMaxX = 0;
+		gMaxY = 0;
+		gDeltaSum = 0;
+	}
+	GroupMemoryBarrierWithGroupSync();
+}
+
+// Flag, counts and bbox via one groupshared reduction - 4M threads hammering
+// a single address serializes on the atomic unit.
+void ActivityAccumulate(float4 delta, uint2 pixel)
+{
+	if (any(delta > 0.0)) {
+		InterlockedAdd(gActivity, 1u);
+		if (delta.x > 0.0)
+			InterlockedAdd(gCountR, 1u);
+		if (delta.y > 0.0)
+			InterlockedAdd(gCountG, 1u);
+		if (max(delta.z, delta.w) > 0.0)
+			InterlockedAdd(gCountB, 1u);
+		InterlockedMax(gCMinX, 65535u - pixel.x);
+		InterlockedMax(gCMinY, 65535u - pixel.y);
+		InterlockedMax(gMaxX, pixel.x);
+		InterlockedMax(gMaxY, pixel.y);
+		float maxDelta = max(max(delta.x, delta.y), max(delta.z, delta.w));
+		InterlockedAdd(gDeltaSum, min((uint)(maxDelta * 1e6 + 0.5), 1000000u));
+	}
+	[branch] if (DebugActivityView)
+		ActivityView[pixel] = max(ActivityView[pixel],
+			float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
+				saturate(max(delta.z, delta.w) * 512.0), 1.0));
+}
+
+void ActivityPublish(uint GIdx)
+{
+	GroupMemoryBarrierWithGroupSync();
+	if (GIdx == 0 && gActivity != 0) {
+		ActivityFlag.InterlockedOr(0, 1u);
+		ActivityFlag.InterlockedAdd(4, gActivity);
+		uint unused;
+		ActivityFlag.InterlockedMax(8, gCMinX, unused);
+		ActivityFlag.InterlockedMax(12, gCMinY, unused);
+		ActivityFlag.InterlockedMax(16, gMaxX, unused);
+		ActivityFlag.InterlockedMax(20, gMaxY, unused);
+		ActivityFlag.InterlockedAdd(24, gCountR);
+		ActivityFlag.InterlockedAdd(28, gCountG);
+		ActivityFlag.InterlockedAdd(32, gCountB);
+		ActivityFlag.InterlockedAdd(36, gDeltaSum);
+	}
 }
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
@@ -287,23 +365,15 @@ float SlumpTap(int2 p, int2 dims)
 	return saturate(t.x - abs(t.y));
 }
 
-[numthreads(8, 8, 1)] void main(uint3 DTid
-								: SV_DispatchThreadID, uint GIdx
-								: SV_GroupIndex) {
+// The world acting on the map: scroll, inject, refill, decay, slump. The
+// neighbour reads (slump support, upwind refill supply) all go to the
+// previous-frame snapshot, so tile edges cannot see half-updated texels.
+[numthreads(8, 8, 1)] void EvolveCS(uint3 DTid
+									: SV_DispatchThreadID, uint GIdx
+									: SV_GroupIndex) {
 	uint2 pixel = DTid.xy;
 
-	if (GIdx == 0) {
-		gActivity = 0;
-		gCountR = 0;
-		gCountG = 0;
-		gCountB = 0;
-		gCMinX = 0;
-		gCMinY = 0;
-		gMaxX = 0;
-		gMaxY = 0;
-		gDeltaSum = 0;
-	}
-	GroupMemoryBarrierWithGroupSync();
+	ActivityReset(GIdx);
 
 	float deformation = 0.0;
 	// Melted portion of `deformation`, carried so the shells can tell a
@@ -397,7 +467,7 @@ float SlumpTap(int2 p, int2 dims)
 		// the drift fetch above, and RAISES deformation toward the settle
 		// target at a rate - so it composes with the refill (which is
 		// pulling the other way on both the strip and its neighbors) and
-		// with this frame's stamps, which max-blend over it below.
+		// with this frame's stamps, which max-blend over it in StampCS.
 		// The receiving texel is skipped outright while it carries any melt
 		// or scorch of its own: those marks are spell-authored shapes, and
 		// deepening one - even toward a correct neighbor floor - redraws it.
@@ -443,6 +513,36 @@ float SlumpTap(int2 p, int2 dims)
 			}
 		}
 	}
+
+	// Alpha is written as 1, not 0, on the debug side only. Nothing reads the
+	// map's .w as alpha except the ImGui preview, which the deposit channel
+	// claimed; see TrenchDebugCS for the honest view.
+	float4 result = float4(deformation, melted, crust, deposit);
+	CurrentDeformation[pixel] = result;
+
+	ActivityAccumulate(StoredDelta(result, carried), pixel);
+	ActivityPublish(GIdx);
+}
+
+// Actors acting on the map: stamp capsules and bow-wave deposits, RMW on the
+// texel EvolveCS wrote this frame (or the standing map on frames where the
+// world had nothing to do). Every term is a function of the texel's own
+// value - no neighbour reads - which is what lets this pass run in place and,
+// later, be dispatched over the stamps' bounding tiles only.
+[numthreads(8, 8, 1)] void StampCS(uint3 DTid
+								   : SV_DispatchThreadID, uint GIdx
+								   : SV_GroupIndex) {
+	uint2 pixel = DTid.xy;
+
+	ActivityReset(GIdx);
+
+	const float4 carried = CurrentDeformation[pixel];
+	float deformation = carried.x;
+	float melted = carried.y;
+	float crust = carried.z;
+	float deposit = carried.w;
+
+	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
 	// Carve, melt and scorch accumulate separately so the result cannot depend
 	// on the order stamps happen to sit in the buffer.
@@ -675,10 +775,6 @@ float SlumpTap(int2 p, int2 dims)
 		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
 	crustNow = saturate(crustNow);
 
-	// Alpha is written as 1, not 0. Nothing reads it yet - it is being kept for
-	// blood - but the ImGui debug preview blends the map with its alpha, and a
-	// zero there renders the whole thing invisible. Whatever claims .w later
-	// needs its own debug view rather than this one.
 	// Bow-wave deposit. The SAME crescent the shell draws, MAXed in at
 	// wherever the crest stands this frame: max, not accumulate, so passing
 	// twice does not build a wall, and so the field records the high-water
@@ -774,39 +870,6 @@ float SlumpTap(int2 p, int2 dims)
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
 	CurrentDeformation[pixel] = result;
 
-	// Flag, counts and bbox via one groupshared reduction - 4M threads
-	// hammering a single address serializes on the atomic unit.
-	float4 delta = StoredDelta(result, carried);
-	if (any(delta > 0.0)) {
-		InterlockedAdd(gActivity, 1u);
-		if (delta.x > 0.0)
-			InterlockedAdd(gCountR, 1u);
-		if (delta.y > 0.0)
-			InterlockedAdd(gCountG, 1u);
-		if (max(delta.z, delta.w) > 0.0)
-			InterlockedAdd(gCountB, 1u);
-		InterlockedMax(gCMinX, 65535u - pixel.x);
-		InterlockedMax(gCMinY, 65535u - pixel.y);
-		InterlockedMax(gMaxX, pixel.x);
-		InterlockedMax(gMaxY, pixel.y);
-		float maxDelta = max(max(delta.x, delta.y), max(delta.z, delta.w));
-		InterlockedAdd(gDeltaSum, min((uint)(maxDelta * 1e6 + 0.5), 1000000u));
-	}
-	[branch] if (DebugActivityView)
-		ActivityView[pixel] = float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
-			saturate(max(delta.z, delta.w) * 512.0), 1.0);
-	GroupMemoryBarrierWithGroupSync();
-	if (GIdx == 0 && gActivity != 0) {
-		ActivityFlag.InterlockedOr(0, 1u);
-		ActivityFlag.InterlockedAdd(4, gActivity);
-		uint unused;
-		ActivityFlag.InterlockedMax(8, gCMinX, unused);
-		ActivityFlag.InterlockedMax(12, gCMinY, unused);
-		ActivityFlag.InterlockedMax(16, gMaxX, unused);
-		ActivityFlag.InterlockedMax(20, gMaxY, unused);
-		ActivityFlag.InterlockedAdd(24, gCountR);
-		ActivityFlag.InterlockedAdd(28, gCountG);
-		ActivityFlag.InterlockedAdd(32, gCountB);
-		ActivityFlag.InterlockedAdd(36, gDeltaSum);
-	}
+	ActivityAccumulate(StoredDelta(result, carried), pixel);
+	ActivityPublish(GIdx);
 }

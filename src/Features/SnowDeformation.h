@@ -720,9 +720,12 @@ public:
 	 */
 	virtual void Prepass() override;
 
-	/** @brief Returns the deformation update compute shader, compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationUpdateCS();
-	ID3D11ComputeShader* deformationUpdateCS = nullptr;
+	/** @brief Returns the map-evolution compute shader (scroll/inject/refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationEvolveCS();
+	/** @brief Returns the stamp compute shader (stamps + bow waves, in-place RMW), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationStampCS();
+	ID3D11ComputeShader* deformationEvolveCS = nullptr;
+	ID3D11ComputeShader* deformationStampCS = nullptr;
 	/** @brief Returns the berm field bake compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetBermFieldCS();
 	ID3D11ComputeShader* bermFieldCS = nullptr;
