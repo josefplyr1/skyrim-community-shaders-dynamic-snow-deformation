@@ -19,6 +19,9 @@
 
 Texture2D<float4> DeformationMap : register(t0);
 RWTexture2D<float> OutBermField : register(u0);
+// Tiles (x | y<<16) whose berm output is stale, from ScanBermCS: the map
+// changed within the tap reach. Consumed by BermTiledCS via indirect args.
+StructuredBuffer<uint> BermTilesIn : register(t1);
 
 // Shares DeformationUpdateCS's PerFrame buffer; only TexelSize is read, but
 // the leading layout must match it exactly.
@@ -59,9 +62,10 @@ float Displaced(float4 texel)
 	return saturate(texel.x - max(texel.y, 0.0));
 }
 
-// The map is toroidal; the berm field is NOT - it is rebuilt from scratch
-// every frame, so it stays logically laid out and its consumers are
-// untouched. Only the map fetch translates.
+// The berm field is toroidal like the map it is baked from (same MapOrigin),
+// so a partial rebuild stays valid across scrolls - texels never move.
+// Consumers translate through the shells' DeformTexel, exactly as for the
+// map.
 int3 DeformTexel(int2 t, int2 dims)
 {
 	return int3((t + MapOrigin) & (dims - 1), 0);
@@ -100,22 +104,42 @@ float Tap(float2 texel, float2 dims)
 	return TapBilinear(texel, dims);
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 dtid : SV_DispatchThreadID)
+void BermTexel(uint2 phys)
 {
 	float2 dims;
 	DeformationMap.GetDimensions(dims.x, dims.y);
-	if (any(float2(dtid.xy) >= dims))
+	if (any(float2(phys) >= dims))
 		return;
 
 	// Tap offsets are authored in world units; the window resizes with the
-	// Trenches range slider, so convert through the live texel size.
+	// Trenches range slider, so convert through the live texel size. Tap
+	// math runs in LOGICAL texel space (the window-border zeroing is a world
+	// rule); only the fetches and the output translate.
 	float invTexel = 1.0 / max(TexelSize, 1e-4);
-	float2 centre = float2(dtid.xy);
+	float2 centre = float2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
 	float b = Tap(centre, dims);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += Tap(centre + kBermTaps[i] * invTexel, dims);
 
-	OutBermField[dtid.xy] = saturate(b / 17.0);
+	OutBermField[phys] = saturate(b / 17.0);
+}
+
+[numthreads(8, 8, 1)]
+void main(uint3 dtid : SV_DispatchThreadID)
+{
+	BermTexel(dtid.xy);
+}
+
+// Indirect over ScanBermCS's list: only tiles whose inputs changed (plus
+// the tap-reach halo) rebuild; everything else keeps last frame's bake,
+// which the toroidal layout keeps valid across scrolls.
+[numthreads(8, 8, 1)]
+void BermTiledCS(uint3 GTid : SV_GroupThreadID, uint3 Gid : SV_GroupID)
+{
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= BermTilesIn[0])
+		return;
+	const uint packed = BermTilesIn[1 + listIndex];
+	BermTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
 }

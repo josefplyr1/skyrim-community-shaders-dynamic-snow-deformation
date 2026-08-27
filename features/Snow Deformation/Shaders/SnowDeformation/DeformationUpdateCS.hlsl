@@ -278,6 +278,16 @@ StructuredBuffer<uint> EvolveTilesIn : register(t3);
 StructuredBuffer<uint> TileListIn : register(t5);
 RWByteAddressBuffer TileArgs : register(u5);
 
+// Per-tile "the map changed here this frame" - the berm bake's dirty set,
+// marked by every writer (the ring unconditionally: departing ground zeroed
+// is as much a berm-input change as arriving ground injected). Accumulates
+// until a berm rebuild consumes it (the CPU clears it after), so a berm
+// A/B toggle re-enabling picks up exactly what it missed.
+RWTexture2D<uint> BermDirty : register(u6);
+Texture2D<uint> BermDirtyIn : register(t6);
+// Berm tile list, same shape as the evolve list.
+RWStructuredBuffer<uint> BermTiles : register(u7);
+
 // Logical -> physical texel. The dim is a power of two (1024/2048/4096), so
 // the wrap is a mask. Callers clamp in LOGICAL space first - the map border
 // is the window's world border; the physical seam is meaningless to the
@@ -465,6 +475,8 @@ float SlumpTap(int2 p, int2 dims)
 	// band, so an absolute 0 could clobber a neighbour texel's 1).
 	if (depth > 0.0)
 		Occupancy[phys >> 3] = 1u;
+	// The berm bake's inputs changed either way.
+	BermDirty[phys >> 3] = 1u;
 }
 
 // The world acting on the map: refill, decay, slump. The neighbour reads
@@ -627,11 +639,13 @@ bool EvolveTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[tile] = gNonZero;
-		// Evolve's own word: a run that changed nothing lets the CPU idle
-		// this pass until an external write (ring, stamps) or refill
-		// re-arms it.
-		if (gActivity != 0)
+		if (gActivity != 0) {
+			BermDirty[tile] = 1u;
+			// Evolve's own word: a run that changed nothing lets the CPU
+			// idle this pass until an external write (ring, stamps) or
+			// refill re-arms it.
 			ActivityFlag.InterlockedOr(40, 1u);
+		}
 	}
 }
 
@@ -664,6 +678,33 @@ bool EvolveTexel(uint2 phys)
 	EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
 	// Census, riding the activity readback.
 	ActivityFlag.InterlockedAdd(44, 1u);
+}
+
+// Lists the tiles the berm bake must rebuild: the map changed within the
+// 40-unit tap reach. Same wrapped-space dilation as the evolve scan.
+[numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid
+									  : SV_DispatchThreadID) {
+	uint2 dims;
+	BermDirtyIn.GetDimensions(dims.x, dims.y);
+	if (any(DTid.xy >= dims))
+		return;
+
+	bool need = ForceAllDirty != 0;
+	if (!need) {
+		const int halo = (int)ceil((40.0 / max(TexelSize, 1e-3) + 2.0) / 8.0);
+		for (int dy = -halo; dy <= halo && !need; dy++)
+			for (int dx = -halo; dx <= halo && !need; dx++) {
+				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+				need = BermDirtyIn[t] != 0;
+			}
+	}
+	if (!need)
+		return;
+
+	uint idx;
+	InterlockedAdd(BermTiles[0], 1u, idx);
+	BermTiles[1 + idx] = DTid.x | (DTid.y << 16);
+	ActivityFlag.InterlockedAdd(48, 1u);
 }
 
 // A list's count becomes indirect dispatch args (x capped at 1024, the
@@ -1039,8 +1080,11 @@ bool StampTexel(uint2 phys)
 	if (StampTexel(tile * 8u + GTid.xy))
 		InterlockedOr(gNonZero, 1u);
 	ActivityPublish(GIdx);
-	if (GIdx == 0)
+	if (GIdx == 0) {
 		Occupancy[tile] = gNonZero;
+		if (gActivity != 0)
+			BermDirty[tile] = 1u;
+	}
 }
 
 // Full-map fallback for a tile list past its cap; also the force-all-dirty
@@ -1053,6 +1097,9 @@ bool StampTexel(uint2 phys)
 	if (StampTexel(DTid.xy))
 		InterlockedOr(gNonZero, 1u);
 	ActivityPublish(GIdx);
-	if (GIdx == 0)
+	if (GIdx == 0) {
 		Occupancy[Gid.xy] = gNonZero;
+		if (gActivity != 0)
+			BermDirty[Gid.xy] = 1u;
+	}
 }

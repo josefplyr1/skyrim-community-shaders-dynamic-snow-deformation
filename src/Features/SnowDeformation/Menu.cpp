@@ -898,9 +898,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
 			else
 				ImGui::Text("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
-			// Occupied + slump halo, from the last executed scan (lags by the
-			// readback ring, like the verdict).
+			// Occupied + slump halo and changed + tap halo, from the last
+			// executed scans (lag by the readback ring, like the verdict).
 			ImGui::Text("Evolve tiles: %u of %u", evolveTilesLast, totalTiles);
+			ImGui::Text("Berm tiles: %u of %u", bermTilesLast, totalTiles);
 		}
 
 		{

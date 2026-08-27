@@ -779,8 +779,27 @@ public:
 	ID3D11ComputeShader* GetDeformationScanEvolveCS();
 	/** @brief Returns the list-count -> indirect-args shader, compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationTileArgsCS();
+	/** @brief Returns the berm-scan compute shader (dirty grid + tap-reach halo -> tile list), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationScanBermCS();
+	/** @brief Returns the tiled berm bake (indirect over the berm tile list), compiling it on first use. */
+	ID3D11ComputeShader* GetBermFieldTiledCS();
 	ID3D11ComputeShader* deformationScanEvolveCS = nullptr;
 	ID3D11ComputeShader* deformationTileArgsCS = nullptr;
+	ID3D11ComputeShader* deformationScanBermCS = nullptr;
+	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
+
+	/** @brief Per-tile "the map changed here" - the berm bake's dirty set, marked by every map writer and ACCUMULATED until a berm rebuild consumes it (cleared after), so the A/B toggle re-enabling rebuilds exactly what it missed. Recreated with the map; seeded all-1. */
+	winrt::com_ptr<ID3D11Texture2D> bermDirtyTexture;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bermDirtyUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bermDirtySRV;
+	/** @brief Berm tile list ([0] count) + its indirect args; GPU-only like the evolve pair. */
+	winrt::com_ptr<ID3D11Buffer> bermTileBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bermTileUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bermTileSRV;
+	winrt::com_ptr<ID3D11Buffer> bermArgsBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bermArgsUAV;
+	/** @brief Last consumed berm-tile census (activity readback). */
+	uint32_t bermTilesLast = 0;
 
 	/** @brief Arriving-band rect in logical texel space; see ComputeArrivalRects. */
 	struct ArrivalRect

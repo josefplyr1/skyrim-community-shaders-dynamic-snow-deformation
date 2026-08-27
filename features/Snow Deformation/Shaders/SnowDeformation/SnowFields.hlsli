@@ -91,7 +91,8 @@ static const float2 kBermTaps[16] = {
 };
 
 // One bilinear tap of the baked field, addressed exactly like the deformation
-// map it was baked from (BermFieldCS writes texel-for-texel).
+// map it was baked from (BermFieldCS writes texel-for-texel, same toroidal
+// layout and MapOrigin - so partial rebuilds survive scrolls).
 float BermFieldBaked(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
@@ -105,10 +106,10 @@ float BermFieldBaked(float2 gridLocal)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float s00 = BermFieldMap.Load(int3(t0.x, t0.y, 0));
-	float s10 = BermFieldMap.Load(int3(t1.x, t0.y, 0));
-	float s01 = BermFieldMap.Load(int3(t0.x, t1.y, 0));
-	float s11 = BermFieldMap.Load(int3(t1.x, t1.y, 0));
+	float s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
