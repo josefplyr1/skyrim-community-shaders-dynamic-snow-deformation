@@ -657,7 +657,11 @@ bool EvolveTexel(uint2 phys)
 [numthreads(8, 8, 1)] void ScanEvolveCS(uint3 DTid
 										: SV_DispatchThreadID) {
 	uint2 dims;
-	Occupancy.GetDimensions(dims.x, dims.y);
+	// The SRV, not the UAV: the grid reaches this pass as OccupancyIn (u3 is
+	// deliberately unbound), and an unbound view's GetDimensions returns 0x0
+	// - which silently killed every scan thread at the bounds guard and
+	// dispatched an evolve of zero tiles. The census is what caught it.
+	OccupancyIn.GetDimensions(dims.x, dims.y);
 	if (any(DTid.xy >= dims))
 		return;
 

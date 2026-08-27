@@ -894,7 +894,9 @@ void SnowDeformation::DrawSettings()
 			// track these counts; if it does not, the force-all-dirty toggle
 			// is the discriminator.
 			const uint32_t totalTiles = (deformMapDim / 8) * (deformMapDim / 8);
-			if (stampTilesLast > kStampTileCap)
+			if (debugForceAllTilesDirty)
+				ImGui::Text("Stamp tiles: forced to full map (%u tiles)", totalTiles);
+			else if (stampTilesLast > kStampTileCap)
 				ImGui::Text("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
 			else
 				ImGui::Text("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
