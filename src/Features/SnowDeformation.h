@@ -735,11 +735,27 @@ public:
 	ID3D11ComputeShader* GetDeformationRingCS();
 	/** @brief Returns the map-evolution compute shader (refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationEvolveCS();
-	/** @brief Returns the stamp compute shader (stamps + bow waves, in-place RMW), compiling it on first use. */
+	/** @brief Returns the stamp compute shader (stamps + bow waves, in-place RMW, one group per CPU-listed tile), compiling it on first use. */
 	ID3D11ComputeShader* GetDeformationStampCS();
+	/** @brief Returns the full-map stamp fallback (tile list past its cap, or force-all-dirty). */
+	ID3D11ComputeShader* GetDeformationStampAllCS();
 	ID3D11ComputeShader* deformationRingCS = nullptr;
 	ID3D11ComputeShader* deformationEvolveCS = nullptr;
 	ID3D11ComputeShader* deformationStampCS = nullptr;
+	ID3D11ComputeShader* deformationStampAllCS = nullptr;
+
+	// ---- Tile dispatch (DEFORMATION-UPDATE-PLAN S3) ----
+	/** @brief Stamp-pass tile list capacity. 256 stamps at walking bboxes are a few thousand tiles; past the cap the pass falls back to full-map rather than truncate (a truncated list is a silently frozen stamp). */
+	static constexpr uint kStampTileCap = 16384;
+	/** @brief Dynamic structured buffer of PHYSICAL tiles (x | y<<16) for StampCS, rebuilt per frame from the stamp capsules' and waves' bounding boxes. */
+	winrt::com_ptr<ID3D11Buffer> stampTileBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> stampTileSRV;
+	std::vector<uint32_t> stampTileScratch;
+	std::vector<uint32_t> stampTileBits;
+	/** @brief Last frame's stamp tile count, for the census readout (kStampTileCap+1 = overflowed to full-map). */
+	uint32_t stampTilesLast = 0;
+	/** @brief Fills stampTileScratch with the deduped physical tiles the stamp inputs touch (wrap-aware). Returns the count, or UINT32_MAX on overflow past kStampTileCap. */
+	uint32_t BuildStampTileList(const PerFrame& a_data);
 
 	/** @brief Arriving-band rect in logical texel space; see ComputeArrivalRects. */
 	struct ArrivalRect
@@ -1819,6 +1835,8 @@ protected:
 	// re-enabled - is to keep running.
 	/** @brief Diagnostic override: keeps the update dispatching every frame so the pass can be measured at rest. Runtime-only. */
 	bool debugForceDeformationUpdate = false;
+	/** @brief Diagnostic override: the tile-dispatch passes cover the whole map instead of their lists (S3's one-click "my trenches froze" cross-check - if a symptom vanishes with this on, a dirty-tracking path missed a writer). Runtime-only. */
+	bool debugForceAllTilesDirty = false;
 	/** @brief Last frame's verdict, for the menu readout. */
 	bool deformIdleSkipped = false;
 	winrt::com_ptr<ID3D11Buffer> deformActivityBuffer;

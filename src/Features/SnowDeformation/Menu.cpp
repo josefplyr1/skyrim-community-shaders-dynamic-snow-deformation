@@ -808,6 +808,9 @@ void SnowDeformation::DrawSettings()
 		// S1: the idle skip and its measurement override. The readout names
 		// what is holding the pass on, so "why is it running" answers itself.
 		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
+		// S3: the tile dispatch's one-click cross-check. A symptom that
+		// vanishes with this on means a dirty-tracking path missed a writer.
+		ImGui::Checkbox(T(TKEY("debug_force_tiles"), "Force All Tiles Dirty"), &debugForceAllTilesDirty);
 		// The count is the magnitude behind a map-active blocker: a handful of
 		// texels is a precision tail, millions is a logic bug. From the newest
 		// verdict, so it lags the dispatch by the readback ring.
@@ -885,6 +888,16 @@ void SnowDeformation::DrawSettings()
 			// past tolerance. Either resets the quiet window.
 			ImGui::Text("Stamp set changes: %u/300 frames (count %u, drift %u)",
 				stampSetCountChanges + stampSetDriftChanges, stampSetCountChanges, stampSetDriftChanges);
+		}
+		{
+			// The tile census: dispatch domain vs the whole map. Cost should
+			// track these counts; if it does not, the force-all-dirty toggle
+			// is the discriminator.
+			const uint32_t totalTiles = (deformMapDim / 8) * (deformMapDim / 8);
+			if (stampTilesLast > kStampTileCap)
+				ImGui::Text("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
+			else
+				ImGui::Text("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
 		}
 
 		{

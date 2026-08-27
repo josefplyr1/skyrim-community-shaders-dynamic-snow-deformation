@@ -253,6 +253,10 @@ RWTexture2D<float4> CurrentDeformation : register(u0);
 // Tile-store depth for the arriving ring, resampled on the CPU. LOGICAL
 // layout - RingCS translates when it writes the map.
 Texture2D<float> InjectDepth : register(t1);
+// PHYSICAL tiles (x | y << 16, 8x8 texels each) the stamp pass must visit -
+// built on the CPU from the stamp capsules' and waves' bounding boxes, so
+// the dispatch covers actors' surroundings and nothing else.
+StructuredBuffer<uint> StampTiles : register(t2);
 
 // Logical -> physical texel. The dim is a power of two (1024/2048/4096), so
 // the wrap is a mask. Callers clamp in LOGICAL space first - the map border
@@ -579,20 +583,17 @@ float SlumpTap(int2 p, int2 dims)
 // Actors acting on the map: stamp capsules and bow-wave deposits, RMW on the
 // texel EvolveCS wrote this frame (or the standing map on frames where the
 // world had nothing to do). Every term is a function of the texel's own
-// value - no neighbour reads - which is what lets this pass run in place and,
-// later, be dispatched over the stamps' bounding tiles only.
-[numthreads(8, 8, 1)] void StampCS(uint3 DTid
-								   : SV_DispatchThreadID, uint GIdx
-								   : SV_GroupIndex) {
-	uint2 pixel = DTid.xy;
-
-	ActivityReset(GIdx);
-
+// value - no neighbour reads - which is what lets this pass run in place and
+// be dispatched over the stamps' bounding tiles only.
+void StampTexel(uint2 phys)
+{
 	uint2 dims;
 	CurrentDeformation.GetDimensions(dims.x, dims.y);
-	const int2 phys = TorusPhys(int2(pixel), int2(dims));
+	// Inverse of TorusPhys: the world position and the activity bookkeeping
+	// (bbox, view) live in logical space.
+	const uint2 pixel = uint2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
-	const float4 carried = CurrentDeformation[uint2(phys)];
+	const float4 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
 	float melted = carried.y;
 	float crust = carried.z;
@@ -924,8 +925,28 @@ float SlumpTap(int2 p, int2 dims)
 
 	float4 result = float4(total,
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
-	CurrentDeformation[uint2(phys)] = result;
+	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
+}
+
+// One group per CPU-listed tile: actors' surroundings, nothing else.
+[numthreads(8, 8, 1)] void StampCS(uint3 GTid
+								   : SV_GroupThreadID, uint3 Gid
+								   : SV_GroupID, uint GIdx
+								   : SV_GroupIndex) {
+	ActivityReset(GIdx);
+	const uint packed = StampTiles[Gid.x];
+	StampTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
+	ActivityPublish(GIdx);
+}
+
+// Full-map fallback for a tile list past its cap; also the force-all-dirty
+// debug path, so "my trenches froze" has a one-click cross-check.
+[numthreads(8, 8, 1)] void StampAllCS(uint3 DTid
+									  : SV_DispatchThreadID, uint GIdx
+									  : SV_GroupIndex) {
+	ActivityReset(GIdx);
+	StampTexel(DTid.xy);
 	ActivityPublish(GIdx);
 }

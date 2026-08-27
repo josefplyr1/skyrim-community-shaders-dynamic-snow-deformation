@@ -273,6 +273,24 @@ void SnowDeformation::SetupResources()
 			DX::ThrowIfFailed(device->CreateBuffer(&stagingDesc, nullptr, deformActivityStaging[i].put()));
 			Util::SetResourceName(deformActivityStaging[i].get(), "SnowDeformation::DeformActivityStaging");
 		}
+
+		// Stamp-pass tile list: CPU-built per frame, capacity-fixed so it is
+		// dimension-independent.
+		D3D11_BUFFER_DESC tileDesc{};
+		tileDesc.ByteWidth = kStampTileCap * sizeof(uint32_t);
+		tileDesc.Usage = D3D11_USAGE_DYNAMIC;
+		tileDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		tileDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		tileDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		tileDesc.StructureByteStride = sizeof(uint32_t);
+		DX::ThrowIfFailed(device->CreateBuffer(&tileDesc, nullptr, stampTileBuffer.put()));
+		Util::SetResourceName(stampTileBuffer.get(), "SnowDeformation::StampTiles");
+		D3D11_SHADER_RESOURCE_VIEW_DESC tileSrvDesc{};
+		tileSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		tileSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		tileSrvDesc.Buffer.NumElements = kStampTileCap;
+		DX::ThrowIfFailed(device->CreateShaderResourceView(stampTileBuffer.get(), &tileSrvDesc, stampTileSRV.put()));
+		Util::SetResourceName(stampTileSRV.get(), "SnowDeformation::StampTiles SRV");
 	}
 
 	{
@@ -1030,6 +1048,10 @@ void SnowDeformation::Prepass()
 		auto* scratch = deformationTextures[1];
 		const bool ringRan = perFrameData.RingTotalTexels > 0;
 		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f;
+		// Whether the stamp pass actually wrote anything - a stamp set that
+		// lies entirely outside the window dispatches nothing and must not
+		// re-arm evolve.
+		bool stampDispatched = stampRan;
 
 		{
 			ID3D11Buffer* buffers[1] = { perFrame->CB() };
@@ -1091,13 +1113,42 @@ void SnowDeformation::Prepass()
 			// Stamps + waves RMW the texels evolve just wrote. Sustained
 			// stamps (melt, crust) must re-apply even when the set is quiet -
 			// dwell time is their input - so the gate is presence, not change.
-			const bool stampWork = stampRan;
-			if (stampWork) {
-				context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
-				globals::profiler->BeginPass("SnowDeformation::DeformationStamps");
-				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
-				globals::profiler->EndPass();
+			// Dispatched over the inputs' bounding tiles (the CPU knows every
+			// capsule and wave); full-map only past the list cap or under the
+			// force-all-dirty cross-check - never a truncated list, which
+			// would be a silently frozen stamp.
+			if (stampRan) {
+				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
+				stampTilesLast = tileCount == UINT32_MAX ? kStampTileCap + 1 : tileCount;
+				bool tiled = tileCount > 0 && tileCount != UINT32_MAX;
+				if (tiled) {
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					if (SUCCEEDED(context->Map(stampTileBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+						memcpy(mapped.pData, stampTileScratch.data(), tileCount * sizeof(uint32_t));
+						context->Unmap(stampTileBuffer.get(), 0);
+					} else {
+						tiled = false;
+					}
+				}
+				if (tileCount == 0) {
+					// Every stamp lies outside the window; nothing to write.
+					stampDispatched = false;
+					globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
+				} else if (tiled) {
+					ID3D11ShaderResourceView* tileSRV = stampTileSRV.get();
+					context->CSSetShaderResources(2, 1, &tileSRV);
+					context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
+					globals::profiler->BeginPass("SnowDeformation::DeformationStamps");
+					context->Dispatch(tileCount, 1, 1);
+					globals::profiler->EndPass();
+				} else {
+					context->CSSetShader(GetDeformationStampAllCS(), nullptr, 0);
+					globals::profiler->BeginPass("SnowDeformation::DeformationStamps");
+					context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+					globals::profiler->EndPass();
+				}
 			} else {
+				stampTilesLast = 0;
 				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 			}
 		}
@@ -1130,7 +1181,7 @@ void SnowDeformation::Prepass()
 		ID3D11Buffer* nullBuffer = nullptr;
 		context->CSSetConstantBuffers(0, 1, &nullBuffer);
 
-		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
+		ID3D11ShaderResourceView* nullSrvs[3] = { nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 
 		ID3D11UnorderedAccessView* nullUavs[3] = { nullptr, nullptr, nullptr };
@@ -1148,7 +1199,7 @@ void SnowDeformation::Prepass()
 		// verdict already covers the inject (arm at seq-1, which that verdict
 		// beats). A ring without inject writes pristine zeros - nothing to
 		// evolve - and arms nothing.
-		if (stampRan)
+		if (stampDispatched)
 			evolveLastArmSeq = std::max(evolveLastArmSeq, deformDispatchSeq);
 		if (ringRan && perFrameData.InjectValid)
 			evolveLastArmSeq = std::max(evolveLastArmSeq, evolveNeeded ? deformDispatchSeq - 1 : deformDispatchSeq);
@@ -1232,6 +1283,102 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
 	return deformationStampCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetDeformationStampAllCS()
+{
+	if (!deformationStampAllCS) {
+		logger::debug("Compiling DeformationUpdateCS:StampAllCS");
+		deformationStampAllCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampAllCS"));
+	}
+	return deformationStampAllCS;
+}
+
+uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
+{
+	const int dim = (int)deformMapDim;
+	const int mask = dim - 1;
+	const int tilesPerAxis = dim / 8;
+	const float texel = a_data.TexelSize;
+
+	stampTileScratch.clear();
+	const size_t words = ((size_t)tilesPerAxis * tilesPerAxis + 31) / 32;
+	if (stampTileBits.size() != words)
+		stampTileBits.resize(words);
+	std::fill(stampTileBits.begin(), stampTileBits.end(), 0u);
+
+	bool overflow = false;
+
+	// A world box -> logical texel bounds (one-texel slop) -> physical
+	// segments (wrap split per axis, the CPU's one torus crossing besides
+	// CopyLogicalBox) -> deduped tiles.
+	auto addWorldBox = [&](float minX, float minY, float maxX, float maxY) {
+		int l0[2] = { (int)std::floor((minX - a_data.WindowOrigin.x) / texel) - 1,
+			(int)std::floor((minY - a_data.WindowOrigin.y) / texel) - 1 };
+		int l1[2] = { (int)std::floor((maxX - a_data.WindowOrigin.x) / texel) + 1,
+			(int)std::floor((maxY - a_data.WindowOrigin.y) / texel) + 1 };
+		int seg[2][2][2];  // [axis][segment][start,end], physical texels
+		int segCount[2];
+		const int origin[2] = { mapOrigin.x, mapOrigin.y };
+		for (int axis = 0; axis < 2; axis++) {
+			l0[axis] = std::max(l0[axis], 0);
+			l1[axis] = std::min(l1[axis], dim - 1);
+			if (l0[axis] > l1[axis])
+				return;
+			const int p = (l0[axis] + origin[axis]) & mask;
+			const int len = l1[axis] - l0[axis] + 1;
+			const int run = std::min(len, dim - p);
+			seg[axis][0][0] = p;
+			seg[axis][0][1] = p + run - 1;
+			segCount[axis] = 1;
+			if (run < len) {
+				seg[axis][1][0] = 0;
+				seg[axis][1][1] = len - run - 1;
+				segCount[axis] = 2;
+			}
+		}
+		for (int sy = 0; sy < segCount[1]; sy++)
+			for (int sx = 0; sx < segCount[0]; sx++)
+				for (int ty = seg[1][sy][0] >> 3; ty <= seg[1][sy][1] >> 3; ty++)
+					for (int tx = seg[0][sx][0] >> 3; tx <= seg[0][sx][1] >> 3; tx++) {
+						const uint32_t idx = (uint32_t)(ty * tilesPerAxis + tx);
+						if (stampTileBits[idx >> 5] & (1u << (idx & 31)))
+							continue;
+						stampTileBits[idx >> 5] |= 1u << (idx & 31);
+						if (stampTileScratch.size() >= kStampTileCap) {
+							overflow = true;
+							return;
+						}
+						stampTileScratch.push_back((uint32_t)tx | ((uint32_t)ty << 16));
+					}
+	};
+
+	// Stamp capsules: the shader's own gate radius, mirrored (pit legs reach
+	// furthest; noise widens the rest).
+	const float gateScale = std::max(1.31f, 1.0f + std::max(0.5f * a_data.StampNoiseAmp, a_data.MeltEdgeNoise));
+	for (uint i = 0; i < a_data.StampCount && !overflow; i++) {
+		const float reach = a_data.Stamps[i].w * gateScale;
+		addWorldBox(std::min(a_data.Stamps[i].x, a_data.StampEnds[i].x) - reach,
+			std::min(a_data.Stamps[i].y, a_data.StampEnds[i].y) - reach,
+			std::max(a_data.Stamps[i].x, a_data.StampEnds[i].x) + reach,
+			std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + reach);
+	}
+
+	// Bow waves: crest forward extent is compressed by Reach in shaped space
+	// (world extent 1.45 x r x reach); the wipe reaches 2.1 r laterally.
+	if (a_data.DepositParams.x > 0.5f) {
+		const uint waveCount = (uint)a_data.DepositParams.x;
+		const float reachExtent = std::max(1.45f * std::max(a_data.DepositParams.y, 0.25f), 2.2f);
+		for (uint w = 0; w < waveCount && !overflow; w++) {
+			const float r = std::max(a_data.DepositShape[w].x, 1e-3f) * reachExtent;
+			addWorldBox(std::min(a_data.DepositPosDir[w].x, a_data.DepositShape[w].z) - r,
+				std::min(a_data.DepositPosDir[w].y, a_data.DepositShape[w].w) - r,
+				std::max(a_data.DepositPosDir[w].x, a_data.DepositShape[w].z) + r,
+				std::max(a_data.DepositPosDir[w].y, a_data.DepositShape[w].w) + r);
+		}
+	}
+
+	return overflow ? UINT32_MAX : (uint32_t)stampTileScratch.size();
+}
+
 void SnowDeformation::ClearShaderCache()
 {
 	if (deformationRingCS)
@@ -1243,6 +1390,9 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationStampCS)
 		deformationStampCS->Release();
 	deformationStampCS = nullptr;
+	if (deformationStampAllCS)
+		deformationStampAllCS->Release();
+	deformationStampAllCS = nullptr;
 	if (bermFieldCS)
 		bermFieldCS->Release();
 	bermFieldCS = nullptr;
