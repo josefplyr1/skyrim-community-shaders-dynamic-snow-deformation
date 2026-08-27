@@ -231,10 +231,41 @@ Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
 
+// The terrain window also reaches the patch VS: the road-verge depth blend
+// needs the landscape class depth per vertex.
+#if defined(PSHADER) || defined(DOMAINSHADER) || ((defined(VSHADER) || defined(HULLSHADER)) && defined(PATCH))
+Texture2D<float4> TerrainWindow : register(t0);
+
+// Terrain window sample (height, rampDepth, coverage), matching the terrain
+// shell's math, for blending the object skin into the ground shell.
+float3 SampleTerrainStatics(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+
+	float3 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).xyz;
+	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).xyz;
+	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
+	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
+
+	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	// Same scale as the landscape shell's, and NOT because object snow
+	// accumulates - it does not, the cap stays pinned. These three call sites
+	// are this shader's reference to where the GROUND is: the snow-snow seam
+	// band at object bases, the blanket-normal blend across it, and the march's
+	// ground horizon. Left unscaled they would describe a landscape that is no
+	// longer there, and object bases would seam and sink as it snowed.
+	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
+	return result;
+}
+#endif
+
 // The domain shader samples the displacement companion for tessellated
 // relief, so the material block is visible to it as well as the PS.
 #if defined(PSHADER) || defined(DOMAINSHADER)
-Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float4> SnowDiffuse : register(t2);
 // TruePBR snow companion maps (see SnowShell.hlsl); inherited bindings.
 Texture2D<float4> SnowNormalMap : register(t6);
@@ -826,6 +857,23 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// fxc's X4000 and CI enforces zero warnings.
 	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled)
 	{
+		// Road verge: ride the repose cone down to the landscape class depth.
+		// A trench crossing the road edge then keeps ONE cross-section - the
+		// walls shrink smoothly to landscape scale by the boundary instead of
+		// jumping between the two class depths at the silhouette (Josef's
+		// crossing seam). Interior, the cone stands above the road depth and
+		// nothing changes; the road never exceeds its own class, and never
+		// drops below the smaller of the two. SampleTerrainStatics carries
+		// the accumulation scale, so the verge stays continuous as depths
+		// grow. Undisturbed verges change from a step to a bank, which is
+		// what snow does at a cleared edge anyway.
+		[branch] if (roadField)
+		{
+			float landDepth = max(SampleTerrainStatics(gridLocal).y, 0.0);
+			float cone = ObjectConeDepth(worldXY);
+			skinDepth = max(min(cone, skinDepth), min(landDepth, skinDepth));
+		}
+
 		// Bicubic, like the landscape shell; rounded trench walls.
 		float deform = saturate(SampleDeformationSmooth(gridLocal));
 
@@ -1599,32 +1647,6 @@ float CoverageNoise(float2 worldXY)
 	return lerp(lerp(n00, n10, f.x), lerp(n01, n11, f.x), f.y);
 }
 
-// Terrain window sample (height, rampDepth, coverage), matching the terrain
-// shell's math, for blending the object skin into the ground shell.
-float3 SampleTerrainStatics(float2 gridLocal)
-{
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-
-	float3 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).xyz;
-	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).xyz;
-	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
-	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
-
-	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-	// Same scale as the landscape shell's, and NOT because object snow
-	// accumulates - it does not, the cap stays pinned. These three call sites
-	// are this shader's reference to where the GROUND is: the snow-snow seam
-	// band at object bases, the blanket-normal blend across it, and the march's
-	// ground horizon. Left unscaled they would describe a landscape that is no
-	// longer there, and object bases would seam and sink as it snowed.
-	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
-	return result;
-}
-
 PS_OUTPUT main(VS_OUTPUT input)
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
@@ -2394,6 +2416,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 								// them. Baked berm only, the march's own
 								// convention - the 17-tap live field is not
 								// worth 5 taps of it per pixel.
+								// Same verge blend as BuildPatchVertex, or the
+								// occluder regrows the walls the geometry
+								// tapered - the recurring shape/shadow split.
+								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
+								float tapCone = ObjectConeDepth(tapWorld);
+								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
 								float tapDeform = SampleDeformation(sampleLocal);
 								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +

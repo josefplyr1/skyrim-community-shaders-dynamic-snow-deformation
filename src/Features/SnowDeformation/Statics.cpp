@@ -2066,6 +2066,19 @@ void SnowDeformation::DrawCapturedStatics()
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
+		// Terrain window (t0) + object snow cone (t13) for the road-verge
+		// depth blend, in whichever stage evaluates BuildPatchVertex (the VS
+		// on the legacy grid, the DS when tessellating). Explicit binds: both
+		// were previously reachable only through state left over from earlier
+		// passes, which is one reorder from an unbound read.
+		ID3D11ShaderResourceView* patchTerrainSRV = shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr;
+		ID3D11ShaderResourceView* patchConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
+		context->VSSetShaderResources(0, 1, &patchTerrainSRV);
+		context->VSSetShaderResources(13, 1, &patchConeSRV);
+		if (tessellatePatch) {
+			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
+			context->DSSetShaderResources(13, 1, &patchConeSRV);
+		}
 		if (tessellatePatch) {
 			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
 			context->HSSetShader(nullptr, nullptr, 0);
