@@ -215,10 +215,22 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		return;
 	}
 
+	// Per-texel seed, floored by the class constant. InB is the skin-depth
+	// raster: ROADS write their own class there, so the cone over a road
+	// interior reaches the road depth and the patch's verge blend can ride
+	// it down to the landscape class - seeded at the constant alone, the
+	// blend silently capped every road at min(road, landscape), which is how
+	// Road Meshes stopped responding above the snow01 depth. The constant
+	// floor is what keeps everything else byte-identical: non-carving
+	// objects write ZERO depth to the raster, and an unfloored seed would
+	// collapse their cone and with it every skin's edge taper.
+	float texelDepth = max(InB[dtid.xy], 0.0);
+	float seed = max(texelDepth, ObjectSnowDepth);
+
 	// Internal rims: a step taller than the layer sheds it the same way the
 	// outer silhouette does. Floored so shallow settings do not read ordinary
 	// surface roughness as a cliff.
-	float rimDrop = max(ObjectSnowDepth, 8.0);
+	float rimDrop = max(seed, 8.0);
 	bool rim = false;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
@@ -231,7 +243,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			rim = true;
 	}
 
-	OutA[dtid.xy] = rim ? 0.0 : ObjectSnowDepth;
+	OutA[dtid.xy] = rim ? 0.0 : seed;
 }
 
 // InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be

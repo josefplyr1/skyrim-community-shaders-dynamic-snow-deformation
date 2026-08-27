@@ -1490,12 +1490,16 @@ void SnowDeformation::RenderObjectHeightMap()
 		processData.ObjectSnowDepth = std::max({ settings.SnowMeshesDepth, settings.ObjectsSnowDepth, 0.1f });
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
-		ID3D11ShaderResourceView* seedSRV = heightTopRaw[heightCurrent]->srv.get();
+		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
+		// seed at their own class depth (see ObjectConeSeedCS).
+		ID3D11ShaderResourceView* seedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
+			heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
 		ID3D11UnorderedAccessView* seedUAV = objectSnowCone->uav.get();
-		context->CSSetShaderResources(0, 1, &seedSRV);
+		context->CSSetShaderResources(0, 2, seedSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, &seedUAV, nullptr);
 		context->Dispatch(dispatchDim, dispatchDim, 1);
-		context->CSSetShaderResources(0, 1, nullCsSRVs);
+		ID3D11ShaderResourceView* nullSeedSRVs[2] = { nullptr, nullptr };
+		context->CSSetShaderResources(0, 2, nullSeedSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
 		context->CSSetShader(objectConeCS, nullptr, 0);
