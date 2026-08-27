@@ -1818,6 +1818,8 @@ protected:
 	uint32_t deformChangedDepth = 0;
 	uint32_t deformChangedMelt = 0;
 	uint32_t deformChangedCrustDep = 0;
+	/** @brief Sum of the per-texel max delta (fixed-point 1e6). Mean = sum/count is a term's fingerprint: the slump step is SlumpRate x 0.5 x dt and scales with the slider. */
+	uint32_t deformChangedDeltaSum = 0;
 	/** @brief Bounding box of the changed texels (map coords), from the same verdict. Valid while count > 0. A few hundred churning texels are sub-pixel in the 512 view; the box is what makes them findable. */
 	uint32_t deformChangedMinX = 0, deformChangedMinY = 0;
 	uint32_t deformChangedMaxX = 0, deformChangedMaxY = 0;

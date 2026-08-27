@@ -832,8 +832,13 @@ void SnowDeformation::DrawSettings()
 					IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
 			}
 
-			ImGui::Text("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u)",
-				deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep);
+			// The mean delta is the fingerprint: the slump step is
+			// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
+			// Snow Slumping slider; storage-precision creep is an order
+			// smaller and scales with nothing.
+			ImGui::Text("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u), mean delta %.5f",
+				deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
+				deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
 			if (bboxValid) {
 				const float texel = deformWorldSize / std::max((float)deformMapDim, 1.0f);
 				const float cx = ((float)(deformChangedMinX + deformChangedMaxX) * 0.5f + 0.5f) * texel;

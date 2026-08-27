@@ -244,7 +244,7 @@ void SnowDeformation::SetupResources()
 		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
 		// so ClearUAV's all-zero init works for every field), [16] maxX,
 		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
-		// crust/deposit count, [36] spare.
+		// crust/deposit count, [36] per-texel max-delta sum, fixed-point 1e6.
 		D3D11_BUFFER_DESC flagDesc{};
 		flagDesc.ByteWidth = 40;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -502,6 +502,7 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint cminX = value[2], cminY = value[3];
 			const uint maxX = value[4], maxY = value[5];
 			const uint countR = value[6], countG = value[7], countB = value[8];
+			const uint deltaSum = value[9];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
@@ -510,6 +511,7 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 				deformChangedDepth = countR;
 				deformChangedMelt = countG;
 				deformChangedCrustDep = countB;
+				deformChangedDeltaSum = deltaSum;
 				deformChangedMinX = 65535u - cminX;
 				deformChangedMinY = 65535u - cminY;
 				deformChangedMaxX = maxX;

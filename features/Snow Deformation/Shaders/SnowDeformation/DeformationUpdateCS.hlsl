@@ -233,6 +233,10 @@ groupshared uint gCMinX;
 groupshared uint gCMinY;
 groupshared uint gMaxX;
 groupshared uint gMaxY;
+// Sum of the largest per-texel delta, fixed-point 1e6. The MEAN delta is a
+// term's fingerprint: the slump step is SlumpRate x 0.5 x dt and scales with
+// the slider; half-ULP creep is an order smaller and scales with nothing.
+groupshared uint gDeltaSum;
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
@@ -297,6 +301,7 @@ float SlumpTap(int2 p, int2 dims)
 		gCMinY = 0;
 		gMaxX = 0;
 		gMaxY = 0;
+		gDeltaSum = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
 
@@ -779,6 +784,8 @@ float SlumpTap(int2 p, int2 dims)
 		InterlockedMax(gCMinY, 65535u - pixel.y);
 		InterlockedMax(gMaxX, pixel.x);
 		InterlockedMax(gMaxY, pixel.y);
+		float maxDelta = max(max(delta.x, delta.y), max(delta.z, delta.w));
+		InterlockedAdd(gDeltaSum, min((uint)(maxDelta * 1e6 + 0.5), 1000000u));
 	}
 	[branch] if (DebugActivityView)
 		ActivityView[pixel] = float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
@@ -795,5 +802,6 @@ float SlumpTap(int2 p, int2 dims)
 		ActivityFlag.InterlockedAdd(24, gCountR);
 		ActivityFlag.InterlockedAdd(28, gCountG);
 		ActivityFlag.InterlockedAdd(32, gCountB);
+		ActivityFlag.InterlockedAdd(36, gDeltaSum);
 	}
 }
