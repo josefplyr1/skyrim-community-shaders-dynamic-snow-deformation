@@ -803,26 +803,39 @@ void SnowDeformation::Prepass()
 	// count never reaches zero while anyone stands on snow. Re-applying an
 	// unchanged set is exactly what the activity verdict proved absorbed
 	// (carves max-blend; melt/crust saturate, and stay active until they do).
-	// Quantized so idle-animation jitter does not read as motion; XOR-combined
-	// so the nearest-first resort cannot reorder two equidistant stamps into
-	// a "change".
-	uint64_t stampHash = 0x9E3779B97F4A7C15ull ^ perFrameData.StampCount;
-	for (uint i = 0; i < perFrameData.StampCount; i++) {
-		const auto& s = perFrameData.Stamps[i];
-		const auto& e = perFrameData.StampEnds[i];
-		uint64_t h = 1469598103934665603ull;
-		const auto mix = [&h](long long v) { h ^= (uint64_t)v; h *= 1099511628211ull; };
-		mix(std::llround(s.x * 4.0f));
-		mix(std::llround(s.y * 4.0f));
-		mix(std::llround(s.z * 1024.0f));
-		mix(std::llround(s.w * 4.0f));
-		mix(std::llround(e.x * 4.0f));
-		mix(std::llround(e.y * 4.0f));
-		mix(std::llround(e.z * 1024.0f));
-		mix(std::llround(e.w * 1024.0f));
-		stampHash ^= h;
+	// Matched within a tolerance rather than hashed on a grid: a swaying foot
+	// straddling any quantization boundary reads as change every few frames,
+	// and each flicker costs dispatch + verdict latency - measured as a
+	// permanent 0% skip under `tai`. Sub-tolerance drift while skipping goes
+	// unapplied; half a texel inside an already-carved print is invisible.
+	constexpr float kStampTol = 2.0f;
+	constexpr float kStampTolSq = kStampTol * kStampTol;
+	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
+	if (stampsQuiet && perFrameData.StampCount > 0) {
+		stampMatchUsed.assign(lastStampSet.size(), 0);
+		for (uint i = 0; i < perFrameData.StampCount && stampsQuiet; i++) {
+			const auto& s = perFrameData.Stamps[i];
+			const auto& e = perFrameData.StampEnds[i];
+			bool found = false;
+			for (size_t j = 0; j < lastStampSet.size(); j++) {
+				if (stampMatchUsed[j])
+					continue;
+				const auto& ps = lastStampSet[j];
+				const auto& pe = lastStampEnds[j];
+				const float dx = s.x - ps.x, dy = s.y - ps.y;
+				const float ex = e.x - pe.x, ey = e.y - pe.y;
+				if (dx * dx + dy * dy <= kStampTolSq && ex * ex + ey * ey <= kStampTolSq &&
+					std::abs(s.z - ps.z) <= 0.01f && std::abs(s.w - ps.w) <= 1.0f &&
+					std::abs(e.z - pe.z) <= 0.01f &&
+					std::abs(e.w - pe.w) <= 0.01f + 0.01f * std::abs(pe.w)) {
+					stampMatchUsed[j] = 1;
+					found = true;
+					break;
+				}
+			}
+			stampsQuiet = found;
+		}
 	}
-	const bool stampsQuiet = stampHash == lastExecutedStampHash;
 
 	const bool inputsIdle =
 		perFrameData.ScrollDelta.x == 0 && perFrameData.ScrollDelta.y == 0 &&
@@ -932,7 +945,11 @@ void SnowDeformation::Prepass()
 		deformDispatchSeq++;
 		if (!inputsIdle)
 			deformLastNonIdleSeq = deformDispatchSeq;
-		lastExecutedStampHash = stampHash;
+		// Rebase the match set on every executed dispatch: the pass just
+		// applied these exact stamps, so drift accumulates only while skipping
+		// - bounded by the tolerance.
+		lastStampSet.assign(perFrameData.Stamps, perFrameData.Stamps + perFrameData.StampCount);
+		lastStampEnds.assign(perFrameData.StampEnds, perFrameData.StampEnds + perFrameData.StampCount);
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
 			if (!deformActivityPending[i]) {
 				context->CopyResource(deformActivityStaging[i].get(), deformActivityBuffer.get());

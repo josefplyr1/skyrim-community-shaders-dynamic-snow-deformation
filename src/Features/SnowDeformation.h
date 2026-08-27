@@ -1800,8 +1800,10 @@ protected:
 	bool deformFlagActive = true;
 	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
 	bool prevBermBakeDisabled = false;
-	/** @brief Stamp set of the last EXECUTED dispatch (quantized, order-insensitive). Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. Sentinel: matches nothing until the first dispatch. */
-	uint64_t lastExecutedStampHash = ~0ull;
+	/** @brief Stamp set of the last EXECUTED dispatch, for the tolerance match. Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. A quantized hash was tried first and flickered: a swaying foot straddling a grid-cell boundary reads as change every few frames, and each flicker buys dispatch + verdict latency - permanent 0% skip. Matching within a tolerance has no boundaries to straddle. */
+	std::vector<float4> lastStampSet;
+	std::vector<float4> lastStampEnds;
+	std::vector<uint8_t> stampMatchUsed;
 	/** @brief Why the last frame ran, for the menu readout (bit 0 scroll, 1 stamps, 2 waves, 3 inject, 4 refill, 5 clear, 6 map-active, 7 verdict-stale). */
 	uint32_t deformIdleBlockers = 0;
 	/** @brief Skip rate over the previous 300 decisions (fraction; negative until the first window closes). Separates "fully idle" from a flickering skip in one readout. */

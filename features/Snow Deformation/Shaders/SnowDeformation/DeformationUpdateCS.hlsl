@@ -212,15 +212,20 @@ RWTexture2D<float4> CurrentDeformation : register(u0);
 Texture2D<float> InjectDepth : register(t1);
 
 // Idle-skip activity flag: ORed to 1 when any texel's STORED value moved this
-// frame. Compared at half precision - what the R16 map actually keeps - or a
+// frame. Compared at the R16 map's own precision - a half quantum - or a
 // sub-quantum decay (slump parked a hair off its clamp, a thaw tail) would
-// read as activity for ever and the skip would never engage.
+// read as activity for ever and the skip would never engage. An epsilon, not
+// f32tof16 bits: that intrinsic truncates while texture storage rounds to
+// nearest, so a result the stored map rounds straight back to compared as
+// "changed" every frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 
-uint4 StoredBits(float4 v)
+bool StoredDiffers(float4 a, float4 b)
 {
-	return uint4(f32tof16(v.x), f32tof16(v.y), f32tof16(v.z), f32tof16(v.w));
+	float4 d = abs(a - b);
+	float4 tol = max(abs(a), abs(b)) * exp2(-11.0) + 1e-6;
+	return any(d > tol);
 }
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
@@ -733,7 +738,7 @@ float SlumpTap(int2 p, int2 dims)
 
 	// One flag write per changed GROUP, not per texel - 4M threads hammering
 	// a single address serializes on the atomic unit.
-	if (any(StoredBits(result) != StoredBits(carried)))
+	if (StoredDiffers(result, carried))
 		InterlockedOr(gActivity, 1u);
 	GroupMemoryBarrierWithGroupSync();
 	if (GIdx == 0 && gActivity != 0)
