@@ -2835,8 +2835,51 @@ protected:
 		float nearestBodyAlpha = 1.0f;
 		bool nearestGhostFlag = false;
 		bool nearestIncorporeal = false;
+		/** @brief FormID of the nearest non-player actor, latched into skeletonProbeTarget at gather end. */
+		uint32_t nearestFormID = 0;
+		/** @brief Actors in range that were turned away because the stamp budget was already full. Whole-actor dropout: the range slider widens the gather radius against a fixed budget. */
+		uint budgetTurnedAway = 0;
 	};
 	StampStats stampStats;
+
+	/** @brief Runtime-only skeleton probe: per-foot trenching status of one NPC (the nearest, latched by formID with one frame of lag), plus which gate ate the actor when nothing carved. Filled by GatherStamps only while debugSkeletonProbe is on; drawn in Debugging Options. */
+	bool debugSkeletonProbe = false;
+	/** @brief One-shot: log the probed actor's whole node tree (names, scales, match classification) to CommunityShaders.log, for tester reports. */
+	bool skeletonProbeDumpRequested = false;
+	/** @brief FormID the probe follows: last frame's nearest non-player actor. */
+	uint32_t skeletonProbeTarget = 0;
+	struct SkeletonProbe
+	{
+		bool valid = false;
+		uint32_t formID = 0;
+		std::string actorName;
+		/** @brief What happened to the actor this frame: which path carved, or which gate returned first. */
+		const char* verdict = "";
+		struct FootRow
+		{
+			std::string name;
+			std::string toe;
+			float scale = 1.0f;
+			bool attached = false;
+			float zAboveRef = 0.0f;
+			float band = 0.0f;
+			bool planted = false;
+			bool stamped = false;
+			float radius = 0.0f;
+		};
+		std::vector<FootRow> feet;
+		uint usableFeet = 0;
+		uint limbs = 0;
+		uint limbsStamped = 0;
+		uint shapes = 0;
+		float dryTravel = 0.0f;
+		bool collisionFallback = false;
+		float bodyAlpha = 1.0f;
+		uint16_t alphaSettle = 0;
+		float gapToLand = 0.0f;
+		float floatingGap = 0.0f;
+	};
+	SkeletonProbe skeletonProbe;
 
 	/** @brief Last 3D-root position per loose prop (formID), rebuilt every frame from the in-range scan. The position gate runs before any collision traversal, so resting clutter costs one hash lookup per frame. */
 	std::unordered_map<uint32_t, RE::NiPoint3> propPrevPositions;

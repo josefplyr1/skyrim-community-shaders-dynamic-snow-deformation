@@ -989,9 +989,10 @@ void SnowDeformation::DrawSettings()
 			}
 			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
 				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
-			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u",
+			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u | actors turned away %u",
 				stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
-				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled);
+				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled,
+				stampStats.budgetTurnedAway);
 			ImGui::TreePop();
 		}
 
@@ -1202,6 +1203,60 @@ void SnowDeformation::DrawSettings()
 				"suspended (all ground in reach known bare)"
 			};
 			ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
+		}
+
+		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
+		if (debugSkeletonProbe) {
+			ImGui::SameLine();
+			if (ImGui::Button("Dump skeleton to log"))
+				skeletonProbeDumpRequested = true;
+			if (!skeletonProbe.valid) {
+				ImGui::Text("probe: no NPC in range this frame");
+			} else {
+				ImGui::Text("probe: %s (%08X) - %s",
+					skeletonProbe.actorName.empty() ? "<unnamed>" : skeletonProbe.actorName.c_str(),
+					skeletonProbe.formID, skeletonProbe.verdict);
+				ImGui::Text("  feet %zu (usable %u) | limbs %u (stamped %u) | shapes stamped %u | dry travel %.0f%s",
+					skeletonProbe.feet.size(), skeletonProbe.usableFeet,
+					skeletonProbe.limbs, skeletonProbe.limbsStamped, skeletonProbe.shapes,
+					skeletonProbe.dryTravel, skeletonProbe.collisionFallback ? " [FAILSAFE]" : "");
+				ImGui::Text("  body alpha %.2f (reads %u) | above land %.0f | floating gap %.0f",
+					skeletonProbe.bodyAlpha, (uint)skeletonProbe.alphaSettle,
+					skeletonProbe.gapToLand, skeletonProbe.floatingGap);
+				if (!skeletonProbe.feet.empty() &&
+					ImGui::BeginTable("##skelprobe", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+					ImGui::TableSetupColumn("Foot node");
+					ImGui::TableSetupColumn("Toe");
+					ImGui::TableSetupColumn("Scale");
+					ImGui::TableSetupColumn("Attached");
+					ImGui::TableSetupColumn("z-ref / band");
+					ImGui::TableSetupColumn("Result");
+					ImGui::TableHeadersRow();
+					for (const auto& row : skeletonProbe.feet) {
+						ImGui::TableNextRow();
+						ImGui::TableNextColumn();
+						ImGui::TextUnformatted(row.name.c_str());
+						ImGui::TableNextColumn();
+						ImGui::TextUnformatted(row.toe.c_str());
+						ImGui::TableNextColumn();
+						ImGui::Text("%.3f", row.scale);
+						ImGui::TableNextColumn();
+						ImGui::TextUnformatted(row.attached ? "yes" : "DETACHED");
+						ImGui::TableNextColumn();
+						ImGui::Text("%.1f / %.1f", row.zAboveRef, row.band);
+						ImGui::TableNextColumn();
+						if (row.stamped)
+							ImGui::Text("STAMPED r=%.1f", row.radius);
+						else if (row.planted)
+							ImGui::TextUnformatted("planted, no stamp");
+						else if (row.scale < 0.01f)
+							ImGui::TextUnformatted("ZERO SCALE");
+						else
+							ImGui::TextUnformatted("lifted");
+					}
+					ImGui::EndTable();
+				}
+			}
 		}
 		if (auto* sky = RE::Sky::GetSingleton())
 			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,

@@ -272,6 +272,32 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 		CollectStampBones(child.get(), a_ancestor, a_ancestorRadius, a_out);
 }
 
+// Full-tree dump for the skeleton probe: every node with its match
+// classification, so a tester's log shows exactly what the stamper saw.
+static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
+{
+	if (!a_obj || a_depth > 24)
+		return;
+	auto* node = a_obj->AsNode();
+	const char* name = a_obj->name.c_str() ? a_obj->name.c_str() : "";
+	const char* kind = "";
+	if (!node)
+		kind = " [geometry: never matches]";
+	else if (NameStartsWith(a_obj->name, "CME ") || NameStartsWith(a_obj->name, "MOV "))
+		kind = " [control: skipped]";
+	else if (NameContains(a_obj->name, "foot") || NameContains(a_obj->name, "hoof") || NameContains(a_obj->name, "paw"))
+		kind = " [FOOT]";
+	else if (NameContains(a_obj->name, "toe"))
+		kind = " [toe]";
+	else if (MatchLimb(a_obj->name))
+		kind = " [limb]";
+	logger::info("[SNOW DEFORMATION] skel {:{}}{} scale={:.3f} worldZ={:.1f}{}",
+		"", a_depth * 2, name, a_obj->world.scale, a_obj->world.translate.z, kind);
+	if (node)
+		for (auto& child : node->GetChildren())
+			DumpSkeletonToLog(child.get(), a_depth + 1);
+}
+
 // Weight a shape puts through a crust, from its size. Crust bears a boot and
 // gives under a mammoth, and the shapes a heavy skeleton carries are simply
 // bigger - there is no mass to read off a collision shape, but this tracks it
@@ -435,13 +461,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		bowWaveSpeed.clear();
 	stampStats = {};
 
+	// The map is 2048 whatever the Trenches range, so past ~100 m a texel
+	// outgrows the minimum print and a min-size stamp can fall entirely
+	// between texel centres - NPC feet at the clamp floor sporadically write
+	// nothing. Floor every stamp at one texel; fatter prints at long range
+	// are the honest cost of the coarser map (raise Deformation Map
+	// Resolution to keep them sharp instead).
+	const float texelFloor = deformWorldSize / (float)deformMapDim;
+	const float footRadiusFloor = std::max(kMinFootStampRadius, texelFloor);
+	const float limbRadiusFloor = std::max(kMinStampShapeRadius, texelFloor);
+	const bool probeActive = debugSkeletonProbe && skeletonProbeTarget != 0;
+	skeletonProbe.valid = false;
+
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
 	// (discrete alternating prints); skeletons without foot bones, corpses
 	// and props stamp their Havok collision shapes (Util::GetShapeBound over
 	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
 	auto addStamps = [&](RE::ActorHandle a_handle) {
-		if (stampCount >= actorCeiling)
-			return;
 		auto actor = a_handle.get();
 		if (!actor || !actor->Is3DLoaded())
 			return;
@@ -454,6 +490,22 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 
 		const uint32_t formID = actor->formID;
+		const bool probing = probeActive && formID == skeletonProbeTarget;
+		if (probing) {
+			skeletonProbe = {};
+			skeletonProbe.valid = true;
+			skeletonProbe.formID = formID;
+			skeletonProbe.actorName = actor->GetName() ? actor->GetName() : "";
+			skeletonProbe.verdict = "processing";
+		}
+		// Counted per actor turned away whole, which is what the Trenches
+		// range slider risks: a wider gather radius against a fixed budget.
+		if (stampCount >= actorCeiling) {
+			stampStats.budgetTurnedAway++;
+			if (probing)
+				skeletonProbe.verdict = "gated: stamp budget exhausted";
+			return;
+		}
 		// The dead carve every frame until they settle; once settled only a
 		// large displacement (dragging, explosions) wakes them and the
 		// refill buries their imprint. No first-sight waiver: decapitation
@@ -483,8 +535,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		auto* charController = actor->GetCharController();
 		if (!isDead && charController &&
 			(charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
-				charController->context.currentState == RE::hkpCharacterStateType::kFlying))
+				charController->context.currentState == RE::hkpCharacterStateType::kFlying)) {
+			if (probing)
+				skeletonProbe.verdict = "gated: airborne (controller in-air/flying)";
 			return;
+		}
 
 		// Living actors on ELEVATED structures (walkways, roofs, bridges) do
 		// not stamp either: the deformation map is 2D, so their trails would
@@ -497,8 +552,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			float landZ = position.z;
 			if (const auto tesLand = RE::TES::GetSingleton())
 				tesLand->GetLandHeight(position, landZ);
-			if (position.z - landZ > kElevatedStampCutoff)
+			if (probing)
+				skeletonProbe.gapToLand = position.z - landZ;
+			if (position.z - landZ > kElevatedStampCutoff) {
+				if (probing)
+					skeletonProbe.verdict = "gated: elevated surface (above land cutoff)";
 				return;
+			}
 		}
 
 		// Living actors use their own position as the ground reference. Dead
@@ -642,6 +702,31 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				cache.collisionFallback = true;
 		};
 
+		if (probing) {
+			skeletonProbe.usableFeet = usableFeet;
+			skeletonProbe.dryTravel = cache.dryTravel;
+			skeletonProbe.collisionFallback = cache.collisionFallback;
+			skeletonProbe.bodyAlpha = cache.bodyAlpha;
+			skeletonProbe.alphaSettle = cache.alphaSettle;
+			skeletonProbe.limbs = (uint)cache.limbs.size();
+			for (const auto& foot : cache.feet) {
+				SkeletonProbe::FootRow row;
+				auto* n = foot.node.get();
+				row.name = n && n->name.c_str() ? n->name.c_str() : "<null>";
+				auto* t = foot.toe.get();
+				row.toe = t && t->name.c_str() ? t->name.c_str() : "-";
+				row.scale = n ? n->world.scale : 0.0f;
+				row.attached = n && NodeAttachedTo(n, root);
+				skeletonProbe.feet.push_back(std::move(row));
+			}
+			if (skeletonProbeDumpRequested) {
+				skeletonProbeDumpRequested = false;
+				logger::info("[SNOW DEFORMATION] Skeleton dump: {} ({:08X}), {} feet / {} limbs matched",
+					skeletonProbe.actorName, formID, cache.feet.size(), cache.limbs.size());
+				DumpSkeletonToLog(root, 0);
+			}
+		}
+
 		// Floating actors carve nothing. Atronachs, wisps and ghosts never
 		// touch the ground, so every mark they leave today is one the snow
 		// should not have taken - and the foot path is what puts it there:
@@ -653,6 +738,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
 		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ, &floatingGap, &floatingByFeet);
+		if (probing)
+			skeletonProbe.floatingGap = floatingGap;
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
 		// A thing made of an element has a body however transparent it is, and
@@ -693,6 +780,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestUsableFeet = usableFeet;
 				stampStats.nearestFallback = cache.collisionFallback;
 				stampStats.nearestDryTravel = cache.dryTravel;
+				stampStats.nearestFormID = formID;
 				stampStats.nearestBodyAlpha = bodyAlpha;
 				stampStats.nearestGhostFlag = ghostFlag;
 				stampStats.nearestIncorporeal = incorporeal;
@@ -715,10 +803,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			// can break out of it. Collision-measured hovering is trusted.
 			if (floatingByFeet)
 				accumulateDry(dryStep);
+			if (probing)
+				skeletonProbe.verdict = floatingByFeet ? "gated: FLOATING (measured by feet)" :
+				                                         "gated: FLOATING (measured by collision/limbs)";
 			return;
 		}
 		if (incorporeal) {
 			stampStats.incorporeal++;
+			if (probing)
+				skeletonProbe.verdict = "gated: incorporeal (translucent/ghost)";
 			return;
 		}
 		// A ghost's see-through look arrives by SCRIPT, frames after its model
@@ -732,6 +825,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		                          (settings.IncorporealMode == 1 || settings.IncorporealMode == 3);
 		if (!isDead && alphaGoverns && bones && bones->alphaSettle < kBodyAlphaSettleReads) {
 			stampStats.incorporeal++;
+			if (probing)
+				skeletonProbe.verdict = "gated: alpha settling (newly seen actor)";
 			return;
 		}
 
@@ -740,6 +835,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// collision-shape fallback while its high segments carve nothing, and
 		// so would feet an editor broke or a watchdog already gave up on.
 		if (footPath && bones) {
+			if (probing)
+				skeletonProbe.verdict = "carving: bone path";
 			bool footStamped = false;
 			{
 				float minFootZ = FLT_MAX;
@@ -788,7 +885,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						}
 					}
 					radius = std::clamp(radius * settings.FootPrintScale * depthScale,
-						kMinFootStampRadius, kMaxStampShapeRadius);
+						footRadiusFloor, kMaxStampShapeRadius);
 
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
@@ -804,7 +901,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					                            kFootPlantBand * boneScale;
 					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
 					const bool wasPlanted = stampPrevPositions.find(key) != stampPrevPositions.end();
-					if (footWorld.translate.z - plantRef > plantBand * (wasPlanted ? 1.5f : 1.0f))
+					const float releaseBand = plantBand * (wasPlanted ? 1.5f : 1.0f);
+					const bool planted = footWorld.translate.z - plantRef <= releaseBand;
+					if (probing && thisIndex < skeletonProbe.feet.size()) {
+						auto& row = skeletonProbe.feet[thisIndex];
+						row.zAboveRef = footWorld.translate.z - plantRef;
+						row.band = releaseBand;
+						row.planted = planted;
+						row.radius = radius;
+					}
+					if (!planted)
 						continue;
 
 					// A continuously planted heel can still slide (shuffles,
@@ -859,6 +965,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stampCount++;
 					stampStats.feet++;
 					footStamped = true;
+					if (probing && thisIndex < skeletonProbe.feet.size())
+						skeletonProbe.feet[thisIndex].stamped = true;
 				}
 			}
 
@@ -881,7 +989,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
 					continue;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
-					kMinStampShapeRadius, kMaxStampShapeRadius);
+					limbRadiusFloor, kMaxStampShapeRadius);
 				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
 				const float carve = std::min(1.0f - heightAbove / nominalDepth, 1.0f);
 				if (carve < kMinLimbCarve)
@@ -897,6 +1005,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.limbs++;
+				if (probing)
+					skeletonProbe.limbsStamped++;
 			}
 			if (footStamped) {
 				cache.dryTravel = 0.0f;
@@ -909,6 +1019,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		if (!isDead && cache.collisionFallback)
 			stampStats.fallbackActors++;
+		if (probing) {
+			if (isDead)
+				skeletonProbe.verdict = "corpse path";
+			else if (cache.collisionFallback)
+				skeletonProbe.verdict = "carving: collision shapes (failsafe latched)";
+			else if (cache.feet.empty())
+				skeletonProbe.verdict = "carving: collision shapes (no matched feet)";
+			else
+				skeletonProbe.verdict = "carving: collision shapes (feet unusable)";
+		}
 
 		// Corpses with cached bones imprint body-shaped: the same limb
 		// segments, run through the shape path's settle latch per limb.
@@ -944,7 +1064,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
 					continue;
 				const float radius = std::clamp(limb.radius * boneScale * depthScale,
-					kMinStampShapeRadius, kMaxStampShapeRadius);
+					limbRadiusFloor, kMaxStampShapeRadius);
 				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;
 
 				float2 current = { center.x, center.y };
@@ -1043,12 +1163,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.y = current.y;
 					stamp.z = 1.0f;
 					// StampRadius scales the shape's own radius.
-					stamp.w = radius * settings.StampRadius / kStampRadiusNeutral * depthScale;
+					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
+						texelFloor);
 					perFrameData.Stamps[stampCount] = stamp;
 					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
 						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.shapes++;
+					if (probing)
+						skeletonProbe.shapes++;
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
@@ -1072,6 +1195,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		for (auto& actorHandle : processLists->highActorHandles)
 			addStamps(actorHandle);
 	}
+	// One frame of lag: the probe follows whoever ended THIS gather nearest,
+	// and fills during the next, so the pick is settled before any row is
+	// written.
+	skeletonProbeTarget = stampStats.nearestValid ? stampStats.nearestFormID : 0;
 
 	// Loose props carve while moving. The cheap root-position gate runs
 	// before any collision traversal.
