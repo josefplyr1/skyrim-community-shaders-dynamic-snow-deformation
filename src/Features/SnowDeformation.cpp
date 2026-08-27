@@ -25,7 +25,6 @@
 	X(StampRadius) \
 	X(FootPrintScale) \
 	X(TrenchWallSharpness) \
-	X(TrailIrregularity) \
 	X(SlumpRate) \
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
@@ -854,7 +853,6 @@ void SnowDeformation::Prepass()
 	// Sharpness is a percent slider; 100% clamps just below the degenerate
 	// smoothstep(1, 1, x) edge.
 	perFrameData.StampFalloffStart = std::clamp(settings.TrenchWallSharpness / 100.0f, 0.0f, 0.98f);
-	perFrameData.StampNoiseAmp = std::max(settings.TrailIrregularity, 0.0f);
 	perFrameData.SlumpRate = std::clamp(settings.SlumpRate, 0.0f, 1.0f);
 
 	float deltaTime = *globals::game::deltaTime;
@@ -1546,8 +1544,8 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 	};
 
 	// Stamp capsules: the shader's own gate radius, mirrored (pit legs reach
-	// furthest; noise widens the rest).
-	const float gateScale = std::max(1.31f, 1.0f + std::max(0.5f * a_data.StampNoiseAmp, a_data.MeltEdgeNoise));
+	// furthest; melt edge noise widens the rest).
+	const float gateScale = std::max(1.31f, 1.0f + a_data.MeltEdgeNoise);
 	for (uint i = 0; i < a_data.StampCount && !overflow; i++) {
 		const float reach = a_data.Stamps[i].w * gateScale;
 		addWorldBox(std::min(a_data.Stamps[i].x, a_data.StampEnds[i].x) - reach,

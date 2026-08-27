@@ -37,7 +37,7 @@ cbuffer PerFrame : register(b0)
 	uint ClearMap;
 
 	float StampFalloffStart;
-	float StampNoiseAmp;
+	float padTrail;
 	float2 WindBias;
 
 	float DeltaTime;

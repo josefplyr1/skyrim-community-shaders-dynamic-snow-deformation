@@ -2437,7 +2437,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Provenance: green = baked cell data; LOD-classified far texels
 		// (w = 2 + score) grade brown (classified bare) -> blue-white
 		// (classified snow) so the classification itself is inspectable;
-		// cyan = snow-line fallback (no LOD tile); red = no data at all
+		// cyan = no LOD tile (filled bare); red = no data at all
 		// (outside the worldspace; the VS raises these to eye level so the
 		// gap reads as a sheet).
 		float2 provT = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;

@@ -176,8 +176,8 @@ cbuffer PerFrame : register(b0)
 	// Lower smoothstep edge of the stamp falloff (fraction of radius):
 	// higher = steeper trench walls.
 	float StampFalloffStart;
-	// Fraction-of-radius noise wobbling each stamp's edge.
-	float StampNoiseAmp;
+	// Retired TrailIrregularity slot; layout kept.
+	float padTrail;
 	// Unit wind direction (world XY, blowing toward) times wind strength
 	// 0-1; zero = uniform refill.
 	float2 WindBias;
@@ -786,11 +786,11 @@ bool StampTexel(uint2 phys)
 		bool isCone = modeNoBowl > STAMP_MODE_CONE - 0.5;
 		float mode = isCone ? modeNoBowl - STAMP_MODE_CONE : modeNoBowl;
 
-		// Either edge treatment can push the falloff outward, so the gate
-		// widens by whichever reaches further.
-		// Pits reach furthest of all - their arc legs run past the radius.
+		// Melt edge noise can push the falloff outward, so the gate widens
+		// by it. Pits reach furthest of all - their arc legs run past the
+		// radius.
 		float gateRadius = radius * max(PIT_LOBE_MAX + PIT_LOBE_WIDTH,
-									 1.0 + max(0.5 * StampNoiseAmp, MeltEdgeNoise));
+									 1.0 + MeltEdgeNoise);
 		[branch] if (distSq < gateRadius * gateRadius)
 		{
 			float dist = sqrt(distSq);
@@ -821,13 +821,7 @@ bool StampTexel(uint2 phys)
 
 			[branch] if (mode < 0.5)
 			{
-				// Carve: high-frequency noise ON the falloff distance, which
-				// churns the edge the way a boot breaks snow.
 				float edgeDist = edgeCoord;
-				[branch] if (StampNoiseAmp > 0.001)
-				{
-					edgeDist += (StampNoise(worldPos * 0.125) - 0.5) * StampNoiseAmp;
-				}
 				// Falloff from StampFalloffStart of the radius: low values keep a
 				// wide edge band coarser consumers of the map can still represent,
 				// high values hold full depth almost to the edge. A BOWL carve

@@ -293,8 +293,6 @@ public:
 		float FootPrintScale = 1.5f;
 		/** @brief Lower smoothstep edge of the stamp falloff, in PERCENT of the stamp radius: 0 = the softest, widest banks; 100 = full depth held to the very edge (clamped just below degenerate in the CB fill). */
 		float TrenchWallSharpness = 50.0f;
-		/** @brief World-anchored noise on stamp edges (fraction of stamp radius), breaking the swept-capsule look of trails into churned snow. */
-		float TrailIrregularity = 0.60f;
 		/** @brief Unsupported-snow settle speed, 0-1. Strips left standing between separate trails sink toward whichever side is shallower once BOTH sides are dug away; walls and open snow never move. Default OFF until A/B'd - it changes the map every subsystem reads (TRENCH-REALISM-PLAN.md Stage 3b). */
 		float SlumpRate = 0.1f;
 		/** @brief Multiplier on the snowfall-driven refill rate. 0 disables refilling. */
@@ -504,11 +502,11 @@ public:
 		/** @brief Bow wave: crest height as a fraction of local snow depth. 0 = off. */
 		float BowWaveHeight = 0.30f;
 		/** @brief Bow wave: how far ahead of the feet the crest sits, and how far it stretches along travel. Not a size multiplier; width comes from BowWaveForward. */
-		float BowWaveReach = 1.30f;
+		float BowWaveReach = 1.15f;
 		/** @brief Bow wave: 0 = a ring all round the actor, 1 = only dead ahead. Mid values give the crescent. */
 		float BowWaveForward = 0.80f;
 		/** @brief Bow wave: how far the crest breaks into uneven lumps rather than a smooth swell (P6's clod octave, world-anchored). 0 = smooth. */
-		float BowWaveChunk = 0.15f;
+		float BowWaveChunk = 0.25f;
 		/** @brief Bow wave: speed (units/sec) at which the crest reaches full strength. Lower = a walk already pushes. */
 		float BowWaveFullSpeed = 200.0f;
 		/** @brief Churn lump amplitude in world units on carved/piled snow (trench walls, floors, berms). */
@@ -600,8 +598,8 @@ public:
 
 		/** @brief Lower smoothstep edge of the stamp falloff (fraction of radius): higher = steeper trench walls. */
 		float StampFalloffStart;
-		/** @brief Fraction-of-radius noise wobbling each stamp's edge. */
-		float StampNoiseAmp;
+		/** @brief Retired TrailIrregularity slot; layout kept. */
+		float padTrail;
 		/** @brief Unit wind direction (world XY, blowing toward) times wind strength 0-1; zero = uniform refill. */
 		float2 WindBias;
 
@@ -1269,12 +1267,8 @@ public:
 		float2 HeightMapOffset;
 
 		float2 HeightRange;
-		float2 WorldYRange;
-
-		float SnowLineZ;
-		float SnowNorthDrop;
-		float SnowLineFade;
 		float SnowDepthUnits;
+		float padFill;
 
 		/** @brief 2x2 level-32 LOD diffuse tile block: SW corner world XY, per-tile world span (32 cells), snow-classification sensitivity. */
 		float2 LODTileBase;

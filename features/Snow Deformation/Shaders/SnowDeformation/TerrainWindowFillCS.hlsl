@@ -9,10 +9,10 @@
 // the xLODGen worldspace heightmap (the Terrain Shadows data source) and
 // their snow coverage from the game's own LOD terrain diffuse — where the
 // baked LOD texture is snow, our snow is placed, so the far shell follows
-// the hand-painted snow instead of an elevation guess. The snow-line
-// heuristic survives only as the fallback for texels without an LOD tile.
-// Texel .w records provenance for the debug view: 1 = snow-line fallback,
-// 2 + score = LOD-classified.
+// the hand-painted snow instead of an elevation guess. Texels without an
+// LOD tile fill bare (the old snow-line elevation heuristic was retired,
+// settings sweep 2026-08-27). Texel .w records provenance for the debug
+// view: 1 = no LOD tile (bare), 2 + score = LOD-classified.
 
 RWTexture2D<float4> TerrainWindow : register(u0);
 Texture2D<float> HeightMap : register(t0);
@@ -41,14 +41,9 @@ cbuffer WindowFillCB : register(b0)
 	// zRange is the actual min/max CONTENT height and is a much narrower
 	// band, so decoding with it flattens the world toward its midpoint.
 	float2 HeightRange;
-	// Worldspace south/north Y bounds for the latitude term.
-	float2 WorldYRange;
-
-	float SnowLineZ;
-	float SnowNorthDrop;
-	float SnowLineFade;
 	// Snow depth (world units) a fully covered heightmap texel carries.
 	float SnowDepthUnits;
+	float padFill;
 
 	// World XY of the tile block's SW corner and one tile's world span
 	// (32 cells). Tiles are loaded ignoring sRGB, so classification runs on
@@ -113,12 +108,9 @@ float ClassifyLODSnow(float3 color)
 	}
 	else
 	{
-		// Snow-line fallback: sinks toward the north edge over the top
-		// ~third of the map, so the northern coast reads snowy at sea level
-		// while the mid-map plains stay bare at the same elevation.
-		float northness = saturate((worldXY.y - WorldYRange.x) / max(WorldYRange.y - WorldYRange.x, 1.0));
-		float snowLine = SnowLineZ - SnowNorthDrop * smoothstep(0.55, 0.9, northness);
-		coverage = smoothstep(snowLine - SnowLineFade, snowLine + SnowLineFade, z);
+		// No LOD tile: fill bare. Height still lands so the far shell hugs
+		// the ground; coverage decides whether snow sits on it.
+		coverage = 0.0;
 		provenance = 1.0;
 	}
 
