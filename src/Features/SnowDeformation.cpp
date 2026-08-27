@@ -797,14 +797,50 @@ void SnowDeformation::Prepass()
 	// byte-identically - so neither runs. Any doubt (readback not in yet,
 	// inputs active since the verdict) keeps them running.
 	PollDeformActivity(context);
+
+	// Stamps are "quiet" when the SET is unchanged since the last executed
+	// dispatch, not when it is empty - planted feet stamp every frame, so a
+	// count never reaches zero while anyone stands on snow. Re-applying an
+	// unchanged set is exactly what the activity verdict proved absorbed
+	// (carves max-blend; melt/crust saturate, and stay active until they do).
+	// Quantized so idle-animation jitter does not read as motion; XOR-combined
+	// so the nearest-first resort cannot reorder two equidistant stamps into
+	// a "change".
+	uint64_t stampHash = 0x9E3779B97F4A7C15ull ^ perFrameData.StampCount;
+	for (uint i = 0; i < perFrameData.StampCount; i++) {
+		const auto& s = perFrameData.Stamps[i];
+		const auto& e = perFrameData.StampEnds[i];
+		uint64_t h = 1469598103934665603ull;
+		const auto mix = [&h](long long v) { h ^= (uint64_t)v; h *= 1099511628211ull; };
+		mix(std::llround(s.x * 4.0f));
+		mix(std::llround(s.y * 4.0f));
+		mix(std::llround(s.z * 1024.0f));
+		mix(std::llround(s.w * 4.0f));
+		mix(std::llround(e.x * 4.0f));
+		mix(std::llround(e.y * 4.0f));
+		mix(std::llround(e.z * 1024.0f));
+		mix(std::llround(e.w * 1024.0f));
+		stampHash ^= h;
+	}
+	const bool stampsQuiet = stampHash == lastExecutedStampHash;
+
 	const bool inputsIdle =
 		perFrameData.ScrollDelta.x == 0 && perFrameData.ScrollDelta.y == 0 &&
-		perFrameData.StampCount == 0 &&
+		stampsQuiet &&
 		perFrameData.DepositParams.x < 0.5f &&
 		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
 		perFrameData.ClearMap == 0;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
+	deformIdleBlockers =
+		((perFrameData.ScrollDelta.x != 0 || perFrameData.ScrollDelta.y != 0) ? 1u : 0u) |
+		(!stampsQuiet ? 2u : 0u) |
+		(perFrameData.DepositParams.x >= 0.5f ? 4u : 0u) |
+		(perFrameData.InjectValid != 0 ? 8u : 0u) |
+		(perFrameData.RefillAmount > 0.0f ? 16u : 0u) |
+		(perFrameData.ClearMap != 0 ? 32u : 0u) |
+		(deformFlagActive ? 64u : 0u) |
+		(deformFlagSeq <= deformLastNonIdleSeq ? 128u : 0u);
 	// The berm field is only rebuilt by an executed pass; re-enabling its A/B
 	// at rest needs one forced run or the stale bake stands until something moves.
 	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
@@ -874,6 +910,7 @@ void SnowDeformation::Prepass()
 		deformDispatchSeq++;
 		if (!inputsIdle)
 			deformLastNonIdleSeq = deformDispatchSeq;
+		lastExecutedStampHash = stampHash;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
 			if (!deformActivityPending[i]) {
 				context->CopyResource(deformActivityStaging[i].get(), deformActivityBuffer.get());

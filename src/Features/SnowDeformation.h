@@ -1800,6 +1800,10 @@ protected:
 	bool deformFlagActive = true;
 	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
 	bool prevBermBakeDisabled = false;
+	/** @brief Stamp set of the last EXECUTED dispatch (quantized, order-insensitive). Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. Sentinel: matches nothing until the first dispatch. */
+	uint64_t lastExecutedStampHash = ~0ull;
+	/** @brief Why the last frame ran, for the menu readout (bit 0 scroll, 1 stamps, 2 waves, 3 inject, 4 refill, 5 clear, 6 map-active, 7 verdict-stale). */
+	uint32_t deformIdleBlockers = 0;
 	/** @brief Consumes completed activity readbacks (non-blocking). */
 	void PollDeformActivity(ID3D11DeviceContext* a_context);
 

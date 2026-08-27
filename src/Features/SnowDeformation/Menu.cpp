@@ -805,10 +805,24 @@ void SnowDeformation::DrawSettings()
 			}
 		}
 
-		// S1: the idle skip and its measurement override. The readout is the
-		// one-glance answer to "did the pass stop at rest".
+		// S1: the idle skip and its measurement override. The readout names
+		// what is holding the pass on, so "why is it running" answers itself.
 		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
-		ImGui::Text("Update pass: %s", deformIdleSkipped ? "idle (skipped)" : "running");
+		if (deformIdleSkipped) {
+			ImGui::Text("Update pass: idle (skipped)");
+		} else {
+			static const char* kBlockerNames[8] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale" };
+			std::string held;
+			for (int bit = 0; bit < 8; bit++)
+				if (deformIdleBlockers & (1u << bit)) {
+					if (!held.empty())
+						held += ", ";
+					held += kBlockerNames[bit];
+				}
+			if (debugForceDeformationUpdate)
+				held = held.empty() ? "forced" : "forced, " + held;
+			ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
+		}
 
 		{
 			// One tile is 512 world units square, only trodden ground has one,
