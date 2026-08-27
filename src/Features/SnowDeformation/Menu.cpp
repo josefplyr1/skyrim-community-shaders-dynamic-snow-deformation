@@ -813,10 +813,38 @@ void SnowDeformation::DrawSettings()
 		// verdict, so it lags the dispatch by the readback ring.
 		ImGui::Checkbox(T(TKEY("debug_activity_view"), "Show Update Activity"), &debugActivityView);
 		if (debugActivityView) {
-			ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically.");
+			ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
+			const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
 			if (activityViewSRV)
 				ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
-			ImGui::Text("Changed texels (last verdict): %u", deformChangedTexels);
+
+			const bool bboxValid = deformChangedTexels > 0 &&
+			                       deformChangedMinX <= deformChangedMaxX &&
+			                       deformChangedMinY <= deformChangedMaxY;
+			if (bboxValid && activityViewSRV) {
+				const float scale = 512.0f / std::max((float)deformMapDim, 1.0f);
+				auto* draw = ImGui::GetWindowDrawList();
+				draw->AddRect(
+					{ activityTopLeft.x + (float)deformChangedMinX * scale - 2.0f,
+						activityTopLeft.y + (float)deformChangedMinY * scale - 2.0f },
+					{ activityTopLeft.x + (float)(deformChangedMaxX + 1) * scale + 2.0f,
+						activityTopLeft.y + (float)(deformChangedMaxY + 1) * scale + 2.0f },
+					IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+			}
+
+			ImGui::Text("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u)",
+				deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep);
+			if (bboxValid) {
+				const float texel = deformWorldSize / std::max((float)deformMapDim, 1.0f);
+				const float cx = ((float)(deformChangedMinX + deformChangedMaxX) * 0.5f + 0.5f) * texel;
+				const float cy = ((float)(deformChangedMinY + deformChangedMaxY) * 0.5f + 0.5f) * texel;
+				const float half = deformWorldSize * 0.5f;
+				ImGui::Text("Bbox: (%u,%u)-(%u,%u), %.1f x %.1f m, centre %.1f m E / %.1f m N of camera",
+					deformChangedMinX, deformChangedMinY, deformChangedMaxX, deformChangedMaxY,
+					(float)(deformChangedMaxX - deformChangedMinX + 1) * texel / kUnitsPerMeter,
+					(float)(deformChangedMaxY - deformChangedMinY + 1) * texel / kUnitsPerMeter,
+					(cx - half) / kUnitsPerMeter, (cy - half) / kUnitsPerMeter);
+			}
 		}
 
 		if (deformIdleSkipped) {

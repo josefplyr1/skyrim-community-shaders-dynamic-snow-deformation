@@ -1806,14 +1806,21 @@ protected:
 	std::vector<float4> lastStampSet;
 	std::vector<float4> lastStampEnds;
 	std::vector<uint8_t> stampMatchUsed;
+	std::vector<uint32_t> stampMatchIndex;
 	/** @brief Why the last frame ran, for the menu readout (bit 0 scroll, 1 stamps, 2 waves, 3 inject, 4 refill, 5 clear, 6 map-active, 7 verdict-stale). */
 	uint32_t deformIdleBlockers = 0;
 	/** @brief Skip rate over the previous 300 decisions (fraction; negative until the first window closes). Separates "fully idle" from a flickering skip in one readout. */
 	float deformSkipRate = -1.0f;
 	uint32_t deformSkipTallyFrames = 0;
 	uint32_t deformSkipTallySkipped = 0;
-	/** @brief Changed-texel count from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. */
+	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-deposit). */
 	uint32_t deformChangedTexels = 0;
+	uint32_t deformChangedDepth = 0;
+	uint32_t deformChangedMelt = 0;
+	uint32_t deformChangedCrustDep = 0;
+	/** @brief Bounding box of the changed texels (map coords), from the same verdict. Valid while count > 0. A few hundred churning texels are sub-pixel in the 512 view; the box is what makes them findable. */
+	uint32_t deformChangedMinX = 0, deformChangedMinY = 0;
+	uint32_t deformChangedMaxX = 0, deformChangedMaxY = 0;
 	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|deposit) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
 	bool debugActivityView = false;
 	winrt::com_ptr<ID3D11Texture2D> activityViewTexture;

@@ -239,9 +239,14 @@ void SnowDeformation::SetupResources()
 		// without a stall. Dimension-independent, so a map-resolution change
 		// never touches it.
 		auto device = globals::d3d::device;
-		// 8 bytes: [0] the changed-anywhere flag, [4] the changed-texel count.
+		// 40 bytes, layout mirrored in DeformationUpdateCS.hlsl:
+		// [0] changed-anywhere flag, [4] changed count,
+		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
+		// so ClearUAV's all-zero init works for every field), [16] maxX,
+		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
+		// crust/deposit count, [36] spare.
 		D3D11_BUFFER_DESC flagDesc{};
-		flagDesc.ByteWidth = 8;
+		flagDesc.ByteWidth = 40;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
 		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -251,13 +256,13 @@ void SnowDeformation::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
 		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		flagUavDesc.Buffer.NumElements = 2;
+		flagUavDesc.Buffer.NumElements = 10;
 		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
 		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
 
 		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 8;
+		stagingDesc.ByteWidth = 40;
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -494,11 +499,21 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint* value = static_cast<const uint*>(mapped.pData);
 			const uint flag = value[0];
 			const uint changed = value[1];
+			const uint cminX = value[2], cminY = value[3];
+			const uint maxX = value[4], maxY = value[5];
+			const uint countR = value[6], countG = value[7], countB = value[8];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
 				deformFlagActive = flag != 0;
 				deformChangedTexels = changed;
+				deformChangedDepth = countR;
+				deformChangedMelt = countG;
+				deformChangedCrustDep = countB;
+				deformChangedMinX = 65535u - cminX;
+				deformChangedMinY = 65535u - cminY;
+				deformChangedMaxX = maxX;
+				deformChangedMaxY = maxY;
 			}
 		}
 		// A failed map drops the slot rather than wedging the ring; the verdict
@@ -853,6 +868,7 @@ void SnowDeformation::Prepass()
 	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
 	if (stampsQuiet && perFrameData.StampCount > 0) {
 		stampMatchUsed.assign(lastStampSet.size(), 0);
+		stampMatchIndex.resize(perFrameData.StampCount);
 		for (uint i = 0; i < perFrameData.StampCount && stampsQuiet; i++) {
 			const auto& s = perFrameData.Stamps[i];
 			const auto& e = perFrameData.StampEnds[i];
@@ -869,11 +885,26 @@ void SnowDeformation::Prepass()
 					std::abs(e.z - pe.z) <= 0.01f &&
 					std::abs(e.w - pe.w) <= 0.01f + 0.01f * std::abs(pe.w)) {
 					stampMatchUsed[j] = 1;
+					stampMatchIndex[i] = (uint32_t)j;
 					found = true;
 					break;
 				}
 			}
 			stampsQuiet = found;
+		}
+	}
+	// Snap a quiet-matched set to its baseline. The match alone was not
+	// enough: while anything else keeps the pass running, the swayed stamps
+	// are still APPLIED, and each sub-tolerance sway re-carves footprint edge
+	// texels by a hair - so the map keeps changing, which keeps the pass
+	// running, which keeps applying sway. Substituting the baseline makes the
+	// applied set bit-identical frame over frame; the edges converge and the
+	// feedback breaks. The baseline rebase below then keeps it FIXED while
+	// quiet, so it cannot creep.
+	if (stampsQuiet) {
+		for (uint i = 0; i < perFrameData.StampCount; i++) {
+			perFrameData.Stamps[i] = lastStampSet[stampMatchIndex[i]];
+			perFrameData.StampEnds[i] = lastStampEnds[stampMatchIndex[i]];
 		}
 	}
 

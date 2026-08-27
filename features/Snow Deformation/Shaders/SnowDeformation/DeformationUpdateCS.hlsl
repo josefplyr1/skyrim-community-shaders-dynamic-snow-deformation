@@ -220,8 +220,19 @@ Texture2D<float> InjectDepth : register(t1);
 // f32tof16 bits: that intrinsic truncates while texture storage rounds to
 // nearest, so a result the stored map rounds straight back to compared as
 // "changed" every frame.
+// Raw layout mirrored in SnowDeformation.cpp: [0] flag, [4] count,
+// [8]/[12] complemented min X/Y (min as InterlockedMax of 65535-coord, so an
+// all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
+// per-channel counts (depth, melt/scorch, crust/deposit).
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
+groupshared uint gCountR;
+groupshared uint gCountG;
+groupshared uint gCountB;
+groupshared uint gCMinX;
+groupshared uint gCMinY;
+groupshared uint gMaxX;
+groupshared uint gMaxY;
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
@@ -277,8 +288,16 @@ float SlumpTap(int2 p, int2 dims)
 								: SV_GroupIndex) {
 	uint2 pixel = DTid.xy;
 
-	if (GIdx == 0)
+	if (GIdx == 0) {
 		gActivity = 0;
+		gCountR = 0;
+		gCountG = 0;
+		gCountB = 0;
+		gCMinX = 0;
+		gCMinY = 0;
+		gMaxX = 0;
+		gMaxY = 0;
+	}
 	GroupMemoryBarrierWithGroupSync();
 
 	float deformation = 0.0;
@@ -745,11 +764,22 @@ float SlumpTap(int2 p, int2 dims)
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
 	CurrentDeformation[pixel] = result;
 
-	// Flag + count via one groupshared reduction - 4M threads hammering a
-	// single address serializes on the atomic unit.
+	// Flag, counts and bbox via one groupshared reduction - 4M threads
+	// hammering a single address serializes on the atomic unit.
 	float4 delta = StoredDelta(result, carried);
-	if (any(delta > 0.0))
+	if (any(delta > 0.0)) {
 		InterlockedAdd(gActivity, 1u);
+		if (delta.x > 0.0)
+			InterlockedAdd(gCountR, 1u);
+		if (delta.y > 0.0)
+			InterlockedAdd(gCountG, 1u);
+		if (max(delta.z, delta.w) > 0.0)
+			InterlockedAdd(gCountB, 1u);
+		InterlockedMax(gCMinX, 65535u - pixel.x);
+		InterlockedMax(gCMinY, 65535u - pixel.y);
+		InterlockedMax(gMaxX, pixel.x);
+		InterlockedMax(gMaxY, pixel.y);
+	}
 	[branch] if (DebugActivityView)
 		ActivityView[pixel] = float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
 			saturate(max(delta.z, delta.w) * 512.0), 1.0);
@@ -757,5 +787,13 @@ float SlumpTap(int2 p, int2 dims)
 	if (GIdx == 0 && gActivity != 0) {
 		ActivityFlag.InterlockedOr(0, 1u);
 		ActivityFlag.InterlockedAdd(4, gActivity);
+		uint unused;
+		ActivityFlag.InterlockedMax(8, gCMinX, unused);
+		ActivityFlag.InterlockedMax(12, gCMinY, unused);
+		ActivityFlag.InterlockedMax(16, gMaxX, unused);
+		ActivityFlag.InterlockedMax(20, gMaxY, unused);
+		ActivityFlag.InterlockedAdd(24, gCountR);
+		ActivityFlag.InterlockedAdd(28, gCountG);
+		ActivityFlag.InterlockedAdd(32, gCountB);
 	}
 }
