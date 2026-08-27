@@ -137,7 +137,6 @@
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
-	X(RangeSkinsFadeM) \
 	X(RangeSkinsGeometryM) \
 	X(SkinDistantBareness) \
 	X(ObjectTrenches) \

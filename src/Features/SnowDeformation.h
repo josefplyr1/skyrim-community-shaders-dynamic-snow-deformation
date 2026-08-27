@@ -539,8 +539,6 @@ public:
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 125.0f;
 		float RangeSkinsM = 750.0f;
-		/** @brief Distance (m) where the object-snow skin STARTS dissolving back into the object's own material; fully gone at the Object Snow range end. Cures distant blank-white objects. */
-		float RangeSkinsFadeM = 750.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Strength of the far-field facing handover: as a pixel grows past the edge taper's own width the coverage test hands over to the true face normal, so distant objects keep bare rock on steep faces instead of collapsing to white. Scales against kFacingLODMax; 0 disables it. The near-field rim-contour push is deliberately NOT on this dial (see the PS). */

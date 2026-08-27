@@ -720,8 +720,15 @@ void SnowDeformation::DrawShell()
 	// Statics-skin distance dissolve: starts at the blend slider, fully gone
 	// at the Object Snow capture range (floored one meter past the start so
 	// the smoothstep never degenerates when the sliders cross).
-	cbData.SkinFadeStart = settings.RangeSkinsFadeM * kUnitsPerMeter;
-	cbData.SkinFadeEnd = std::max(settings.RangeSkinsM * kUnitsPerMeter, cbData.SkinFadeStart + kUnitsPerMeter);
+	// Distant Snow Blend (RangeSkinsFadeM) is retired: its dissolve END was
+	// anchored at the capture range, so with both at 750 m and captures bounded
+	// by the loaded cells (~207 m at uGrids 5) the slider could thin a real
+	// object by at most ~7% - inert in practice, its stated job long since
+	// taken over by Distant Bare Rock and the geometry-range flatten. The skin
+	// now dissolves over a fixed ~29 m band inside the capture range, so
+	// lowering Object Snow keeps a soft edge without a second slider.
+	cbData.SkinFadeEnd = settings.RangeSkinsM * kUnitsPerMeter;
+	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
 	// Field enable gate + window addressing for the t4/t5 samplers; the
 	// center is re-uploaded below once the height pass has recentered.
 	cbData.ObjectLiftCap = kObjectLiftCap;
