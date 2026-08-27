@@ -234,6 +234,38 @@ void SnowDeformation::SetupResources()
 	CreateDeformationTextures();
 
 	{
+		// Idle-skip activity flag: one raw uint the update CS ORs when any texel
+		// changed at stored precision, plus a staging ring to read it back
+		// without a stall. Dimension-independent, so a map-resolution change
+		// never touches it.
+		auto device = globals::d3d::device;
+		D3D11_BUFFER_DESC flagDesc{};
+		flagDesc.ByteWidth = 4;
+		flagDesc.Usage = D3D11_USAGE_DEFAULT;
+		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		DX::ThrowIfFailed(device->CreateBuffer(&flagDesc, nullptr, deformActivityBuffer.put()));
+		Util::SetResourceName(deformActivityBuffer.get(), "SnowDeformation::DeformActivity");
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
+		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		flagUavDesc.Buffer.NumElements = 1;
+		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
+		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
+
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = 4;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (uint i = 0; i < kDeformActivitySlots; i++) {
+			DX::ThrowIfFailed(device->CreateBuffer(&stagingDesc, nullptr, deformActivityStaging[i].put()));
+			Util::SetResourceName(deformActivityStaging[i].get(), "SnowDeformation::DeformActivityStaging");
+		}
+	}
+
+	{
 		// Wide exclusion field. Two 8-bit channels (suppression, melt) are
 		// plenty for values the shells only ever smoothstep.
 		D3D11_TEXTURE2D_DESC fieldDesc = {
@@ -432,7 +464,43 @@ void SnowDeformation::ApplyRangeSettings()
 		trenchRangeDirty = false;
 	}
 
+	// Map resolution: same contract as the range change - texel content is
+	// resolution-relative, so the pair recreates (with the store's window-sized
+	// companions) and clears, and the store re-injects what it holds.
+	if (deformMapDimDirty) {
+		const uint desired = std::clamp(deformMapDimRequest, 1024u, 4096u);
+		if (desired != deformMapDim) {
+			deformMapDim = desired;
+			CreateDeformationTextures();
+			clearRequested = true;
+		}
+		deformMapDimDirty = false;
+	}
+
 	rangeInitApplied = true;
+}
+
+void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
+{
+	for (uint i = 0; i < kDeformActivitySlots; i++) {
+		if (!deformActivityPending[i])
+			continue;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		const HRESULT hr = a_context->Map(deformActivityStaging[i].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped);
+		if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
+			continue;
+		if (SUCCEEDED(hr)) {
+			const uint value = *static_cast<const uint*>(mapped.pData);
+			a_context->Unmap(deformActivityStaging[i].get(), 0);
+			if (deformActivitySlotSeq[i] > deformFlagSeq) {
+				deformFlagSeq = deformActivitySlotSeq[i];
+				deformFlagActive = value != 0;
+			}
+		}
+		// A failed map drops the slot rather than wedging the ring; the verdict
+		// simply stays whatever it was, which errs toward running.
+		deformActivityPending[i] = false;
+	}
 }
 
 void SnowDeformation::TickGameClock()
@@ -724,58 +792,97 @@ void SnowDeformation::Prepass()
 		}
 	}
 
-	perFrame->Update(perFrameData);
+	// Idle skip: with every input quiet and the last executed pass reporting
+	// the map at its fixed point, both dispatches would rewrite the map
+	// byte-identically - so neither runs. Any doubt (readback not in yet,
+	// inputs active since the verdict) keeps them running.
+	PollDeformActivity(context);
+	const bool inputsIdle =
+		perFrameData.ScrollDelta.x == 0 && perFrameData.ScrollDelta.y == 0 &&
+		perFrameData.StampCount == 0 &&
+		perFrameData.DepositParams.x < 0.5f &&
+		perFrameData.InjectValid == 0 &&
+		perFrameData.RefillAmount <= 0.0f &&
+		perFrameData.ClearMap == 0;
+	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
+	// The berm field is only rebuilt by an executed pass; re-enabling its A/B
+	// at rest needs one forced run or the stale bake stands until something moves.
+	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
+	prevBermBakeDisabled = shellBermBakeDisabled;
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !debugForceDeformationUpdate;
 
-	uint previousTexture = currentTexture;
-	currentTexture = 1 - currentTexture;
+	if (!deformIdleSkipped) {
+		perFrame->Update(perFrameData);
 
-	{
-		ID3D11Buffer* buffers[1] = { perFrame->CB() };
-		context->CSSetConstantBuffers(0, 1, buffers);
+		uint previousTexture = currentTexture;
+		currentTexture = 1 - currentTexture;
 
-		ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get(), trenchInjectSRV.get() };
-		context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+		{
+			ID3D11Buffer* buffers[1] = { perFrame->CB() };
+			context->CSSetConstantBuffers(0, 1, buffers);
 
-		ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get() };
-		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
+			ID3D11ShaderResourceView* srvs[] = { deformationTextures[previousTexture]->srv.get(), trenchInjectSRV.get() };
+			context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 
-		context->CSSetShader(GetDeformationUpdateCS(), nullptr, 0);
-		globals::profiler->BeginPass("SnowDeformation::DeformationUpdate");
-		context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
-		globals::profiler->EndPass();
-	}
+			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
+			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
 
-	// Berm bake, reading the map the pass above just wrote. Skipped while the
-	// A/B toggle holds the shells on their per-pixel path, so the comparison
-	// measures the whole trade and not just the sampling half of it.
-	if (!shellBermBakeDisabled && bermFieldTexture) {
-		if (auto* bermCS = GetBermFieldCS()) {
-			ID3D11ShaderResourceView* bermSrvs[] = { deformationTextures[currentTexture]->srv.get() };
-			ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
-			// The freshly written map is still bound as a UAV; a texture cannot
-			// be read and written at once, so drop that binding first.
-			ID3D11UnorderedAccessView* nullUav = nullptr;
-			context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-			context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
-			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
+			ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get(), deformActivityUAV.get() };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
-			context->CSSetShader(bermCS, nullptr, 0);
-			globals::profiler->BeginPass("SnowDeformation::BermField");
+			context->CSSetShader(GetDeformationUpdateCS(), nullptr, 0);
+			globals::profiler->BeginPass("SnowDeformation::DeformationUpdate");
 			context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 			globals::profiler->EndPass();
 		}
+
+		// Berm bake, reading the map the pass above just wrote. Skipped while the
+		// A/B toggle holds the shells on their per-pixel path, so the comparison
+		// measures the whole trade and not just the sampling half of it.
+		if (!shellBermBakeDisabled && bermFieldTexture) {
+			if (auto* bermCS = GetBermFieldCS()) {
+				ID3D11ShaderResourceView* bermSrvs[] = { deformationTextures[currentTexture]->srv.get() };
+				ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
+				// The freshly written map is still bound as a UAV; a texture cannot
+				// be read and written at once, so drop that binding first.
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
+				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
+
+				context->CSSetShader(bermCS, nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::BermField");
+				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+				globals::profiler->EndPass();
+			}
+		}
+
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		ID3D11Buffer* nullBuffer = nullptr;
+		context->CSSetConstantBuffers(0, 1, &nullBuffer);
+
+		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
+		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
+
+		ID3D11UnorderedAccessView* nullUavs[2] = { nullptr, nullptr };
+		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
+
+		// The verdict this dispatch just wrote, staged for a later frame's poll.
+		// No free slot only happens if three are already in flight; the copy is
+		// simply not taken and the skip waits for a newer one.
+		deformDispatchSeq++;
+		if (!inputsIdle)
+			deformLastNonIdleSeq = deformDispatchSeq;
+		for (uint i = 0; i < kDeformActivitySlots; i++) {
+			if (!deformActivityPending[i]) {
+				context->CopyResource(deformActivityStaging[i].get(), deformActivityBuffer.get());
+				deformActivitySlotSeq[i] = deformDispatchSeq;
+				deformActivityPending[i] = true;
+				break;
+			}
+		}
 	}
-
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	ID3D11Buffer* nullBuffer = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullBuffer);
-
-	ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
-	context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
-
-	ID3D11UnorderedAccessView* nullUavs[1] = { nullptr };
-	context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
 
 	// After the swap, so it copies the map this frame just wrote - including
 	// anything the inject seeded into it.

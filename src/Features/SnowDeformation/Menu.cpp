@@ -794,6 +794,22 @@ void SnowDeformation::DrawSettings()
 			ClearTrenchStore("the Clear Deformation Map button");
 		}
 
+		// S0 instrument (DEFORMATION-UPDATE-PLAN): map resolution. Applies
+		// like a Trenches-range change - the map clears, the store re-injects.
+		{
+			static const uint kMapDims[] = { 1024u, 2048u, 4096u };
+			int dimIndex = deformMapDimRequest <= 1024u ? 0 : (deformMapDimRequest >= 4096u ? 2 : 1);
+			if (ImGui::Combo(T(TKEY("debug_map_dim"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0" "4096\0")) {
+				deformMapDimRequest = kMapDims[dimIndex];
+				deformMapDimDirty = true;
+			}
+		}
+
+		// S1: the idle skip and its measurement override. The readout is the
+		// one-glance answer to "did the pass stop at rest".
+		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
+		ImGui::Text("Update pass: %s", deformIdleSkipped ? "idle (skipped)" : "running");
+
 		{
 			// One tile is 512 world units square, only trodden ground has one,
 			// and refill deletes the ones it takes back to bare snow. Occupancy

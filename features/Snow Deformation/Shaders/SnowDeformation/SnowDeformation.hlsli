@@ -15,8 +15,6 @@ namespace SnowDeformation
 	Texture2D<float4> HorizonSnowAlbedo : register(t102);
 	Texture2D<float4> HorizonSnowNormal : register(t103);
 
-	// Must match kTextureDim in src/Features/SnowDeformation.h.
-	static const float MapDim = 2048.0;
 	// Must match kSnowUVTile in SnowShell.hlsl: identical world tiling on the
 	// shell and the recolored LOD is what makes the handoff invisible.
 	static const float SnowUVTile = 4096.0 / 24.0;
@@ -51,8 +49,11 @@ namespace SnowDeformation
 		{
 			// B-spline bicubic via 4 bilinear taps: value- and gradient-
 			// continuous, so normals derived from this field do not band
-			// per texel.
-			float2 t = uv * MapDim - 0.5;
+			// per texel. Dimensions from the texture, not a constant: the map
+			// resolution is runtime (Debugging Options).
+			float2 mapDim;
+			DeformationMap.GetDimensions(mapDim.x, mapDim.y);
+			float2 t = uv * mapDim - 0.5;
 			float2 i = floor(t);
 			float2 f = t - i;
 			float2 f2 = f * f;
@@ -65,8 +66,8 @@ namespace SnowDeformation
 
 			float2 g0 = w0 + w1;
 			float2 g1 = w2 + w3;
-			float2 h0 = (i + 0.5 - 1.0 + w1 / g0) / MapDim;
-			float2 h1 = (i + 0.5 + 1.0 + w3 / g1) / MapDim;
+			float2 h0 = (i + 0.5 - 1.0 + w1 / g0) / mapDim;
+			float2 h1 = (i + 0.5 + 1.0 + w3 / g1) / mapDim;
 
 			float s00 = DeformationMap.SampleLevel(SampColorSampler, float2(h0.x, h0.y), 0).x;
 			float s10 = DeformationMap.SampleLevel(SampColorSampler, float2(h1.x, h0.y), 0).x;

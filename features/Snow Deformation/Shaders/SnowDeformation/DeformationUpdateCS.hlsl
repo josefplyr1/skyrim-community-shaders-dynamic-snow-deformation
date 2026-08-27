@@ -211,6 +211,18 @@ RWTexture2D<float4> CurrentDeformation : register(u0);
 // scroll brings in from outside actually read it.
 Texture2D<float> InjectDepth : register(t1);
 
+// Idle-skip activity flag: ORed to 1 when any texel's STORED value moved this
+// frame. Compared at half precision - what the R16 map actually keeps - or a
+// sub-quantum decay (slump parked a hair off its clamp, a thaw tail) would
+// read as activity for ever and the skip would never engage.
+RWByteAddressBuffer ActivityFlag : register(u1);
+groupshared uint gActivity;
+
+uint4 StoredBits(float4 v)
+{
+	return uint4(f32tof16(v.x), f32tof16(v.y), f32tof16(v.z), f32tof16(v.w));
+}
+
 // World-anchored value noise (8-unit cells at the call site) wobbling each
 // stamp's falloff distance, so trail edges read as churned snow instead of
 // swept circles.
@@ -247,8 +259,13 @@ float SlumpTap(int2 p, int2 dims)
 }
 
 [numthreads(8, 8, 1)] void main(uint3 DTid
-								: SV_DispatchThreadID) {
+								: SV_DispatchThreadID, uint GIdx
+								: SV_GroupIndex) {
 	uint2 pixel = DTid.xy;
+
+	if (GIdx == 0)
+		gActivity = 0;
+	GroupMemoryBarrierWithGroupSync();
 
 	float deformation = 0.0;
 	// Melted portion of `deformation`, carried so the shells can tell a
@@ -266,6 +283,11 @@ float SlumpTap(int2 p, int2 dims)
 	[branch] if (InjectValid)
 		deformation = InjectDepth[pixel];
 
+	// What this texel would hold if the pass had not run - the activity
+	// comparison baseline. Meaningful only when the skip could engage (no
+	// scroll, no clear); on other frames the flag is computed but unread.
+	float4 carried = float4(deformation, 0.0, 0.0, 0.0);
+
 	if (!ClearMap) {
 		int2 sourcePixel = int2(pixel) + ScrollDelta;
 
@@ -280,6 +302,7 @@ float SlumpTap(int2 p, int2 dims)
 			crust = previous.z;
 			deposit = previous.w;
 		}
+		carried = float4(deformation, melted, crust, deposit);
 
 		// Wind-biased refill: recovery scales with the intact snow a few
 		// texels upwind (the drift supply), so carved areas fill from their
@@ -704,6 +727,15 @@ float SlumpTap(int2 p, int2 dims)
 		deposit = max(deposit, crest * saturate(1.0 - total));
 	}
 
-	CurrentDeformation[pixel] = float4(total,
+	float4 result = float4(total,
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
+	CurrentDeformation[pixel] = result;
+
+	// One flag write per changed GROUP, not per texel - 4M threads hammering
+	// a single address serializes on the atomic unit.
+	if (any(StoredBits(result) != StoredBits(carried)))
+		InterlockedOr(gActivity, 1u);
+	GroupMemoryBarrierWithGroupSync();
+	if (GIdx == 0 && gActivity != 0)
+		ActivityFlag.InterlockedOr(0, 1u);
 }

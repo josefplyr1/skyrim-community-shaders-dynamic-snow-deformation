@@ -1769,7 +1769,39 @@ protected:
 	bool trenchRangeDirty = false;
 	/** @brief Deformation map resolution. */
 	uint deformMapDim = kTextureDim;
+	/** @brief Requested map resolution (Debugging Options; DEFORMATION-UPDATE-PLAN S0). Applied in ApplyRangeSettings: recreates the map and the store's window-sized companions and clears; the world-anchored store re-injects what it holds. */
+	uint deformMapDimRequest = kTextureDim;
+	bool deformMapDimDirty = false;
 	bool rangeInitApplied = false;
+
+	// ---- Idle skip (DEFORMATION-UPDATE-PLAN S1) ----
+	// Both map dispatches are skipped while every input is idle (no scroll,
+	// stamps, waves, inject, refill or clear) AND the last executed pass
+	// reported the map at its fixed point. The flag is written by the CS at
+	// stored (half) precision and read back through a small staging ring, so
+	// the default on any doubt - readback late, resolution changed, feature
+	// re-enabled - is to keep running.
+	/** @brief Diagnostic override: keeps the update dispatching every frame so the pass can be measured at rest. Runtime-only. */
+	bool debugForceDeformationUpdate = false;
+	/** @brief Last frame's verdict, for the menu readout. */
+	bool deformIdleSkipped = false;
+	winrt::com_ptr<ID3D11Buffer> deformActivityBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> deformActivityUAV;
+	static constexpr uint kDeformActivitySlots = 3;
+	winrt::com_ptr<ID3D11Buffer> deformActivityStaging[kDeformActivitySlots];
+	uint64_t deformActivitySlotSeq[kDeformActivitySlots] = {};
+	bool deformActivityPending[kDeformActivitySlots] = {};
+	/** @brief Executed update dispatches. */
+	uint64_t deformDispatchSeq = 0;
+	/** @brief Seq of the last dispatch whose inputs were non-idle; a quiet verdict older than this proves nothing. */
+	uint64_t deformLastNonIdleSeq = 0;
+	/** @brief Newest readback consumed and its verdict. */
+	uint64_t deformFlagSeq = 0;
+	bool deformFlagActive = true;
+	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
+	bool prevBermBakeDisabled = false;
+	/** @brief Consumes completed activity readbacks (non-blocking). */
+	void PollDeformActivity(ID3D11DeviceContext* a_context);
 
 	// ---- Persistent trenches: world-anchored sparse tile store ----
 	// The map is a camera-following window and DeformationUpdateCS discards
