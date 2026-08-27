@@ -239,8 +239,9 @@ void SnowDeformation::SetupResources()
 		// without a stall. Dimension-independent, so a map-resolution change
 		// never touches it.
 		auto device = globals::d3d::device;
+		// 8 bytes: [0] the changed-anywhere flag, [4] the changed-texel count.
 		D3D11_BUFFER_DESC flagDesc{};
-		flagDesc.ByteWidth = 4;
+		flagDesc.ByteWidth = 8;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
 		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -250,13 +251,13 @@ void SnowDeformation::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
 		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		flagUavDesc.Buffer.NumElements = 1;
+		flagUavDesc.Buffer.NumElements = 2;
 		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
 		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
 
 		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 4;
+		stagingDesc.ByteWidth = 8;
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -490,17 +491,49 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 		if (hr == DXGI_ERROR_WAS_STILL_DRAWING)
 			continue;
 		if (SUCCEEDED(hr)) {
-			const uint value = *static_cast<const uint*>(mapped.pData);
+			const uint* value = static_cast<const uint*>(mapped.pData);
+			const uint flag = value[0];
+			const uint changed = value[1];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
-				deformFlagActive = value != 0;
+				deformFlagActive = flag != 0;
+				deformChangedTexels = changed;
 			}
 		}
 		// A failed map drops the slot rather than wedging the ring; the verdict
 		// simply stays whatever it was, which errs toward running.
 		deformActivityPending[i] = false;
 	}
+}
+
+void SnowDeformation::EnsureActivityViewTexture()
+{
+	if (activityViewTexture && activityViewDim == deformMapDim)
+		return;
+	auto device = globals::d3d::device;
+	if (!device)
+		return;
+
+	activityViewTexture = nullptr;
+	activityViewSRV = nullptr;
+	activityViewUAV = nullptr;
+
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = deformMapDim;
+	desc.Height = deformMapDim;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, activityViewTexture.put())))
+		return;
+	Util::SetResourceName(activityViewTexture.get(), "SnowDeformation::ActivityView");
+	device->CreateShaderResourceView(activityViewTexture.get(), nullptr, activityViewSRV.put());
+	device->CreateUnorderedAccessView(activityViewTexture.get(), nullptr, activityViewUAV.put());
+	activityViewDim = deformMapDim;
 }
 
 void SnowDeformation::TickGameClock()
@@ -792,6 +825,13 @@ void SnowDeformation::Prepass()
 		}
 	}
 
+	// Activity view: which texels the CS is about to claim changed, and in
+	// which channel. The count in the readback rides along whether or not the
+	// view is displayed.
+	if (debugActivityView)
+		EnsureActivityViewTexture();
+	perFrameData.DebugActivityView = (debugActivityView && activityViewUAV) ? 1u : 0u;
+
 	// Idle skip: with every input quiet and the last executed pass reporting
 	// the map at its fixed point, both dispatches would rewrite the map
 	// byte-identically - so neither runs. Any doubt (readback not in yet,
@@ -896,7 +936,8 @@ void SnowDeformation::Prepass()
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
 
-			ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get(), deformActivityUAV.get() };
+			ID3D11UnorderedAccessView* uavs[] = { deformationTextures[currentTexture]->uav.get(), deformActivityUAV.get(),
+				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			context->CSSetShader(GetDeformationUpdateCS(), nullptr, 0);
@@ -936,7 +977,7 @@ void SnowDeformation::Prepass()
 		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 
-		ID3D11UnorderedAccessView* nullUavs[2] = { nullptr, nullptr };
+		ID3D11UnorderedAccessView* nullUavs[3] = { nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 
 		// The verdict this dispatch just wrote, staged for a later frame's poll.

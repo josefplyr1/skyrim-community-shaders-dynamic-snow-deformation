@@ -808,6 +808,17 @@ void SnowDeformation::DrawSettings()
 		// S1: the idle skip and its measurement override. The readout names
 		// what is holding the pass on, so "why is it running" answers itself.
 		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
+		// The count is the magnitude behind a map-active blocker: a handful of
+		// texels is a precision tail, millions is a logic bug. From the newest
+		// verdict, so it lags the dispatch by the readback ring.
+		ImGui::Checkbox(T(TKEY("debug_activity_view"), "Show Update Activity"), &debugActivityView);
+		if (debugActivityView) {
+			ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically.");
+			if (activityViewSRV)
+				ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
+			ImGui::Text("Changed texels (last verdict): %u", deformChangedTexels);
+		}
+
 		if (deformIdleSkipped) {
 			if (deformSkipRate >= 0.0f)
 				ImGui::Text("Update pass: idle (skipped) - %.0f%% of last 300 frames", deformSkipRate * 100.0f);

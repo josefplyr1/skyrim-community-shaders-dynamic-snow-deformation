@@ -192,7 +192,9 @@ cbuffer PerFrame : register(b0)
 	// to DeltaTime in ordinary play; a wait or a sleep passes hours without
 	// rendering them, and the world's own clocks must not sit those hours out.
 	float GameDeltaTime;
-	uint2 InjectPad;
+	// 1 = paint the per-texel activity view (u2).
+	uint DebugActivityView;
+	uint InjectPad;
 
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -221,11 +223,18 @@ Texture2D<float> InjectDepth : register(t1);
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 
-bool StoredDiffers(float4 a, float4 b)
+// Debug: per-texel activity, painted only while the menu view is open.
+// R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
+// stored precision the change is.
+RWTexture2D<float4> ActivityView : register(u2);
+
+// Per-channel excess beyond what the R16 map's storage precision can express;
+// zero everywhere = this pass rewrote the stored map byte-identically.
+float4 StoredDelta(float4 a, float4 b)
 {
 	float4 d = abs(a - b);
 	float4 tol = max(abs(a), abs(b)) * exp2(-11.0) + 1e-6;
-	return any(d > tol);
+	return max(d - tol, 0.0);
 }
 
 // World-anchored value noise (8-unit cells at the call site) wobbling each
@@ -736,11 +745,17 @@ float SlumpTap(int2 p, int2 dims)
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, deposit);
 	CurrentDeformation[pixel] = result;
 
-	// One flag write per changed GROUP, not per texel - 4M threads hammering
-	// a single address serializes on the atomic unit.
-	if (StoredDiffers(result, carried))
-		InterlockedOr(gActivity, 1u);
+	// Flag + count via one groupshared reduction - 4M threads hammering a
+	// single address serializes on the atomic unit.
+	float4 delta = StoredDelta(result, carried);
+	if (any(delta > 0.0))
+		InterlockedAdd(gActivity, 1u);
+	[branch] if (DebugActivityView)
+		ActivityView[pixel] = float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
+			saturate(max(delta.z, delta.w) * 512.0), 1.0);
 	GroupMemoryBarrierWithGroupSync();
-	if (GIdx == 0 && gActivity != 0)
+	if (GIdx == 0 && gActivity != 0) {
 		ActivityFlag.InterlockedOr(0, 1u);
+		ActivityFlag.InterlockedAdd(4, gActivity);
+	}
 }

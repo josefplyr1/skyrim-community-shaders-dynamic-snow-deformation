@@ -638,7 +638,9 @@ public:
 		uint InjectValid;
 		/** @brief The frame's span in GAME time, expressed in the seconds DeltaTime is measured in. Equal to DeltaTime during ordinary play; a wait or a sleep passes hours without rendering them, and the world's own clocks (glaze thaw, slump) must not sit those hours out. Stamp application deliberately keeps DeltaTime - a fire must not carve its whole basin in the single frame after a wait. Claimed a pad slot, so the layout is byte-identical. */
 		float GameDeltaTime;
-		uint InjectPad[2];
+		/** @brief 1 = the CS paints the per-texel activity view (u2): which texels changed at stored precision, and in which channel. Claimed a pad slot, layout unchanged. */
+		uint DebugActivityView;
+		uint InjectPad;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -1810,6 +1812,16 @@ protected:
 	float deformSkipRate = -1.0f;
 	uint32_t deformSkipTallyFrames = 0;
 	uint32_t deformSkipTallySkipped = 0;
+	/** @brief Changed-texel count from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. */
+	uint32_t deformChangedTexels = 0;
+	/** @brief Runtime-only: the update CS paints result-vs-carried per texel (R depth, G melt/scorch, B crust|deposit) into a map-sized RGBA8 shown in the menu. Answers WHERE the map claims to be evolving. */
+	bool debugActivityView = false;
+	winrt::com_ptr<ID3D11Texture2D> activityViewTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> activityViewSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> activityViewUAV;
+	uint32_t activityViewDim = 0;
+	/** @brief Lazily (re)creates the activity-view texture at the current map dimension. */
+	void EnsureActivityViewTexture();
 	/** @brief Consumes completed activity readbacks (non-blocking). */
 	void PollDeformActivity(ID3D11DeviceContext* a_context);
 
