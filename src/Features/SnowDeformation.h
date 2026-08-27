@@ -1813,6 +1813,9 @@ protected:
 	float deformSkipRate = -1.0f;
 	uint32_t deformSkipTallyFrames = 0;
 	uint32_t deformSkipTallySkipped = 0;
+	/** @brief Stamp-set changes over the same window, split by mechanism: count changed (a stamp appeared or vanished - the plant-band flicker signature) vs drift (a matched stamp moved past tolerance). Published with the rate. */
+	uint32_t stampSetCountChanges = 0, stampSetDriftChanges = 0;
+	uint32_t stampSetTallyCount = 0, stampSetTallyDrift = 0;
 	/** @brief Changed-texel counts from the newest consumed verdict - the magnitude behind "map-active": a handful is a precision tail, millions is a logic bug. Per channel, the counts name the term (depth / melt-scorch / crust-deposit). */
 	uint32_t deformChangedTexels = 0;
 	uint32_t deformChangedDepth = 0;

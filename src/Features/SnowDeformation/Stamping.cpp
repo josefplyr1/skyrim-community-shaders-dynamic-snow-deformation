@@ -696,17 +696,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// Absence from the trail map is the lifted latch: a foot in
 					// swing phase drops out, so its next plant starts a fresh
 					// discrete print instead of dragging from the previous one.
+					// The band releases at 1.5x for a foot that stamped last
+					// frame: an idle foot hovering AT the band flickers its
+					// stamp in and out every frame or two, and each flicker is
+					// a real map input. A swing lift clears 1.5x instantly, so
+					// the trail-break latch is unaffected.
 					const float plantRef = groundRefStarved ? minFootZ : groundZ;
 					const float plantBand = groundRefStarved ?
 					                            std::max(kFootRelativeBand * boneScale, kFootRelativeLenFactor * footLen) :
 					                            kFootPlantBand * boneScale;
-					if (footWorld.translate.z - plantRef > plantBand)
+					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
+					const bool wasPlanted = stampPrevPositions.find(key) != stampPrevPositions.end();
+					if (footWorld.translate.z - plantRef > plantBand * (wasPlanted ? 1.5f : 1.0f))
 						continue;
 
 					// A continuously planted heel can still slide (shuffles,
 					// slopes); the capsule then covers drag plus foot length.
 					float2 segStart = heel;
-					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
 					auto it = stampPrevPositions.find(key);
 					if (it != stampPrevPositions.end()) {
 						float2 delta = { heel.x - it->second.x, heel.y - it->second.y };

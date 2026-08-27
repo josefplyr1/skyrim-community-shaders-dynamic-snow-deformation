@@ -868,6 +868,8 @@ void SnowDeformation::Prepass()
 	constexpr float kStampTol = 2.0f;
 	constexpr float kStampTolSq = kStampTol * kStampTol;
 	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
+	if (!stampsQuiet)
+		stampSetTallyCount++;
 	if (stampsQuiet && perFrameData.StampCount > 0) {
 		stampMatchUsed.assign(lastStampSet.size(), 0);
 		stampMatchIndex.resize(perFrameData.StampCount);
@@ -894,6 +896,8 @@ void SnowDeformation::Prepass()
 			}
 			stampsQuiet = found;
 		}
+		if (!stampsQuiet)
+			stampSetTallyDrift++;
 	}
 	// Snap a quiet-matched set to its baseline. The match alone was not
 	// enough: while anything else keeps the pass running, the swayed stamps
@@ -943,6 +947,10 @@ void SnowDeformation::Prepass()
 		deformSkipRate = (float)deformSkipTallySkipped / (float)deformSkipTallyFrames;
 		deformSkipTallyFrames = 0;
 		deformSkipTallySkipped = 0;
+		stampSetCountChanges = stampSetTallyCount;
+		stampSetDriftChanges = stampSetTallyDrift;
+		stampSetTallyCount = 0;
+		stampSetTallyDrift = 0;
 	}
 
 	if (deformIdleSkipped) {

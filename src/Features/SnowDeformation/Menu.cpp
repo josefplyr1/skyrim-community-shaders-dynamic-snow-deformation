@@ -874,6 +874,13 @@ void SnowDeformation::DrawSettings()
 			else
 				ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
 		}
+		if (deformSkipRate >= 0.0f) {
+			// The flicker census: count changes are stamps appearing or
+			// vanishing (plant-band flicker), drift is a matched stamp moving
+			// past tolerance. Either resets the quiet window.
+			ImGui::Text("Stamp set changes: %u/300 frames (count %u, drift %u)",
+				stampSetCountChanges + stampSetDriftChanges, stampSetCountChanges, stampSetDriftChanges);
+		}
 
 		{
 			// One tile is 512 world units square, only trodden ground has one,
