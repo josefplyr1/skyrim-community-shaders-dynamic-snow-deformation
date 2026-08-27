@@ -809,7 +809,10 @@ void SnowDeformation::DrawSettings()
 		// what is holding the pass on, so "why is it running" answers itself.
 		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
 		if (deformIdleSkipped) {
-			ImGui::Text("Update pass: idle (skipped)");
+			if (deformSkipRate >= 0.0f)
+				ImGui::Text("Update pass: idle (skipped) - %.0f%% of last 300 frames", deformSkipRate * 100.0f);
+			else
+				ImGui::Text("Update pass: idle (skipped)");
 		} else {
 			static const char* kBlockerNames[8] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale" };
 			std::string held;
@@ -821,7 +824,11 @@ void SnowDeformation::DrawSettings()
 				}
 			if (debugForceDeformationUpdate)
 				held = held.empty() ? "forced" : "forced, " + held;
-			ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
+			if (deformSkipRate >= 0.0f)
+				ImGui::Text("Update pass: running (%s) - skipped %.0f%% of last 300 frames",
+					held.empty() ? "none - engages next verdict" : held.c_str(), deformSkipRate * 100.0f);
+			else
+				ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
 		}
 
 		{

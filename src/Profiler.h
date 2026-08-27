@@ -116,6 +116,16 @@ public:
 	/** @brief Ends the current timing pass and records the CPU/GPU timestamps. */
 	void EndPass();
 
+	/**
+	 * @brief Records an explicit zero-cost sample for a pass that was deliberately skipped this frame.
+	 *
+	 * A pass that simply stops calling BeginPass keeps publishing its stale rolling window until
+	 * RetireStaleTimers drops the row - so an idle-skipped pass reads as still costing full price.
+	 * Skipping IS the measurement; this records it.
+	 * @param name Pass identifier, same as BeginPass.
+	 */
+	void MarkPassSkipped(const std::string& name);
+
 	/** @brief Ends the current profiling frame and advances the ring buffer write cursor. */
 	void EndFrame();
 

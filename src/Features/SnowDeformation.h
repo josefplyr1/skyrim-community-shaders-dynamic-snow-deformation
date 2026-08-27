@@ -1804,6 +1804,10 @@ protected:
 	uint64_t lastExecutedStampHash = ~0ull;
 	/** @brief Why the last frame ran, for the menu readout (bit 0 scroll, 1 stamps, 2 waves, 3 inject, 4 refill, 5 clear, 6 map-active, 7 verdict-stale). */
 	uint32_t deformIdleBlockers = 0;
+	/** @brief Skip rate over the previous 300 decisions (fraction; negative until the first window closes). Separates "fully idle" from a flickering skip in one readout. */
+	float deformSkipRate = -1.0f;
+	uint32_t deformSkipTallyFrames = 0;
+	uint32_t deformSkipTallySkipped = 0;
 	/** @brief Consumes completed activity readbacks (non-blocking). */
 	void PollDeformActivity(ID3D11DeviceContext* a_context);
 

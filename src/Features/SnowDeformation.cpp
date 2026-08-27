@@ -847,6 +847,26 @@ void SnowDeformation::Prepass()
 	prevBermBakeDisabled = shellBermBakeDisabled;
 	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !debugForceDeformationUpdate;
 
+	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
+	// the hash quantum every few frames) reads identically in a single-frame
+	// readout; the rate is what tells them apart.
+	deformSkipTallyFrames++;
+	if (deformIdleSkipped)
+		deformSkipTallySkipped++;
+	if (deformSkipTallyFrames >= 300) {
+		deformSkipRate = (float)deformSkipTallySkipped / (float)deformSkipTallyFrames;
+		deformSkipTallyFrames = 0;
+		deformSkipTallySkipped = 0;
+	}
+
+	if (deformIdleSkipped) {
+		// Skipping IS the measurement. Without an explicit zero the profiler
+		// keeps publishing the stale pre-skip window (or retires the row), so
+		// an idle pass still reads as costing full price.
+		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationUpdate");
+		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
+	}
+
 	if (!deformIdleSkipped) {
 		perFrame->Update(perFrameData);
 
@@ -875,6 +895,8 @@ void SnowDeformation::Prepass()
 		// Berm bake, reading the map the pass above just wrote. Skipped while the
 		// A/B toggle holds the shells on their per-pixel path, so the comparison
 		// measures the whole trade and not just the sampling half of it.
+		if (shellBermBakeDisabled || !bermFieldTexture)
+			globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
 		if (!shellBermBakeDisabled && bermFieldTexture) {
 			if (auto* bermCS = GetBermFieldCS()) {
 				ID3D11ShaderResourceView* bermSrvs[] = { deformationTextures[currentTexture]->srv.get() };

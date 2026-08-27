@@ -138,6 +138,23 @@ void Profiler::EndPass()
 		endPerfEvent({});
 }
 
+void Profiler::MarkPassSkipped(const std::string& name)
+{
+	if (!initialized)
+		return;
+
+	auto [it, inserted] = knownTimerIndex.try_emplace(name, knownTimers.size());
+	if (inserted) {
+		KnownTimer kt;
+		kt.name = name;
+		knownTimers.push_back(std::move(kt));
+	}
+	auto& known = knownTimers[it->second];
+	known.gpu.PushSample(0.0f);
+	known.cpu.PushSample(0.0f);
+	known.lastSampleFrame = collectedFrames;
+}
+
 void Profiler::EndFrame()
 {
 	if (!initialized || !context || !frameActive)
