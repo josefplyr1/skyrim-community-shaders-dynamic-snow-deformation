@@ -83,66 +83,39 @@ public:
 	// walls into blocky silhouettes.
 	static constexpr float kShellGridSpacing = 8.0f;
 
-	// Distance warp, power-of-two bands. Each band holds verts[b] vertices
-	// spaced mul[b] x kShellGridSpacing apart; steps are exact powers of two
-	// of the base step and every band START is a multiple of both its own
-	// step and kShellOriginSnap.
+	// Distance warp, power-of-two bands. Each band holds kShellWarpBandVerts
+	// vertices spaced kShellWarpBandMul x kShellGridSpacing apart; steps are
+	// exact powers of two of the base step and every band START is a multiple
+	// of both its own step and kShellOriginSnap.
 	//
 	// INVARIANT: break the alignment and adjacent vertices snap one or two
 	// fineSteps apart depending on the grid centre, so quad widths flip as the
 	// camera moves and the surface inside them jumps (distant up/down jumping).
-	// Must match BOTH kWarpBand tables in SnowGrid.hlsli.
+	// Must match the kWarpBand tables in SnowShell.hlsl.
 	//
-	// The coarsest band is 128 units - exactly the land-vertex spacing - out
-	// to the seam, so the shell samples every terrain texel it covers and
-	// needs no clearance pad. A 256-unit outer band would skip every other
-	// texel, which is what made a pad necessary. BOTH density rows keep that
-	// law and the same 15,744-unit reach; the Half row doubles the inner
-	// spacing instead of the outer, with band starts re-picked to stay on the
-	// 256-unit snap (1536 / 1792 / 2048 / 2560 units).
+	// The coarsest band is 128 units - exactly the land-vertex spacing - from
+	// 2432 out to the seam, so the shell samples every terrain texel it covers
+	// and needs no clearance pad. A 256-unit outer band would skip every other
+	// texel, which is what made a pad necessary.
 	static constexpr int kShellWarpBands = 5;
-	struct ShellBandTable
-	{
-		float verts[kShellWarpBands];
-		float mul[kShellWarpBands];
-	};
-	/** @brief Row 0 = Full density (8-unit inner spacing), row 1 = Half (16-unit). Indexed by Settings::ShellVertexDensity. */
-	static constexpr ShellBandTable kShellBandTables[2] = {
-		{ { 192.0f, 8.0f, 8.0f, 8.0f, 104.0f }, { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f } },
-		{ { 96.0f, 8.0f, 4.0f, 4.0f, 103.0f }, { 2.0f, 4.0f, 8.0f, 16.0f, 16.0f } },
-	};
+	static constexpr float kShellWarpBandVerts[kShellWarpBands] = { 192.0f, 8.0f, 8.0f, 8.0f, 104.0f };
+	static constexpr float kShellWarpBandMul[kShellWarpBands] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f };
 
-	/** @brief Grid origin snap. Every vertex lands exactly on its own band's world lattice with no per-vertex rounding left to churn. Density-independent: both rows' steps divide it. */
+	/** @brief Grid origin snap. The coarsest band step, so every vertex lands exactly on its own band's world lattice with no per-vertex rounding left to churn. */
 	static constexpr float kShellOriginSnap = kShellGridSpacing * 32.0f;
 
-	/** @brief Grid dimension for a requested radius: the fine bands in full, plus enough coarsest-band vertices to reach it. Capped so radius 225 m reproduces the fixed grid exactly (640 Full / 430 Half). */
-	static uint ShellGridDimFor(float a_radiusM, int a_density)
+	/** @brief World half-span of the warped shell grid (center to edge) at a given inner spacing. Linear in spacing: the band shape is unchanged. */
+	static float ShellWarpedHalfSpan(float a_spacing = kShellGridSpacing)
 	{
-		const auto& t = kShellBandTables[a_density & 1];
-		float fineVerts = 0.0f;
-		float fineSpan = 0.0f;
-		for (int band = 0; band < kShellWarpBands - 1; ++band) {
-			fineVerts += t.verts[band];
-			fineSpan += t.verts[band] * t.mul[band];
-		}
-		const float targetSpan = std::clamp(a_radiusM, 50.0f, 225.0f) * kUnitsPerMeter / kShellGridSpacing;
-		const float coarse = std::clamp(std::ceil((targetSpan - fineSpan) / t.mul[kShellWarpBands - 1]), 8.0f, t.verts[kShellWarpBands - 1]);
-		return 2u * (uint)(fineVerts + coarse);
-	}
-
-	/** @brief World half-span (center to edge) of the warped grid at a given dimension and density. Any vertices past the table extend at the coarsest step. */
-	static float ShellWarpedHalfSpanFor(uint a_gridDim, int a_density)
-	{
-		const auto& t = kShellBandTables[a_density & 1];
 		float span = 0.0f;
-		float remaining = a_gridDim * 0.5f;
+		float verts = 0.0f;
 		for (int band = 0; band < kShellWarpBands; ++band) {
-			const float take = std::min(remaining, t.verts[band]);
-			span += take * t.mul[band];
-			remaining -= take;
+			span += kShellWarpBandVerts[band] * kShellWarpBandMul[band];
+			verts += kShellWarpBandVerts[band];
 		}
-		span += std::max(remaining, 0.0f) * t.mul[kShellWarpBands - 1];
-		return span * kShellGridSpacing;
+		// Any vertices past the table extend at the coarsest step.
+		span += std::max(kShellGridDim * 0.5f - verts, 0.0f) * kShellWarpBandMul[kShellWarpBands - 1];
+		return span * a_spacing;
 	}
 
 	// Terrain data window: 16x16 cells at land-vertex resolution (128 units),
@@ -559,10 +532,6 @@ public:
 		float ShellSlopeDepthBias = 0.0f;
 		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
 		bool ShellBareGroundCull = true;
-		/** @brief How far the deformable snow layer reaches around the camera, in meters. 225 reproduces the fixed grid exactly; smaller trims the coarsest warp band, so near-camera detail is untouched. Applies live - the grid is procedural (SV_VertexID), no resource depends on it. */
-		float ShellRadiusM = 225.0f;
-		/** @brief kShellBandTables row: 0 = Full (8-unit inner spacing), 1 = Half (16-unit, ~45% of the quads at the same reach and the same 128-unit outer sampling). Changing it recompiles the shell shaders - the band tables are compile-time constants in SnowGrid.hlsli, kept so out of C3's warp functions. */
-		int ShellVertexDensity = 0;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
 		float CompactMatte = 0.6f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
@@ -1165,10 +1134,6 @@ public:
 	/** @brief Settings::ShellDepthClamp the cached shellPS was compiled against; a mismatch releases it. Catches every path that can change the setting, not just the menu checkbox. */
 	bool shellDepthClampCompiled = true;
 
-	/** @brief Settings::ShellVertexDensity the cached shell shaders were compiled against. EnsureShellShaderDensity releases all ten on a mismatch; checked at the top of both draw paths because the shadow cast runs before DrawShell. Implemented in SnowDeformation/Shell.cpp. */
-	int shellShaderDensityCompiled = 0;
-	void EnsureShellShaderDensity();
-
 	/** @brief Bias values shellRasterState was built with, so it is rebuilt only when they actually move. */
 	float shellRasterBias = 0.0f;
 	float shellRasterSlopeBias = 0.0f;
@@ -1280,9 +1245,7 @@ public:
 	/** @brief Lazy-loads the shell snow texture set (and its authored PBR parameters) from the user-configured path. Implemented in SnowDeformation/Shell.cpp. */
 	void EnsureShellSnowTextures();
 	/** @brief PS define list for the shell shaders: PSHADER, optional extra, plus SNOW_EXP_HEIGHT_FOG when the EHF addon is loaded. Implemented in SnowDeformation/Shell.cpp. */
-	std::vector<std::pair<const char*, const char*>> ShellPSDefines(const char* a_extra = nullptr);
-	/** @brief Stage defines for a SnowShell.hlsl compile, with SNOW_HALF_DENSITY appended when Settings::ShellVertexDensity selects the half-density band table. Implemented in SnowDeformation/Shell.cpp. */
-	std::vector<std::pair<const char*, const char*>> ShellStageDefines(std::initializer_list<const char*> a_defines);
+	static std::vector<std::pair<const char*, const char*>> ShellPSDefines(const char* a_extra = nullptr);
 	/** @brief Re-reads the matched TruePBR texture set's values (per frame: follows ReloadTextureSetData and live menu edits). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshSnowPBRParams();
 
@@ -1872,7 +1835,7 @@ protected:
 	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. */
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f); }
 	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
-	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpanFor(ShellGridDimFor(settings.ShellRadiusM, settings.ShellVertexDensity), settings.ShellVertexDensity)); }
+	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */
 	bool deformSuspended = false;
 	std::shared_mutex shellCellMutex;

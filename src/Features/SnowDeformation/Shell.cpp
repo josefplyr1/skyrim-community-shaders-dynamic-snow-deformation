@@ -291,52 +291,11 @@ void SnowDeformation::RefreshSnowPBRParams()
 	}
 }
 
-// Vertex Density changes the band-table permutation every SnowShell stage
-// compiles against. Checked at the top of BOTH draw paths rather than in each
-// getter - the shadow cast runs before DrawShell, and a mixed set (one stage on
-// the old table, another on the new) places the two lattices differently.
-void SnowDeformation::EnsureShellShaderDensity()
-{
-	if (shellShaderDensityCompiled == settings.ShellVertexDensity)
-		return;
-	shellShaderDensityCompiled = settings.ShellVertexDensity;
-	logger::debug("Shell vertex density changed, releasing shell shaders");
-	auto releaseIt = [](auto*& a_shader) {
-		if (a_shader)
-			a_shader->Release();
-		a_shader = nullptr;
-	};
-	releaseIt(shellVS);
-	releaseIt(shellTessVS);
-	releaseIt(shellShadowVS);
-	releaseIt(shellHS);
-	releaseIt(shellHSNear);
-	releaseIt(shellHSFar);
-	releaseIt(shellDS);
-	releaseIt(shellPS);
-	releaseIt(shellPSNoDepth);
-	releaseIt(shellLODPS);
-}
-
-// The band tables in SnowGrid.hlsli are compile-time constants on purpose (the
-// C3 warp functions must not be restructured to read a CB), so density rides in
-// as a define on every SnowShell.hlsl stage. Statics is untouched: the trench
-// patch runs its OWN table through WarpAxisT and never reads the shell's.
-std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellStageDefines(std::initializer_list<const char*> a_defines)
-{
-	std::vector<std::pair<const char*, const char*>> defines;
-	for (const char* define : a_defines)
-		defines.emplace_back(define, "");
-	if (settings.ShellVertexDensity == 1)
-		defines.emplace_back("SNOW_HALF_DENSITY", "");
-	return defines;
-}
-
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
 	if (!shellVS) {
 		logger::debug("Compiling SnowShell VS");
-		shellVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({ "VSHADER" }), "vs_5_0"));
+		shellVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
 	}
 	return shellVS;
 }
@@ -345,7 +304,7 @@ ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 {
 	if (!shellShadowVS) {
 		logger::debug("Compiling SnowShell shadow-cast VS");
-		shellShadowVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({ "VSHADER", "SNOW_SHADOW_CAST" }), "vs_5_0"));
+		shellShadowVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" } }, "vs_5_0"));
 	}
 	return shellShadowVS;
 }
@@ -379,8 +338,6 @@ std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines
 	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
 	if (a_extra)
 		defines.emplace_back(a_extra, "");
-	if (settings.ShellVertexDensity == 1)
-		defines.emplace_back("SNOW_HALF_DENSITY", "");
 	if (globals::features::exponentialHeightFog.loaded)
 		defines.emplace_back("SNOW_EXP_HEIGHT_FOG", "");
 	if (globals::features::ibl.loaded)
@@ -405,7 +362,7 @@ ID3D11VertexShader* SnowDeformation::GetShellTessVS()
 {
 	if (!shellTessVS) {
 		logger::debug("Compiling SnowShell tess control-point VS");
-		shellTessVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({ "VSHADER", "SNOW_TESS" }), "vs_5_0"));
+		shellTessVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_TESS", "" } }, "vs_5_0"));
 	}
 	return shellTessVS;
 }
@@ -414,7 +371,7 @@ ID3D11HullShader* SnowDeformation::GetShellHS()
 {
 	if (!shellHS) {
 		logger::debug("Compiling SnowShell HS");
-		shellHS = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({}), "hs_5_0"));
+		shellHS = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "hs_5_0"));
 	}
 	return shellHS;
 }
@@ -423,7 +380,7 @@ ID3D11HullShader* SnowDeformation::GetShellHSNear()
 {
 	if (!shellHSNear) {
 		logger::debug("Compiling SnowShell HS (split near)");
-		shellHSNear = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({ "SNOW_SPLIT_NEAR" }), "hs_5_0"));
+		shellHSNear = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_NEAR", "" } }, "hs_5_0"));
 	}
 	return shellHSNear;
 }
@@ -432,7 +389,7 @@ ID3D11HullShader* SnowDeformation::GetShellHSFar()
 {
 	if (!shellHSFar) {
 		logger::debug("Compiling SnowShell HS (split far)");
-		shellHSFar = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({ "SNOW_SPLIT_FAR" }), "hs_5_0"));
+		shellHSFar = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_FAR", "" } }, "hs_5_0"));
 	}
 	return shellHSFar;
 }
@@ -452,7 +409,7 @@ ID3D11DomainShader* SnowDeformation::GetShellDS()
 {
 	if (!shellDS) {
 		logger::debug("Compiling SnowShell DS");
-		shellDS = static_cast<ID3D11DomainShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellStageDefines({}), "ds_5_0"));
+		shellDS = static_cast<ID3D11DomainShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
 	}
 	return shellDS;
 }
@@ -510,9 +467,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	const auto camAdjust = fb.GetCameraPosAdjust();
 	const float shellSpacing = kShellGridSpacing;
 	a_cb.GridSpacing = shellSpacing;
-	// Radius trims the coarsest band only; the fine bands and every start
-	// alignment are untouched, so no shader change rides on this value.
-	a_cb.GridDim = ShellGridDimFor(settings.ShellRadiusM, settings.ShellVertexDensity);
+	a_cb.GridDim = kShellGridDim;
 	// The warped grid is camera-centered: snap the center to the COARSEST band
 	// step, then offset by the warped span. Snapping to the base 8 units is not
 	// enough - a coarse-band vertex would then need per-vertex rounding onto its
@@ -522,7 +477,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// nothing left to round. The cost is that the fine region re-centres in
 	// 256-unit steps, leaving the camera up to ~181 units off centre against a
 	// 1792-unit inner radius.
-	const float warpedHalfSpan = ShellWarpedHalfSpanFor(a_cb.GridDim, settings.ShellVertexDensity);
+	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
 	a_cb.WarpedHalfSpan = warpedHalfSpan;
 	a_cb.GridOrigin = {
 		std::floor(camAdjust.x / kShellOriginSnap) * kShellOriginSnap - warpedHalfSpan,
@@ -614,7 +569,6 @@ void SnowDeformation::DrawShell()
 	if (!globals::state->inWorld)
 		return;
 
-	EnsureShellShaderDensity();
 	auto vs = GetShellVS();
 	auto ps = GetShellPS();
 	if (!vs || !ps)
@@ -1113,13 +1067,13 @@ void SnowDeformation::DrawShell()
 		if (hsNear && hsFar && psNear) {
 			context->HSSetShader(hsNear, nullptr, 0);
 			context->PSSetShader(psNear, nullptr, 0);
-			context->Draw(cbData.GridDim * cbData.GridDim * 4, 0);
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 
 			context->HSSetShader(hsFar, nullptr, 0);
 			context->PSSetShader(ps, nullptr, 0);
-			context->Draw(cbData.GridDim * cbData.GridDim * 4, 0);
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 		} else {
-			context->Draw(cbData.GridDim * cbData.GridDim * 4, 0);
+			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 		}
 		// The statics pass and everything after run the normal pipeline.
 		context->HSSetShader(nullptr, nullptr, 0);
@@ -1127,7 +1081,7 @@ void SnowDeformation::DrawShell()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	} else {
 		context->VSSetShader(vs, nullptr, 0);
-		context->Draw(cbData.GridDim * cbData.GridDim * 6, 0);
+		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
 	}
 	globals::profiler->EndPass();
 

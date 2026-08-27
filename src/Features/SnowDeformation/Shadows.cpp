@@ -252,7 +252,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return;
 	}
 
-	EnsureShellShaderDensity();
 	auto* vs = GetShellShadowVS();
 	if (!vs) {
 		logOnce("skip: shell shadow VS unavailable");
@@ -536,7 +535,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
-		context->Draw(shadowCB.GridDim * shadowCB.GridDim * 6, 0);
+		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
 	}
 	globals::profiler->EndPass();
 
