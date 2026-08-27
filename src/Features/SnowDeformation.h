@@ -651,7 +651,9 @@ public:
 		DirectX::XMINT4 RingRects[2];
 		uint RingRectCount;
 		uint RingTotalTexels;
-		uint RingPad[2];
+		/** @brief 1 = the tile scans list every tile (the force-all-dirty cross-check). Claimed a pad slot, layout unchanged. */
+		uint ForceAllDirty;
+		uint RingPad;
 
 		float4 Stamps[kMaxStamps];
 		/** @brief Capsule segment start per stamp (the stamped shape's previous position). */
@@ -756,6 +758,29 @@ public:
 	uint32_t stampTilesLast = 0;
 	/** @brief Fills stampTileScratch with the deduped physical tiles the stamp inputs touch (wrap-aware). Returns the count, or UINT32_MAX on overflow past kStampTileCap. */
 	uint32_t BuildStampTileList(const PerFrame& a_data);
+
+	/** @brief Per-tile (8x8) occupancy of the physical map, GPU-maintained (writers set it, evolve groups write their tile's truth). Recreated with the map; seeded all-1 (safe default: dirty). */
+	winrt::com_ptr<ID3D11Texture2D> occupancyTexture;
+	winrt::com_ptr<ID3D11UnorderedAccessView> occupancyUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> occupancySRV;
+	/** @brief Evolve tile list: [0] count, then packed tiles. GPU-only (scan appends, TileArgsCS sizes the indirect dispatch); the CPU never reads it. */
+	winrt::com_ptr<ID3D11Buffer> evolveTileBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> evolveTileUAV;
+	winrt::com_ptr<ID3D11ShaderResourceView> evolveTileSRV;
+	/** @brief Indirect dispatch args for the evolve pass, written by TileArgsCS. */
+	winrt::com_ptr<ID3D11Buffer> evolveArgsBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> evolveArgsUAV;
+	/** @brief Set when the map (and with it the occupancy grid) was (re)created; the next Prepass seeds occupancy all-1. */
+	bool tileGridsNeedInit = true;
+	/** @brief Last consumed evolve-tile census (from the activity readback; lags by the ring like the verdict). */
+	uint32_t evolveTilesLast = 0;
+
+	/** @brief Returns the evolve-scan compute shader (occupancy + halo -> tile list), compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationScanEvolveCS();
+	/** @brief Returns the list-count -> indirect-args shader, compiling it on first use. */
+	ID3D11ComputeShader* GetDeformationTileArgsCS();
+	ID3D11ComputeShader* deformationScanEvolveCS = nullptr;
+	ID3D11ComputeShader* deformationTileArgsCS = nullptr;
 
 	/** @brief Arriving-band rect in logical texel space; see ComputeArrivalRects. */
 	struct ArrivalRect

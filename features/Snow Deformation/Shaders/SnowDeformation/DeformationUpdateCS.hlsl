@@ -227,7 +227,10 @@ cbuffer PerFrame : register(b0)
 	int4 RingRects[2];
 	uint RingRectCount;
 	uint RingTotalTexels;
-	uint2 RingPad;
+	// 1 = the tile scans list every tile (the "my trenches froze" one-click
+	// cross-check). Claimed a RingPad slot, layout unchanged.
+	uint ForceAllDirty;
+	uint RingPad;
 
 	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
 	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
@@ -258,6 +261,23 @@ Texture2D<float> InjectDepth : register(t1);
 // the dispatch covers actors' surroundings and nothing else.
 StructuredBuffer<uint> StampTiles : register(t2);
 
+// Per-tile (8x8) occupancy of the PHYSICAL map: 1 = some texel holds a
+// non-zero channel. Maintained by the passes themselves - an evolve or
+// stamp group writes the truth for its whole tile, the ring sets it where
+// inject lands - so the evolve scan needs no CPU readback and a stale mark
+// self-heals on the next visit. Seeded all-1 on map (re)creation: the safe
+// default is dirty.
+RWTexture2D<uint> Occupancy : register(u3);
+Texture2D<uint> OccupancyIn : register(t4);
+// Evolve tile list: [0] = count, then packed tiles (x | y<<16). Appended by
+// ScanEvolveCS, sized into indirect args by TileArgsCS, consumed by
+// EvolveCS - count and list never touch the CPU.
+RWStructuredBuffer<uint> EvolveTiles : register(u4);
+StructuredBuffer<uint> EvolveTilesIn : register(t3);
+// TileArgsCS: whatever list is bound at t5 becomes indirect args at u5.
+StructuredBuffer<uint> TileListIn : register(t5);
+RWByteAddressBuffer TileArgs : register(u5);
+
 // Logical -> physical texel. The dim is a power of two (1024/2048/4096), so
 // the wrap is a mask. Callers clamp in LOGICAL space first - the map border
 // is the window's world border; the physical seam is meaningless to the
@@ -279,8 +299,9 @@ int2 TorusPhys(int2 logical, int2 dims)
 // all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
 // per-channel counts (depth, melt/scorch, crust/deposit), [36] delta sum,
 // [40] evolve-only flag (EvolveCS changed something - its idle gate's own
-// verdict, meaningful only on frames evolve ran). Both passes OR into the
-// same buffer; the CPU clears it once per executed frame.
+// verdict, meaningful only on frames evolve ran), [44] evolve tile count and
+// [48] berm tile count (the dispatch census). Both passes OR into the same
+// buffer; the CPU clears it once per executed frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
@@ -295,6 +316,9 @@ groupshared uint gMaxY;
 // the slider; storage-precision creep is an order smaller and scales with
 // nothing.
 groupshared uint gDeltaSum;
+// Any texel of this group's tile non-zero after the pass - the occupancy
+// truth an aligned 8x8 group can write absolutely.
+groupshared uint gNonZero;
 
 // Debug: per-texel activity, painted only while the menu view is open.
 // R = depth, G = melt/scorch, B = crust or deposit; brightness = how far past
@@ -323,6 +347,7 @@ void ActivityReset(uint GIdx)
 		gMaxX = 0;
 		gMaxY = 0;
 		gDeltaSum = 0;
+		gNonZero = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
 }
@@ -433,29 +458,33 @@ float SlumpTap(int2 p, int2 dims)
 	float depth = 0.0;
 	[branch] if (InjectValid)
 		depth = InjectDepth[logical];
-	CurrentDeformation[TorusPhys(logical, int2(dims))] = float4(depth, 0.0, 0.0, 0.0);
+	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
+	CurrentDeformation[phys] = float4(depth, 0.0, 0.0, 0.0);
+	// Injected ground occupies its tile; zeroed ground leaves any stale mark
+	// for the next evolve visit to heal (writes here are unordered across the
+	// band, so an absolute 0 could clobber a neighbour texel's 1).
+	if (depth > 0.0)
+		Occupancy[phys >> 3] = 1u;
 }
 
 // The world acting on the map: refill, decay, slump. The neighbour reads
 // (slump support, upwind refill supply) all go to the previous-frame
 // snapshot, so tile edges cannot see half-updated texels. No scroll: texels
-// never move, RingCS already rewrote the reassigned band.
-[numthreads(8, 8, 1)] void EvolveCS(uint3 DTid
-									: SV_DispatchThreadID, uint GIdx
-									: SV_GroupIndex) {
-	uint2 pixel = DTid.xy;
-
-	ActivityReset(GIdx);
-
+// never move, RingCS already rewrote the reassigned band. Returns whether
+// the texel holds anything, for the group's occupancy write.
+bool EvolveTexel(uint2 phys)
+{
 	uint2 dims;
 	PreviousDeformation.GetDimensions(dims.x, dims.y);
-	const int2 phys = TorusPhys(int2(pixel), int2(dims));
+	// Inverse of TorusPhys: world position, border tests and the activity
+	// bookkeeping live in logical space.
+	const uint2 pixel = uint2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
 	// What this texel would hold if the pass had not run - the activity
 	// comparison baseline.
-	const float4 carried = PreviousDeformation[uint2(phys)];
+	const float4 carried = PreviousDeformation[phys];
 	float deformation = carried.x;
 	// Melted portion of `deformation`, carried so the shells can tell a
 	// melt basin from a dug trench.
@@ -570,22 +599,89 @@ float SlumpTap(int2 p, int2 dims)
 	// map's .w as alpha except the ImGui preview, which the deposit channel
 	// claimed; see TrenchDebugCS for the honest view.
 	float4 result = float4(deformation, melted, crust, deposit);
-	CurrentDeformation[uint2(phys)] = result;
+	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
+	return any(result != 0.0);
+}
+
+// Indirect over ScanEvolveCS's list: occupied tiles plus the slump-reach
+// halo (a pristine fin BETWEEN two carved trails is the receiving texel, so
+// zero tiles beside occupied ones must still be visited). Each group owns
+// one whole tile and writes its occupancy back absolutely - which is also
+// how a stale mark heals.
+[numthreads(8, 8, 1)] void EvolveCS(uint3 GTid
+									: SV_GroupThreadID, uint3 Gid
+									: SV_GroupID, uint GIdx
+									: SV_GroupIndex) {
+	// Uniform per group, so the early-out never splits a barrier.
+	const uint listIndex = Gid.y * 1024u + Gid.x;
+	if (listIndex >= EvolveTilesIn[0])
+		return;
+
+	ActivityReset(GIdx);
+	const uint packed = EvolveTilesIn[1 + listIndex];
+	const uint2 tile = uint2(packed & 0xFFFFu, packed >> 16u);
+	if (EvolveTexel(tile * 8u + GTid.xy))
+		InterlockedOr(gNonZero, 1u);
 	ActivityPublish(GIdx);
-	// Evolve's own word: a full run that changed nothing lets the CPU idle
-	// this pass until an external write (ring, stamps) or refill re-arms it.
-	if (GIdx == 0 && gActivity != 0)
-		ActivityFlag.InterlockedOr(40, 1u);
+	if (GIdx == 0) {
+		Occupancy[tile] = gNonZero;
+		// Evolve's own word: a run that changed nothing lets the CPU idle
+		// this pass until an external write (ring, stamps) or refill
+		// re-arms it.
+		if (gActivity != 0)
+			ActivityFlag.InterlockedOr(40, 1u);
+	}
+}
+
+// Lists the tiles evolve must visit: any occupancy within the slump reach,
+// tested in wrapped physical space (logical adjacency survives the seam;
+// the extra cross-border pairs are harmless over-inclusion). At extreme
+// range/resolution combos the halo grows to a few hundred taps per tile -
+// accepted, the scan is R8 reads against a 4M-texel pass saved.
+[numthreads(8, 8, 1)] void ScanEvolveCS(uint3 DTid
+										: SV_DispatchThreadID) {
+	uint2 dims;
+	Occupancy.GetDimensions(dims.x, dims.y);
+	if (any(DTid.xy >= dims))
+		return;
+
+	bool need = ForceAllDirty != 0;
+	if (!need) {
+		const int halo = (int)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
+		for (int dy = -halo; dy <= halo && !need; dy++)
+			for (int dx = -halo; dx <= halo && !need; dx++) {
+				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+				need = OccupancyIn[t] != 0;
+			}
+	}
+	if (!need)
+		return;
+
+	uint idx;
+	InterlockedAdd(EvolveTiles[0], 1u, idx);
+	EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
+	// Census, riding the activity readback.
+	ActivityFlag.InterlockedAdd(44, 1u);
+}
+
+// A list's count becomes indirect dispatch args (x capped at 1024, the
+// remainder in y - 4096-dim full-dirty is 262144 tiles, past the 65535
+// one-dimension cap), so the CPU never reads a count back.
+[numthreads(1, 1, 1)] void TileArgsCS(uint3 DTid
+									  : SV_DispatchThreadID) {
+	const uint count = TileListIn[0];
+	TileArgs.Store3(0, uint3(min(count, 1024u), (count + 1023u) / 1024u, 1u));
 }
 
 // Actors acting on the map: stamp capsules and bow-wave deposits, RMW on the
 // texel EvolveCS wrote this frame (or the standing map on frames where the
 // world had nothing to do). Every term is a function of the texel's own
 // value - no neighbour reads - which is what lets this pass run in place and
-// be dispatched over the stamps' bounding tiles only.
-void StampTexel(uint2 phys)
+// be dispatched over the stamps' bounding tiles only. Returns whether the
+// texel holds anything, for the group's occupancy write.
+bool StampTexel(uint2 phys)
 {
 	uint2 dims;
 	CurrentDeformation.GetDimensions(dims.x, dims.y);
@@ -928,25 +1024,35 @@ void StampTexel(uint2 phys)
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
+	return any(result != 0.0);
 }
 
-// One group per CPU-listed tile: actors' surroundings, nothing else.
+// One group per CPU-listed tile: actors' surroundings, nothing else. The
+// group owns its whole tile, so it writes occupancy absolutely.
 [numthreads(8, 8, 1)] void StampCS(uint3 GTid
 								   : SV_GroupThreadID, uint3 Gid
 								   : SV_GroupID, uint GIdx
 								   : SV_GroupIndex) {
 	ActivityReset(GIdx);
 	const uint packed = StampTiles[Gid.x];
-	StampTexel(uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy);
+	const uint2 tile = uint2(packed & 0xFFFFu, packed >> 16u);
+	if (StampTexel(tile * 8u + GTid.xy))
+		InterlockedOr(gNonZero, 1u);
 	ActivityPublish(GIdx);
+	if (GIdx == 0)
+		Occupancy[tile] = gNonZero;
 }
 
 // Full-map fallback for a tile list past its cap; also the force-all-dirty
 // debug path, so "my trenches froze" has a one-click cross-check.
 [numthreads(8, 8, 1)] void StampAllCS(uint3 DTid
-									  : SV_DispatchThreadID, uint GIdx
+									  : SV_DispatchThreadID, uint3 Gid
+									  : SV_GroupID, uint GIdx
 									  : SV_GroupIndex) {
 	ActivityReset(GIdx);
-	StampTexel(DTid.xy);
+	if (StampTexel(DTid.xy))
+		InterlockedOr(gNonZero, 1u);
 	ActivityPublish(GIdx);
+	if (GIdx == 0)
+		Occupancy[Gid.xy] = gNonZero;
 }

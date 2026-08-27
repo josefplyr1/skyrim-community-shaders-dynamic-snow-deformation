@@ -225,6 +225,50 @@ void SnowDeformation::CreateDeformationTextures()
 	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
 	bermFieldTexture->CreateSRV(srvDesc);
 	bermFieldTexture->CreateUAV(uavDesc);
+
+	// Tile-dispatch state, sized to the map's tile grid (dim/8 per axis).
+	{
+		auto device = globals::d3d::device;
+		const uint tiles = deformMapDim / 8;
+
+		occupancyTexture = nullptr;
+		occupancyUAV = nullptr;
+		occupancySRV = nullptr;
+		D3D11_TEXTURE2D_DESC occDesc{};
+		occDesc.Width = tiles;
+		occDesc.Height = tiles;
+		occDesc.MipLevels = 1;
+		occDesc.ArraySize = 1;
+		occDesc.Format = DXGI_FORMAT_R8_UINT;
+		occDesc.SampleDesc.Count = 1;
+		occDesc.Usage = D3D11_USAGE_DEFAULT;
+		occDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		DX::ThrowIfFailed(device->CreateTexture2D(&occDesc, nullptr, occupancyTexture.put()));
+		Util::SetResourceName(occupancyTexture.get(), "SnowDeformation::TileOccupancy");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(occupancyTexture.get(), nullptr, occupancyUAV.put()));
+		Util::SetResourceName(occupancyUAV.get(), "SnowDeformation::TileOccupancy UAV");
+		DX::ThrowIfFailed(device->CreateShaderResourceView(occupancyTexture.get(), nullptr, occupancySRV.put()));
+		Util::SetResourceName(occupancySRV.get(), "SnowDeformation::TileOccupancy SRV");
+
+		evolveTileBuffer = nullptr;
+		evolveTileUAV = nullptr;
+		evolveTileSRV = nullptr;
+		D3D11_BUFFER_DESC listDesc{};
+		listDesc.ByteWidth = (tiles * tiles + 1) * sizeof(uint32_t);
+		listDesc.Usage = D3D11_USAGE_DEFAULT;
+		listDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		listDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		listDesc.StructureByteStride = sizeof(uint32_t);
+		DX::ThrowIfFailed(device->CreateBuffer(&listDesc, nullptr, evolveTileBuffer.put()));
+		Util::SetResourceName(evolveTileBuffer.get(), "SnowDeformation::EvolveTiles");
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(evolveTileBuffer.get(), nullptr, evolveTileUAV.put()));
+		Util::SetResourceName(evolveTileUAV.get(), "SnowDeformation::EvolveTiles UAV");
+		DX::ThrowIfFailed(device->CreateShaderResourceView(evolveTileBuffer.get(), nullptr, evolveTileSRV.put()));
+		Util::SetResourceName(evolveTileSRV.get(), "SnowDeformation::EvolveTiles SRV");
+
+		// Occupancy content is unknown until the next Prepass seeds it all-1.
+		tileGridsNeedInit = true;
+	}
 }
 
 void SnowDeformation::SetupResources()
@@ -241,16 +285,17 @@ void SnowDeformation::SetupResources()
 		// without a stall. Dimension-independent, so a map-resolution change
 		// never touches it.
 		auto device = globals::d3d::device;
-		// 44 bytes, layout mirrored in DeformationUpdateCS.hlsl:
+		// 52 bytes, layout mirrored in DeformationUpdateCS.hlsl:
 		// [0] changed-anywhere flag, [4] changed count,
 		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
 		// so ClearUAV's all-zero init works for every field), [16] maxX,
 		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
 		// crust/deposit count, [36] per-texel max-delta sum, fixed-point 1e6,
 		// [40] evolve-only flag (that pass's own idle gate; meaningful only on
-		// frames evolve ran).
+		// frames evolve ran), [44] evolve tile count, [48] berm tile count
+		// (the dispatch census).
 		D3D11_BUFFER_DESC flagDesc{};
-		flagDesc.ByteWidth = 44;
+		flagDesc.ByteWidth = 52;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
 		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -260,13 +305,13 @@ void SnowDeformation::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
 		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		flagUavDesc.Buffer.NumElements = 11;
+		flagUavDesc.Buffer.NumElements = 13;
 		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
 		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
 
 		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 44;
+		stagingDesc.ByteWidth = 52;
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -291,6 +336,23 @@ void SnowDeformation::SetupResources()
 		tileSrvDesc.Buffer.NumElements = kStampTileCap;
 		DX::ThrowIfFailed(device->CreateShaderResourceView(stampTileBuffer.get(), &tileSrvDesc, stampTileSRV.put()));
 		Util::SetResourceName(stampTileSRV.get(), "SnowDeformation::StampTiles SRV");
+
+		// Indirect args for the evolve dispatch, written by TileArgsCS.
+		// Dimension-independent (always three uints).
+		D3D11_BUFFER_DESC argsDesc{};
+		argsDesc.ByteWidth = 3 * sizeof(uint32_t);
+		argsDesc.Usage = D3D11_USAGE_DEFAULT;
+		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		DX::ThrowIfFailed(device->CreateBuffer(&argsDesc, nullptr, evolveArgsBuffer.put()));
+		Util::SetResourceName(evolveArgsBuffer.get(), "SnowDeformation::EvolveArgs");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUavDesc{};
+		argsUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		argsUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		argsUavDesc.Buffer.NumElements = 3;
+		argsUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		DX::ThrowIfFailed(device->CreateUnorderedAccessView(evolveArgsBuffer.get(), &argsUavDesc, evolveArgsUAV.put()));
+		Util::SetResourceName(evolveArgsUAV.get(), "SnowDeformation::EvolveArgs UAV");
 	}
 
 	{
@@ -541,12 +603,14 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint countR = value[6], countG = value[7], countB = value[8];
 			const uint deltaSum = value[9];
 			const uint evolveFlag = value[10];
+			const uint evolveTiles = value[11];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			// Evolve's own verdict, only from frames it actually ran (the
 			// buffer is cleared per frame, so a skipped evolve reads 0 there).
 			if (deformActivitySlotEvolveRan[i] && deformActivitySlotSeq[i] > evolveVerdictSeq) {
 				evolveVerdictSeq = deformActivitySlotSeq[i];
 				evolveFlagActive = evolveFlag != 0;
+				evolveTilesLast = evolveTiles;
 			}
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
@@ -847,6 +911,7 @@ void SnowDeformation::Prepass()
 			perFrameData.RingTotalTexels += (uint)(arriving[i].w * arriving[i].h);
 		}
 	}
+	perFrameData.ForceAllDirty = debugForceAllTilesDirty ? 1u : 0u;
 
 	// Persistent trenches. Ordered against the dispatch:
 	// the flush stages what this frame's scroll is about to discard, so it must
@@ -1024,6 +1089,7 @@ void SnowDeformation::Prepass()
 		// keeps publishing the stale pre-skip window (or retires the row), so
 		// an idle pass still reads as costing full price.
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationRing");
+		globals::profiler->MarkPassSkipped("SnowDeformation::TileScan");
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
 		globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
@@ -1072,8 +1138,18 @@ void SnowDeformation::Prepass()
 				context->ClearUnorderedAccessViewFloat(activityViewUAV.get(), zeroView);
 			}
 
+			// Occupancy content is unknown after a (re)create; seed all-dirty
+			// so the first evolve visits everything and writes the truth back.
+			if (tileGridsNeedInit) {
+				const UINT allDirty[4] = { 1, 1, 1, 1 };
+				context->ClearUnorderedAccessViewUint(occupancyUAV.get(), allDirty);
+				tileGridsNeedInit = false;
+			}
+
 			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),
-				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr };
+				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr,
+				occupancyUAV.get() };
+			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 
 			// Ring: rewrite only the texels the scroll (or clear) reassigned.
 			// This is the whole scroll cost now - a walking-speed frame is a
@@ -1081,7 +1157,6 @@ void SnowDeformation::Prepass()
 			if (perFrameData.RingTotalTexels > 0) {
 				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
-				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::DeformationRing");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
@@ -1093,20 +1168,50 @@ void SnowDeformation::Prepass()
 			// Evolve reads a snapshot so its neighbour taps (slump support,
 			// upwind supply) see one consistent frame. The copy must follow
 			// the ring, or arriving texels would evolve from the departed
-			// ground that used to stand at their physical position.
+			// ground that used to stand at their physical position. The
+			// dispatch is indirect over ScanEvolveCS's occupied-plus-halo
+			// list; neither the list nor its count ever touches the CPU.
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				context->CopyResource(scratch->resource.get(), map->resource.get());
 
+				// Scan: occupancy (SRV, so drop its UAV bind) + halo -> list.
+				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
+				const UINT zeroList[4] = { 0, 0, 0, 0 };
+				context->ClearUnorderedAccessViewUint(evolveTileUAV.get(), zeroList);
+				ID3D11ShaderResourceView* occSRV = occupancySRV.get();
+				context->CSSetShaderResources(4, 1, &occSRV);
+				ID3D11UnorderedAccessView* listUAV = evolveTileUAV.get();
+				context->CSSetUnorderedAccessViews(4, 1, &listUAV, nullptr);
+				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
+				globals::profiler->BeginPass("SnowDeformation::TileScan");
+				const uint tilesPerAxis = deformMapDim / 8;
+				context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
+
+				// List count -> indirect args.
+				context->CSSetUnorderedAccessViews(4, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* listSRV = evolveTileSRV.get();
+				context->CSSetShaderResources(5, 1, &listSRV);
+				ID3D11UnorderedAccessView* argsUAV = evolveArgsUAV.get();
+				context->CSSetUnorderedAccessViews(5, 1, &argsUAV, nullptr);
+				context->CSSetShader(GetDeformationTileArgsCS(), nullptr, 0);
+				context->Dispatch(1, 1, 1);
+				globals::profiler->EndPass();
+				context->CSSetUnorderedAccessViews(5, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* nullOcc = nullptr;
+				context->CSSetShaderResources(4, 1, &nullOcc);
+
 				ID3D11ShaderResourceView* srvs[2] = { scratch->srv.get(), trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+				context->CSSetShaderResources(3, 1, &listSRV);
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::DeformationEvolve");
-				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
+				context->DispatchIndirect(evolveArgsBuffer.get(), 0);
 				globals::profiler->EndPass();
 			} else {
+				globals::profiler->MarkPassSkipped("SnowDeformation::TileScan");
 				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
 			}
 
@@ -1181,10 +1286,10 @@ void SnowDeformation::Prepass()
 		ID3D11Buffer* nullBuffer = nullptr;
 		context->CSSetConstantBuffers(0, 1, &nullBuffer);
 
-		ID3D11ShaderResourceView* nullSrvs[3] = { nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* nullSrvs[6] = {};
 		context->CSSetShaderResources(0, ARRAYSIZE(nullSrvs), nullSrvs);
 
-		ID3D11UnorderedAccessView* nullUavs[3] = { nullptr, nullptr, nullptr };
+		ID3D11UnorderedAccessView* nullUavs[6] = {};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 
 		// The verdict this dispatch just wrote, staged for a later frame's poll.
@@ -1292,6 +1397,24 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampAllCS()
 	return deformationStampAllCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetDeformationScanEvolveCS()
+{
+	if (!deformationScanEvolveCS) {
+		logger::debug("Compiling DeformationUpdateCS:ScanEvolveCS");
+		deformationScanEvolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanEvolveCS"));
+	}
+	return deformationScanEvolveCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetDeformationTileArgsCS()
+{
+	if (!deformationTileArgsCS) {
+		logger::debug("Compiling DeformationUpdateCS:TileArgsCS");
+		deformationTileArgsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TileArgsCS"));
+	}
+	return deformationTileArgsCS;
+}
+
 uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 {
 	const int dim = (int)deformMapDim;
@@ -1393,6 +1516,12 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationStampAllCS)
 		deformationStampAllCS->Release();
 	deformationStampAllCS = nullptr;
+	if (deformationScanEvolveCS)
+		deformationScanEvolveCS->Release();
+	deformationScanEvolveCS = nullptr;
+	if (deformationTileArgsCS)
+		deformationTileArgsCS->Release();
+	deformationTileArgsCS = nullptr;
 	if (bermFieldCS)
 		bermFieldCS->Release();
 	bermFieldCS = nullptr;
