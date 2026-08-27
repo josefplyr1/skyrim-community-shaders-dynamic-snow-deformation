@@ -384,6 +384,21 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
+			// Promoted from Debugging Options once the tile-dispatch work made
+			// it a real performance lever. Applies like a Trenches-range
+			// change: the map clears and the trench store re-injects what it
+			// remembers.
+			{
+				static const uint kMapDims[] = { 1024u, 2048u, 4096u };
+				int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : (settings.DeformMapResolution >= 4096u ? 2 : 1);
+				if (ImGui::Combo(T(TKEY("map_resolution"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0" "4096\0")) {
+					settings.DeformMapResolution = kMapDims[dimIndex];
+					deformMapDimDirty = true;
+				}
+				if (auto _ttRes = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("map_resolution_tooltip"), "Resolution of the map every trench, melt mark and berm lives in. The main performance dial for this section: cost scales with the square of it, so each step down roughly quarters the trench passes' GPU time. Detail follows the Trenches range too - at the default range, 2048 gives roughly 12 cm per texel, 1024 roughly 24 cm (footprints soften but trails stay). Changing it clears the map; remembered trenches are re-injected from the store."));
+			}
+
 			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
 			if (auto _ttOt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
@@ -792,17 +807,6 @@ void SnowDeformation::DrawSettings()
 			// Deliberate wipe, so the store goes with it: left alone, the
 			// inject would put every trench back on the very next frame.
 			ClearTrenchStore("the Clear Deformation Map button");
-		}
-
-		// S0 instrument (DEFORMATION-UPDATE-PLAN): map resolution. Applies
-		// like a Trenches-range change - the map clears, the store re-injects.
-		{
-			static const uint kMapDims[] = { 1024u, 2048u, 4096u };
-			int dimIndex = deformMapDimRequest <= 1024u ? 0 : (deformMapDimRequest >= 4096u ? 2 : 1);
-			if (ImGui::Combo(T(TKEY("debug_map_dim"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0" "4096\0")) {
-				deformMapDimRequest = kMapDims[dimIndex];
-				deformMapDimDirty = true;
-			}
 		}
 
 		// S1: the idle skip and its measurement override. The readout names

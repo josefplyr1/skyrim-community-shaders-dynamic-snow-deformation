@@ -534,6 +534,8 @@ public:
 		bool ShellBareGroundCull = true;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
 		float CompactMatte = 0.6f;
+		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
+		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 125.0f;
 		float RangeSkinsM = 750.0f;
@@ -1865,8 +1867,7 @@ protected:
 	bool trenchRangeDirty = false;
 	/** @brief Deformation map resolution. */
 	uint deformMapDim = kTextureDim;
-	/** @brief Requested map resolution (Debugging Options; DEFORMATION-UPDATE-PLAN S0). Applied in ApplyRangeSettings: recreates the map and the store's window-sized companions and clears; the world-anchored store re-injects what it holds. */
-	uint deformMapDimRequest = kTextureDim;
+	/** @brief Settings::DeformMapResolution changed; ApplyRangeSettings recreates the map and the store's window-sized companions and clears; the world-anchored store re-injects what it holds. */
 	bool deformMapDimDirty = false;
 	bool rangeInitApplied = false;
 

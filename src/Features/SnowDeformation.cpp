@@ -134,6 +134,7 @@
 	X(ShellDepthBias) \
 	X(ShellSlopeDepthBias) \
 	X(ShellBareGroundCull) \
+	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsFadeM) \
@@ -592,10 +593,10 @@ void SnowDeformation::ApplyRangeSettings()
 	// Map resolution: same contract as the range change - texel content is
 	// resolution-relative, so the pair recreates (with the store's window-sized
 	// companions) and clears, and the store re-injects what it holds.
-	if (deformMapDimDirty) {
+	if (deformMapDimDirty || !rangeInitApplied) {
 		// Snapped to a power of two - the toroidal mask requires it. The
-		// combo only offers these three; this guards any other writer.
-		const uint clamped = std::clamp(deformMapDimRequest, 1024u, 4096u);
+		// combo only offers these three; this guards a hand-edited JSON.
+		const uint clamped = std::clamp(settings.DeformMapResolution, 1024u, 4096u);
 		const uint desired = clamped >= 4096u ? 4096u : (clamped >= 2048u ? 2048u : 1024u);
 		if (desired != deformMapDim) {
 			deformMapDim = desired;
@@ -1721,9 +1722,10 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	// Loaded values may change the window size; the apply path is a no-op
-	// when they match the current state.
+	// Loaded values may change the window size or map resolution; the apply
+	// path is a no-op when they match the current state.
 	trenchRangeDirty = true;
+	deformMapDimDirty = true;
 	RefreshLandTextureDepths();
 }
 
@@ -1736,6 +1738,7 @@ void SnowDeformation::RestoreDefaultSettings()
 {
 	settings = {};
 	trenchRangeDirty = true;
+	deformMapDimDirty = true;
 	clearRequested = true;
 	ClearTrenchStore("restore defaults");
 	RefreshLandTextureDepths();
