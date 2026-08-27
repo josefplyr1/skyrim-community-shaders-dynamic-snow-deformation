@@ -1834,6 +1834,16 @@ protected:
 	/** @brief Newest readback consumed and its verdict. */
 	uint64_t deformFlagSeq = 0;
 	bool deformFlagActive = true;
+	/** @brief Whether EvolveCS executed in the frame each staging slot describes; its verdict word means nothing on frames it did not run (the buffer is cleared per frame). */
+	bool deformActivitySlotEvolveRan[kDeformActivitySlots] = {};
+	/** @brief Evolve pass's own verdict: the last executed evolve changed nothing at stored precision. Starts active (errs toward running). */
+	bool evolveFlagActive = true;
+	/** @brief Seq of the newest consumed evolve verdict. */
+	uint64_t evolveVerdictSeq = 0;
+	/** @brief Seq of the last frame that re-armed evolve: an external write landed (ring or stamps) so the settled verdict is stale. RefillAmount > 0 arms directly, per frame. */
+	uint64_t evolveLastArmSeq = 0;
+	/** @brief Last frame's evolve decision, for the menu readout. */
+	bool evolveIdleLastFrame = false;
 	/** @brief Last frame's berm A/B state: re-enabling the bake must run one update even at rest, or the shells read a bake from before the toggle went off. */
 	bool prevBermBakeDisabled = false;
 	/** @brief Stamp set of the last EXECUTED dispatch, for the tolerance match. Planted feet stamp every frame, so a count can never reach zero while anyone stands on snow; "unchanged since the verdict" is the idle test instead. A quantized hash was tried first and flickered: a swaying foot straddling a grid-cell boundary reads as change every few frames, and each flicker buys dispatch + verdict latency - permanent 0% skip. Matching within a tolerance has no boundaries to straddle. */

@@ -241,14 +241,16 @@ void SnowDeformation::SetupResources()
 		// without a stall. Dimension-independent, so a map-resolution change
 		// never touches it.
 		auto device = globals::d3d::device;
-		// 40 bytes, layout mirrored in DeformationUpdateCS.hlsl:
+		// 44 bytes, layout mirrored in DeformationUpdateCS.hlsl:
 		// [0] changed-anywhere flag, [4] changed count,
 		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
 		// so ClearUAV's all-zero init works for every field), [16] maxX,
 		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
-		// crust/deposit count, [36] per-texel max-delta sum, fixed-point 1e6.
+		// crust/deposit count, [36] per-texel max-delta sum, fixed-point 1e6,
+		// [40] evolve-only flag (that pass's own idle gate; meaningful only on
+		// frames evolve ran).
 		D3D11_BUFFER_DESC flagDesc{};
-		flagDesc.ByteWidth = 40;
+		flagDesc.ByteWidth = 44;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
 		flagDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		flagDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
@@ -258,13 +260,13 @@ void SnowDeformation::SetupResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC flagUavDesc{};
 		flagUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		flagUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		flagUavDesc.Buffer.NumElements = 10;
+		flagUavDesc.Buffer.NumElements = 11;
 		flagUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(deformActivityBuffer.get(), &flagUavDesc, deformActivityUAV.put()));
 		Util::SetResourceName(deformActivityUAV.get(), "SnowDeformation::DeformActivity UAV");
 
 		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 40;
+		stagingDesc.ByteWidth = 44;
 		stagingDesc.Usage = D3D11_USAGE_STAGING;
 		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -520,7 +522,14 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint maxX = value[4], maxY = value[5];
 			const uint countR = value[6], countG = value[7], countB = value[8];
 			const uint deltaSum = value[9];
+			const uint evolveFlag = value[10];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
+			// Evolve's own verdict, only from frames it actually ran (the
+			// buffer is cleared per frame, so a skipped evolve reads 0 there).
+			if (deformActivitySlotEvolveRan[i] && deformActivitySlotSeq[i] > evolveVerdictSeq) {
+				evolveVerdictSeq = deformActivitySlotSeq[i];
+				evolveFlagActive = evolveFlag != 0;
+			}
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
 				deformFlagActive = flag != 0;
@@ -1002,11 +1011,25 @@ void SnowDeformation::Prepass()
 		globals::profiler->MarkPassSkipped("SnowDeformation::BermField");
 	}
 
+	// Evolve's own gate, inside a running frame: when its last full run
+	// changed nothing at stored precision and nothing external has written
+	// the map since (ring inject, stamps), rerunning it is a proven no-op.
+	// Refill arms it directly - a continuous input, not an event. This is
+	// what keeps walking in clear weather off the 4M-thread pass: the ring
+	// is a band, stamps are the stamp pass, and the settled world stays
+	// settled.
+	const bool evolveQuiet = !evolveFlagActive && evolveVerdictSeq > evolveLastArmSeq;
+	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet ||
+	                          debugForceDeformationUpdate;
+	evolveIdleLastFrame = !deformIdleSkipped && !evolveNeeded;
+
 	if (!deformIdleSkipped) {
 		perFrame->Update(perFrameData);
 
 		auto* map = deformationTextures[0];
 		auto* scratch = deformationTextures[1];
+		const bool ringRan = perFrameData.RingTotalTexels > 0;
+		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f;
 
 		{
 			ID3D11Buffer* buffers[1] = { perFrame->CB() };
@@ -1049,7 +1072,7 @@ void SnowDeformation::Prepass()
 			// upwind supply) see one consistent frame. The copy must follow
 			// the ring, or arriving texels would evolve from the departed
 			// ground that used to stand at their physical position.
-			{
+			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				context->CopyResource(scratch->resource.get(), map->resource.get());
@@ -1061,12 +1084,14 @@ void SnowDeformation::Prepass()
 				globals::profiler->BeginPass("SnowDeformation::DeformationEvolve");
 				context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 				globals::profiler->EndPass();
+			} else {
+				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationEvolve");
 			}
 
 			// Stamps + waves RMW the texels evolve just wrote. Sustained
 			// stamps (melt, crust) must re-apply even when the set is quiet -
 			// dwell time is their input - so the gate is presence, not change.
-			const bool stampWork = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f;
+			const bool stampWork = stampRan;
 			if (stampWork) {
 				context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::DeformationStamps");
@@ -1117,6 +1142,16 @@ void SnowDeformation::Prepass()
 		deformDispatchSeq++;
 		if (!inputsIdle)
 			deformLastNonIdleSeq = deformDispatchSeq;
+		// Evolve re-arm bookkeeping. Stamps run AFTER evolve, so a stamp
+		// write is unassessed by this frame's evolve and arms at this seq; a
+		// ring inject runs BEFORE it, so when evolve ran this frame its
+		// verdict already covers the inject (arm at seq-1, which that verdict
+		// beats). A ring without inject writes pristine zeros - nothing to
+		// evolve - and arms nothing.
+		if (stampRan)
+			evolveLastArmSeq = std::max(evolveLastArmSeq, deformDispatchSeq);
+		if (ringRan && perFrameData.InjectValid)
+			evolveLastArmSeq = std::max(evolveLastArmSeq, evolveNeeded ? deformDispatchSeq - 1 : deformDispatchSeq);
 		// Rebase the match set on every executed dispatch: the pass just
 		// applied these exact stamps, so drift accumulates only while skipping
 		// - bounded by the tolerance.
@@ -1126,6 +1161,7 @@ void SnowDeformation::Prepass()
 			if (!deformActivityPending[i]) {
 				context->CopyResource(deformActivityStaging[i].get(), deformActivityBuffer.get());
 				deformActivitySlotSeq[i] = deformDispatchSeq;
+				deformActivitySlotEvolveRan[i] = evolveNeeded;
 				deformActivityPending[i] = true;
 				break;
 			}

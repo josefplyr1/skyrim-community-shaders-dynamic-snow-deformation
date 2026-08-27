@@ -873,6 +873,11 @@ void SnowDeformation::DrawSettings()
 					held.empty() ? "none - engages next verdict" : held.c_str(), deformSkipRate * 100.0f);
 			else
 				ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
+			// Within a running frame the evolve pass has its own gate: idle
+			// means its last full run changed nothing and no external write
+			// (ring inject, stamps) or refill has re-armed it - the ring and
+			// stamp passes are the only cost while walking settled ground.
+			ImGui::Text("Evolve pass: %s", evolveIdleLastFrame ? "idle (settled)" : "active");
 		}
 		if (deformSkipRate >= 0.0f) {
 			// The flicker census: count changes are stamps appearing or

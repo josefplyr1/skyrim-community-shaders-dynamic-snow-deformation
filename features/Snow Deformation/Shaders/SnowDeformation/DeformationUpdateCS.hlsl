@@ -273,8 +273,10 @@ int2 TorusPhys(int2 logical, int2 dims)
 // Raw layout mirrored in SnowDeformation.cpp: [0] flag, [4] count,
 // [8]/[12] complemented min X/Y (min as InterlockedMax of 65535-coord, so an
 // all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
-// per-channel counts (depth, melt/scorch, crust/deposit). Both passes OR
-// into the same buffer; the CPU clears it once per executed frame.
+// per-channel counts (depth, melt/scorch, crust/deposit), [36] delta sum,
+// [40] evolve-only flag (EvolveCS changed something - its idle gate's own
+// verdict, meaningful only on frames evolve ran). Both passes OR into the
+// same buffer; the CPU clears it once per executed frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
@@ -568,6 +570,10 @@ float SlumpTap(int2 p, int2 dims)
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
 	ActivityPublish(GIdx);
+	// Evolve's own word: a full run that changed nothing lets the CPU idle
+	// this pass until an external write (ring, stamps) or refill re-arms it.
+	if (GIdx == 0 && gActivity != 0)
+		ActivityFlag.InterlockedOr(40, 1u);
 }
 
 // Actors acting on the map: stamp capsules and bow-wave deposits, RMW on the
