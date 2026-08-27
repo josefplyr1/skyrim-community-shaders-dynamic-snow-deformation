@@ -2027,6 +2027,14 @@ void SnowDeformation::DrawCapturedStatics()
 		// surface is the object top, not the terrain window's class ramp.
 		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
+		// Skin-depth raster (PS t12): the march rebuilds the carved layer on
+		// road-owned taps. Bound explicitly - inheriting the skin pass's bind
+		// through D3D11 state persistence worked but was one reorder away
+		// from a silently unbound read.
+		ID3D11ShaderResourceView* patchSkinPSSRV = (heightSkinDepth && heightSkinDepth->srv) ?
+		                                               heightSkinDepth->srv.get() :
+		                                               nullptr;
+		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
 
 		StaticsCB scb{};
 		// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see

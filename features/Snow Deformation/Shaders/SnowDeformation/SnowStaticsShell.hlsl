@@ -2312,19 +2312,54 @@ PS_OUTPUT main(VS_OUTPUT input)
 						// skin, and the round-35 top term then stacked the
 						// ramp on the top as well - object snow fell into
 						// shadow at any low sun.
-						//
-						// REVERTED 2026-08-26: reconstructing the patch's real
-						// carved surface here (CarveProfile + berm from the
-						// per-texel depth) was tried to kill the unshadowed
-						// streak down object trails. It did NOT kill the
-						// streak, and it made object shading BLOCKY - both the
-						// depth (PatchSkinDepth, max-of-4) and topH (a point
-						// Load) are 4-unit raster reads, so an occluder built
-						// from them steps in texels. topH + a small constant
-						// hides that; topH + a 30-unit layer does not.
-						// A real fix needs a smooth occluder surface, not a
-						// finer read of the same raster.
 						sh = topH + 2.0;
+
+						// Except on ROAD-OWNED columns, which carry a full
+						// carved layer: a dusting occluder leaves the trench
+						// floor unshadowed by its own walls - the bright
+						// streak down every road trail. Rebuild the surface
+						// the patch draws, from BILINEAR reads: attempt one
+						// (reverted) fed the point-Load top and the max-of-4
+						// depth into the carve and the occluder stepped in
+						// 4-unit texels, which read as blocky shadows.
+						// Bilinear over the same lattice is the smoothness
+						// class of the patch's own drawn geometry. All four
+						// top texels must be valid (a sentinel poisons the
+						// interpolation) and the road must own the column;
+						// everywhere else - rocks, cairns, walls - the
+						// dusting above stands, so skins cannot regress.
+						float2 tapWorld = GridOrigin + sampleLocal;
+						float2 bt = PatchTexel(tapWorld, topDims);
+						int2 bt0 = (int2)bt;
+						float2 btf = bt - bt0;
+						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
+						float4 tapTops = float4(
+							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
+							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
+						[branch] if (all(tapTops > -50000.0))
+						{
+							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
+							float2 sd10 = ObjectSkinDepth.Load(int3(bt1.x, bt0.y, 0));
+							float2 sd01 = ObjectSkinDepth.Load(int3(bt0.x, bt1.y, 0));
+							float2 sd11 = ObjectSkinDepth.Load(int3(bt1.x, bt1.y, 0));
+							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
+							float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
+							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
+							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && (topSmooth - tapRoadTop) < kRoadOwnsTop && depthSmooth >= 1.0)
+							{
+								// Same assembly as the off-object branch below:
+								// carve + berm, undulation riding on the result;
+								// churn and clods skipped, as both marches skip
+								// them. Baked berm only, the march's own
+								// convention - the 17-tap live field is not
+								// worth 5 taps of it per pixel.
+								float tapDeform = SampleDeformation(sampleLocal);
+								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
+								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+							}
+						}
 						tapOnObject = true;
 					}
 				}
