@@ -119,6 +119,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRkf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_fade_tooltip"), "Distance where object snow starts dissolving back into the object's own appearance; fully faded by the Object Snow range end. Cures distant blank-white objects. Set level with Object Snow to keep the skins solid all the way out."));
 
+		ImGui::SliderFloat(T(TKEY("shell_radius"), "Shell Radius"), &settings.ShellRadiusM, 50.0f, 225.0f, "%.0f m");
+		if (auto _ttSr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_radius_tooltip"), "How far the snow layer's geometry reaches around the camera. 225 covers out to the loaded-cell boundary. Shrinking it trims only the coarsest ring - near-camera detail is untouched - and saves geometry and pixel work, but past the edge the ground shows its plain snow textures: no trenches, no undulation, no depth. On snowfields that dissolve hides well; a short radius can still read as a ring where the detail ends. Applies live, in ~1.8 m steps."));
+
 		ImGui::PushID("distant_snow");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("lod_replace_legacy"), "Legacy Horizon Shading"), &settings.LODReplaceLegacy);
@@ -194,6 +198,15 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Snow Undulation"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttUnd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
+
+		{
+			const char* densityItems[2] = { T(TKEY("shell_density_full"), "Full (8 units)"), T(TKEY("shell_density_half"), "Half (16 units)") };
+			ImGui::Combo(T(TKEY("shell_vertex_density"), "Shell Vertex Density"), &settings.ShellVertexDensity, densityItems, 2);
+			if (auto _ttSvd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_vertex_density_tooltip"), "Vertex spacing of the snow surface near the camera. Full is the 8-unit spacing trench walls were tuned at. Half doubles it for roughly half the shell's geometry work - same reach, same distant sampling, so the far field does not change at all - at the cost of blockier trench silhouettes up close; tessellation smooths much of that back. Changing it recompiles the snow shaders (a moment's hitch)."));
+			settings.ShellVertexDensity = std::clamp(settings.ShellVertexDensity, 0, 1);
+		}
+
 		ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
 		if (auto _ttUs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));

@@ -134,6 +134,8 @@
 	X(ShellDepthBias) \
 	X(ShellSlopeDepthBias) \
 	X(ShellBareGroundCull) \
+	X(ShellRadiusM) \
+	X(ShellVertexDensity) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \

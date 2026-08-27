@@ -14,15 +14,27 @@
 
 // Distance warp, power-of-two bands: band b holds kWarpBandVerts[b] vertices
 // spaced kWarpBandMul[b] * GridSpacing apart, reaching ~17k units per side.
-// Must match SnowDeformation.h (kShellWarpBandVerts / kShellWarpBandMul).
+// Must match SnowDeformation.h (kShellBandTables - BOTH rows).
 //
 // INVARIANT: every step is an exact power of two of the base step and every
 // band start is a multiple of both its own step and the origin snap, so a
 // vertex lands on its band's lattice with no rounding left over. Break it and
 // quad widths flip as the camera moves (distant up/down jumping).
+//
+// SNOW_HALF_DENSITY selects the half-density row: 16-unit inner spacing for
+// ~45% of the quads at the SAME reach and the SAME 128-unit coarsest step -
+// the land-lattice law the pad retirement depends on. Band starts re-picked to
+// stay on the 256-unit origin snap (1536 / 1792 / 2048 / 2560 units). Tables
+// only; the warp functions below are byte-identical either way, which is what
+// keeps the DXBC no-op guarantee on the Full path.
 #define kWarpBands 5
+#ifdef SNOW_HALF_DENSITY
+static const float kWarpBandVerts[kWarpBands] = { 96.0, 8.0, 4.0, 4.0, 103.0 };
+static const float kWarpBandMul[kWarpBands] = { 2.0, 4.0, 8.0, 16.0, 16.0 };
+#else
 static const float kWarpBandVerts[kWarpBands] = { 192.0, 8.0, 8.0, 8.0, 104.0 };
 static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };
+#endif
 
 // Band lookup for vertex |u|: x = step multiplier in GridSpacing units,
 // y = fraction through the band (0 at its inner edge, 1 at its outer). The
