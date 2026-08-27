@@ -202,7 +202,6 @@ cbuffer ShellCB : register(b0)
 // shaders and this is landscape-only. Rebuilt every frame from current
 // position and velocity, so it emits nothing and needs no per-wave age; the
 // berm the module already draws is the settle.
-#define MAX_BOW_WAVES 16
 cbuffer BowWaveCB : register(b1)
 {
 	/// x = live wave count, y = height scale (fraction of local depth),
@@ -210,10 +209,9 @@ cbuffer BowWaveCB : register(b1)
 	float4 BowWaveParams;
 	/// x = chunkiness 0-1 (how far the crest breaks into lumps), yzw spare
 	float4 BowWaveLook;
-	/// xy = world position, zw = unit travel direction
-	float4 BowWavePosDir[MAX_BOW_WAVES];
-	/// x = push radius (world units), y = strength 0-1 (speed x depth), zw spare
-	float4 BowWaveShape[MAX_BOW_WAVES];
+	// The per-wave position/shape arrays are gone: DeformationUpdateCS MAXes
+	// the crest into the map's deposit channel and the shell reads that field,
+	// so the buffer carries only the look knobs.
 }
 
 Texture2D<float4> TerrainWindow : register(t0);

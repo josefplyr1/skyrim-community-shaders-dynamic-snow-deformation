@@ -137,28 +137,29 @@ public:
 	// texture is tunable on its own and the terrain-shader snow mask follows
 	// the resolved depth, not the class.
 	static constexpr uint kSnowClassCount = 12;
+	// Default depths live ONLY in Settings::SnowClassDepths - a defaultDepth
+	// column here was never read at runtime and drifted from the live values.
 	struct SnowClassDef
 	{
 		const char* label;
 		const char* match;
-		float defaultDepth;
 	};
 	static constexpr SnowClassDef kSnowClasses[kSnowClassCount] = {
-		{ "Grass Snow", "grasssnow", 14.0f },
-		{ "Trodden Path", "snowpath", 18.0f },
-		{ "Snowy Rocks", "snowrocks", 30.0f },
-		{ "Snow 01", "snow01", 30.0f },
-		{ "Snow 02", "snow02", 30.0f },
+		{ "Grass Snow", "grasssnow" },
+		{ "Trodden Path", "snowpath" },
+		{ "Snowy Rocks", "snowrocks" },
+		{ "Snow 01", "snow01" },
+		{ "Snow 02", "snow02" },
 		// Non-snow classes sit at -8, matching the fully-bare submerge in
 		// ShellSurfaceZ, so every bare texel reaches one depth instead of
 		// stopping short of it.
-		{ "Roads", "road", -8.0f },
-		{ "Dirt", "dirt", -8.0f },
-		{ "Grass & Fields", "grass", -8.0f },
-		{ "Rocks & Cliffs", "rock", -8.0f },
-		{ "Coast & Beach", "coast", -8.0f },
-		{ "Mud & Rivers", "mud", -8.0f },
-		{ "Other", "", -8.0f },
+		{ "Roads", "road" },
+		{ "Dirt", "dirt" },
+		{ "Grass & Fields", "grass" },
+		{ "Rocks & Cliffs", "rock" },
+		{ "Coast & Beach", "coast" },
+		{ "Mud & Rivers", "mud" },
+		{ "Other", "" },
 	};
 
 	// Textures whose family default is wrong for them: frozen marsh ice is
@@ -286,7 +287,7 @@ public:
 	{
 		bool EnableSnowDeformation = true;
 		bool ShowDebugTexture = false;
-		/** @brief Scale on Havok collision-shape radii (20 = 1.0x = the shapes' actual size). */
+		/** @brief Scale on Havok collision-shape radii: 20 = the shapes' actual size; the 10 default halves them, which is the intended in-game read (full-size prints read bloated). */
 		float StampRadius = 10.0f;
 		/** @brief Width multiplier on foot-bone stamps (length stays anatomical). */
 		float FootPrintScale = 1.5f;
@@ -463,8 +464,6 @@ public:
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
-		/** @brief Set when the texture stores linear (PBR) color. Auto-detected for resolved PBR sets; only matters for legacy textures. */
-		bool SnowTextureLinear = false;
 		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
 		float TrampleZoneScale = 0.75f;
 		/** @brief Snow height remaining in a workspace clearing, in PERCENT of the class depth. 0 = melted to the floor, 100 = no clearing. */
@@ -487,8 +486,6 @@ public:
 		float UndulationSpacing = 1.0f;
 		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth. */
 		bool Tessellation = true;
-		/** @brief Displacement-map relief amplitude in world units on UNTRAMPLED landscape snow (carved ground is excluded by the domain shader's (1 - carve) term). Also sets whether undeformed ground is subdivided at all: at 0 its tessellation factor collapses to 1 and only trenches keep theirs. No menu control; inert at its default and read from JSON only. */
-		float ReliefDepth = 0.0f;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
 		float ParallaxShadowStrength = 0.5f;
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
@@ -524,12 +521,6 @@ public:
 		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
 		float ShellSSSRemarchCasterCap = 20.0f;
-		/** @brief Shell PS exports SV_DepthLessEqual carrying the anti-z-fight clamp. That export moves depth toward the camera, which defeats early-Z REJECTION for the whole draw under the pass's LESS_EQUAL test - so every shell pixel behind terrain, a building or an actor still runs the full shader. Measured 2026-08-26: off is 32% cheaper at Dawnstar, 50% at Riften. Off relies on the depth bias below for the near-field coincident-surface case and gives up the far-field clamp entirely. */
-		bool ShellDepthClamp = true;
-		/** @brief Constant rasteriser depth bias applied ONLY when the clamp is off, standing in for the 0.75-unit near-field clamp. Raw D3D11_RASTERIZER_DESC::DepthBias units; scaled by the depth format's exponent, so the useful magnitude is found by eye. */
-		float ShellDepthBias = 0.0f;
-		/** @brief Slope-scaled companion to ShellDepthBias; grazing-angle surfaces need more offset than head-on ones. Applied only when the clamp is off. */
-		float ShellSlopeDepthBias = 0.0f;
 		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
 		bool ShellBareGroundCull = true;
 		/** @brief How completely trampled snow loses its glints (packed snow has crushed the crystals that sparkle). Shared by both shells. */
@@ -543,18 +534,10 @@ public:
 		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Strength of the far-field facing handover: as a pixel grows past the edge taper's own width the coverage test hands over to the true face normal, so distant objects keep bare rock on steep faces instead of collapsing to white. Scales against kFacingLODMax; 0 disables it. The near-field rim-contour push is deliberately NOT on this dial (see the PS). */
 		float SkinDistantBareness = 0.6f;
-		/** @brief Distant snow line (world Z units): heightmap-sourced far terrain above this height gets snow coverage. */
-		float DistantSnowLineZ = 5000.0f;
-		/** @brief How far the snow line sinks (world units) toward the worldspace's north edge, so the northern coast is snowy at sea level. */
-		float DistantSnowNorthDrop = 15000.0f;
-		/** @brief Half-width (world units) of the bare-to-snow blend band around the snow line. */
-		float DistantSnowLineFade = 1500.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief A/B toggle: shade horizon snow with the old vanilla-math recolor instead of the shell's recipe. */
-		bool LODReplaceLegacy = false;
 		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
 		bool ProjSnowMatch = true;
 		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
@@ -580,8 +563,8 @@ public:
 		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
 		float SnowHasNormal;
 
-		/** @brief A/B: 1 = old input-patch recolor, 0 = shell-recipe output override. */
-		float LODReplaceLegacy;
+		/** @brief was LODReplaceLegacy; the legacy recolor A/B is retired, slot kept for layout. */
+		float padLegacy;
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
@@ -986,8 +969,6 @@ public:
 	 * Implemented in SnowDeformation/Shell.cpp.
 	 */
 	void DrawShell();
-	/** @brief Rebuilds shellRasterState when the depth-bias settings change. Bias is forced to zero while ShellDepthClamp is on. Implemented in SnowDeformation/Shell.cpp. */
-	void EnsureShellRasterState();
 
 	/** @brief Returns the shell vertex/pixel shaders, compiling them on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellVS();
@@ -1012,7 +993,7 @@ public:
 	ID3D11HullShader* shellHSFar = nullptr;
 	ID3D11HullShader* GetShellHSNear();
 	ID3D11HullShader* GetShellHSFar();
-	/** @brief Shell PS with the depth export compiled out, used for the split's NEAR pass while the clamp is on. Distinct from shellPS, which follows the ShellDepthClamp setting. */
+	/** @brief Shell PS with the depth export compiled out, used for the split's NEAR pass while the clamp is on. Distinct from shellPS, which follows the clamp A/B flag. */
 	ID3D11PixelShader* shellPSNoDepth = nullptr;
 	ID3D11PixelShader* GetShellPSNoDepth();
 
@@ -1061,8 +1042,6 @@ public:
 	{
 		float4 BowWaveParams;
 		float4 BowWaveLook;
-		float4 BowWavePosDir[kMaxBowWaves];
-		float4 BowWaveShape[kMaxBowWaves];
 	};
 	ConstantBuffer* bowWaveCB = nullptr;
 	std::vector<BowWave> bowWaves;
@@ -1129,15 +1108,15 @@ public:
 	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
 	bool shellBermBakeDisabled = false;
 
-	/** @brief Settings::ShellDepthClamp the cached shellPS was compiled against; a mismatch releases it. Catches every path that can change the setting, not just the menu checkbox. */
+	/** @brief Clamp state the cached shellPS was compiled against; a mismatch releases it. The clamp is a debug A/B now (shellDepthClampDisabled), not a setting. */
 	bool shellDepthClampCompiled = true;
 
-	/** @brief Bias values shellRasterState was built with, so it is rebuilt only when they actually move. */
-	float shellRasterBias = 0.0f;
-	float shellRasterSlopeBias = 0.0f;
 
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
+
+	/** @brief A/B measurement: drops the shell's SV_DepthLessEqual export outright (single no-export draw, no far-field clamp). Demoted from a setting 2026-08-27: with the split draw on by default there is no configuration where turning the clamp off is a good trade, so it is an instrument, not a choice. Runtime-only; forces a PS recompile. */
+	bool shellDepthClampDisabled = false;
 
 	/** @brief A/B measurement: returns terrain height to plain bilinear, which averages the mesh's two triangulations and so sits below both. Turning it on should bring back the poke-through on steep ground. Runtime-only. */
 	bool shellBilinearHeight = false;

@@ -314,7 +314,7 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 	// Setting changes reach here from the menu, a settings load and a preset
 	// alike, so the permutation is keyed off the compiled-against value rather
 	// than off any one of those paths noticing.
-	if (shellPS && shellDepthClampCompiled != settings.ShellDepthClamp) {
+	if (shellPS && shellDepthClampCompiled != !shellDepthClampDisabled) {
 		shellPS->Release();
 		shellPS = nullptr;
 	}
@@ -323,9 +323,9 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 		auto defines = ShellPSDefines();
 		// Applied here, not in ShellPSDefines: that is static, and the LOD
 		// histogram variant has no reason to carry this.
-		if (!settings.ShellDepthClamp)
+		if (shellDepthClampDisabled)
 			defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
-		shellDepthClampCompiled = settings.ShellDepthClamp;
+		shellDepthClampCompiled = !shellDepthClampDisabled;
 		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;
@@ -531,36 +531,6 @@ void SnowDeformation::UpdateBowWaveBuffer()
 	bowWaveCB->Update(data);
 }
 
-// Bias applies only with the clamp off: with it on the clamp already settles
-// coincident surfaces, and stacking the two would push the shell in front of
-// things it should lose to.
-void SnowDeformation::EnsureShellRasterState()
-{
-	const float wantBias = settings.ShellDepthClamp ? 0.0f : settings.ShellDepthBias;
-	const float wantSlope = settings.ShellDepthClamp ? 0.0f : settings.ShellSlopeDepthBias;
-	if (shellRasterState && wantBias == shellRasterBias && wantSlope == shellRasterSlopeBias)
-		return;
-
-	D3D11_RASTERIZER_DESC rasterDesc{};
-	rasterDesc.FillMode = D3D11_FILL_SOLID;
-	rasterDesc.CullMode = D3D11_CULL_NONE;
-	rasterDesc.DepthClipEnable = TRUE;
-	// NEGATED: both sliders read as "toward the camera", which is the direction
-	// the clamp pulled. D3D adds its bias to depth and this pass is standard-Z
-	// under LESS_EQUAL, so a positive value would push the shell BEHIND the
-	// ground and make it lose the test - snow receding and holes, not fewer.
-	rasterDesc.DepthBias = -(INT)wantBias;
-	rasterDesc.SlopeScaledDepthBias = -wantSlope;
-
-	winrt::com_ptr<ID3D11RasterizerState> state;
-	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put())))
-		return;  // keep the previous state rather than drawing with none
-	shellRasterState = state;
-	Util::SetResourceName(shellRasterState.get(), "SnowDeformation::ShellRasterState");
-	shellRasterBias = wantBias;
-	shellRasterSlopeBias = wantSlope;
-}
-
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
@@ -632,12 +602,14 @@ void SnowDeformation::DrawShell()
 	// texture set reach the shell the same frame they reach the ground.
 	RefreshSnowPBRParams();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
-	cbData.SnowTextureIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
+	cbData.SnowTextureIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
 	// Tessellated relief amplitude, straight from the slider (world units;
 	// the PBR config's displacementScale is deliberately not multiplied in,
 	// the slider is authoritative).
-	cbData.SnowReliefDepth = std::max(settings.ReliefDepth, 0.0f);
+	// Relief retired (setting removed 2026-08-27, slider long gone): 0 keeps
+	// the tess reach collapsing to 1 on undeformed ground and the DS flat.
+	cbData.SnowReliefDepth = 0.0f;
 	// Parallax. HeightScale is the PBR config's displacementScale verbatim:
 	// kSnowUVTile now equals the game's landscape tiling, so the UV-space slab
 	// depth Extended Materials derives from it lands on the same world depth
@@ -855,7 +827,6 @@ void SnowDeformation::DrawShell()
 
 	context->IASetInputLayout(nullptr);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	EnsureShellRasterState();
 	context->RSSetState(shellRasterState.get());
 	context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
@@ -1068,7 +1039,7 @@ void SnowDeformation::DrawShell()
 		// Skipped when the clamp is already off (one pass, nothing to keep) or
 		// when the LOD heatmap owns the PS, and it falls back to the single
 		// draw if either variant failed to compile.
-		auto* hsNear = (settings.ShellDepthClamp && !lodHeatmap && !shellSplitDisabled) ? GetShellHSNear() : nullptr;
+		auto* hsNear = (!shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled) ? GetShellHSNear() : nullptr;
 		auto* hsFar = hsNear ? GetShellHSFar() : nullptr;
 		auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
 		if (hsNear && hsFar && psNear) {

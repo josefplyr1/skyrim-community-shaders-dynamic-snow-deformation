@@ -30,10 +30,6 @@ void SnowDeformation::DrawSettings()
 			shellSnowTextureAttempted = false;
 		}
 
-		ImGui::Checkbox(T(TKEY("snow_texture_linear"), "Linear (PBR) Texture"), &settings.SnowTextureLinear);
-		if (auto _ttLin = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_texture_linear_tooltip"), "Legacy override: enable when a NON-PBR texture stores linear color. When a PBR set is auto-resolved (Textures\\PBR\\...), linear color is detected automatically and this checkbox is ignored."));
-
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Match Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "The game paints snow onto rocks, roofs and logs by projecting a separate snow texture from above. This swaps that projection's texture and material response for the snow shell's own set, so painted-on snow matches the shell instead of reading as a different snow. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
@@ -55,23 +51,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("shell_bare_ground_cull"), "Bare-Ground Cull"), &settings.ShellBareGroundCull);
 			if (auto _ttBare = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_bare_ground_cull_tooltip"), "Stops drawing the snow layer over ground that has no snow class under it at all - sand, riverbed, road, seafloor. There the layer sits below the terrain and cannot produce a pixel, so skipping it is free. The test is the -8 floor, the depth ground reaches only when every texture under it is a non-snow class, so the ramp that climbs into a snow layer is never cut and edges are unaffected. Leave on."));
-
-			ImGui::SeparatorText(T(TKEY("shell_depth_group"), "Shell Depth"));
-
-			ImGui::Checkbox(T(TKEY("shell_depth_clamp"), "Depth Clamp (costs early-Z)"), &settings.ShellDepthClamp);
-			if (auto _ttClamp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_depth_clamp_tooltip"), "The shell writes its own depth so it can settle against ground it lands just behind - the z-fight and pinhole class. The catch is that writing depth TOWARD the camera means the GPU cannot reject a hidden shell pixel before shading it, so every pixel behind terrain, a building or an actor pays full price: measured 32% of the Shell pass at Dawnstar, 50% at Riften. Turning it OFF buys that back and costs distant z-fighting; use the two bias sliders to settle the near-field case. The recompile takes a moment."));
-
-			{
-				auto biasGuard = Util::DisableGuard(settings.ShellDepthClamp);
-				ImGui::SliderFloat(T(TKEY("shell_depth_bias"), "Depth Bias"), &settings.ShellDepthBias, 0.0f, 5000.0f, "%.0f");
-				if (auto _ttBias = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("shell_depth_bias_tooltip"), "Nudges the whole shell TOWARD the camera at rasterisation time, which is free and keeps early-Z. Stands in for the clamp's near-field half, so higher = the shell wins more depth ties. Raw hardware units scaled by the depth format: raise it until coincident-surface shimmer stops and no further - too much floats the snow in front of things standing in it. Only active with the clamp off."));
-
-				ImGui::SliderFloat(T(TKEY("shell_slope_depth_bias"), "Slope Depth Bias"), &settings.ShellSlopeDepthBias, 0.0f, 16.0f, "%.2f");
-				if (auto _ttSlope = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("shell_slope_depth_bias_tooltip"), "Adds pull toward the camera in proportion to how steeply the surface is angled away from it, where a flat offset does least good. Usually the one that fixes grazing-angle shimmer on slopes. Only active with the clamp off."));
-			}
 
 			ImGui::TreePop();
 		}
@@ -101,7 +80,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::IsItemDeactivatedAfterEdit())
 			trenchRangeDirty = true;
 		if (auto _ttRt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches; trench detail coarsens with range."));
+			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches. NOT a performance setting: cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach."));
 
 		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
 		if (auto _ttRk = Util::HoverTooltipWrapper())
@@ -114,30 +93,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttSdb = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour."));
-
-		ImGui::PushID("distant_snow");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::Checkbox(T(TKEY("lod_replace_legacy"), "Legacy Horizon Shading"), &settings.LODReplaceLegacy);
-			if (auto _ttLrl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_replace_legacy_tooltip"), "A/B comparison: shade horizon snow with the old recolor (vanilla LOD lighting math) instead of the snow shell's own recipe. The old math reads brighter and bluer than the shell, peaking at golden hour. Leave off unless comparing."));
-
-			ImGui::TextDisabled("%s", T(TKEY("distant_snow_fallback_label"), "Fallback snow line (used only where LOD textures are missing):"));
-
-			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_line"), "Snow Line Height"), &settings.DistantSnowLineZ, -10000.0f, 30000.0f, "%.0f units");
-			if (auto _ttDsl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("distant_snow_line_tooltip"), "Elevation above which distant unloaded terrain reads as snow-covered, where no LOD terrain texture exists to read the answer from."));
-
-			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_north"), "North Snow Drop"), &settings.DistantSnowNorthDrop, 0.0f, 40000.0f, "%.0f units");
-			if (auto _ttDsn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("distant_snow_north_tooltip"), "How far the fallback snow line sinks toward the map's north edge, so the northern coast is snowy at sea level while southern plains at the same elevation stay bare."));
-
-			distantChanged |= ImGui::SliderFloat(T(TKEY("distant_snow_fade"), "Snow Line Fade"), &settings.DistantSnowLineFade, 100.0f, 6000.0f, "%.0f units");
-			if (auto _ttDsf = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("distant_snow_fade_tooltip"), "Width of the bare-to-snow transition band around the fallback snow line."));
-
-			ImGui::TreePop();
-		}
-		ImGui::PopID();
 
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
@@ -1059,6 +1014,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
+
+		ImGui::Checkbox(T(TKEY("shell_depth_clamp_disabled"), "Shell: Disable Depth Clamp"), &shellDepthClampDisabled);
+		if (auto _ttClampDbg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_depth_clamp_disabled_tooltip"), "Measurement aid, demoted from a setting: drops the shell's SV_DepthLessEqual export outright - one no-export draw, early-Z everywhere, and NO far-field clamp, so distant z-fighting returns while it is on. With the split draw on by default there is no configuration where this is a good trade; it exists to A/B what the clamp costs. Recompiles the shell PS on toggle."));
 
 		ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike);
 		if (auto _ttEZS = Util::HoverTooltipWrapper())

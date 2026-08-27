@@ -621,9 +621,11 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	cbData.HeightRange = { heightmap->pos0.z, heightmap->pos1.z };
 	// TS convention: pos0 = left-TOP (north, larger Y), pos1 = right-bottom.
 	cbData.WorldYRange = { heightmap->pos1.y, heightmap->pos0.y };
-	cbData.SnowLineZ = settings.DistantSnowLineZ;
-	cbData.SnowNorthDrop = settings.DistantSnowNorthDrop;
-	cbData.SnowLineFade = std::max(settings.DistantSnowLineFade, 1.0f);
+	// Fallback snow line for texels with no LOD texture to read: fixed at the
+	// tuned values since the sliders were retired (settings sweep 2026-08-27).
+	cbData.SnowLineZ = 5000.0f;
+	cbData.SnowNorthDrop = 15000.0f;
+	cbData.SnowLineFade = 1500.0f;
 	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);  // "Snow 01"
 
 	// 2x2 block of level-32 tiles (each spans exactly the window's 32 cells)

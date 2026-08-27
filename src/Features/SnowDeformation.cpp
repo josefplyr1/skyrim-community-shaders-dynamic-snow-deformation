@@ -99,7 +99,6 @@
 	X(SnowMeshesDepth) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
-	X(SnowTextureLinear) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
 	X(SnowBorderDithering) \
@@ -111,7 +110,6 @@
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
 	X(Tessellation) \
-	X(ReliefDepth) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
 	X(TrenchFloorFade) \
@@ -130,9 +128,6 @@
 	X(ShellSSSRemarch) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
-	X(ShellDepthClamp) \
-	X(ShellDepthBias) \
-	X(ShellSlopeDepthBias) \
 	X(ShellBareGroundCull) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
@@ -141,12 +136,8 @@
 	X(SkinDistantBareness) \
 	X(ObjectTrenches) \
 	X(RoadHeightfield) \
-	X(DistantSnowLineZ) \
-	X(DistantSnowNorthDrop) \
-	X(DistantSnowLineFade) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
-	X(LODReplaceLegacy) \
 	X(ProjSnowMatch) \
 	X(GlacierSnowMatch)
 
@@ -559,11 +550,11 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODReplaceStart = 0.0f;
 	data.LODReplaceFadeInv = 1.0f / 2048.0f;
 	data.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
-	data.SnowIsLinear = (shellSnowTextureIsPBR || settings.SnowTextureLinear) ? 1.0f : 0.0f;
+	// PBR auto-detection only; the manual linear override for non-PBR sets was retired.
+	data.SnowIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	data.SnowRoughnessScale = snowRoughnessScale;
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
-	data.LODReplaceLegacy = settings.LODReplaceLegacy ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.BakedSnowEnable = (settings.EnableSnowDeformation && settings.GlacierSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-

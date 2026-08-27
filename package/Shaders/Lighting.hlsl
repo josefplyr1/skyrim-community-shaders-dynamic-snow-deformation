@@ -1510,19 +1510,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// tile seam regardless of the sampler's address mode.
 			float2 snowRawUV = (input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
 			float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
-			[branch] if (SharedData::snowDeformationSettings.LODReplaceLegacy > 0.5)
-			{
-				float3 snowGamma = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSkyrimGamma(snowSample) : snowSample;
-				baseColor.xyz = lerp(baseColor.xyz, Color::Diffuse(snowGamma), lodReplaceW);
-				glossiness = lerp(glossiness, 1.0 - SharedData::snowDeformationSettings.SnowRoughnessScale, lodReplaceW);
-			}
-			else
-			{
-				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo):
-				// sRGB-encoded, no vanilla Diffuse() processing.
-				snowLodReplaceW = lodReplaceW;
-				snowLodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowSample) : snowSample;
-			}
+			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo):
+			// sRGB-encoded, no vanilla Diffuse() processing. (The legacy
+			// vanilla-math recolor A/B this used to branch on is retired.)
+			snowLodReplaceW = lodReplaceW;
+			snowLodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowSample) : snowSample;
 			// Normal-map parity with the shell: perturb the LOD normal by the
 			// snow normal at the same world tiling. LOD normals are world-
 			// space up-ish, so a world-axis tangent frame is stable here.

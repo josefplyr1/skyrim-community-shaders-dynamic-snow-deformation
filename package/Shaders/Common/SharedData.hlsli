@@ -366,10 +366,10 @@ namespace SharedData
 		float LODReplaceEnable;
 		// Snow normal map bound at t103 (0 = legacy set without one).
 		float SnowHasNormal;
-		// A/B: 1 = old input-patch recolor (vanilla shading math), 0 = the
-		// shell-recipe output override (SNOW-MATCH Phase 1). Scalar pads (not
-		// an array: cbuffer arrays stride per-register) mirror the C++ padLod.
-		float LODReplaceLegacy;
+		// was LODReplaceLegacy; the legacy recolor A/B is retired, slot kept
+		// for layout. Scalar pads (not an array: cbuffer arrays stride
+		// per-register) mirror the C++ padLod.
+		float padLegacy;
 		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
 		// snow set is bound at t102.
 		float ProjSnowEnable;
