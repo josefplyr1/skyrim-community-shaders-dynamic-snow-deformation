@@ -497,6 +497,11 @@ struct VS_OUTPUT
 	// Lift height in world units. Interpolated, so unlike the geometric face
 	// normal it varies smoothly across a triangle.
 	float Lift : TEXCOORD7;
+	// Authored projected-snow factor from ApplySkinLift (1 = no data or
+	// disabled). In density mode the PS gates coverage on THIS instead of
+	// the facing band: the weight already contains the slope term, and the
+	// band's mid-zone partial alpha dithers into a film on low-poly meshes.
+	float ProjFactor : TEXCOORD8;
 };
 
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
@@ -1075,6 +1080,7 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	                 0.0;
 	// The patch is exempt from the lift gates; its walls are real geometry.
 	vsout.Lift = 1e6;
+	vsout.ProjFactor = 1.0;
 	[branch] if (v.Killed > 0.5)
 	{
 		// NaN position: the rasterizer culls every primitive touching it,
@@ -1258,6 +1264,9 @@ struct SkinLift
 	// Debug view only: the two masks, unmultiplied.
 	float Support;
 	float UpFacing;
+	// The authored-placement multiplier applied to UpFacing (1 = no data or
+	// disabled); the PS's density-mode coverage gate reads it interpolated.
+	float ProjFactor;
 };
 
 SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat, float vertexAlpha)
@@ -1294,20 +1303,18 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// mode grades depth by the authored weight itself - thick where the
 	// paint is solid, a dusting where it fades - and SUPERSEDES the sharp
 	// gate: multiplying both would double-punish sparse paint.
+	// The cut-in kills sparse paint OUTRIGHT instead of rendering it thin,
+	// and the factor is exported for the PS's density-mode coverage gate.
+	float projFactor = 1.0;
 	[branch] if (ProjThreshold > -0.5)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
-		// The cut-in kills sparse paint OUTRIGHT instead of rendering it: a
-		// uniformly shallow lift parks wide areas inside the PS's narrow
-		// liftCoverage band, and that partial alpha dithers into the
-		// translucent film Josef rejected (mountain-flank shots,
-		// 2026-08-28). Below the band snow is GONE, above it depth tracks
-		// density; the band itself is narrow enough to read as an edge.
 		[flatten] if (ProjDensityEnable > 0.5)
-			upFacing *= saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
+			projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
 		else [flatten] if (ProjMaskEnable > 0.5)
-			upFacing *= saturate(5.0 * projWeight);
+			projFactor = saturate(5.0 * projWeight);
 	}
+	upFacing *= projFactor;
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
@@ -1396,6 +1403,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	o.RimT = rimT;
 	o.Support = support;
 	o.UpFacing = upFacing;
+	o.ProjFactor = projFactor;
 	return o;
 }
 
@@ -1543,6 +1551,7 @@ VS_OUTPUT main(VS_INPUT input)
 	}
 	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
 	vsout.Lift = lift.CoverDepth;
+	vsout.ProjFactor = lift.ProjFactor;
 	return vsout;
 }
 #else
@@ -1710,6 +1719,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	}
 	vsout.GridLocal = gridLocal;
 	vsout.Lift = lift.CoverDepth;
+	vsout.ProjFactor = lift.ProjFactor;
 	return vsout;
 }
 #endif
@@ -1838,6 +1848,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float geoUp = geoFacing.z * (dot(geoFacing, normalWS) < 0.0 ? -1.0 : 1.0);
 		pixelCoverage = smoothstep(0.4, 0.7, lerp(input.Coverage, geoUp, faceLOD));
 	}
+
+	// Density mode, PD-carrying draws: the authored factor REPLACES both
+	// facing terms above. The weight already contains the slope term, and
+	// the facing band's mid-zone is exactly what dithered into the
+	// mountain-flank film (huge low-poly faces sit mid-band for whole
+	// screens). Near-binary threshold on a smoothly interpolated value -
+	// the liftCoverage philosophy: opaque above, GONE below, the narrow
+	// crossing reads as the snow edge and matches the vanilla PD patch.
+	[flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
+		pixelCoverage = smoothstep(0.06, 0.14, input.ProjFactor);
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every
