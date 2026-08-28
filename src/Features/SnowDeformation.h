@@ -473,7 +473,7 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
 		bool ProjDepthDensity = true;
-		/** @brief SKIN-PLACEMENT-PLAN S3 (Josef's spec): on PD draws the shell is a painted coat placed by vanilla's weight rebuilt PER PIXEL - the G-buffer normal, the authored alpha, threshold, +0.1 bias and the noise term - so the footprint matches the purple debug view. The 3D extrusion is PARKED (round-4 call) until the footprint matches 100%; the class depth sliders meanwhile act as per-class FILL knobs (raising them retires the noise, bridging specks and cracks). All PD draws classify ROUNDED except the name-matched plank family (flat, cornice-later). Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
+		/** @brief SKIN-PLACEMENT-PLAN S3 (Josef's spec): on PD draws the shell is a painted coat placed by vanilla's weight rebuilt PER PIXEL - the G-buffer normal, the authored alpha, threshold, +0.1 bias and the noise term - so the footprint matches the purple debug view. The 3D extrusion is PARKED MODE-WIDE (rounds 4-5): PD draws place by the weight; captured draws WITHOUT projection data keep the old placement gates but their geometry is clamped to the coat too, so nothing wears a raised shell while the footprint work is under way. ALL PD draws classify ROUNDED (round-5 call - no plank exception), so "Round Objects" is the single fill knob for painted snow (raising it retires the noise, bridging specks and cracks). Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
 		bool ProjPixelRelief = false;
 		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
 		bool OpaqueObjectSnow = true;
@@ -1349,7 +1349,7 @@ public:
 		float projNoiseTiling;
 		/** @brief Mountain/cliff family by geometry name: force the ROUNDED class. The divergence-only flat classifier reads a jagged low-poly cliff's split normals as "plate" and drapes it with a rigid vertical lift of the full flat depth - the hovering sheet Josef reported as a translucent film. Deterministic name match (road-class precedent), NOT a stats heuristic (those were tried and rejected, see SmoothNormalsCS FlatStatsCS). */
 		bool forceRounded;
-		/** @brief Plank family by geometry name (plank/walkway/catwalk): in authored-relief mode these are the ONLY flat-class draws - Josef's call to retire the statistical classifier there: everything else PD is rounded, planks get the cornice treatment (and their own fill slider). */
+		/** @brief Plank family by geometry name (plank/walkway/catwalk). Currently DECIDES NOTHING - Josef's round-5 call classifies ALL PD draws rounded; the match is kept (and logged once per name) for the future cornice treatment when the 3D shell returns. */
 		bool plankFamily;
 	};
 
@@ -1508,7 +1508,7 @@ public:
 		float OpaqueCoverage;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
-		/** @brief >0.5: Settings::ProjPixelRelief with the noise map bound at t21, never on road draws - the reconstructed vanilla weight replaces the facing gates as depth source and coverage cut (SKIN-PLACEMENT-PLAN S3). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief Authored relief (SKIN-PLACEMENT-PLAN S3), 3-state: 0 = off for this draw (mode off, or a road), 1 = mode on but no projection data - geometry parked to the minimum coat while the old placement gates keep the coverage, 2 = full authored placement (the reconstructed vanilla weight owns the per-pixel coverage cut). Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjPixelEnable;
 		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinNormalCopy;

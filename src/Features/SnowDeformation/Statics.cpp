@@ -1493,12 +1493,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		// Same class pick as the skin: authored relief retires the flat
-		// classifier on PD draws (all rounded, planks flat).
+		// classifier on PD draws outright - ALL rounded (Josef's round-5
+		// call; the plank family match survives, logged, for the future
+		// cornice work but decides nothing today).
 		{
 			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
 			                            cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
-			scb.ClassOverride = authoredRelief ? (cap.plankFamily ? 2.0f : 1.0f) :
-			                                     (cap.forceRounded ? 1.0f : 0.0f);
+			scb.ClassOverride = (authoredRelief || cap.forceRounded) ? 1.0f : 0.0f;
 		}
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
@@ -2063,24 +2064,26 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		// Authored relief retires the flat classifier on PD draws: all
-		// rounded, planks flat (Josef's round-4 call - the divergence stats
-		// disagreed with themselves across the two class sliders).
+		// Authored relief retires the flat classifier on PD draws outright:
+		// ALL rounded (Josef's round-5 call - his stairs/planks screenshots
+		// showed the split still misfiring; the plank family match survives,
+		// logged, for the future cornice work but decides nothing today).
 		{
 			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
 			                            cap.projThreshold > -0.5f && projNoiseSRV;
-			scb.ClassOverride = authoredRelief ? (cap.plankFamily ? 2.0f : 1.0f) :
-			                                     (cap.forceRounded ? 1.0f : 0.0f);
+			scb.ClassOverride = (authoredRelief || cap.forceRounded) ? 1.0f : 0.0f;
 		}
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// Authored relief supersedes the S2 gates on PD draws (the weight
-		// replaces the facing ramp outright, so the density/mask multipliers
-		// have nothing left to modify). Roads are excluded: the road
-		// heightfield owns their surface and its hand-off gates key on the
-		// lift the replacement would re-shape. Off without the noise map.
-		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road) ? 1.0f : 0.0f;
+		// 3-state (see StaticsCB): 2 = full authored placement (PD data
+		// present), 1 = mode on but no PD data - geometry parked to the
+		// coat, old placement gates keep the coverage (the fence's no-PD
+		// snow ridge was the tell), 0 = off / road (the heightfield owns
+		// roads and its hand-off keys on the lift). Off without the map.
+		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road) ?
+		                          ((cap.projThreshold > -0.5f) ? 2.0f : 1.0f) :
+		                          0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

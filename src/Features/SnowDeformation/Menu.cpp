@@ -207,22 +207,18 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRoad = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 
-		// With Authored Snow Relief on these two stop being layer heights (the
-		// 3D extrusion is parked) and become per-class FILL knobs, so they
-		// relabel to say what they actually do in that mode.
+		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+		if (auto _ttObj = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh. With Authored Snow Relief on, everything carrying the game's projected-snow data uses the slider below instead; this one only affects the remaining objects, and their layer lies flat while that mode is on."));
+
+		// With Authored Snow Relief on, every PD draw classifies rounded and
+		// the extrusion is parked, so this slider stops being a layer height
+		// and becomes THE fill knob for the painted snow.
 		if (settings.ProjPixelRelief) {
-			ImGui::SliderFloat(T(TKEY("objects_snow_fill"), "Snow Fill - Planks"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f");
-			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_fill_tooltip"), "How filled-in the painted snow is on plank meshes (walkways, catwalks). At 0 it matches the game's own painted snow pattern exactly; raising it closes the small gaps and specks, ragged fringes last."));
-
-			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill - Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
+			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How filled-in the painted snow is on everything else carrying the game's projected-snow data (rocks, cliffs, buildings). At 0 it matches the game's own painted snow pattern exactly; raising it closes the small gaps and specks, ragged fringes last."));
+				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How filled-in the painted snow is, on everything carrying the game's projected-snow data. At 0 it matches the game's own painted snow pattern exactly; raising it closes the small gaps and specks, ragged fringes last."));
 		} else {
-			ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttObj = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh."));
-
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
@@ -496,7 +492,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("proj_pixel_relief"), "Authored Snow Relief"), &settings.ProjPixelRelief);
 			if (auto _ttPpr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("proj_pixel_relief_tooltip"), "Object snow is placed exactly where the game itself paints its projected snow, pixel for pixel - ragged patch boundaries, scattered specks and bare crack faces included - retextured to match the snow shell. The 3D raised layer is temporarily parked while this placement is perfected: the snow lies flat on the surface, and the two model-class sliders above become fill controls (raising them closes small gaps in the pattern). Replaces the up-facing placement rules on meshes carrying the game's projected-snow data (and supersedes the two settings above there); everything else, and roads, keep the standard rules."));
+				ImGui::Text("%s", T(TKEY("proj_pixel_relief_tooltip"), "Object snow is placed exactly where the game itself paints its projected snow, pixel for pixel - ragged patch boundaries, scattered specks and bare crack faces included - retextured to match the snow shell. The 3D raised layer is temporarily parked on ALL objects while this placement is perfected: snow lies flat on every surface, and the Snow Fill slider (under Snow Depth by Model Class) closes small gaps in the pattern. Replaces the up-facing placement rules on meshes carrying the game's projected-snow data (and supersedes the two settings above there); objects without that data, and roads, keep the standard placement."));
 
 			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
 			if (auto _ttOt = Util::HoverTooltipWrapper())

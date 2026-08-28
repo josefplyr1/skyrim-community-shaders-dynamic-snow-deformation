@@ -251,12 +251,14 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
-	// >0.5: authored relief (S3) - on PD draws the reconstructed vanilla
-	// weight (nz*alpha - threshold + 0.1 - scale*noise) REPLACES the facing
-	// ramp as the depth source and the shape gates as the coverage cut, so
-	// the shell's footprint is the purple debug view's, extruded by the
-	// depth sliders. Set only with the noise map bound at t21, never on
-	// road draws. Mirror in SnowDeformation.h.
+	// Authored relief (S3), 3-state: 0 = off for this draw (mode off, or a
+	// road - the heightfield owns those). 1 = mode ON but the draw carries
+	// no projection data: the 3D extrusion is parked (geometry clamped to
+	// the minimum coat) while the OLD placement gates keep the coverage -
+	// no captured object wears a raised shell while the footprint work is
+	// under way. 2 = full authored placement: the reconstructed vanilla
+	// weight owns the coverage cut per pixel. Set only with the noise map
+	// bound at t21. Mirror in SnowDeformation.h.
 	float ProjPixelEnable;
 	// >0.5: pre-shell copy of the NORMALROUGHNESS target bound at PS t23 -
 	// the per-pixel nz for the authored-relief coverage cut comes from the
@@ -1367,7 +1369,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// rounds' replacements granted because the formula was incomplete).
 	// ProjLinear rides TEXCOORD8 carrying the AUTHORED VERTEX ALPHA - the
 	// PS needs the raw authored term, not a pre-mixed weight.
-	[branch] if (ProjPixelEnable > 0.5 && ProjThreshold > -0.5)
+	[branch] if (ProjPixelEnable > 1.5)
 	{
 		projLinear = vertexAlpha;
 		upFacing = 0.0;
@@ -1462,14 +1464,20 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = max(depth, kMinSkinLift * upFacing);
 	}
 
-	// Authored-relief clearance floor, applied LAST so the cone taper, the
-	// shelter dusting and the distance collapse cannot pull it back under:
-	// every pixel the PS's per-pixel cut may grant needs real separation
-	// from its source mesh or the shell z-fights it. Unconditional in-mode:
-	// the per-pixel G-buffer normal can score up-facing (a stone top on a
-	// wall) where every vertex-level term is near zero, so no vertex-side
+	// Mode-wide extrusion park, applied LAST so the cone taper, shelter and
+	// collapse cannot override it. GEOMETRY only: CoverDepth was captured
+	// unclamped above, so a no-PD draw's old lift-keyed coverage still
+	// draws its full extent - as a flat coat (Josef's round-5 call: NO
+	// captured object wears a raised shell while the footprint work is
+	// under way; the fence's no-PD snow ridge was the tell).
+	[flatten] if (ProjPixelEnable > 0.5)
+		depth = min(depth, kMinSkinLift);
+	// Authored-placement clearance floor: every pixel the PS's per-pixel
+	// cut may grant needs real separation from its source mesh or the
+	// shell z-fights it, and the per-pixel G-buffer normal can score
+	// up-facing where every vertex-level term is near zero - no vertex-side
 	// key can bound what the PS may grant.
-	[flatten] if (ProjPixelEnable > 0.5 && ProjThreshold > -0.5)
+	[flatten] if (ProjPixelEnable > 1.5)
 		depth = max(depth, kMinSkinLift);
 
 	SkinLift o;
@@ -1636,7 +1644,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.Lift = lift.CoverDepth;
 	// Authored-relief mode repurposes the interpolant: the raw authored
 	// vertex alpha, for the PS's per-pixel weight rebuild.
-	vsout.ProjFactor = ProjPixelEnable > 0.5 ? lift.ProjLinear : lift.ProjFactor;
+	vsout.ProjFactor = ProjPixelEnable > 1.5 ? lift.ProjLinear : lift.ProjFactor;
 	return vsout;
 }
 #else
@@ -1806,7 +1814,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	vsout.Lift = lift.CoverDepth;
 	// Same repurposing as the untessellated VS: raw authored alpha in
 	// authored-relief mode.
-	vsout.ProjFactor = ProjPixelEnable > 0.5 ? lift.ProjLinear : lift.ProjFactor;
+	vsout.ProjFactor = ProjPixelEnable > 1.5 ? lift.ProjLinear : lift.ProjFactor;
 	return vsout;
 }
 #endif
@@ -1963,7 +1971,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
-	bool pdMode = ProjPixelEnable > 0.5 && ProjThreshold > -0.5;
+	bool pdMode = ProjPixelEnable > 1.5;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
