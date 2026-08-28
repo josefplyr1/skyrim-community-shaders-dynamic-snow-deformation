@@ -2003,17 +2003,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// extent, and RoadOwnsColumn reads that same raster, so it already returns
 	// false everywhere the patch cannot draw. One predicate owns the hand-off
 	// instead of a radius that had to be kept in step with the grid by hand.
-	// EITHER facing measure counts as up. geoFacing is the per-triangle
-	// facet normal, and the baked snow drapes inside RoadChunk*Snow nifs are
-	// low-poly crinkles: every facet tilts past the 0.55 gate while the
-	// SMOOTHED surface reads flat-up - so the drape trishapes' skins never
-	// discarded and hovered over carved trenches as torn paper sheets
-	// (Josef's Edge Taper screenshots: bright-G up-facing yellow, undischarged).
-	// A real kerb or causeway flank is steep in BOTH normals and still keeps
-	// its skin; a crinkle facet with an up smoothed normal steps aside, and
-	// the patch owns the column behind it.
-	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 &&
-		(abs(geoFacing.z) > 0.55 || normalWS.z > 0.55) && RoadOwnsColumn(worldXY))
+	// No facing gate at all: ownership alone decides. Two rounds of facing
+	// tests failed on the baked snow drapes inside RoadChunk*Snow nifs -
+	// facet normals (geoFacing) tilt past any threshold on their low-poly
+	// crinkles, and road skins run the LEGACY path whose NormalWS is the
+	// mesh's own vertex normal, crinkled just the same - so the drape skins
+	// kept hovering over carved trenches as paper sheets whose height rode
+	// the Road Meshes slider. The gates only ever existed to keep a flank
+	// from discarding into a visible gap, and on a road-owned column there
+	// is no gap: the patch drapes that column by construction, flanks
+	// included. Where ownership cannot answer - beyond the raster window -
+	// it already answers "keep the skin", which is the far-field hand-off.
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && RoadOwnsColumn(worldXY))
 		discard;
 
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
