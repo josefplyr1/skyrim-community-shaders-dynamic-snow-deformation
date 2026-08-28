@@ -1849,15 +1849,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 		pixelCoverage = smoothstep(0.4, 0.7, lerp(input.Coverage, geoUp, faceLOD));
 	}
 
-	// Density mode, PD-carrying draws: the authored factor REPLACES both
-	// facing terms above. The weight already contains the slope term, and
-	// the facing band's mid-zone is exactly what dithered into the
-	// mountain-flank film (huge low-poly faces sit mid-band for whole
-	// screens). Near-binary threshold on a smoothly interpolated value -
-	// the liftCoverage philosophy: opaque above, GONE below, the narrow
-	// crossing reads as the snow edge and matches the vanilla PD patch.
+	// Density mode, PD-carrying draws: the authored factor MULTIPLIES the
+	// facing gates - suppressor only, the same principle as the lift. It
+	// kills the mountain-flank film (that ring is SPARSE paint, factor 0)
+	// while the facing gates keep rendering the partial trim on beams and
+	// slopes exactly as with the mode off. Film round 2 REPLACED the gates
+	// instead, and full opaque coverage on every positively-painted beam
+	// turned vanilla's thin trim into fat snow ropes (gable screenshots,
+	// 2026-08-28) - replacement grants, and the authored data may only
+	// ever take away.
 	[flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
-		pixelCoverage = smoothstep(0.06, 0.14, input.ProjFactor);
+		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every
