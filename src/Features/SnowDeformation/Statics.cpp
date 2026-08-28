@@ -1435,6 +1435,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
+		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1986,6 +1987,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
+		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

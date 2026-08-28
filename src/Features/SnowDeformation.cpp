@@ -135,6 +135,7 @@
 	X(SkinDistantBareness) \
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
+	X(ProjDepthDensity) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \

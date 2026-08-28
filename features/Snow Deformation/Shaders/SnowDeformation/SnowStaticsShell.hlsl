@@ -230,7 +230,10 @@ cbuffer StaticCB : register(b1)
 	// >0.5: ApplySkinLift multiplies up-facing by the authored
 	// projected-snow term. Mirror in SnowDeformation.h.
 	float ProjMaskEnable;
-	float3 padStatics;
+	// >0.5: depth scales with the authored density (graded factor replaces
+	// the sharp gate). Mirror in SnowDeformation.h.
+	float ProjDensityEnable;
+	float2 padStatics;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1281,15 +1284,24 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// The layer stays geometrically uncarved: trench relief is traced per
 	// pixel in the PS instead.
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, smoothWS.z);
-	// The NIF's authored projected-snow term as a SUPPRESSOR (S2,
+	// The NIF's authored projected-snow term as a SUPPRESSOR (S2/S2b,
 	// SKIN-PLACEMENT-PLAN): it multiplies, never adds, so agreement zones
 	// keep their snow and vanilla-only zones (leaning walls, whose raw
 	// weight lacks the noise term's break-up) gain none. Surfaces authored
-	// bare - walkway undersides, posts, railings - shed the skin; the lift
-	// going to zero also zeroes the PS's liftCoverage material gate, so no
-	// separate coverage plumbing. Sentinel threshold = no data, unchanged.
-	[flatten] if (ProjMaskEnable > 0.5 && ProjThreshold > -0.5)
-		upFacing *= saturate(5.0 * (nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0)));
+	// bare - posts, railings, rims - shed the skin; the lift going to zero
+	// also zeroes the PS's liftCoverage material gate, so no separate
+	// coverage plumbing. Sentinel threshold = no data, unchanged. Density
+	// mode grades depth by the authored weight itself - thick where the
+	// paint is solid, a dusting where it fades - and SUPERSEDES the sharp
+	// gate: multiplying both would double-punish sparse paint.
+	[branch] if (ProjThreshold > -0.5)
+	{
+		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
+		[flatten] if (ProjDensityEnable > 0.5)
+			upFacing *= saturate(projWeight);
+		else [flatten] if (ProjMaskEnable > 0.5)
+			upFacing *= saturate(5.0 * projWeight);
+	}
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so

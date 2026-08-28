@@ -41,9 +41,10 @@ cbuffer StaticCB : register(b1)
 	// >0.5: this draw is a road-heightfield object; RT2.g carries the bit so
 	// the patch can own the column outright.
 	float RoadField;
-	float ProjThreshold;   // layout sync with SnowStaticsShell; unused here
-	float ProjMaskEnable;  // layout sync with SnowStaticsShell; unused here
-	float3 padStatics;
+	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
+	float ProjMaskEnable;    // layout sync with SnowStaticsShell; unused here
+	float ProjDensityEnable; // layout sync with SnowStaticsShell; unused here
+	float2 padStatics;
 }
 
 struct VS_INPUT

@@ -469,8 +469,10 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
-		/** @brief SKIN-PLACEMENT-PLAN S2: the skin's up-facing mask is multiplied by the NIF's authored projected-snow term (vertex alpha x normal-Z minus the material threshold), so surfaces Bethesda painted bare (walkway undersides, posts, railings) shed their skin. Suppressor only - it never adds snow; draws without projected-UV data are unchanged. */
-		bool ProjMaskPlacement = false;
+		/** @brief SKIN-PLACEMENT-PLAN S2: the skin's up-facing mask is multiplied by the NIF's authored projected-snow term (vertex alpha x normal-Z minus the material threshold), so surfaces Bethesda painted bare (walkway undersides, posts, railings) shed their skin. Suppressor only - it never adds snow; draws without projected-UV data are unchanged. Default ON per Josef's A/B verdict 2026-08-28 (red-only zones deleted, nothing lost snow it correctly wore). */
+		bool ProjMaskPlacement = true;
+		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
+		bool ProjDepthDensity = false;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -1480,7 +1482,9 @@ public:
 		float ProjThreshold;
 		/** @brief >0.5: Settings::ProjMaskPlacement - ApplySkinLift multiplies its up-facing mask by the authored projected-snow term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjMaskEnable;
-		float padStatics[3];
+		/** @brief >0.5: Settings::ProjDepthDensity - the graded density factor replaces the sharp gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjDensityEnable;
+		float padStatics[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
