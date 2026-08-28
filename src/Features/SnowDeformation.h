@@ -473,7 +473,7 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
 		bool ProjDepthDensity = true;
-		/** @brief SKIN-PLACEMENT-PLAN S3: the density weight carries vanilla's FULL projected-snow formula - the +0.1 bias and the noise term, sampled from the game's own projected-noise map (per generated vertex in the lift, per pixel in the coverage gate). The covered/uncovered boundary breaks into the ragged patches, specks and bare crack faces the purple debug view shows, instead of a vertex-smooth cut. Requires ProjDepthDensity; inert without it or without the noise map. Default OFF for the A/B. */
+		/** @brief SKIN-PLACEMENT-PLAN S3 (round 2, Josef's spec): on PD draws the reconstructed vanilla weight - nz*alpha - threshold + 0.1 - scale*noise, the purple debug view's own formula - REPLACES the facing gates as both depth source and coverage cut. At low depth the shell hugs the surface wearing exactly vanilla's ragged pattern (snow-textured); raising depth extrudes it and the noise retires with local dome height, bridging cracks center-out. Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
 		bool ProjPixelRelief = false;
 		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
 		bool OpaqueObjectSnow = true;
@@ -1502,7 +1502,7 @@ public:
 		float OpaqueCoverage;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
-		/** @brief >0.5: Settings::ProjPixelRelief with density mode on and the noise map bound at t21 (SKIN-PLACEMENT-PLAN S3). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief >0.5: Settings::ProjPixelRelief with the noise map bound at t21, never on road draws - the reconstructed vanilla weight replaces the facing gates as depth source and coverage cut (SKIN-PLACEMENT-PLAN S3 round 2). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjPixelEnable;
 		float padStatics2;
 	};

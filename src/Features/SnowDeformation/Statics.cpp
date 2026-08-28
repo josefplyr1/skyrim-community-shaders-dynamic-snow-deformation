@@ -1915,7 +1915,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// owned texture; a missing map just leaves the mode off (per-object CB
 	// gate below).
 	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
-	if (settings.ProjPixelRelief && settings.ProjDepthDensity) {
+	if (settings.ProjPixelRelief) {
 		auto* graphicsState = globals::game::graphicsState;
 		auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
 		if (noiseTex && noiseTex->rendererTexture)
@@ -2044,9 +2044,12 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// Pixel relief needs density mode (it upgrades that path's weight) and
-		// the engine's noise map; without either the shader runs unchanged.
-		scb.ProjPixelEnable = (settings.ProjPixelRelief && settings.ProjDepthDensity && projNoiseSRV) ? 1.0f : 0.0f;
+		// Authored relief supersedes the S2 gates on PD draws (the weight
+		// replaces the facing ramp outright, so the density/mask multipliers
+		// have nothing left to modify). Roads are excluded: the road
+		// heightfield owns their surface and its hand-off gates key on the
+		// lift the replacement would re-shape. Off without the noise map.
+		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road) ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

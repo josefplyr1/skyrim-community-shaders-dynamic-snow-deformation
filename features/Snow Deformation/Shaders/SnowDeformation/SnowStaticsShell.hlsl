@@ -249,11 +249,12 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
-	// >0.5: per-pixel authored relief (S3) - the density weight carries
-	// vanilla's full formula: +0.1 bias and the noise term, per generated
-	// vertex in the lift and per pixel in the coverage gate. Only set with
-	// density mode on and the noise map bound at t21. Mirror in
-	// SnowDeformation.h.
+	// >0.5: authored relief (S3) - on PD draws the reconstructed vanilla
+	// weight (nz*alpha - threshold + 0.1 - scale*noise) REPLACES the facing
+	// ramp as the depth source and the shape gates as the coverage cut, so
+	// the shell's footprint is the purple debug view's, extruded by the
+	// depth sliders. Set only with the noise map bound at t21, never on
+	// road draws. Mirror in SnowDeformation.h.
 	float ProjPixelEnable;
 	float padStatics2;
 }
@@ -370,6 +371,12 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // and z-fights it invisible; a tenth of a unit clears that without reading as
 // a coat, so a class slider at 0 is a flat sheet rather than a 1-unit layer.
 static const float kMinSkinLift = 0.1;
+
+// Authored relief (S3): local dome height at which the noise term has fully
+// retired. At the sliders' low end the footprint is exactly vanilla's ragged
+// projected pattern; as the (pre-noise) dome grows toward this height the
+// specks and cracks bridge over, fringe last - Josef's fill-in sketch.
+static const float kProjFillDepth = 10.0;
 
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
@@ -1341,29 +1348,38 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// and the factor is exported for the PS's density-mode coverage gate.
 	float projFactor = 1.0;
 	float projLinear = 1.0;
-	[branch] if (ProjThreshold > -0.5)
+	// S3 round 2, per Josef's spec (2026-08-28 screenshots): on PD-carrying
+	// draws the authored weight REPLACES the facing ramp as the depth source.
+	// The purple debug view IS the wanted footprint - vanilla's full formula,
+	// nz*alpha - threshold + 0.1 - scale*noise, evaluated on OUR side - and
+	// depth = depthBase * weight is the height field of his sketch: at the
+	// sliders' low end the shell hugs the surface wearing exactly the vanilla
+	// pattern; raising depth extrudes it. Replacement is sanctioned HERE and
+	// only here: rounds 2/3's replacements granted (ropes on beams) because
+	// the noise term was missing - thin ragged trim rendered as a solid gate.
+	// With the noise reconstructed, granting what vanilla grants is the goal.
+	// The noise retires as the local pre-noise dome grows (kProjFillDepth),
+	// so cracks and specks bridge over from the center out, fringe last.
+	// ProjLinear rides TEXCOORD8 pre-noise: the PS subtracts its own
+	// per-pixel sample for the coverage cut.
+	[branch] if (ProjPixelEnable > 0.5 && ProjThreshold > -0.5)
+	{
+		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
+		projLinear = wLin;
+		float fill = saturate(depthBase * saturate(wLin) / kProjFillDepth);
+		float3 triW = Triplanar::GetWeights(nrmWS, nrmWS);
+		float noise = Triplanar::SampleLevel(ProjNoiseMap, SnowSampler, worldBase, triW, ProjNoiseTiling, 0.0).x;
+		upFacing = saturate(wLin - ProjNoiseScale * (1.0 - fill) * noise);
+	}
+	else [branch] if (ProjThreshold > -0.5)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
-		// S3 pixel relief: complete the reconstruction with vanilla's +0.1
-		// bias and its noise term (the two the round-3 view treated as
-		// cancelling - the mean of scale*noise IS ~0.1, so the grading bands
-		// below keep their tuning while the weight gains vanilla's ragged
-		// per-patch texture). Sampled at the BASE surface, pre-lift, which is
-		// where vanilla evaluates it. ProjLinear stays pre-noise: the PS
-		// subtracts its own per-pixel sample.
-		[branch] if (ProjPixelEnable > 0.5)
-		{
-			projWeight += 0.1;
-			projLinear = projWeight;
-			float3 triW = Triplanar::GetWeights(nrmWS, nrmWS);
-			projWeight -= ProjNoiseScale * Triplanar::SampleLevel(ProjNoiseMap, SnowSampler, worldBase, triW, ProjNoiseTiling, 0.0).x;
-		}
 		[flatten] if (ProjDensityEnable > 0.5)
 			projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
 		else [flatten] if (ProjMaskEnable > 0.5)
 			projFactor = saturate(5.0 * projWeight);
+		upFacing *= projFactor;
 	}
-	upFacing *= projFactor;
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
@@ -1444,6 +1460,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// upFacing so genuinely steep faces still stay bare.
 		depth = max(depth, kMinSkinLift * upFacing);
 	}
+
+	// Authored-relief clearance floor, applied LAST so the cone taper, the
+	// shelter dusting and the distance collapse cannot pull it back under:
+	// every pixel the PS's per-pixel cut may grant needs real separation from
+	// its source mesh or the shell z-fights it. Keyed on the pre-noise
+	// weight, which bounds the per-pixel one (the noise only subtracts), so
+	// the floor covers everything grantable and nothing more.
+	[flatten] if (ProjPixelEnable > 0.5 && ProjThreshold > -0.5)
+		depth = max(depth, kMinSkinLift * smoothstep(0.0, 0.05, projLinear));
 
 	SkinLift o;
 	o.WorldAbs = worldBase + liftWS * depth;
@@ -1914,28 +1939,32 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// turned vanilla's thin trim into fat snow ropes (gable screenshots,
 	// 2026-08-28) - replacement grants, and the authored data may only
 	// ever take away.
-	// S3 pixel relief: the interpolant carries the pre-noise weight;
+	// Authored relief (S3 round 2): TEXCOORD8 carries the pre-noise weight;
 	// subtracting the noise HERE, at pixel frequency, is what breaks the
 	// covered/uncovered boundary into vanilla's ragged patches, specks and
-	// bare crack faces (the purple view's structure). Same gate band either
-	// way, so the A/B isolates the noise term. Sampled at the base surface
-	// (lift subtracted) where vanilla evaluates the formula; gradients
-	// computed outside all flow control - implicit-derivative sampling is
-	// illegal inside it, and ddx/ddy are gradient ops themselves.
+	// bare crack faces - the purple debug view's structure, which per
+	// Josef's spec IS the wanted footprint. The noise retires as the local
+	// pre-noise dome grows (same fill law as the lift), so raising the
+	// depth sliders bridges the cracks from the center out, fringe last.
+	// Sampled at the base surface (lift subtracted) where vanilla evaluates
+	// the formula; gradients computed outside all flow control -
+	// implicit-derivative sampling is illegal inside it, and ddx/ddy are
+	// gradient ops themselves.
 	float3 projWorldPos = input.WorldPos + ShellCameraPosAdjust.xyz;
 	projWorldPos.z -= input.Lift;
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
-	[branch] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
+	float pdCoverage = 0.0;
+	bool pdMode = ProjPixelEnable > 0.5 && ProjThreshold > -0.5;
+	[branch] if (pdMode)
 	{
-		float projGate = input.ProjFactor;
-		[branch] if (ProjPixelEnable > 0.5)
-		{
-			float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
-			projGate -= ProjNoiseScale * Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
-		}
-		pixelCoverage *= smoothstep(0.06, 0.14, projGate);
+		float fill = saturate(liftBase * saturate(input.ProjFactor) / kProjFillDepth);
+		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
+		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
+		pdCoverage = smoothstep(0.0, 0.05, input.ProjFactor - ProjNoiseScale * (1.0 - fill) * noise);
 	}
+	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
+		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every
@@ -1954,6 +1983,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * fwidth(input.Lift)), kRimBandMax * liftBase);
 	float liftCoverage = smoothstep(liftEdgeLOD - liftBand, liftEdgeLOD, input.Lift);
 	pixelCoverage *= liftCoverage;
+
+	// Authored relief REPLACES the shape gates on PD draws - facing band,
+	// facing LOD and the lift-band contour all yield to the reconstructed
+	// per-pixel weight, because the footprint has to be able to reach where
+	// they refuse (steep flanks the purple view paints) and its edge is cut
+	// by the noise, not by the lift threshold. Sanctioned replacement: the
+	// earlier rounds' replacements granted (beam ropes) because the noise
+	// term was missing; with it reconstructed, granting exactly what vanilla
+	// grants is the point. The rim wall (below) and the trench, road and
+	// distance machinery are untouched.
+	[flatten] if (pdMode)
+		pixelCoverage = pdCoverage;
 #	endif
 	// Applied after every steepness multiply; the rim wall is exempt from all
 	// of them.

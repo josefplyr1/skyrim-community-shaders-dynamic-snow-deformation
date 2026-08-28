@@ -483,7 +483,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("proj_pixel_relief"), "Authored Snow Relief"), &settings.ProjPixelRelief);
 			if (auto _ttPpr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("proj_pixel_relief_tooltip"), "The edge of object snow follows the game's own snow pattern pixel for pixel: ragged patch boundaries, scattered specks, and bare crack faces where the vanilla snow breaks up, instead of a smooth cut between covered and bare. Uses the same noise texture the game itself paints projected snow with. Needs Snow Depth Follows Density on; only affects meshes carrying the game's projected-snow data."));
+				ImGui::Text("%s", T(TKEY("proj_pixel_relief_tooltip"), "Object snow is placed exactly where the game itself paints its projected snow, pixel for pixel - ragged patch boundaries, scattered specks and bare crack faces included - then extruded upward by the depth sliders, small gaps filling in as the layer deepens. At depth 0 the layer looks just like the game's own painted snow, retextured to match the snow shell. Replaces the up-facing placement rules on meshes carrying the game's projected-snow data (and supersedes the two settings above there); everything else, and roads, keep the standard rules."));
 
 			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
 			if (auto _ttOt = Util::HoverTooltipWrapper())
