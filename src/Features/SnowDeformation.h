@@ -473,7 +473,7 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
 		bool ProjDepthDensity = true;
-		/** @brief SKIN-PLACEMENT-PLAN S3 (round 2, Josef's spec): on PD draws the reconstructed vanilla weight - nz*alpha - threshold + 0.1 - scale*noise, the purple debug view's own formula - REPLACES the facing gates as both depth source and coverage cut. At low depth the shell hugs the surface wearing exactly vanilla's ragged pattern (snow-textured); raising depth extrudes it and the noise retires with local dome height, bridging cracks center-out. Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
+		/** @brief SKIN-PLACEMENT-PLAN S3 (Josef's spec): on PD draws the shell is a painted coat placed by vanilla's weight rebuilt PER PIXEL - the G-buffer normal, the authored alpha, threshold, +0.1 bias and the noise term - so the footprint matches the purple debug view. The 3D extrusion is PARKED (round-4 call) until the footprint matches 100%; the class depth sliders meanwhile act as per-class FILL knobs (raising them retires the noise, bridging specks and cracks). All PD draws classify ROUNDED except the name-matched plank family (flat, cornice-later). Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
 		bool ProjPixelRelief = false;
 		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
 		bool OpaqueObjectSnow = true;
@@ -1349,6 +1349,8 @@ public:
 		float projNoiseTiling;
 		/** @brief Mountain/cliff family by geometry name: force the ROUNDED class. The divergence-only flat classifier reads a jagged low-poly cliff's split normals as "plate" and drapes it with a rigid vertical lift of the full flat depth - the hovering sheet Josef reported as a translucent film. Deterministic name match (road-class precedent), NOT a stats heuristic (those were tried and rejected, see SmoothNormalsCS FlatStatsCS). */
 		bool forceRounded;
+		/** @brief Plank family by geometry name (plank/walkway/catwalk): in authored-relief mode these are the ONLY flat-class draws - Josef's call to retire the statistical classifier there: everything else PD is rounded, planks get the cornice treatment (and their own fill slider). */
+		bool plankFamily;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1498,8 +1500,8 @@ public:
 		float ProjMaskEnable;
 		/** @brief >0.5: Settings::ProjDepthDensity - the graded density factor replaces the sharp gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjDensityEnable;
-		/** @brief >0.5: CapturedSnowStatic::forceRounded - the class decision skips the flat classifier for this draw. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ForceRounded;
+		/** @brief Class override code: 0 = flat classifier decides, 1 = force ROUNDED (CapturedSnowStatic::forceRounded, and every PD draw in authored-relief mode), 2 = force FLAT (plankFamily in authored-relief mode). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
 		/** @brief >0.5: Settings::OpaqueObjectSnow - the skin's shape-gate coverage binarizes at 0.5 (no translucent dither films; the distance dissolve stays partial). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

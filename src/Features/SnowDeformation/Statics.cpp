@@ -13,6 +13,16 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+// The engine's projected-noise map, when reachable - authored relief's hard
+// dependency. Checked identically at capture-raster and skin time so both
+// passes pick the same class for a draw.
+static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
+{
+	auto* graphicsState = globals::game::graphicsState;
+	auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
+	return (noiseTex && noiseTex->rendererTexture) ? noiseTex->rendererTexture->resourceView : nullptr;
+}
+
 // True if the scenegraph carries a live attached light. A burning torch (held
 // or dropped) has a NiPointLight in its 3D; torch-snuffing mods remove it
 // while keeping the carryable light base form.
@@ -716,6 +726,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// hovering translucent film. Name match like the road class; a false
 	// positive forces rounded on something already rounded, a no-op.
 	bool forceRounded = false;
+	bool plankFamily = false;
 	{
 		std::string loweredName(a_pass->geometry->name.c_str());
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
@@ -729,9 +740,22 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			if (loggedRoundedNames.insert(loweredName).second)
 				logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", loweredName);
 		}
+		// Plank family: in authored-relief mode the ONLY flat-class draws
+		// (cornice treatment, own fill slider); everything else PD is
+		// rounded. Same deterministic name match as the road class.
+		plankFamily = loweredName.find("plank") != std::string::npos ||
+		              loweredName.find("walkway") != std::string::npos ||
+		              loweredName.find("catwalk") != std::string::npos;
+		if (plankFamily) {
+			static std::unordered_set<std::string> loggedPlankNames;
+			if (loggedPlankNames.size() > 4096)
+				loggedPlankNames.clear();
+			if (loggedPlankNames.insert(loweredName).second)
+				logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", loweredName);
+		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1468,7 +1492,14 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
+		// Same class pick as the skin: authored relief retires the flat
+		// classifier on PD draws (all rounded, planks flat).
+		{
+			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
+			                            cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
+			scb.ClassOverride = authoredRelief ? (cap.plankFamily ? 2.0f : 1.0f) :
+			                                     (cap.forceRounded ? 1.0f : 0.0f);
+		}
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
@@ -1914,13 +1945,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// reconstructs Lighting.hlsl's full projWeight per pixel, and this is
 	// its noise term. Engine-owned texture; a missing map just leaves the
 	// mode off (per-object CB gate below).
-	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
-	if (settings.ProjPixelRelief) {
-		auto* graphicsState = globals::game::graphicsState;
-		auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
-		if (noiseTex && noiseTex->rendererTexture)
-			projNoiseSRV = noiseTex->rendererTexture->resourceView;
-	}
+	ID3D11ShaderResourceView* projNoiseSRV = settings.ProjPixelRelief ? SD_ProjNoiseMapSRV() : nullptr;
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
 	// Pre-shell normals copy (PS t23): the per-pixel nz for the coverage
 	// cut - the scene's own shaded normal, normal maps included.
@@ -2038,7 +2063,15 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
+		// Authored relief retires the flat classifier on PD draws: all
+		// rounded, planks flat (Josef's round-4 call - the divergence stats
+		// disagreed with themselves across the two class sliders).
+		{
+			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
+			                            cap.projThreshold > -0.5f && projNoiseSRV;
+			scb.ClassOverride = authoredRelief ? (cap.plankFamily ? 2.0f : 1.0f) :
+			                                     (cap.forceRounded ? 1.0f : 0.0f);
+		}
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;

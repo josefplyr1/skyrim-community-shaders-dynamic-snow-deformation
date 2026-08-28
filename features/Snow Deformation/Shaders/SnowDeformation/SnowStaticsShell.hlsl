@@ -235,10 +235,12 @@ cbuffer StaticCB : register(b1)
 	// >0.5: depth scales with the authored density (graded factor replaces
 	// the sharp gate). Mirror in SnowDeformation.h.
 	float ProjDensityEnable;
-	// >0.5: mountain/cliff family - skip the flat classifier, the mesh is
-	// ROUNDED whatever its split-normal stats say. Mirror in
-	// SnowDeformation.h.
-	float ForceRounded;
+	// Class override code: 0 = flat classifier decides, 1 = force ROUNDED
+	// (mountain/cliff family - a jagged cliff's split normals score "flat";
+	// and EVERY PD draw in authored-relief mode, per Josef's call to retire
+	// the statistical classifier there), 2 = force FLAT (plank family, the
+	// cornice treatment). Mirror in SnowDeformation.h.
+	float ClassOverride;
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
@@ -1352,28 +1354,23 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float projFactor = 1.0;
 	float projLinear = 1.0;
 	// S3, per Josef's spec (2026-08-28 screenshots): on PD-carrying draws
-	// the authored weight REPLACES the facing ramp as the depth source. The
-	// purple debug view IS the wanted footprint; the shell hugs the surface
-	// wearing that pattern at the sliders' low end and extrudes as they
-	// rise. Two round-3 lessons baked in: the lift is a SMOOTH field - no
-	// noise term in geometry; vertex-frequency noise lifted adjacent
-	// vertices by different amounts and stretched connected triangles into
-	// the dripping shards of Josef's Round-25 screenshot - and it is scaled
-	// by up-facingness, because lifting a VERTICAL face along +Z only
-	// slides the surface along itself (the wall pattern smeared upward
-	// instead of inflating). Walls keep a hugging painted coat; tops dome.
-	// All raggedness - noise AND the per-pixel normal - lives in the PS
-	// coverage cut. Replacement is sanctioned here and only here: the film
-	// rounds' replacements granted (beam ropes) because the formula was
-	// incomplete; reconstructed in full, granting what vanilla grants is
-	// the goal. ProjLinear rides TEXCOORD8 carrying the AUTHORED VERTEX
-	// ALPHA - the PS rebuilds the weight per pixel from the G-buffer
-	// normal, so it needs the raw authored term, not a pre-mixed weight.
+	// the purple debug view IS the wanted footprint, and the PS owns it
+	// entirely - the per-pixel G-buffer normal, the authored alpha and the
+	// noise term rebuild vanilla's weight per pixel. The 3D extrusion is
+	// PARKED (Josef's round-4 call): the shell rides the minimum coat as a
+	// pure painted layer until the footprint matches the purple 100%; only
+	// then does the dome return, on a footprint the module finally trusts.
+	// The class sliders meanwhile drive nothing here - they feed the PS's
+	// FILL term (raising them retires the noise so cracks bridge over),
+	// which is the coverage behavior Josef found and kept. Replacement of
+	// the facing gates is sanctioned in this mode and only here (the film
+	// rounds' replacements granted because the formula was incomplete).
+	// ProjLinear rides TEXCOORD8 carrying the AUTHORED VERTEX ALPHA - the
+	// PS needs the raw authored term, not a pre-mixed weight.
 	[branch] if (ProjPixelEnable > 0.5 && ProjThreshold > -0.5)
 	{
-		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
 		projLinear = vertexAlpha;
-		upFacing = saturate(wLin) * saturate(smoothWS.z);
+		upFacing = 0.0;
 	}
 	else [branch] if (ProjThreshold > -0.5)
 	{
@@ -1558,10 +1555,6 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
 		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			isFlat = 1.0;
-		// Mountain/cliff family: a jagged cliff's split normals score flat
-		// and the plate lift drapes it with a hovering film. CPU name match.
-		[flatten] if (ForceRounded > 0.5)
-			isFlat = 0.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)
 		{
@@ -1569,6 +1562,14 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 			vertexAlpha = saturate(smoothEntry.w - 1.0);
 		}
 	}
+	// CPU class overrides, outside the smoothed-normals guard so a mesh
+	// without the buffer still classifies (matching the capture raster):
+	// 1 = rounded (mountain/cliff; every PD draw in authored-relief mode),
+	// 2 = flat (plank family, the cornice treatment).
+	[flatten] if (ClassOverride > 1.5)
+		isFlat = 1.0;
+	else [flatten] if (ClassOverride > 0.5)
+		isFlat = 0.0;
 
 	float3 worldAbs = float3(
 		dot(WorldRow0.xyz, posMS) + WorldRow0.w,
@@ -1971,14 +1972,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float nzPix = normalWS.z;
 		[branch] if (HasSkinNormalCopy > 0.5)
 		{
-			float3 sceneViewN = GBuffer::DecodeNormal(PreSkinNormals.Load(int3(input.Position.xy, 0)).xy);
-			// Inverse of this PS's own encode: viewN = mul(CameraView, worldN).
-			nzPix = mul(sceneViewN, (float3x3)CameraView).z;
+			// A cleared texel (sky, or anything that never wrote normals)
+			// reads (0,0); keep the interpolated fallback there rather than
+			// decoding garbage - the silhouette-overhang miss suspect.
+			float2 rawN = PreSkinNormals.Load(int3(input.Position.xy, 0)).xy;
+			[flatten] if (abs(rawN.x) + abs(rawN.y) > 1e-4)
+			{
+				// Inverse of this PS's own encode: viewN = mul(CameraView, worldN).
+				nzPix = mul(GBuffer::DecodeNormal(rawN), (float3x3)CameraView).z;
+			}
 		}
-		float fill = saturate(input.Lift / kProjFillDepth);
+		float wLinPix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
+		// Fill: the class slider drives how much of the noise term retires
+		// (extrusion is parked, so the sliders ARE the coverage knobs). At
+		// 0 the footprint is exactly vanilla's painted pattern; raising it
+		// bridges the specks and cracks where the pre-noise weight is
+		// solid, fringe last.
+		float fill = saturate(liftBase * saturate(wLinPix) / kProjFillDepth);
 		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
 		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
-		float wpix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1 - ProjNoiseScale * (1.0 - fill) * noise;
+		float wpix = wLinPix - ProjNoiseScale * (1.0 - fill) * noise;
 		pdCoverage = smoothstep(0.0, 0.05, wpix);
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
