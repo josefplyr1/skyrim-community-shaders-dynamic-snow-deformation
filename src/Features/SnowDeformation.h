@@ -1333,6 +1333,8 @@ public:
 		bool bridge;
 		/** @brief Glacier/iceberg family: captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
 		bool fadeExempt;
+		/** @brief projectedUVParams.w from the draw's property, -1 without kProjectedUV; see StaticsCB::ProjThreshold. */
+		float projThreshold;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1472,7 +1474,8 @@ public:
 		float FadeExempt;
 		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float RoadField;
-		float padStatics;
+		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV. Debug reconstruction only (S0, SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjThreshold;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -1486,7 +1489,9 @@ public:
 		uint32_t NormalOffsetBytes;
 		uint32_t PosIsFloat32;
 		uint32_t TableMask;
-		uint32_t padSm[3];
+		uint32_t ColorOffsetBytes;
+		uint32_t HasColor;
+		uint32_t padSm;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
 

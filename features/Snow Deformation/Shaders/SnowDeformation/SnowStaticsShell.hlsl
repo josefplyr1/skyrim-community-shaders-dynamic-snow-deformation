@@ -222,7 +222,10 @@ cbuffer StaticCB : register(b1)
 	// patch's own draw it is the global gate and the per-texel bit comes from
 	// the skin-depth raster's y channel. Mirror in SnowDeformation.h.
 	float RoadField;
-	float padStatics;
+	// Vanilla projected-UV threshold (projectedUVParams.w) for this draw;
+	// -1 = no kProjectedUV on the property. Debug mask reconstruction only
+	// (mode 5). Mirror in SnowDeformation.h.
+	float ProjThreshold;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1381,6 +1384,15 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 	}
 	return normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
 }
+
+// Vanilla's projected-UV mask, reconstructed from the same inputs
+// (Lighting.hlsl projWeight), noise term omitted; -1 threshold (draw has
+// no projection data) evaluates as the plain up-test. Debug mode 5 only.
+float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
+{
+	float projWeight = nz * vertexAlpha - max(threshold, 0.0);
+	return smoothstep(0.0, 1.0, 5.0 * (0.1 + projWeight));
+}
 #endif
 
 #if defined(VSHADER) && !defined(PATCH)
@@ -1393,6 +1405,9 @@ struct SkinVertex
 	float3 NormalWS;
 	float3 SmoothWS;
 	float Flat;
+	// Authored NIF vertex alpha (vanilla's projected-mask term), decoded
+	// from OutNormals.w = 1 + alpha; 1 where the mesh carries none.
+	float VertexAlpha;
 };
 
 SkinVertex BuildSkinVertex(VS_INPUT input)
@@ -1407,6 +1422,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	// pole caps. Already-smooth meshes are unchanged (average == raw).
 	float3 inflateMS = nrmMS;
 	float isFlat = 0.0;
+	float vertexAlpha = 1.0;
 	[branch] if (HasSmoothedNormals > 0.5)
 	{
 		// Mesh-level flatness stats (element appended past the last vertex):
@@ -1421,7 +1437,10 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 			isFlat = 1.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)
+		{
 			inflateMS = smoothEntry.xyz;
+			vertexAlpha = saturate(smoothEntry.w - 1.0);
+		}
 	}
 
 	float3 worldAbs = float3(
@@ -1444,6 +1463,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	v.NormalWS = nrmWS;
 	v.SmoothWS = smoothWS;
 	v.Flat = isFlat;
+	v.VertexAlpha = vertexAlpha;
 	return v;
 }
 
@@ -1466,7 +1486,15 @@ VS_OUTPUT main(VS_INPUT input)
 	// pixel. Thresholding here makes low-poly rocks flip whole FACES between
 	// snowed and bare; thresholding the interpolated normal varies smoothly.
 	// Debug view: smuggle the two lift masks through the shading interpolants.
-	[flatten] if (StaticsDebugView > 2.5)
+	// Mode 5 pairs the current up-facing mask with vanilla's reconstructed
+	// projection mask so one screenshot says whether the authored vertex
+	// alpha carries information the normal test lacks (SKIN-PLACEMENT-PLAN).
+	[flatten] if (StaticsDebugView > 4.5)
+	{
+		vsout.Coverage = lift.UpFacing;
+		vsout.Flat = ReconstructedProjMask(v.NormalWS.z, v.VertexAlpha, ProjThreshold);
+	}
+	else [flatten] if (StaticsDebugView > 2.5)
 	{
 		vsout.Coverage = v.SmoothWS.z * 0.5 + 0.5;
 		vsout.Flat = v.Flat;
@@ -1489,6 +1517,7 @@ struct TessControlPoint
 	float3 NormalWS : TEXCOORD1;
 	float3 SmoothWS : TEXCOORD2;
 	float Flat : TEXCOORD3;
+	float VertexAlpha : TEXCOORD4;
 };
 
 TessControlPoint main(VS_INPUT input)
@@ -1499,6 +1528,7 @@ TessControlPoint main(VS_INPUT input)
 	cp.NormalWS = v.NormalWS;
 	cp.SmoothWS = v.SmoothWS;
 	cp.Flat = v.Flat;
+	cp.VertexAlpha = v.VertexAlpha;
 	return cp;
 }
 #endif
@@ -1511,6 +1541,7 @@ struct TessControlPoint
 	float3 NormalWS : TEXCOORD1;
 	float3 SmoothWS : TEXCOORD2;
 	float Flat : TEXCOORD3;
+	float VertexAlpha : TEXCOORD4;
 };
 
 struct TessFactors
@@ -1575,6 +1606,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	float3 normalWS = nSum / max(length(nSum), 1e-3);
 	float3 inflateWS = iSum / max(length(iSum), 1e-3);
 	float isFlat = patch[0].Flat * bary.x + patch[1].Flat * bary.y + patch[2].Flat * bary.z;
+	float vertexAlpha = patch[0].VertexAlpha * bary.x + patch[1].VertexAlpha * bary.y + patch[2].VertexAlpha * bary.z;
 
 	// The lift is evaluated HERE, per generated vertex: the up-facing mask and
 	// the edge taper get tessellated density instead of being interpolated
@@ -1621,7 +1653,15 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
 	// then traceable to whichever of the two is lying.
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 2.5)
+	[flatten] if (StaticsDebugView > 4.5)
+	{
+		// Mode 5: identical encoding to the untessellated VS. smoothZ is the
+		// RAW interpolated normal's z (normalWS holds the shading normal by
+		// now), which is the vertex-level analog of vanilla's worldNormal.
+		vsout.Coverage = lift.UpFacing;
+		vsout.Flat = ReconstructedProjMask(smoothZ, vertexAlpha, ProjThreshold);
+	}
+	else [flatten] if (StaticsDebugView > 2.5)
 	{
 		vsout.Coverage = smoothZ * 0.5 + 0.5;
 		vsout.Flat = isFlat;
@@ -2595,7 +2635,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH
-		[branch] if (StaticsDebugView > 3.5)
+		[branch] if (StaticsDebugView > 4.5)
+		{
+			// Projected-mask mode compares skin masks; the patch has no
+			// authored alpha. Dim gray = patch, outside the comparison.
+			preLit = float3(0.1, 0.1, 0.1);
+		}
+		else [branch] if (StaticsDebugView > 3.5)
 		{
 			// March mode. R = march darkening, G = road-surface taps,
 			// B = dusting taps; dim magenta = the march never ran here.
@@ -2606,7 +2652,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 3.5)
+		[branch] if (StaticsDebugView > 4.5)
+		{
+			// Projected-mask mode. R = the current up-facing mask, G =
+			// vanilla's reconstructed projection weight (authored vertex
+			// alpha included, noise omitted), B = the draw carries no
+			// projected-UV data (threshold sentinel). Yellow = the masks
+			// agree; red-only = only the normal test wants snow here, which
+			// is exactly the under-floorboard signature if the alpha is
+			// authored (B off) — with B on, green is the plain up-test and
+			// says nothing.
+			preLit = float3(saturate(input.Coverage), saturate(input.Flat), ProjThreshold < -0.5 ? 0.25 : 0.0);
+		}
+		else [branch] if (StaticsDebugView > 3.5)
 		{
 			// March mode, identical encoding to the patch: the march is
 			// shared, and a skin pixel beside a patch pixel must be

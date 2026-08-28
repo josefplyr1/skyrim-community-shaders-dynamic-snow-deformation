@@ -687,7 +687,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt });
+	// Vanilla's projected-UV threshold, for the S0 mask reconstruction
+	// (SKIN-PLACEMENT-PLAN.md). -1 = no projection data on this draw.
+	float projThreshold = -1.0f;
+	if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV))
+		projThreshold = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams.alpha;
+
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1421,6 +1427,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
+		scb.ProjThreshold = cap.projThreshold;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1603,6 +1610,14 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 		}
 	}
 	const uint32_t normalOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
+	// Authored vertex color for the projected-mask reconstruction; alpha
+	// rides OutNormals.w (see SmoothNormalsCS RESOLVE).
+	uint32_t colorOffset = 0;
+	bool hasColor = false;
+	if (desc.HasFlag(RE::BSGraphics::Vertex::VF_COLORS)) {
+		colorOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_COLOR);
+		hasColor = colorOffset > 0 && colorOffset + 4 <= stride;
+	}
 
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
@@ -1689,6 +1704,8 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	cb.NormalOffsetBytes = normalOffset;
 	cb.PosIsFloat32 = positionBytes >= 16 ? 1u : 0u;
 	cb.TableMask = tableSlots - 1;
+	cb.ColorOffsetBytes = colorOffset;
+	cb.HasColor = hasColor ? 1u : 0u;
 	smoothCB->Update(cb);
 
 	// Compute-only state: does not disturb the surrounding draw pipeline.
@@ -1960,6 +1977,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.SkinDistantBareness = settings.SkinDistantBareness;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
+		scb.ProjThreshold = cap.projThreshold;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

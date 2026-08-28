@@ -37,7 +37,9 @@ cbuffer SmoothCB : register(b0)
 	uint PosIsFloat32;  // 1 = float4 position, 0 = half4
 
 	uint TableMask;  // slots - 1 (power of two)
-	uint3 padSm;
+	uint ColorOffsetBytes;
+	uint HasColor;  // 1 = the vertex stream carries VA_COLOR
+	uint padSm;
 }
 
 static const uint kMaxProbe = 16;
@@ -58,6 +60,19 @@ float3 LoadNormal(uint v)
 {
 	uint raw = SrcVerts.Load(v * StrideBytes + NormalOffsetBytes);
 	return float3(raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF) / 255.0 * 2.0 - 1.0;
+}
+
+// Authored vertex alpha (VA_COLOR is R8G8B8A8_UNORM), the term vanilla's
+// projected-UV mask multiplies its up-test by. Raw per-vertex on purpose:
+// that is exactly what Lighting.hlsl reads, no welding.
+float LoadColorAlpha(uint v)
+{
+	float alpha = 1.0;
+	[branch] if (HasColor != 0) {
+		uint raw = SrcVerts.Load(v * StrideBytes + ColorOffsetBytes);
+		alpha = float(raw >> 24) / 255.0;
+	}
+	return alpha;
 }
 
 // Quantize to 1/32 model unit: welds coincident vertices, keeps distinct ones apart.
@@ -173,6 +188,10 @@ groupshared float3 gsNormalSum[64];
 	uint2 h = PositionHashes(LoadPosition(v));
 	uint slot = FindSlot(h.x, h.y, false);
 
+	// w encodes validity AND the vertex's authored color alpha: 0 = invalid,
+	// 1 + alpha = valid. Every reader's `w > 0.5` test is untouched; the skin
+	// VS decodes alpha as saturate(w - 1). Chosen over a second buffer: no
+	// new register, no new bind at the three draw sites.
 	float4 result = float4(0.0, 0.0, 0.0, 0.0);
 	if (slot != 0xFFFFFFFF) {
 		uint base = slot * 16;
@@ -180,7 +199,7 @@ groupshared float3 gsNormalSum[64];
 		float3 n = float3(sum) / kFixedScale;
 		float len = length(n);
 		if (len > 0.001)
-			result = float4(n / len, 1.0);
+			result = float4(n / len, 1.0 + LoadColorAlpha(v));
 	}
 	OutNormals[v] = result;
 }
