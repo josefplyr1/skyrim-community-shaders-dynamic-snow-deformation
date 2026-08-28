@@ -1385,13 +1385,18 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 	return normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
 }
 
-// Vanilla's projected-UV mask, reconstructed from the same inputs
-// (Lighting.hlsl projWeight), noise term omitted; -1 threshold (draw has
-// no projection data) evaluates as the plain up-test. Debug mode 5 only.
+// Vanilla's projected-UV weight, reconstructed from the same inputs
+// (Lighting.hlsl projWeight); positive part only. NOT vanilla's
+// smoothstep(5*(0.1+w)): that +0.1 bias floors at 0.5 wherever the weight
+// is zero and vanilla cancels it with the noise term this omits (round 2
+// proved the thresholds here are ~0, so with the bias every wall and
+// underside read half-open). Dropping bias AND noise together treats them
+// as roughly cancelling; S3 refines. The flat-color branch's hard
+// projWeight > 0 test has no bias either. Debug mode 5 only.
 float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
 {
 	float projWeight = nz * vertexAlpha - max(threshold, 0.0);
-	return smoothstep(0.0, 1.0, 5.0 * (0.1 + projWeight));
+	return saturate(5.0 * projWeight);
 }
 #endif
 
