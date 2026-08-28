@@ -687,11 +687,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	// Vanilla's projected-UV threshold, for the S0 mask reconstruction
-	// (SKIN-PLACEMENT-PLAN.md). -1 = no projection data on this draw.
+	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
+	// placement suppressor (SKIN-PLACEMENT-PLAN.md). -1 = no projection data
+	// on this draw. Tree-anim meshes are sentineled too: their vertex alpha
+	// is wind weight, not a snow mask, and vanilla forces alpha 1 on them.
 	float projThreshold = -1.0f;
-	if (a_pass->shaderProperty->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kProjectedUV))
-		projThreshold = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams.alpha;
+	{
+		const auto& capFlags = a_pass->shaderProperty->flags;
+		using CapFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim))
+			projThreshold = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams.alpha;
+	}
 
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold });
 }
@@ -1428,6 +1434,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
+		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1978,6 +1985,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.SkinDistantBareness = settings.SkinDistantBareness;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
+		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

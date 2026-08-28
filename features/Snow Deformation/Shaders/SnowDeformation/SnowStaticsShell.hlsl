@@ -223,9 +223,14 @@ cbuffer StaticCB : register(b1)
 	// the skin-depth raster's y channel. Mirror in SnowDeformation.h.
 	float RoadField;
 	// Vanilla projected-UV threshold (projectedUVParams.w) for this draw;
-	// -1 = no kProjectedUV on the property. Debug mask reconstruction only
-	// (mode 5). Mirror in SnowDeformation.h.
+	// -1 = no kProjectedUV on the property (or a tree-anim mesh, whose
+	// vertex alpha is wind weight). Feeds debug mode 5 and the S2
+	// suppressor. Mirror in SnowDeformation.h.
 	float ProjThreshold;
+	// >0.5: ApplySkinLift multiplies up-facing by the authored
+	// projected-snow term. Mirror in SnowDeformation.h.
+	float ProjMaskEnable;
+	float3 padStatics;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1252,7 +1257,7 @@ struct SkinLift
 	float UpFacing;
 };
 
-SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat)
+SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat, float vertexAlpha)
 {
 	// The layer grows straight up for every class. Displacing along the
 	// normal expands a mesh in all directions at once, so a rock gains girth
@@ -1276,6 +1281,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// The layer stays geometrically uncarved: trench relief is traced per
 	// pixel in the PS instead.
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, smoothWS.z);
+	// The NIF's authored projected-snow term as a SUPPRESSOR (S2,
+	// SKIN-PLACEMENT-PLAN): it multiplies, never adds, so agreement zones
+	// keep their snow and vanilla-only zones (leaning walls, whose raw
+	// weight lacks the noise term's break-up) gain none. Surfaces authored
+	// bare - walkway undersides, posts, railings - shed the skin; the lift
+	// going to zero also zeroes the PS's liftCoverage material gate, so no
+	// separate coverage plumbing. Sentinel threshold = no data, unchanged.
+	[flatten] if (ProjMaskEnable > 0.5 && ProjThreshold > -0.5)
+		upFacing *= saturate(5.0 * (nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0)));
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
@@ -1476,7 +1490,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 VS_OUTPUT main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);
-	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat);
+	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat, v.VertexAlpha);
 
 	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = lift.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
@@ -1616,7 +1630,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// The lift is evaluated HERE, per generated vertex: the up-facing mask and
 	// the edge taper get tessellated density instead of being interpolated
 	// across a source face.
-	SkinLift lift = ApplySkinLift(worldBase, normalWS, inflateWS, isFlat);
+	SkinLift lift = ApplySkinLift(worldBase, normalWS, inflateWS, isFlat, vertexAlpha);
 	float3 worldAbs = lift.WorldAbs;
 	float2 gridLocal = worldAbs.xy - GridOrigin;
 	normalWS = SkinShadingNormal(normalWS, inflateWS, isFlat, lift.Depth, lift.RimT);

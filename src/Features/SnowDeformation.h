@@ -469,6 +469,8 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
+		/** @brief SKIN-PLACEMENT-PLAN S2: the skin's up-facing mask is multiplied by the NIF's authored projected-snow term (vertex alpha x normal-Z minus the material threshold), so surfaces Bethesda painted bare (walkway undersides, posts, railings) shed their skin. Suppressor only - it never adds snow; draws without projected-UV data are unchanged. */
+		bool ProjMaskPlacement = false;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -1474,8 +1476,11 @@ public:
 		float FadeExempt;
 		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float RoadField;
-		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV. Debug reconstruction only (S0, SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV (or kTreeAnim, whose vertex alpha is wind weight, not a snow mask). Feeds the S0 debug view and the S2 placement suppressor (SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjThreshold;
+		/** @brief >0.5: Settings::ProjMaskPlacement - ApplySkinLift multiplies its up-facing mask by the authored projected-snow term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjMaskEnable;
+		float padStatics[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

@@ -469,6 +469,10 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
+			ImGui::Checkbox(T(TKEY("proj_mask_placement"), "Authored Snow Placement"), &settings.ProjMaskPlacement);
+			if (auto _ttPmp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("proj_mask_placement_tooltip"), "Object snow follows the placement Bethesda's artists painted into each mesh for the game's own snow, instead of covering everything that faces up. Undersides of walkways, posts and railings the artists left bare shed their snow layer; surfaces the artists marked snowy are unchanged. Only removes snow, never adds it, and only on meshes that carry the game's projected-snow data."));
+
 			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
 			if (auto _ttOt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
