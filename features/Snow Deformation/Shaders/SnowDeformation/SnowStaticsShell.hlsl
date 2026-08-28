@@ -2657,12 +2657,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// Projected-mask mode. R = the current up-facing mask, G =
 			// vanilla's reconstructed projection weight (authored vertex
 			// alpha included, noise omitted), B = the draw carries no
-			// projected-UV data (threshold sentinel). Yellow = the masks
-			// agree; red-only = only the normal test wants snow here, which
-			// is exactly the under-floorboard signature if the alpha is
-			// authored (B off) — with B on, green is the plain up-test and
-			// says nothing.
-			preLit = float3(saturate(input.Coverage), saturate(input.Flat), ProjThreshold < -0.5 ? 0.25 : 0.0);
+			// projected-UV data. G is ZEROED on no-data draws: the
+			// reconstruction's +0.1 smoothstep bias floors at 0.5 with a
+			// zeroed threshold, so a substituted G paints every vertical
+			// half-green and drowns the real signal (round 1 screenshot).
+			// Yellow = the masks agree; red-only = only the normal test
+			// wants snow (the under-floorboard signature); green-only =
+			// only vanilla wants snow; blue = no data, magenta = no data
+			// but our mask fires.
+			bool noProjData = ProjThreshold < -0.5;
+			preLit = float3(saturate(input.Coverage), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);
 		}
 		else [branch] if (StaticsDebugView > 3.5)
 		{
