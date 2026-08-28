@@ -1910,10 +1910,10 @@ void SnowDeformation::DrawCapturedStatics()
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
 	context->PSSetShaderResources(16, 2, skinFrostSRVs);
-	// Vanilla's projected-UV noise map (t21): S3 pixel relief reconstructs
-	// Lighting.hlsl's full projWeight, and this is its noise term. Engine-
-	// owned texture; a missing map just leaves the mode off (per-object CB
-	// gate below).
+	// Vanilla's projected-UV noise map (PS t21): authored relief (S3)
+	// reconstructs Lighting.hlsl's full projWeight per pixel, and this is
+	// its noise term. Engine-owned texture; a missing map just leaves the
+	// mode off (per-object CB gate below).
 	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
 	if (settings.ProjPixelRelief) {
 		auto* graphicsState = globals::game::graphicsState;
@@ -1921,13 +1921,11 @@ void SnowDeformation::DrawCapturedStatics()
 		if (noiseTex && noiseTex->rendererTexture)
 			projNoiseSRV = noiseTex->rendererTexture->resourceView;
 	}
-	context->VSSetShaderResources(21, 1, &projNoiseSRV);
-	context->DSSetShaderResources(21, 1, &projNoiseSRV);
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	// The untessellated VS samples the noise with SampleLevel; the DS gets
-	// the same sampler in the tessellation block above.
-	ID3D11SamplerState* skinVSSampler = shellSnowSampler.get();
-	context->VSSetSamplers(0, 1, &skinVSSampler);
+	// Pre-shell normals copy (PS t23): the per-pixel nz for the coverage
+	// cut - the scene's own shaded normal, normal maps included.
+	ID3D11ShaderResourceView* skinNormalsSRV = settings.ProjPixelRelief ? preSkinNormalsCopySRV.get() : nullptr;
+	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
@@ -2050,6 +2048,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// heightfield owns their surface and its hand-off gates key on the
 		// lift the replacement would re-shape. Off without the noise map.
 		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road) ? 1.0f : 0.0f;
+		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's
@@ -2091,9 +2090,8 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
-	context->VSSetShaderResources(21, 1, &nullSmoothSRV);
-	context->DSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

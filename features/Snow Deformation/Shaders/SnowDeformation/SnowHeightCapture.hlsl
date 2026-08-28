@@ -49,9 +49,9 @@ cbuffer StaticCB : register(b1)
 	float ForceRounded;
 	float ProjNoiseScale;   // layout sync with SnowStaticsShell; unused here
 	float OpaqueCoverage;   // layout sync with SnowStaticsShell; unused here
-	float ProjNoiseTiling;  // layout sync with SnowStaticsShell; unused here
-	float ProjPixelEnable;  // layout sync with SnowStaticsShell; unused here
-	float padStatics2;
+	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
+	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
+	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here
 }
 
 struct VS_INPUT

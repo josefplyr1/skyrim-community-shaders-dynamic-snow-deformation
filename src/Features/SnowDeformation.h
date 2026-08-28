@@ -1379,6 +1379,10 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
+	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the authored-relief coverage cut reads its nz here (SKIN-PLACEMENT-PLAN S3). Taken only while Settings::ProjPixelRelief is on; bound at skin PS t23. */
+	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
+
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
 		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
@@ -1502,9 +1506,10 @@ public:
 		float OpaqueCoverage;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
-		/** @brief >0.5: Settings::ProjPixelRelief with the noise map bound at t21, never on road draws - the reconstructed vanilla weight replaces the facing gates as depth source and coverage cut (SKIN-PLACEMENT-PLAN S3 round 2). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief >0.5: Settings::ProjPixelRelief with the noise map bound at t21, never on road draws - the reconstructed vanilla weight replaces the facing gates as depth source and coverage cut (SKIN-PLACEMENT-PLAN S3). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjPixelEnable;
-		float padStatics2;
+		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float HasSkinNormalCopy;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

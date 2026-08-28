@@ -807,6 +807,15 @@ void SnowDeformation::DrawShell()
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
 		}
+		// Pre-shell normals for the skins' authored-relief coverage cut
+		// (per-pixel nz, normal maps included). Gated on the setting so the
+		// off-cost is zero; the null SRV keeps HasSkinNormalCopy off.
+		preSkinNormalsCopySRV = nullptr;
+		auto& normalsRT = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
+		if (settings.ProjPixelRelief && normalsRT.SRV) {
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			CopySRVResource(normalsRT.SRV, "SnowDeformation::PreSkinNormalsCopy", preSkinNormalsCopyTex, preSkinNormalsCopySRV);
+		}
 	}
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
