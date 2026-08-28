@@ -380,21 +380,21 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // a coat, so a class slider at 0 is a flat sheet rather than a 1-unit layer.
 static const float kMinSkinLift = 0.1;
 
-// Authored relief (S3): the Snow Fill slider value at which the noise term
-// has fully retired - set to the slider's maximum so the knob is a linear
-// 0-100%: at 0 the footprint is exactly vanilla's ragged projected pattern,
-// at the top the ENTIRE positive-weight area is covered and the purple
-// match view has nothing left to show (Josef's round-6 spec).
-static const float kProjFillDepth = 25.0;
+// Authored relief (S3): local dome height at which the noise term has
+// fully retired (round-3 form, restored by Josef's commit callback). At
+// the slider's low end the footprint is exactly vanilla's ragged projected
+// pattern; as the local lift grows toward this height the specks and
+// cracks bridge over - fill and depth rise together, which is the coupling
+// Josef verified and liked.
+static const float kProjFillDepth = 10.0;
 
-// Authored relief: the parked coat's clearance above its source mesh.
-// kMinSkinLift (0.1 units = about a millimetre) is enough for surfaces the
-// coverage gates keep from ever SHADING coincident, but the coat IS shaded
-// - and at a millimetre the depth buffer cannot separate shell from source
-// at distance, so the coat lost most of its pixels to its own object and
-// vanilla's PD showed through (round 5's invisible-coat bug: "Snow Fill
-// does nothing", "Snow Deformation OFF makes no difference"). Two units
-// (~3 cm) still reads dead flat and wins the z-test cleanly.
+// Authored relief: minimum clearance for any pixel the per-pixel cut may
+// grant. kMinSkinLift (0.1 units = about a millimetre) is enough for
+// surfaces the coverage gates keep from ever SHADING coincident, but
+// granted fringe pixels ARE shaded - and below a couple of units the depth
+// buffer cannot separate shell from source at distance (rounds 4-6's
+// flat-coat experiment z-banded into invisibility on exactly this). Two
+// units (~3 cm) still reads flat at the fringe and wins the z-test.
 static const float kProjCoatLift = 2.0;
 
 // World width of the cornice roll on flat plates, and the band over which a
@@ -1367,23 +1367,25 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float projFactor = 1.0;
 	float projLinear = 1.0;
 	// S3, per Josef's spec (2026-08-28 screenshots): on PD-carrying draws
-	// the purple debug view IS the wanted footprint, and the PS owns it
-	// entirely - the per-pixel G-buffer normal, the authored alpha and the
-	// noise term rebuild vanilla's weight per pixel. The 3D extrusion is
-	// PARKED (Josef's round-4 call): the shell rides the minimum coat as a
-	// pure painted layer until the footprint matches the purple 100%; only
-	// then does the dome return, on a footprint the module finally trusts.
-	// The class sliders meanwhile drive nothing here - they feed the PS's
-	// FILL term (raising them retires the noise so cracks bridge over),
-	// which is the coverage behavior Josef found and kept. Replacement of
-	// the facing gates is sanctioned in this mode and only here (the film
-	// rounds' replacements granted because the formula was incomplete).
-	// ProjLinear rides TEXCOORD8 carrying the AUTHORED VERTEX ALPHA - the
-	// PS needs the raw authored term, not a pre-mixed weight.
+	// the purple debug view IS the wanted footprint - the PS rebuilds
+	// vanilla's weight per pixel (G-buffer normal, authored alpha, noise)
+	// and owns the coverage cut. The depth source is the round-3 form
+	// Josef verified and, after the flat-coat experiment failed, asked
+	// back BY COMMIT ("bring 7698da38 back"): the weight itself, scaled by
+	// up-facingness - a REAL lift, because a coat parked millimetres or
+	// even a few units above its source z-bands against it on slopes at
+	// distance (rounds 4-6: invisible coat, striped roofs, a fill slider
+	// that appeared inverted). The shell must stand proud to own its
+	// pixels; flat-coat-only is a dead end, not a tuning problem.
+	// Replacement of the facing gates is sanctioned in this mode and only
+	// here (the film rounds' replacements granted because the formula was
+	// incomplete). ProjLinear rides TEXCOORD8 carrying the AUTHORED VERTEX
+	// ALPHA - the PS needs the raw authored term, not a pre-mixed weight.
 	[branch] if (ProjPixelEnable > 1.5)
 	{
+		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
 		projLinear = vertexAlpha;
-		upFacing = 0.0;
+		upFacing = saturate(wLin) * saturate(smoothWS.z);
 	}
 	else [branch] if (ProjThreshold > -0.5)
 	{
@@ -1475,19 +1477,13 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = max(depth, kMinSkinLift * upFacing);
 	}
 
-	// Mode-wide extrusion park, applied LAST so the cone taper, shelter and
-	// collapse cannot override it. GEOMETRY only: CoverDepth was captured
-	// unclamped above, so a no-PD draw's old lift-keyed coverage still
-	// draws its full extent - as a flat coat (Josef's round-5 call: NO
-	// captured object wears a raised shell while the footprint work is
-	// under way; the fence's no-PD snow ridge was the tell).
-	[flatten] if (ProjPixelEnable > 0.5)
-		depth = min(depth, kProjCoatLift);
-	// Authored-placement clearance floor: every pixel the PS's per-pixel
-	// cut may grant needs real separation from its source mesh or the
-	// shell z-fights it invisible (see kProjCoatLift), and the per-pixel
-	// G-buffer normal can score up-facing where every vertex-level term is
-	// near zero - no vertex-side key can bound what the PS may grant.
+	// Authored-placement clearance floor, applied LAST so the cone taper,
+	// shelter and collapse cannot pull it back under: every pixel the PS's
+	// per-pixel cut may grant needs real separation from its source mesh
+	// or the shell z-fights it invisible (see kProjCoatLift), and the
+	// per-pixel G-buffer normal can score up-facing where every
+	// vertex-level term is near zero - no vertex-side key can bound what
+	// the PS may grant.
 	[flatten] if (ProjPixelEnable > 1.5)
 		depth = max(depth, kProjCoatLift);
 
@@ -2002,14 +1998,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 		}
 		float wLinPix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		// Fill: the Snow Fill slider, linear 0-100% (see kProjFillDepth) -
-		// how much of the noise term retires. At 0 the footprint is exactly
-		// vanilla's painted pattern; at the top every positive-weight pixel
-		// is covered and the purple match view goes fully dark. Deliberately
-		// NOT weighted by the local weight any more: Josef's round-6 spec
-		// wants the slider's maximum to cover the WHOLE PD area, weak paint
-		// included.
-		float fill = saturate(liftBase / kProjFillDepth);
+		// Fill from the LOCAL lift (round-3 form): where the dome is tall
+		// the noise retires and cracks bridge over; the fringe stays
+		// ragged. At slider 0 the footprint is exactly vanilla's painted
+		// pattern; with the purple match view on, remaining purple marks
+		// exactly where this layer under-covers.
+		float fill = saturate(input.Lift / kProjFillDepth);
 		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
 		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
 		float wpix = wLinPix - ProjNoiseScale * (1.0 - fill) * noise;

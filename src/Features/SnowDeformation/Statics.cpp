@@ -2076,13 +2076,14 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// 3-state (see StaticsCB): 2 = full authored placement (PD data
-		// present), 1 = mode on but no PD data - geometry parked to the
-		// coat, old placement gates keep the coverage (the fence's no-PD
-		// snow ridge was the tell), 0 = off / road (the heightfield owns
-		// roads and its hand-off keys on the lift). Off without the map.
-		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road) ?
-		                          ((cap.projThreshold > -0.5f) ? 2.0f : 1.0f) :
+		// 2 = authored placement (PD data present), 0 = classic path (mode
+		// off, no PD data, or a road - the heightfield owns roads). The
+		// round-5 "park no-PD draws too" middle state (1) is retired with
+		// the flat-coat experiment: no-PD draws run the classic path
+		// untouched. Off without the noise map.
+		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road &&
+		                          cap.projThreshold > -0.5f) ?
+		                          2.0f :
 		                          0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
