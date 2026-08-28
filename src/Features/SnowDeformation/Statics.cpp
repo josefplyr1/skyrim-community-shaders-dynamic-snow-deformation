@@ -669,21 +669,26 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	// Road-classification log: the road heightfield hands a whole object to a
-	// top-down heightfield, so a false positive is no longer a slightly wrong
-	// depth - it is a flat plate over a rock. One line per unique geometry
-	// name, so a session's log names every mesh the class accepted.
-	if (road) {
-		static std::unordered_set<std::string> loggedRoadNames;
+	// Capture log, one line per unique geometry name: classification plus the
+	// diffuse. Began as the road-class log; widened to EVERY capture because
+	// the question "was this trishape captured at all, and as what?" keeps
+	// being the fork in a diagnosis - RoadChunkS03's ':1' paper sheet is
+	// either an uncaptured vanilla snow drape or our own skin on a
+	// non-road-named trishape, and only this log can say which.
+	{
+		static std::unordered_set<std::string> loggedCaptureNames;
 		std::string name(a_pass->geometry->name.c_str());
-		if (loggedRoadNames.size() > 4096)
-			loggedRoadNames.clear();
-		if (loggedRoadNames.insert(name).second) {
-			logger::info("[SNOW DEFORMATION] road class '{}' via {}{} -> heightfield={}",
-				name, roadVia, bridge ? " (BRIDGE)" : "",
-				(!bridge && settings.RoadHeightfield) ? "yes" : "no");
-			if (!roadTexPath.empty())
-				logger::info("[SNOW DEFORMATION]   road texture: '{}'", roadTexPath);
+		if (loggedCaptureNames.size() > 4096)
+			loggedCaptureNames.clear();
+		if (loggedCaptureNames.insert(name).second) {
+			const char* diffusePath = "";
+			if (auto* logMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
+				if (auto textureSet = logMaterial->textureSet.get())
+					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
+						diffusePath = path;
+			logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}){} heightfield={} tex='{}'",
+				name, road ? "yes" : "no", roadVia, bridge ? " (BRIDGE)" : "",
+				(road && !bridge && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
 		}
 	}
 
