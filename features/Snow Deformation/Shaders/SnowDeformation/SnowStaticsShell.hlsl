@@ -2003,7 +2003,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// extent, and RoadOwnsColumn reads that same raster, so it already returns
 	// false everywhere the patch cannot draw. One predicate owns the hand-off
 	// instead of a radius that had to be kept in step with the grid by hand.
-	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 && abs(geoFacing.z) > 0.55 && RoadOwnsColumn(worldXY))
+	// EITHER facing measure counts as up. geoFacing is the per-triangle
+	// facet normal, and the baked snow drapes inside RoadChunk*Snow nifs are
+	// low-poly crinkles: every facet tilts past the 0.55 gate while the
+	// SMOOTHED surface reads flat-up - so the drape trishapes' skins never
+	// discarded and hovered over carved trenches as torn paper sheets
+	// (Josef's Edge Taper screenshots: bright-G up-facing yellow, undischarged).
+	// A real kerb or causeway flank is steep in BOTH normals and still keeps
+	// its skin; a crinkle facet with an up smoothed normal steps aside, and
+	// the patch owns the column behind it.
+	[branch] if (RoadField > 0.5 && RoundedDepth > 1.0 &&
+		(abs(geoFacing.z) > 0.55 || normalWS.z > 0.55) && RoadOwnsColumn(worldXY))
 		discard;
 
 	// Hand-off to the trench patch: trampled rounded pixels near the camera
