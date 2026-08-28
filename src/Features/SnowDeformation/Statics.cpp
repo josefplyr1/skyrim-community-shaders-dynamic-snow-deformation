@@ -699,7 +699,28 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			projThreshold = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams.alpha;
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold });
+	// Mountain/cliff family: force the rounded class. A jagged low-poly
+	// cliff's split normals score "flat" under the divergence classifier and
+	// the mesh drapes with a rigid plate lifted the full flat depth - the
+	// hovering translucent film. Name match like the road class; a false
+	// positive forces rounded on something already rounded, a no-op.
+	bool forceRounded = false;
+	{
+		std::string loweredName(a_pass->geometry->name.c_str());
+		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		forceRounded = loweredName.find("mountain") != std::string::npos ||
+		               loweredName.find("cliff") != std::string::npos;
+		if (forceRounded) {
+			static std::unordered_set<std::string> loggedRoundedNames;
+			if (loggedRoundedNames.size() > 4096)
+				loggedRoundedNames.clear();
+			if (loggedRoundedNames.insert(loweredName).second)
+				logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", loweredName);
+		}
+	}
+
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, forceRounded });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1436,6 +1457,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
+		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1988,6 +2010,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
+		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

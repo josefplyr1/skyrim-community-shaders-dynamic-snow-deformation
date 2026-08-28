@@ -44,7 +44,10 @@ cbuffer StaticCB : register(b1)
 	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
 	float ProjMaskEnable;    // layout sync with SnowStaticsShell; unused here
 	float ProjDensityEnable; // layout sync with SnowStaticsShell; unused here
-	float2 padStatics;
+	// >0.5: mountain/cliff family - the class pick below skips the flat
+	// classifier, matching the skin VS. Mirror in SnowDeformation.h.
+	float ForceRounded;
+	float padStatics;
 }
 
 struct VS_INPUT
@@ -82,9 +85,10 @@ VS_OUTPUT main(VS_INPUT input)
 	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
 
 	float skinDepth = RoundedDepth;
-	[branch] if (HasSmoothedNormals > 0.5)
+	[branch] if (HasSmoothedNormals > 0.5 && ForceRounded < 0.5)
 	{
-		// Same flat condition as the skin VS (divergence-only).
+		// Same flat condition as the skin VS (divergence-only, with the
+		// same mountain/cliff family override).
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
 		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			skinDepth = ObjectsDepth;

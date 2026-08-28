@@ -1339,6 +1339,8 @@ public:
 		bool fadeExempt;
 		/** @brief projectedUVParams.w from the draw's property, -1 without kProjectedUV; see StaticsCB::ProjThreshold. */
 		float projThreshold;
+		/** @brief Mountain/cliff family by geometry name: force the ROUNDED class. The divergence-only flat classifier reads a jagged low-poly cliff's split normals as "plate" and drapes it with a rigid vertical lift of the full flat depth - the hovering sheet Josef reported as a translucent film. Deterministic name match (road-class precedent), NOT a stats heuristic (those were tried and rejected, see SmoothNormalsCS FlatStatsCS). */
+		bool forceRounded;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1484,7 +1486,9 @@ public:
 		float ProjMaskEnable;
 		/** @brief >0.5: Settings::ProjDepthDensity - the graded density factor replaces the sharp gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjDensityEnable;
-		float padStatics[2];
+		/** @brief >0.5: CapturedSnowStatic::forceRounded - the class decision skips the flat classifier for this draw. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ForceRounded;
+		float padStatics;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

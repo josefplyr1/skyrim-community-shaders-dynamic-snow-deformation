@@ -233,7 +233,11 @@ cbuffer StaticCB : register(b1)
 	// >0.5: depth scales with the authored density (graded factor replaces
 	// the sharp gate). Mirror in SnowDeformation.h.
 	float ProjDensityEnable;
-	float2 padStatics;
+	// >0.5: mountain/cliff family - skip the flat classifier, the mesh is
+	// ROUNDED whatever its split-normal stats say. Mirror in
+	// SnowDeformation.h.
+	float ForceRounded;
+	float padStatics;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1426,17 +1430,15 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 }
 
 // Vanilla's projected-UV weight, reconstructed from the same inputs
-// (Lighting.hlsl projWeight); positive part only. NOT vanilla's
-// smoothstep(5*(0.1+w)): that +0.1 bias floors at 0.5 wherever the weight
+// (Lighting.hlsl projWeight); positive part, GRADED. Not vanilla's
+// smoothstep(5*(0.1+w)): the +0.1 bias floors at 0.5 wherever the weight
 // is zero and vanilla cancels it with the noise term this omits (round 2
-// proved the thresholds here are ~0, so with the bias every wall and
-// underside read half-open). Dropping bias AND noise together treats them
-// as roughly cancelling; S3 refines. The flat-color branch's hard
-// projWeight > 0 test has no bias either. Debug mode 5 only.
+// proved the thresholds here are ~0). Ungraded 5x amplification lit
+// thin-trim beams as bright as solid fields, so the debug view could not
+// distinguish "wants a dusting" from "wants full snow". Debug mode 5 only.
 float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
 {
-	float projWeight = nz * vertexAlpha - max(threshold, 0.0);
-	return saturate(5.0 * projWeight);
+	return saturate(nz * vertexAlpha - max(threshold, 0.0));
 }
 #endif
 
@@ -1480,6 +1482,10 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
 		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			isFlat = 1.0;
+		// Mountain/cliff family: a jagged cliff's split normals score flat
+		// and the plate lift drapes it with a hovering film. CPU name match.
+		[flatten] if (ForceRounded > 0.5)
+			isFlat = 0.0;
 		float4 smoothEntry = SmoothedNormals[input.VertexID];
 		[flatten] if (smoothEntry.w > 0.5)
 		{
@@ -2713,17 +2719,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 #else
 		[branch] if (StaticsDebugView > 4.5)
 		{
-			// Projected-mask mode. R = the current up-facing mask, G =
-			// vanilla's reconstructed projection weight (authored vertex
-			// alpha included, noise omitted), B = the draw carries no
-			// projected-UV data. G is ZEROED on no-data draws: the
-			// reconstruction's +0.1 smoothstep bias floors at 0.5 with a
-			// zeroed threshold, so a substituted G paints every vertical
-			// half-green and drowns the real signal (round 1 screenshot).
-			// Yellow = the masks agree; red-only = only the normal test
-			// wants snow (the under-floorboard signature); green-only =
-			// only vanilla wants snow; blue = no data, magenta = no data
-			// but our mask fires.
+			// Projected-mask mode. R = the live geometry mask (the authored
+			// factor already folded in when a mode is on). G = the authored
+			// weight GRADED - brightness is how much snow the data wants,
+			// not just its sign: the 5x-amplified G lit thin-trim beams as
+			// bright as solid fields and read as "full snow expected here"
+			// (Josef's beam report). ZEROED on no-data draws (the +0.1 bias
+			// floors at 0.5 otherwise). B = no projected-UV data. Yellow =
+			// agree; red-only = we place where vanilla says bare; dim green
+			// = vanilla wants a dusting; bright green = vanilla wants full
+			// snow we do not place.
 			bool noProjData = ProjThreshold < -0.5;
 			preLit = float3(saturate(input.Coverage), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);
 		}
