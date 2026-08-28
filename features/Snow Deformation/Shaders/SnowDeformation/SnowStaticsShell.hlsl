@@ -238,6 +238,11 @@ cbuffer StaticCB : register(b1)
 	// SnowDeformation.h.
 	float ForceRounded;
 	float padStatics;
+	// >0.5: the shape gates' coverage binarizes at 0.5 - no translucent
+	// dither films; the distance dissolve stays partial. Mirror in
+	// SnowDeformation.h.
+	float OpaqueCoverage;
+	float3 padStatics2;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -2154,6 +2159,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// exactly the columns this dissolves or the skin steps aside into a hole.
 	coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
 #	endif
+
+	// Opaque object snow: partial alpha from the SHAPE gates can only render
+	// as stochastic dither in this deferred pipeline, and over a wide
+	// mid-slope face that dither reads as a translucent film (the mountain,
+	// after the class fix took the plate lift out of the story). The
+	// landscape shell's edge policy is already a clean binary cut with
+	// noise-shaped raggedness; the skins now match. The coverage noise and
+	// the grain edge shaping above decide WHERE the 0.5 crossing lands, so
+	// the cut stays ragged, not polygonal. The distance dissolve BELOW stays
+	// partial on purpose - thinning into the object's own vanilla snow at
+	// range without a pop is exactly what dither is for.
+	[flatten] if (OpaqueCoverage > 0.5)
+		coverageAlpha = coverageAlpha >= 0.5 ? 1.0 : 0.0;
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the

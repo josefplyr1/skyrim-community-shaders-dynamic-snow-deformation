@@ -473,6 +473,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttPmp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("proj_mask_placement_tooltip"), "Object snow follows the placement Bethesda's artists painted into each mesh for the game's own snow, instead of covering everything that faces up. Undersides of walkways, posts and railings the artists left bare shed their snow layer; surfaces the artists marked snowy are unchanged. Only removes snow, never adds it, and only on meshes that carry the game's projected-snow data."));
 
+			ImGui::Checkbox(T(TKEY("opaque_object_snow"), "Opaque Object Snow"), &settings.OpaqueObjectSnow);
+			if (auto _ttOos = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("opaque_object_snow_tooltip"), "Object snow is either fully there or fully absent - no see-through layers. Partial coverage renders as a noisy dither in this engine, and over a wide rock face that reads as a translucent film. Edges stay ragged (the noise decides where the cut lands); the distance fade into each object's own snow keeps its gradual thinning."));
+
 			ImGui::Checkbox(T(TKEY("proj_depth_density"), "Snow Depth Follows Density"), &settings.ProjDepthDensity);
 			if (auto _ttPdd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("proj_depth_density_tooltip"), "Object snow depth scales with how densely the artists painted the game's own snow onto each surface - full depth where the paint is solid, thinning to a dusting where it fades toward edges and slopes. A graded version of Authored Snow Placement that replaces its hard cutoff while on. Only affects meshes carrying the game's projected-snow data."));

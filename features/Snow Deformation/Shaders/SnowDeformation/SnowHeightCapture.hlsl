@@ -48,6 +48,8 @@ cbuffer StaticCB : register(b1)
 	// classifier, matching the skin VS. Mirror in SnowDeformation.h.
 	float ForceRounded;
 	float padStatics;
+	float OpaqueCoverage;  // layout sync with SnowStaticsShell; unused here
+	float3 padStatics2;
 }
 
 struct VS_INPUT

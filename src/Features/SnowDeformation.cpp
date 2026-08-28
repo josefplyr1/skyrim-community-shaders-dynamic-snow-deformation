@@ -136,6 +136,7 @@
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
 	X(ProjDepthDensity) \
+	X(OpaqueObjectSnow) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \

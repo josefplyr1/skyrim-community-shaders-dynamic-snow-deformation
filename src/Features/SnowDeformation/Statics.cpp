@@ -1458,6 +1458,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
+		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -2011,6 +2012,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
+		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

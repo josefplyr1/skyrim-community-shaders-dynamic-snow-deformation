@@ -473,6 +473,8 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
 		bool ProjDepthDensity = false;
+		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
+		bool OpaqueObjectSnow = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -1489,6 +1491,9 @@ public:
 		/** @brief >0.5: CapturedSnowStatic::forceRounded - the class decision skips the flat classifier for this draw. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ForceRounded;
 		float padStatics;
+		/** @brief >0.5: Settings::OpaqueObjectSnow - the skin's shape-gate coverage binarizes at 0.5 (no translucent dither films; the distance dissolve stays partial). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float OpaqueCoverage;
+		float padStatics2[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
