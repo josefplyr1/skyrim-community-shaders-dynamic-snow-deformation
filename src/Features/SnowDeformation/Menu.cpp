@@ -1223,6 +1223,18 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("  body alpha %.2f (reads %u) | above land %.0f | floating gap %.0f",
 					skeletonProbe.bodyAlpha, (uint)skeletonProbe.alphaSettle,
 					skeletonProbe.gapToLand, skeletonProbe.floatingGap);
+				{
+					const char* surface;
+					if (!skeletonProbe.cellBaked)
+						surface = "cell not baked yet (stamps assume snow)";
+					else if (skeletonProbe.shellDepth <= 0.0f)
+						surface = "NO SHELL HERE: ground class carries no snow - nothing can display a trench";
+					else if (skeletonProbe.gapToLand > 10.0f)
+						surface = "standing on a mesh ABOVE the landscape - snow there is object skin (trenches only on roads / Object Trenches)";
+					else
+						surface = "landscape shell underfoot - trenches should show";
+					ImGui::Text("  ground: shell depth %.0f | %s", skeletonProbe.shellDepth, surface);
+				}
 				if (!skeletonProbe.feet.empty() &&
 					ImGui::BeginTable("##skelprobe", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
 					ImGui::TableSetupColumn("Foot node");

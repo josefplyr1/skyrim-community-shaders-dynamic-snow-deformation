@@ -187,6 +187,25 @@ static bool NodeAttachedTo(const RE::NiAVObject* a_node, const RE::NiAVObject* a
 	return false;
 }
 
+// Non-flesh nodes that carry body-part substrings and stamped as limbs:
+// holsters ("Weapon L Calf" matches calf, "Ankle Dagger Offhand" matches
+// hand), IED/XPMSSE "Extra*" gear slots ("ExtraLThighFlute"), and HDT-SMP
+// physics bones (the auto-rename prefix itself contains "Head", so every
+// hair braid matched - and dangling cloth bones wobble every frame, which
+// also kept the stamp-quiet idle skip from ever engaging nearby). Gear
+// never touches snow while worn; physics bones are covered by the flesh
+// they hang from.
+static bool GearNodeName(const RE::BSFixedString& a_name)
+{
+	return NameStartsWith(a_name, "Extra") || NameStartsWith(a_name, "hdt") ||
+	       NameContains(a_name, "weapon") || NameContains(a_name, "dagger") ||
+	       NameContains(a_name, "sword") || NameContains(a_name, "axe") ||
+	       NameContains(a_name, "mace") || NameContains(a_name, "staff") ||
+	       NameContains(a_name, "shield") || NameContains(a_name, "quiver") ||
+	       NameContains(a_name, "bolt") || NameContains(a_name, "torch") ||
+	       NameContains(a_name, "magicnode") || NameContains(a_name, "animobject");
+}
+
 static RE::NiAVObject* FindToeBone(RE::NiNode* a_node)
 {
 	for (auto& child : a_node->GetChildren()) {
@@ -234,9 +253,9 @@ static const LimbSpec* MatchLimb(const RE::BSFixedString& a_name)
 }
 
 // Bones only (NiNode): skinned geometry like "FemaleFeet" must not match.
-// CME/MOV prefixes are XPMSSE control nodes mirroring bone names; they fail
-// the match but stay on the recursion path (XPMSSE inserts them as parents
-// of the real bones).
+// CME/MOV prefixes are XPMSSE control nodes mirroring bone names, and gear
+// holster nodes carry body-part substrings; both fail the match but stay on
+// the recursion path (XPMSSE inserts control nodes as parents of real bones).
 static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor, float a_ancestorRadius,
 	SnowDeformation::StampBones& a_out)
 {
@@ -244,7 +263,8 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 	if (!node)
 		return;
 	const auto& name = node->name;
-	const bool controlNode = NameStartsWith(name, "CME ") || NameStartsWith(name, "MOV ");
+	const bool controlNode = NameStartsWith(name, "CME ") || NameStartsWith(name, "MOV ") ||
+	                         GearNodeName(name);
 	if (!controlNode &&
 		(NameContains(name, "foot") || NameContains(name, "hoof") || NameContains(name, "paw"))) {
 		if (a_out.feet.size() < kMaxCachedFeet)
@@ -285,6 +305,8 @@ static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
 		kind = " [geometry: never matches]";
 	else if (NameStartsWith(a_obj->name, "CME ") || NameStartsWith(a_obj->name, "MOV "))
 		kind = " [control: skipped]";
+	else if (GearNodeName(a_obj->name))
+		kind = " [gear: skipped]";
 	else if (NameContains(a_obj->name, "foot") || NameContains(a_obj->name, "hoof") || NameContains(a_obj->name, "paw"))
 		kind = " [FOOT]";
 	else if (NameContains(a_obj->name, "toe"))
@@ -584,6 +606,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
+		if (probing) {
+			// Sentinel far below any real blended depth: a baked bare-class
+			// cell legitimately reads small negative.
+			const float probeDepth = GetNominalSnowDepthAt(position.x, position.y, -10000.0f);
+			skeletonProbe.cellBaked = probeDepth > -9999.0f;
+			skeletonProbe.shellDepth = skeletonProbe.cellBaked ? probeDepth : -1.0f;
+		}
 
 		// Bow wave. The body measures the motion - one smoothed speed and
 		// heading per actor, so the crest never pulses with the gait - but the

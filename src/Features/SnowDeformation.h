@@ -2883,6 +2883,9 @@ protected:
 		uint16_t alphaSettle = 0;
 		float gapToLand = 0.0f;
 		float floatingGap = 0.0f;
+		/** @brief Nominal shell depth at the actor's XY (-1 if the cell is unbaked). Separates "stamps land but nothing here can display a trench" from skeleton problems. */
+		float shellDepth = -1.0f;
+		bool cellBaked = false;
 	};
 	SkeletonProbe skeletonProbe;
 
