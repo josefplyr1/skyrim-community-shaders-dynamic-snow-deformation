@@ -1297,8 +1297,14 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (ProjThreshold > -0.5)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
+		// The cut-in kills sparse paint OUTRIGHT instead of rendering it: a
+		// uniformly shallow lift parks wide areas inside the PS's narrow
+		// liftCoverage band, and that partial alpha dithers into the
+		// translucent film Josef rejected (mountain-flank shots,
+		// 2026-08-28). Below the band snow is GONE, above it depth tracks
+		// density; the band itself is narrow enough to read as an edge.
 		[flatten] if (ProjDensityEnable > 0.5)
-			upFacing *= saturate(projWeight);
+			upFacing *= saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
 		else [flatten] if (ProjMaskEnable > 0.5)
 			upFacing *= saturate(5.0 * projWeight);
 	}
