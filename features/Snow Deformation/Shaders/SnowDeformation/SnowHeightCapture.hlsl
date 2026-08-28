@@ -47,9 +47,11 @@ cbuffer StaticCB : register(b1)
 	// >0.5: mountain/cliff family - the class pick below skips the flat
 	// classifier, matching the skin VS. Mirror in SnowDeformation.h.
 	float ForceRounded;
-	float padStatics;
-	float OpaqueCoverage;  // layout sync with SnowStaticsShell; unused here
-	float3 padStatics2;
+	float ProjNoiseScale;   // layout sync with SnowStaticsShell; unused here
+	float OpaqueCoverage;   // layout sync with SnowStaticsShell; unused here
+	float ProjNoiseTiling;  // layout sync with SnowStaticsShell; unused here
+	float ProjPixelEnable;  // layout sync with SnowStaticsShell; unused here
+	float padStatics2;
 }
 
 struct VS_INPUT

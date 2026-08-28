@@ -692,11 +692,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// on this draw. Tree-anim meshes are sentineled too: their vertex alpha
 	// is wind weight, not a snow mask, and vanilla forces alpha 1 on them.
 	float projThreshold = -1.0f;
+	float projNoiseScale = 0.0f;
+	float projNoiseTiling = 0.0f;
 	{
 		const auto& capFlags = a_pass->shaderProperty->flags;
 		using CapFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim))
-			projThreshold = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams.alpha;
+		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim)) {
+			const auto& projParams = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams;
+			projThreshold = projParams.alpha;
+			projNoiseScale = projParams.red;
+			projNoiseTiling = projParams.blue;
+		}
 	}
 
 	// Mountain/cliff family: force the rounded class. A jagged low-poly
@@ -720,7 +726,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, forceRounded });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1899,6 +1905,24 @@ void SnowDeformation::DrawCapturedStatics()
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
 	context->PSSetShaderResources(16, 2, skinFrostSRVs);
+	// Vanilla's projected-UV noise map (t21): S3 pixel relief reconstructs
+	// Lighting.hlsl's full projWeight, and this is its noise term. Engine-
+	// owned texture; a missing map just leaves the mode off (per-object CB
+	// gate below).
+	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
+	if (settings.ProjPixelRelief && settings.ProjDepthDensity) {
+		auto* graphicsState = globals::game::graphicsState;
+		auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
+		if (noiseTex && noiseTex->rendererTexture)
+			projNoiseSRV = noiseTex->rendererTexture->resourceView;
+	}
+	context->VSSetShaderResources(21, 1, &projNoiseSRV);
+	context->DSSetShaderResources(21, 1, &projNoiseSRV);
+	context->PSSetShaderResources(21, 1, &projNoiseSRV);
+	// The untessellated VS samples the noise with SampleLevel; the DS gets
+	// the same sampler in the tessellation block above.
+	ID3D11SamplerState* skinVSSampler = shellSnowSampler.get();
+	context->VSSetSamplers(0, 1, &skinVSSampler);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
@@ -2013,6 +2037,11 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ForceRounded = cap.forceRounded ? 1.0f : 0.0f;
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
+		scb.ProjNoiseScale = cap.projNoiseScale;
+		scb.ProjNoiseTiling = cap.projNoiseTiling;
+		// Pixel relief needs density mode (it upgrades that path's weight) and
+		// the engine's noise map; without either the shader runs unchanged.
+		scb.ProjPixelEnable = (settings.ProjPixelRelief && settings.ProjDepthDensity && projNoiseSRV) ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's
@@ -2054,6 +2083,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
+	context->VSSetShaderResources(21, 1, &nullSmoothSRV);
+	context->DSSetShaderResources(21, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

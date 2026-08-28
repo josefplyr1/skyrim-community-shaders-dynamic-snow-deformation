@@ -20,8 +20,10 @@
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
+#include "Common/Triplanar.hlsli"
 
 // Stochastic anti-tiling sampler (same include the terrain shell uses); the
 // frost crystal pattern scatters with it.
@@ -237,12 +239,23 @@ cbuffer StaticCB : register(b1)
 	// ROUNDED whatever its split-normal stats say. Mirror in
 	// SnowDeformation.h.
 	float ForceRounded;
-	float padStatics;
+	// projectedUVParams.x - strength of vanilla's projected-noise term for
+	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
+	float ProjNoiseScale;
 	// >0.5: the shape gates' coverage binarizes at 0.5 - no translucent
 	// dither films; the distance dissolve stays partial. Mirror in
 	// SnowDeformation.h.
 	float OpaqueCoverage;
-	float3 padStatics2;
+	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
+	// SnowDeformation.h.
+	float ProjNoiseTiling;
+	// >0.5: per-pixel authored relief (S3) - the density weight carries
+	// vanilla's full formula: +0.1 bias and the noise term, per generated
+	// vertex in the lift and per pixel in the coverage gate. Only set with
+	// density mode on and the noise map bound at t21. Mirror in
+	// SnowDeformation.h.
+	float ProjPixelEnable;
+	float padStatics2;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -263,6 +276,10 @@ Texture2D<float> BermFieldMap : register(t14);
 Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
+// Vanilla's projected-UV noise map (the BSGraphics default the game's own
+// Lighting.hlsl samples for projWeight), bound by the skin draw when
+// ProjPixelEnable is set; null and unread otherwise.
+Texture2D<float4> ProjNoiseMap : register(t21);
 
 // The terrain window also reaches the patch VS: the road-verge depth blend
 // needs the landscape class depth per vertex.
@@ -307,6 +324,10 @@ Texture2D<float4> SnowRmaosMap : register(t7);
 // self-shadow. float4 to match Extended Materials' TexParallaxSampler
 // convention; the SRV is single-channel, so only .x carries data.
 Texture2D<float4> SnowHeightMap : register(t8);
+SamplerState SnowSampler : register(s0);
+#elif defined(VSHADER) && !defined(PATCH)
+// Untessellated skin VS: ApplySkinLift's noise SampleLevel needs the wrap
+// sampler the PS/DS already declare.
 SamplerState SnowSampler : register(s0);
 #endif
 
@@ -1276,6 +1297,10 @@ struct SkinLift
 	// The authored-placement multiplier applied to UpFacing (1 = no data or
 	// disabled); the PS's density-mode coverage gate reads it interpolated.
 	float ProjFactor;
+	// Pixel-relief mode: the pre-noise biased weight (nz*alpha - threshold
+	// + 0.1), exported so the PS can subtract its own per-pixel noise sample
+	// instead of this stage's vertex-frequency one.
+	float ProjLinear;
 };
 
 SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat, float vertexAlpha)
@@ -1315,9 +1340,24 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// The cut-in kills sparse paint OUTRIGHT instead of rendering it thin,
 	// and the factor is exported for the PS's density-mode coverage gate.
 	float projFactor = 1.0;
+	float projLinear = 1.0;
 	[branch] if (ProjThreshold > -0.5)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
+		// S3 pixel relief: complete the reconstruction with vanilla's +0.1
+		// bias and its noise term (the two the round-3 view treated as
+		// cancelling - the mean of scale*noise IS ~0.1, so the grading bands
+		// below keep their tuning while the weight gains vanilla's ragged
+		// per-patch texture). Sampled at the BASE surface, pre-lift, which is
+		// where vanilla evaluates it. ProjLinear stays pre-noise: the PS
+		// subtracts its own per-pixel sample.
+		[branch] if (ProjPixelEnable > 0.5)
+		{
+			projWeight += 0.1;
+			projLinear = projWeight;
+			float3 triW = Triplanar::GetWeights(nrmWS, nrmWS);
+			projWeight -= ProjNoiseScale * Triplanar::SampleLevel(ProjNoiseMap, SnowSampler, worldBase, triW, ProjNoiseTiling, 0.0).x;
+		}
 		[flatten] if (ProjDensityEnable > 0.5)
 			projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
 		else [flatten] if (ProjMaskEnable > 0.5)
@@ -1413,6 +1453,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	o.Support = support;
 	o.UpFacing = upFacing;
 	o.ProjFactor = projFactor;
+	o.ProjLinear = projLinear;
 	return o;
 }
 
@@ -1562,7 +1603,9 @@ VS_OUTPUT main(VS_INPUT input)
 	}
 	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
 	vsout.Lift = lift.CoverDepth;
-	vsout.ProjFactor = lift.ProjFactor;
+	// Pixel-relief mode repurposes the interpolant: the pre-noise biased
+	// weight, so the PS can add the noise at ITS frequency.
+	vsout.ProjFactor = ProjPixelEnable > 0.5 ? lift.ProjLinear : lift.ProjFactor;
 	return vsout;
 }
 #else
@@ -1730,7 +1773,9 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	}
 	vsout.GridLocal = gridLocal;
 	vsout.Lift = lift.CoverDepth;
-	vsout.ProjFactor = lift.ProjFactor;
+	// Same repurposing as the untessellated VS: pre-noise weight in pixel-
+	// relief mode.
+	vsout.ProjFactor = ProjPixelEnable > 0.5 ? lift.ProjLinear : lift.ProjFactor;
 	return vsout;
 }
 #endif
@@ -1869,8 +1914,28 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// turned vanilla's thin trim into fat snow ropes (gable screenshots,
 	// 2026-08-28) - replacement grants, and the authored data may only
 	// ever take away.
-	[flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
-		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
+	// S3 pixel relief: the interpolant carries the pre-noise weight;
+	// subtracting the noise HERE, at pixel frequency, is what breaks the
+	// covered/uncovered boundary into vanilla's ragged patches, specks and
+	// bare crack faces (the purple view's structure). Same gate band either
+	// way, so the A/B isolates the noise term. Sampled at the base surface
+	// (lift subtracted) where vanilla evaluates the formula; gradients
+	// computed outside all flow control - implicit-derivative sampling is
+	// illegal inside it, and ddx/ddy are gradient ops themselves.
+	float3 projWorldPos = input.WorldPos + ShellCameraPosAdjust.xyz;
+	projWorldPos.z -= input.Lift;
+	float3 projGradX, projGradY;
+	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
+	[branch] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
+	{
+		float projGate = input.ProjFactor;
+		[branch] if (ProjPixelEnable > 0.5)
+		{
+			float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
+			projGate -= ProjNoiseScale * Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
+		}
+		pixelCoverage *= smoothstep(0.06, 0.14, projGate);
+	}
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every

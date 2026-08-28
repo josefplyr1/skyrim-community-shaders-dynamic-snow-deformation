@@ -481,6 +481,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttPdd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("proj_depth_density_tooltip"), "Object snow depth scales with how densely the artists painted the game's own snow onto each surface - full depth where the paint is solid, thinning to a dusting where it fades toward edges and slopes. A graded version of Authored Snow Placement that replaces its hard cutoff while on. Only affects meshes carrying the game's projected-snow data."));
 
+			ImGui::Checkbox(T(TKEY("proj_pixel_relief"), "Authored Snow Relief"), &settings.ProjPixelRelief);
+			if (auto _ttPpr = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("proj_pixel_relief_tooltip"), "The edge of object snow follows the game's own snow pattern pixel for pixel: ragged patch boundaries, scattered specks, and bare crack faces where the vanilla snow breaks up, instead of a smooth cut between covered and bare. Uses the same noise texture the game itself paints projected snow with. Needs Snow Depth Follows Density on; only affects meshes carrying the game's projected-snow data."));
+
 			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
 			if (auto _ttOt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));

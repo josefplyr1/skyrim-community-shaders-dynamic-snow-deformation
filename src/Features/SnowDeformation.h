@@ -473,6 +473,8 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
 		bool ProjDepthDensity = true;
+		/** @brief SKIN-PLACEMENT-PLAN S3: the density weight carries vanilla's FULL projected-snow formula - the +0.1 bias and the noise term, sampled from the game's own projected-noise map (per generated vertex in the lift, per pixel in the coverage gate). The covered/uncovered boundary breaks into the ragged patches, specks and bare crack faces the purple debug view shows, instead of a vertex-smooth cut. Requires ProjDepthDensity; inert without it or without the noise map. Default OFF for the A/B. */
+		bool ProjPixelRelief = false;
 		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
 		bool OpaqueObjectSnow = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
@@ -1341,6 +1343,10 @@ public:
 		bool fadeExempt;
 		/** @brief projectedUVParams.w from the draw's property, -1 without kProjectedUV; see StaticsCB::ProjThreshold. */
 		float projThreshold;
+		/** @brief projectedUVParams.x - vanilla's noise-term strength; 0 without projection data. */
+		float projNoiseScale;
+		/** @brief projectedUVParams.z - the noise map's world-space tiling; 0 without projection data. */
+		float projNoiseTiling;
 		/** @brief Mountain/cliff family by geometry name: force the ROUNDED class. The divergence-only flat classifier reads a jagged low-poly cliff's split normals as "plate" and drapes it with a rigid vertical lift of the full flat depth - the hovering sheet Josef reported as a translucent film. Deterministic name match (road-class precedent), NOT a stats heuristic (those were tried and rejected, see SmoothNormalsCS FlatStatsCS). */
 		bool forceRounded;
 	};
@@ -1490,10 +1496,15 @@ public:
 		float ProjDensityEnable;
 		/** @brief >0.5: CapturedSnowStatic::forceRounded - the class decision skips the flat classifier for this draw. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ForceRounded;
-		float padStatics;
+		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjNoiseScale;
 		/** @brief >0.5: Settings::OpaqueObjectSnow - the skin's shape-gate coverage binarizes at 0.5 (no translucent dither films; the distance dissolve stays partial). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float OpaqueCoverage;
-		float padStatics2[3];
+		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjNoiseTiling;
+		/** @brief >0.5: Settings::ProjPixelRelief with density mode on and the noise map bound at t21 (SKIN-PLACEMENT-PLAN S3). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjPixelEnable;
+		float padStatics2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
