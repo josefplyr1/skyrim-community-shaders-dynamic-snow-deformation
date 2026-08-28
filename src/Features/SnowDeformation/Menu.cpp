@@ -217,7 +217,7 @@ void SnowDeformation::DrawSettings()
 		if (settings.ProjPixelRelief) {
 			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How filled-in the painted snow is, on everything carrying the game's projected-snow data. At 0 it matches the game's own painted snow pattern exactly; raising it closes the small gaps and specks, ragged fringes last."));
+				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How filled-in the painted snow is, on everything carrying the game's projected-snow data. At 0 it matches the game's own painted snow pattern exactly; raising it closes the gaps and specks until, at maximum, the entire projected-snow area is covered. With the Debug Projected Snow Match view on, any purple still showing is exactly where this layer under-covers."));
 		} else {
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())

@@ -380,11 +380,22 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // a coat, so a class slider at 0 is a flat sheet rather than a 1-unit layer.
 static const float kMinSkinLift = 0.1;
 
-// Authored relief (S3): local dome height at which the noise term has fully
-// retired. At the sliders' low end the footprint is exactly vanilla's ragged
-// projected pattern; as the (pre-noise) dome grows toward this height the
-// specks and cracks bridge over, fringe last - Josef's fill-in sketch.
-static const float kProjFillDepth = 10.0;
+// Authored relief (S3): the Snow Fill slider value at which the noise term
+// has fully retired - set to the slider's maximum so the knob is a linear
+// 0-100%: at 0 the footprint is exactly vanilla's ragged projected pattern,
+// at the top the ENTIRE positive-weight area is covered and the purple
+// match view has nothing left to show (Josef's round-6 spec).
+static const float kProjFillDepth = 25.0;
+
+// Authored relief: the parked coat's clearance above its source mesh.
+// kMinSkinLift (0.1 units = about a millimetre) is enough for surfaces the
+// coverage gates keep from ever SHADING coincident, but the coat IS shaded
+// - and at a millimetre the depth buffer cannot separate shell from source
+// at distance, so the coat lost most of its pixels to its own object and
+// vanilla's PD showed through (round 5's invisible-coat bug: "Snow Fill
+// does nothing", "Snow Deformation OFF makes no difference"). Two units
+// (~3 cm) still reads dead flat and wins the z-test cleanly.
+static const float kProjCoatLift = 2.0;
 
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
@@ -1471,14 +1482,14 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// captured object wears a raised shell while the footprint work is
 	// under way; the fence's no-PD snow ridge was the tell).
 	[flatten] if (ProjPixelEnable > 0.5)
-		depth = min(depth, kMinSkinLift);
+		depth = min(depth, kProjCoatLift);
 	// Authored-placement clearance floor: every pixel the PS's per-pixel
 	// cut may grant needs real separation from its source mesh or the
-	// shell z-fights it, and the per-pixel G-buffer normal can score
-	// up-facing where every vertex-level term is near zero - no vertex-side
-	// key can bound what the PS may grant.
+	// shell z-fights it invisible (see kProjCoatLift), and the per-pixel
+	// G-buffer normal can score up-facing where every vertex-level term is
+	// near zero - no vertex-side key can bound what the PS may grant.
 	[flatten] if (ProjPixelEnable > 1.5)
-		depth = max(depth, kMinSkinLift);
+		depth = max(depth, kProjCoatLift);
 
 	SkinLift o;
 	o.WorldAbs = worldBase + liftWS * depth;
@@ -1991,12 +2002,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 		}
 		float wLinPix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		// Fill: the class slider drives how much of the noise term retires
-		// (extrusion is parked, so the sliders ARE the coverage knobs). At
-		// 0 the footprint is exactly vanilla's painted pattern; raising it
-		// bridges the specks and cracks where the pre-noise weight is
-		// solid, fringe last.
-		float fill = saturate(liftBase * saturate(wLinPix) / kProjFillDepth);
+		// Fill: the Snow Fill slider, linear 0-100% (see kProjFillDepth) -
+		// how much of the noise term retires. At 0 the footprint is exactly
+		// vanilla's painted pattern; at the top every positive-weight pixel
+		// is covered and the purple match view goes fully dark. Deliberately
+		// NOT weighted by the local weight any more: Josef's round-6 spec
+		// wants the slider's maximum to cover the WHOLE PD area, weak paint
+		// included.
+		float fill = saturate(liftBase / kProjFillDepth);
 		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
 		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
 		float wpix = wLinPix - ProjNoiseScale * (1.0 - fill) * noise;
