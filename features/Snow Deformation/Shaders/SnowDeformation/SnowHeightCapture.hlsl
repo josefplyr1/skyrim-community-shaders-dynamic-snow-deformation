@@ -72,6 +72,9 @@ struct VS_OUTPUT
 	// object (the PS turns it into the road's top height).
 	float2 SkinDepth : TEXCOORD1;
 	float2 WorldXY : TEXCOORD2;
+	// World-space normal z: the peel passes reject surfaces that cannot
+	// carry snow (undersides, walls) from owning a layer.
+	float NormalZ : TEXCOORD3;
 };
 
 #ifdef VSHADER
@@ -112,23 +115,40 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.WorldZ = worldAbs.z;
 	vsout.SkinDepth = float2(skinDepth, RoadField > 0.5 ? 1.0 : 0.0);
 	vsout.WorldXY = worldAbs.xy;
+	float3 nrmMS = input.Normal.xyz * 2.0 - 1.0;
+	float3 nrmWS = float3(
+		dot(WorldRow0.xyz, nrmMS),
+		dot(WorldRow1.xyz, nrmMS),
+		dot(WorldRow2.xyz, nrmMS));
+	vsout.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
 	return vsout;
 }
 #endif
 
-#if defined(PSHADER) && defined(PEEL)
-// S4 phase 2 - layer-2 peel (SKIN-PLACEMENT-PLAN): re-rasterize the
+#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2))
+// S4 phase 2 - layer peels (SKIN-PLACEMENT-PLAN): re-rasterize the
 // captures keeping only fragments a peel tolerance BELOW this frame's
-// accumulated layer-1 top; MAX blending then yields the SECOND-highest
-// surface per column. Every plank, tread and beam below a roof or
-// railing gets its own plane, its own rims, its own roll.
+// accumulated layer-1 top (PEEL2: below layer 2 as well); MAX blending
+// then yields the next-highest surface per column. Every plank, tread
+// and beam below a roof or railing gets its own plane, its own rims,
+// its own roll.
 Texture2D<float> Layer1Top : register(t3);
+#	if defined(PEEL2)
+Texture2D<float> Layer2Top : register(t4);
+#	endif
 // Mirror: SnowStaticsShell.hlsl kPeelTol - surfaces within this z-band
-// of the column top belong to layer 1's plane.
+// of a layer's top belong to that layer's plane.
 static const float kPeelTol = 8.0;
 
 float main(VS_OUTPUT input) : SV_Target0
 {
+	// Only up-facing surfaces may OWN a peeled layer. The capture
+	// rasterizes both faces (the bottoms map needs undersides), and a
+	// roof's own underside claiming layer 2 starved the real floor
+	// beneath it of any plane at all - the "no snow under roofs"
+	// remnant. Undersides and walls can never carry snow.
+	[branch] if (input.NormalZ < 0.05)
+		discard;
 	float2 dims;
 	Layer1Top.GetDimensions(dims.x, dims.y);
 	float2 local = (input.WorldXY - HeightWindowCenter) / HeightHalfExtent;
@@ -137,6 +157,12 @@ float main(VS_OUTPUT input) : SV_Target0
 	float top1 = Layer1Top.Load(int3(t, 0));
 	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - kPeelTol)
 		discard;
+#	if defined(PEEL2)
+	// No third layer without a second, and only strictly below it.
+	float top2 = Layer2Top.Load(int3(t, 0));
+	[branch] if (top2 < -50000.0 || input.WorldZ > top2 - kPeelTol)
+		discard;
+#	endif
 	return input.WorldZ;
 }
 #elif defined(PSHADER)

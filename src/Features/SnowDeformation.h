@@ -1580,6 +1580,9 @@ public:
 	/** @brief S4 phase 2 - the PEELED second layer: ping-pong accumulated raw top of the highest surface more than kPeelTol below layer 1 per column, plus its own repose cone. A vertex whose height matches layer 2 takes its roll from here (SKIN-PLACEMENT-PLAN, layered top peeling). Skin VS/DS t24 (top) and t26 (cone). */
 	Texture2D* heightTop2Raw[2] = { nullptr, nullptr };
 	Texture2D* objectSnowCone2 = nullptr;
+	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
+	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
+	Texture2D* objectSnowCone3 = nullptr;
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
@@ -1590,8 +1593,10 @@ public:
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
-	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest surface per column. */
+	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
+	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
+	ID3D11PixelShader* heightPeel2PS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;

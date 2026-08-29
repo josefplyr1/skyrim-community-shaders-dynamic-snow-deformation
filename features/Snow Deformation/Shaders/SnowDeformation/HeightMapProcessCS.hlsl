@@ -227,14 +227,19 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	float texelDepth = max(InB[dtid.xy], 0.0);
 	float seed = max(texelDepth, ObjectSnowDepth);
 
-	// Internal rims: a step taller than the layer sheds it the same way the
-	// outer silhouette does. Floored so shallow settings do not read ordinary
-	// surface roughness as a cliff. BRIDGED one texel out: the cracks
-	// between walkway boards are single empty texels at this raster's
-	// 4-unit resolution, and treating each as a rim pinched every board
-	// into its own pillow with holes between (Josef's S4 walkway shot);
+	// Internal rims: a LEVEL BREAK sheds the layer the same way the outer
+	// silhouette does. Detected as a slope DISCONTINUITY, not an absolute
+	// drop: on a continuous slope the drop to the neighbour matches the
+	// drop continuing one texel beyond (second difference ~ 0), while a
+	// stair tread or ledge drops the full step against a flat run. The old
+	// absolute test (drop > max(seed, 8)) let the class depth bury every
+	// step shallower than the slider - at depth 25 a whole staircase read
+	// as ONE plane and the fillet arced across the treads. BRIDGED one
+	// texel out as before: the cracks between walkway boards are single
+	// empty texels at this raster's 4-unit resolution, and treating each
+	// as a rim pinched every board into its own pillow with holes between;
 	// a real silhouette is empty for many texels and still rims.
-	float rimDrop = max(seed, 8.0);
+	static const float kRimStep = 6.0;
 	bool rim = false;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
@@ -242,11 +247,21 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		int2 p = int2(dtid.xy) + offs;
 		if (any(p < 0) || any(p >= int2(dims)))
 			continue;
-		float n = InA[uint2(p)];
+		float n1 = InA[uint2(p)];
+		float n2 = -100000.0;
 		int2 p2 = int2(dtid.xy) + offs * 2;
 		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
-			n = max(n, InA[uint2(p2)]);
-		if (n < -50000.0 || (top - n) > rimDrop)
+			n2 = InA[uint2(p2)];
+		float n = max(n1, n2);
+		if (n < -50000.0) {
+			rim = true;
+			continue;
+		}
+		float drop = top - n;
+		// Slope carrying on past the neighbour cancels the drop; a step
+		// against a flat run keeps it in full.
+		float carry = max(n1 - n2, 0.0);
+		if (drop - carry > kRimStep)
 			rim = true;
 	}
 
