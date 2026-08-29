@@ -205,7 +205,7 @@ void SnowDeformation::DrawSettings()
 		// recolor of the game's own projected snow, and our raised 3D layer.
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, two ways at once: the projection's texture and material are swapped for the snow shell's set inside the object's own shader, and a thin flat shell hugging the object covers the projected-snow area with the shell's material - from every angle, overhangs included. The Snow Fill slider below picks how much of that area the flat shell covers, most up-facing parts first. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow: the projection's texture and material are swapped for the snow shell's set inside the object's own shader, so it works from every angle, overhangs included. The Snow Fill slider below pushes the pattern to full coverage, most up-facing parts first. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
 
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
 		if (auto _tt3d = Util::HoverTooltipWrapper())
@@ -224,7 +224,7 @@ void SnowDeformation::DrawSettings()
 		if (settings.ProjSnowMatch) {
 			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How much of the game's projected-snow area the flat shell covers: the most up-facing parts come first, and at maximum every angle of the pattern is covered - undersides included. The pattern itself always matches the game's own painted snow exactly. With the Debug Projected Snow Match view on, any purple still showing is exactly where the flat shell under-covers."));
+				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, and at maximum every angle of the pattern is fully covered - undersides included. At 0 the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
 		} else {
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())

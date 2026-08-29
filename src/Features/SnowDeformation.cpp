@@ -559,6 +559,11 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
+	// Snow Fill, 0..1 across the slider's span: how much of the projected
+	// footprint the recolor pushes to FULL shell-snow weight, most
+	// up-facing pixels first (SKIN-PLACEMENT-PLAN round 11 - the fill
+	// lives in Lighting's recolor, where the real weight is).
+	data.ProjSnowFill = std::clamp(settings.SnowMeshesDepth / 25.0f, 0.0f, 1.0f);
 	data.BakedSnowEnable = (settings.EnableSnowDeformation && settings.GlacierSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows

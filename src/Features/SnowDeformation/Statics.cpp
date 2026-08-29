@@ -13,16 +13,6 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
-// The engine's projected-noise map, when reachable - authored relief's hard
-// dependency. Checked identically at capture-raster and skin time so both
-// passes pick the same class for a draw.
-static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
-{
-	auto* graphicsState = globals::game::graphicsState;
-	auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
-	return (noiseTex && noiseTex->rendererTexture) ? noiseTex->rendererTexture->resourceView : nullptr;
-}
-
 // True if the scenegraph carries a live attached light. A burning torch (held
 // or dropped) has a NiPointLight in its 3D; torch-snuffing mods remove it
 // while keeping the carryable light base form.
@@ -1492,15 +1482,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		// Same class pick as the skin: authored relief retires the flat
-		// classifier on PD draws outright - ALL rounded (Josef's round-5
-		// call; the plank family match survives, logged, for the future
-		// cornice work but decides nothing today).
-		{
-			const bool authoredRelief = settings.ProjSnowMatch && !cap.road &&
-			                            cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
-			scb.ClassOverride = (authoredRelief || cap.forceRounded) ? 1.0f : 0.0f;
-		}
+		// Same class pick as the skin (the flat PD cover lives in Lighting
+		// since round 11, so the classifier is back for every skin draw).
+		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
@@ -1942,29 +1926,24 @@ void SnowDeformation::DrawCapturedStatics()
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
 	context->PSSetShaderResources(16, 2, skinFrostSRVs);
-	// Vanilla's projected-UV noise map (PS t21): authored relief (S3)
-	// reconstructs Lighting.hlsl's full projWeight per pixel, and this is
-	// its noise term. Engine-owned texture; a missing map just leaves the
-	// mode off (per-object CB gate below).
-	ID3D11ShaderResourceView* projNoiseSRV = settings.ProjSnowMatch ? SD_ProjNoiseMapSRV() : nullptr;
+	// t21 (noise map) and t23 (pre-shell normals copy) belong to the skin's
+	// dormant per-pixel placement machinery (kept for the 3D rebuild); the
+	// flat PD cover lives in Lighting's recolor since round 11, so nothing
+	// is fetched or bound here.
+	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	// Pre-shell normals copy (PS t23): the per-pixel nz for the coverage
-	// cut - the scene's own shaded normal, normal maps included.
-	ID3D11ShaderResourceView* skinNormalsSRV = settings.ProjSnowMatch ? preSkinNormalsCopySRV.get() : nullptr;
+	ID3D11ShaderResourceView* skinNormalsSRV = nullptr;
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
-		// Which cover system owns this draw (Josef's round-10 split): the
-		// flat PD shell belongs to "Recolor Projected Snow", the classic
-		// height-adjustable skin to "3D Snow on Objects" - each master
-		// toggle gates only its own. Roads are their own machinery and
-		// always draw.
-		const bool coatDraw = settings.ProjSnowMatch && projNoiseSRV && !cap.road &&
-		                      cap.projThreshold > -0.5f;
-		if (!coatDraw && !cap.road && !settings.ObjectSnow3D)
+		// The flat PD cover moved INTO Lighting's recolor (round 11 - the
+		// object's own shader has the real weight; the round-4..10 skin
+		// coats are why). The skins are the 3D layer only, gated by its
+		// master toggle; roads are their own machinery and always draw.
+		if (!cap.road && !settings.ObjectSnow3D)
 			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape) {
@@ -2073,15 +2052,14 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		// Flat-shell draws retire the flat classifier outright: ALL rounded
-		// (the plank family match survives, logged, for the future cornice
-		// work but decides nothing today).
-		scb.ClassOverride = (coatDraw || cap.forceRounded) ? 1.0f : 0.0f;
+		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// 2 = the flat PD shell owns this draw, 0 = classic path.
-		scb.ProjPixelEnable = coatDraw ? 2.0f : 0.0f;
+		// Always 0 since round 11: the flat PD cover lives in Lighting's
+		// recolor now. The shader's mode-2 machinery stays dormant for the
+		// coming 3D rebuild.
+		scb.ProjPixelEnable = 0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

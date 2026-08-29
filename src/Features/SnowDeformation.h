@@ -555,7 +555,7 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief "Recolor Projected Snow" - BOTH halves of "the game's projected snow looks like ours" (SKIN-PLACEMENT-PLAN S3, round 10): (a) the Lighting-side recolor - projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow; (b) the FLAT PD SHELL - a constant kProjCoatLift coat inflated along the sealed smooth normal (covers every angle; a normal-offset copy is strictly nearer the camera on any visible pixel, so it always wins z - the property the vertical lift lacked), placed per pixel by vanilla's full reconstructed weight, noise included. "Snow Fill" (SnowMeshesDepth) selects the angular slice of that footprint: most up-facing first, slider max = every angle. Replaced the retired ProjPixelRelief toggle. */
+		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (SnowMeshesDepth -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
 		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
 		bool GlacierSnowMatch = true;
@@ -586,7 +586,8 @@ public:
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
 		float BakedSnowEnable;
-		float padLod;
+		/** @brief Snow Fill, 0..1: fraction of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 1 = every angle solid. Mirror in SharedData.hlsli. */
+		float ProjSnowFill;
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
@@ -1381,7 +1382,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
-	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the authored-relief coverage cut reads its nz here (SKIN-PLACEMENT-PLAN S3). Taken only while Settings::ProjSnowMatch is on; bound at skin PS t23. */
+	/** @brief DORMANT since round 11 (the flat PD cover lives in Lighting's recolor, which has the real normal): pre-shell copy of the NORMALROUGHNESS target for the skin's per-pixel placement machinery, kept for the 3D rebuild. Never filled today; skin PS t23 stays null. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
 

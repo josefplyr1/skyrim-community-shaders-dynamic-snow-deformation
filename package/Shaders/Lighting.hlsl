@@ -1808,6 +1808,20 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (snowProjMatch)
 	{
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+		// Snow Fill (SKIN-PLACEMENT-PLAN round 11): sweep the projected
+		// footprint by facing - most up-facing pixels first - and push
+		// accepted pixels to FULL shell-snow weight. 0 leaves vanilla's own
+		// graded paint; 1 turns every projected-snow pixel solid, every
+		// angle included. This operates on the REAL weight in the object's
+		// own shader, so there is nothing to reconstruct and no geometry
+		// that could miss an angle - the round-4..10 skin-coat attempts
+		// are why this lives here.
+		float projSnowFill = SharedData::snowDeformationSettings.ProjSnowFill;
+		[flatten] if (projSnowFill > 0.001 && projectedMaterialWeight > 0.003)
+		{
+			float fillNzCut = 1.0 - 2.0 * projSnowFill;
+			projectedMaterialWeight = max(projectedMaterialWeight, smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, worldNormal.z));
+		}
 		[branch] if (projectedMaterialWeight > 0.003)
 		{
 			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
