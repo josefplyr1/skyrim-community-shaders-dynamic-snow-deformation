@@ -473,8 +473,6 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
 		bool ProjDepthDensity = true;
-		/** @brief SKIN-PLACEMENT-PLAN S3 (Josef's spec): on PD draws the shell is placed by vanilla's weight rebuilt PER PIXEL - the G-buffer normal, the authored alpha, threshold, +0.1 bias and the noise term - so the footprint matches the purple debug view. Depth source is the verified round-3 form (restored round 7 at Josef's request after the flat-coat experiment z-banded into invisibility): the weight itself scaled by up-facingness, a REAL lift, with the "Snow Fill" slider raising depth and closing the pattern's gaps together. ALL PD draws classify ROUNDED (no plank exception); no-PD draws run the classic path untouched. Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
-		bool ProjPixelRelief = false;
 		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default flipped OFF per Josef 2026-08-28 (round 9): with Authored Snow Relief the partial edge BLENDS into the game's own painted snow, which reads better than the hard cut. */
 		bool OpaqueObjectSnow = false;
 		/** @brief Master toggle for the raised 3D object snow layer (the statics skins). Off skips only the skin draws - capture, height rasters and the road/trench patch keep running - so "Recolor Projected Snow" (ProjSnowMatch) can be judged alone during the object-snow rework (Josef, 2026-08-28). */
@@ -557,7 +555,7 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief Projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow. */
+		/** @brief "Recolor Projected Snow" - BOTH halves of "the game's projected snow looks like ours" (SKIN-PLACEMENT-PLAN S3, round 10): (a) the Lighting-side recolor - projected snow wears the shell's snow set (albedo + PBR response) on draws whose projected material is snow; (b) the FLAT PD SHELL - a constant kProjCoatLift coat inflated along the sealed smooth normal (covers every angle; a normal-offset copy is strictly nearer the camera on any visible pixel, so it always wins z - the property the vertical lift lacked), placed per pixel by vanilla's full reconstructed weight, noise included. "Snow Fill" (SnowMeshesDepth) selects the angular slice of that footprint: most up-facing first, slider max = every angle. Replaced the retired ProjPixelRelief toggle. */
 		bool ProjSnowMatch = true;
 		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
 		bool GlacierSnowMatch = true;
@@ -1383,7 +1381,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
-	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the authored-relief coverage cut reads its nz here (SKIN-PLACEMENT-PLAN S3). Taken only while Settings::ProjPixelRelief is on; bound at skin PS t23. */
+	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the authored-relief coverage cut reads its nz here (SKIN-PLACEMENT-PLAN S3). Taken only while Settings::ProjSnowMatch is on; bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
 

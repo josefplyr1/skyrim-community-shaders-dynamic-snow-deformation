@@ -1497,7 +1497,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// call; the plank family match survives, logged, for the future
 		// cornice work but decides nothing today).
 		{
-			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
+			const bool authoredRelief = settings.ProjSnowMatch && !cap.road &&
 			                            cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (authoredRelief || cap.forceRounded) ? 1.0f : 0.0f;
 		}
@@ -1946,21 +1946,25 @@ void SnowDeformation::DrawCapturedStatics()
 	// reconstructs Lighting.hlsl's full projWeight per pixel, and this is
 	// its noise term. Engine-owned texture; a missing map just leaves the
 	// mode off (per-object CB gate below).
-	ID3D11ShaderResourceView* projNoiseSRV = settings.ProjPixelRelief ? SD_ProjNoiseMapSRV() : nullptr;
+	ID3D11ShaderResourceView* projNoiseSRV = settings.ProjSnowMatch ? SD_ProjNoiseMapSRV() : nullptr;
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
 	// Pre-shell normals copy (PS t23): the per-pixel nz for the coverage
 	// cut - the scene's own shaded normal, normal maps included.
-	ID3D11ShaderResourceView* skinNormalsSRV = settings.ProjPixelRelief ? preSkinNormalsCopySRV.get() : nullptr;
+	ID3D11ShaderResourceView* skinNormalsSRV = settings.ProjSnowMatch ? preSkinNormalsCopySRV.get() : nullptr;
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 
-	// Master toggle for the 3D layer: capture, the height rasters and the
-	// road/trench patch below keep running - only the skin draws skip, so
-	// "Recolor Projected Snow" can be judged alone during the object-snow
-	// rework (Josef, 2026-08-28).
-	if (settings.ObjectSnow3D)
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
+			continue;
+		// Which cover system owns this draw (Josef's round-10 split): the
+		// flat PD shell belongs to "Recolor Projected Snow", the classic
+		// height-adjustable skin to "3D Snow on Objects" - each master
+		// toggle gates only its own. Roads are their own machinery and
+		// always draw.
+		const bool coatDraw = settings.ProjSnowMatch && projNoiseSRV && !cap.road &&
+		                      cap.projThreshold > -0.5f;
+		if (!coatDraw && !cap.road && !settings.ObjectSnow3D)
 			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape) {
@@ -2069,27 +2073,15 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		// Authored relief retires the flat classifier on PD draws outright:
-		// ALL rounded (Josef's round-5 call - his stairs/planks screenshots
-		// showed the split still misfiring; the plank family match survives,
-		// logged, for the future cornice work but decides nothing today).
-		{
-			const bool authoredRelief = settings.ProjPixelRelief && !cap.road &&
-			                            cap.projThreshold > -0.5f && projNoiseSRV;
-			scb.ClassOverride = (authoredRelief || cap.forceRounded) ? 1.0f : 0.0f;
-		}
+		// Flat-shell draws retire the flat classifier outright: ALL rounded
+		// (the plank family match survives, logged, for the future cornice
+		// work but decides nothing today).
+		scb.ClassOverride = (coatDraw || cap.forceRounded) ? 1.0f : 0.0f;
 		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// 2 = authored placement (PD data present), 0 = classic path (mode
-		// off, no PD data, or a road - the heightfield owns roads). The
-		// round-5 "park no-PD draws too" middle state (1) is retired with
-		// the flat-coat experiment: no-PD draws run the classic path
-		// untouched. Off without the noise map.
-		scb.ProjPixelEnable = (settings.ProjPixelRelief && projNoiseSRV && !cap.road &&
-		                          cap.projThreshold > -0.5f) ?
-		                          2.0f :
-		                          0.0f;
+		// 2 = the flat PD shell owns this draw, 0 = classic path.
+		scb.ProjPixelEnable = coatDraw ? 2.0f : 0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

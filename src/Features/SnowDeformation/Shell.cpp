@@ -812,7 +812,7 @@ void SnowDeformation::DrawShell()
 		// off-cost is zero; the null SRV keeps HasSkinNormalCopy off.
 		preSkinNormalsCopySRV = nullptr;
 		auto& normalsRT = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
-		if (settings.ProjPixelRelief && normalsRT.SRV) {
+		if (settings.ProjSnowMatch && normalsRT.SRV) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(normalsRT.SRV, "SnowDeformation::PreSkinNormalsCopy", preSkinNormalsCopyTex, preSkinNormalsCopySRV);
 		}
