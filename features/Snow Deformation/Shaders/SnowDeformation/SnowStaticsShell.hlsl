@@ -1480,12 +1480,16 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float mask = smoothstep(0.0, 0.05, wLin);
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		mask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		// NO top-visibility cut (Josef, 2026-08-29): comparing against the
+		// GLOBAL column top made anything under a roof or railing lose its
+		// shell with a hard mid-plank cliff - the walkway's red-outlined
+		// edges. Snow builds wherever the projected footprint says, roofs
+		// included; the proper sheltering ("no snow under tents") returns
+		// later as its own mechanism. Undersides stay harmless: their
+		// up-displaced faces land inside their own geometry.
 		float rollT = 1.0;
 		[branch] if (HasObjectTop > 0.5)
 		{
-			float objTop = PatchTop(worldBase.xy);
-			[flatten] if (objTop > -50000.0)
-				mask *= smoothstep(-8.0, -2.0, worldBase.z - objTop);
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 			rollT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
 		}

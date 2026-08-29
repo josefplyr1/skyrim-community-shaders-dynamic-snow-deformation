@@ -747,6 +747,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		plankFamily = loweredName.find("plank") != std::string::npos ||
 		              loweredName.find("walkway") != std::string::npos ||
 		              loweredName.find("catwalk") != std::string::npos;
+		// Snow-drift family: pure snow meshes carry no projected-UV data on
+		// their property, so the S4 shell would skip them - and with the
+		// old shell retired they stood bare (Josef, 2026-08-29). Treat them
+		// as fully painted: threshold 0, no noise term (their scale stays
+		// 0), alpha defaults to 1 without vertex colors.
+		if (projThreshold < -0.5f &&
+			(loweredName.find("snowdrift") != std::string::npos ||
+				loweredName.find("snowpile") != std::string::npos)) {
+			projThreshold = 0.0f;
+			static std::unordered_set<std::string> loggedDriftNames;
+			if (loggedDriftNames.size() > 4096)
+				loggedDriftNames.clear();
+			if (loggedDriftNames.insert(loweredName).second)
+				logger::info("[SNOW DEFORMATION] drift family (S4 shell, fully painted): '{}'", loweredName);
+		}
 		if (plankFamily) {
 			static std::unordered_set<std::string> loggedPlankNames;
 			if (loggedPlankNames.size() > 4096)
