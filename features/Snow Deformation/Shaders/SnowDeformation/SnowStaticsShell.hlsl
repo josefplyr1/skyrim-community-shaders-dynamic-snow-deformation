@@ -268,7 +268,11 @@ cbuffer StaticCB : register(b1)
 	// cos(max shell slope): minimum normal Z that grows the S4 shell -
 	// the up-facing gate, user-tunable. Mirror in SnowDeformation.h.
 	float ShellMinNz;
-	float3 padS4;
+	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
+	// z-band of a layer's top belong to that layer's plane. Mirror in
+	// SnowHeightCapture.hlsl / SnowDeformation.h.
+	float PeelTol;
+	float2 padS4;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -561,18 +565,17 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // Cone-transformed snow surface over the same window: the angle of repose
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
-// S4 phase 2 - the PEELED second layer: the highest surface more than
-// kPeelTol below layer 1 per column, with its own cone. A vertex whose
-// height matches layer 2 takes its roll from here, so a tread under a
-// railing or a beam under a roof gets ITS OWN plane's rims instead of
-// borrowing the plane above (the beam-streak / staircase-hole root).
+// S4 phase 2 - the PEELED second layer: the highest up-facing surface
+// more than the peel tolerance below layer 1 per column, with its own
+// cone. A vertex whose height matches layer 2 takes its roll from here,
+// so a tread under a railing or a beam under a roof gets ITS OWN
+// plane's rims instead of borrowing the plane above (the beam-streak /
+// staircase-hole root).
 Texture2D<float> ObjectTop2Raw : register(t24);
 Texture2D<float> ObjectSnowCone2 : register(t26);
 // K=3: the third peeled layer for roof-over-beam-over-floor columns.
 Texture2D<float> ObjectTop3Raw : register(t27);
 Texture2D<float> ObjectSnowCone3 : register(t28);
-// Mirror: SnowHeightCapture.hlsl kPeelTol.
-static const float kPeelTol = 8.0;
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -713,6 +716,44 @@ float ObjectConeDepth3(float2 worldXY)
 	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// NEAREST-texel layer tops, for the lift's layer select only. The
+// MAX-of-4 twins above spread a higher neighbour one texel outward,
+// which flipped every vertex within a texel of a stair riser onto the
+// UPPER tread's layer - a band of confused spikes along each seam.
+// The select wants the top of the vertex's own column, nothing wider.
+float PatchTopPoint(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTopRaw.GetDimensions(dims.x, dims.y);
+	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
+	return ObjectTopRaw.Load(int3(t, 0));
+}
+
+float PatchTop2Point(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTop2Raw.GetDimensions(dims.x, dims.y);
+	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
+	return ObjectTop2Raw.Load(int3(t, 0));
+}
+
+float PatchTop3Point(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTop3Raw.GetDimensions(dims.x, dims.y);
+	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
+	return ObjectTop3Raw.Load(int3(t, 0));
 }
 #endif
 
@@ -1592,16 +1633,16 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			// surface and it gets NO roll data rather than a full-height
 			// interior borrowed from someone else's plane - which was the
 			// beam-streak and staircase-hole failure.
-			float top1 = PatchTop(worldBase.xy);
-			[branch] if (top1 > -50000.0 && worldBase.z < top1 - kPeelTol)
+			float top1 = PatchTopPoint(worldBase.xy);
+			[branch] if (top1 > -50000.0 && worldBase.z < top1 - PeelTol)
 			{
-				float top2 = PatchTop2(worldBase.xy);
+				float top2 = PatchTop2Point(worldBase.xy);
 				cone = ObjectConeDepth2(worldBase.xy);
-				[branch] if (top2 < -50000.0 || worldBase.z < top2 - kPeelTol)
+				[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
 				{
-					float top3 = PatchTop3(worldBase.xy);
+					float top3 = PatchTop3Point(worldBase.xy);
 					cone = ObjectConeDepth3(worldBase.xy);
-					[flatten] if (top3 < -50000.0 || worldBase.z < top3 - kPeelTol)
+					[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
 						cone = 0.0;
 				}
 			}

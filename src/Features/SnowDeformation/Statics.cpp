@@ -1160,6 +1160,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
+	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1635,6 +1636,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 			scb.HeightWindowCenter = heightWindowCenter;
 			scb.HeightHalfExtent = kHeightMapHalfExtent;
+			scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
 			staticsCB->Update(scb);
 			context->DrawIndexed(indexCount, 0, 0);
 		}
@@ -2262,6 +2264,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjPixelEnable = s4Shell ? 2.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		scb.ShellMinNz = std::cos(std::clamp(settings.ShellMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

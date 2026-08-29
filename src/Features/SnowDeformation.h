@@ -465,6 +465,10 @@ public:
 		float ObjectsSnowDepth = 3.0f;
 		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). */
 		float ShellMaxSlopeDeg = 80.0f;
+		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
+		float PlaneSplitStep = 6.0f;
+		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
+		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
 		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
@@ -1515,7 +1519,9 @@ public:
 		float HasSkinNormalCopy;
 		/** @brief cos(Settings::ShellMaxSlopeDeg): minimum normal Z that grows the S4 shell (the shell's up-facing gate, user-tunable). Grew the CB a row. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ShellMinNz;
-		float padS4[3];
+		/** @brief Settings::PlaneMergeHeight - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float PeelTol;
+		float padS4[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -1625,7 +1631,9 @@ public:
 		float GhostDecay;
 		/** @brief Rounded-class snow depth, seeding the object snow cone. */
 		float ObjectSnowDepth;
-		float padHeight[2];
+		/** @brief Settings::PlaneSplitStep - the cone seed's slope-discontinuity rim threshold (user-tunable). */
+		float RimStep;
+		float padHeight;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;

@@ -38,7 +38,8 @@ cbuffer HeightProcessCB : register(b0)
 
 	float GhostDecay;  // units/frame the accumulated maps drift toward empty
 	float ObjectSnowDepth;  // rounded-class depth, for the object snow cone seed
-	float2 padHeight;
+	float RimStep;  // the seed's slope-discontinuity rim threshold (user knob)
+	float padHeight;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -238,8 +239,8 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	// texel out as before: the cracks between walkway boards are single
 	// empty texels at this raster's 4-unit resolution, and treating each
 	// as a rim pinched every board into its own pillow with holes between;
-	// a real silhouette is empty for many texels and still rims.
-	static const float kRimStep = 6.0;
+	// a real silhouette is empty for many texels and still rims. The
+	// threshold is the "Plane Split Step" knob.
 	bool rim = false;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
@@ -261,7 +262,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		// Slope carrying on past the neighbour cancels the drop; a step
 		// against a flat run keeps it in full.
 		float carry = max(n1 - n2, 0.0);
-		if (drop - carry > kRimStep)
+		if (drop - carry > RimStep)
 			rim = true;
 	}
 

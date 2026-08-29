@@ -235,6 +235,14 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSlope = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface."));
 
+		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
+		if (auto _ttSplit = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this becomes its own snow plane with its own rounded rims (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps back into one continuous surface. Sloped roofs and rocks never self-split regardless."));
+
+		ImGui::SliderFloat(T(TKEY("plane_merge_height"), "Plane Merge Height"), &settings.PlaneMergeHeight, 2.0f, 24.0f, "%.0f units");
+		if (auto _ttMerge = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("plane_merge_height_tooltip"), "Surfaces within this height below a plane's top count as part of that plane. Only three stacked planes per spot get snow, so raising this makes thin trims and beams under a roof merge into it instead of using up a plane - helps bare patches under roofs. Lowering separates near-touching boards."));
+
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -
 		// no scrolling between Snow Trenches and the model depths).

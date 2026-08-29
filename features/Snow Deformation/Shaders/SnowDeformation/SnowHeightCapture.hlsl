@@ -55,7 +55,11 @@ cbuffer StaticCB : register(b1)
 	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
 	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here
 	float ShellMinNz;         // layout sync with SnowStaticsShell; unused here
-	float3 padS4;
+	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
+	// z-band of a layer's top belong to that layer's plane. Mirror in
+	// SnowStaticsShell.hlsl / SnowDeformation.h.
+	float PeelTol;
+	float2 padS4;
 }
 
 struct VS_INPUT
@@ -136,9 +140,6 @@ Texture2D<float> Layer1Top : register(t3);
 #	if defined(PEEL2)
 Texture2D<float> Layer2Top : register(t4);
 #	endif
-// Mirror: SnowStaticsShell.hlsl kPeelTol - surfaces within this z-band
-// of a layer's top belong to that layer's plane.
-static const float kPeelTol = 8.0;
 
 float main(VS_OUTPUT input) : SV_Target0
 {
@@ -155,12 +156,12 @@ float main(VS_OUTPUT input) : SV_Target0
 	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
 	int2 t = int2(clamp(uv * dims - 0.5, 0.0, dims.x - 1.001));
 	float top1 = Layer1Top.Load(int3(t, 0));
-	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - kPeelTol)
+	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - PeelTol)
 		discard;
 #	if defined(PEEL2)
 	// No third layer without a second, and only strictly below it.
 	float top2 = Layer2Top.Load(int3(t, 0));
-	[branch] if (top2 < -50000.0 || input.WorldZ > top2 - kPeelTol)
+	[branch] if (top2 < -50000.0 || input.WorldZ > top2 - PeelTol)
 		discard;
 #	endif
 	return input.WorldZ;
