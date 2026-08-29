@@ -231,6 +231,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttObj = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider above."));
 
+		ImGui::SliderFloat(T(TKEY("shell_max_slope"), "3D Shell Max Slope"), &settings.ShellMaxSlopeDeg, 0.0f, 90.0f, "%.0fÂ°");
+		if (auto _ttSlope = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface."));
+
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -
 		// no scrolling between Snow Trenches and the model depths).

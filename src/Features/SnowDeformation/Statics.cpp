@@ -718,6 +718,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			projThreshold = projParams.alpha;
 			projNoiseScale = projParams.red;
 			projNoiseTiling = projParams.blue;
+		} else if (!capFlags.any(CapFlag::kTreeAnim) && !fadeExempt) {
+			// The classification-key mismatch closed (Josef's fence,
+			// 2026-08-29): capture is technique-classified, so everything
+			// here IS projected snow to the recolor - but mesh-replacer
+			// statics (fences, drifts) carry no kProjectedUV on the
+			// PROPERTY and the S4 shell skipped them. Default them fully
+			// painted: threshold 0, no noise term, authored alpha still
+			// honored where the mesh carries vertex colors (vanilla's own
+			// PROJECTED_UV path reads Color.w on these draws too). Trees
+			// stay sentineled (wind alpha); the ice family keeps its
+			// structural exclusion.
+			projThreshold = 0.0f;
 		}
 	}
 
@@ -747,21 +759,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		plankFamily = loweredName.find("plank") != std::string::npos ||
 		              loweredName.find("walkway") != std::string::npos ||
 		              loweredName.find("catwalk") != std::string::npos;
-		// Snow-drift family: pure snow meshes carry no projected-UV data on
-		// their property, so the S4 shell would skip them - and with the
-		// old shell retired they stood bare (Josef, 2026-08-29). Treat them
-		// as fully painted: threshold 0, no noise term (their scale stays
-		// 0), alpha defaults to 1 without vertex colors.
-		if (projThreshold < -0.5f &&
-			(loweredName.find("snowdrift") != std::string::npos ||
-				loweredName.find("snowpile") != std::string::npos)) {
-			projThreshold = 0.0f;
-			static std::unordered_set<std::string> loggedDriftNames;
-			if (loggedDriftNames.size() > 4096)
-				loggedDriftNames.clear();
-			if (loggedDriftNames.insert(loweredName).second)
-				logger::info("[SNOW DEFORMATION] drift family (S4 shell, fully painted): '{}'", loweredName);
-		}
+		// (Drift-family special-casing removed: drifts ride the general
+		// fully-painted default above, like every technique-classified
+		// draw without property-level projection data.)
 		if (plankFamily) {
 			static std::unordered_set<std::string> loggedPlankNames;
 			if (loggedPlankNames.size() > 4096)
@@ -2092,6 +2092,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// 2 = the S4 shell owns this draw; 0 = classic path.
 		scb.ProjPixelEnable = s4Shell ? 2.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
+		scb.ShellMinNz = std::cos(std::clamp(settings.ShellMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

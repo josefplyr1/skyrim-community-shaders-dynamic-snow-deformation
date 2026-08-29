@@ -96,6 +96,7 @@
 	X(TextureDepths) \
 	X(ObjectsSnowDepth) \
 	X(ProjSnowFillPct) \
+	X(ShellMaxSlopeDeg) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \

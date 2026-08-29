@@ -265,6 +265,10 @@ cbuffer StaticCB : register(b1)
 	// game's own shaded normal (normal maps included), which is where the
 	// purple view's per-stone detail lives. Mirror in SnowDeformation.h.
 	float HasSkinNormalCopy;
+	// cos(max shell slope): minimum normal Z that grows the S4 shell -
+	// the up-facing gate, user-tunable. Mirror in SnowDeformation.h.
+	float ShellMinNz;
+	float3 padS4;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1484,8 +1488,9 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// lifted along +Z slides along itself, and at fill 100% the +0.1
 		// bias floored whole walls into the mask (Josef's whitewashed
 		// boards). Steep faces are the RECOLOR's job; the shell's geometry
-		// is the tops'.
-		mask *= smoothstep(0.05, 0.25, nrmWS.z);
+		// is the tops', and the cutoff is Josef's slider (ShellMinNz =
+		// cos of the max slope).
+		mask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, nrmWS.z);
 		// NO top-visibility cut (Josef, 2026-08-29): comparing against the
 		// GLOBAL column top made anything under a roof or railing lose its
 		// shell with a hard mid-plank cliff - the walkway's red-outlined
@@ -2034,7 +2039,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
-		pdCoverage *= smoothstep(0.05, 0.25, nzPix);
+		pdCoverage *= smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
 		// the last sliver would shade coincident with the surface below it
 		// - cut the material where the lift drops under the clearance and

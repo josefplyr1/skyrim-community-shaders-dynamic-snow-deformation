@@ -463,6 +463,8 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
 		float ObjectsSnowDepth = 3.0f;
+		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). */
+		float ShellMaxSlopeDeg = 80.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
 		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
@@ -1511,6 +1513,9 @@ public:
 		float ProjPixelEnable;
 		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinNormalCopy;
+		/** @brief cos(Settings::ShellMaxSlopeDeg): minimum normal Z that grows the S4 shell (the shell's up-facing gate, user-tunable). Grew the CB a row. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ShellMinNz;
+		float padS4[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
