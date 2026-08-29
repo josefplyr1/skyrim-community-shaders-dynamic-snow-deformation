@@ -1619,6 +1619,8 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
 	ID3D11PixelShader* heightPeel2PS = nullptr;
+	/** @brief Snow Bridging: bilateral 3x3 smooth over the absolute surface fields - flattens the top raster's texel terracing and thin-geometry spikes without crossing cliffs. */
+	ID3D11ComputeShader* surfaceSmoothCS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;

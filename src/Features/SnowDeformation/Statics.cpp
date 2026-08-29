@@ -1031,6 +1031,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
 		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
+	if (!surfaceSmoothCS)
+		surfaceSmoothCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "SurfaceSmoothCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1784,6 +1786,21 @@ void SnowDeformation::RenderObjectHeightMap()
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(surfIn, surfOut);
 			}
+			// Two bilateral passes (even count ends in place): terraces
+			// flatten, spikes drop, the scroll-phase crawl calms.
+			if (surfaceSmoothCS) {
+				context->CSSetShader(surfaceSmoothCS, nullptr, 0);
+				for (int pass = 0; pass < 2; pass++) {
+					ID3D11ShaderResourceView* smSRV = surfIn->srv.get();
+					ID3D11UnorderedAccessView* smUAV = surfOut->uav.get();
+					context->CSSetShaderResources(0, 1, &smSRV);
+					context->CSSetUnorderedAccessViews(0, 1, &smUAV, nullptr);
+					context->Dispatch(dispatchDim, dispatchDim, 1);
+					context->CSSetShaderResources(0, 1, nullCsSRVs);
+					context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+					std::swap(surfIn, surfOut);
+				}
+			}
 		}
 
 		// S4 phase 2: the same seed + repose chain over each PEELED layer
@@ -1823,6 +1840,21 @@ void SnowDeformation::RenderObjectHeightMap()
 				context->CSSetShaderResources(0, 2, nullCsSRVs);
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(obj2In, obj2Out);
+			}
+			// Bridged layers are absolute surfaces: same bilateral pair
+			// as the layer-1 surface. Classic depth cones stay untouched.
+			if (settings.SnowBridging && surfaceSmoothCS) {
+				context->CSSetShader(surfaceSmoothCS, nullptr, 0);
+				for (int pass = 0; pass < 2; pass++) {
+					ID3D11ShaderResourceView* smSRV = obj2In->srv.get();
+					ID3D11UnorderedAccessView* smUAV = obj2Out->uav.get();
+					context->CSSetShaderResources(0, 1, &smSRV);
+					context->CSSetUnorderedAccessViews(0, 1, &smUAV, nullptr);
+					context->Dispatch(dispatchDim, dispatchDim, 1);
+					context->CSSetShaderResources(0, 1, nullCsSRVs);
+					context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+					std::swap(obj2In, obj2Out);
+				}
 			}
 		}
 	}

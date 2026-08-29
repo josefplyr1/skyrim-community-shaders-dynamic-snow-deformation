@@ -338,6 +338,52 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	OutA[dtid.xy] = BridgeMode > 0.5 ? h : max(h, 0.0);
 }
 
+// Bridged-surface bilateral smooth. The top raster stores one MAX height
+// per 4-unit texel, so slopes quantize into terraces and thin geometry
+// (ropes, rails, grass) into single-texel spikes - and the ABSOLUTE
+// surface hands both straight to the shell as razor-blade shards on
+// smooth meshes, crawling whenever the window's scroll shifts the texel
+// phase (the classic depth fields never showed any of it; they never
+// sample absolute heights). Average neighbours in the SAME plane band;
+// cliffs and sentinels stay untouched, so the seam-closing continuity
+// survives (a riser's surface steps at most SlopePerUnit per texel,
+// well inside the band).
+[numthreads(8, 8, 1)] void SurfaceSmoothCS(uint3 dtid
+										   : SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+
+	float center = InA[dtid.xy];
+	if (center > 50000.0) {
+		OutA[dtid.xy] = center;
+		return;
+	}
+	// Same-plane band, matching the peel tolerance's intent.
+	static const float kSmoothTol = 8.0;
+	float sum = center;
+	float weight = 1.0;
+	[unroll] for (int dy = -1; dy <= 1; dy++)
+	{
+		[unroll] for (int dx = -1; dx <= 1; dx++)
+		{
+			if (dx == 0 && dy == 0)
+				continue;
+			int2 p = int2(dtid.xy) + int2(dx, dy);
+			if (any(p < 0) || any(p >= int2(dims)))
+				continue;
+			float s = InA[uint2(p)];
+			[flatten] if (s < 50000.0 && abs(s - center) < kSmoothTol)
+			{
+				sum += s;
+				weight += 1.0;
+			}
+		}
+	}
+	OutA[dtid.xy] = sum / weight;
+}
+
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).
 [numthreads(8, 8, 1)] void ConeCS(uint3 dtid
 								  : SV_DispatchThreadID) {
