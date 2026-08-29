@@ -2259,20 +2259,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// most up-facing parts first, the midpoint covers the up-facing
 		// hemisphere, the top covers every angle.
 		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		float footprint = smoothstep(-0.03, 0.0, wpix);
-		// Uniform-shell floor (Josef's under-roof occlusion find):
-		// Bethesda AUTHORED under-roof geometry bare (the S0 finding), so
-		// the reconstructed footprint says "no snow" exactly where his
-		// rule says the shell must stand - the material dissolved into
-		// dither there, the discarded fragments wrote no depth, and the
-		// shell stopped occluding: benches surfaced through drifts and
-		// walls wore the surviving speckle as white smears. Where the
-		// GEOMETRY stands at full lift, the material holds solid; the
-		// footprint still owns every edge, because the fillet carries the
-		// lift down through this floor's band on the way to zero.
-		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
-		footprint = max(footprint, smoothstep(0.5, 0.85, liftFrac));
-		pdCoverage = footprint * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
@@ -2296,6 +2283,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// let the recolored PD carry on underneath (the two systems agree
 		// by construction, so the hand-off is a seam of height only).
 		pdCoverage *= smoothstep(0.3 * kProjCoatLift, kProjCoatLift, input.Lift);
+		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
+		// occlusion find, decoded by his coverage-alpha shot): every gate
+		// above reads nzPix / wpix from the PRE-SHELL G-buffer - the
+		// surface BEHIND the shell on screen, not the shell's own. That
+		// reconstruction is right for a hugging coat, but the 3D shell
+		// RISES: its pixels overlap benches, walls and posts, the
+		// background normal there is vertical, and the gates dissolved
+		// the shell exactly where it was supposed to occlude something -
+		// discarded fragments write no depth, so it "rendered behind
+		// everything". Where the GEOMETRY stands at full lift, the vertex
+		// gates already enforced footprint, fill and slope policy on the
+		// shell's OWN surface; the per-pixel reconstruction only owns the
+		// edges, where the fillet carries the lift down through this
+		// floor's band on its way to zero.
+		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+		pdCoverage = max(pdCoverage, smoothstep(0.5, 0.85, liftFrac));
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
