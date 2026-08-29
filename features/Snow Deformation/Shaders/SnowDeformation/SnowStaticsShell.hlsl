@@ -2259,7 +2259,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// most up-facing parts first, the midpoint covers the up-facing
 		// hemisphere, the top covers every angle.
 		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		float footprint = smoothstep(-0.03, 0.0, wpix);
+		// Uniform-shell floor (Josef's under-roof occlusion find):
+		// Bethesda AUTHORED under-roof geometry bare (the S0 finding), so
+		// the reconstructed footprint says "no snow" exactly where his
+		// rule says the shell must stand - the material dissolved into
+		// dither there, the discarded fragments wrote no depth, and the
+		// shell stopped occluding: benches surfaced through drifts and
+		// walls wore the surviving speckle as white smears. Where the
+		// GEOMETRY stands at full lift, the material holds solid; the
+		// footprint still owns every edge, because the fillet carries the
+		// lift down through this floor's band on the way to zero.
+		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+		footprint = max(footprint, smoothstep(0.5, 0.85, liftFrac));
+		pdCoverage = footprint * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
