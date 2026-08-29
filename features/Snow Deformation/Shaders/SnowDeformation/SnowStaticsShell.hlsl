@@ -1653,11 +1653,24 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				// over a porch, a bench over its floor. The plane keeps
 				// its FULL uniform height and clips through, instead of
 				// deferring to a peeled layer's narrow tattered
-				// footprint. Only cover WITHIN the clearance (a tread
-				// over a tread, a low ledge) descends the cascade.
+				// footprint - but ONLY where the plane actually EXISTS
+				// beneath the cover: a peeled layer top at the vertex's
+				// own height proves it. A tread edge whose nearest texel
+				// belongs to the wall has no plane of its own there -
+				// full height would run the dome off the end as a lifted
+				// open shelf (the left-rolls/right-floats stair bug), so
+				// it gets no roll data and rounds off instead. Cover
+				// WITHIN the clearance (a tread over a tread, a low
+				// ledge) descends the cascade as usual.
 				[branch] if (top1 - worldBase.z > OverheadIgnore)
 				{
-					cone = coneSeed;
+					float top2 = PatchTop2Point(worldBase.xy);
+					float top3 = PatchTop3Point(worldBase.xy);
+					bool planeHere = (top2 > -50000.0 && abs(worldBase.z - top2) <= PeelTol) ||
+					                 (top3 > -50000.0 && abs(worldBase.z - top3) <= PeelTol);
+					cone = planeHere ? coneSeed : 0.0;
+					[flatten] if (!planeHere)
+						debugLayer = 4.0;
 				}
 				else
 				{

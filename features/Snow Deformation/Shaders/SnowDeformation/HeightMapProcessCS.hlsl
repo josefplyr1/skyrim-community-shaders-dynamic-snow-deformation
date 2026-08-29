@@ -44,6 +44,13 @@ cbuffer HeightProcessCB : register(b0)
 	// not split the plane; the dome keeps its height and clips through.
 	// Rises within [RimStep, OverheadIgnore] still rim (stair treads).
 	float OverheadIgnore;
+
+	// "Meld Co-Planar Surfaces" A/B: >0.5 = the drop-bridge reaches 3
+	// texels (same-height planes a sliver apart meld into one dome);
+	// 0 = no bridging - every shell clings to its own raster edge and
+	// nearby shells just clip into each other.
+	float MeldPlanes;
+	float3 padHeight;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -62,6 +69,9 @@ cbuffer HeightProcessCB : register(b0)
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
 Texture2D<float4> TerrainWindow : register(t2);
+// ObjectConeSeedCS only: the NEXT peeled layer's top map, for the
+// continuation test behind tall cover (see the rise rim below).
+Texture2D<float> InC : register(t3);
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
 // CombineCS only: the shelter mask, TWO independent channels (R = door
@@ -263,7 +273,9 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		int2 p3 = int2(dtid.xy) + offs * 3;
 		[flatten] if (all(p3 >= 0) && all(p3 < int2(dims)))
 			n3 = InA[uint2(p3)];
-		float n = max(max(n1, n2), n3);
+		// "Meld Co-Planar Surfaces" OFF = cling: no bridging at all, the
+		// shell rolls at its own raster edge whatever sits nearby.
+		float n = MeldPlanes > 0.5 ? max(max(n1, n2), n3) : n1;
 		if (n < -50000.0) {
 			rim = true;
 			continue;
@@ -279,13 +291,26 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		// clips invisibly into its neighbour instead of piling against
 		// the riser. Unbridged (a crack can never fake a rise), with the
 		// same slope-continuation cancel so ascending roofs and rock
-		// flanks never self-rim. CAPPED by "Ignore Cover Above": a wall,
-		// roof or railing more than the clearance above is a separate
-		// world - the plane keeps its height and clips through it.
+		// flanks never self-rim.
 		float rise = n1 - top;
 		float riseCarry = max(n2 - n1, 0.0);
-		if (n1 > -50000.0 && rise - riseCarry > RimStep && rise < OverheadIgnore)
-			rim = true;
+		if (n1 > -50000.0 && rise - riseCarry > RimStep) {
+			if (rise < OverheadIgnore) {
+				// A nearby plane (stair tread, low ledge): dome boundary.
+				rim = true;
+			} else {
+				// Tall cover ("Ignore Cover Above") is only ignorable if
+				// OUR plane actually CONTINUES beneath it - a porch floor
+				// running under its roof, read from the next peeled
+				// layer's top. A tread ENDING against a wall has nothing
+				// of itself beyond the edge: the cover is "not there",
+				// and neither is anything else - that edge is a
+				// silhouette and must roll (the lifted-shelf bug).
+				float under = InC[uint2(p)];
+				if (under < -50000.0 || abs(under - top) > RimStep)
+					rim = true;
+			}
+		}
 	}
 
 	OutA[dtid.xy] = rim ? 0.0 : seed;

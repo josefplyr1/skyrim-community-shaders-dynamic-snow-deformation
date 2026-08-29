@@ -1162,6 +1162,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.GhostDecay = 0.5f;
 	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
 	processData.OverheadIgnore = std::clamp(settings.OverheadClearance, 4.0f, 200.0f);
+	processData.MeldPlanes = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1721,15 +1722,19 @@ void SnowDeformation::RenderObjectHeightMap()
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
 		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
-		// seed at their own class depth (see ObjectConeSeedCS).
+		// seed at their own class depth (see ObjectConeSeedCS). InC (t3) =
+		// the next layer's top, for the rise rim's continuation test.
 		ID3D11ShaderResourceView* seedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
 			heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
+		ID3D11ShaderResourceView* seedNextSRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
 		ID3D11UnorderedAccessView* seedUAV = objectSnowCone->uav.get();
 		context->CSSetShaderResources(0, 2, seedSRVs);
+		context->CSSetShaderResources(3, 1, &seedNextSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &seedUAV, nullptr);
 		context->Dispatch(dispatchDim, dispatchDim, 1);
 		ID3D11ShaderResourceView* nullSeedSRVs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(0, 2, nullSeedSRVs);
+		context->CSSetShaderResources(3, 1, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
 		context->CSSetShader(objectConeCS, nullptr, 0);
@@ -1758,12 +1763,19 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetShader(objectConeSeedCS, nullptr, 0);
 			ID3D11ShaderResourceView* seed2SRVs[2] = { peelTops[peelLayer]->srv.get(),
 				heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
+			// The continuation test's "next layer": L3 for the L2 chain;
+			// the L3 chain has nothing deeper and reads itself (its own
+			// neighbour value never matches a tall riser, so tall cover
+			// over an L3 sliver rims - the safe default).
+			ID3D11ShaderResourceView* seed2NextSRV = heightTop3Raw[heightCurrent] ? heightTop3Raw[heightCurrent]->srv.get() : nullptr;
 			ID3D11UnorderedAccessView* seed2UAV = peelCones[peelLayer]->uav.get();
 			context->CSSetShaderResources(0, 2, seed2SRVs);
+			context->CSSetShaderResources(3, 1, &seed2NextSRV);
 			context->CSSetUnorderedAccessViews(0, 1, &seed2UAV, nullptr);
 			context->Dispatch(dispatchDim, dispatchDim, 1);
 			ID3D11ShaderResourceView* nullSeed2SRVs[2] = { nullptr, nullptr };
 			context->CSSetShaderResources(0, 2, nullSeed2SRVs);
+			context->CSSetShaderResources(3, 1, nullCsSRVs);
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
 			context->CSSetShader(objectConeCS, nullptr, 0);
@@ -2312,7 +2324,10 @@ void SnowDeformation::DrawCapturedStatics()
 		// 2 = the S4 shell owns this draw; 0 = classic path.
 		scb.ProjPixelEnable = s4Shell ? 2.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
-		scb.ShellMinNz = std::cos(std::clamp(settings.ShellMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+		// The rock family (mountain/cliff name match) carries its own max
+		// slope: rocks were the only sufferers of a low global slope.
+		const float maxSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
+		scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
 		scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 4.0f, 200.0f);
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;

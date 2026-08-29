@@ -97,9 +97,11 @@
 	X(ObjectsSnowDepth) \
 	X(ProjSnowFillPct) \
 	X(ShellMaxSlopeDeg) \
+	X(RockMaxSlopeDeg) \
 	X(PlaneSplitStep) \
 	X(PlaneMergeHeight) \
 	X(OverheadClearance) \
+	X(MeldCoPlanar) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \

@@ -233,7 +233,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("shell_max_slope"), "3D Shell Max Slope"), &settings.ShellMaxSlopeDeg, 0.0f, 90.0f, "%.0fÂ°");
 		if (auto _ttSlope = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface."));
+			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface. Rocks, mountains and cliffs use their own slider below instead."));
+
+		ImGui::SliderFloat(T(TKEY("rock_max_slope"), "Rock & Cliff Max Slope"), &settings.RockMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xC2\xB0");
+		if (auto _ttRock = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("rock_max_slope_tooltip"), "The 3D shell's max slope for the rock family only (mountains, cliffs, large rocks - matched by mesh name). These were the only surfaces hurt by a low global Max Slope, so they get their own: 90 covers every up-facing rock face regardless of the main slider."));
 
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
@@ -241,7 +245,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("overhead_clearance"), "Ignore Cover Above"), &settings.OverheadClearance, 8.0f, 96.0f, "%.0f units");
 		if (auto _ttOverhead = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Things WITHIN this clearance (stair treads, low ledges, bench seats) still count as neighboring planes and get their own domes. Lower = more things split planes; higher = more things ignored."));
+			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
+
+		ImGui::Checkbox(T(TKEY("meld_coplanar"), "Meld Co-Planar Surfaces"), &settings.MeldCoPlanar);
+		if (auto _ttMeld = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("meld_coplanar_tooltip"), "A/B: ON = surfaces at the same height separated by a small horizontal gap (stairs meeting a walkway) meld into one snow dome across the gap. OFF = no melding at all: every object's shell rolls off at its own edges, and shells that happen to sit near each other simply clip together."));
 
 		ImGui::SliderFloat(T(TKEY("plane_merge_height"), "Plane Merge Height"), &settings.PlaneMergeHeight, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttMerge = Util::HoverTooltipWrapper())

@@ -462,13 +462,17 @@ public:
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
-		float ObjectsSnowDepth = 3.0f;
-		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). */
-		float ShellMaxSlopeDeg = 80.0f;
+		float ObjectsSnowDepth = 5.0f;
+		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). Rocks/mountains/cliffs use RockMaxSlopeDeg instead. */
+		float ShellMaxSlopeDeg = 65.0f;
+		/** @brief The rock family's own max slope (Josef's call: rocks/mountains/cliffs were the only sufferers of a low global slope) - applies to draws the mountain/cliff name match flags (CapturedSnowStatic::forceRounded). */
+		float RockMaxSlopeDeg = 90.0f;
 		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this - in either direction - becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
 		float PlaneSplitStep = 6.0f;
 		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
-		float OverheadClearance = 32.0f;
+		float OverheadClearance = 19.0f;
+		/** @brief A/B (Josef): ON = co-planar surfaces a small horizontal gap apart meld into one dome (drop-bridge reach 3 texels). OFF = "cling" - no bridging at all, every object's shell rolls at its own raster edge and nearby shells simply clip into each other. */
+		bool MeldCoPlanar = true;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1646,8 +1650,12 @@ public:
 		float ObjectSnowDepth;
 		/** @brief Settings::PlaneSplitStep - the cone seed's slope-discontinuity rim threshold (user-tunable). */
 		float RimStep;
-		/** @brief Settings::OverheadClearance - the seed's rise-rim upper bound: surfaces further above do not split the plane. */
+		/** @brief Settings::OverheadClearance - the seed's rise-rim upper bound: surfaces further above do not split the plane WHEN this plane continues beneath them (the next layer's top says); a silhouette edge against tall cover still rims. */
 		float OverheadIgnore;
+
+		/** @brief Settings::MeldCoPlanar - >0.5: the seed's drop-bridge reaches 3 texels so co-planar surfaces a sliver apart meld; 0: no bridging, every shell clings to its own raster edge. */
+		float MeldPlanes;
+		float padHeight[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;
