@@ -249,7 +249,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "How tall a snow pile may stand relative to what its footprint can support. Narrow things - ropes, fence rails, thin boards - stop growing early instead of stretching into tall fins; wide surfaces keep growing longer, and full-width snow is unaffected. 1 = strict angle-of-repose physics; higher = taller piles on narrow features."));
+			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
 
 		ImGui::Checkbox(T(TKEY("meld_coplanar"), "Meld Co-Planar Surfaces"), &settings.MeldCoPlanar);
 		if (auto _ttMeld = Util::HoverTooltipWrapper())

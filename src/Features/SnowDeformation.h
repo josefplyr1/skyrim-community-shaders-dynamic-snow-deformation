@@ -473,8 +473,8 @@ public:
 		float OverheadClearance = 19.0f;
 		/** @brief A/B (Josef): ON = co-planar surfaces a small horizontal gap apart meld into one dome (drop-bridge reach 3 texels). OFF = "cling" - no bridging at all, every object's shell rolls at its own raster edge and nearby shells simply clip into each other. */
 		bool MeldCoPlanar = true;
-		/** @brief The width failsafe (Josef's saturation sketch): a dome stands at most this many times the repose height its footprint supports - 1 = strict physics (ropes carry slivers), higher = taller piles on narrow features. Wide interiors are unaffected. */
-		float PileHeightRatio = 2.0f;
+		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
+		float PileHeightRatio = 1.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */

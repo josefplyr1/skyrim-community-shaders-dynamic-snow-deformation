@@ -1461,6 +1461,11 @@ struct SkinLift
 	// Debug (Shell Layers view): which peeled plane owned this vertex.
 	// 0 = not an S4 draw, 1/2/3 = the layer, 4 = below all three.
 	float DebugLayer;
+	// S4 dome shading normal: the dome's shape lives in the CONE field,
+	// not the mesh normals, so without this the shell shaded flat - lee
+	// flanks as bright as sun-facing ones (Josef's report). Analytic
+	// surface normal from the cone gradient through the fillet's slope.
+	float3 ShadeNormal;
 };
 
 SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat, float vertexAlpha)
@@ -1503,6 +1508,8 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float projLinear = 1.0;
 	// Shell Layers debug view: which peeled plane owned this vertex.
 	float debugLayer = 0.0;
+	// S4 dome shading normal; non-S4 paths keep the raw normal.
+	float3 shadeNormal = nrmWS;
 	// Flat PD shell (S3 round 10, Josef's split): this draw's cover is a
 	// CONSTANT coat inflated along the sealed smooth normal - set at the
 	// END of this function; the depth pipeline below belongs to the 3D
@@ -1649,6 +1656,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float rollT = 1.0;
 		float meldWall = 0.0;
 		float heightScale = 1.0;
+		float3 domeNormal = nrmWS;
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
@@ -1705,19 +1713,50 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 					}
 				}
 			}
-			// WIDTH FAILSAFE (Josef's saturation sketch): the cone value IS
-			// the height the angle of repose permits above this point given
-			// the distance to the nearest rim - the feature-width signal.
-			// A dome may stand at most PileHeightRatio times that, so thin
-			// features (ropes, rails, thin boards) SATURATE early instead
-			// of stretching tall fins (the circular fillet's vertical rim
-			// tangent granted ~40% height to even a sliver of cone), wider
-			// surfaces saturate later, and a full-width interior
-			// (cone = seed) is untouched. The roll radius follows the
-			// reduced height, keeping roll run = height PER FEATURE.
-			float hEff = min(coneSeed, PileHeightRatio * cone);
+			// WIDTH FAILSAFE, take 2 (Josef's "peak rounded shape" spec):
+			// the dome keeps the FILLET shape always, but its RADIUS
+			// freezes at the feature's own CREST - the moment the rolls
+			// from both edges meet in the middle, growth stops whatever
+			// the depth slider says; at ratio 1 the frozen shape is the
+			// perfect half-dome exactly filling the width. The crest is
+			// the feature's maximum cone, approximated by a tap ring at
+			// half the roll radius: features narrow enough to saturate
+			// have their crest within reach, wider ones read large values
+			// and pass unclamped (their classic fillet is untouched).
+			// Round 13's local-cone envelope warped the whole profile
+			// into a cone-follower - pyramids at strict ratio.
+			float crest = cone;
+			{
+				float tapR = 0.5 * coneSeed;
+				float tapD = tapR * 0.7071;
+				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapR, 0.0)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapR, 0.0)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(0.0, tapR)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(0.0, tapR)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapD, tapD)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, tapD)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapD, -tapD)));
+				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, -tapD)));
+			}
+			float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
 			heightScale = hEff / coneSeed;
-			rollT = saturate(cone / max(hEff, kMinSkinLift));
+			rollT = saturate(cone / hEff);
+			// DOME SHADING (Josef: lee flanks must go dark like the
+			// landscape shell's). Analytic surface normal from the cone
+			// gradient through the fillet's slope, clamped near the
+			// vertical rim; taps clamped to the seed so the window-edge
+			// sentinel cannot poison the gradient.
+			{
+				const float gs = 4.0;
+				float cXP = min(ObjectConeDepth(worldBase.xy + float2(gs, 0.0)), coneSeed);
+				float cXN = min(ObjectConeDepth(worldBase.xy - float2(gs, 0.0)), coneSeed);
+				float cYP = min(ObjectConeDepth(worldBase.xy + float2(0.0, gs)), coneSeed);
+				float cYN = min(ObjectConeDepth(worldBase.xy - float2(0.0, gs)), coneSeed);
+				float2 coneGrad = float2(cXP - cXN, cYP - cYN) / (2.0 * gs);
+				float rimIn0 = 1.0 - rollT;
+				float dhdc = rimIn0 / max(sqrt(saturate(1.0 - rimIn0 * rimIn0)), 0.2);
+				domeNormal = normalize(float3(-coneGrad * dhdc, 1.0));
+			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
 			// mesh geometry, so nothing can span the physical void between
 			// two co-planar objects - but the meshes' own SIDE FACES can
@@ -1736,6 +1775,9 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
 		upFacing = mask;
+		// Blend to the dome normal as the lift establishes; undisplaced
+		// fringes keep shading by the surface beneath.
+		shadeNormal = normalize(lerp(nrmWS, domeNormal, mask * saturate(depth / (2.0 * kProjCoatLift))));
 	}
 
 	SkinLift o;
@@ -1748,6 +1790,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	o.ProjFactor = projFactor;
 	o.ProjLinear = projLinear;
 	o.DebugLayer = debugLayer;
+	o.ShadeNormal = shadeNormal;
 	return o;
 }
 
@@ -1876,7 +1919,9 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	vsout.NormalWS = SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
+	// S4 draws shade by the analytic dome normal (the dome's shape lives
+	// in the cone field, invisible to the mesh normals).
+	vsout.NormalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
 	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
 	// pixel. Thresholding here makes low-poly rocks flip whole FACES between
 	// snowed and bare; thresholding the interpolated normal varies smoothly.
@@ -2019,7 +2064,8 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	SkinLift lift = ApplySkinLift(worldBase, normalWS, inflateWS, isFlat, vertexAlpha);
 	float3 worldAbs = lift.WorldAbs;
 	float2 gridLocal = worldAbs.xy - GridOrigin;
-	normalWS = SkinShadingNormal(normalWS, inflateWS, isFlat, lift.Depth, lift.RimT);
+	// Same S4 dome-normal selection as the untessellated VS.
+	normalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(normalWS, inflateWS, isFlat, lift.Depth, lift.RimT);
 
 	// Relief from the displacement map, same recipe as the landscape shell:
 	// top-projected snow UV, gated by the inflated depth (bare and thin
