@@ -278,7 +278,11 @@ cbuffer StaticCB : register(b1)
 	// layer's narrow footprint. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
 	float OverheadIgnore;
-	float padS4;
+	// "Meld Co-Planar Surfaces" for the skin: >0.5 lets side faces at
+	// MELDED boundaries lift, closing the slit between co-planar shells
+	// with vertical snow. Mirror in SnowHeightCapture.hlsl /
+	// SnowDeformation.h. CB is FULL.
+	float MeldPlanesSk;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1615,9 +1619,12 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (ProjPixelEnable > 1.5)
 	{
 		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
-		float mask = smoothstep(0.0, 0.05, wLin);
+		// maskBase = the PD footprint and fill gates alone; the up-facing
+		// gate multiplies in below, and the meld wall bypasses ONLY it.
+		float maskBase = smoothstep(0.0, 0.05, wLin);
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		mask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		maskBase *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		float mask = maskBase;
 		// Vertical growth is only meaningful on up-facing surfaces - a wall
 		// lifted along +Z slides along itself, and at fill 100% the +0.1
 		// bias floored whole walls into the mask (Josef's whitewashed
@@ -1634,6 +1641,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// up-displaced faces land inside their own geometry.
 		debugLayer = 1.0;
 		float rollT = 1.0;
+		float meldWall = 0.0;
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
@@ -1691,7 +1699,20 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				}
 			}
 			rollT = saturate(cone / coneSeed);
+			// MELD WALL (Josef's gap-close sketch): the shell is displaced
+			// mesh geometry, so nothing can span the physical void between
+			// two co-planar objects - but the meshes' own SIDE FACES can
+			// stand in. At a MELDED boundary the seed left no rim, so the
+			// cone is still full at the edge; there, the side face's top
+			// band (within the peel tolerance of its column top) lifts at
+			// full depth too, and the slit between the two shells closes
+			// behind a facing pair of vertical snow walls. A rolled
+			// (rimmed) edge keeps its bare sides, so cling mode and true
+			// silhouettes are untouched.
+			[flatten] if (MeldPlanesSk > 0.5 && top1 > -50000.0 && worldBase.z > top1 - PeelTol)
+				meldWall = smoothstep(0.85, 0.95, rollT);
 		}
+		mask = max(mask, maskBase * meldWall);
 		float rimIn = 1.0 - rollT;
 		depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
@@ -2241,7 +2262,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
-		pdCoverage *= smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
+		// EXCEPT the meld wall: the lift raises side faces at melded
+		// boundaries to close the slit between co-planar shells, and the
+		// pixel gate must let them through where the cone confirms a
+		// melded (unrimmed) column and the vertex actually lifted.
+		float upGateP = smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
+		[branch] if (MeldPlanesSk > 0.5 && upGateP < 0.99 && input.Lift > 0.3 * kProjCoatLift)
+		{
+			float2 pixXY = input.WorldPos.xy + ShellCameraPosAdjust.xy;
+			float coneP = ObjectConeDepth(pixXY);
+			float topP = PatchTopPoint(pixXY);
+			float seedP = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+			[flatten] if (topP > -50000.0 && coneP >= seedP * 0.85)
+				upGateP = 1.0;
+		}
+		pdCoverage *= upGateP;
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
 		// the last sliver would shade coincident with the surface below it
 		// - cut the material where the lift drops under the clearance and
@@ -2433,8 +2468,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float coverageAlpha = smoothstep(0.05, 0.35, coverageGate);
 	// Hard down-facing kill: snow accumulates on TOPS only. The interpolated
 	// raw normal is negative on every underside pixel, whatever the noise or
-	// seam blends below decide.
-	coverageAlpha *= max(smoothstep(-0.05, 0.1, input.Coverage), shoulderWall);
+	// seam blends below decide. In pdMode the reconstructed coverage owns
+	// steepness policy (and the meld wall is legitimately vertical), so the
+	// kill narrows to genuine undersides there.
+	float downKill = smoothstep(-0.05, 0.1, input.Coverage);
+	[flatten] if (pdMode)
+		downKill = smoothstep(-0.08, -0.02, input.Coverage);
+	coverageAlpha *= max(downKill, shoulderWall);
 
 	// Height-blended edges (HEIGHT-BLEND-PLAN pairs 6+4): reshape the rim
 	// coverage fade and the ground hand-off band below by the snow grain,
@@ -2484,6 +2524,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		seamTotal = groundBand;
 	}
+	// S4 shells never dissolve into the ground blanket (Josef's bench
+	// find): terrain runs on UNDER buildings, often standing - with its
+	// snow depth - ABOVE an elevated deck built into a hillside, so
+	// "below the terrain shell's surface" was true for whole roofed
+	// porches and the band discarded every fragment there; with no depth
+	// written, later draws (the bench) rendered in front of snow that
+	// should bury them. The fillet already rolls to zero at silhouettes,
+	// which is the meeting this dissolve fakes; true burial belongs to
+	// the z-buffer.
+	[flatten] if (pdMode)
+		seamTotal = 1.0;
 	coverageAlpha *= seamTotal;
 	dbgSeam *= seamTotal;
 

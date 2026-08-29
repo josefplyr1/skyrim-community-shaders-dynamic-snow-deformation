@@ -60,7 +60,7 @@ cbuffer StaticCB : register(b1)
 	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
 	float OverheadIgnore;  // layout sync with SnowStaticsShell; unused here
-	float padS4;
+	float MeldPlanesSk;    // layout sync with SnowStaticsShell; unused here
 }
 
 struct VS_INPUT

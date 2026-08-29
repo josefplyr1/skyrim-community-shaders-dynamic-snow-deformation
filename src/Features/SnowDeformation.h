@@ -1529,7 +1529,8 @@ public:
 		float PeelTol;
 		/** @brief Settings::OverheadClearance - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float OverheadIgnore;
-		float padS4;
+		/** @brief Settings::MeldCoPlanar for the skin: >0.5 lets side faces at MELDED boundaries lift (the vertical snow closing the slit between co-planar shells). CB is FULL. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float MeldPlanesSk;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

@@ -2330,6 +2330,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
 		scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 4.0f, 200.0f);
+		scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
