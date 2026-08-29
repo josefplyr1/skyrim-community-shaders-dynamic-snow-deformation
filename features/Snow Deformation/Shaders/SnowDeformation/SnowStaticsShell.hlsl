@@ -1775,9 +1775,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
 		upFacing = mask;
-		// Blend to the dome normal as the lift establishes; undisplaced
-		// fringes keep shading by the surface beneath.
-		shadeNormal = normalize(lerp(nrmWS, domeNormal, mask * saturate(depth / (2.0 * kProjCoatLift))));
+		// Shading: the smoothed-normal recipe is the BASE, so the texture
+		// planes and the lighting follow the shell surface's TRUE
+		// orientation at every angle - replacing it wholesale with the
+		// dome normal (which always points up-hemisphere by construction)
+		// top-projected every steep rock-family shell and flattened its
+		// lighting into a gray smear at distance (Josef's report). The
+		// dome curvature blends in ONLY where the surface is genuinely
+		// up-facing - where the fillet really IS the surface.
+		float3 smoothShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
+		float domeBlend = mask * saturate(depth / (2.0 * kProjCoatLift)) * smoothstep(0.6, 0.85, nrmWS.z);
+		shadeNormal = normalize(lerp(smoothShade, domeNormal, domeBlend));
 	}
 
 	SkinLift o;
