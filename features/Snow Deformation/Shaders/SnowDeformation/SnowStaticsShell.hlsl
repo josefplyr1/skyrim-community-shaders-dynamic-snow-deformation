@@ -1685,33 +1685,47 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				// it gets no roll data and rounds off instead. Cover
 				// WITHIN the clearance (a tread over a tread, a low
 				// ledge) descends the cascade as usual.
+				float coneDeep;
 				[branch] if (top1 - worldBase.z > OverheadIgnore)
 				{
 					float top2 = PatchTop2Point(worldBase.xy);
 					float top3 = PatchTop3Point(worldBase.xy);
 					bool planeHere = (top2 > -50000.0 && abs(worldBase.z - top2) <= PeelTol) ||
 					                 (top3 > -50000.0 && abs(worldBase.z - top3) <= PeelTol);
-					cone = planeHere ? coneSeed : 0.0;
+					coneDeep = planeHere ? coneSeed : 0.0;
 					[flatten] if (!planeHere)
 						debugLayer = 4.0;
 				}
 				else
 				{
 					float top2 = PatchTop2Point(worldBase.xy);
-					cone = ObjectConeDepth2(worldBase.xy);
+					float cone2v = ObjectConeDepth2(worldBase.xy);
+					coneDeep = cone2v;
 					debugLayer = 2.0;
 					[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
 					{
 						float top3 = PatchTop3Point(worldBase.xy);
-						cone = ObjectConeDepth3(worldBase.xy);
+						float cone3v = ObjectConeDepth3(worldBase.xy);
 						debugLayer = 3.0;
 						[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
 						{
-							cone = 0.0;
+							cone3v = 0.0;
 							debugLayer = 4.0;
 						}
+						// Same smooth hand-off as below, one layer deeper.
+						float f2 = top2 > -50000.0 ? smoothstep(PeelTol, PeelTol * 2.0, top2 - worldBase.z) : 1.0;
+						coneDeep = lerp(cone2v, cone3v, f2);
 					}
 				}
+				// SMOOTH LAYER HAND-OFF (Josef's paper-sheet find): a
+				// binary per-vertex layer choice pleats the surface into
+				// an accordion of thin vertical sheets wherever the
+				// cover's raster boundary jitters texel to texel - under
+				// roofs, beside posts and benches, on deep shells. The
+				// deep result blends in over one peel tolerance instead
+				// of switching, so the shell stays one smooth surface
+				// through every hand-off.
+				cone = lerp(cone, coneDeep, smoothstep(PeelTol, PeelTol * 2.0, top1 - worldBase.z));
 			}
 			// WIDTH FAILSAFE, take 2 (Josef's "peak rounded shape" spec):
 			// the dome keeps the FILLET shape always, but its RADIUS
@@ -2346,13 +2360,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// most up-facing parts first, the midpoint covers the up-facing
 		// hemisphere, the top covers every angle.
 		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		// Widened cut (Josef's soft-border ask, the old Opaque-OFF look):
-		// the noise term modulates wpix, so a wider band renders the
-		// fringe as a ragged dithered fade into the recolored PD instead
-		// of a hard line. Deliberately moderate - the S2b film lesson
-		// stands: a band wide enough to cover whole mid-coverage faces
-		// dithers into a translucent sheet under TAA.
-		pdCoverage = smoothstep(-0.12, 0.03, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		// Soft borders, take 2 (Josef: a GRADUAL fade, not dither steps).
+		// The widened noisy band failed because the noise term owned the
+		// fade: wpix oscillates inside the band, so alpha broke into
+		// mid-level islands - his "100 -> 50 -> 0 steps". The fade
+		// envelope now rides the SMOOTH half of the weight (noise
+		// excluded), descending monotonically across the border, while
+		// the noisy cut stays narrow and only keeps the edge ragged.
+		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
+		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(-0.18, 0.08, wSmooth) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
@@ -2740,7 +2756,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 		coverageAlpha = 1.0;
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-	if (screenNoise * screenNoise >= coverageAlpha)
+	// pdMode dithers LINEARLY: the squared reference survives low alphas
+	// at sqrt density, which brightened the fade's sparse end into a
+	// visible mid-level plateau (part of Josef's "steps"). The classic
+	// paths keep their tuned curve.
+	float ditherRef = pdMode ? screenNoise : screenNoise * screenNoise;
+	if (ditherRef >= coverageAlpha)
 		discard;
 
 	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
