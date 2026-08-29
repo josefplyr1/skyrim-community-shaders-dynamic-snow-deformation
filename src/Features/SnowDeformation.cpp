@@ -102,6 +102,7 @@
 	X(PlaneMergeHeight) \
 	X(OverheadClearance) \
 	X(MeldCoPlanar) \
+	X(PileHeightRatio) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \

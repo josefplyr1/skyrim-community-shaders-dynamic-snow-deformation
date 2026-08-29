@@ -281,8 +281,14 @@ cbuffer StaticCB : register(b1)
 	// "Meld Co-Planar Surfaces" for the skin: >0.5 lets side faces at
 	// MELDED boundaries lift, closing the slit between co-planar shells
 	// with vertical snow. Mirror in SnowHeightCapture.hlsl /
-	// SnowDeformation.h. CB is FULL.
+	// SnowDeformation.h.
 	float MeldPlanesSk;
+
+	// "Pile Height Ratio" (the width failsafe): a dome may stand at most
+	// this many times the repose height its footprint supports. Mirror in
+	// SnowHeightCapture.hlsl / SnowDeformation.h.
+	float PileHeightRatio;
+	float3 padPile;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1642,6 +1648,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		debugLayer = 1.0;
 		float rollT = 1.0;
 		float meldWall = 0.0;
+		float heightScale = 1.0;
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
@@ -1698,7 +1705,19 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 					}
 				}
 			}
-			rollT = saturate(cone / coneSeed);
+			// WIDTH FAILSAFE (Josef's saturation sketch): the cone value IS
+			// the height the angle of repose permits above this point given
+			// the distance to the nearest rim - the feature-width signal.
+			// A dome may stand at most PileHeightRatio times that, so thin
+			// features (ropes, rails, thin boards) SATURATE early instead
+			// of stretching tall fins (the circular fillet's vertical rim
+			// tangent granted ~40% height to even a sliver of cone), wider
+			// surfaces saturate later, and a full-width interior
+			// (cone = seed) is untouched. The roll radius follows the
+			// reduced height, keeping roll run = height PER FEATURE.
+			float hEff = min(coneSeed, PileHeightRatio * cone);
+			heightScale = hEff / coneSeed;
+			rollT = saturate(cone / max(hEff, kMinSkinLift));
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
 			// mesh geometry, so nothing can span the physical void between
 			// two co-planar objects - but the meshes' own SIDE FACES can
@@ -1710,11 +1729,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			// (rimmed) edge keeps its bare sides, so cling mode and true
 			// silhouettes are untouched.
 			[flatten] if (MeldPlanesSk > 0.5 && top1 > -50000.0 && worldBase.z > top1 - PeelTol)
-				meldWall = smoothstep(0.85, 0.95, rollT);
+				meldWall = smoothstep(0.85, 0.95, rollT) * heightScale;
 		}
 		mask = max(mask, maskBase * meldWall);
 		float rimIn = 1.0 - rollT;
-		depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
+		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
 		upFacing = mask;
 	}

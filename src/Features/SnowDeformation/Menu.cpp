@@ -247,6 +247,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttOverhead = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
 
+		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
+		if (auto _ttPile = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "How tall a snow pile may stand relative to what its footprint can support. Narrow things - ropes, fence rails, thin boards - stop growing early instead of stretching into tall fins; wide surfaces keep growing longer, and full-width snow is unaffected. 1 = strict angle-of-repose physics; higher = taller piles on narrow features."));
+
 		ImGui::Checkbox(T(TKEY("meld_coplanar"), "Meld Co-Planar Surfaces"), &settings.MeldCoPlanar);
 		if (auto _ttMeld = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("meld_coplanar_tooltip"), "A/B: ON = surfaces at the same height separated by a small horizontal gap (stairs meeting a walkway) meld into one snow dome across the gap. OFF = no melding at all: every object's shell rolls off at its own edges, and shells that happen to sit near each other simply clip together."));

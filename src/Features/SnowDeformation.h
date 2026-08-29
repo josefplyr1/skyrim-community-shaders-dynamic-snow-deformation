@@ -473,6 +473,8 @@ public:
 		float OverheadClearance = 19.0f;
 		/** @brief A/B (Josef): ON = co-planar surfaces a small horizontal gap apart meld into one dome (drop-bridge reach 3 texels). OFF = "cling" - no bridging at all, every object's shell rolls at its own raster edge and nearby shells simply clip into each other. */
 		bool MeldCoPlanar = true;
+		/** @brief The width failsafe (Josef's saturation sketch): a dome stands at most this many times the repose height its footprint supports - 1 = strict physics (ropes carry slivers), higher = taller piles on narrow features. Wide interiors are unaffected. */
+		float PileHeightRatio = 2.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1529,8 +1531,12 @@ public:
 		float PeelTol;
 		/** @brief Settings::OverheadClearance - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float OverheadIgnore;
-		/** @brief Settings::MeldCoPlanar for the skin: >0.5 lets side faces at MELDED boundaries lift (the vertical snow closing the slit between co-planar shells). CB is FULL. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief Settings::MeldCoPlanar for the skin: >0.5 lets side faces at MELDED boundaries lift (the vertical snow closing the slit between co-planar shells). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float MeldPlanesSk;
+
+		/** @brief Settings::PileHeightRatio - a dome may stand at most this many times the repose height its footprint supports (the cone value); thin features saturate early instead of stretching fins. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float PileHeightRatio;
+		float padPile[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
