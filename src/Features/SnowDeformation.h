@@ -473,7 +473,7 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
 		bool ProjDepthDensity = true;
-		/** @brief Master toggle for the raised 3D object snow layer. On PD-carrying draws this is the S4 shell (the rolling-ball fillet over the fill's cyan slice); draws without projection data keep the classic skin until the rebuild covers them. Off skips only the skin draws - capture, height rasters and the road/trench patch keep running. */
+		/** @brief Master toggle for the raised 3D object snow layer = the S4 shell (the rolling-ball fillet over the fill's cyan slice, PD-carrying draws only). The old object shell is RETIRED (2026-08-29): draws without projection data get no skin at all - the Lighting recolor still covers the technique-classified ones flat, and roads keep their own machinery regardless. Off skips only the skin draws - capture, height rasters and the road/trench patch keep running. */
 		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;

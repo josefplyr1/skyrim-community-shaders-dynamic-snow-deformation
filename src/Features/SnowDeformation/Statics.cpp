@@ -1951,14 +1951,19 @@ void SnowDeformation::DrawCapturedStatics()
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
-		// The 3D layer's master toggle gates every skin draw; roads are
-		// their own machinery and always draw. PD-carrying draws get the
-		// S4 shell (mode 2); the rest keep the classic path until the
-		// rebuild covers them.
-		if (!cap.road && !settings.ObjectSnow3D)
-			continue;
+		// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
+		// its no-PD pillows stood alone on the steps, and at fill 100 the
+		// S4 shell stacked on top of them). Only two things draw now:
+		// roads (their own tuned machinery, always) and the S4 shell
+		// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
+		// PROPERTY carries no projection data get no skin at all - the
+		// Lighting recolor still covers the technique-classified ones
+		// (fence family) flat. The classic shader path survives only
+		// because roads run through it.
 		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
 		                     cap.projThreshold > -0.5f && projNoiseSRV;
+		if (!cap.road && !s4Shell)
+			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape) {
 			logSkip(geometry, "not a BSTriShape");
