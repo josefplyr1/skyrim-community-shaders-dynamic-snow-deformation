@@ -1595,6 +1595,16 @@ public:
 	Texture2D* objectSnowCone3 = nullptr;
 	/** @brief Snow Bridging: the layer-1 ABSOLUTE reposed snow surface (skin VS/DS t29). Its own texture because the classic layer-1 cone keeps serving roads, the trench patch, and the PS self-shadow march with depth semantics. */
 	Texture2D* objectSnowSurface = nullptr;
+
+	// ---- Height-field probe (Debugging Options): the seven object maps read
+	// back at the player's texel every frame, so a report carries numbers
+	// instead of guesses. Ping-pong staging; the value shown is one frame old.
+	winrt::com_ptr<ID3D11Texture2D> probeStaging[2];
+	uint probeCursor = 0;
+	/** @brief Sampled values: 0 = L1 top, 1 = L2 top, 2 = L3 top, 3 = cone1, 4 = cone2, 5 = cone3, 6 = bridged surface. Sentinels pass through raw. */
+	float probeVals[7] = {};
+	bool probeValid = false;
+	float3 probeWorldPos = {};
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;

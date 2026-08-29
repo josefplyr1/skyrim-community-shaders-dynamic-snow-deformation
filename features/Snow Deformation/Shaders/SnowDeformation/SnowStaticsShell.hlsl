@@ -1486,6 +1486,9 @@ struct SkinLift
 	// Authored-relief mode: the raw authored vertex alpha, exported so the
 	// PS can rebuild vanilla's weight per pixel from the G-buffer normal.
 	float ProjLinear;
+	// Debug (Shell Layers view): which peeled plane owned this vertex.
+	// 0 = not an S4 draw, 1/2/3 = the layer, 4 = below all three.
+	float DebugLayer;
 };
 
 SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float isFlat, float vertexAlpha)
@@ -1526,6 +1529,8 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// and the factor is exported for the PS's density-mode coverage gate.
 	float projFactor = 1.0;
 	float projLinear = 1.0;
+	// Shell Layers debug view: which peeled plane owned this vertex.
+	float debugLayer = 0.0;
 	// Flat PD shell (S3 round 10, Josef's split): this draw's cover is a
 	// CONSTANT coat inflated along the sealed smooth normal - set at the
 	// END of this function; the depth pipeline below belongs to the 3D
@@ -1665,6 +1670,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// included; the proper sheltering ("no snow under tents") returns
 		// later as its own mechanism. Undersides stay harmless: their
 		// up-displaced faces land inside their own geometry.
+		debugLayer = 1.0;
 		[branch] if (BridgeModeSk > 0.5 && HasObjectTop > 0.5)
 		{
 			// SNOW BRIDGING: the height comes from ONE continuous reposed
@@ -1682,12 +1688,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			{
 				float top2 = PatchTop2Point(worldBase.xy);
 				surf = ObjectConeDepth2(worldBase.xy);
+				debugLayer = 2.0;
 				[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
 				{
 					float top3 = PatchTop3Point(worldBase.xy);
 					surf = ObjectConeDepth3(worldBase.xy);
+					debugLayer = 3.0;
 					[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
+					{
 						surf = worldBase.z;
+						debugLayer = 4.0;
+					}
 				}
 			}
 			// The sentinel survives BilinearValid when no data is near.
@@ -1714,12 +1725,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				{
 					float top2 = PatchTop2Point(worldBase.xy);
 					cone = ObjectConeDepth2(worldBase.xy);
+					debugLayer = 2.0;
 					[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
 					{
 						float top3 = PatchTop3Point(worldBase.xy);
 						cone = ObjectConeDepth3(worldBase.xy);
+						debugLayer = 3.0;
 						[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
+						{
 							cone = 0.0;
+							debugLayer = 4.0;
+						}
 					}
 				}
 				rollT = saturate(cone / coneSeed);
@@ -1740,6 +1756,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	o.UpFacing = upFacing;
 	o.ProjFactor = projFactor;
 	o.ProjLinear = projLinear;
+	o.DebugLayer = debugLayer;
 	return o;
 }
 
@@ -1876,7 +1893,14 @@ VS_OUTPUT main(VS_INPUT input)
 	// Mode 5 pairs the current up-facing mask with vanilla's reconstructed
 	// projection mask so one screenshot says whether the authored vertex
 	// alpha carries information the normal test lacks (SKIN-PLACEMENT-PLAN).
-	[flatten] if (StaticsDebugView > 4.5)
+	// Mode 6 (Shell Layers): which peeled plane owned the vertex + the depth
+	// it was granted, the two questions every S4 report reduces to.
+	[flatten] if (StaticsDebugView > 5.5)
+	{
+		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
+		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, v.Flat), kMinSkinLift));
+	}
+	else [flatten] if (StaticsDebugView > 4.5)
 	{
 		vsout.Coverage = lift.UpFacing;
 		vsout.Flat = ReconstructedProjMask(v.NormalWS.z, v.VertexAlpha, ProjThreshold);
@@ -2043,7 +2067,13 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
 	// then traceable to whichever of the two is lying.
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 4.5)
+	[flatten] if (StaticsDebugView > 5.5)
+	{
+		// Mode 6: identical encoding to the untessellated VS.
+		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
+		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift));
+	}
+	else [flatten] if (StaticsDebugView > 4.5)
 	{
 		// Mode 5: identical encoding to the untessellated VS. smoothZ is the
 		// RAW interpolated normal's z (normalWS holds the shading normal by
@@ -3129,8 +3159,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef PATCH
 		[branch] if (StaticsDebugView > 4.5)
 		{
-			// Projected-mask mode compares skin masks; the patch has no
-			// authored alpha. Dim gray = patch, outside the comparison.
+			// Layer/projected-mask modes compare skin data; the patch is
+			// outside both. Dim gray.
 			preLit = float3(0.1, 0.1, 0.1);
 		}
 		else [branch] if (StaticsDebugView > 3.5)
@@ -3144,7 +3174,29 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 4.5)
+		[branch] if (StaticsDebugView > 5.5)
+		{
+			// Shell Layers mode: WHICH peeled plane owns each pixel and
+			// what depth it was granted. Green = layer 1, yellow = layer 2,
+			// red = layer 3, magenta = below all three (no plane owns it),
+			// dim blue-gray = a non-S4 draw (roads/classic). Brightness =
+			// granted depth as a fraction of the slider; a dim pure color
+			// is a plane that got NO height - the exact signature of every
+			// starved-floor and cut-surface report.
+			float layer = floor(saturate(input.Coverage) * 8.0);
+			float bright = 0.25 + 0.75 * saturate(input.Flat);
+			float3 layerColor = float3(0.1, 0.15, 0.25);
+			[flatten] if (layer > 3.5)
+				layerColor = float3(1.0, 0.0, 1.0);
+			else [flatten] if (layer > 2.5)
+				layerColor = float3(1.0, 0.1, 0.1);
+			else [flatten] if (layer > 1.5)
+				layerColor = float3(1.0, 1.0, 0.1);
+			else [flatten] if (layer > 0.5)
+				layerColor = float3(0.1, 1.0, 0.1);
+			preLit = layerColor * bright;
+		}
+		else [branch] if (StaticsDebugView > 4.5)
 		{
 			// Projected-mask mode. R = the live geometry mask (the authored
 			// factor already folded in when a mode is on). G = the authored

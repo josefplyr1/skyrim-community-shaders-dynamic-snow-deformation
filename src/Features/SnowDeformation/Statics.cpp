@@ -1773,12 +1773,14 @@ void SnowDeformation::RenderObjectHeightMap()
 			for (uint step : kConeSteps) {
 				processData.ConeStep = step;
 				heightProcessCB->Update(processData);
-				ID3D11ShaderResourceView* surfSRV = surfIn->srv.get();
+				// t1 = the layer's top raster: the iterate's connectivity
+				// test needs each column's own floor.
+				ID3D11ShaderResourceView* surfSRVs[2] = { surfIn->srv.get(), heightTopRaw[heightCurrent]->srv.get() };
 				ID3D11UnorderedAccessView* surfUAV = surfOut->uav.get();
-				context->CSSetShaderResources(0, 1, &surfSRV);
+				context->CSSetShaderResources(0, 2, surfSRVs);
 				context->CSSetUnorderedAccessViews(0, 1, &surfUAV, nullptr);
 				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetShaderResources(0, 2, nullCsSRVs);
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(surfIn, surfOut);
 			}
@@ -1812,12 +1814,13 @@ void SnowDeformation::RenderObjectHeightMap()
 			for (uint step : kConeSteps) {
 				processData.ConeStep = step;
 				heightProcessCB->Update(processData);
-				ID3D11ShaderResourceView* obj2SRV = obj2In->srv.get();
+				// t1 = this layer's top raster (bridge connectivity test).
+				ID3D11ShaderResourceView* obj2SRVs[2] = { obj2In->srv.get(), peelTops[peelLayer]->srv.get() };
 				ID3D11UnorderedAccessView* obj2UAV = obj2Out->uav.get();
-				context->CSSetShaderResources(0, 1, &obj2SRV);
+				context->CSSetShaderResources(0, 2, obj2SRVs);
 				context->CSSetUnorderedAccessViews(0, 1, &obj2UAV, nullptr);
 				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetShaderResources(0, 2, nullCsSRVs);
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(obj2In, obj2Out);
 			}
@@ -1828,6 +1831,54 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShaderResources(2, 2, nullTailSRVs);
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
+
+	// Height-field probe (Debugging Options): the seven object maps read
+	// back at the player's texel. Copy this frame, map LAST frame's copy
+	// with DO_NOT_WAIT, so the readout is one frame old and never stalls.
+	if (auto probePlayer = RE::PlayerCharacter::GetSingleton()) {
+		if (!probeStaging[0]) {
+			D3D11_TEXTURE2D_DESC sdesc{
+				.Width = 8,
+				.Height = 1,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_R32_FLOAT,
+				.SampleDesc = { 1, 0 },
+				.Usage = D3D11_USAGE_STAGING,
+				.BindFlags = 0,
+				.CPUAccessFlags = D3D11_CPU_ACCESS_READ,
+				.MiscFlags = 0
+			};
+			globals::d3d::device->CreateTexture2D(&sdesc, nullptr, probeStaging[0].put());
+			globals::d3d::device->CreateTexture2D(&sdesc, nullptr, probeStaging[1].put());
+			if (probeStaging[0])
+				Util::SetResourceName(probeStaging[0].get(), "SnowDeformation::ProbeStaging0");
+			if (probeStaging[1])
+				Util::SetResourceName(probeStaging[1].get(), "SnowDeformation::ProbeStaging1");
+		}
+		if (probeStaging[0] && probeStaging[1]) {
+			const auto pos = probePlayer->GetPosition();
+			probeWorldPos = { pos.x, pos.y, pos.z };
+			// Same world->texel mapping as PatchTexel / the capture VS.
+			float u = (pos.x - heightWindowCenter.x) / kHeightMapHalfExtent * 0.5f + 0.5f;
+			float v = 0.5f - (pos.y - heightWindowCenter.y) / kHeightMapHalfExtent * 0.5f;
+			uint tx = uint(std::clamp(int(u * kHeightMapDim), 0, int(kHeightMapDim) - 1));
+			uint ty = uint(std::clamp(int(v * kHeightMapDim), 0, int(kHeightMapDim) - 1));
+			Texture2D* probeMaps[7] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
+				objectSnowCone, objectSnowCone2, objectSnowCone3, objectSnowSurface };
+			D3D11_BOX probeBox{ tx, ty, 0, tx + 1, ty + 1, 1 };
+			for (uint i = 0; i < 7; i++)
+				if (probeMaps[i] && probeMaps[i]->resource)
+					context->CopySubresourceRegion(probeStaging[probeCursor].get(), 0, i, 0, 0, probeMaps[i]->resource.get(), 0, &probeBox);
+			probeCursor ^= 1;
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (SUCCEEDED(context->Map(probeStaging[probeCursor].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+				memcpy(probeVals, mapped.pData, sizeof(probeVals));
+				context->Unmap(probeStaging[probeCursor].get(), 0);
+				probeValid = true;
+			}
+		}
+	}
 }
 
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)

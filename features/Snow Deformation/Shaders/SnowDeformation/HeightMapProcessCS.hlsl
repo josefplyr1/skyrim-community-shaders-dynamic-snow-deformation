@@ -268,10 +268,18 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			rim = true;
 			continue;
 		}
-		// Bridged surfaces need no internal rims: a step's snow rolls down
-		// to the lower plane's surface under the slope limit by itself.
-		if (BridgeMode > 0.5)
+		if (BridgeMode > 0.5) {
+			// Bridged: small steps need no rims (the surface buries them
+			// under the slope limit by itself), but a ledge the
+			// neighbour's snow column can never climb - deeper than its
+			// full depth plus the repose rise across the bridge span - is
+			// a separate structure, and without a bare-top rim its edge
+			// would stand as an open shell wall. The threshold is
+			// physics, not a knob.
+			if (top - n > seed + SlopePerUnit * 8.0)
+				rim = true;
 			continue;
+		}
 		float drop = top - n;
 		// Slope carrying on past the neighbour cancels the drop; a step
 		// against a flat run keeps it in full.
@@ -288,7 +296,8 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 // InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be
 // reused here: its terrain clamp belongs to an absolute-height field and would
-// pin a depth field to world Z.
+// pin a depth field to world Z. Bridge mode additionally reads InB = the
+// layer's TOP raster for the connectivity test.
 [numthreads(8, 8, 1)] void ObjectConeCS(uint3 dtid
 										: SV_DispatchThreadID) {
 	uint2 dims;
@@ -298,6 +307,14 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	float texel = HeightHalfExtent * 2.0 / dims.x;
 	float h = InA[dtid.xy];
+	// Bridge mode: this column's own floor. Snow can only avalanche onto a
+	// surface it physically reaches, so a neighbour's drift constrains this
+	// column ONLY if its level plus the repose rise lands ABOVE the floor;
+	// a lower drift with air between must not cut a porch, roof or post to
+	// its level - that cut is what erased every shell in town on the first
+	// bridged build. Empty columns (floor -100000) accept everything, which
+	// is what propagates real values into cracks and edge-bilinear texels.
+	float topHere = InB[dtid.xy];
 
 	[unroll] for (int dy = -1; dy <= 1; dy++)
 	{
@@ -309,7 +326,10 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			if (any(p < 0) || any(p >= int2(dims)))
 				continue;
 			float dist = length(float2(dx, dy)) * ConeStep * texel;
-			h = min(h, InA[uint2(p)] + SlopePerUnit * dist);
+			float cand = InA[uint2(p)] + SlopePerUnit * dist;
+			[flatten] if (BridgeMode > 0.5 && cand < topHere)
+				continue;
+			h = min(h, cand);
 		}
 	}
 

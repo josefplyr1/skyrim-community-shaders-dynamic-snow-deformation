@@ -1131,10 +1131,34 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 
 		{
-			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask" };
+			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers" };
 			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
+			// Height-field probe: the seven object maps under the player's
+			// feet, one frame old. The numbers behind every layer/height
+			// question - tops per peeled layer, the depth cones, and the
+			// bridged surface. Sentinels (no data) print as '-'.
+			if (probeValid) {
+				auto fmtHeight = [](float v, char* out, size_t n) {
+					if (v < -50000.0f || v > 50000.0f)
+						snprintf(out, n, "-");
+					else
+						snprintf(out, n, "%.0f", v);
+				};
+				char l1[16], l2[16], l3[16], c2[16], c3[16], sf[16];
+				fmtHeight(probeVals[0], l1, sizeof(l1));
+				fmtHeight(probeVals[1], l2, sizeof(l2));
+				fmtHeight(probeVals[2], l3, sizeof(l3));
+				fmtHeight(probeVals[4], c2, sizeof(c2));
+				fmtHeight(probeVals[5], c3, sizeof(c3));
+				fmtHeight(probeVals[6], sf, sizeof(sf));
+				char probeLine1[160], probeLine2[160];
+				snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s  L3 %s", probeWorldPos.z, l1, l2, l3);
+				snprintf(probeLine2, sizeof(probeLine2), "cone1 %.1f | L2 field %s | L3 field %s | bridged surface %s", probeVals[3], c2, c3, sf);
+				ImGui::TextUnformatted(probeLine1);
+				ImGui::TextUnformatted(probeLine2);
+			}
 			if (auto _ttSdv = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the live geometry mask, green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires."));
+				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the live geometry mask, green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));
 		}
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"));
