@@ -465,8 +465,8 @@ public:
 		float ObjectsSnowDepth = 3.0f;
 		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). */
 		float ShellMaxSlopeDeg = 80.0f;
-		/** @brief Snow Bridging (A/B, Josef's "think outside the box" round): ON = the shell height comes from ONE continuous reposed snow SURFACE in absolute height per layer - planes meet at the same height at every seam, steps/stairs bury themselves as depth rises, no split threshold involved. OFF = the per-plane rolling-ball fillet (the previous look). */
-		bool SnowBridging = true;
+		/** @brief Snow Bridging (A/B experiment, default OFF per Josef's isolation sketch): ON = the shell height comes from ONE continuous reposed snow SURFACE in absolute height per layer - seams close, but it inherits the top raster's texel noise (razor blades, scroll-phase crawl, decay jitter). OFF = per-plane isolated domes, rounded at every plane boundary, clipping invisibly into neighbours - the sketch model. */
+		bool SnowBridging = false;
 		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. Classic (non-bridged) shell only. */
 		float PlaneSplitStep = 6.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */

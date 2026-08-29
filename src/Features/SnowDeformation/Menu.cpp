@@ -237,11 +237,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("snow_bridging"), "Snow Bridging"), &settings.SnowBridging);
 		if (auto _ttBridge = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_bridging_tooltip"), "ON: the snow forms one continuous drift surface - stairs and ledges bury themselves as depth rises, and shells from neighboring surfaces always meet with no seams or gaps. OFF: each surface wears its own rounded pillow (the previous look; Plane Split Step applies only here)."));
+			ImGui::Text("%s", T(TKEY("snow_bridging_tooltip"), "EXPERIMENTAL, default OFF: the snow forms one continuous drift surface - seams close and stairs bury as depth rises, but the surface inherits height-map noise (razor shards, crawling when the camera moves). OFF: every surface wears its own isolated dome, rounded at every plane boundary, overlapping neighbors invisibly - the intended look."));
 
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "Snow Bridging OFF only: a ledge or step taller than this becomes its own snow plane with its own rounded rims (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps back into one continuous surface. Sloped roofs and rocks never self-split regardless."));
+			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this - in either direction, and regardless of snow depth - marks the boundary of a distinct snow plane, each wearing its own dome (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps into one surface. Sloped roofs and rocks never self-split. Snow Bridging OFF only."));
 
 		ImGui::SliderFloat(T(TKEY("plane_merge_height"), "Plane Merge Height"), &settings.PlaneMergeHeight, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttMerge = Util::HoverTooltipWrapper())

@@ -286,6 +286,16 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		float carry = max(n1 - n2, 0.0);
 		if (drop - carry > RimStep)
 			rim = true;
+		// SYMMETRIC (Josef's isolation sketch): a break UPWARD is a plane
+		// boundary too, so every plank's dome rounds at BOTH edges and
+		// clips invisibly into its neighbour instead of piling against
+		// the riser. Unbridged (a crack can never fake a rise), with the
+		// same slope-continuation cancel so ascending roofs and rock
+		// flanks never self-rim.
+		float rise = n1 - top;
+		float riseCarry = max(n2 - n1, 0.0);
+		if (n1 > -50000.0 && rise - riseCarry > RimStep)
+			rim = true;
 	}
 
 	[branch] if (BridgeMode > 0.5)
