@@ -2197,6 +2197,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 normalWS = normalize(input.NormalWS);
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
+	// Shared scope: the seam, down-kill and march gates below read this in
+	// BOTH variants. The patch never carries the S4 mode (its draws leave
+	// ProjPixelEnable at 0), so it reads false there - but declaring it
+	// inside the skin-only region broke the PATCH compile silently (the
+	// runtime compiler fails without a build error; the trench patch was
+	// simply absent in-game).
+	bool pdMode = ProjPixelEnable > 1.5;
 
 	// Rim wall: where a lifted cap reaches back down to the object's edge it is
 	// near-vertical at any depth, so the steepness gates below would erase it
@@ -2297,7 +2304,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
-	bool pdMode = ProjPixelEnable > 1.5;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -3013,7 +3019,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// cannot see under
 		// roofs: where it stands well above the surface being shaded, drop
 		// its term and let the cascades/SSS own the shading here.
-		bool objectTopUsable = HasObjectTop > 0.5;
+		// S4 shells skip the OBJECT taps outright (Josef's call): this
+		// march term predates the S4 shell - it was built to self-shadow
+		// trench walls from the raster when nothing else would - and on
+		// the new domes it only duplicates what the cascades already
+		// draw, in blocky 4-unit raster steps. The terrain taps below
+		// stay (a drift in a hill's lee still darkens smoothly).
+		bool objectTopUsable = HasObjectTop > 0.5 && !pdMode;
 		[branch] if (objectTopUsable)
 		{
 			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
