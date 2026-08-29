@@ -1105,6 +1105,7 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
+	objectSnowSurface = makeHeightTexture("SnowDeformation::ObjectSnowSurface");
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
@@ -1161,6 +1162,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
 	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
+	// Per-dispatch flag: only the bridged-surface chains flip it on below.
+	processData.BridgeMode = 0.0f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1747,8 +1750,46 @@ void SnowDeformation::RenderObjectHeightMap()
 			std::swap(objIn, objOut);
 		}
 
+		// Snow Bridging: the layer-1 ABSOLUTE reposed surface, its own
+		// texture - the classic depth cone above keeps serving roads, the
+		// trench patch and the PS self-shadow march unchanged.
+		if (settings.SnowBridging && objectSnowSurface) {
+			processData.BridgeMode = 1.0f;
+			heightProcessCB->Update(processData);
+			context->CSSetShader(objectConeSeedCS, nullptr, 0);
+			ID3D11ShaderResourceView* surfSeedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
+				heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
+			ID3D11UnorderedAccessView* surfSeedUAV = objectSnowSurface->uav.get();
+			context->CSSetShaderResources(0, 2, surfSeedSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, &surfSeedUAV, nullptr);
+			context->Dispatch(dispatchDim, dispatchDim, 1);
+			ID3D11ShaderResourceView* nullSurfSRVs[2] = { nullptr, nullptr };
+			context->CSSetShaderResources(0, 2, nullSurfSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+
+			context->CSSetShader(objectConeCS, nullptr, 0);
+			Texture2D* surfIn = objectSnowSurface;
+			Texture2D* surfOut = heightScratch;
+			for (uint step : kConeSteps) {
+				processData.ConeStep = step;
+				heightProcessCB->Update(processData);
+				ID3D11ShaderResourceView* surfSRV = surfIn->srv.get();
+				ID3D11UnorderedAccessView* surfUAV = surfOut->uav.get();
+				context->CSSetShaderResources(0, 1, &surfSRV);
+				context->CSSetUnorderedAccessViews(0, 1, &surfUAV, nullptr);
+				context->Dispatch(dispatchDim, dispatchDim, 1);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+				std::swap(surfIn, surfOut);
+			}
+		}
+
 		// S4 phase 2: the same seed + repose chain over each PEELED layer
 		// top, so every below-top plane gets its own rims and distances.
+		// In bridging mode these run as absolute surfaces too - their only
+		// consumer is the skin's layer select, which switches with them.
+		processData.BridgeMode = settings.SnowBridging ? 1.0f : 0.0f;
+		heightProcessCB->Update(processData);
 		Texture2D* peelTops[2] = { heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent] };
 		Texture2D* peelCones[2] = { objectSnowCone2, objectSnowCone3 };
 		for (int peelLayer = 0; peelLayer < 2; peelLayer++) {
@@ -2111,12 +2152,13 @@ void SnowDeformation::DrawCapturedStatics()
 	context->DSSetShaderResources(24, 1, &top2SRV);
 	context->VSSetShaderResources(26, 1, &cone2SRV);
 	context->DSSetShaderResources(26, 1, &cone2SRV);
-	ID3D11ShaderResourceView* layer3SRVs[2] = {
+	ID3D11ShaderResourceView* layer3SRVs[3] = {
 		(heightTop3Raw[heightCurrent] && heightTop3Raw[heightCurrent]->srv) ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
-		(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr
+		(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr,
+		(objectSnowSurface && objectSnowSurface->srv) ? objectSnowSurface->srv.get() : nullptr
 	};
-	context->VSSetShaderResources(27, 2, layer3SRVs);
-	context->DSSetShaderResources(27, 2, layer3SRVs);
+	context->VSSetShaderResources(27, 3, layer3SRVs);
+	context->DSSetShaderResources(27, 3, layer3SRVs);
 	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
 	// skin's self-shadow march and spell-mark shading read the landscape
 	// shell's slots; the skins draw standalone, so bind explicitly here.
@@ -2265,6 +2307,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		scb.ShellMinNz = std::cos(std::clamp(settings.ShellMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
+		scb.BridgeModeSk = settings.SnowBridging ? 1.0f : 0.0f;
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
@@ -2311,9 +2354,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(24, 1, &nullSmoothSRV);
-	ID3D11ShaderResourceView* nullLayerSRVs[3] = { nullptr, nullptr, nullptr };
-	context->VSSetShaderResources(26, 3, nullLayerSRVs);
-	context->DSSetShaderResources(26, 3, nullLayerSRVs);
+	ID3D11ShaderResourceView* nullLayerSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
+	context->VSSetShaderResources(26, 4, nullLayerSRVs);
+	context->DSSetShaderResources(26, 4, nullLayerSRVs);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

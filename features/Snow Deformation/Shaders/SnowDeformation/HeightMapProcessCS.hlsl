@@ -39,7 +39,14 @@ cbuffer HeightProcessCB : register(b0)
 	float GhostDecay;  // units/frame the accumulated maps drift toward empty
 	float ObjectSnowDepth;  // rounded-class depth, for the object snow cone seed
 	float RimStep;  // the seed's slope-discontinuity rim threshold (user knob)
-	float padHeight;
+	// >0.5: this seed/iterate dispatch builds an ABSOLUTE reposed snow
+	// SURFACE (Snow Bridging) instead of a per-plane depth field: seeds are
+	// top+depth (top alone at silhouette rims, +100000 where empty - a
+	// no-op under min-plus), internal steps bury themselves under the
+	// slope limit with no rim test, and the iterate skips the >=0 clamp
+	// (absolute world z may be negative). Per dispatch, not per frame:
+	// roads/patch/PS keep reading the classic depth cone.
+	float BridgeMode;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -212,7 +219,10 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	float top = InA[dtid.xy];
 	if (top < -50000.0) {
-		OutA[dtid.xy] = 0.0;
+		// Bridged: empty columns must not constrain the min-plus surface
+		// (and near seeds they pick up propagated values, which is what
+		// keeps edge bilinear taps sane). Classic: empty = rim.
+		OutA[dtid.xy] = BridgeMode > 0.5 ? 100000.0 : 0.0;
 		return;
 	}
 
@@ -258,6 +268,10 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			rim = true;
 			continue;
 		}
+		// Bridged surfaces need no internal rims: a step's snow rolls down
+		// to the lower plane's surface under the slope limit by itself.
+		if (BridgeMode > 0.5)
+			continue;
 		float drop = top - n;
 		// Slope carrying on past the neighbour cancels the drop; a step
 		// against a flat run keeps it in full.
@@ -266,7 +280,10 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			rim = true;
 	}
 
-	OutA[dtid.xy] = rim ? 0.0 : seed;
+	[branch] if (BridgeMode > 0.5)
+		OutA[dtid.xy] = rim ? top : top + seed;
+	else
+		OutA[dtid.xy] = rim ? 0.0 : seed;
 }
 
 // InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be
@@ -296,7 +313,9 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		}
 	}
 
-	OutA[dtid.xy] = max(h, 0.0);
+	// The bridged surface is absolute world z, which may be negative; the
+	// >=0 clamp belongs to the depth field only.
+	OutA[dtid.xy] = BridgeMode > 0.5 ? h : max(h, 0.0);
 }
 
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).
