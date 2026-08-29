@@ -218,7 +218,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
 		if (auto _tt3d = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The height-adjustable raised snow layer on objects without projected-snow data (and the classic placement rules that drive it). The flat projected-snow shell is controlled by Recolor Projected Snow above and stays on without this. Roads and their trenches are separate machinery and stay on."));
+			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The raised 3D snow layer on objects. Where the game paints projected snow, the layer is a rounded blanket grown over the Snow Fill area - its edge rolls over like a real snow lip, and the rounding lengthens as the depth rises. Objects without projected-snow data keep the classic layer for now. Roads and their trenches are separate machinery and stay on."));
 
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttRoad = Util::HoverTooltipWrapper())

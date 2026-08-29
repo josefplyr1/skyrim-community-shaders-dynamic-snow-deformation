@@ -244,19 +244,21 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	// Layout keeper (was OpaqueCoverage, retired round 13 - the Lighting
-	// fill covers cleanly, so the binary-cut policy has no job left).
+	// Snow Fill, 0..1 (mirror of SettingsGPU::ProjSnowFill, carried here
+	// because b6 is not bound to the skin VS/DS): the S4 shell grows only
+	// on the fill's angular slice. Took the retired OpaqueCoverage slot.
 	// Mirror in SnowDeformation.h.
-	float padOpaque;
+	float ProjSnowFillSk;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
-	// 2 = the flat PD shell owns this draw ("Recolor Projected Snow"):
-	// constant coat inflated along the smooth normal, coverage = vanilla's
-	// weight rebuilt per pixel sliced by Snow Fill's angular knob. 0 =
-	// classic path (recolor off, no projection data, or a road). Encoded
-	// as 2 so the >1.5 tests survive any future middle state. Set only
-	// with the noise map bound at t21. Mirror in SnowDeformation.h.
+	// 2 = the S4 shell owns this draw ("3D Snow on Objects" + projection
+	// data): the rolling-ball fillet grown vertically over the
+	// fill-covered slice of the projected footprint, coverage = vanilla's
+	// weight rebuilt per pixel. 0 = classic path (no projection data, or
+	// a road). Encoded as 2 so the >1.5 tests survive any future middle
+	// state. Set only with the noise map bound at t21. Mirror in
+	// SnowDeformation.h.
 	float ProjPixelEnable;
 	// >0.5: pre-shell copy of the NORMALROUGHNESS target bound at PS t23 -
 	// the per-pixel nz for the authored-relief coverage cut comes from the
@@ -378,19 +380,10 @@ static const float kSnowUVTile = 4096.0 / 24.0;
 // a coat, so a class slider at 0 is a flat sheet rather than a 1-unit layer.
 static const float kMinSkinLift = 0.1;
 
-// Flat PD shell (S3, round 10): the Snow Fill slider's full span, mapped
-// to the angular coverage of the projected-snow footprint - 0 covers
-// nothing, the midpoint covers the whole up-facing hemisphere, the top
-// covers every angle including straight down (Josef's percentage spec).
-static const float kProjFillRange = 25.0;
-
-// Flat PD shell: the coat's inflation distance along the SEALED smooth
-// normal. Normal-offset, not vertical, on purpose: for any visible
-// (front-facing) pixel the inflated copy is strictly nearer the camera
-// than its source, so the coat always wins the z-test - the property the
-// vertical lift lacked on walls (rounds 4-6 z-banded into invisibility) -
-// and it covers every angle, overhangs included. Two units (~3 cm) reads
-// as paint, not a layer.
+// S4 shell: the roll edge's z-clearance. The fillet's geometry reaches
+// h=0 at the rim; below this lift the material is cut (the last sliver
+// would shade coincident with the surface it covers) and the recolored
+// PD carries on underneath. Two units (~3 cm).
 static const float kProjCoatLift = 2.0;
 
 // World width of the cornice roll on flat plates, and the band over which a
@@ -1467,14 +1460,39 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = max(depth, kMinSkinLift * upFacing);
 	}
 
-	// Flat PD shell geometry, applied LAST so nothing upstream can modify
-	// it: a CONSTANT inflation along the sealed smooth normal (see
-	// kProjCoatLift for why normal-offset and not vertical). Coverage is
-	// decided entirely per pixel in the PS.
-	[flatten] if (ProjPixelEnable > 1.5)
+	// S4 phase 1 - the NEW 3D shell (Josef's 0/10/20/30 sketch): a
+	// ROLLING-BALL FILLET whose radius IS the height, grown VERTICALLY
+	// over the fill-covered ("cyan") slice of the projected footprint.
+	// Applied LAST because the classic depth pipeline (taper, shelter,
+	// collapse) belongs to the classic layer - the fillet IS this shell's
+	// taper. h(t) = H*sqrt(1-(1-t)^2) over the cone field's normalized
+	// distance-to-rim: the roll's run equals H, so the rounding lengthens
+	// with the slider by construction, flattening into the blanket
+	// interior; MoundSteepness naturally modulates roll tightness. The
+	// placement mask (vertex frequency; the PS refines it per pixel):
+	// inside the projected footprint, inside the fill's angular slice,
+	// and TOP-VISIBLE - only what the downward camera (the object-top
+	// raster) can see grows the shell; the recolored PD continues
+	// underneath everywhere else.
+	[branch] if (ProjPixelEnable > 1.5)
 	{
-		liftWS = smoothWS;
-		depth = kProjCoatLift;
+		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
+		float mask = smoothstep(0.0, 0.05, wLin);
+		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
+		mask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		float rollT = 1.0;
+		[branch] if (HasObjectTop > 0.5)
+		{
+			float objTop = PatchTop(worldBase.xy);
+			[flatten] if (objTop > -50000.0)
+				mask *= smoothstep(-8.0, -2.0, worldBase.z - objTop);
+			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+			rollT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
+		}
+		float rimIn = 1.0 - rollT;
+		depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
+		coverDepth = depth;
+		upFacing = mask;
 	}
 
 	SkinLift o;
@@ -2002,8 +2020,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// slider sweeps the acceptance threshold across that whole range -
 		// most up-facing parts first, the midpoint covers the up-facing
 		// hemisphere, the top covers every angle.
-		float nzCut = 1.0 - 2.0 * saturate(liftBase / kProjFillRange);
+		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
+		// the last sliver would shade coincident with the surface below it
+		// - cut the material where the lift drops under the clearance and
+		// let the recolored PD carry on underneath (the two systems agree
+		// by construction, so the hand-off is a seam of height only).
+		pdCoverage *= smoothstep(0.3 * kProjCoatLift, kProjCoatLift, input.Lift);
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);

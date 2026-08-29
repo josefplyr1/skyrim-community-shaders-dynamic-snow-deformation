@@ -13,6 +13,17 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
+// The engine's projected-noise map, when reachable - the S4 shell's hard
+// dependency (its per-pixel footprint cut reconstructs vanilla's weight).
+// Checked identically at capture-raster and skin time so both passes pick
+// the same class for a draw.
+static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
+{
+	auto* graphicsState = globals::game::graphicsState;
+	auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
+	return (noiseTex && noiseTex->rendererTexture) ? noiseTex->rendererTexture->resourceView : nullptr;
+}
+
 // True if the scenegraph carries a live attached light. A burning torch (held
 // or dropped) has a NiPointLight in its 3D; torch-snuffing mods remove it
 // while keeping the carryable light base form.
@@ -1482,9 +1493,12 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		// Same class pick as the skin (the flat PD cover lives in Lighting
-		// since round 11, so the classifier is back for every skin draw).
-		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
+		// Same class pick as the skin: S4 shell draws are all ROUNDED.
+		{
+			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
+			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
+		}
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1925,25 +1939,26 @@ void SnowDeformation::DrawCapturedStatics()
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
 	context->PSSetShaderResources(16, 2, skinFrostSRVs);
-	// t21 (noise map) and t23 (pre-shell normals copy) belong to the skin's
-	// dormant per-pixel placement machinery (kept for the 3D rebuild); the
-	// flat PD cover lives in Lighting's recolor since round 11, so nothing
-	// is fetched or bound here.
-	ID3D11ShaderResourceView* projNoiseSRV = nullptr;
+	// The S4 shell's per-pixel footprint cut: vanilla's noise map (PS t21)
+	// and the pre-shell normals copy (PS t23, per-pixel nz with the
+	// interpolated fallback).
+	ID3D11ShaderResourceView* projNoiseSRV = settings.ObjectSnow3D ? SD_ProjNoiseMapSRV() : nullptr;
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	ID3D11ShaderResourceView* skinNormalsSRV = nullptr;
+	ID3D11ShaderResourceView* skinNormalsSRV = settings.ObjectSnow3D ? preSkinNormalsCopySRV.get() : nullptr;
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
-		// The flat PD cover moved INTO Lighting's recolor (round 11 - the
-		// object's own shader has the real weight; the round-4..10 skin
-		// coats are why). The skins are the 3D layer only, gated by its
-		// master toggle; roads are their own machinery and always draw.
+		// The 3D layer's master toggle gates every skin draw; roads are
+		// their own machinery and always draw. PD-carrying draws get the
+		// S4 shell (mode 2); the rest keep the classic path until the
+		// rebuild covers them.
 		if (!cap.road && !settings.ObjectSnow3D)
 			continue;
+		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+		                     cap.projThreshold > -0.5f && projNoiseSRV;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape) {
 			logSkip(geometry, "not a BSTriShape");
@@ -2051,13 +2066,12 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
+		scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// Always 0 since round 11: the flat PD cover lives in Lighting's
-		// recolor now. The shader's mode-2 machinery stays dormant for the
-		// coming 3D rebuild.
-		scb.ProjPixelEnable = 0.0f;
+		// 2 = the S4 shell owns this draw; 0 = classic path.
+		scb.ProjPixelEnable = s4Shell ? 2.0f : 0.0f;
+		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 

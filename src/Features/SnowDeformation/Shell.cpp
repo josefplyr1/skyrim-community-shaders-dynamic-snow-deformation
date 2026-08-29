@@ -807,11 +807,15 @@ void SnowDeformation::DrawShell()
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
 		}
-		// The pre-shell normals copy for the skins' per-pixel placement is
-		// retired with the flat-shell experiment (round 11 - the flat PD
-		// cover lives in Lighting's recolor, which has the real normal).
-		// The machinery returns with the 3D rebuild if it needs it.
+		// Pre-shell normals for the S4 shell's per-pixel footprint cut
+		// (per-pixel nz, normal maps included). Gated on the 3D toggle so
+		// the off-cost is zero; the null SRV keeps HasSkinNormalCopy off.
 		preSkinNormalsCopySRV = nullptr;
+		auto& normalsRT = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
+		if (settings.ObjectSnow3D && settings.ObjectsSnowDepth > 0.05f && normalsRT.SRV) {
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			CopySRVResource(normalsRT.SRV, "SnowDeformation::PreSkinNormalsCopy", preSkinNormalsCopyTex, preSkinNormalsCopySRV);
+		}
 	}
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,

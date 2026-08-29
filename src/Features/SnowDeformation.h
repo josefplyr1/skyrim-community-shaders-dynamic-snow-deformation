@@ -473,7 +473,7 @@ public:
 		bool ProjMaskPlacement = true;
 		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
 		bool ProjDepthDensity = true;
-		/** @brief Master toggle for the raised 3D object snow layer (the statics skins). Off skips only the skin draws - capture, height rasters and the road/trench patch keep running - so "Recolor Projected Snow" (ProjSnowMatch) can be judged alone during the object-snow rework (Josef, 2026-08-28). */
+		/** @brief Master toggle for the raised 3D object snow layer. On PD-carrying draws this is the S4 shell (the rolling-ball fillet over the fill's cyan slice); draws without projection data keep the classic skin until the rebuild covers them. Off skips only the skin draws - capture, height rasters and the road/trench patch keep running. */
 		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
@@ -1380,7 +1380,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
-	/** @brief DORMANT since round 11 (the flat PD cover lives in Lighting's recolor, which has the real normal): pre-shell copy of the NORMALROUGHNESS target for the skin's per-pixel placement machinery, kept for the 3D rebuild. Never filled today; skin PS t23 stays null. */
+	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Taken only while ObjectSnow3D is on with a nonzero depth; bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
 
@@ -1503,11 +1503,11 @@ public:
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
-		/** @brief Layout keeper (was OpaqueCoverage, retired round 13 - the Lighting-side fill covers cleanly, so the skins' binary-cut policy has no job left). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float padOpaque;
+		/** @brief Snow Fill, 0..1 (ProjSnowFillPct / 100) - the S4 shell grows only on the fill's angular slice; carried in StaticsCB because b6 is not bound to the skin VS/DS. Took the retired OpaqueCoverage slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ProjSnowFillSk;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
-		/** @brief Authored relief (SKIN-PLACEMENT-PLAN S3): 2 = authored placement for this draw (the reconstructed vanilla weight is the depth source - real lift, round-3 form - and owns the per-pixel coverage cut), 0 = classic path (mode off, no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state; the round-5/6 flat-coat state (1) is retired - a coat without real lift z-bands into invisibility. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief 2 = the S4 shell owns this draw (SKIN-PLACEMENT-PLAN S4 phase 1): the rolling-ball fillet grown vertically over the fill-covered slice of the projected footprint, per-pixel coverage from the reconstructed vanilla weight. 0 = classic path (no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjPixelEnable;
 		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinNormalCopy;
