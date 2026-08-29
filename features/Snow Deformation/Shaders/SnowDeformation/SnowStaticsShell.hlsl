@@ -1480,6 +1480,12 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float mask = smoothstep(0.0, 0.05, wLin);
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		mask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		// Vertical growth is only meaningful on up-facing surfaces - a wall
+		// lifted along +Z slides along itself, and at fill 100% the +0.1
+		// bias floored whole walls into the mask (Josef's whitewashed
+		// boards). Steep faces are the RECOLOR's job; the shell's geometry
+		// is the tops'.
+		mask *= smoothstep(0.05, 0.25, nrmWS.z);
 		// NO top-visibility cut (Josef, 2026-08-29): comparing against the
 		// GLOBAL column top made anything under a roof or railing lose its
 		// shell with a hard mid-plank cliff - the walkway's red-outlined
@@ -2026,6 +2032,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// hemisphere, the top covers every angle.
 		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		// Match the geometry's up-facing gate per pixel: the shell's
+		// material belongs to top surfaces; steep faces keep the recolor.
+		pdCoverage *= smoothstep(0.05, 0.25, nzPix);
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
 		// the last sliver would shade coincident with the surface below it
 		// - cut the material where the lift drops under the clearance and

@@ -229,7 +229,11 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	// Internal rims: a step taller than the layer sheds it the same way the
 	// outer silhouette does. Floored so shallow settings do not read ordinary
-	// surface roughness as a cliff.
+	// surface roughness as a cliff. BRIDGED one texel out: the cracks
+	// between walkway boards are single empty texels at this raster's
+	// 4-unit resolution, and treating each as a rim pinched every board
+	// into its own pillow with holes between (Josef's S4 walkway shot);
+	// a real silhouette is empty for many texels and still rims.
 	float rimDrop = max(seed, 8.0);
 	bool rim = false;
 	[unroll] for (int i = 0; i < 4; i++)
@@ -239,6 +243,9 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		if (any(p < 0) || any(p >= int2(dims)))
 			continue;
 		float n = InA[uint2(p)];
+		int2 p2 = int2(dtid.xy) + offs * 2;
+		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
+			n = max(n, InA[uint2(p2)]);
 		if (n < -50000.0 || (top - n) > rimDrop)
 			rim = true;
 	}
