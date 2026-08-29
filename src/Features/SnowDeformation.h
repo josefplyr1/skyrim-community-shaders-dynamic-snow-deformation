@@ -1839,6 +1839,8 @@ public:
 	bool debugTilingRuler = false;
 	/** @brief Tints classified projected-snow pixels magenta (DebugTerrainOverlay bit 4) so the SnowProjectedIsSnow bit is verifiable in-game without a capture. */
 	bool debugProjSnowView = false;
+	/** @brief Fill instrument (DebugTerrainOverlay bit 16): the slice Snow Fill covers renders cyan inside the projected-snow recolor, so raising the slider visibly converts the debug purple. Not serialized, like every debug view. */
+	bool debugProjFillView = false;
 	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
 	bool debugGlacierView = false;
 

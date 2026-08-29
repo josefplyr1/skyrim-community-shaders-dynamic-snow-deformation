@@ -1817,10 +1817,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		// that could miss an angle - the round-4..10 skin-coat attempts
 		// are why this lives here.
 		float projSnowFill = SharedData::snowDeformationSettings.ProjSnowFill;
+		float projFillBoost = 0.0;
 		[flatten] if (projSnowFill > 0.001 && projectedMaterialWeight > 0.003)
 		{
 			float fillNzCut = 1.0 - 2.0 * projSnowFill;
-			projectedMaterialWeight = max(projectedMaterialWeight, smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, worldNormal.z));
+			projFillBoost = smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, worldNormal.z);
+			projectedMaterialWeight = max(projectedMaterialWeight, projFillBoost);
 		}
 		[branch] if (projectedMaterialWeight > 0.003)
 		{
@@ -1830,6 +1832,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// Classification debug: everything this block replaces, in magenta.
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 				snowProjAlbedo = float3(1.0, 0.0, 1.0);
+			// Fill instrument: the slice Snow Fill covers turns CYAN, so
+			// raising the slider visibly converts the purple - the
+			// working-as-intended readout. Overrides the magenta where
+			// both views are on.
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 16) != 0 && projFillBoost > 0.5)
+				snowProjAlbedo = float3(0.0, 1.0, 1.0);
 #			if defined(TRUE_PBR)
 			// PBR pixels are convention-correct already: albedo + the shell's
 			// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).

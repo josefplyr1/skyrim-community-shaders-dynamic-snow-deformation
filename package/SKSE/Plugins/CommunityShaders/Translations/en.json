@@ -1441,6 +1441,8 @@
     "feature.snow_deformation.debug_options": "Debugging Options",
     "feature.snow_deformation.debug_overlay": "Debug Terrain Overlay",
     "feature.snow_deformation.debug_overlay_tooltip": "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow.",
+    "feature.snow_deformation.debug_proj_fill": "Debug Snow Fill Coverage",
+    "feature.snow_deformation.debug_proj_fill_tooltip": "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0, fully cyan at maximum means the fill is working.",
     "feature.snow_deformation.debug_proj_snow": "Debug Projected Snow Match",
     "feature.snow_deformation.debug_proj_snow_tooltip": "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log.",
     "feature.snow_deformation.debug_tiling_ruler": "Debug Tiling Ruler",

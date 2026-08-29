@@ -543,7 +543,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugGlacierView ? 8u : 0u);
+	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugGlacierView ? 8u : 0u) | (debugProjFillView ? 16u : 0u);
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
 	// (where the shell ends), so the recolor simply applies to all of it â€”

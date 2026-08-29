@@ -225,6 +225,11 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, and at maximum every angle of the pattern is fully covered - undersides included. At 0 the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
+#if !SNOW_ALPHA_BUILD
+			ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Debug Snow Fill Coverage"), &debugProjFillView);
+			if (auto _ttFillDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0, fully cyan at maximum means the fill is working."));
+#endif
 		} else {
 			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
 			if (auto _ttMesh = Util::HoverTooltipWrapper())
