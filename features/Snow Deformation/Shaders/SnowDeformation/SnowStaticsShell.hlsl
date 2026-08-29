@@ -1784,7 +1784,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// dome curvature blends in ONLY where the surface is genuinely
 		// up-facing - where the fillet really IS the surface.
 		float3 smoothShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
-		float domeBlend = mask * saturate(depth / (2.0 * kProjCoatLift)) * smoothstep(0.6, 0.85, nrmWS.z);
+		// The dome normal drives BOTH lighting and the PS's two-plane
+		// texture selection, so it must win on the ROLL WALLS - which are
+		// steepest exactly where depth is lowest, where a depth-only ramp
+		// suppressed it and left the walls top-projected into vertical
+		// streaks (Josef's fence shot). The tilt term hands the walls the
+		// same side-plane projection the trench walls use; the up-facing
+		// gate on the BASE surface still keeps rocks untouched.
+		float domeTilt = smoothstep(0.1, 0.35, 1.0 - domeNormal.z);
+		float domeBlend = mask * max(saturate(depth / (2.0 * kProjCoatLift)), domeTilt) * smoothstep(0.6, 0.85, nrmWS.z);
 		shadeNormal = normalize(lerp(smoothShade, domeNormal, domeBlend));
 	}
 
@@ -2338,7 +2346,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// most up-facing parts first, the midpoint covers the up-facing
 		// hemisphere, the top covers every angle.
 		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		// Widened cut (Josef's soft-border ask, the old Opaque-OFF look):
+		// the noise term modulates wpix, so a wider band renders the
+		// fringe as a ragged dithered fade into the recolored PD instead
+		// of a hard line. Deliberately moderate - the S2b film lesson
+		// stands: a band wide enough to cover whole mid-coverage faces
+		// dithers into a translucent sheet under TAA.
+		pdCoverage = smoothstep(-0.12, 0.03, wpix) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
