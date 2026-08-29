@@ -1572,6 +1572,8 @@ public:
 
 	/** @brief Builds (or returns) the smoothed-normal buffer for a captured geometry. Dispatches the SmoothNormalsCS passes on first sight; cached thereafter. Returns null while unavailable (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
 	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
+	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
+	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const;
 
 	// ---- Top-down object height windows ----
 
@@ -1627,6 +1629,8 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
 	ID3D11PixelShader* heightPeel2PS = nullptr;
+	/** @brief Depth-only skin caster VS (SHADOWCAST define): the full lift, clip position through the light matrix ShellCB carries during the cascade injection. Drawn by InjectShellShadowCasters so the object shells cast real sun shadows. */
+	ID3D11VertexShader* skinShadowVS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;

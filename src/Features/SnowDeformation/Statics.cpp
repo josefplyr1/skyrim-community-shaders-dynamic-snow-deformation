@@ -1020,6 +1020,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPeel2PS, "SnowDeformation::HeightPeel2PS");
 		}
 	}
+	if (!skinShadowVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SHADOWCAST"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &skinShadowVS)))
+				Util::SetResourceName(skinShadowVS, "SnowDeformation::SkinShadowVS");
+		}
+	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
@@ -1850,6 +1858,47 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 }
 
+void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const
+{
+	const auto& rot = a_cap.world.rotate;
+	const float scale = a_cap.world.scale;
+	a_scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_cap.world.translate.x };
+	a_scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_cap.world.translate.y };
+	a_scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_cap.world.translate.z };
+	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+	a_scb.VertexCountF = a_vertexCount;
+	a_scb.HeightWindowCenter = heightWindowCenter;
+	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
+	a_scb.HasSmoothedNormals = a_hasSmoothedNormals ? 1.0f : 0.0f;
+	a_scb.HasObjectTop = a_hasObjectTop ? 1.0f : 0.0f;
+	a_scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
+	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
+	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
+	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
+	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+	a_scb.SkinDistantBareness = settings.SkinDistantBareness;
+	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
+	a_scb.ProjThreshold = a_cap.projThreshold;
+	a_scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
+	a_scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
+	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
+	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
+	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
+	// 2 = the S4 shell owns this draw; 0 = classic path.
+	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
+	a_scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
+	// The rock family (mountain/cliff name match) carries its own max
+	// slope: rocks were the only sufferers of a low global slope.
+	const float maxSlopeDeg = a_cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
+	a_scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+	a_scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
+	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
+	a_scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
+	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
+	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
+}
+
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
 {
 	auto triShape = a_geometry->AsTriShape();
@@ -2291,48 +2340,13 @@ void SnowDeformation::DrawCapturedStatics()
 		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-		StaticsCB scb{};
-		const auto& rot = cap.world.rotate;
-		const float scale = cap.world.scale;
-		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
-		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
-		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
-		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		// Smoothed normals (built once per unique mesh): pillow inflation
 		// for flat split-normal surfaces; planks, roofs, pole caps.
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
 		context->VSSetShaderResources(10, 1, &smoothSRV);
-		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
-		scb.HasObjectTop = objectTopSRV ? 1.0f : 0.0f;
-		scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
-		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
-		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
-		scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
-		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
-		scb.SkinDistantBareness = settings.SkinDistantBareness;
-		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
-		scb.ProjThreshold = cap.projThreshold;
-		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
-		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
-		scb.ProjNoiseScale = cap.projNoiseScale;
-		scb.ProjNoiseTiling = cap.projNoiseTiling;
-		// 2 = the S4 shell owns this draw; 0 = classic path.
-		scb.ProjPixelEnable = s4Shell ? 2.0f : 0.0f;
-		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
-		// The rock family (mountain/cliff name match) carries its own max
-		// slope: rocks were the only sufferers of a low global slope.
-		const float maxSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
-		scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
-		scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
-		scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
-		scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
-		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
+		StaticsCB scb{};
+		FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
+			smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
 		staticsCB->Update(scb);
 
 		// Depth export only where the carve can fire: SnowStaticsShell's

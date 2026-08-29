@@ -1935,7 +1935,26 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	return v;
 }
 
-#if !defined(SNOW_TESS)
+#if defined(SHADOWCAST)
+// Depth-only shadow caster VS (sun cascade injection): the FULL lift
+// math - the caster must be the exact surface the visible shell renders
+// or the shadow offsets from its own snow - but none of the shading
+// interpolants. During the caster pass ShellCB carries the light's clip
+// matrix in CameraViewProj with ShellCameraPosAdjust zeroed (absolute-
+// world rendering, same contract as the landscape shell's caster), so
+// the standard position chain lands in light clip untouched. The
+// distance collapse is off CB-side: the caster's StaticsCB writes
+// SkinHeightFadeEnd = 0 (a zeroed camera adjust would put every object
+// at "80 km away" and collapse every caster flat - the documented
+// shared-CB trap).
+float4 main(VS_INPUT input) : SV_POSITION
+{
+	SkinVertex v = BuildSkinVertex(input);
+	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat, v.VertexAlpha);
+	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
+	return mul(CameraViewProj, float4(rel, 1.0));
+}
+#elif !defined(SNOW_TESS)
 VS_OUTPUT main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);

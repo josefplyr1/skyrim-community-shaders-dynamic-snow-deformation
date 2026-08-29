@@ -440,6 +440,20 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t i = 0; i < 6; i++)
 			prevVSSRVs[i].attach(srvs[i]);
 	}
+	// The skin casters bind the lift's map set (t10-t13 smoothed normals /
+	// top / skin depth / cone, t24-t28 the peeled layers).
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsSkin[4];
+	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsLayer[5];
+	{
+		ID3D11ShaderResourceView* srvs[4] = {};
+		context->VSGetShaderResources(10, 4, srvs);
+		for (uint32_t i = 0; i < 4; i++)
+			prevVSSRVsSkin[i].attach(srvs[i]);
+		ID3D11ShaderResourceView* srvs2[5] = {};
+		context->VSGetShaderResources(24, 5, srvs2);
+		for (uint32_t i = 0; i < 5; i++)
+			prevVSSRVsLayer[i].attach(srvs2[i]);
+	}
 	winrt::com_ptr<ID3D11Buffer> prevVB;
 	UINT prevVBStride = 0, prevVBOffset = 0;
 	{
@@ -528,7 +542,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 
 		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[cascade].get());
 
-		// Terrain shell only: vertex-buffer-less grid with the excess-height
+		// Terrain shell: vertex-buffer-less grid with the excess-height
 		// caster VS.
 		context->IASetInputLayout(nullptr);
 		ID3D11Buffer* nullVB = nullptr;
@@ -536,6 +550,86 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
 		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+
+		// The OBJECT shells cast too (Josef's cliff report: the shadow
+		// line came from the bare rock beneath the shell). Same captured
+		// list, same lift math, depth-only; the caster ShellCB already
+		// carries this cascade's light clip with the camera adjust
+		// zeroed, so the standard skin position chain lands in light
+		// space untouched. The list and the height maps are one frame
+		// stale - static geometry, invisible.
+		if (skinShadowVS && !capturedStatics.empty()) {
+			context->VSSetShader(skinShadowVS, nullptr, 0);
+			ID3D11Buffer* skinCB1 = staticsCB->CB();
+			context->VSSetConstantBuffers(1, 1, &skinCB1);
+			ID3D11ShaderResourceView* castTopSRV = heightTopRaw[heightCurrent] ? heightTopRaw[heightCurrent]->srv.get() : nullptr;
+			context->VSSetShaderResources(11, 1, &castTopSRV);
+			ID3D11ShaderResourceView* castConeSRV = objectSnowCone ? objectSnowCone->srv.get() : nullptr;
+			context->VSSetShaderResources(13, 1, &castConeSRV);
+			ID3D11ShaderResourceView* castTop2SRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
+			context->VSSetShaderResources(24, 1, &castTop2SRV);
+			ID3D11ShaderResourceView* castLayerSRVs[3] = {
+				objectSnowCone2 ? objectSnowCone2->srv.get() : nullptr,
+				heightTop3Raw[heightCurrent] ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
+				objectSnowCone3 ? objectSnowCone3->srv.get() : nullptr
+			};
+			context->VSSetShaderResources(26, 3, castLayerSRVs);
+
+			for (const auto& cap : capturedStatics) {
+				auto* geometry = cap.geometry.get();
+				if (!geometry)
+					continue;
+				// Same skip rules as the visible skin draw, minus the
+				// PS-only noise-map validity (the vertex mask carries no
+				// noise term).
+				const bool s4Shell = settings.ObjectSnow3D && !cap.road && cap.projThreshold > -0.5f;
+				if (!cap.road && !s4Shell)
+					continue;
+				auto triShape = geometry->AsTriShape();
+				if (!triShape)
+					continue;
+				auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+				if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+					continue;
+				uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+				if (indexCount == 0)
+					continue;
+				auto desc = rendererData->vertexDesc;
+				if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+					continue;
+				uint64_t descKey;
+				memcpy(&descKey, &desc, sizeof(descKey));
+				auto layoutIt = staticsILCache.find(descKey);
+				if (layoutIt == staticsILCache.end() || !layoutIt->second)
+					continue;  // layouts are created by the skin pass; reuse only
+				context->IASetInputLayout(layoutIt->second.get());
+				UINT stride = uint32_t(descKey & 0xF) * 4;
+				if (stride == 0)
+					continue;
+				UINT offset = 0;
+				auto* skinVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+				auto* skinIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+				context->IASetVertexBuffers(0, 1, &skinVB, &stride, &offset);
+				context->IASetIndexBuffer(skinIB, DXGI_FORMAT_R16_UINT, 0);
+				// Cache LOOKUP only - building here would dispatch compute
+				// mid-shadow-pass through unsaved CS state; a mesh casts
+				// with raw normals until the skin pass builds its entry.
+				ID3D11ShaderResourceView* smoothSRV = nullptr;
+				if (auto smoothIt = smoothedNormalsCache.find(rendererData->vertexBuffer);
+					smoothIt != smoothedNormalsCache.end() && smoothIt->second.ready)
+					smoothSRV = smoothIt->second.srv.get();
+				context->VSSetShaderResources(10, 1, &smoothSRV);
+				StaticsCB scb{};
+				FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
+					smoothSRV != nullptr, castTopSRV != nullptr, false, scb);
+				// No distance collapse for casters: the zeroed camera
+				// adjust reads every object as ~80k units away and would
+				// flatten every caster (the documented shared-CB trap).
+				scb.SkinHeightFadeEnd = 0.0f;
+				staticsCB->Update(scb);
+				context->DrawIndexed(indexCount, 0, 0);
+			}
+		}
 	}
 	globals::profiler->EndPass();
 
@@ -577,6 +671,15 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
+		// The skin casters' map set.
+		ID3D11ShaderResourceView* skinSrvs[4];
+		for (uint32_t i = 0; i < 4; i++)
+			skinSrvs[i] = prevVSSRVsSkin[i].get();
+		context->VSSetShaderResources(10, 4, skinSrvs);
+		ID3D11ShaderResourceView* layerSrvs[5];
+		for (uint32_t i = 0; i < 5; i++)
+			layerSrvs[i] = prevVSSRVsLayer[i].get();
+		context->VSSetShaderResources(24, 5, layerSrvs);
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();
