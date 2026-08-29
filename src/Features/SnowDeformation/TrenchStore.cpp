@@ -78,6 +78,7 @@ void SnowDeformation::CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_
 
 bool SnowDeformation::CreateTrenchStoreResources()
 {
+	LoadTraceScope _loadTrace(this, "TrenchStore: CreateTrenchStoreResources");
 	auto device = globals::d3d::device;
 	if (!device)
 		return false;
@@ -909,6 +910,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing)
 {
+	LoadTraceScope _loadTrace(this, "TrenchStore: BuildTrenchInject");
 	auto context = globals::d3d::context;
 	if (!settings.PersistTrenches || !trenchInjectTexture || !context)
 		return 0;

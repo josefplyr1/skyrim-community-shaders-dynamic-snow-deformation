@@ -875,6 +875,9 @@ bool SnowDeformation::EnsureStaticsShaders()
 {
 	if (staticsVS && staticsPS)
 		return true;
+	LoadTraceScope _loadTrace(this, "Statics: EnsureStaticsShaders (compile)");
+	if (staticsVS && staticsPS)
+		return true;
 	if (staticsShadersFailed)
 		return false;
 
@@ -1050,6 +1053,7 @@ bool SnowDeformation::EnsureStaticsShaders()
 
 void SnowDeformation::CreateHeightFieldResources()
 {
+	LoadTraceScope _loadTrace(this, "Statics: CreateHeightFieldResources");
 	D3D11_TEXTURE2D_DESC heightDesc = {
 		.Width = kHeightMapDim,
 		.Height = kHeightMapDim,
@@ -1142,6 +1146,7 @@ void SnowDeformation::CreateHeightFieldResources()
 
 void SnowDeformation::RenderObjectHeightMap()
 {
+	LoadTraceScope _loadTrace(this, "Statics: RenderObjectHeightMap");
 	auto context = globals::d3d::context;
 
 	// Camera-following window, snapped to texel size for stability.
@@ -1901,6 +1906,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
 {
+	LoadTraceScope _loadTrace(this, "Statics: EnsureSmoothedNormals");
 	auto triShape = a_geometry->AsTriShape();
 	if (!triShape)
 		return nullptr;
@@ -2089,6 +2095,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 void SnowDeformation::DrawCapturedStatics()
 {
+	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty())
 		return;
@@ -2514,6 +2521,7 @@ void SnowDeformation::DrawCapturedStatics()
 
 void SnowDeformation::RenderExclusionField()
 {
+	LoadTraceScope _loadTrace(this, "Statics: RenderExclusionField");
 	exclusionFieldValid = false;
 	if (!exclusionFieldTexture || !exclusionFieldCB || !shellTerrainTexture)
 		return;

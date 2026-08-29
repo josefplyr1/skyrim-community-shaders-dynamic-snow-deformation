@@ -169,6 +169,7 @@ void from_json(const nlohmann::json& j, SnowDeformation::Settings& s)
 
 void SnowDeformation::CreateDeformationTextures()
 {
+	LoadTraceScope _loadTrace(this, "CreateDeformationTextures");
 	for (uint i = 0; i < 2; i++) {
 		delete deformationTextures[i];
 		deformationTextures[i] = nullptr;
@@ -294,6 +295,7 @@ void SnowDeformation::CreateDeformationTextures()
 
 void SnowDeformation::SetupResources()
 {
+	LoadTraceScope _loadTrace(this, "SetupResources");
 	logger::info("[SNOW DEFORMATION] {}", kAttribution);
 
 	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
@@ -781,6 +783,7 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 
 void SnowDeformation::Prepass()
 {
+	LoadTraceFramePulse();
 	ApplyRangeSettings();
 
 	// Frame boundary for the once-per-frame local shadow atlas copy.

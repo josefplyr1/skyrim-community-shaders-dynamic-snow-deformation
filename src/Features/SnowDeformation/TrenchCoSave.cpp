@@ -136,6 +136,8 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 
 void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t)
 {
+	LoadTraceBegin("co-save trench store");
+	LoadTraceScope _loadTrace(this, "CoSave: LoadTrenchStore");
 	if (a_version != kTrenchRecordVersion) {
 		// Refused, not guessed at: a future layout read as this one is a
 		// corrupt store rather than a missing one.

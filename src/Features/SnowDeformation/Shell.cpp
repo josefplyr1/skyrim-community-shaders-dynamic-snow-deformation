@@ -175,6 +175,7 @@ void SnowDeformation::EnsureShellSnowTextures()
 {
 	if (shellSnowTextureAttempted)
 		return;
+	LoadTraceScope _loadTrace(this, "Shell: EnsureShellSnowTextures (load)");
 	shellSnowTextureAttempted = true;
 	shellSnowDiffuseSRV = nullptr;
 	shellSnowNormalSRV = nullptr;
@@ -535,6 +536,7 @@ void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
 		return;
+	LoadTraceScope _loadTrace(this, "Shell: DrawShell");
 
 	if (!globals::state->inWorld)
 		return;

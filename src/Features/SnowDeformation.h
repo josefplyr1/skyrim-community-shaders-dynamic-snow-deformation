@@ -2286,6 +2286,63 @@ protected:
 	/** @brief Reads it back, refusing a version this build does not know. */
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
+	// ---- Load trace: what a save load spends its time on ----
+	// Begins at the first co-save read, aggregates instrumented phases and
+	// render-frame gaps, logs every event >= 100 ms live, and writes
+	// SnowDeformation-LoadTrace.txt to the SKSE log folder once the load
+	// path has been quiet for 20 s. Implemented in SnowDeformation/LoadTrace.cpp.
+
+	/** @brief Starts a trace if none is running; a second call while active only marks the timeline. */
+	void LoadTraceBegin(const char* a_reason);
+	/** @brief Timeline event with a timestamp relative to the trace start. No-op while no trace runs. */
+	void LoadTraceMark(std::string_view a_what);
+	/** @brief Aggregates one timed run of a named phase; runs >= 100 ms also land on the timeline. */
+	void LoadTraceRecord(const char* a_name, double a_ms);
+	/** @brief Once per rendered frame (top of Prepass): detects frame gaps and decides when the trace ends. */
+	void LoadTraceFramePulse();
+
+	/** @brief RAII phase timer. Costs one relaxed atomic load when no trace is active. */
+	struct LoadTraceScope
+	{
+		LoadTraceScope(SnowDeformation* a_owner, const char* a_name) :
+			name(a_name), start(std::chrono::steady_clock::now())
+		{
+			owner = a_owner->loadTraceActive.load(std::memory_order_acquire) ? a_owner : nullptr;
+		}
+		~LoadTraceScope()
+		{
+			if (owner)
+				owner->LoadTraceRecord(name, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+		}
+		LoadTraceScope(const LoadTraceScope&) = delete;
+		LoadTraceScope& operator=(const LoadTraceScope&) = delete;
+
+		SnowDeformation* owner;
+		const char* name;
+		std::chrono::steady_clock::time_point start;
+	};
+
+	struct LoadTracePhase
+	{
+		uint32_t count = 0;
+		double totalMs = 0.0;
+		double maxMs = 0.0;
+	};
+	std::atomic<bool> loadTraceActive = false;
+	std::mutex loadTraceMutex;
+	std::chrono::steady_clock::time_point loadTraceStart;
+	/** @brief Last event worth reporting; 20 quiet seconds after it, the report writes. */
+	std::chrono::steady_clock::time_point loadTraceLastNotable;
+	std::chrono::steady_clock::time_point loadTraceLastFrame;
+	bool loadTraceFrameSeen = false;
+	std::map<std::string, LoadTracePhase> loadTracePhases;
+	std::vector<std::string> loadTraceTimeline;
+	uint32_t loadTraceFrames = 0;
+	uint32_t loadTraceStallFrames = 0;
+	double loadTraceWorstFrameMs = 0.0;
+	/** @brief Writes the report file and ends the trace. Caller holds loadTraceMutex. */
+	void LoadTraceReportLocked(const char* a_reason);
+
 	/**
 	 * @brief Guards the tile store. SKSE's save, load and revert callbacks arrive
 	 * on the GAME thread while the flush, sweep and inject run on the render

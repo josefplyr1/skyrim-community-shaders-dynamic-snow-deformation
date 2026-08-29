@@ -205,6 +205,7 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 
 void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 {
+	LoadTraceScope _loadTrace(this, "TerrainData: BakeShellCell");
 	auto cell = land->GetSaveParentCell();
 	if (!cell)
 		return;
@@ -446,6 +447,7 @@ void SnowDeformation::UpdateActiveWorldspace()
 
 void SnowDeformation::UpdateShellTerrainWindow()
 {
+	LoadTraceScope _loadTrace(this, "TerrainData: UpdateShellTerrainWindow");
 	auto eyeFB = globals::game::frameBufferCached.GetCameraPosAdjust();
 	int camCellX = (int)std::floor(eyeFB.x / (kShellVertexSpacing * kShellTexelsPerCell));
 	int camCellY = (int)std::floor(eyeFB.y / (kShellVertexSpacing * kShellTexelsPerCell));
@@ -579,6 +581,7 @@ ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()
 
 ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY)
 {
+	LoadTraceScope _loadTrace(this, "TerrainData: GetLODTile");
 	const uint64_t key = (uint64_t(uint32_t(a_cellX)) << 32) | uint32_t(a_cellY);
 	if (auto it = lodTileCache.find(key); it != lodTileCache.end())
 		return it->second.get();
@@ -604,6 +607,7 @@ ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_world
 
 void SnowDeformation::FillShellWindowFromHeightmap()
 {
+	LoadTraceScope _loadTrace(this, "TerrainData: FillShellWindowFromHeightmap");
 	auto& terrainShadows = globals::features::terrainShadows;
 	if (!terrainShadows.loaded || !terrainShadows.texHeightMap || !terrainShadows.IsHeightMapReady()) {
 		lastFillWorldspace.clear();
