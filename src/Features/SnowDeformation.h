@@ -465,10 +465,10 @@ public:
 		float ObjectsSnowDepth = 3.0f;
 		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). */
 		float ShellMaxSlopeDeg = 80.0f;
-		/** @brief Snow Bridging (A/B experiment, default OFF per Josef's isolation sketch): ON = the shell height comes from ONE continuous reposed snow SURFACE in absolute height per layer - seams close, but it inherits the top raster's texel noise (razor blades, scroll-phase crawl, decay jitter). OFF = per-plane isolated domes, rounded at every plane boundary, clipping invisibly into neighbours - the sketch model. */
-		bool SnowBridging = false;
-		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. Classic (non-bridged) shell only. */
+		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this - in either direction - becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
 		float PlaneSplitStep = 6.0f;
+		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
+		float OverheadClearance = 32.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1523,8 +1523,8 @@ public:
 		float ShellMinNz;
 		/** @brief Settings::PlaneMergeHeight - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
-		/** @brief >0.5: Snow Bridging - the lift takes its height from the absolute bridged surface (t29 for layer 1; the layer-2/3 cones switch semantics with it) instead of the per-plane fillet. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float BridgeModeSk;
+		/** @brief Settings::OverheadClearance - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float OverheadIgnore;
 		float padS4;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
@@ -1593,16 +1593,13 @@ public:
 	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
 	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
 	Texture2D* objectSnowCone3 = nullptr;
-	/** @brief Snow Bridging: the layer-1 ABSOLUTE reposed snow surface (skin VS/DS t29). Its own texture because the classic layer-1 cone keeps serving roads, the trench patch, and the PS self-shadow march with depth semantics. */
-	Texture2D* objectSnowSurface = nullptr;
-
-	// ---- Height-field probe (Debugging Options): the seven object maps read
+	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
 	winrt::com_ptr<ID3D11Texture2D> probeStaging[2];
 	uint probeCursor = 0;
-	/** @brief Sampled values: 0 = L1 top, 1 = L2 top, 2 = L3 top, 3 = cone1, 4 = cone2, 5 = cone3, 6 = bridged surface. Sentinels pass through raw. */
-	float probeVals[7] = {};
+	/** @brief Sampled values: 0 = L1 top, 1 = L2 top, 2 = L3 top, 3 = cone1, 4 = cone2, 5 = cone3. Sentinels pass through raw. */
+	float probeVals[6] = {};
 	bool probeValid = false;
 	float3 probeWorldPos = {};
 	/** @brief Per-frame skin-depth raster (R16F, cleared each frame, MAX-blended): each captured mesh writes its class layer depth, so consumers know how thick the snow above any object top is. No scroll persistence; a missed frame is invisible for one frame. */
@@ -1619,8 +1616,6 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
 	ID3D11PixelShader* heightPeel2PS = nullptr;
-	/** @brief Snow Bridging: bilateral 3x3 smooth over the absolute surface fields - flattens the top raster's texel terracing and thin-geometry spikes without crossing cliffs. */
-	ID3D11ComputeShader* surfaceSmoothCS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;
@@ -1651,8 +1646,8 @@ public:
 		float ObjectSnowDepth;
 		/** @brief Settings::PlaneSplitStep - the cone seed's slope-discontinuity rim threshold (user-tunable). */
 		float RimStep;
-		/** @brief >0.5: this seed/iterate dispatch builds the ABSOLUTE bridged snow surface (Snow Bridging) instead of the per-plane depth field. Set per dispatch - the classic layer-1 cone (roads/patch/PS consumers) always runs with 0. */
-		float BridgeMode;
+		/** @brief Settings::OverheadClearance - the seed's rise-rim upper bound: surfaces further above do not split the plane. */
+		float OverheadIgnore;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;

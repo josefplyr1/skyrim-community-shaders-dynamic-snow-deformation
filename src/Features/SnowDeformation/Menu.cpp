@@ -235,13 +235,13 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSlope = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface."));
 
-		ImGui::Checkbox(T(TKEY("snow_bridging"), "Snow Bridging"), &settings.SnowBridging);
-		if (auto _ttBridge = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_bridging_tooltip"), "EXPERIMENTAL, default OFF: the snow forms one continuous drift surface - seams close and stairs bury as depth rises, but the surface inherits height-map noise (razor shards, crawling when the camera moves). OFF: every surface wears its own isolated dome, rounded at every plane boundary, overlapping neighbors invisibly - the intended look."));
-
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this - in either direction, and regardless of snow depth - marks the boundary of a distinct snow plane, each wearing its own dome (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps into one surface. Sloped roofs and rocks never self-split. Snow Bridging OFF only."));
+			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this - in either direction, and regardless of snow depth - marks the boundary of a distinct snow plane, each wearing its own dome (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps into one surface. Sloped roofs and rocks never self-split, and surfaces at the SAME height separated by a small horizontal gap meld into one."));
+
+		ImGui::SliderFloat(T(TKEY("overhead_clearance"), "Ignore Cover Above"), &settings.OverheadClearance, 8.0f, 96.0f, "%.0f units");
+		if (auto _ttOverhead = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Things WITHIN this clearance (stair treads, low ledges, bench seats) still count as neighboring planes and get their own domes. Lower = more things split planes; higher = more things ignored."));
 
 		ImGui::SliderFloat(T(TKEY("plane_merge_height"), "Plane Merge Height"), &settings.PlaneMergeHeight, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttMerge = Util::HoverTooltipWrapper())
@@ -1144,16 +1144,13 @@ void SnowDeformation::DrawSettings()
 					else
 						snprintf(out, n, "%.0f", v);
 				};
-				char l1[16], l2[16], l3[16], c2[16], c3[16], sf[16];
+				char l1[16], l2[16], l3[16];
 				fmtHeight(probeVals[0], l1, sizeof(l1));
 				fmtHeight(probeVals[1], l2, sizeof(l2));
 				fmtHeight(probeVals[2], l3, sizeof(l3));
-				fmtHeight(probeVals[4], c2, sizeof(c2));
-				fmtHeight(probeVals[5], c3, sizeof(c3));
-				fmtHeight(probeVals[6], sf, sizeof(sf));
 				char probeLine1[160], probeLine2[160];
 				snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s  L3 %s", probeWorldPos.z, l1, l2, l3);
-				snprintf(probeLine2, sizeof(probeLine2), "cone1 %.1f | L2 field %s | L3 field %s | bridged surface %s", probeVals[3], c2, c3, sf);
+				snprintf(probeLine2, sizeof(probeLine2), "cone depths: L1 %.1f  L2 %.1f  L3 %.1f", probeVals[3], probeVals[4], probeVals[5]);
 				ImGui::TextUnformatted(probeLine1);
 				ImGui::TextUnformatted(probeLine2);
 			}

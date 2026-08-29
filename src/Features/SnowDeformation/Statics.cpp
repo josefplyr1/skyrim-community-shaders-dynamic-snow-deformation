@@ -1031,8 +1031,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
 		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
-	if (!surfaceSmoothCS)
-		surfaceSmoothCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "SurfaceSmoothCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1107,7 +1105,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
-	objectSnowSurface = makeHeightTexture("SnowDeformation::ObjectSnowSurface");
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
@@ -1164,8 +1161,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
 	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
-	// Per-dispatch flag: only the bridged-surface chains flip it on below.
-	processData.BridgeMode = 0.0f;
+	processData.OverheadIgnore = std::clamp(settings.OverheadClearance, 4.0f, 200.0f);
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1752,63 +1748,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			std::swap(objIn, objOut);
 		}
 
-		// Snow Bridging: the layer-1 ABSOLUTE reposed surface, its own
-		// texture - the classic depth cone above keeps serving roads, the
-		// trench patch and the PS self-shadow march unchanged.
-		if (settings.SnowBridging && objectSnowSurface) {
-			processData.BridgeMode = 1.0f;
-			heightProcessCB->Update(processData);
-			context->CSSetShader(objectConeSeedCS, nullptr, 0);
-			ID3D11ShaderResourceView* surfSeedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
-				heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
-			ID3D11UnorderedAccessView* surfSeedUAV = objectSnowSurface->uav.get();
-			context->CSSetShaderResources(0, 2, surfSeedSRVs);
-			context->CSSetUnorderedAccessViews(0, 1, &surfSeedUAV, nullptr);
-			context->Dispatch(dispatchDim, dispatchDim, 1);
-			ID3D11ShaderResourceView* nullSurfSRVs[2] = { nullptr, nullptr };
-			context->CSSetShaderResources(0, 2, nullSurfSRVs);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-
-			context->CSSetShader(objectConeCS, nullptr, 0);
-			Texture2D* surfIn = objectSnowSurface;
-			Texture2D* surfOut = heightScratch;
-			for (uint step : kConeSteps) {
-				processData.ConeStep = step;
-				heightProcessCB->Update(processData);
-				// t1 = the layer's top raster: the iterate's connectivity
-				// test needs each column's own floor.
-				ID3D11ShaderResourceView* surfSRVs[2] = { surfIn->srv.get(), heightTopRaw[heightCurrent]->srv.get() };
-				ID3D11UnorderedAccessView* surfUAV = surfOut->uav.get();
-				context->CSSetShaderResources(0, 2, surfSRVs);
-				context->CSSetUnorderedAccessViews(0, 1, &surfUAV, nullptr);
-				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 2, nullCsSRVs);
-				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-				std::swap(surfIn, surfOut);
-			}
-			// Two bilateral passes (even count ends in place): terraces
-			// flatten, spikes drop, the scroll-phase crawl calms.
-			if (surfaceSmoothCS) {
-				context->CSSetShader(surfaceSmoothCS, nullptr, 0);
-				for (int pass = 0; pass < 2; pass++) {
-					ID3D11ShaderResourceView* smSRV = surfIn->srv.get();
-					ID3D11UnorderedAccessView* smUAV = surfOut->uav.get();
-					context->CSSetShaderResources(0, 1, &smSRV);
-					context->CSSetUnorderedAccessViews(0, 1, &smUAV, nullptr);
-					context->Dispatch(dispatchDim, dispatchDim, 1);
-					context->CSSetShaderResources(0, 1, nullCsSRVs);
-					context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-					std::swap(surfIn, surfOut);
-				}
-			}
-		}
-
 		// S4 phase 2: the same seed + repose chain over each PEELED layer
 		// top, so every below-top plane gets its own rims and distances.
-		// In bridging mode these run as absolute surfaces too - their only
-		// consumer is the skin's layer select, which switches with them.
-		processData.BridgeMode = settings.SnowBridging ? 1.0f : 0.0f;
-		heightProcessCB->Update(processData);
 		Texture2D* peelTops[2] = { heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent] };
 		Texture2D* peelCones[2] = { objectSnowCone2, objectSnowCone3 };
 		for (int peelLayer = 0; peelLayer < 2; peelLayer++) {
@@ -1831,30 +1772,14 @@ void SnowDeformation::RenderObjectHeightMap()
 			for (uint step : kConeSteps) {
 				processData.ConeStep = step;
 				heightProcessCB->Update(processData);
-				// t1 = this layer's top raster (bridge connectivity test).
-				ID3D11ShaderResourceView* obj2SRVs[2] = { obj2In->srv.get(), peelTops[peelLayer]->srv.get() };
+				ID3D11ShaderResourceView* obj2SRV = obj2In->srv.get();
 				ID3D11UnorderedAccessView* obj2UAV = obj2Out->uav.get();
-				context->CSSetShaderResources(0, 2, obj2SRVs);
+				context->CSSetShaderResources(0, 1, &obj2SRV);
 				context->CSSetUnorderedAccessViews(0, 1, &obj2UAV, nullptr);
 				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 2, nullCsSRVs);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(obj2In, obj2Out);
-			}
-			// Bridged layers are absolute surfaces: same bilateral pair
-			// as the layer-1 surface. Classic depth cones stay untouched.
-			if (settings.SnowBridging && surfaceSmoothCS) {
-				context->CSSetShader(surfaceSmoothCS, nullptr, 0);
-				for (int pass = 0; pass < 2; pass++) {
-					ID3D11ShaderResourceView* smSRV = obj2In->srv.get();
-					ID3D11UnorderedAccessView* smUAV = obj2Out->uav.get();
-					context->CSSetShaderResources(0, 1, &smSRV);
-					context->CSSetUnorderedAccessViews(0, 1, &smUAV, nullptr);
-					context->Dispatch(dispatchDim, dispatchDim, 1);
-					context->CSSetShaderResources(0, 1, nullCsSRVs);
-					context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-					std::swap(obj2In, obj2Out);
-				}
 			}
 		}
 	}
@@ -1896,10 +1821,10 @@ void SnowDeformation::RenderObjectHeightMap()
 			float v = 0.5f - (pos.y - heightWindowCenter.y) / kHeightMapHalfExtent * 0.5f;
 			uint tx = uint(std::clamp(int(u * kHeightMapDim), 0, int(kHeightMapDim) - 1));
 			uint ty = uint(std::clamp(int(v * kHeightMapDim), 0, int(kHeightMapDim) - 1));
-			Texture2D* probeMaps[7] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
-				objectSnowCone, objectSnowCone2, objectSnowCone3, objectSnowSurface };
+			Texture2D* probeMaps[6] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
+				objectSnowCone, objectSnowCone2, objectSnowCone3 };
 			D3D11_BOX probeBox{ tx, ty, 0, tx + 1, ty + 1, 1 };
-			for (uint i = 0; i < 7; i++)
+			for (uint i = 0; i < 6; i++)
 				if (probeMaps[i] && probeMaps[i]->resource)
 					context->CopySubresourceRegion(probeStaging[probeCursor].get(), 0, i, 0, 0, probeMaps[i]->resource.get(), 0, &probeBox);
 			probeCursor ^= 1;
@@ -2235,13 +2160,12 @@ void SnowDeformation::DrawCapturedStatics()
 	context->DSSetShaderResources(24, 1, &top2SRV);
 	context->VSSetShaderResources(26, 1, &cone2SRV);
 	context->DSSetShaderResources(26, 1, &cone2SRV);
-	ID3D11ShaderResourceView* layer3SRVs[3] = {
+	ID3D11ShaderResourceView* layer3SRVs[2] = {
 		(heightTop3Raw[heightCurrent] && heightTop3Raw[heightCurrent]->srv) ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
-		(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr,
-		(objectSnowSurface && objectSnowSurface->srv) ? objectSnowSurface->srv.get() : nullptr
+		(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr
 	};
-	context->VSSetShaderResources(27, 3, layer3SRVs);
-	context->DSSetShaderResources(27, 3, layer3SRVs);
+	context->VSSetShaderResources(27, 2, layer3SRVs);
+	context->DSSetShaderResources(27, 2, layer3SRVs);
 	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
 	// skin's self-shadow march and spell-mark shading read the landscape
 	// shell's slots; the skins draw standalone, so bind explicitly here.
@@ -2390,7 +2314,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		scb.ShellMinNz = std::cos(std::clamp(settings.ShellMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
-		scb.BridgeModeSk = settings.SnowBridging ? 1.0f : 0.0f;
+		scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 4.0f, 200.0f);
 		scb.HasSkinNormalCopy = skinNormalsSRV ? 1.0f : 0.0f;
 		staticsCB->Update(scb);
 
@@ -2437,9 +2361,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(24, 1, &nullSmoothSRV);
-	ID3D11ShaderResourceView* nullLayerSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
-	context->VSSetShaderResources(26, 4, nullLayerSRVs);
-	context->DSSetShaderResources(26, 4, nullLayerSRVs);
+	ID3D11ShaderResourceView* nullLayerSRVs[3] = { nullptr, nullptr, nullptr };
+	context->VSSetShaderResources(26, 3, nullLayerSRVs);
+	context->DSSetShaderResources(26, 3, nullLayerSRVs);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

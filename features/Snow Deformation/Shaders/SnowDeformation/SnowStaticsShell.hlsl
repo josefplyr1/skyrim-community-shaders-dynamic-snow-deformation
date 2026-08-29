@@ -272,11 +272,12 @@ cbuffer StaticCB : register(b1)
 	// z-band of a layer's top belong to that layer's plane. Mirror in
 	// SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PeelTol;
-	// >0.5: Snow Bridging - lift height = absolute bridged surface (t29
-	// for layer 1; the layer-2/3 cones switch semantics with it) instead
-	// of the per-plane fillet. Mirror in SnowHeightCapture.hlsl /
+	// "Ignore Cover Above" (user knob): cover more than this far above a
+	// vertex is a separate world - the plane keeps its full uniform
+	// height and clips through it instead of deferring to a peeled
+	// layer's narrow footprint. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
-	float BridgeModeSk;
+	float OverheadIgnore;
 	float padS4;
 }
 
@@ -581,10 +582,6 @@ Texture2D<float> ObjectSnowCone2 : register(t26);
 // K=3: the third peeled layer for roof-over-beam-over-floor columns.
 Texture2D<float> ObjectTop3Raw : register(t27);
 Texture2D<float> ObjectSnowCone3 : register(t28);
-// Snow Bridging: the layer-1 ABSOLUTE reposed snow surface. Separate from
-// ObjectSnowCone because roads, the trench patch and the PS self-shadow
-// march keep reading that one as a DEPTH field in every mode.
-Texture2D<float> ObjectSnowSurface : register(t29);
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -657,18 +654,6 @@ float ObjectConeDepth(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Sentinel-aware bilinear: taps at the bridged surface's empty sentinel
-// (+100000) carry no information - renormalize over the valid ones, and
-// report the sentinel itself when nothing valid remains. Classic depth
-// fields never reach the guard, so the layer twins share it harmlessly.
-float BilinearValid(float4 s, float2 f)
-{
-	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
-	w *= step(s, 50000.0);
-	float wsum = dot(w, 1.0);
-	return wsum > 1e-5 ? dot(s, w) / wsum : 100000.0;
-}
-
 // Layer-2 twins (S4 phase 2). HLSL SM5 cannot parameterize the texture,
 // so these mirror PatchTop / ObjectConeDepth verbatim on the peeled maps.
 float PatchTop2(float2 worldXY)
@@ -698,12 +683,11 @@ float ObjectConeDepth2(float2 worldXY)
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float4 s = float4(
-		ObjectSnowCone2.Load(int3(t0.x, t0.y, 0)),
-		ObjectSnowCone2.Load(int3(t1.x, t0.y, 0)),
-		ObjectSnowCone2.Load(int3(t0.x, t1.y, 0)),
-		ObjectSnowCone2.Load(int3(t1.x, t1.y, 0)));
-	return BilinearValid(s, f);
+	float s00 = ObjectSnowCone2.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectSnowCone2.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectSnowCone2.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectSnowCone2.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 float PatchTop3(float2 worldXY)
@@ -733,33 +717,11 @@ float ObjectConeDepth3(float2 worldXY)
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float4 s = float4(
-		ObjectSnowCone3.Load(int3(t0.x, t0.y, 0)),
-		ObjectSnowCone3.Load(int3(t1.x, t0.y, 0)),
-		ObjectSnowCone3.Load(int3(t0.x, t1.y, 0)),
-		ObjectSnowCone3.Load(int3(t1.x, t1.y, 0)));
-	return BilinearValid(s, f);
-}
-
-// Snow Bridging: the layer-1 absolute surface (t29), same sampling.
-float ObjectSurfaceHeight(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return 100000.0;
-
-	float2 dims;
-	ObjectSnowSurface.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float4 s = float4(
-		ObjectSnowSurface.Load(int3(t0.x, t0.y, 0)),
-		ObjectSnowSurface.Load(int3(t1.x, t0.y, 0)),
-		ObjectSnowSurface.Load(int3(t0.x, t1.y, 0)),
-		ObjectSnowSurface.Load(int3(t1.x, t1.y, 0)));
-	return BilinearValid(s, f);
+	float s00 = ObjectSnowCone3.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectSnowCone3.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 // NEAREST-texel layer tops, for the lift's layer select only. The
@@ -1671,57 +1633,33 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// later as its own mechanism. Undersides stay harmless: their
 		// up-displaced faces land inside their own geometry.
 		debugLayer = 1.0;
-		[branch] if (BridgeModeSk > 0.5 && HasObjectTop > 0.5)
+		float rollT = 1.0;
+		[branch] if (HasObjectTop > 0.5)
 		{
-			// SNOW BRIDGING: the height comes from ONE continuous reposed
-			// snow SURFACE in absolute world z (per layer). Every plane at
-			// a given XY samples the same surface, so shells meet at the
-			// same height at every seam - stair treads bury into a drift
-			// as depth rises, internal steps need no split threshold, and
-			// silhouettes roll down because rim columns seed the surface
-			// at bare-top height. NO fillet remap here: any f(S - z)
-			// other than identity gives the two planes at a seam
-			// different heights and reopens the gap.
+			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+			float cone = ObjectConeDepth(worldBase.xy);
+			// Layer select (S4 phase 2, K=3): a vertex belongs to the
+			// topmost PEELED plane whose height matches its own. Below
+			// a layer by more than the peel tolerance, the roll comes
+			// from the next layer's cone; below all three, no plane
+			// owns the surface and it gets NO roll data rather than a
+			// full-height interior borrowed from someone else's plane
+			// - which was the beam-streak and staircase-hole failure.
 			float top1 = PatchTopPoint(worldBase.xy);
-			float surf = ObjectSurfaceHeight(worldBase.xy);
 			[branch] if (top1 > -50000.0 && worldBase.z < top1 - PeelTol)
 			{
-				float top2 = PatchTop2Point(worldBase.xy);
-				surf = ObjectConeDepth2(worldBase.xy);
-				debugLayer = 2.0;
-				[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
+				// "Ignore Cover Above" (Josef's rule): cover more than
+				// the clearance overhead is a separate world - a roof
+				// over a porch, a bench over its floor. The plane keeps
+				// its FULL uniform height and clips through, instead of
+				// deferring to a peeled layer's narrow tattered
+				// footprint. Only cover WITHIN the clearance (a tread
+				// over a tread, a low ledge) descends the cascade.
+				[branch] if (top1 - worldBase.z > OverheadIgnore)
 				{
-					float top3 = PatchTop3Point(worldBase.xy);
-					surf = ObjectConeDepth3(worldBase.xy);
-					debugLayer = 3.0;
-					[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
-					{
-						surf = worldBase.z;
-						debugLayer = 4.0;
-					}
+					cone = coneSeed;
 				}
-			}
-			// The sentinel survives BilinearValid when no data is near.
-			[flatten] if (surf > 50000.0)
-				surf = worldBase.z;
-			depth = clamp(surf - worldBase.z, 0.0, depthBase + PeelTol) * mask;
-		}
-		else
-		{
-			float rollT = 1.0;
-			[branch] if (HasObjectTop > 0.5)
-			{
-				float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-				float cone = ObjectConeDepth(worldBase.xy);
-				// Layer select (S4 phase 2, K=3): a vertex belongs to the
-				// topmost PEELED plane whose height matches its own. Below
-				// a layer by more than the peel tolerance, the roll comes
-				// from the next layer's cone; below all three, no plane
-				// owns the surface and it gets NO roll data rather than a
-				// full-height interior borrowed from someone else's plane
-				// - which was the beam-streak and staircase-hole failure.
-				float top1 = PatchTopPoint(worldBase.xy);
-				[branch] if (top1 > -50000.0 && worldBase.z < top1 - PeelTol)
+				else
 				{
 					float top2 = PatchTop2Point(worldBase.xy);
 					cone = ObjectConeDepth2(worldBase.xy);
@@ -1738,11 +1676,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 						}
 					}
 				}
-				rollT = saturate(cone / coneSeed);
 			}
-			float rimIn = 1.0 - rollT;
-			depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
+			rollT = saturate(cone / coneSeed);
 		}
+		float rimIn = 1.0 - rollT;
+		depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
 		upFacing = mask;
 	}

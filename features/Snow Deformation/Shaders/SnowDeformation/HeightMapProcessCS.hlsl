@@ -39,14 +39,11 @@ cbuffer HeightProcessCB : register(b0)
 	float GhostDecay;  // units/frame the accumulated maps drift toward empty
 	float ObjectSnowDepth;  // rounded-class depth, for the object snow cone seed
 	float RimStep;  // the seed's slope-discontinuity rim threshold (user knob)
-	// >0.5: this seed/iterate dispatch builds an ABSOLUTE reposed snow
-	// SURFACE (Snow Bridging) instead of a per-plane depth field: seeds are
-	// top+depth (top alone at silhouette rims, +100000 where empty - a
-	// no-op under min-plus), internal steps bury themselves under the
-	// slope limit with no rim test, and the iterate skips the >=0 clamp
-	// (absolute world z may be negative). Per dispatch, not per frame:
-	// roads/patch/PS keep reading the classic depth cone.
-	float BridgeMode;
+	// "Ignore Cover Above" (user knob): a neighbouring surface more than
+	// this far ABOVE is a separate world (wall, roof, railing) - it does
+	// not split the plane; the dome keeps its height and clips through.
+	// Rises within [RimStep, OverheadIgnore] still rim (stair treads).
+	float OverheadIgnore;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -219,10 +216,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	float top = InA[dtid.xy];
 	if (top < -50000.0) {
-		// Bridged: empty columns must not constrain the min-plus surface
-		// (and near seeds they pick up propagated values, which is what
-		// keeps edge bilinear taps sane). Classic: empty = rim.
-		OutA[dtid.xy] = BridgeMode > 0.5 ? 100000.0 : 0.0;
+		OutA[dtid.xy] = 0.0;
 		return;
 	}
 
@@ -245,12 +239,14 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	// stair tread or ledge drops the full step against a flat run. The old
 	// absolute test (drop > max(seed, 8)) let the class depth bury every
 	// step shallower than the slider - at depth 25 a whole staircase read
-	// as ONE plane and the fillet arced across the treads. BRIDGED one
-	// texel out as before: the cracks between walkway boards are single
-	// empty texels at this raster's 4-unit resolution, and treating each
-	// as a rim pinched every board into its own pillow with holes between;
-	// a real silhouette is empty for many texels and still rims. The
-	// threshold is the "Plane Split Step" knob.
+	// as ONE plane and the fillet arced across the treads. BRIDGED two
+	// texels out: single empty texels are the cracks between walkway
+	// boards, and TWO low/empty texels with a SAME-HEIGHT surface beyond
+	// are the small gap between a stair assembly and the walkway it meets
+	// - co-planar planes MELD across it (Josef's rule: separated by
+	// height = distinct; same height but a sliver apart = one surface).
+	// A real silhouette is empty far wider and still rims. The threshold
+	// is the "Plane Split Step" knob.
 	bool rim = false;
 	[unroll] for (int i = 0; i < 4; i++)
 	{
@@ -260,24 +256,16 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			continue;
 		float n1 = InA[uint2(p)];
 		float n2 = -100000.0;
+		float n3 = -100000.0;
 		int2 p2 = int2(dtid.xy) + offs * 2;
 		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
 			n2 = InA[uint2(p2)];
-		float n = max(n1, n2);
+		int2 p3 = int2(dtid.xy) + offs * 3;
+		[flatten] if (all(p3 >= 0) && all(p3 < int2(dims)))
+			n3 = InA[uint2(p3)];
+		float n = max(max(n1, n2), n3);
 		if (n < -50000.0) {
 			rim = true;
-			continue;
-		}
-		if (BridgeMode > 0.5) {
-			// Bridged: small steps need no rims (the surface buries them
-			// under the slope limit by itself), but a ledge the
-			// neighbour's snow column can never climb - deeper than its
-			// full depth plus the repose rise across the bridge span - is
-			// a separate structure, and without a bare-top rim its edge
-			// would stand as an open shell wall. The threshold is
-			// physics, not a knob.
-			if (top - n > seed + SlopePerUnit * 8.0)
-				rim = true;
 			continue;
 		}
 		float drop = top - n;
@@ -291,23 +279,21 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		// clips invisibly into its neighbour instead of piling against
 		// the riser. Unbridged (a crack can never fake a rise), with the
 		// same slope-continuation cancel so ascending roofs and rock
-		// flanks never self-rim.
+		// flanks never self-rim. CAPPED by "Ignore Cover Above": a wall,
+		// roof or railing more than the clearance above is a separate
+		// world - the plane keeps its height and clips through it.
 		float rise = n1 - top;
 		float riseCarry = max(n2 - n1, 0.0);
-		if (n1 > -50000.0 && rise - riseCarry > RimStep)
+		if (n1 > -50000.0 && rise - riseCarry > RimStep && rise < OverheadIgnore)
 			rim = true;
 	}
 
-	[branch] if (BridgeMode > 0.5)
-		OutA[dtid.xy] = rim ? top : top + seed;
-	else
-		OutA[dtid.xy] = rim ? 0.0 : seed;
+	OutA[dtid.xy] = rim ? 0.0 : seed;
 }
 
 // InA = depth field. OutA = one repose iteration at ConeStep. ConeCS cannot be
 // reused here: its terrain clamp belongs to an absolute-height field and would
-// pin a depth field to world Z. Bridge mode additionally reads InB = the
-// layer's TOP raster for the connectivity test.
+// pin a depth field to world Z.
 [numthreads(8, 8, 1)] void ObjectConeCS(uint3 dtid
 										: SV_DispatchThreadID) {
 	uint2 dims;
@@ -317,14 +303,6 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 
 	float texel = HeightHalfExtent * 2.0 / dims.x;
 	float h = InA[dtid.xy];
-	// Bridge mode: this column's own floor. Snow can only avalanche onto a
-	// surface it physically reaches, so a neighbour's drift constrains this
-	// column ONLY if its level plus the repose rise lands ABOVE the floor;
-	// a lower drift with air between must not cut a porch, roof or post to
-	// its level - that cut is what erased every shell in town on the first
-	// bridged build. Empty columns (floor -100000) accept everything, which
-	// is what propagates real values into cracks and edge-bilinear texels.
-	float topHere = InB[dtid.xy];
 
 	[unroll] for (int dy = -1; dy <= 1; dy++)
 	{
@@ -336,62 +314,11 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			if (any(p < 0) || any(p >= int2(dims)))
 				continue;
 			float dist = length(float2(dx, dy)) * ConeStep * texel;
-			float cand = InA[uint2(p)] + SlopePerUnit * dist;
-			[flatten] if (BridgeMode > 0.5 && cand < topHere)
-				continue;
-			h = min(h, cand);
+			h = min(h, InA[uint2(p)] + SlopePerUnit * dist);
 		}
 	}
 
-	// The bridged surface is absolute world z, which may be negative; the
-	// >=0 clamp belongs to the depth field only.
-	OutA[dtid.xy] = BridgeMode > 0.5 ? h : max(h, 0.0);
-}
-
-// Bridged-surface bilateral smooth. The top raster stores one MAX height
-// per 4-unit texel, so slopes quantize into terraces and thin geometry
-// (ropes, rails, grass) into single-texel spikes - and the ABSOLUTE
-// surface hands both straight to the shell as razor-blade shards on
-// smooth meshes, crawling whenever the window's scroll shifts the texel
-// phase (the classic depth fields never showed any of it; they never
-// sample absolute heights). Average neighbours in the SAME plane band;
-// cliffs and sentinels stay untouched, so the seam-closing continuity
-// survives (a riser's surface steps at most SlopePerUnit per texel,
-// well inside the band).
-[numthreads(8, 8, 1)] void SurfaceSmoothCS(uint3 dtid
-										   : SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-
-	float center = InA[dtid.xy];
-	if (center > 50000.0) {
-		OutA[dtid.xy] = center;
-		return;
-	}
-	// Same-plane band, matching the peel tolerance's intent.
-	static const float kSmoothTol = 8.0;
-	float sum = center;
-	float weight = 1.0;
-	[unroll] for (int dy = -1; dy <= 1; dy++)
-	{
-		[unroll] for (int dx = -1; dx <= 1; dx++)
-		{
-			if (dx == 0 && dy == 0)
-				continue;
-			int2 p = int2(dtid.xy) + int2(dx, dy);
-			if (any(p < 0) || any(p >= int2(dims)))
-				continue;
-			float s = InA[uint2(p)];
-			[flatten] if (s < 50000.0 && abs(s - center) < kSmoothTol)
-			{
-				sum += s;
-				weight += 1.0;
-			}
-		}
-	}
-	OutA[dtid.xy] = sum / weight;
+	OutA[dtid.xy] = max(h, 0.0);
 }
 
 // InA = field. OutA = slope-limited field (one iteration at ConeStep).

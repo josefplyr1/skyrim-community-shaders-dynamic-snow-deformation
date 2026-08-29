@@ -59,7 +59,7 @@ cbuffer StaticCB : register(b1)
 	// z-band of a layer's top belong to that layer's plane. Mirror in
 	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
-	float BridgeModeSk;  // layout sync with SnowStaticsShell; unused here
+	float OverheadIgnore;  // layout sync with SnowStaticsShell; unused here
 	float padS4;
 }
 
