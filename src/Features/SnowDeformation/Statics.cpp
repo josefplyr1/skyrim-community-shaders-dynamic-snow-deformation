@@ -1468,7 +1468,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
@@ -1485,7 +1485,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		// Same class pick as the skin (the flat PD cover lives in Lighting
 		// since round 11, so the classifier is back for every skin draw).
 		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
-		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
 		// reads the same classification the skin uses.
 		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
@@ -1568,7 +1567,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
 		// One shared field for both classes: seed it with the deeper of the
 		// two and let each class normalize against it (see SkinLift.RimT).
-		processData.ObjectSnowDepth = std::max({ settings.SnowMeshesDepth, settings.ObjectsSnowDepth, 0.1f });
+		processData.ObjectSnowDepth = std::max(settings.ObjectsSnowDepth, 0.1f);
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
 		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
@@ -2032,7 +2031,7 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.SnowMeshesDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
 		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
@@ -2053,7 +2052,6 @@ void SnowDeformation::DrawCapturedStatics()
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ClassOverride = cap.forceRounded ? 1.0f : 0.0f;
-		scb.OpaqueCoverage = settings.OpaqueObjectSnow ? 1.0f : 0.0f;
 		scb.ProjNoiseScale = cap.projNoiseScale;
 		scb.ProjNoiseTiling = cap.projNoiseTiling;
 		// Always 0 since round 11: the flat PD cover lives in Lighting's
@@ -2113,7 +2111,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// 0 produces dead patch texels for its objects only. The pass gate just
 	// needs ANY class active (the old > 1 threshold silently disabled the
 	// whole patch at depth 1).
-	if (patchVS && patchPS && heightSkinDepth && (settings.SnowMeshesDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
+	if (patchVS && patchPS && heightSkinDepth && (settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as
@@ -2171,7 +2169,7 @@ void SnowDeformation::DrawCapturedStatics()
 			std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
 		};
 		scb.ObjectsDepth = settings.ObjectsSnowDepth;
-		scb.RoundedDepth = settings.SnowMeshesDepth;
+		scb.RoundedDepth = settings.ObjectsSnowDepth;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		// The march's footprint test (see the t11 bind above).

@@ -207,6 +207,15 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow: the projection's texture and material are swapped for the snow shell's set inside the object's own shader, so it works from every angle, overhangs included. The Snow Fill slider below pushes the pattern to full coverage, most up-facing parts first. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
 
+		ImGui::SliderFloat(T(TKEY("proj_snow_fill"), "Snow Fill"), &settings.ProjSnowFillPct, 0.0f, 100.0f, "%.0f%%");
+		if (auto _ttFill = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_snow_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, 50%% covers everything facing upward, and 100%% covers every angle of the pattern - undersides included. At 0%% the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
+#if !SNOW_ALPHA_BUILD
+		ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Debug Snow Fill Coverage"), &debugProjFillView);
+		if (auto _ttFillDbg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
+#endif
+
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
 		if (auto _tt3d = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The height-adjustable raised snow layer on objects without projected-snow data (and the classic placement rules that drive it). The flat projected-snow shell is controlled by Recolor Projected Snow above and stays on without this. Roads and their trenches are separate machinery and stay on."));
@@ -215,26 +224,12 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRoad = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 
-		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "Flat Objects"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
+		// One depth for the whole 3D layer (round 13): the flat/rounded
+		// class split kept its shading differences but no longer has two
+		// user knobs - the rebuilt shell will be one thing.
+		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "3D Snow Shell Depth"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
 		if (auto _ttObj = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Snow layer on flat hard-edged meshes (walkways, roofs, planks) — these get a completely flat overlay, no fake 3D. Classified automatically per mesh. With Authored Snow Relief on, everything carrying the game's projected-snow data uses the slider below instead; this one only affects the remaining objects, and their layer lies flat while that mode is on."));
-
-		// With the recolor on, every PD draw wears the flat shell and this
-		// slider is its angular-coverage knob rather than a layer height.
-		if (settings.ProjSnowMatch) {
-			ImGui::SliderFloat(T(TKEY("snow_meshes_fill"), "Snow Fill"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f");
-			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, and at maximum every angle of the pattern is fully covered - undersides included. At 0 the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
-#if !SNOW_ALPHA_BUILD
-			ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Debug Snow Fill Coverage"), &debugProjFillView);
-			if (auto _ttFillDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0, fully cyan at maximum means the fill is working."));
-#endif
-		} else {
-			ImGui::SliderFloat(T(TKEY("snow_meshes_depth"), "Round Objects"), &settings.SnowMeshesDepth, 0.0f, 25.0f, "%.0f units");
-			if (auto _ttMesh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("snow_meshes_depth_tooltip"), "Snow layer on organically smooth meshes (rocks, drifts, logs), where the puffed pillow layer reads correctly in 3D."));
-		}
+			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider above."));
 
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -
@@ -244,10 +239,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("proj_mask_placement"), "Authored Snow Placement"), &settings.ProjMaskPlacement);
 		if (auto _ttPmp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_mask_placement_tooltip"), "Object snow follows the placement Bethesda's artists painted into each mesh for the game's own snow, instead of covering everything that faces up. Undersides of walkways, posts and railings the artists left bare shed their snow layer; surfaces the artists marked snowy are unchanged. Only removes snow, never adds it, and only on meshes that carry the game's projected-snow data."));
-
-		ImGui::Checkbox(T(TKEY("opaque_object_snow"), "Opaque Object Snow"), &settings.OpaqueObjectSnow);
-		if (auto _ttOos = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("opaque_object_snow_tooltip"), "Object snow is either fully there or fully absent - no see-through layers. Partial coverage renders as a noisy dither in this engine, and over a wide rock face that reads as a translucent film. Off, the layer's edges blend into the game's own painted snow instead of cutting hard - which reads better with Authored Snow Relief."));
 
 		ImGui::Checkbox(T(TKEY("proj_depth_density"), "Snow Depth Follows Density"), &settings.ProjDepthDensity);
 		if (auto _ttPdd = Util::HoverTooltipWrapper())

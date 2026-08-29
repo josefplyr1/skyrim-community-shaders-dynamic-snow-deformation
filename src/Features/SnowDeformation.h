@@ -463,18 +463,16 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
 		float ObjectsSnowDepth = 3.0f;
-		/** @brief Statics skin, rounded class: layer height on organically smooth meshes (rocks, drifts, logs), where pillow inflation reads correctly. Default 0 like the flat class, per in-game tuning. */
-		float SnowMeshesDepth = 3.0f;
+		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
+		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
 		/** @brief SKIN-PLACEMENT-PLAN S2: the skin's up-facing mask is multiplied by the NIF's authored projected-snow term (vertex alpha x normal-Z minus the material threshold), so surfaces Bethesda painted bare (walkway undersides, posts, railings) shed their skin. Suppressor only - it never adds snow; draws without projected-UV data are unchanged. Default ON per Josef's A/B verdict 2026-08-28 (red-only zones deleted, nothing lost snow it correctly wore). */
 		bool ProjMaskPlacement = true;
-		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). Default ON with OpaqueObjectSnow per Josef's verdict 2026-08-28: the graded edges hug so closely that the binary cut needs no dither. */
+		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
 		bool ProjDepthDensity = true;
-		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default flipped OFF per Josef 2026-08-28 (round 9): with Authored Snow Relief the partial edge BLENDS into the game's own painted snow, which reads better than the hard cut. */
-		bool OpaqueObjectSnow = false;
 		/** @brief Master toggle for the raised 3D object snow layer (the statics skins). Off skips only the skin draws - capture, height rasters and the road/trench patch keep running - so "Recolor Projected Snow" (ProjSnowMatch) can be judged alone during the object-snow rework (Josef, 2026-08-28). */
 		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
@@ -555,7 +553,7 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (SnowMeshesDepth -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
+		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (ProjSnowFillPct -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
 		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
 		bool GlacierSnowMatch = true;
@@ -1505,8 +1503,8 @@ public:
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
-		/** @brief >0.5: Settings::OpaqueObjectSnow - the skin's shape-gate coverage binarizes at 0.5 (no translucent dither films; the distance dissolve stays partial). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float OpaqueCoverage;
+		/** @brief Layout keeper (was OpaqueCoverage, retired round 13 - the Lighting-side fill covers cleanly, so the skins' binary-cut policy has no job left). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float padOpaque;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
 		/** @brief Authored relief (SKIN-PLACEMENT-PLAN S3): 2 = authored placement for this draw (the reconstructed vanilla weight is the depth source - real lift, round-3 form - and owns the per-pixel coverage cut), 0 = classic path (mode off, no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state; the round-5/6 flat-coat state (1) is retired - a coat without real lift z-bands into invisibility. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

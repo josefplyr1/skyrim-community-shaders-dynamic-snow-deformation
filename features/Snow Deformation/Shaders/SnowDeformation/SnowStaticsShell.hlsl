@@ -244,10 +244,10 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	// >0.5: the shape gates' coverage binarizes at 0.5 - no translucent
-	// dither films; the distance dissolve stays partial. Mirror in
-	// SnowDeformation.h.
-	float OpaqueCoverage;
+	// Layout keeper (was OpaqueCoverage, retired round 13 - the Lighting
+	// fill covers cleanly, so the binary-cut policy has no job left).
+	// Mirror in SnowDeformation.h.
+	float padOpaque;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
@@ -973,9 +973,9 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// shading-only.
 		//
 		// Scaled by the per-texel skinDepth, NOT the draw's class constant: the
-		// patch draw carries SnowMeshesDepth (3) in RoundedDepth, and
-		// BermDepthGate(3) is exactly zero - which is why the pixel shader's
-		// shading berm has been silently inert on the patch as well.
+		// patch draw carries the shallow object depth in RoundedDepth, and
+		// BermDepthGate of a shallow depth is exactly zero - which is why the
+		// pixel shader's shading berm has been silently inert on the patch.
 		float bermD = 0.0;
 		[branch] if (ObjBermHeightAmp > 0.005)
 			bermD = BermField(gridLocal);
@@ -2318,19 +2318,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// exactly the columns this dissolves or the skin steps aside into a hole.
 	coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
 #	endif
-
-	// Opaque object snow: partial alpha from the SHAPE gates can only render
-	// as stochastic dither in this deferred pipeline, and over a wide
-	// mid-slope face that dither reads as a translucent film (the mountain,
-	// after the class fix took the plate lift out of the story). The
-	// landscape shell's edge policy is already a clean binary cut with
-	// noise-shaped raggedness; the skins now match. The coverage noise and
-	// the grain edge shaping above decide WHERE the 0.5 crossing lands, so
-	// the cut stays ragged, not polygonal. The distance dissolve BELOW stays
-	// partial on purpose - thinning into the object's own vanilla snow at
-	// range without a pop is exactly what dither is for.
-	[flatten] if (OpaqueCoverage > 0.5)
-		coverageAlpha = coverageAlpha >= 0.5 ? 1.0 : 0.0;
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
 	// back into the object's own material, fully gone by SkinFadeEnd (the

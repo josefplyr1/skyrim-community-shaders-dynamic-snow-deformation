@@ -95,7 +95,7 @@
 	X(SnowClassDepths) \
 	X(TextureDepths) \
 	X(ObjectsSnowDepth) \
-	X(SnowMeshesDepth) \
+	X(ProjSnowFillPct) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \
@@ -136,7 +136,6 @@
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
 	X(ProjDepthDensity) \
-	X(OpaqueObjectSnow) \
 	X(ObjectSnow3D) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
@@ -563,7 +562,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	// footprint the recolor pushes to FULL shell-snow weight, most
 	// up-facing pixels first (SKIN-PLACEMENT-PLAN round 11 - the fill
 	// lives in Lighting's recolor, where the real weight is).
-	data.ProjSnowFill = std::clamp(settings.SnowMeshesDepth / 25.0f, 0.0f, 1.0f);
+	data.ProjSnowFill = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 	data.BakedSnowEnable = (settings.EnableSnowDeformation && settings.GlacierSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
