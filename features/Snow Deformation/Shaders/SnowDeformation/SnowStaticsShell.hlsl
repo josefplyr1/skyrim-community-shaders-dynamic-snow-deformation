@@ -1998,16 +1998,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 		}
 		float wLinPix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		// Fill from the LOCAL lift (round-3 form): where the dome is tall
-		// the noise retires and cracks bridge over; the fringe stays
-		// ragged. At slider 0 the footprint is exactly vanilla's painted
-		// pattern; with the purple match view on, remaining purple marks
-		// exactly where this layer under-covers.
-		float fill = saturate(input.Lift / kProjFillDepth);
+		// Fill from the SLIDER alone - deliberately not from the local lift
+		// (round-8 fix): lift is facing-scaled, so lift-driven fill never
+		// reached steep faces and their noise term never retired - the
+		// residual purple on cliff flanks at maximum fill. Josef's rule:
+		// wherever there is PD, from ANY angle, the coat covers; the only
+		// angle dependence coverage keeps is vanilla's own nz term, which
+		// is what defines the purple in the first place.
+		float fill = saturate(liftBase / kProjFillDepth);
 		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
 		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
 		float wpix = wLinPix - ProjNoiseScale * (1.0 - fill) * noise;
-		pdCoverage = smoothstep(0.0, 0.05, wpix);
+		// Superset margin: the reconstruction can never be pixel-identical
+		// to vanilla's (triplanar weights and the sample position differ
+		// slightly), and the purple view tints right at weight zero - so
+		// the cut sits a hair BELOW zero, guaranteeing the coat covers
+		// everything the purple shows at any fill level. Purple may only
+		// ever peek through a genuine reconstruction hole.
+		pdCoverage = smoothstep(-0.03, 0.0, wpix);
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
