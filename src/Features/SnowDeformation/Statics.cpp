@@ -1004,6 +1004,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
 		}
 	}
+	if (!heightPeelPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "PEEL"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPeelPS)))
+				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
+		}
+	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
@@ -1082,6 +1090,10 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomFiltered->CreateUAV(maskUavDesc);
 	heightScratch = makeHeightTexture("SnowDeformation::HeightConeScratch");
 	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
+	// S4 phase 2: the peeled second layer and its cone.
+	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
+	heightTop2Raw[1] = makeHeightTexture("SnowDeformation::HeightTop2Raw1");
+	objectSnowCone2 = makeHeightTexture("SnowDeformation::ObjectSnowCone2");
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
@@ -1425,6 +1437,21 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, 2, nullCsSRVs);
 	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+
+	// S4 phase 2: scroll the peeled layer-2 top the same way. ScrollCS's
+	// bottom slot reads last frame's bottoms (harmless) and writes into
+	// heightScratch as a throwaway (the scratch is fully overwritten by
+	// the cone chains below), so the CS runs unmodified.
+	if (heightTop2Raw[0] && heightTop2Raw[1]) {
+		ID3D11ShaderResourceView* scroll2SRVs[2] = { heightTop2Raw[previous]->srv.get(), heightBottomRaw[previous]->srv.get() };
+		ID3D11UnorderedAccessView* scroll2UAVs[2] = { heightTop2Raw[heightCurrent]->uav.get(), heightScratch->uav.get() };
+		context->CSSetShaderResources(0, 2, scroll2SRVs);
+		context->CSSetUnorderedAccessViews(0, 2, scroll2UAVs, nullptr);
+		context->CSSetShader(heightScrollCS, nullptr, 0);
+		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
+		context->CSSetShaderResources(0, 2, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+	}
 	ID3D11Buffer* nullProcessCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -1527,6 +1554,72 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
+
+	// S4 phase 2 - the layer-2 PEEL: re-rasterize the captures against
+	// this frame's completed layer-1 top (now readable), keeping only
+	// fragments below it by the peel tolerance; MAX blending yields the
+	// second-highest surface per column. Only the transform and the
+	// window fields matter to this pass.
+	if (heightPeelPS && heightTop2Raw[heightCurrent]) {
+		ID3D11RenderTargetView* peelRTV = heightTop2Raw[heightCurrent]->rtv.get();
+		context->OMSetRenderTargets(1, &peelRTV, nullptr);
+		context->PSSetShader(heightPeelPS, nullptr, 0);
+		ID3D11ShaderResourceView* peelTopSRV = heightTopRaw[heightCurrent]->srv.get();
+		context->PSSetShaderResources(3, 1, &peelTopSRV);
+		// The peel PS addresses the layer-1 map through StaticCB's window
+		// fields; the capture pass binds b1 to the VS only.
+		context->PSSetConstantBuffers(1, 1, &cb1);
+
+		globals::profiler->BeginPass("SnowDeformation::ObjectHeightPeel");
+		for (const auto& cap : capturedStatics) {
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape)
+				continue;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				continue;
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				continue;
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				continue;
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto layoutIt = staticsILCache.find(descKey);
+			if (layoutIt == staticsILCache.end() || !layoutIt->second)
+				continue;
+			context->IASetInputLayout(layoutIt->second.get());
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				continue;
+			UINT offset = 0;
+			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+			StaticsCB scb{};
+			const auto& rot = cap.world.rotate;
+			const float scale = cap.world.scale;
+			scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
+			scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
+			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+			scb.HeightWindowCenter = heightWindowCenter;
+			scb.HeightHalfExtent = kHeightMapHalfExtent;
+			staticsCB->Update(scb);
+			context->DrawIndexed(indexCount, 0, 0);
+		}
+		globals::profiler->EndPass();
+
+		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+		ID3D11ShaderResourceView* nullPeelSRV = nullptr;
+		context->PSSetShaderResources(3, 1, &nullPeelSRV);
+	}
+
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
@@ -1625,6 +1718,37 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetShaderResources(0, 1, nullCsSRVs);
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 			std::swap(objIn, objOut);
+		}
+
+		// S4 phase 2: the same seed + repose chain over the PEELED layer-2
+		// top, so every below-top plane gets its own rims and distances.
+		if (objectSnowCone2 && heightTop2Raw[heightCurrent]) {
+			context->CSSetShader(objectConeSeedCS, nullptr, 0);
+			ID3D11ShaderResourceView* seed2SRVs[2] = { heightTop2Raw[heightCurrent]->srv.get(),
+				heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
+			ID3D11UnorderedAccessView* seed2UAV = objectSnowCone2->uav.get();
+			context->CSSetShaderResources(0, 2, seed2SRVs);
+			context->CSSetUnorderedAccessViews(0, 1, &seed2UAV, nullptr);
+			context->Dispatch(dispatchDim, dispatchDim, 1);
+			ID3D11ShaderResourceView* nullSeed2SRVs[2] = { nullptr, nullptr };
+			context->CSSetShaderResources(0, 2, nullSeed2SRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+
+			context->CSSetShader(objectConeCS, nullptr, 0);
+			Texture2D* obj2In = objectSnowCone2;
+			Texture2D* obj2Out = heightScratch;
+			for (uint step : kConeSteps) {
+				processData.ConeStep = step;
+				heightProcessCB->Update(processData);
+				ID3D11ShaderResourceView* obj2SRV = obj2In->srv.get();
+				ID3D11UnorderedAccessView* obj2UAV = obj2Out->uav.get();
+				context->CSSetShaderResources(0, 1, &obj2SRV);
+				context->CSSetUnorderedAccessViews(0, 1, &obj2UAV, nullptr);
+				context->Dispatch(dispatchDim, dispatchDim, 1);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+				std::swap(obj2In, obj2Out);
+			}
 		}
 	}
 
@@ -1946,6 +2070,16 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &coneSRV);
 	context->DSSetShaderResources(13, 1, &coneSRV);
 	context->PSSetShaderResources(13, 1, &coneSRV);
+	// S4 phase 2 layer-2 maps (t24 peeled top, t26 its cone): the lift's
+	// per-vertex layer select. VS + DS only.
+	ID3D11ShaderResourceView* top2SRV = (heightTop2Raw[heightCurrent] && heightTop2Raw[heightCurrent]->srv) ?
+	                                        heightTop2Raw[heightCurrent]->srv.get() :
+	                                        nullptr;
+	ID3D11ShaderResourceView* cone2SRV = (objectSnowCone2 && objectSnowCone2->srv) ? objectSnowCone2->srv.get() : nullptr;
+	context->VSSetShaderResources(24, 1, &top2SRV);
+	context->DSSetShaderResources(24, 1, &top2SRV);
+	context->VSSetShaderResources(26, 1, &cone2SRV);
+	context->DSSetShaderResources(26, 1, &cone2SRV);
 	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
 	// skin's self-shadow march and spell-mark shading read the landscape
 	// shell's slots; the skins draw standalone, so bind explicitly here.
@@ -2137,6 +2271,10 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
+	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
+	context->DSSetShaderResources(24, 1, &nullSmoothSRV);
+	context->VSSetShaderResources(26, 1, &nullSmoothSRV);
+	context->DSSetShaderResources(26, 1, &nullSmoothSRV);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

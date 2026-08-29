@@ -116,7 +116,30 @@ VS_OUTPUT main(VS_INPUT input)
 }
 #endif
 
-#ifdef PSHADER
+#if defined(PSHADER) && defined(PEEL)
+// S4 phase 2 - layer-2 peel (SKIN-PLACEMENT-PLAN): re-rasterize the
+// captures keeping only fragments a peel tolerance BELOW this frame's
+// accumulated layer-1 top; MAX blending then yields the SECOND-highest
+// surface per column. Every plank, tread and beam below a roof or
+// railing gets its own plane, its own rims, its own roll.
+Texture2D<float> Layer1Top : register(t3);
+// Mirror: SnowStaticsShell.hlsl kPeelTol - surfaces within this z-band
+// of the column top belong to layer 1's plane.
+static const float kPeelTol = 8.0;
+
+float main(VS_OUTPUT input) : SV_Target0
+{
+	float2 dims;
+	Layer1Top.GetDimensions(dims.x, dims.y);
+	float2 local = (input.WorldXY - HeightWindowCenter) / HeightHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	int2 t = int2(clamp(uv * dims - 0.5, 0.0, dims.x - 1.001));
+	float top1 = Layer1Top.Load(int3(t, 0));
+	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - kPeelTol)
+		discard;
+	return input.WorldZ;
+}
+#elif defined(PSHADER)
 // Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
 // window addressing is read here; names carry an H so they cannot clash
 // with StaticCB's.

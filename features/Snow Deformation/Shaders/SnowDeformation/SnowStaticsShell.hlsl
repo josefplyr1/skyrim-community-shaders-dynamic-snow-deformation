@@ -561,6 +561,15 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // Cone-transformed snow surface over the same window: the angle of repose
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
+// S4 phase 2 - the PEELED second layer: the highest surface more than
+// kPeelTol below layer 1 per column, with its own cone. A vertex whose
+// height matches layer 2 takes its roll from here, so a tread under a
+// railing or a beam under a roof gets ITS OWN plane's rims instead of
+// borrowing the plane above (the beam-streak / staircase-hole root).
+Texture2D<float> ObjectTop2Raw : register(t24);
+Texture2D<float> ObjectSnowCone2 : register(t26);
+// Mirror: SnowHeightCapture.hlsl kPeelTol.
+static const float kPeelTol = 8.0;
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -630,6 +639,42 @@ float ObjectConeDepth(float2 worldXY)
 	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
 	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Layer-2 twins (S4 phase 2). HLSL SM5 cannot parameterize the texture,
+// so these mirror PatchTop / ObjectConeDepth verbatim on the peeled maps.
+float PatchTop2(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+
+	float2 dims;
+	ObjectTop2Raw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	return max(max(ObjectTop2Raw.Load(int3(t0.x, t0.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t0.y, 0))),
+		max(ObjectTop2Raw.Load(int3(t0.x, t1.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t1.y, 0))));
+}
+
+float ObjectConeDepth2(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return 1000000.0;
+
+	float2 dims;
+	ObjectSnowCone2.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = ObjectSnowCone2.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectSnowCone2.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectSnowCone2.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectSnowCone2.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 #endif
@@ -1502,7 +1547,23 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-			rollT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
+			float cone = ObjectConeDepth(worldBase.xy);
+			// Layer select (S4 phase 2): a vertex belongs to the topmost
+			// PEELED plane whose height matches its own. Below layer 1 by
+			// more than the peel tolerance, the roll comes from layer 2's
+			// cone; below even layer 2, no plane owns the surface and it
+			// gets NO roll data (a minimal dome) rather than a full-height
+			// interior borrowed from someone else's plane - which was the
+			// beam-streak and staircase-hole failure.
+			float top1 = PatchTop(worldBase.xy);
+			[branch] if (top1 > -50000.0 && worldBase.z < top1 - kPeelTol)
+			{
+				float top2 = PatchTop2(worldBase.xy);
+				cone = ObjectConeDepth2(worldBase.xy);
+				[flatten] if (top2 < -50000.0 || worldBase.z < top2 - kPeelTol)
+					cone = 0.0;
+			}
+			rollT = saturate(cone / coneSeed);
 		}
 		float rimIn = 1.0 - rollT;
 		depth = depthBase * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
