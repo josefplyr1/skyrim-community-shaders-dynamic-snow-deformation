@@ -1953,6 +1953,11 @@ void SnowDeformation::DrawCapturedStatics()
 	ID3D11ShaderResourceView* skinNormalsSRV = settings.ProjPixelRelief ? preSkinNormalsCopySRV.get() : nullptr;
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 
+	// Master toggle for the 3D layer: capture, the height rasters and the
+	// road/trench patch below keep running - only the skin draws skip, so
+	// "Recolor Projected Snow" can be judged alone during the object-snow
+	// rework (Josef, 2026-08-28).
+	if (settings.ObjectSnow3D)
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)

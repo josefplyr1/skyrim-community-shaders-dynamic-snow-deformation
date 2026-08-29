@@ -475,8 +475,10 @@ public:
 		bool ProjDepthDensity = true;
 		/** @brief SKIN-PLACEMENT-PLAN S3 (Josef's spec): on PD draws the shell is placed by vanilla's weight rebuilt PER PIXEL - the G-buffer normal, the authored alpha, threshold, +0.1 bias and the noise term - so the footprint matches the purple debug view. Depth source is the verified round-3 form (restored round 7 at Josef's request after the flat-coat experiment z-banded into invisibility): the weight itself scaled by up-facingness, a REAL lift, with the "Snow Fill" slider raising depth and closing the pattern's gaps together. ALL PD draws classify ROUNDED (no plank exception); no-PD draws run the classic path untouched. Supersedes ProjMaskPlacement/ProjDepthDensity on PD draws; roads excluded; inert without the noise map. Default OFF for the A/B. */
 		bool ProjPixelRelief = false;
-		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default ON per Josef 2026-08-28. */
-		bool OpaqueObjectSnow = true;
+		/** @brief Object snow coverage is binary: the shape gates' partial alpha renders as stochastic dither, which reads as a translucent film over wide mid-slope faces. The landscape shell's clean-cut edge policy, applied to the skins. Distance dissolve keeps its dither. Default flipped OFF per Josef 2026-08-28 (round 9): with Authored Snow Relief the partial edge BLENDS into the game's own painted snow, which reads better than the hard cut. */
+		bool OpaqueObjectSnow = false;
+		/** @brief Master toggle for the raised 3D object snow layer (the statics skins). Off skips only the skin draws - capture, height rasters and the road/trench patch keep running - so "Recolor Projected Snow" (ProjSnowMatch) can be judged alone during the object-snow rework (Josef, 2026-08-28). */
+		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */

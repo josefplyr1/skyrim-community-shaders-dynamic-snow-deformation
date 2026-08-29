@@ -138,6 +138,7 @@
 	X(ProjDepthDensity) \
 	X(ProjPixelRelief) \
 	X(OpaqueObjectSnow) \
+	X(ObjectSnow3D) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
