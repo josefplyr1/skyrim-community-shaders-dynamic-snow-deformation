@@ -46,9 +46,19 @@ namespace Util
 	 * @param Defines Preprocessor macro name/value pairs to pass to the compiler.
 	 * @param ProgramType Shader model target (e.g. "ps_5_0", "vs_5_0", "cs_5_0").
 	 * @param Program Entry point function name (defaults to "main").
+	 * @param OutBlob When non-null, receives the compiled bytecode (caller owns the reference).
 	 * @return The compiled shader object, or nullptr on failure.
 	 */
-	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main");
+	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main", ID3DBlob** OutBlob = nullptr);
+
+	/**
+	 * @brief Create the D3D11 shader object matching a shader model target from already-compiled bytecode.
+	 * @param Data Compiled bytecode.
+	 * @param Size Bytecode size in bytes.
+	 * @param ProgramType Shader model target the bytecode was compiled for.
+	 * @return The shader object, or nullptr for an unknown target.
+	 */
+	ID3D11DeviceChild* CreateShaderFromBlob(const void* Data, size_t Size, const char* ProgramType);
 
 	/**
 	 * @brief Apply an alpha-blended highlight tint to a texture via CPU staging copy.

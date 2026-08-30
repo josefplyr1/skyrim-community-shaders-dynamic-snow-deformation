@@ -802,6 +802,21 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // convention (everything relative to Data\Shaders).
 static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr)
 {
+	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
+	// of the "sdblob" env token, and the full key round-trips through the
+	// stored file so a fingerprint or define change reads as a miss.
+	auto& snow = globals::features::snowDeformation;
+	const auto defs = std::format("{};{};{};{}", a_stageDefine,
+		a_extraDefine ? a_extraDefine : "", a_extraDefine2 ? a_extraDefine2 : "", a_extraDefine3 ? a_extraDefine3 : "");
+	const auto pathUtf8 = Util::WStringToString(a_path);
+	const auto cacheFile = std::format("{}_{}_blob_{:016x}.bin",
+		std::filesystem::path(a_path).stem().string(), a_target,
+		SnowDeformation::ShaderKeyHash(std::format("{}|{}|{}", pathUtf8, a_target, defs)));
+	const auto cacheKey = std::format("v1|fp{}|{}|{}|env:sdblob|defs:{}",
+		snow.ShaderSourcesFingerprint(), pathUtf8, a_target, defs);
+	if (auto cached = snow.ShaderCacheLoad(cacheKey, cacheFile))
+		return cached.detach();
+
 	struct ShaderInclude : public ID3DInclude
 	{
 		HRESULT Open(D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID* ppData, UINT* pBytes) override
@@ -852,6 +867,8 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 	}
 	if (errors)
 		errors->Release();
+	if (blob)
+		snow.ShaderCacheStore(cacheKey, cacheFile, blob);
 	return blob;
 }
 
@@ -1033,15 +1050,15 @@ bool SnowDeformation::EnsureStaticsShaders()
 	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
-		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
+		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
 	if (!heightCombineCS)
-		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
+		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightConeCS)
-		heightConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeCS"));
+		heightConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ConeCS"));
 	if (!objectConeSeedCS)
-		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
+		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
-		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
+		objectConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1904,6 +1921,17 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 }
 
+bool SnowDeformation::EnsureSmoothNormalsCS()
+{
+	if (!smoothAccumulateCS)
+		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
+	if (!smoothResolveCS)
+		smoothResolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
+	if (!smoothFlatStatsCS)
+		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+	return smoothAccumulateCS && smoothResolveCS && smoothFlatStatsCS;
+}
+
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
 {
 	LoadTraceScope _loadTrace(this, "Statics: EnsureSmoothedNormals");
@@ -1927,13 +1955,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	// First sight of this geometry: build now (a buffer copy + two small
 	// dispatches, once per unique mesh). Failures leave the permanent null
 	// entry; no per-frame retries; the VS falls back to raw normals.
-	if (!smoothAccumulateCS)
-		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
-	if (!smoothResolveCS)
-		smoothResolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
-	if (!smoothFlatStatsCS)
-		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
-	if (!smoothAccumulateCS || !smoothResolveCS || !smoothFlatStatsCS || !smoothCB)
+	if (!EnsureSmoothNormalsCS() || !smoothCB)
 		return nullptr;
 
 	auto desc = rendererData->vertexDesc;

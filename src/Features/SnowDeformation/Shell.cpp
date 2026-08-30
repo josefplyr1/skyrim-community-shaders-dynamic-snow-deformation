@@ -296,7 +296,7 @@ ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
 	if (!shellVS) {
 		logger::debug("Compiling SnowShell VS");
-		shellVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
+		shellVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
 	}
 	return shellVS;
 }
@@ -305,7 +305,7 @@ ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 {
 	if (!shellShadowVS) {
 		logger::debug("Compiling SnowShell shadow-cast VS");
-		shellShadowVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" } }, "vs_5_0"));
+		shellShadowVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" } }, "vs_5_0"));
 	}
 	return shellShadowVS;
 }
@@ -327,7 +327,7 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 		if (shellDepthClampDisabled)
 			defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
 		shellDepthClampCompiled = !shellDepthClampDisabled;
-		shellPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;
 }
@@ -354,7 +354,7 @@ ID3D11PixelShader* SnowDeformation::GetShellLODPS()
 	if (!shellLODPS) {
 		logger::debug("Compiling SnowShell LOD heatmap PS");
 		auto defines = ShellPSDefines("SNOW_LOD_HISTOGRAM");
-		shellLODPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellLODPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellLODPS;
 }
@@ -363,7 +363,7 @@ ID3D11VertexShader* SnowDeformation::GetShellTessVS()
 {
 	if (!shellTessVS) {
 		logger::debug("Compiling SnowShell tess control-point VS");
-		shellTessVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_TESS", "" } }, "vs_5_0"));
+		shellTessVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_TESS", "" } }, "vs_5_0"));
 	}
 	return shellTessVS;
 }
@@ -372,7 +372,7 @@ ID3D11HullShader* SnowDeformation::GetShellHS()
 {
 	if (!shellHS) {
 		logger::debug("Compiling SnowShell HS");
-		shellHS = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "hs_5_0"));
+		shellHS = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "hs_5_0"));
 	}
 	return shellHS;
 }
@@ -381,7 +381,7 @@ ID3D11HullShader* SnowDeformation::GetShellHSNear()
 {
 	if (!shellHSNear) {
 		logger::debug("Compiling SnowShell HS (split near)");
-		shellHSNear = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_NEAR", "" } }, "hs_5_0"));
+		shellHSNear = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_NEAR", "" } }, "hs_5_0"));
 	}
 	return shellHSNear;
 }
@@ -390,7 +390,7 @@ ID3D11HullShader* SnowDeformation::GetShellHSFar()
 {
 	if (!shellHSFar) {
 		logger::debug("Compiling SnowShell HS (split far)");
-		shellHSFar = static_cast<ID3D11HullShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_FAR", "" } }, "hs_5_0"));
+		shellHSFar = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_FAR", "" } }, "hs_5_0"));
 	}
 	return shellHSFar;
 }
@@ -401,7 +401,7 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 		logger::debug("Compiling SnowShell PS (no depth export)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
-		shellPSNoDepth = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellPSNoDepth = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPSNoDepth;
 }
@@ -410,7 +410,7 @@ ID3D11DomainShader* SnowDeformation::GetShellDS()
 {
 	if (!shellDS) {
 		logger::debug("Compiling SnowShell DS");
-		shellDS = static_cast<ID3D11DomainShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
+		shellDS = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
 	}
 	return shellDS;
 }
@@ -419,7 +419,7 @@ ID3D11ComputeShader* SnowDeformation::GetDepthSyncCS()
 {
 	if (!depthSyncCS) {
 		logger::debug("Compiling DepthSyncCS");
-		depthSyncCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0"));
+		depthSyncCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0"));
 	}
 	return depthSyncCS;
 }
@@ -535,6 +535,8 @@ void SnowDeformation::UpdateBowWaveBuffer()
 void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
+		return;
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 	LoadTraceScope _loadTrace(this, "Shell: DrawShell");
 
@@ -1220,7 +1222,7 @@ ID3D11ComputeShader* SnowDeformation::GetLODProbeCS()
 {
 	if (!lodProbeCS) {
 		logger::debug("Compiling SnowShell LOD probe CS");
-		lodProbeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "cs_5_0"));
+		lodProbeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "cs_5_0"));
 	}
 	return lodProbeCS;
 }

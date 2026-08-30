@@ -574,7 +574,7 @@ ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()
 {
 	if (!windowFillCS) {
 		logger::debug("Compiling TerrainWindowFillCS");
-		windowFillCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", {}, "cs_5_0"));
+		windowFillCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", {}, "cs_5_0"));
 	}
 	return windowFillCS;
 }

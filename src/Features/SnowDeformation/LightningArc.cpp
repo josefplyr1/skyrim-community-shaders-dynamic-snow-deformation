@@ -63,7 +63,7 @@ ID3D11VertexShader* SnowDeformation::GetLightningArcVS()
 {
 	if (!arcVS) {
 		logger::debug("Compiling LightningArc VS");
-		arcVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(
+		arcVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(
 			L"Data\\Shaders\\SnowDeformation\\LightningArc.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
 	}
 	return arcVS;
@@ -73,7 +73,7 @@ ID3D11PixelShader* SnowDeformation::GetLightningArcPS()
 {
 	if (!arcPS) {
 		logger::debug("Compiling LightningArc PS");
-		arcPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(
+		arcPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(
 			L"Data\\Shaders\\SnowDeformation\\LightningArc.hlsl", { { "PSHADER", "" } }, "ps_5_0"));
 	}
 	return arcPS;
@@ -164,6 +164,8 @@ bool SnowDeformation::EnsureLightningArcResources()
 void SnowDeformation::DrawLightningArcs()
 {
 	if (!settings.EnableSnowDeformation || !settings.EnableLightningArcs)
+		return;
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 	if (lightningArcs.empty())
 		return;

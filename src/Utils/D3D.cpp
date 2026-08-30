@@ -141,10 +141,35 @@ namespace Util
 		}
 	};
 
-	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program)
+	ID3D11DeviceChild* CreateShaderFromBlob(const void* Data, size_t Size, const char* ProgramType)
 	{
 		auto device = globals::d3d::device;
+		if (!_stricmp(ProgramType, "ps_5_0")) {
+			ID3D11PixelShader* regShader;
+			DX::ThrowIfFailed(device->CreatePixelShader(Data, Size, nullptr, &regShader));
+			return regShader;
+		} else if (!_stricmp(ProgramType, "vs_5_0")) {
+			ID3D11VertexShader* regShader;
+			DX::ThrowIfFailed(device->CreateVertexShader(Data, Size, nullptr, &regShader));
+			return regShader;
+		} else if (!_stricmp(ProgramType, "hs_5_0")) {
+			ID3D11HullShader* regShader;
+			DX::ThrowIfFailed(device->CreateHullShader(Data, Size, nullptr, &regShader));
+			return regShader;
+		} else if (!_stricmp(ProgramType, "ds_5_0")) {
+			ID3D11DomainShader* regShader;
+			DX::ThrowIfFailed(device->CreateDomainShader(Data, Size, nullptr, &regShader));
+			return regShader;
+		} else if (!_stricmp(ProgramType, "cs_5_0") || !_stricmp(ProgramType, "cs_4_0")) {
+			ID3D11ComputeShader* regShader;
+			DX::ThrowIfFailed(device->CreateComputeShader(Data, Size, nullptr, &regShader));
+			return regShader;
+		}
+		return nullptr;
+	}
 
+	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program, ID3DBlob** OutBlob)
+	{
 		CustomInclude include;
 
 		// Build defines (aka convert vector->D3DCONSTANT array)
@@ -216,33 +241,11 @@ namespace Util
 		}
 		if (shaderErrors)
 			logger::debug("Shader logs:\n{}", static_cast<char*>(shaderErrors->GetBufferPointer()));
-		if (!_stricmp(ProgramType, "ps_5_0")) {
-			ID3D11PixelShader* regShader;
-			DX::ThrowIfFailed(device->CreatePixelShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "vs_5_0")) {
-			ID3D11VertexShader* regShader;
-			DX::ThrowIfFailed(device->CreateVertexShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "hs_5_0")) {
-			ID3D11HullShader* regShader;
-			DX::ThrowIfFailed(device->CreateHullShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "ds_5_0")) {
-			ID3D11DomainShader* regShader;
-			DX::ThrowIfFailed(device->CreateDomainShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "cs_5_0")) {
-			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "cs_4_0")) {
-			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), nullptr, &regShader));
-			return regShader;
-		}
 
-		return nullptr;
+		auto shader = CreateShaderFromBlob(shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(), ProgramType);
+		if (OutBlob)
+			*OutBlob = shaderBlob;
+		return shader;
 	}
 
 	// RAII wrapper for D3D mapped resources

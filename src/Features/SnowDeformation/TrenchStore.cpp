@@ -160,13 +160,15 @@ ID3D11ComputeShader* SnowDeformation::GetTrenchDebugCS()
 {
 	if (!trenchDebugCS)
 		trenchDebugCS = static_cast<ID3D11ComputeShader*>(
-			Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", {}, "cs_5_0"));
+			CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", {}, "cs_5_0"));
 	return trenchDebugCS;
 }
 
 void SnowDeformation::UpdateTrenchDebugTexture()
 {
 	if (!settings.ShowDebugTexture || !trenchDebugUAV)
+		return;
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 
 	auto context = globals::d3d::context;

@@ -820,6 +820,13 @@ void SnowDeformation::Prepass()
 
 	UpdateActiveWorldspace();
 
+	// The shader prime owns every shader member while it runs; nothing on the
+	// render thread may reach a getter (or read the pointers it writes) until
+	// it finishes. The skipped frames resume exactly like a long hitch - the
+	// window-jump and trench-inject paths already handle the catch-up.
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+		return;
+
 	if (settings.EnableSnowDeformation && globals::state->inWorld)
 		UpdateShellTerrainWindow();
 
@@ -1416,7 +1423,7 @@ ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()
 {
 	if (!exclusionFieldCS) {
 		logger::debug("Compiling ExclusionFieldCS");
-		exclusionFieldCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", {}, "cs_5_0"));
+		exclusionFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", {}, "cs_5_0"));
 	}
 	return exclusionFieldCS;
 }
@@ -1425,7 +1432,7 @@ ID3D11ComputeShader* SnowDeformation::GetBermFieldCS()
 {
 	if (!bermFieldCS) {
 		logger::debug("Compiling BermFieldCS");
-		bermFieldCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0"));
+		bermFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0"));
 	}
 	return bermFieldCS;
 }
@@ -1434,7 +1441,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationRingCS()
 {
 	if (!deformationRingCS) {
 		logger::debug("Compiling DeformationUpdateCS:RingCS");
-		deformationRingCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "RingCS"));
+		deformationRingCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "RingCS"));
 	}
 	return deformationRingCS;
 }
@@ -1443,7 +1450,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationEvolveCS()
 {
 	if (!deformationEvolveCS) {
 		logger::debug("Compiling DeformationUpdateCS:EvolveCS");
-		deformationEvolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "EvolveCS"));
+		deformationEvolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "EvolveCS"));
 	}
 	return deformationEvolveCS;
 }
@@ -1452,7 +1459,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
 {
 	if (!deformationStampCS) {
 		logger::debug("Compiling DeformationUpdateCS:StampCS");
-		deformationStampCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampCS"));
+		deformationStampCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampCS"));
 	}
 	return deformationStampCS;
 }
@@ -1461,7 +1468,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampAllCS()
 {
 	if (!deformationStampAllCS) {
 		logger::debug("Compiling DeformationUpdateCS:StampAllCS");
-		deformationStampAllCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampAllCS"));
+		deformationStampAllCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampAllCS"));
 	}
 	return deformationStampAllCS;
 }
@@ -1470,7 +1477,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationScanEvolveCS()
 {
 	if (!deformationScanEvolveCS) {
 		logger::debug("Compiling DeformationUpdateCS:ScanEvolveCS");
-		deformationScanEvolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanEvolveCS"));
+		deformationScanEvolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanEvolveCS"));
 	}
 	return deformationScanEvolveCS;
 }
@@ -1479,7 +1486,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationTileArgsCS()
 {
 	if (!deformationTileArgsCS) {
 		logger::debug("Compiling DeformationUpdateCS:TileArgsCS");
-		deformationTileArgsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TileArgsCS"));
+		deformationTileArgsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TileArgsCS"));
 	}
 	return deformationTileArgsCS;
 }
@@ -1488,7 +1495,7 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
 {
 	if (!deformationScanBermCS) {
 		logger::debug("Compiling DeformationUpdateCS:ScanBermCS");
-		deformationScanBermCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanBermCS"));
+		deformationScanBermCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanBermCS"));
 	}
 	return deformationScanBermCS;
 }
@@ -1497,7 +1504,7 @@ ID3D11ComputeShader* SnowDeformation::GetBermFieldTiledCS()
 {
 	if (!bermFieldTiledCS) {
 		logger::debug("Compiling BermFieldCS:BermTiledCS");
-		bermFieldTiledCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "BermTiledCS"));
+		bermFieldTiledCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "BermTiledCS"));
 	}
 	return bermFieldTiledCS;
 }
@@ -1591,6 +1598,16 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 void SnowDeformation::ClearShaderCache()
 {
+	// The prime worker owns these members while it runs; a debug toggle in
+	// that window no-ops rather than racing it.
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+		return;
+	// Rehash the sources on the next compile, so a recompile after a live
+	// shader edit cannot serve stale cached bytecode.
+	{
+		std::scoped_lock lock(snowShaderCacheMutex);
+		snowSourcesFingerprint.clear();
+	}
 	if (deformationRingCS)
 		deformationRingCS->Release();
 	deformationRingCS = nullptr;

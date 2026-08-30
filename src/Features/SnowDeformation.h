@@ -2343,6 +2343,43 @@ protected:
 	/** @brief Writes the report file and ends the trace. Caller holds loadTraceMutex. */
 	void LoadTraceReportLocked(const char* a_reason);
 
+public:
+	// ---- Shader prime + blob disk cache ----
+	// Runtime D3DCompile of the snow shaders measured ~150 s on the render
+	// thread at first draw (LoadTrace 2026-08-29). All variants now compile on
+	// a worker thread started at the main menu (DataLoaded); the draw entry
+	// points skip while it runs, so a load that beats the prime shows snow a
+	// few seconds late instead of freezing. Compiled bytecode lands in a blob
+	// disk cache keyed on a content fingerprint of every .hlsl/.hlsli under
+	// Data\Shaders plus the exact defines/flags, so an unchanged launch loads
+	// blobs in milliseconds and any source or define change recompiles.
+	// Implemented in SnowDeformation/ShaderPrime.cpp.
+
+	virtual void DataLoaded() override;
+	~SnowDeformation();
+	/** @brief Worker body: every non-debug shader getter once, in visibility order. */
+	void RunShaderPrime();
+	/** @brief 0 = never started (getters compile lazily, pre-prime behaviour); 1 = running (draw entry points skip; ONLY the worker may touch shader members); 2 = done. */
+	std::atomic<int> snowPrimeState = 0;
+	std::thread snowPrimeThread;
+
+	/** @brief Util::CompileShader with the blob disk cache in front. Same contract; every snow shader compiles through this. */
+	ID3D11DeviceChild* CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry = "main");
+	/** @brief Content hash over every shader source under Data\Shaders; cached until ClearShaderCache drops it. */
+	std::string ShaderSourcesFingerprint();
+	/** @brief Loads a cached blob whose stored key matches a_key exactly; null on any mismatch. */
+	winrt::com_ptr<ID3DBlob> ShaderCacheLoad(const std::string& a_key, const std::string& a_file);
+	void ShaderCacheStore(const std::string& a_key, const std::string& a_file, ID3DBlob* a_blob);
+	static uint64_t ShaderKeyHash(std::string_view a_text);
+	/** @brief Compiles the three SmoothNormalsCS variants; shared by the primer and EnsureSmoothedNormals. Implemented in SnowDeformation/Statics.cpp. */
+	bool EnsureSmoothNormalsCS();
+	std::mutex snowShaderCacheMutex;
+	std::string snowSourcesFingerprint;
+	std::atomic<uint32_t> snowShaderCacheHits = 0;
+	std::atomic<uint32_t> snowShaderCacheMisses = 0;
+
+protected:
+
 	/**
 	 * @brief Guards the tile store. SKSE's save, load and revert callbacks arrive
 	 * on the GAME thread while the flush, sweep and inject run on the render

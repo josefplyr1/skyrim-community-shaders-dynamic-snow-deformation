@@ -230,6 +230,8 @@ void SnowDeformation::UpdatePointShadowLights()
 
 void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV)
 {
+	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+		return;
 	// One-shot diagnostics: name the exit taken, so a missing shadow points
 	// straight at its gate.
 	static std::unordered_set<std::string> injectLogged;
