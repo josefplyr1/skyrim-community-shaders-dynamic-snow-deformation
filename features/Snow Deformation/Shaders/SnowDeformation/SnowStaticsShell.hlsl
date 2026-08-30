@@ -1137,19 +1137,15 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float pad = min(skinDepth, 0.8 + camDist * 0.004) * smoothstep(0.25, 2.0, skinEdgeMin);
 		depth = max(depth, pad);
 
-		// Churn: broken lumps on the carved walls. The room factor keeps the dig
-		// under 80% of the cover above the floor even at the slider maximum, so
-		// lumps can never expose the object beneath; fully trampled floors stay
-		// smooth by the same term. floorRef mirrors CarveProfile's own floorDepth
-		// expression - reading its inputs, not re-deriving its profile.
-		float floorRef = max(pad, min(skinDepth, BorderStyle.y * smoothstep(0.5, 8.0, skinDepth)));
-		// ChurnWeight is the landscape shell's own weighting, shared: churn peaks
-		// in the trench and backs off on the berm crest. The room factor is the
-		// object-specific half and stays - the ground can churn into itself, this
-		// cannot dig past the object it stands on.
-		float churnW = ChurnWeight(deform, bermD) * saturate((depth - floorRef) / 10.0);
+		// Churn: broken lumps on carved snow, the landscape shell's weighting
+		// verbatim (ChurnWeight x depth/10) so trench floors read trampled
+		// exactly as the ground's do. The old room factor (headroom above the
+		// floor) zeroed churn AT the floor, and fully trampled road floors
+		// shaded as pristine top snow. The object-exposure guard is now the
+		// pad clamp instead: lumps dig toward the pad, never through it.
+		float churnW = ChurnWeight(deform, bermD) * saturate(depth / 10.0);
 		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
-			depth += ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW;
+			depth = max(depth + ChurnNoise(worldXY) * ObjChurnHeightAmp * churnW, pad);
 
 		// Berm clods: a coarser octave weighted by BermShape rather than the churn
 		// weight, since spoil lands on the crest while churn peaks in the trench.
