@@ -2320,6 +2320,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// simply absent in-game).
 	bool pdMode = ProjPixelEnable > 1.5;
 
+	// Josef's shred rule: where the drawn surface is PLEATED - adjacent
+	// vertices flipping between lifted and grounded, rasterised as a fence
+	// of sliver triangles (the rim fences, the under-cover rifts) - the
+	// shell dissolves and the recolored PD carries the snow look; the two
+	// agree by construction, so what remains is clean recolored surface
+	// instead of shredded geometry. The tell is the SCREEN-SPACE lift
+	// gradient: a coherent dome wall drops the class depth across many
+	// pixels, a shard drops it within one or two. SHARED SCOPE (the pdMode
+	// lesson above): the multiply site is shared code, and the patch is
+	// immune by construction anyway - its Lift is a constant, gradient
+	// zero. Gradient op, so it stays outside all flow control.
+	float pleat = fwidth(input.Lift) / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+	float pleatFade = 1.0 - smoothstep(0.2, 0.45, pleat);
+
 	// Rim wall: where a lifted cap reaches back down to the object's edge it is
 	// near-vertical at any depth, so the steepness gates below would erase it
 	// and the cap would lose its side. The object's top raster separates the
@@ -2499,8 +2513,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// shell's OWN surface; the per-pixel reconstruction only owns the
 		// edges, where the fillet carries the lift down through this
 		// floor's band on its way to zero.
-		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
-		pdCoverage = max(pdCoverage, smoothstep(0.5, 0.85, liftFrac));
+		// The band is ABSOLUTE height now, not a fraction of the class
+		// depth: P3's sheltering lowers a shell's TARGET, and the old
+		// fraction-of-class floor read a half-height sheltered shell as
+		// "edge" forever - the pre-shell gates then owned whole under-roof
+		// areas and the risen snow rendered behind everything again
+		// (Josef's walkway shot). The reconstruction is only ever right
+		// for hugging coats, so anything standing a few units proud owns
+		// its policy by the vertex gates, whatever its class depth.
+		pdCoverage = max(pdCoverage, smoothstep(1.5 * kProjCoatLift, 4.0 * kProjCoatLift, input.Lift));
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
@@ -2538,6 +2559,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Applied after every steepness multiply; the rim wall is exempt from all
 	// of them.
 	pixelCoverage = max(pixelCoverage, shoulderWall);
+	// The shred rule applies LAST among the shape gates - after the rim
+	// wall's exemption and the pdMode hand-off, because the fences ARE at
+	// rims and any earlier multiply would be resurrected by the max above.
+	pixelCoverage *= pleatFade;
 	// Coverage debug: the facing gates' product, and the two seam blends,
 	// captured separately so the rim band's owner is readable at a glance.
 	float dbgFacing = pixelCoverage;
