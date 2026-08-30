@@ -2405,8 +2405,16 @@ public:
 	~SnowDeformation();
 	/** @brief Worker body: every non-debug shader getter once, in visibility order. */
 	void RunShaderPrime();
-	/** @brief 0 = never started (getters compile lazily, pre-prime behaviour); 1 = running (draw entry points skip; ONLY the worker may touch shader members); 2 = done. */
+	/** @brief 0 = never started (getters compile lazily, pre-prime behaviour); 1 = running; 2 = done. While running, member ownership is split by snowPrimePhase. */
 	std::atomic<int> snowPrimeState = 0;
+	/** @brief Groups the worker has PUBLISHED (release; gates read acquire): 1 = landscape shell + every compute, 2 = object snow, 3 = effects. The worker never touches a published group's members again; the render thread never touches an unpublished group's. */
+	std::atomic<int> snowPrimePhase = 0;
+	/** @brief True while the prime still owns this group's shader members - the render path must skip. */
+	bool SnowShadersPending(int a_group) const
+	{
+		return snowPrimeState.load(std::memory_order_acquire) == 1 &&
+		       snowPrimePhase.load(std::memory_order_acquire) < a_group;
+	}
 	std::thread snowPrimeThread;
 
 	/** @brief Util::CompileShader with the blob disk cache in front. Same contract; every snow shader compiles through this. */

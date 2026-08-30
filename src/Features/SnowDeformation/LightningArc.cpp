@@ -165,7 +165,7 @@ void SnowDeformation::DrawLightningArcs()
 {
 	if (!settings.EnableSnowDeformation || !settings.EnableLightningArcs)
 		return;
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+	if (SnowShadersPending(3))
 		return;
 	if (lightningArcs.empty())
 		return;

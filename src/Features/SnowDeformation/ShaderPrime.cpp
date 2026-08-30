@@ -208,12 +208,17 @@ SnowDeformation::~SnowDeformation()
 void SnowDeformation::RunShaderPrime()
 {
 	const auto start = std::chrono::steady_clock::now();
-	ShaderSourcesFingerprint();
 
-	// Visibility order: the landscape shell is the whole ground, the statics
-	// skins dress it, the computes animate it. A quit mid-prime bails between
-	// items so shutdown never waits on more than one compile.
-	const std::function<void()> primeSteps[] = {
+	// Three groups, in the order the player sees them, each PUBLISHED through
+	// snowPrimePhase the moment it completes so the gated render paths
+	// unlock per group: on a cold cache the snowfield appears when ITS
+	// shaders exist, not when all of them do. Ownership contract: the worker
+	// never touches a published group's members again, and the render thread
+	// never touches an unpublished group's (SnowShadersPending). A quit
+	// mid-prime bails between items so shutdown never waits on more than one
+	// compile.
+	const std::function<void()> groundSteps[] = {
+		[&] { ShaderSourcesFingerprint(); },
 		[&] { GetShellVS(); },
 		[&] { GetShellPS(); },
 		[&] { GetShellHS(); },
@@ -224,11 +229,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellShadowVS(); },
 		[&] { GetShellPSNoDepth(); },
 		[&] { GetDepthSyncCS(); },
-		[&] { EnsureStaticsShaders(); },
-		[&] { GetPatchShadowVS(); },
-		[&] { EnsureSmoothNormalsCS(); },
-		[&] { GetLightningArcVS(); },
-		[&] { GetLightningArcPS(); },
 		[&] { GetExclusionFieldCS(); },
 		[&] { GetBermFieldCS(); },
 		[&] { GetBermFieldTiledCS(); },
@@ -242,11 +242,34 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetUndulationFieldCS(); },
 		[&] { GetWindowFillCS(); },
 	};
-	for (const auto& step : primeSteps) {
-		if (globals::game::quitGame)
-			return;
-		step();
-	}
+	const std::function<void()> objectSteps[] = {
+		[&] { EnsureStaticsShaders(); },
+		[&] { GetPatchShadowVS(); },
+		[&] { EnsureSmoothNormalsCS(); },
+	};
+	const std::function<void()> effectSteps[] = {
+		[&] { GetLightningArcVS(); },
+		[&] { GetLightningArcPS(); },
+	};
+
+	auto runGroup = [&](const std::function<void()>* a_steps, size_t a_count, int a_phase, const char* a_name) {
+		for (size_t i = 0; i < a_count; i++) {
+			if (globals::game::quitGame)
+				return false;
+			a_steps[i]();
+		}
+		snowPrimePhase.store(a_phase, std::memory_order_release);
+		logger::info("[SNOW DEFORMATION] shader prime: {} ready at {:.1f} s", a_name,
+			std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+		return true;
+	};
+
+	if (!runGroup(groundSteps, std::size(groundSteps), 1, "ground (shell + computes)"))
+		return;
+	if (!runGroup(objectSteps, std::size(objectSteps), 2, "object snow"))
+		return;
+	if (!runGroup(effectSteps, std::size(effectSteps), 3, "effects"))
+		return;
 
 	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	const auto hits = snowShaderCacheHits.load(std::memory_order_relaxed);
@@ -254,3 +277,4 @@ void SnowDeformation::RunShaderPrime()
 	logger::info("[SNOW DEFORMATION] shader prime done in {:.1f} s ({} blobs from cache, {} compiled fresh)", seconds, hits, misses);
 	LoadTraceMark(std::format("shader prime done in {:.1f} s ({} cached / {} compiled)", seconds, hits, misses));
 }
+

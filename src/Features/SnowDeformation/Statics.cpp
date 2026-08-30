@@ -2146,6 +2146,8 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 void SnowDeformation::DrawCapturedStatics()
 {
+	if (SnowShadersPending(2))
+		return;
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty())

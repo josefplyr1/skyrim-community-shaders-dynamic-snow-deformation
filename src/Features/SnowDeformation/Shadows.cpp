@@ -230,7 +230,7 @@ void SnowDeformation::UpdatePointShadowLights()
 
 void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV)
 {
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+	if (SnowShadersPending(1))
 		return;
 	// One-shot diagnostics: name the exit taken, so a missing shadow points
 	// straight at its gate.
@@ -575,7 +575,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// zeroed, so the standard skin position chain lands in light
 		// space untouched. The list and the height maps are one frame
 		// stale - static geometry, invisible.
-		if (skinShadowVS && !capturedStatics.empty()) {
+		if (!SnowShadersPending(2) && skinShadowVS && !capturedStatics.empty()) {
 			context->VSSetShader(skinShadowVS, nullptr, 0);
 			ID3D11Buffer* skinCB1 = staticsCB->CB();
 			context->VSSetConstantBuffers(1, 1, &skinCB1);
@@ -670,7 +670,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// inside the saved t10-t13 range) is the patch's own addition.
 		// Same gate as the visible patch draw, one frame stale like the
 		// skins.
-		if (auto* patchCastVS = GetPatchShadowVS();
+		if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
 			patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
 			heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
 			(settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {

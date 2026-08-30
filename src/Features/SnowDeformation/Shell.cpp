@@ -546,7 +546,7 @@ void SnowDeformation::DrawShell()
 {
 	if (!settings.EnableSnowDeformation)
 		return;
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+	if (SnowShadersPending(1))
 		return;
 	LoadTraceScope _loadTrace(this, "Shell: DrawShell");
 
@@ -792,7 +792,9 @@ void SnowDeformation::DrawShell()
 
 	// Rasterize this frame's captured statics top-down into the object
 	// height windows, then restore the viewport for the screen-space passes.
-	if (EnsureStaticsShaders())
+	// Waits for the prime's object group: EnsureStaticsShaders would
+	// otherwise compile its ten variants synchronously right here.
+	if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);

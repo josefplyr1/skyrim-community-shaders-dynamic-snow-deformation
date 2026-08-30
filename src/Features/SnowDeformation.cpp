@@ -851,11 +851,12 @@ void SnowDeformation::Prepass()
 
 	UpdateActiveWorldspace();
 
-	// The shader prime owns every shader member while it runs; nothing on the
-	// render thread may reach a getter (or read the pointers it writes) until
-	// it finishes. The skipped frames resume exactly like a long hitch - the
-	// window-jump and trench-inject paths already handle the catch-up.
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
+	// While the prime owns a group's shader members, its render paths skip;
+	// groups unlock as the worker publishes them (SnowShadersPending), so
+	// the snowfield appears when ITS shaders exist rather than when all
+	// do. Skipped frames resume exactly like a long hitch - the window-
+	// jump and trench-inject paths already handle the catch-up.
+	if (SnowShadersPending(1))
 		return;
 
 	if (settings.EnableSnowDeformation && globals::state->inWorld) {
