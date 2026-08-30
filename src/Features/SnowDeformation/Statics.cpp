@@ -872,6 +872,35 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 	return blob;
 }
 
+void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
+{
+	// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
+	// kPatchBandVerts in SnowStaticsShell.hlsl), so the vertex shader
+	// places about the centre rather than stepping from a corner, and the
+	// snap has to be the COARSEST band step - snapping to the fine step
+	// would leave outer vertices off their own band's lattice and quad
+	// widths would flip as the camera moves.
+	a_scb.WorldRow0 = {
+		std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
+		std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
+	};
+	a_scb.ObjectsDepth = settings.ObjectsSnowDepth;
+	a_scb.RoundedDepth = settings.ObjectsSnowDepth;
+	a_scb.HeightWindowCenter = heightWindowCenter;
+	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
+	// The march's footprint test (t11 in the visible pass).
+	a_scb.HasObjectTop = 1.0f;
+	// The REAL setting, not the forced 1.0 this used to carry: the patch VS
+	// needs it to tell a road-owned column from a rock that only inherited
+	// a carvable depth through the raster's MAX blend. The per-pixel gate
+	// that the 1.0 was suppressing is now a compile-time constant in the
+	// PATCH pixel shader instead.
+	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+	// Global gate here, not a per-draw class: the patch is one draw and
+	// reads the road bit per texel from the raster's G channel.
+	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+}
+
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 {
 	// Lazy like GetShellShadowVS: the shadow pass runs before DrawShell has
@@ -2479,32 +2508,10 @@ void SnowDeformation::DrawCapturedStatics()
 		                                               nullptr;
 		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
 
+		// ONE recipe with the shadow caster (FillPatchDrawCB): the caster must
+		// be the exact surface this draw renders.
 		StaticsCB scb{};
-		// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
-		// kPatchBandVerts in SnowStaticsShell.hlsl), so the vertex shader
-		// places about the centre rather than stepping from a corner, and the
-		// snap has to be the COARSEST band step - snapping to the fine step
-		// would leave outer vertices off their own band's lattice and quad
-		// widths would flip as the camera moves.
-		scb.WorldRow0 = {
-			std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
-			std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
-		};
-		scb.ObjectsDepth = settings.ObjectsSnowDepth;
-		scb.RoundedDepth = settings.ObjectsSnowDepth;
-		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
-		// The march's footprint test (see the t11 bind above).
-		scb.HasObjectTop = 1.0f;
-		// The REAL setting, not the forced 1.0 this used to carry: the patch VS
-		// needs it to tell a road-owned column from a rock that only inherited
-		// a carvable depth through the raster's MAX blend. The per-pixel gate
-		// that the 1.0 was suppressing is now a compile-time constant in the
-		// PATCH pixel shader instead.
-		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
-		// Global gate here, not a per-draw class: the patch is one draw and
-		// reads the road bit per texel from the raster's G channel.
-		scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+		FillPatchDrawCB(scb);
 		staticsCB->Update(scb);
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };

@@ -1574,6 +1574,8 @@ public:
 	ID3D11ShaderResourceView* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
 	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
 	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const;
+	/** @brief ONE StaticsCB recipe for the trench patch, shared by the visible patch draw and its shadow caster for the same drift reason as FillSkinDrawCB. Implemented in SnowDeformation/Statics.cpp. */
+	void FillPatchDrawCB(StaticsCB& a_scb) const;
 
 	// ---- Top-down object height windows ----
 

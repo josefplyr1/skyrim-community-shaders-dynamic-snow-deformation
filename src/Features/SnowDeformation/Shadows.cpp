@@ -638,6 +638,43 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				context->DrawIndexed(indexCount, 0, 0);
 			}
 		}
+
+		// The TRENCH PATCH casts too - attempt two of "road snow casts
+		// shadows" (Josef: trench walls throw no shadow onto their own
+		// floor). Attempt one stretched shadows across the surface because
+		// the caster pass zeroes the camera adjust and the distance-based
+		// precision pad ballooned to full depth - an uncarved slab. The
+		// PATCH+SNOW_SHADOW_CAST VS measures the pad from the snapped patch
+		// centre instead, kills casters under ~4 units of depth (trampled
+		// floors never self-shadow) and fades out over the same 40-70 m
+		// band as the skins. SV_VertexID grid, no IA state; t0 terrain,
+		// t1 deformation and t14 berm bake are already bound above for the
+		// shell grid, t11/t13 by the skin block; t12 (skin-depth raster,
+		// inside the saved t10-t13 range) is the patch's own addition.
+		// Same gate as the visible patch draw, one frame stale like the
+		// skins.
+		if (auto* patchCastVS = GetPatchShadowVS();
+			patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
+			heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
+			(settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
+			context->VSSetShader(patchCastVS, nullptr, 0);
+			ID3D11Buffer* patchCB1 = staticsCB->CB();
+			context->VSSetConstantBuffers(1, 1, &patchCB1);
+			ID3D11ShaderResourceView* patchCastSRVs[3] = {
+				heightTopRaw[heightCurrent]->srv.get(),
+				heightSkinDepth->srv.get(),
+				objectSnowCone ? objectSnowCone->srv.get() : nullptr
+			};
+			context->VSSetShaderResources(11, 3, patchCastSRVs);
+			context->IASetInputLayout(nullptr);
+			ID3D11Buffer* patchNullVB = nullptr;
+			UINT vbZero = 0;
+			context->IASetVertexBuffers(0, 1, &patchNullVB, &vbZero, &vbZero);
+			StaticsCB pscb{};
+			FillPatchDrawCB(pscb);
+			staticsCB->Update(pscb);
+			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		}
 	}
 	globals::profiler->EndPass();
 
