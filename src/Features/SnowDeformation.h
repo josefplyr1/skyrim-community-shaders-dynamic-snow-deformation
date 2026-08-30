@@ -477,6 +477,8 @@ public:
 		float PileHeightRatio = 1.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
 		float SkyExposurePct = 50.0f;
+		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
+		float SnowSettlingPct = 50.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1690,6 +1692,8 @@ public:
 	ID3D11ComputeShader* objectConeCS = nullptr;
 	/** @brief P3: bakes the half-res sky-openness field from the layer-1 tops (ObjectSkyOpenCS). */
 	ID3D11ComputeShader* objectSkyOpenCS = nullptr;
+	/** @brief P4: one Jacobi settling iteration over a cone depth field (ObjectConeDiffuseCS). */
+	ID3D11ComputeShader* objectConeDiffuseCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
@@ -1720,7 +1724,9 @@ public:
 
 		/** @brief Settings::MeldCoPlanar - >0.5: the seed's drop-bridge reaches 3 texels so co-planar surfaces a sliver apart meld; 0: no bridging, every shell clings to its own raster edge. */
 		float MeldPlanes;
-		float padHeight[3];
+		/** @brief P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields (Settings::SnowSettlingPct / 100 * 0.5; 0 = off). */
+		float DiffuseLambda;
+		float padHeight[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 	ConstantBuffer* heightProcessCB = nullptr;

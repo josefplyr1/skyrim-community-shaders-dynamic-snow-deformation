@@ -104,6 +104,7 @@
 	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
 	X(SkyExposurePct) \
+	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \

@@ -1643,6 +1643,8 @@
     "feature.snow_deformation.snow_borders_tooltip": "How the shell behaves where two texture classes with different snow depths meet (deep snow next to mud, roads, coast...).",
     "feature.snow_deformation.snow_refill": "Snow Refill",
     "feature.snow_deformation.snow_refill_tooltip": "How compressed snow recovers, and how deep the layer grows while it snows.",
+    "feature.snow_deformation.snow_settling": "Snow Settling",
+    "feature.snow_deformation.snow_settling_tooltip": "Lets the object snow relax under its own weight before it is drawn. Sharp dome rims soften, and where two shells almost touch - stones in a pile, boards a sliver apart - the snow arches partway across the gap instead of meeting in a hard black crack. Higher settles more; 0 turns it off and every shell keeps its raw shape.",
     "feature.snow_deformation.snow_slumping": "Snow Slumping",
     "feature.snow_deformation.snow_slumping_tooltip": "Snow dug away on BOTH sides loses its support and settles about halfway into a low uneven bump, so heavy traffic reads as one churned channel instead of a comb of full-height fins. Trench walls and open snow never move. 0 = off; higher = faster settling.",
     "feature.snow_deformation.snow_texture_path": "Shell Snow Texture",

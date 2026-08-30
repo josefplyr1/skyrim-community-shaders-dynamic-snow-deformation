@@ -1090,6 +1090,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
 	if (!objectSkyOpenCS)
 		objectSkyOpenCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectSkyOpenCS"));
+	if (!objectConeDiffuseCS)
+		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1238,6 +1240,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
 	processData.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	processData.MeldPlanes = settings.MeldCoPlanar ? 1.0f : 0.0f;
+	// P4: lambda 0..0.5 - the stability bound for the 4-neighbour Jacobi.
+	processData.DiffuseLambda = std::clamp(settings.SnowSettlingPct, 0.0f, 100.0f) * 0.005f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -1812,6 +1816,26 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetShaderResources(3, 1, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 
+		// P4: settle a finished cone - TWO Jacobi diffusion passes. Exactly
+		// two, and inside the same ping-pong: the pass count must stay even
+		// so the result lands back in the cone's own texture (the kConeSteps
+		// parity invariant).
+		auto settleCone = [&](Texture2D*& a_in, Texture2D*& a_out) {
+			if (!objectConeDiffuseCS || settings.SnowSettlingPct <= 0.5f)
+				return;
+			context->CSSetShader(objectConeDiffuseCS, nullptr, 0);
+			for (int settleI = 0; settleI < 2; settleI++) {
+				ID3D11ShaderResourceView* settleSRV = a_in->srv.get();
+				ID3D11UnorderedAccessView* settleUAV = a_out->uav.get();
+				context->CSSetShaderResources(0, 1, &settleSRV);
+				context->CSSetUnorderedAccessViews(0, 1, &settleUAV, nullptr);
+				context->Dispatch(dispatchDim, dispatchDim, 1);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+				std::swap(a_in, a_out);
+			}
+		};
+
 		context->CSSetShader(objectConeCS, nullptr, 0);
 		Texture2D* objIn = objectSnowCone;
 		Texture2D* objOut = heightScratch;
@@ -1827,6 +1851,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 			std::swap(objIn, objOut);
 		}
+		settleCone(objIn, objOut);
 
 		// S4 phase 2: the same seed + repose chain over each PEELED layer
 		// top, so every below-top plane gets its own rims and distances.
@@ -1868,6 +1893,7 @@ void SnowDeformation::RenderObjectHeightMap()
 				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 				std::swap(obj2In, obj2Out);
 			}
+			settleCone(obj2In, obj2Out);
 		}
 
 		// P3: bake the sky-openness field from the layer-1 tops, after the

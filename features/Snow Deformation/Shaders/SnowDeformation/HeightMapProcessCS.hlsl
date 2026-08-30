@@ -50,7 +50,10 @@ cbuffer HeightProcessCB : register(b0)
 	// 0 = no bridging - every shell clings to its own raster edge and
 	// nearby shells just clip into each other.
 	float MeldPlanes;
-	float3 padHeight;
+	// P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour
+	// average, applied to the finished cone depth fields (0 = off).
+	float DiffuseLambda;
+	float2 padHeight;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -427,4 +430,31 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		occ += o;
 	}
 	OutA[dtid.xy] = 1.0 - occ * (1.0 / 8.0);
+}
+
+// P4 (edge-research study): SETTLING - one Jacobi diffusion iteration over a
+// cone DEPTH field. Every method in the accumulation literature carries a
+// diffusion/blur step; this pipeline never had one. On a depth field it is
+// safe by the Bridging law (absolute-height fields are structurally noisy;
+// per-plane depth fields are immune): it rounds the rims' knees, pulls the
+// dip between two near-touching shells partway up so their domes arch toward
+// each other instead of meeting in a black slit, and denoises raster jitter
+// - which also feeds the crest-freeze tap ring a smoother field. The cone
+// has no sentinels (0 at rims and off-footprint), so plain averaging needs
+// no guards; lambda <= 0.5 is unconditionally stable for this stencil.
+[numthreads(8, 8, 1)] void ObjectConeDiffuseCS(uint3 dtid
+											   : SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+	float h = InA[dtid.xy];
+	int2 c = int2(dtid.xy);
+	int2 mx = int2(dims) - 1;
+	float avg = (InA[uint2(clamp(c + int2(1, 0), int2(0, 0), mx))] +
+					InA[uint2(clamp(c - int2(1, 0), int2(0, 0), mx))] +
+					InA[uint2(clamp(c + int2(0, 1), int2(0, 0), mx))] +
+					InA[uint2(clamp(c - int2(0, 1), int2(0, 0), mx))]) *
+	            0.25;
+	OutA[dtid.xy] = lerp(h, avg, saturate(DiffuseLambda));
 }

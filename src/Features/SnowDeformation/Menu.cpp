@@ -255,6 +255,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSkyExp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("sky_exposure_tooltip"), "Snow falls from the sky, so how much a surface collects depends on how much sky it can see. Open tops keep their full depth; a ledge under a roof or railing, and pockets shadowed by taller neighbours, thin toward a dusting instead of wearing the same layer as everything else. The strength of that thinning - 0 turns it off and every surface gets the full depth again."));
 
+		ImGui::SliderFloat(T(TKEY("snow_settling"), "Snow Settling"), &settings.SnowSettlingPct, 0.0f, 100.0f, "%.0f%%");
+		if (auto _ttSettle = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_settling_tooltip"), "Lets the object snow relax under its own weight before it is drawn. Sharp dome rims soften, and where two shells almost touch - stones in a pile, boards a sliver apart - the snow arches partway across the gap instead of meeting in a hard black crack. Higher settles more; 0 turns it off and every shell keeps its raw shape."));
+
 		ImGui::Checkbox(T(TKEY("meld_coplanar"), "Meld Co-Planar Surfaces"), &settings.MeldCoPlanar);
 		if (auto _ttMeld = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("meld_coplanar_tooltip"), "A/B: ON = surfaces at the same height separated by a small horizontal gap (stairs meeting a walkway) meld into one snow dome across the gap. OFF = no melding at all: every object's shell rolls off at its own edges, and shells that happen to sit near each other simply clip together."));
