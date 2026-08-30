@@ -505,6 +505,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// the clearings, or a melted camp still casts full-depth snow shadows.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	context->VSSetShaderResources(15, 1, &exclusionSRV);
+	// And the baked undulation at t29, or the caster's dunes read zero and
+	// its geometry parts company with the drawn shell's.
+	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
+	context->VSSetShaderResources(29, 1, &undulationSRV);
 	ID3D11Buffer* cb0 = shellCB->CB();
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -729,6 +733,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
+		context->VSSetShaderResources(29, 1, &nullBermSRV);
 		// The skin casters' map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)

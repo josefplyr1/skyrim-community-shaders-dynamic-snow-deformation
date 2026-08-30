@@ -191,6 +191,10 @@ cbuffer ShellCB : register(b0)
 	// teeth strength; zw spare.
 	float4 RimStyle;
 
+	// Baked undulation window: xy = world centre, z = 1/half-extent,
+	// w > 0.5 when the bake is live (UndulationFieldCS, t29).
+	float4 UndulationFieldWindow;
+
 	// Toroidal deformation-map addressing: physical position of logical
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
@@ -266,6 +270,10 @@ Texture2D<float2> ExclusionFieldMap : register(t15);
 // The game's own frost impact art, painted onto crusted snow.
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
+
+// Baked undulation field (UndulationFieldCS): x = amp-free dune height,
+// yz = its +-12-unit shading gradient, over UndulationFieldWindow.
+Texture2D<float4> UndulationFieldMap : register(t29);
 
 SamplerState SnowSampler : register(s0);
 
@@ -1048,7 +1056,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += BowWaveHeight(GridOrigin + gridLocal, gridLocal, deformation, uncarved);
-			depth += Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
+			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 			// Churn scales away on thin cover: the /10 keeps the dig under 80% of
 			// local depth even at the slider's 8-unit maximum.
 			depth += ChurnNoise(GridOrigin + gridLocal) * ChurnHeightAmp * ChurnWeight(deformation, bermD) * saturate(depth / 10.0);
@@ -1781,12 +1789,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float undScale = saturate(pixelDepth / 8.0);
 	[branch] if (undScale > 0.001)
 	{
-		const float uStep = 12.0;
-		float uXP = Undulation(worldXYPS + float2(uStep, 0.0));
-		float uXN = Undulation(worldXYPS - float2(uStep, 0.0));
-		float uYP = Undulation(worldXYPS + float2(0.0, uStep));
-		float uYN = Undulation(worldXYPS - float2(0.0, uStep));
-		gradZ += float2(uXP - uXN, uYP - uYN) / (2.0 * uStep) * undScale;
+		gradZ += UndulationGradSampled(worldXYPS) * undScale;
 	}
 
 	// Churn gradient (same field the geometry displaces by).
@@ -2106,7 +2109,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 			sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
 			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			float sh = st.x + sampleDepth + UndulationSampled(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{
 				float sf = SampleObjectHeight(GridOrigin + sampleLocal);

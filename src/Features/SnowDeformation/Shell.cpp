@@ -727,6 +727,9 @@ void SnowDeformation::DrawShell()
 	// The bake is only usable once its texture exists AND Prepass has filled it
 	// this frame; the A/B toggle suppresses both together.
 	cbData.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;
+	cbData.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
+		1.0f / kUndulationFieldHalfExtent,
+		(undulationFieldValid && !shellUndulationBakeDisabled) ? 1.0f : 0.0f };
 	// Wide exclusion field window: filled provisionally here and RE-UPLOADED
 	// below, after the height pass has rebaked the field and moved its centre.
 	// Sampling this frame's texture through last frame's centre offsets the
@@ -903,6 +906,9 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
+	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
+	context->VSSetShaderResources(29, 1, &undulationSRV);
+	context->PSSetShaderResources(29, 1, &undulationSRV);
 
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* frostSRVs[] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
@@ -1043,6 +1049,7 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(11, 2, objectCapSRVs);
 		context->DSSetShaderResources(14, 1, &bermSRV);
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
+		context->DSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
 

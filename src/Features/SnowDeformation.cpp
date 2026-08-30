@@ -412,6 +412,37 @@ void SnowDeformation::SetupResources()
 	}
 
 	{
+		// Baked undulation field: amp-free height + shading gradient in half
+		// floats. Camera-snapped and settings-keyed, so it rebakes on
+		// recenter/Spacing change rather than per frame.
+		D3D11_TEXTURE2D_DESC undDesc = {
+			.Width = kUndulationFieldDim,
+			.Height = kUndulationFieldDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC undSrvDesc = {
+			.Format = undDesc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC undUavDesc = {
+			.Format = undDesc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		undulationFieldTexture = new Texture2D(undDesc, "SnowDeformation::UndulationField");
+		undulationFieldTexture->CreateSRV(undSrvDesc);
+		undulationFieldTexture->CreateUAV(undUavDesc);
+		undulationFieldCB = new ConstantBuffer(ConstantBufferDesc<UndulationFieldCB>(), "SnowDeformation::UndulationFieldCB");
+		undulationFieldValid = false;
+	}
+
+	{
 		D3D11_TEXTURE2D_DESC terrainDesc = {
 			.Width = kShellWindowDim,
 			.Height = kShellWindowDim,
@@ -827,8 +858,10 @@ void SnowDeformation::Prepass()
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 
-	if (settings.EnableSnowDeformation && globals::state->inWorld)
+	if (settings.EnableSnowDeformation && globals::state->inWorld) {
 		UpdateShellTerrainWindow();
+		UpdateUndulationField();
+	}
 
 	// The overlay keeps the map simulation (stamps, scroll, refill) running
 	// while the feature is disabled, so path tracking can be debugged with
@@ -1509,6 +1542,70 @@ ID3D11ComputeShader* SnowDeformation::GetBermFieldTiledCS()
 	return bermFieldTiledCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetUndulationFieldCS()
+{
+	if (!undulationFieldCS) {
+		logger::debug("Compiling UndulationFieldCS");
+		undulationFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0"));
+	}
+	return undulationFieldCS;
+}
+
+void SnowDeformation::UpdateUndulationField()
+{
+	auto context = globals::d3d::context;
+	if (!undulationFieldTexture || !undulationFieldCB || !context) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::UndulationField");
+		return;
+	}
+
+	// Snap the centre so world-texel alignment is identical across rebakes
+	// (no swimming); the +-16384 window then covers the shell grid's
+	// +-15744 at any offset the snap allows.
+	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const float2 snapped = {
+		std::round(eye.x / kUndulationFieldSnap) * kUndulationFieldSnap,
+		std::round(eye.y / kUndulationFieldSnap) * kUndulationFieldSnap
+	};
+	const float scale = std::max(settings.UndulationSpacing, 0.05f);
+
+	const bool dirty = !undulationFieldValid ||
+	                   snapped.x != undulationFieldCenter.x || snapped.y != undulationFieldCenter.y ||
+	                   scale != undulationFieldBakedScale;
+	if (!dirty) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::UndulationField");
+		return;
+	}
+	auto* cs = GetUndulationFieldCS();
+	if (!cs) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::UndulationField");
+		return;
+	}
+
+	globals::profiler->BeginPass("SnowDeformation::UndulationField");
+	UndulationFieldCB cbData{};
+	cbData.FieldOriginWorld = { snapped.x - kUndulationFieldHalfExtent + 0.5f * kUndulationFieldTexel,
+		snapped.y - kUndulationFieldHalfExtent + 0.5f * kUndulationFieldTexel };
+	cbData.FieldTexel = kUndulationFieldTexel;
+	cbData.FieldScale = scale;
+	undulationFieldCB->Update(cbData);
+
+	ID3D11Buffer* cb = undulationFieldCB->CB();
+	context->CSSetConstantBuffers(0, 1, &cb);
+	ID3D11UnorderedAccessView* uav = undulationFieldTexture->uav.get();
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(cs, nullptr, 0);
+	context->Dispatch(kUndulationFieldDim / 8, kUndulationFieldDim / 8, 1);
+	ID3D11UnorderedAccessView* nullUav = nullptr;
+	context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+	globals::profiler->EndPass();
+
+	undulationFieldCenter = snapped;
+	undulationFieldBakedScale = scale;
+	undulationFieldValid = true;
+}
+
 uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 {
 	const int dim = (int)deformMapDim;
@@ -1632,6 +1729,11 @@ void SnowDeformation::ClearShaderCache()
 	if (bermFieldTiledCS)
 		bermFieldTiledCS->Release();
 	bermFieldTiledCS = nullptr;
+	if (undulationFieldCS)
+		undulationFieldCS->Release();
+	undulationFieldCS = nullptr;
+	// The next UpdateUndulationField rebakes with the fresh CS.
+	undulationFieldValid = false;
 	if (bermFieldCS)
 		bermFieldCS->Release();
 	bermFieldCS = nullptr;

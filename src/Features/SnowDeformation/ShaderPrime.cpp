@@ -239,6 +239,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetDeformationScanEvolveCS(); },
 		[&] { GetDeformationTileArgsCS(); },
 		[&] { GetDeformationScanBermCS(); },
+		[&] { GetUndulationFieldCS(); },
 		[&] { GetWindowFillCS(); },
 	};
 	for (const auto& step : primeSteps) {

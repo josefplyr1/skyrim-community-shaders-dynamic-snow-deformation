@@ -731,6 +731,41 @@ public:
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0]->srv.get(); }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
+
+	// ---- Baked undulation field ----
+	// The dune field is a pure function of world XY and the Spacing slider,
+	// so it bakes: height + the +-12-unit shading gradient (amp-free; the
+	// strength slider stays a live multiplier) into a camera-snapped window,
+	// rebaked only on recenter or a Spacing change. Kills one two-octave
+	// eval per vertex/march tap and four per shaded pixel on both shells.
+
+	/** @brief 2048 texels of 16 world units: +-16384 around the snapped centre covers the shell grid's +-15744 at every snap offset; taps beyond (distant statics) fall back to the live eval. */
+	static constexpr uint32_t kUndulationFieldDim = 2048;
+	static constexpr float kUndulationFieldTexel = 16.0f;
+	static constexpr float kUndulationFieldHalfExtent = kUndulationFieldDim * kUndulationFieldTexel * 0.5f;
+	/** @brief Recenter grid; a multiple of the texel so world-texel alignment never swims across rebakes. */
+	static constexpr float kUndulationFieldSnap = 512.0f;
+
+	/** @brief x = amp-free height, yz = shading gradient. */
+	Texture2D* undulationFieldTexture = nullptr;
+	ID3D11ComputeShader* undulationFieldCS = nullptr;
+	ID3D11ComputeShader* GetUndulationFieldCS();
+	struct alignas(16) UndulationFieldCB
+	{
+		float2 FieldOriginWorld;
+		float FieldTexel;
+		float FieldScale;
+	};
+	STATIC_ASSERT_ALIGNAS_16(UndulationFieldCB);
+	ConstantBuffer* undulationFieldCB = nullptr;
+	/** @brief World centre of the current bake; meaningless while !undulationFieldValid. */
+	float2 undulationFieldCenter = { 0.0f, 0.0f };
+	bool undulationFieldValid = false;
+	/** @brief UndulationScale the field was baked at; a Spacing change rebakes. */
+	float undulationFieldBakedScale = -1.0f;
+	/** @brief Rebakes on recenter/Spacing change; no-ops when current. Called once per frame from Prepass. */
+	void UpdateUndulationField();
+	ID3D11ShaderResourceView* GetUndulationFieldSRV() const { return undulationFieldTexture ? undulationFieldTexture->srv.get() : nullptr; }
 	/** @brief World XY of the corner of texel (0,0) of the current deformation window. */
 	float2 GetWindowOrigin() const { return windowOrigin; }
 
@@ -969,6 +1004,9 @@ public:
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
 
+		/** @brief Baked undulation window (UndulationFieldCS, t29): xy = world centre, z = 1/half-extent, w > 0.5 when the bake is live. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		float4 UndulationFieldWindow;
+
 		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 DeformMapOrigin;
 		DirectX::XMINT2 DeformTorusPad;
@@ -1137,6 +1175,8 @@ public:
 
 	/** @brief A/B measurement: skips the berm field bake and returns the shells to recomputing the 17-tap average per pixel. Runtime-only; the shell renders the same either way. */
 	bool shellBermBakeDisabled = false;
+	/** @brief Debug A/B: zeroes UndulationFieldWindow.w so both shells fall back to the live two-octave eval; the bake keeps updating underneath. */
+	bool shellUndulationBakeDisabled = false;
 
 	/** @brief Clamp state the cached shellPS was compiled against; a mismatch releases it. The clamp is a debug A/B now (shellDepthClampDisabled), not a setting. */
 	bool shellDepthClampCompiled = true;

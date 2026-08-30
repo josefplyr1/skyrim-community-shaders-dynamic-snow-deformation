@@ -10,31 +10,19 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale, BorderStyle), DeformationMap (t1) with the shell's
-// DeformTexel torus helper, BermFieldMap
-// (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17), SnowSampler
+// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle), DeformationMap
+// (t1) with the shell's DeformTexel torus helper, BermFieldMap
+// (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17),
+// UndulationFieldMap (t29), SnowSampler
 // (PS) and the TerrainVariation include - all declared before this include.
 // Deliberately NOT shared: the deformation .x samplers (the landscape
 // smooths bicubic, statics stays bilinear by cost) and BermFieldTapped,
 // which rides each shell's own sampler.
 
-// World-anchored value noise, shared by the border domain warp, the dune
-// undulation and the churn (and any other organic-edge shaping).
-float ShapeNoiseHash(float2 cell)
-{
-	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-	p3 += dot(p3, p3.yzx + 33.33);
-	return frac((p3.x + p3.y) * p3.z);
-}
-
-float ShapeNoise(float2 p)
-{
-	float2 i = floor(p);
-	float2 f = frac(p);
-	f = f * f * (3.0 - 2.0 * f);
-	return lerp(lerp(ShapeNoiseHash(i), ShapeNoiseHash(i + float2(1, 0)), f.x),
-		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
-}
+// ShapeNoiseHash / ShapeNoise / UndulationNorm live in SnowNoise.hlsli so
+// the undulation bake CS shares the exact functions without the ShellCB
+// context. Callers here are unchanged.
+#include "SnowDeformation/SnowNoise.hlsli"
 
 // Two-octave domain warp for snow boundaries: a capped 37-unit coarse wander
 // plus a fine 8-unit octave for raggedness. Moves WHERE a border falls without
@@ -244,9 +232,65 @@ static const float kFireMeltFloor = 1.0;
 
 float Undulation(float2 worldXY)
 {
-	float2 p = worldXY / max(UndulationScale, 0.05);
-	float n = ShapeNoise(p / 340.0) * 0.72 + ShapeNoise(p / 110.0) * 0.28;
-	return (n - 0.5) * 2.0 * UndulationAmp;
+	return UndulationNorm(worldXY, UndulationScale) * UndulationAmp;
+}
+
+// ---- Baked undulation (UndulationFieldCS) ----
+// Height (x) and the +-12-unit shading gradient (yz), amp-free, in a
+// camera-snapped world window: UndulationFieldWindow = (centre XY,
+// 1/half-extent, bake live > 0.5). Same manual-bilinear convention as
+// BermFieldBaked, so every stage reads it without a sampler. The live
+// Undulation() path stays compiled underneath: the fallback for taps
+// outside the window (distant statics), and the debug A/B.
+
+float3 UndulationBakedHG(float2 worldXY)
+{
+	float2 uv = (worldXY - UndulationFieldWindow.xy) * UndulationFieldWindow.z * 0.5 + 0.5;
+	float2 dims;
+	UndulationFieldMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	float3 s00 = UndulationFieldMap.Load(int3(t0, 0)).xyz;
+	float3 s10 = UndulationFieldMap.Load(int3(t0 + int2(1, 0), 0)).xyz;
+	float3 s01 = UndulationFieldMap.Load(int3(t0 + int2(0, 1), 0)).xyz;
+	float3 s11 = UndulationFieldMap.Load(int3(t0 + int2(1, 1), 0)).xyz;
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+bool UndulationBakedCovers(float2 worldXY)
+{
+	return UndulationFieldWindow.w > 0.5 &&
+	       max(abs(worldXY.x - UndulationFieldWindow.x), abs(worldXY.y - UndulationFieldWindow.y)) * UndulationFieldWindow.z < 0.999;
+}
+
+// Drop-in for Undulation(): one bilinear read instead of two octaves.
+// Single-exit like BermField - a return inside [branch] trips X4000.
+float UndulationSampled(float2 worldXY)
+{
+	float result;
+	[branch] if (UndulationBakedCovers(worldXY))
+		result = UndulationBakedHG(worldXY).x * UndulationAmp;
+	else
+		result = Undulation(worldXY);
+	return result;
+}
+
+// Drop-in for the shading blocks' four-tap central difference (uStep 12,
+// the operator the bake stored).
+float2 UndulationGradSampled(float2 worldXY)
+{
+	float2 result;
+	[branch] if (UndulationBakedCovers(worldXY))
+		result = UndulationBakedHG(worldXY).yz * UndulationAmp;
+	else {
+		const float uStep = 12.0;
+		result = float2(
+					 Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
+					 Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) /
+		         (2.0 * uStep);
+	}
+	return result;
 }
 
 // Deformation carves the layer toward the trench floor; the floor rides the

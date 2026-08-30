@@ -1106,6 +1106,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBerm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
+		ImGui::Checkbox(T(TKEY("shell_undulation_bake_disabled"), "Shell: Disable Undulation Bake"), &shellUndulationBakeDisabled);
+		if (auto _ttUndBake = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_undulation_bake_disabled_tooltip"), "Measurement aid: returns both shells to evaluating the dune field's two noise octaves live - one eval per vertex and march tap, four per shaded pixel - instead of reading the baked map. The snow looks the same; Shell and Object Snow get slower. Hold the camera still and toggle to read the trade."));
+
 		ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Shell: Bilinear Terrain Height"), &shellBilinearHeight);
 		if (auto _ttBilin = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));

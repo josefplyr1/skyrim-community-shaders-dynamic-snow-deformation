@@ -173,6 +173,10 @@ cbuffer ShellCB : register(b0)
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
 
+	// Baked undulation window (see SnowShell.hlsl): xy = world centre,
+	// z = 1/half-extent, w > 0.5 when the bake is live.
+	float4 UndulationFieldWindow;
+
 	// Toroidal deformation-map addressing (see SnowShell.hlsl).
 	int2 DeformMapOrigin;
 	int2 DeformTorusPad;
@@ -309,6 +313,9 @@ Texture2D<float> BermFieldMap : register(t14);
 Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
+// Baked undulation field (UndulationFieldCS): x = amp-free dune height,
+// yz = its +-12-unit shading gradient, over UndulationFieldWindow.
+Texture2D<float4> UndulationFieldMap : register(t29);
 // Vanilla's projected-UV noise map (the BSGraphics default the game's own
 // Lighting.hlsl samples for projWeight), bound by the skin draw when
 // ProjPixelEnable is set; null and unread otherwise.
@@ -1162,7 +1169,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// surface shows its sun-facing faces and reads brighter, a flat one
 		// cannot. Looking into the sun the dunes turn their shadowed sides
 		// and the difference closes, which is exactly what Josef reported.
-		depth += Undulation(worldXY) * saturate(depth / 8.0);
+		depth += UndulationSampled(worldXY) * saturate(depth / 8.0);
 
 		v.WorldAbs = float3(worldXY, top + depth - 0.4);
 
@@ -1213,10 +1220,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float undScale = saturate(depth / 8.0);
 		[branch] if (undScale > 0.001)
 		{
-			const float uStep = 12.0;
-			undGrad = float2(
-				Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
-				Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) / (2.0 * uStep) * undScale;
+			undGrad = UndulationGradSampled(worldXY) * undScale;
 		}
 		// Berm gradient, the same field the depth above piled by. The pixel
 		// shader's berm is skipped for the patch now that the geometry owns it.
@@ -3207,7 +3211,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
 								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								sh = topSmooth + tapDepth + UndulationSampled(tapWorld) * saturate(tapDepth / 8.0);
 								dbgMarch.y += 0.2;
 								dbgMarch.z -= 0.2;
 							}
@@ -3230,7 +3234,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 				// Sentinel terrain contributes a hugely negative horizon: a
 				// no-op through the max below, same as the landscape's edge.
-				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+				sh = st.x + sampleDepth + UndulationSampled(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
