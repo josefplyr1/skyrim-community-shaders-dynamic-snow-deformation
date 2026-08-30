@@ -1607,13 +1607,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float rampTerm = smoothstep(1.0, 3.0, pixelRampDepth) * saturate(0.5 + pixelEffDepth / rampFadeBand);
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
 	// Josef's border spec: the alpha may not cut geometry still standing
-	// above its ground - the sheet dives below the terrain (the VS descent's
+	// above its ground - the sheet dives below the terrain (the descent's
 	// undershoot) and the depth test against the terrain IS the border.
-	// Keyed on the RENDERED height above the terrain data, not the ramp, so
-	// low-depth class plateaus hugging the ground under half a unit still
-	// die by the class gate instead of z-fighting as a film. The window-edge
-	// fade rides along; the overrides and contests below still multiply.
-	float sheetAboveGround = smoothstep(0.25, 1.5, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
+	// Keyed on the RENDERED height above the terrain data, not the ramp.
+	// TIGHT band: the first ramp (0.25..1.5) dithered a visible stripe
+	// along the base of every border cliff - the wall's last 1.5 units,
+	// exactly where it meets the dirt, which read as the old hover gap.
+	// Ground-hugging plateau films need no wider guard: the touch-down toe
+	// crushes sub-unit class depths toward zero height, so anything
+	// standing 0.4 units proud is a real sheet. The window-edge fade rides
+	// along; the overrides and contests below still multiply.
+	float sheetAboveGround = smoothstep(0.05, 0.4, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
 	coverageAlpha = max(coverageAlpha, sheetAboveGround * psEdgeFade);
 
 	// Object blending (Terrain Blending-style depth proximity): the shell only
