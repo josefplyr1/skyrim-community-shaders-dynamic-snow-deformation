@@ -103,6 +103,7 @@
 	X(OverheadClearance) \
 	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
+	X(SkyExposurePct) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \

@@ -251,6 +251,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
 
+		ImGui::SliderFloat(T(TKEY("sky_exposure"), "Sky Exposure"), &settings.SkyExposurePct, 0.0f, 100.0f, "%.0f%%");
+		if (auto _ttSkyExp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("sky_exposure_tooltip"), "Snow falls from the sky, so how much a surface collects depends on how much sky it can see. Open tops keep their full depth; a ledge under a roof or railing, and pockets shadowed by taller neighbours, thin toward a dusting instead of wearing the same layer as everything else. The strength of that thinning - 0 turns it off and every surface gets the full depth again."));
+
 		ImGui::Checkbox(T(TKEY("meld_coplanar"), "Meld Co-Planar Surfaces"), &settings.MeldCoPlanar);
 		if (auto _ttMeld = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("meld_coplanar_tooltip"), "A/B: ON = surfaces at the same height separated by a small horizontal gap (stairs meeting a walkway) meld into one snow dome across the gap. OFF = no melding at all: every object's shell rolls off at its own edges, and shells that happen to sit near each other simply clip together."));

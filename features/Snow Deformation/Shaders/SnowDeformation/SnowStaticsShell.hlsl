@@ -292,7 +292,11 @@ cbuffer StaticCB : register(b1)
 	// this many times the repose height its footprint supports. Mirror in
 	// SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PileHeightRatio;
-	float3 padPile;
+	// P3: strength of the sky-exposure depth weighting (Settings::
+	// SkyExposurePct / 100). Took a padPile slot; layout unchanged. Mirror
+	// in SnowHeightCapture.hlsl / SnowDeformation.h.
+	float SkyExposureSk;
+	float2 padPile;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -597,6 +601,9 @@ Texture2D<float> ObjectSnowCone : register(t13);
 // plane's rims instead of borrowing the plane above (the beam-streak /
 // staircase-hole root).
 Texture2D<float> ObjectTop2Raw : register(t24);
+// P3: per-column sky openness (1 = open sky), baked by ObjectSkyOpenCS at
+// half the raster's resolution from the layer-1 tops.
+Texture2D<float> ObjectSkyOpen : register(t25);
 Texture2D<float> ObjectSnowCone2 : register(t26);
 // K=3: the third peeled layer for roof-over-beam-over-floor columns.
 Texture2D<float> ObjectTop3Raw : register(t27);
@@ -670,6 +677,28 @@ float ObjectConeDepth(float2 worldXY)
 	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
 	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// P3: baked sky openness, bilinear (the map is half the raster's resolution;
+// PatchTexel scales by the map's own dims, so nothing here cares). Outside
+// the window there is no data - open sky is the no-op.
+float SampleSkyOpenness(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return 1.0;
+
+	float2 dims;
+	ObjectSkyOpen.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = ObjectSkyOpen.Load(int3(t0.x, t0.y, 0));
+	float s10 = ObjectSkyOpen.Load(int3(t1.x, t0.y, 0));
+	float s01 = ObjectSkyOpen.Load(int3(t0.x, t1.y, 0));
+	float s11 = ObjectSkyOpen.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
@@ -1810,6 +1839,32 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float domeTilt = smoothstep(0.1, 0.35, 1.0 - domeNormal.z);
 		float domeBlend = mask * max(saturate(depth / (2.0 * kProjCoatLift)), domeTilt) * smoothstep(0.6, 0.85, nrmWS.z);
 		shadeNormal = normalize(lerp(smoothShade, domeNormal, domeBlend));
+	}
+
+	// P3 (edge-research study): SKY EXPOSURE weights the depth - the
+	// literature's accumulation field, the half this pipeline never had.
+	// Two terms: the baked horizontal openness (neighbouring tops shading
+	// the column) for every path, and the vertical cover term (a surface
+	// standing under a higher top in its OWN column takes a dusting) for
+	// the S4 shell only - the graded return of the S4 sheltering whose
+	// binary placement cut cliffed mid-plank; classic draws already carry
+	// their own vertical shelter in the taper above. Applied to the FINAL
+	// depth so the fillet, crest freeze and taper compress uniformly, and
+	// thinning toward the dusting rather than zero, matching the landscape
+	// shell's under-roof rule. The casters share this path, so shadow and
+	// shape stay one surface.
+	[branch] if (SkyExposureSk > 0.001 && HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
+	{
+		float open = SampleSkyOpenness(worldBase.xy);
+		[flatten] if (ProjPixelEnable > 1.5)
+		{
+			float coverTop = PatchTop(worldBase.xy);
+			[flatten] if (coverTop > -50000.0)
+				open = min(open, 1.0 - smoothstep(kShelterNear, kShelterFar, coverTop - worldBase.z));
+		}
+		float sheltered = (1.0 - open) * SkyExposureSk;
+		depth = lerp(depth, min(depth, kShelterDust), sheltered);
+		coverDepth = lerp(coverDepth, min(coverDepth, kShelterDust), sheltered);
 	}
 
 	SkinLift o;

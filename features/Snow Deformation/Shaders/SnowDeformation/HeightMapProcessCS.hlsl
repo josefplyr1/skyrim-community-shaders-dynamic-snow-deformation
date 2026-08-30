@@ -375,3 +375,56 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	float terrain = SampleTerrainHeight(TexelWorldXY(dtid.xy, dims));
 	OutA[dtid.xy] = max(h, terrain);
 }
+
+// P3 (edge-research study): per-column SKY OPENNESS baked from the layer-1
+// tops. InA = the full-res top raster; OutA = openness at HALF resolution
+// (a soft field - half res quarters the bake). 1 = open sky. The skin
+// scales its depth by this, so open tops carry full snow and columns shaded
+// by tall neighbours thin toward a dusting; the vertical under-cover half
+// (a surface below a higher top in its OWN column) stays per-vertex in
+// ApplySkinLift, since it depends on the surface's height, not the column.
+// Elevation-angle test per direction: a neighbour must stand meaningfully
+// above the column (6-unit pad ignores kerbs and treads) and steeply
+// (tan 0.35..1.3 ~ 19..52 degrees) to shade it; two radii per direction so
+// both a close wall and a taller ridge further out register.
+[numthreads(8, 8, 1)] void ObjectSkyOpenCS(uint3 dtid
+										   : SV_DispatchThreadID) {
+	uint2 dims;
+	OutA.GetDimensions(dims.x, dims.y);
+	if (dtid.x >= dims.x || dtid.y >= dims.y)
+		return;
+	uint2 inDims;
+	InA.GetDimensions(inDims.x, inDims.y);
+	int2 inMax = int2(inDims) - 1;
+	int2 p = int2(dtid.xy) * 2;
+	// Own surface = MAX over the 2x2 block this output texel covers, so a
+	// column is never read as shaded by its own quantization.
+	float h = max(max(InA[uint2(min(p, inMax))], InA[uint2(min(p + int2(1, 0), inMax))]),
+		max(InA[uint2(min(p + int2(0, 1), inMax))], InA[uint2(min(p + int2(1, 1), inMax))]));
+	if (h < -50000.0) {
+		OutA[dtid.xy] = 1.0;
+		return;
+	}
+	static const int2 kOpenDirs[8] = {
+		int2(1, 0), int2(1, 1), int2(0, 1), int2(-1, 1),
+		int2(-1, 0), int2(-1, -1), int2(0, -1), int2(1, -1)
+	};
+	// Input texels are 4 world units (kHeightTexel); radii 6 and 14 = 24
+	// and 56 units.
+	static const float kOpenRadii[2] = { 6.0, 14.0 };
+	float occ = 0.0;
+	[unroll] for (uint d = 0; d < 8; d++)
+	{
+		float o = 0.0;
+		[unroll] for (uint r = 0; r < 2; r++)
+		{
+			int2 q = clamp(p + kOpenDirs[d] * (int)kOpenRadii[r], int2(0, 0), inMax);
+			float t = InA[uint2(q)];
+			float distW = kOpenRadii[r] * 4.0 * length(float2(kOpenDirs[d]));
+			[flatten] if (t > -50000.0)
+				o = max(o, smoothstep(0.35, 1.3, ((t - h) - 6.0) / distW));
+		}
+		occ += o;
+	}
+	OutA[dtid.xy] = 1.0 - occ * (1.0 / 8.0);
+}

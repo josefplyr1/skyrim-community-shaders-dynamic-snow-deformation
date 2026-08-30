@@ -475,6 +475,8 @@ public:
 		bool MeldCoPlanar = false;
 		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
 		float PileHeightRatio = 1.0f;
+		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
+		float SkyExposurePct = 50.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1580,7 +1582,9 @@ public:
 
 		/** @brief Settings::PileHeightRatio - a dome may stand at most this many times the repose height its footprint supports (the cone value); thin features saturate early instead of stretching fins. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PileHeightRatio;
-		float padPile[3];
+		/** @brief Settings::SkyExposurePct / 100 - strength of the P3 sky-exposure depth weighting (took a padPile slot; layout unchanged). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float SkyExposureSk;
+		float padPile[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -1652,6 +1656,8 @@ public:
 	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
 	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
 	Texture2D* objectSnowCone3 = nullptr;
+	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
+	Texture2D* objectSkyOpen = nullptr;
 	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
@@ -1682,6 +1688,8 @@ public:
 	ID3D11ComputeShader* heightConeCS = nullptr;
 	ID3D11ComputeShader* objectConeSeedCS = nullptr;
 	ID3D11ComputeShader* objectConeCS = nullptr;
+	/** @brief P3: bakes the half-res sky-openness field from the layer-1 tops (ObjectSkyOpenCS). */
+	ID3D11ComputeShader* objectSkyOpenCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB

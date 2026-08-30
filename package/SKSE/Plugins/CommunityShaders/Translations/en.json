@@ -1635,6 +1635,8 @@
     "feature.snow_deformation.show_debug": "Show Deformation Map",
     "feature.snow_deformation.skin_distant_bareness": "Distant Bare Rock",
     "feature.snow_deformation.skin_distant_bareness_tooltip": "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour.",
+    "feature.snow_deformation.sky_exposure": "Sky Exposure",
+    "feature.snow_deformation.sky_exposure_tooltip": "Snow falls from the sky, so how much a surface collects depends on how much sky it can see. Open tops keep their full depth; a ledge under a roof or railing, and pockets shadowed by taller neighbours, thin toward a dusting instead of wearing the same layer as everything else. The strength of that thinning - 0 turns it off and every surface gets the full depth again.",
     "feature.snow_deformation.snow_accumulation": "Snow Accumulation",
     "feature.snow_deformation.snow_accumulation_tooltip": "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth.",
     "feature.snow_deformation.snow_borders": "Snow Borders",

@@ -591,6 +591,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				objectSnowCone3 ? objectSnowCone3->srv.get() : nullptr
 			};
 			context->VSSetShaderResources(26, 3, castLayerSRVs);
+			// P3: the sky-openness field (t25) - the caster must carry the
+			// same exposure-weighted depth as the visible skin. Inside the
+			// saved t24-t28 range, so the restore set is untouched.
+			ID3D11ShaderResourceView* castSkyOpenSRV = objectSkyOpen && objectSkyOpen->srv ? objectSkyOpen->srv.get() : nullptr;
+			context->VSSetShaderResources(25, 1, &castSkyOpenSRV);
 
 			for (const auto& cap : capturedStatics) {
 				auto* geometry = cap.geometry.get();

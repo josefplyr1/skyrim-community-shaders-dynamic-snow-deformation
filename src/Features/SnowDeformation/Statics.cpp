@@ -1088,6 +1088,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
 		objectConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
+	if (!objectSkyOpenCS)
+		objectSkyOpenCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectSkyOpenCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1163,6 +1165,20 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
+	// P3: the sky-openness field at half the raster's resolution - a soft
+	// field, and half res quarters the bake cost. No RTV: compute-written.
+	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
+	openDesc.Width = kHeightMapDim / 2;
+	openDesc.Height = kHeightMapDim / 2;
+	openDesc.Format = DXGI_FORMAT_R8_UNORM;
+	openDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	D3D11_SHADER_RESOURCE_VIEW_DESC openSrvDesc = heightSrvDesc;
+	openSrvDesc.Format = openDesc.Format;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC openUavDesc = heightUavDesc;
+	openUavDesc.Format = openDesc.Format;
+	objectSkyOpen = new Texture2D(openDesc, "SnowDeformation::ObjectSkyOpen");
+	objectSkyOpen->CreateSRV(openSrvDesc);
+	objectSkyOpen->CreateUAV(openUavDesc);
 
 	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
 	// frame). TWO channels, same rationale as the shelter mask above:
@@ -1853,6 +1869,21 @@ void SnowDeformation::RenderObjectHeightMap()
 				std::swap(obj2In, obj2Out);
 			}
 		}
+
+		// P3: bake the sky-openness field from the layer-1 tops, after the
+		// cone chains so the raster is final for this frame. Half-res
+		// output; the consumers bilinear it.
+		if (objectSkyOpenCS && objectSkyOpen) {
+			context->CSSetShader(objectSkyOpenCS, nullptr, 0);
+			ID3D11ShaderResourceView* openSRV = heightTopRaw[heightCurrent]->srv.get();
+			ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
+			context->CSSetShaderResources(0, 1, &openSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &openUAV, nullptr);
+			const uint32_t openDim = (kHeightMapDim / 2 + 7) / 8;
+			context->Dispatch(openDim, openDim, 1);
+			context->CSSetShaderResources(0, 1, nullCsSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+		}
 	}
 
 	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
@@ -1947,6 +1978,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	a_scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
+	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 }
 
@@ -2291,6 +2323,10 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	context->VSSetShaderResources(27, 2, layer3SRVs);
 	context->DSSetShaderResources(27, 2, layer3SRVs);
+	// P3: the sky-openness field (t25), the lift's depth weighting.
+	ID3D11ShaderResourceView* skyOpenSRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
+	context->VSSetShaderResources(25, 1, &skyOpenSRV);
+	context->DSSetShaderResources(25, 1, &skyOpenSRV);
 	// Wide exclusion field (t15) + frost crystal patterns (t16/t17): the
 	// skin's self-shadow march and spell-mark shading read the landscape
 	// shell's slots; the skins draw standalone, so bind explicitly here.
@@ -2457,9 +2493,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(24, 1, &nullSmoothSRV);
-	ID3D11ShaderResourceView* nullLayerSRVs[3] = { nullptr, nullptr, nullptr };
-	context->VSSetShaderResources(26, 3, nullLayerSRVs);
-	context->DSSetShaderResources(26, 3, nullLayerSRVs);
+	ID3D11ShaderResourceView* nullLayerSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
+	context->VSSetShaderResources(25, 4, nullLayerSRVs);
+	context->DSSetShaderResources(25, 4, nullLayerSRVs);
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through
