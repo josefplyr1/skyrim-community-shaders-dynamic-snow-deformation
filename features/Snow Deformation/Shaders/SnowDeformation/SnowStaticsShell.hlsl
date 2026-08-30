@@ -3211,7 +3211,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
 								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-								sh = topSmooth + tapDepth + UndulationSampled(tapWorld) * saturate(tapDepth / 8.0);
+								// Live undulation on purpose - see SnowShell's march note.
+								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 								dbgMarch.y += 0.2;
 								dbgMarch.z -= 0.2;
 							}
@@ -3234,7 +3235,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
 				// Sentinel terrain contributes a hugely negative horizon: a
 				// no-op through the max below, same as the landscape's edge.
-				sh = st.x + sampleDepth + UndulationSampled(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}

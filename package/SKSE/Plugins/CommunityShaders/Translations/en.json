@@ -1608,6 +1608,8 @@
     "feature.snow_deformation.shell_distant_exclusions_disabled_tooltip": "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render.",
     "feature.snow_deformation.shell_exclusion_debug": "Shell: Exclusion Debug Plane",
     "feature.snow_deformation.shell_exclusion_debug_tooltip": "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on.",
+    "feature.snow_deformation.shell_march_bicubic": "Shell: Bicubic March",
+    "feature.snow_deformation.shell_march_bicubic_tooltip": "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first).",
     "feature.snow_deformation.shell_max_slope": "3D Shell Max Slope",
     "feature.snow_deformation.shell_max_slope_tooltip": "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface. Rocks, mountains and cliffs use their own slider below instead.",
     "feature.snow_deformation.shell_split_disabled": "Shell: Disable Split Draw",

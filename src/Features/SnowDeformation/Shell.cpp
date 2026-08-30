@@ -326,7 +326,10 @@ ID3D11PixelShader* SnowDeformation::GetShellPS()
 		// histogram variant has no reason to carry this.
 		if (shellDepthClampDisabled)
 			defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
+		if (shellMarchBicubicRestored)
+			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
 		shellDepthClampCompiled = !shellDepthClampDisabled;
+		shellMarchBicubicCompiledPS = shellMarchBicubicRestored;
 		shellPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPS;
@@ -397,10 +400,17 @@ ID3D11HullShader* SnowDeformation::GetShellHSFar()
 
 ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 {
+	if (shellPSNoDepth && shellMarchBicubicCompiledPSNoDepth != shellMarchBicubicRestored) {
+		shellPSNoDepth->Release();
+		shellPSNoDepth = nullptr;
+	}
 	if (!shellPSNoDepth) {
 		logger::debug("Compiling SnowShell PS (no depth export)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
+		if (shellMarchBicubicRestored)
+			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
+		shellMarchBicubicCompiledPSNoDepth = shellMarchBicubicRestored;
 		shellPSNoDepth = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
 	}
 	return shellPSNoDepth;

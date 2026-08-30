@@ -1110,6 +1110,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttUndBake = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_undulation_bake_disabled_tooltip"), "Measurement aid: returns both shells to evaluating the dune field's two noise octaves live - one eval per vertex and march tap, four per shaded pixel - instead of reading the baked map. The snow looks the same; Shell and Object Snow get slower. Hold the camera still and toggle to read the trade."));
 
+		ImGui::Checkbox(T(TKEY("shell_march_bicubic"), "Shell: Bicubic March"), &shellMarchBicubicRestored);
+		if (auto _ttMarch = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
+
 		ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Shell: Bilinear Terrain Height"), &shellBilinearHeight);
 		if (auto _ttBilin = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));

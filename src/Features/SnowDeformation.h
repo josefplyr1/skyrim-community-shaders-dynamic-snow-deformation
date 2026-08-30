@@ -1177,6 +1177,10 @@ public:
 	bool shellBermBakeDisabled = false;
 	/** @brief Debug A/B: zeroes UndulationFieldWindow.w so both shells fall back to the live two-octave eval; the bake keeps updating underneath. */
 	bool shellUndulationBakeDisabled = false;
+	/** @brief Debug A/B: restores the horizon march's bicubic deformation sampler (16 loads/tap) in place of the shipped bilinear (4). Rekeys both shell PS variants via SNOW_MARCH_BICUBIC. */
+	bool shellMarchBicubicRestored = false;
+	bool shellMarchBicubicCompiledPS = false;
+	bool shellMarchBicubicCompiledPSNoDepth = false;
 
 	/** @brief Clamp state the cached shellPS was compiled against; a mismatch releases it. The clamp is a debug A/B now (shellDepthClampDisabled), not a setting. */
 	bool shellDepthClampCompiled = true;

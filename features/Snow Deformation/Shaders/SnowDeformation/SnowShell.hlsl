@@ -542,6 +542,20 @@ float SampleDeformationFast(float2 gridLocal)
 	return SampleDeformationBilinear(uv * dims - 0.5, dims);
 }
 
+// March-grade deformation tap: one bilinear (4 loads) where the visible
+// surface pays bicubic (16). The horizon march samples 28-1000 units out,
+// where the samplers' difference is invisible - the same too-fine-to-matter
+// rule that keeps churn and clods out of the marches. The debug A/B
+// ("Shell: Bicubic March") restores the surface sampler to measure the trade.
+float SampleDeformationMarch(float2 gridLocal)
+{
+#ifdef SNOW_MARCH_BICUBIC
+	return SampleDeformation(gridLocal);
+#else
+	return SampleDeformationFast(gridLocal);
+#endif
+}
+
 // Bilinear samples of the object field maps at absolute world XY. The raster
 // pass maps +worldY to +ndcY = texture v0 (top), so v mirrors.
 float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
@@ -2100,7 +2114,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				float sampleMelt = saturate(sampleMask.y);
 				sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
 			}
-			float sampleDeform = saturate(SampleDeformation(sampleLocal));
+			float sampleDeform = SampleDeformationMarch(sampleLocal);
 			// The berm occluder reads the berm FIELD, as the geometry does.
 			// BermShape of a raw deformation value peaks across the trench's
 			// sloping wall, which rings every trail with a phantom ridge. One
@@ -2109,7 +2123,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 			sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
 			              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-			float sh = st.x + sampleDepth + UndulationSampled(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			// Live undulation ON PURPOSE: in the march, ALU is free and loads
+			// are the bottleneck, so the bake's 4 loads per tap were a
+			// regression here (2026-08-30). Geometry and shading keep the bake.
+			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			[branch] if (ObjectLiftCap > 0.0)
 			{
 				float sf = SampleObjectHeight(GridOrigin + sampleLocal);
