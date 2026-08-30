@@ -545,7 +545,18 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->OMSetRenderTargets(0, nullptr, shadowAtlasDSV[cascade].get());
 
 		// Terrain shell: vertex-buffer-less grid with the excess-height
-		// caster VS.
+		// caster VS. The grid VS reads BowWaveCB at b1 and the skin/patch
+		// draws below rebind b1 to StaticsCB, so b1 MUST be re-bound here
+		// every cascade: cascade 0 used to survive on the bind inherited
+		// from last frame's visible DrawShell, while every later cascade's
+		// grid read StaticsCB bytes as bow-wave params - harmless while the
+		// skins' first CB float was a rotation element (wave count
+		// truncated to zero), but the patch fill put the world-space patch
+		// centre there and threw phantom trail geometry into the far
+		// cascades (Josef's giant trench wedges: near cascade clean, far
+		// cascades streaked).
+		ID3D11Buffer* waveCB1 = bowWaveCB ? bowWaveCB->CB() : nullptr;
+		context->VSSetConstantBuffers(1, 1, &waveCB1);
 		context->IASetInputLayout(nullptr);
 		ID3D11Buffer* nullVB = nullptr;
 		UINT zero = 0;
@@ -630,10 +641,12 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				StaticsCB scb{};
 				FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
 					smoothSRV != nullptr, castTopSRV != nullptr, false, scb);
-				// No distance collapse for casters: the zeroed camera
-				// adjust reads every object as ~80k units away and would
-				// flatten every caster (the documented shared-CB trap).
-				scb.SkinHeightFadeEnd = 0.0f;
+				// SkinHeightFadeEnd stays LIVE: the caster must collapse
+				// with the visible skin or it throws full-height shadows
+				// past the skin range (the distance streaks). The zeroed
+				// camera adjust cannot be the distance reference, so the
+				// SHADOWCAST lift measures from the height window's centre
+				// instead (ApplySkinLift's SHADOWCAST branch).
 				staticsCB->Update(scb);
 				context->DrawIndexed(indexCount, 0, 0);
 			}

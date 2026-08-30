@@ -1594,7 +1594,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5)
 	{
 		float collapseEnd = SkinCollapseEnd(depthBase);
+#if defined(SHADOWCAST)
+		// Caster pass: ShellCameraPosAdjust is zeroed (absolute world), so
+		// measure from the height window's centre, which tracks the camera -
+		// the patch caster's own convention. The caster must collapse WITH
+		// the visible skin: with the collapse disabled CB-side it kept full
+		// height past the skin range and threw full shadows over shells the
+		// eye no longer sees (Josef's distance streaks).
+		float camDist = length(worldBase.xy - HeightWindowCenter);
+#else
 		float camDist = length(worldBase - ShellCameraPosAdjust.xyz);
+#endif
 		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
 		// Floor at the minimum coat instead of zero. Collapsing all the way
 		// puts the skin vertex EXACTLY on its source vertex, where it z-fights
@@ -1934,10 +1944,11 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 // matrix in CameraViewProj with ShellCameraPosAdjust zeroed (absolute-
 // world rendering, same contract as the landscape shell's caster), so
 // the standard position chain lands in light clip untouched. The
-// distance collapse is off CB-side: the caster's StaticsCB writes
-// SkinHeightFadeEnd = 0 (a zeroed camera adjust would put every object
-// at "80 km away" and collapse every caster flat - the documented
-// shared-CB trap).
+// distance collapse RUNS here, measured from the height window's centre
+// (ApplySkinLift's SHADOWCAST branch): the zeroed camera adjust cannot
+// be the reference (it reads "80 km away" and flattens everything), but
+// skipping the collapse outright kept casters at full height past the
+// skin range - full shadows over shells the eye no longer sees.
 float4 main(VS_INPUT input) : SV_POSITION
 {
 	SkinVertex v = BuildSkinVertex(input);
@@ -2871,10 +2882,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// spacing, and the interpolated gradient shaded trampled floors as
 	// pristine top snow. Geometry keeps its coarse displacement; the normal
 	// carries the look, as with the landscape's dunes.
+	// UNCARVED depth, exactly as the landscape weighs it (its pixelDepth is
+	// the ramp depth, not the carve): trench floors shade at full churn
+	// whenever the layer is deep enough to churn at all. The carved depth
+	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
 	[branch] if (ObjChurnHeightAmp > 0.01)
 	{
-		float depthPix = CarveProfile(pixelDeform, PatchSkinDepth(worldXY).x, worldXY);
-		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(depthPix / 10.0);
+		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(PatchSkinDepth(worldXY).x / 10.0);
 		[branch] if (churnWPix > 0.001)
 		{
 			const float cStep = 3.0;
