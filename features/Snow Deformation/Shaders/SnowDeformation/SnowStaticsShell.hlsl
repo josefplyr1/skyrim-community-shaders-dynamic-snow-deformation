@@ -580,7 +580,9 @@ struct VS_OUTPUT
 	float ProjFactor : TEXCOORD8;
 };
 
-#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
+// HULLSHADER included bare (P1, edge-research study): the skin HS reads the
+// cone field to size tessellation against rim proximity.
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
 // Top-down object top-surface raster. The patch drapes over it (the VS places
 // geometry, the PS clips the silhouette overhang); the skin PS uses it to
 // separate its own rim wall from a bare object face.
@@ -616,7 +618,7 @@ static const float kNoRoadTop = -1000000.0;
 static const float kRoadOwnsTop = 8.0;
 #endif
 
-#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER)
+#if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
 
 // One texel of the object height raster in world units; must match
 // kHeightMapHalfExtent * 2 / kHeightMapDim (SnowDeformation.h).
@@ -1549,25 +1551,20 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 		float steep = clamp(MoundSteepness, 0.5, 3.0);
 		rimT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
-		float allowed;
-		[flatten] if (isFlat > 0.5)
-		{
-			// Cornice: snow on a thin plate carries full depth to the rim and
-			// rolls over in the last sliver, which is the overhang that makes a
-			// snowed plank read correctly. Quarter-circle. The roll is a FIXED
-			// world width - the ramp scales with depth, so a proportional roll
-			// exceeds the plank itself at deep settings.
-			float rollFrac = saturate(kCorniceRoll * steep / coneSeed);
-			float u = saturate(rimT / max(rollFrac, 1e-3));
-			float toRim = 1.0 - u;
-			rimT = u;
-			allowed = depthBase * sqrt(saturate(1.0 - toRim * toRim));
-		}
-		else
-		{
-			// Slump at the angle of repose, which is what a rock wants.
-			allowed = depthBase * rimT;
-		}
+		// Cornice for EVERY class (P2, edge-research study): full depth
+		// carried to within kCorniceRoll units of the rim, quarter-circle
+		// down. Flat plates always worked this way; rocks and cliffs used to
+		// slump LINEARLY across the whole cone ramp - tens of units on a big
+		// boulder - which read as shrink-wrap, not snow. The roll is a FIXED
+		// world width: the ramp scales with depth, so a proportional roll
+		// exceeds thin features at deep settings. Where the ramp is narrower
+		// than the roll, rollFrac saturates and the fillet spans the whole
+		// ramp - it degrades to the dome profile, never to a spike.
+		float rollFrac = saturate(kCorniceRoll * steep / coneSeed);
+		float u = saturate(rimT / max(rollFrac, 1e-3));
+		float toRim = 1.0 - u;
+		rimT = u;
+		float allowed = depthBase * sqrt(saturate(1.0 - toRim * toRim));
 		depth = min(depth, allowed);
 		support = saturate(allowed / max(depthBase, 0.01));
 
@@ -2067,6 +2064,22 @@ float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 	float3 mid = 0.5 * (worldA + worldB);
 	float dist = length(mid - ShellCameraPosAdjust.xyz);
 	float targetLen = max(4.0, dist * 0.01);
+	// P1 (edge-research study): the cornice roll is kCorniceRoll world units
+	// wide, and the distance rule alone gives it ~ONE segment at any range -
+	// a quarter-circle sampled once is a straight ramp, which is the
+	// stretched rim. Where the cone says a rim is close, the target edge
+	// length drops toward 1 unit so the roll gets the vertices the fillet
+	// needs; interiors and the far field keep the old rule. Sampled at both
+	// endpoints and the midpoint - shared edges see the same three points
+	// from either side, so the rule stays crack-free.
+	[branch] if (HasObjectTop > 0.5)
+	{
+		float coneNear = min(ObjectConeDepth(mid.xy),
+			min(ObjectConeDepth(worldA.xy), ObjectConeDepth(worldB.xy)));
+		float rimBoost = (1.0 - smoothstep(4.0, 12.0, coneNear)) *
+		                 (1.0 - smoothstep(1200.0, 2400.0, dist));
+		targetLen = lerp(targetLen, 1.0, rimBoost);
+	}
 	// Retire subdivision over the geometry range, reaching no subdivision at
 	// the distance where the layer itself has collapsed.
 	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, dist);

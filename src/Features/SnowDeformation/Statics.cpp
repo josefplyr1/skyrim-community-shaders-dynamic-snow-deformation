@@ -2222,6 +2222,10 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11Buffer* dsCB1 = staticsCB->CB();
 		context->HSSetConstantBuffers(1, 1, &dsCB1);
 		context->DSSetConstantBuffers(1, 1, &dsCB1);
+		// P1: EdgeTessFactor's rim term reads the cone field, so the HS
+		// needs t13 like the VS/DS do (bound below for those stages).
+		ID3D11ShaderResourceView* hsConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
+		context->HSSetShaderResources(13, 1, &hsConeSRV);
 		ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
 		context->DSSetShaderResources(1, 1, &dsDeformSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
@@ -2448,6 +2452,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
+	context->HSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
