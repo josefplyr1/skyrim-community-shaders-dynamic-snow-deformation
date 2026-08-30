@@ -1405,7 +1405,14 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		const float kEdgeBillowShift = 0.35;
 		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
 		float descent = SnowHeightBlendOneSided(wBillow, hDescent, 1.0 + (descentBlend - 1.0) * 0.5);
-		z = terrainHeight + (z - terrainHeight) * descent;
+		// Josef's border spec: the sheet ends BELOW the ground, not on it. As
+		// the descent runs out the sheet keeps going to terrain - 8
+		// (ShellSurfaceZ's own submerge floor), so the visible border is the
+		// sheet's INTERSECTION with the terrain - the depth test clips it -
+		// and a hovering rim with an exposed underside cannot exist. The
+		// grain still decides WHERE each tongue dives, so the intersection
+		// line keeps the billows.
+		z = terrainHeight + (z - terrainHeight) * descent - 8.0 * (1.0 - descent);
 	}
 
 	// Real relief from the PBR displacement map, through the SAME anti-tiling
@@ -1599,6 +1606,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the ground, so grain interlocks at the fringe. One number cannot do both.
 	float rampTerm = smoothstep(1.0, 3.0, pixelRampDepth) * saturate(0.5 + pixelEffDepth / rampFadeBand);
 	float coverageAlpha = smoothstep(0.0, 0.6, pixelCoverage) * psEdgeFade * rampTerm;
+	// Josef's border spec: the alpha may not cut geometry still standing
+	// above its ground - the sheet dives below the terrain (the VS descent's
+	// undershoot) and the depth test against the terrain IS the border.
+	// Keyed on the RENDERED height above the terrain data, not the ramp, so
+	// low-depth class plateaus hugging the ground under half a unit still
+	// die by the class gate instead of z-fighting as a film. The window-edge
+	// fade rides along; the overrides and contests below still multiply.
+	float sheetAboveGround = smoothstep(0.25, 1.5, input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x);
+	coverageAlpha = max(coverageAlpha, sheetAboveGround * psEdgeFade);
 
 	// Object blending (Terrain Blending-style depth proximity): the shell only
 	// knows terrain heights, so this is what makes it meet statics softly
