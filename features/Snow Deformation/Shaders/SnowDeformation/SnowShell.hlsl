@@ -1389,33 +1389,23 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	// hover. Half the PS alpha's sharpness - the alpha cuts the outline, while
 	// near-binary geometry raises walls that smear the top-projected texture.
 	// Deterministic per position, so shared patch-edge vertices agree.
+	// The border's raggedness is HORIZONTAL (Josef's sketch): the grain also
+	// advances/retards WHERE along the band the sheet lands, so the landing
+	// line billows in plan. The retired vertical edge grain (z +- grain) made
+	// the same billows by lifting the rim, and every raised bump hovered with
+	// its underside exposed; the fringe now touches ground everywhere. Carved
+	// trenches and melt floors keep the vertical grain's old exemptions.
 	float descentBlend = SnowHeightBlendSharpness(camDist);
 	float wEdge = smoothstep(0.0, 0.6, coverage);
 	[branch] if (HasSnowHeight > 0.5 && descentBlend > 1.0 && z > terrainHeight && wEdge < 0.999)
 	{
 		float hDescent = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
-		float descent = SnowHeightBlendOneSided(wEdge, hDescent, 1.0 + (descentBlend - 1.0) * 0.5);
+		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)))) *
+		                (1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0));
+		const float kEdgeBillowShift = 0.35;
+		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
+		float descent = SnowHeightBlendOneSided(wBillow, hDescent, 1.0 + (descentBlend - 1.0) * 0.5);
 		z = terrainHeight + (z - terrainHeight) * descent;
-	}
-
-	// Edge grain: the sheet's visible border is often the geometric clip of the
-	// skirt against the ground, which is featureless whatever the alpha does.
-	// Displacing the edge zone by the same grain x fringe band the PS contest
-	// uses makes geometry and alpha agree by construction. Carved trenches and
-	// melt floors are exempt. Amplitude and reach are FIXED - scaling them by
-	// the Untrampled band displaces the whole sheet by half the slider.
-	const float kEdgeGrainAmp = 2.0;
-	float edgeGrainH = z - terrainHeight;
-	[branch] if (HasSnowHeight > 0.5 && edgeGrainH > -2.0 && edgeGrainH < 6.0)
-	{
-		float edgeGrainW = (1.0 - smoothstep(3.0, 6.0, edgeGrainH)) * (1.0 - smoothstep(1024.0, 2048.0, camDist));
-		edgeGrainW *= 1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)));
-		edgeGrainW *= 1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0);
-		[branch] if (edgeGrainW > 0.001)
-		{
-			float hEdge = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
-			z += (hEdge - 0.5) * kEdgeGrainAmp * edgeGrainW;
-		}
 	}
 
 	// Real relief from the PBR displacement map, through the SAME anti-tiling
