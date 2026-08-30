@@ -583,9 +583,15 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 					continue;
 				// Same skip rules as the visible skin draw, minus the
 				// PS-only noise-map validity (the vertex mask carries no
-				// noise term).
+				// noise term). Roads do NOT cast: the road skin's step-aside
+				// is a per-pixel discard (RoadOwnsColumn in the PS), which a
+				// depth-only caster cannot run - the classic-lift sheet cast
+				// phantom blotches onto the patch, height riding the Road
+				// Meshes slider. The patch deliberately does not cast either
+				// (the retired stretch experiment); the self-shadow march
+				// owns trench-wall shading on roads.
 				const bool s4Shell = settings.ObjectSnow3D && !cap.road && cap.projThreshold > -0.5f;
-				if (!cap.road && !s4Shell)
+				if (!s4Shell)
 					continue;
 				auto triShape = geometry->AsTriShape();
 				if (!triShape)

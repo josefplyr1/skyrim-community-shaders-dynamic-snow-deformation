@@ -1192,8 +1192,11 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// genuinely soft and the two curves agree. The march debug view
 		// cleared the shadow path first: engagement green, wall-base
 		// shadow landing - the band was never the march's.
-		// Churn shades at vertex rate: dense patch vertices sit 1-2 units
-		// apart near the camera.
+		// Churn shading moved to the PS: at ChurnSize 0.25 the lumps sit at
+		// 4/1.75 units, under even the dense band's vertex spacing, so the
+		// vertex-rate gradient interpolated to smooth and trampled floors
+		// shaded as pristine top snow (Josef's road-floor report). Geometry
+		// keeps the coarse displacement above; the normal carries the look.
 		const float gStep = 4.0;
 		float dXP = saturate(SampleDeformationSmooth(gridLocal + float2(gStep, 0.0)));
 		float dXN = saturate(SampleDeformationSmooth(gridLocal - float2(gStep, 0.0)));
@@ -1202,14 +1205,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float2 profGrad = float2(
 			CarveProfile(dXP, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, skinDepth, worldXY - float2(gStep, 0.0)),
 			CarveProfile(dYP, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, skinDepth, worldXY - float2(0.0, gStep))) / (2.0 * gStep);
-		float2 churnGrad = float2(0.0, 0.0);
-		[branch] if (ObjChurnHeightAmp > 0.01 && churnW > 0.001)
-		{
-			const float cs = 3.0;
-			churnGrad = float2(
-				ChurnNoise(worldXY + float2(cs, 0.0)) - ChurnNoise(worldXY - float2(cs, 0.0)),
-				ChurnNoise(worldXY + float2(0.0, cs)) - ChurnNoise(worldXY - float2(0.0, cs))) / (2.0 * cs) * ObjChurnHeightAmp * churnW;
-		}
 		// Undulation gradient, the same field the depth above displaced by -
 		// mirrors SnowShell.hlsl's PS block. The geometry alone is not enough:
 		// at patch vertex spacing the dunes are far coarser than the shading
@@ -1236,7 +1231,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		}
 		// Surface z = top + profile, so normal.xy = -d(profile); the other
 		// fields RAISE the surface and subtract for the same reason.
-		v.NormalWS = normalize(float3(-profGrad - churnGrad - undGrad - bermGrad, 1.0));
+		v.NormalWS = normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
@@ -2868,6 +2863,28 @@ PS_OUTPUT main(VS_OUTPUT input)
 				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
 		}
 	}
+
+#ifdef PATCH
+	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
+	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
+	// the lumps sit at 4/1.75 units, under even the dense band's vertex
+	// spacing, and the interpolated gradient shaded trampled floors as
+	// pristine top snow. Geometry keeps its coarse displacement; the normal
+	// carries the look, as with the landscape's dunes.
+	[branch] if (ObjChurnHeightAmp > 0.01)
+	{
+		float depthPix = CarveProfile(pixelDeform, PatchSkinDepth(worldXY).x, worldXY);
+		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(depthPix / 10.0);
+		[branch] if (churnWPix > 0.001)
+		{
+			const float cStep = 3.0;
+			float2 churnGradPix = float2(
+				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
+				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
+			normalWS = normalize(normalWS + float3(-churnGradPix * ObjChurnHeightAmp * churnWPix, 0.0));
+		}
+	}
+#endif
 
 	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
 	// Built from the geometric normal before the normal map perturbs it, and
