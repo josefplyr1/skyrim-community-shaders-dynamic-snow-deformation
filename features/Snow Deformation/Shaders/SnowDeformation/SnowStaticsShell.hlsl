@@ -1466,7 +1466,14 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// orange top only, green both good.
 		float probeTop = PatchTopL(worldXY);
 		float probeCone = ObjectConeDepthL(worldXY);
-		v.WorldAbs = float3(worldXY, ShellCameraPosAdjust.z - 100.0);
+		// ANCHOR TO THE SURFACE IT READ. Pinned to the camera the slab hid
+		// under the walkway deck, which is the one place the measurement was
+		// needed. Riding the layer's own top puts it exactly where the drape
+		// would draw and nothing can occlude it; a dead read still falls back
+		// to the camera plane, so height alone separates the two cases and the
+		// color confirms which.
+		bool topAlive = probeTop > -50000.0;
+		v.WorldAbs = float3(worldXY, topAlive ? probeTop + 30.0 : ShellCameraPosAdjust.z - 100.0);
 		v.NormalWS = float3(0.0, 0.0, 1.0);
 		v.SkinDepth = 8.0;
 		v.Deform = (probeTop > -50000.0 ? 0.5 : 0.0) + (probeCone > 0.5 ? 0.5 : 0.0);
