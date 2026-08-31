@@ -2499,15 +2499,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// shell's OWN surface; the per-pixel reconstruction only owns the
 		// edges, where the fillet carries the lift down through this
 		// floor's band on its way to zero.
-		// The band is ABSOLUTE height now, not a fraction of the class
-		// depth: P3's sheltering lowers a shell's TARGET, and the old
-		// fraction-of-class floor read a half-height sheltered shell as
-		// "edge" forever - the pre-shell gates then owned whole under-roof
-		// areas and the risen snow rendered behind everything again
-		// (Josef's walkway shot). The reconstruction is only ever right
-		// for hugging coats, so anything standing a few units proud owns
-		// its policy by the vertex gates, whatever its class depth.
-		pdCoverage = max(pdCoverage, smoothstep(1.5 * kProjCoatLift, 4.0 * kProjCoatLift, input.Lift));
+		// EITHER form engages the floor, whichever fires first.
+		//
+		// The ABSOLUTE band exists because P3's sheltering lowers a
+		// shell's TARGET: a half-height sheltered shell read as "edge"
+		// forever under a fraction-of-class rule, the pre-shell gates
+		// then owned whole under-roof areas, and the risen snow rendered
+		// behind everything again (Josef's walkway shot).
+		//
+		// The FRACTIONAL form has to stay beside it, because absolute
+		// alone is WEAKER on shallow classes and that regressed them: at
+		// Objects Snow Depth 5 the fraction engages at 2.5 units while
+		// the absolute band has not started, so shells in that window
+		// lost their floor, fell back to the screen-space gates and
+		// dithered into scattered holes. Taking the max is the only form
+		// that cannot be less permissive than either rule alone.
+		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+		pdCoverage = max(pdCoverage, max(
+										smoothstep(0.5, 0.85, liftFrac),
+										smoothstep(1.5 * kProjCoatLift, 4.0 * kProjCoatLift, input.Lift)));
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
