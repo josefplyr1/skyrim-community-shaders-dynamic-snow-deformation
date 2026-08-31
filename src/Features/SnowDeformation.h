@@ -1665,6 +1665,9 @@ public:
 	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
 	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
 	Texture2D* objectSnowCone3 = nullptr;
+	/** @brief THE AIR TEST (Josef, 2026-08-31): per peeled layer, the lowest surface standing ABOVE that layer's top. A roof over a walkway leaves open space; a wall standing on a road is solid to the ground, and the tops-only rasters read both as "something above, a surface below". Cannot come from heightBottomRaw, which MINs over the whole column so an elevated deck buries the signal under its own underside. Regenerated per frame, only while Layered Object Drape is on; sentinel kHeightMapEmptyBottom means open sky. Patch VS/DS t30 and t31. */
+	Texture2D* objectCoverBottom2 = nullptr;
+	Texture2D* objectCoverBottom3 = nullptr;
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
 	// ---- Height-field probe (Debugging Options): the six object maps read
@@ -1690,6 +1693,8 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
 	ID3D11PixelShader* heightPeel2PS = nullptr;
+	/** @brief COVERBOT variant of SnowHeightCapture: MIN-blends the height of every fragment standing above a peeled layer's top, into SV_Target1 so the capture's blend state supplies the MIN op. Feeds objectCoverBottom2/3. */
+	ID3D11PixelShader* heightCoverPS = nullptr;
 	/** @brief Depth-only skin caster VS (SHADOWCAST define): the full lift, clip position through the light matrix ShellCB carries during the cascade injection. Drawn by InjectShellShadowCasters so the object shells cast real sun shadows. */
 	ID3D11VertexShader* skinShadowVS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;

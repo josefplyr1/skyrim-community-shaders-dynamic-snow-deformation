@@ -135,7 +135,7 @@ VS_OUTPUT main(VS_INPUT input)
 }
 #endif
 
-#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2))
+#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2) || defined(COVERBOT))
 // S4 phase 2 - layer peels (SKIN-PLACEMENT-PLAN): re-rasterize the
 // captures keeping only fragments a peel tolerance BELOW this frame's
 // accumulated layer-1 top (PEEL2: below layer 2 as well); MAX blending
@@ -147,6 +147,51 @@ Texture2D<float> Layer1Top : register(t3);
 Texture2D<float> Layer2Top : register(t4);
 #	endif
 
+#	if defined(COVERBOT)
+// THE AIR TEST's data: for a peeled layer, the lowest surface standing ABOVE
+// it. Josef's distinction - a roof over a walkway leaves open space, a wall
+// standing on a road is solid to the ground - and the tops-only rasters
+// cannot tell those apart, since both read as "something above, a surface
+// below". No height threshold ever could: a roof and a tall wall's top sit at
+// the same height.
+//
+// This cannot ride the existing bottoms map, which MINs over the WHOLE
+// column: an elevated deck records its own underside and buries the signal,
+// rejecting exactly the walkway the peeled layers exist for. Restricting to
+// fragments above the layer's own finished top is the whole trick, and it is
+// why the pass has to run after that layer's peel.
+//
+// EVERY facing counts, unlike the peel: a wall's side faces are what make it
+// solid, and they are precisely what the peel's up-facing filter throws away.
+// Support posts standing on a deck therefore veto their OWN columns and no
+// others, which is correct - snow does not fall inside a post.
+//
+// Written to SV_Target1 so the capture's existing blend state supplies the
+// MIN op; RT0 is bound null for this pass.
+struct COVER_OUTPUT
+{
+	float Bottom : SV_Target1;
+};
+
+COVER_OUTPUT main(VS_OUTPUT input)
+{
+	COVER_OUTPUT psout;
+	// Sentinel is a no-op under MIN: nothing above means open sky, which the
+	// drape reads as free to draw.
+	psout.Bottom = 100000.0;
+	float2 dims;
+	Layer1Top.GetDimensions(dims.x, dims.y);
+	float2 local = (input.WorldXY - HeightWindowCenter) / HeightHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	int2 t = int2(clamp(uv * dims - 0.5, 0.0, dims.x - 1.001));
+	float layerTop = Layer1Top.Load(int3(t, 0));
+	// 2 units of skin so the surface's own coplanar geometry does not read as
+	// its own cover.
+	[flatten] if (layerTop > -50000.0 && input.WorldZ > layerTop + 2.0)
+		psout.Bottom = input.WorldZ;
+	return psout;
+}
+#	else
 float main(VS_OUTPUT input) : SV_Target0
 {
 	// Only up-facing surfaces may OWN a peeled layer. The capture
@@ -172,6 +217,7 @@ float main(VS_OUTPUT input) : SV_Target0
 #	endif
 	return input.WorldZ;
 }
+#	endif
 #elif defined(PSHADER)
 // Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
 // window addressing is read here; names carry an H so they cannot clash

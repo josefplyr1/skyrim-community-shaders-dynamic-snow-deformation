@@ -1064,6 +1064,14 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
 		}
 	}
+	if (!heightCoverPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "COVERBOT"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightCoverPS)))
+				Util::SetResourceName(heightCoverPS, "SnowDeformation::HeightCoverPS");
+		}
+	}
 	if (!heightPeel2PS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "PEEL2"));
@@ -1170,6 +1178,8 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
+	objectCoverBottom2 = makeHeightTexture("SnowDeformation::ObjectCoverBottom2");
+	objectCoverBottom3 = makeHeightTexture("SnowDeformation::ObjectCoverBottom3");
 	// P3: the sky-openness field at half the raster's resolution - a soft
 	// field, and half res quarters the bake cost. No RTV: compute-written.
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
@@ -1663,24 +1673,59 @@ void SnowDeformation::RenderObjectHeightMap()
 	// yields the next-highest snow-bearing surface per column. Each pass
 	// needs the previous one finished, so they run sequentially. Only the
 	// transform and the window fields matter here.
-	for (int peelLayer = 0; peelLayer < 2; peelLayer++) {
-		ID3D11PixelShader* peelPS = peelLayer == 0 ? heightPeelPS : heightPeel2PS;
-		Texture2D* peelTarget = peelLayer == 0 ? heightTop2Raw[heightCurrent] : heightTop3Raw[heightCurrent];
+	//
+	// THE AIR TEST's passes ride the same loop (Josef's distinction, 2026-08-31):
+	// after each peeled top exists, a COVERBOT pass MIN-blends the height of
+	// everything standing above it, which is what separates a roof over a
+	// walkway (open space beneath) from a wall standing on a road (solid to the
+	// ground). They must come after their own layer's peel, and they cost a
+	// full re-rasterization each, so they run ONLY while the drape is on.
+	const int coverPasses = (settings.LayeredObjectDrape && heightCoverPS &&
+								objectCoverBottom2 && objectCoverBottom3) ?
+	                            2 :
+	                            0;
+	for (int pass = 0; pass < 2 + coverPasses; pass++) {
+		const bool coverPass = pass >= 2;
+		const int peelLayer = coverPass ? pass - 2 : pass;
+		ID3D11PixelShader* peelPS = coverPass ? heightCoverPS :
+		                                        (peelLayer == 0 ? heightPeelPS : heightPeel2PS);
+		Texture2D* peelTarget = coverPass ?
+		                            (peelLayer == 0 ? objectCoverBottom2 : objectCoverBottom3) :
+		                            (peelLayer == 0 ? heightTop2Raw[heightCurrent] : heightTop3Raw[heightCurrent]);
 		if (!peelPS || !peelTarget)
 			break;
-		ID3D11RenderTargetView* peelRTV = peelTarget->rtv.get();
-		context->OMSetRenderTargets(1, &peelRTV, nullptr);
+		if (coverPass) {
+			// The MIN op lives on RT1 in the capture's blend state, so bind the
+			// target THERE with RT0 null and let the existing state supply it
+			// rather than authoring a second blend state that could drift.
+			// Cleared to the empty sentinel: no cover at all reads as open sky.
+			const float openSky[4] = { kHeightMapEmptyBottom, kHeightMapEmptyBottom,
+				kHeightMapEmptyBottom, kHeightMapEmptyBottom };
+			context->ClearRenderTargetView(peelTarget->rtv.get(), openSky);
+			ID3D11RenderTargetView* coverRTVs[2] = { nullptr, peelTarget->rtv.get() };
+			context->OMSetRenderTargets(2, coverRTVs, nullptr);
+		} else {
+			ID3D11RenderTargetView* peelRTV = peelTarget->rtv.get();
+			context->OMSetRenderTargets(1, &peelRTV, nullptr);
+		}
 		context->PSSetShader(peelPS, nullptr, 0);
-		// t3 = layer 1; the layer-3 pass adds t4 = the finished layer 2
-		// (never bound while it is still the pass's own render target).
-		ID3D11ShaderResourceView* peelSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
-			peelLayer == 1 ? heightTop2Raw[heightCurrent]->srv.get() : nullptr };
+		// Peel: t3 = layer 1, and the layer-3 pass adds t4 = the finished layer
+		// 2 (never bound while it is still the pass's own render target).
+		// Cover: t3 = the layer this pass measures cover FOR.
+		ID3D11ShaderResourceView* peelSRVs[2] = {
+			coverPass ?
+				(peelLayer == 0 ? heightTop2Raw[heightCurrent]->srv.get() : heightTop3Raw[heightCurrent]->srv.get()) :
+				heightTopRaw[heightCurrent]->srv.get(),
+			(!coverPass && peelLayer == 1) ? heightTop2Raw[heightCurrent]->srv.get() : nullptr
+		};
 		context->PSSetShaderResources(3, 2, peelSRVs);
 		// The peel PS addresses the layer maps through StaticCB's window
 		// fields; the capture pass binds b1 to the VS only.
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
-		globals::profiler->BeginPass(peelLayer == 0 ? "SnowDeformation::ObjectHeightPeel" : "SnowDeformation::ObjectHeightPeel2");
+		globals::profiler->BeginPass(coverPass ?
+				(peelLayer == 0 ? "SnowDeformation::ObjectCoverBottom2" : "SnowDeformation::ObjectCoverBottom3") :
+				(peelLayer == 0 ? "SnowDeformation::ObjectHeightPeel" : "SnowDeformation::ObjectHeightPeel2"));
 		for (const auto& cap : capturedStatics) {
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
@@ -2618,10 +2663,18 @@ void SnowDeformation::DrawCapturedStatics()
 			context->VSSetShaderResources(24, 1, &peelSRVs[0]);
 			context->VSSetShaderResources(26, 1, &peelSRVs[1]);
 			context->VSSetShaderResources(27, 2, peel3SRVs);
+			// t30/t31 = the air test: the lowest surface standing above each
+			// peeled layer, so a peeled pass can tell a roof from a wall.
+			ID3D11ShaderResourceView* coverSRVs[2] = {
+				(objectCoverBottom2 && objectCoverBottom2->srv) ? objectCoverBottom2->srv.get() : nullptr,
+				(objectCoverBottom3 && objectCoverBottom3->srv) ? objectCoverBottom3->srv.get() : nullptr
+			};
+			context->VSSetShaderResources(30, 2, coverSRVs);
 			if (tessellatePatch) {
 				context->DSSetShaderResources(24, 1, &peelSRVs[0]);
 				context->DSSetShaderResources(26, 1, &peelSRVs[1]);
 				context->DSSetShaderResources(27, 2, peel3SRVs);
+				context->DSSetShaderResources(30, 2, coverSRVs);
 			}
 		}
 		// One pass per peeled layer. Layer 0 is the surface the patch has

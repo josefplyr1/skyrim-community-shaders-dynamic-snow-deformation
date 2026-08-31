@@ -615,6 +615,10 @@ Texture2D<float> ObjectSnowCone2 : register(t26);
 // K=3: the third peeled layer for roof-over-beam-over-floor columns.
 Texture2D<float> ObjectTop3Raw : register(t27);
 Texture2D<float> ObjectSnowCone3 : register(t28);
+// THE AIR TEST: per peeled layer, the lowest surface standing ABOVE that
+// layer's top. Sentinel (kHeightMapEmptyBottom) means nothing above at all.
+Texture2D<float> ObjectCoverBottom2 : register(t30);
+Texture2D<float> ObjectCoverBottom3 : register(t31);
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -997,6 +1001,23 @@ float ObjectConeDepthL(float2 worldXY)
 	return r;
 }
 
+// Lowest surface standing above this layer's top, nearest texel. Layer 1 has
+// nothing above it by definition, so it reports open sky and never gates.
+float CoverBottomL(float2 worldXY)
+{
+	float r = 100000.0;
+	[branch] if (PatchLayer > 0.5)
+	{
+		float2 dims;
+		ObjectCoverBottom2.GetDimensions(dims.x, dims.y);
+		float2 tc = PatchTexel(worldXY, dims);
+		int2 c = int2(clamp(tc, 0.0, dims.x - 1.001));
+		r = (PatchLayer < 1.5) ? ObjectCoverBottom2.Load(int3(c.x, c.y, 0)) :
+		                         ObjectCoverBottom3.Load(int3(c.x, c.y, 0));
+	}
+	return r;
+}
+
 // THE PEEL INDEX IS A STACKING ORDINAL, NOT A HEIGHT STRATUM. One column's
 // layer 3 is a walkway while its neighbour's layer 3 is a roof beam, purely
 // because the neighbour carries more surfaces above it. Every neighbour test
@@ -1012,6 +1033,10 @@ float ObjectConeDepthL(float2 worldXY)
 // there the highest surface IS coherent across columns, which is why the
 // existing kills work, and roads must not shift by a texel.
 static const float kPeelNeighborBand = 256.0;
+// Clearance a peeled layer needs above it to count as open. A roof over a
+// walkway clears by hundreds; a wall's own side faces sit within a couple of
+// units of the surface they stand on.
+static const float kCoverAirGap = 32.0;
 float PatchTopNeighbor(float2 worldXY, float refZ)
 {
 	float r = PatchTop(worldXY);
@@ -1284,6 +1309,17 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// Objects re-opens the old path deliberately - it is the experimental
 	// toggle this whole plan is the rework of - and turning the heightfield OFF
 	// restores the pre-heightfield behaviour exactly, so the A/B stays honest.
+	// THE AIR TEST (Josef's Option-B question): a peeled layer draws only where
+	// the thing standing above it actually CLEARS the surface. A roof over a
+	// walkway leaves open space and the walkway keeps its snow; a wall standing
+	// on a road is solid to the ground, and draping that column paints road
+	// snow INSIDE the stone - his "any object above you also gets the shell".
+	// The two are identical in the tops-only rasters, so no height threshold
+	// can separate them; this reads the cover raster built for the question.
+	bool airOK = true;
+	[branch] if (PatchLayer > 0.5)
+		airOK = (CoverBottomL(worldXY) - top) > kCoverAirGap;
+
 	bool mayTrample = (RoadField < 0.5) || ObjectTrenches > 0.5 || owns;
 	// A PEELED LAYER DRAWS ITS WHOLE SURFACE, not just its trails. The
 	// trample gate exists because the layer-1 patch is the TRENCH layer -
@@ -1296,7 +1332,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
-	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled)
+	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled && airOK)
 	{
 		// Road verge: ride the repose cone down to the landscape class depth.
 		// A trench crossing the road edge then keeps ONE cross-section - the
