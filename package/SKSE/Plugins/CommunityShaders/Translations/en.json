@@ -1486,6 +1486,8 @@
     "feature.snow_deformation.key_feature_2": "Trails carved by the player, NPCs and creatures",
     "feature.snow_deformation.key_feature_3": "Snowfall-driven snow refill",
     "feature.snow_deformation.key_feature_4": "Compute-shader based, low performance impact",
+    "feature.snow_deformation.layered_drape": "Layered Object Drape (experimental)",
+    "feature.snow_deformation.layered_drape_tooltip": "Draws the snow sheet that roads already use a second and third time, for surfaces hidden under something else - a walkway beneath a roof, a step under an eave. Without it those surfaces are covered by whatever stands above them and get no snow of their own. Being trialled to find out whether this way of drawing snow can serve buildings as well as it serves roads.",
     "feature.snow_deformation.lift_frost": "Raise Buried Frost Effects",
     "feature.snow_deformation.lift_frost_tooltip": "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch.",
     "feature.snow_deformation.lightning_arcs": "Draw Lightning Arcs",

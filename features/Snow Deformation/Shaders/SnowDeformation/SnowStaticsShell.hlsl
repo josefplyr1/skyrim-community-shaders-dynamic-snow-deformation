@@ -300,7 +300,10 @@ cbuffer StaticCB : register(b1)
 	// CONSTANT-height container and find the surface per pixel. Mirror in
 	// SnowHeightCapture.hlsl / SnowDeformation.h.
 	float ContainerSpike;
-	float padPile;
+	// Which peeled layer THIS patch pass draws (0 = the top surface, 1/2 =
+	// the peeled layers under cover). Mirror in SnowHeightCapture.hlsl /
+	// SnowDeformation.h.
+	float PatchLayer;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -938,6 +941,36 @@ bool RoadOwnsColumn(float2 worldXY)
 
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
 
+// ---- PER-LAYER DRAPE (CONTAINER-SHELL-PLAN pivot) -----------------------
+// A drape is ONE SURFACE PER COLUMN. Roads have exactly one, which is why
+// they were the easy case; a walkway under a roof has two, and the lower
+// one has to keep its snow. The answer is to draw the lattice ONCE PER
+// PEELED LAYER, each pass reading that layer's own top and cone, so the
+// walkway gets its own drape instead of being hidden under the roof's.
+//
+// EVERY raster read in the vertex builder must follow the same layer.
+// A partial redirect would compare layer 2's surface against layer 1's
+// neighbours: the roof towers 100+ units over the walkway, the tall-ray
+// test would fire on every vertex, and the entire under-cover drape would
+// be culled before it drew anything.
+float PatchTopL(float2 worldXY)
+{
+	[branch] if (PatchLayer < 0.5)
+		return PatchTop(worldXY);
+	[branch] if (PatchLayer < 1.5)
+		return PatchTop2(worldXY);
+	return PatchTop3(worldXY);
+}
+
+float ObjectConeDepthL(float2 worldXY)
+{
+	[branch] if (PatchLayer < 0.5)
+		return ObjectConeDepth(worldXY);
+	[branch] if (PatchLayer < 1.5)
+		return ObjectConeDepth2(worldXY);
+	return ObjectConeDepth3(worldXY);
+}
+
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
 // unit or two apart, so the trail-margin test uses a cheap 5-tap cross
@@ -982,10 +1015,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// legacy grid sampled reproduces its exact floor geometry.
 		float2 base = floor(worldXY / kHeightTexel) * kHeightTexel;
 		float2 f = saturate((worldXY - base) / kHeightTexel);
-		float t00 = PatchTop(base);
-		float t10 = PatchTop(base + float2(kHeightTexel, 0.0));
-		float t01 = PatchTop(base + float2(0.0, kHeightTexel));
-		float t11 = PatchTop(base + float2(kHeightTexel, kHeightTexel));
+		float t00 = PatchTopL(base);
+		float t10 = PatchTopL(base + float2(kHeightTexel, 0.0));
+		float t01 = PatchTopL(base + float2(0.0, kHeightTexel));
+		float t11 = PatchTopL(base + float2(kHeightTexel, kHeightTexel));
 		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
 		// A sentinel lattice corner poisons the bilinear, and a large drop
 		// across the cell (roof or wall edge) would interpolate vertices
@@ -996,7 +1029,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float tMin = min(min(t00, t10), min(t01, t11));
 		float tMax = max(max(t00, t10), max(t01, t11));
 		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
-			top = PatchTop(worldXY);
+			top = PatchTopL(worldXY);
 		float2 s00 = PatchSkinDepth(base);
 		float2 s10 = PatchSkinDepth(base + float2(kHeightTexel, 0.0));
 		float2 s01 = PatchSkinDepth(base + float2(0.0, kHeightTexel));
@@ -1011,7 +1044,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	else
 	{
 		float2 skin = PatchSkinDepth(worldXY);
-		top = PatchTop(worldXY);
+		top = PatchTopL(worldXY);
 		skinDepth = skin.x;
 		skinEdgeMin = skinDepth;
 		roadTop = skin.y;
@@ -1033,17 +1066,20 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// already-sampled top/roadTop. Evaluated before the de-jut can
 		// lower `top`, which only makes it more conservative: a real road
 		// column reads top == roadTop either way.
-		owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+		// Roads live on layer 1 only: the skin-depth raster's road channel is
+		// per COLUMN, so a peeled layer under a bridge would inherit the
+		// bridge's road ownership and take the road path's rim exemptions.
+		owns = PatchLayer < 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
 	// rim, or the patch's edge ring is culled along every road chunk. Facade
 	// sheets still die by their own sentinel top.
-	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
-	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
-	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
-	float topYN = PatchTop(worldXY - float2(0.0, kHeightTexel));
+	float topXP = PatchTopL(worldXY + float2(kHeightTexel, 0.0));
+	float topXN = PatchTopL(worldXY - float2(kHeightTexel, 0.0));
+	float topYP = PatchTopL(worldXY + float2(0.0, kHeightTexel));
+	float topYN = PatchTopL(worldXY - float2(0.0, kHeightTexel));
 	float minNeighborTop = 1e9;
 	if (topXP > -50000.0)
 		minNeighborTop = min(minNeighborTop, topXP);
@@ -1095,7 +1131,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	bool nearTall = false;
 	[unroll] for (uint tallI = 0; tallI < 8; tallI++)
 	{
-		float tallTop = PatchTop(worldXY + kTallRays[tallI]);
+		float tallTop = PatchTopL(worldXY + kTallRays[tallI]);
 		[flatten] if (tallTop > -50000.0 && (tallTop - top) > 100.0)
 			nearTall = true;
 	}
@@ -1165,7 +1201,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// toggle this whole plan is the rework of - and turning the heightfield OFF
 	// restores the pre-heightfield behaviour exactly, so the A/B stays honest.
 	bool mayTrample = (RoadField < 0.5) || ObjectTrenches > 0.5 || owns;
-	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample);
+	// A PEELED LAYER DRAWS ITS WHOLE SURFACE, not just its trails. The
+	// trample gate exists because the layer-1 patch is the TRENCH layer -
+	// it lives around footprints and the skin owns everything else. A
+	// layer-2 drape has no skin behind it: it exists precisely to put snow
+	// on a surface the roof above has been hiding, so gating it on
+	// deformation would leave the walkway bare, which is the whole point.
+	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample) || PatchLayer > 0.5;
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
@@ -1185,7 +1227,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		[branch] if (roadField)
 		{
 			float landDepth = max(SampleTerrainStatics(gridLocal).y, 0.0);
-			float cone = ObjectConeDepth(worldXY);
+			float cone = ObjectConeDepthL(worldXY);
 			skinDepth = max(min(cone, skinDepth), min(landDepth, skinDepth));
 		}
 

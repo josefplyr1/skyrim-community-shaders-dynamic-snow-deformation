@@ -65,7 +65,7 @@ cbuffer StaticCB : register(b1)
 	float PileHeightRatio;  // layout sync with SnowStaticsShell; unused here
 	float SkyExposureSk;    // layout sync with SnowStaticsShell; unused here
 	float ContainerSpike;   // layout sync with SnowStaticsShell; unused here
-	float padPile;
+	float PatchLayer;       // layout sync with SnowStaticsShell; unused here
 }
 
 struct VS_INPUT

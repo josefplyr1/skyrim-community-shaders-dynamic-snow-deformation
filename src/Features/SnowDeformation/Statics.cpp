@@ -899,6 +899,9 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Global gate here, not a per-draw class: the patch is one draw and
 	// reads the road bit per texel from the raster's G channel.
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
+	// Layer 0 unless a per-layer pass overrides it after the fill. The
+	// shadow caster shares this recipe and draws the top surface only.
+	a_scb.PatchLayer = 0.0f;
 }
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
@@ -2599,13 +2602,54 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
 		}
+		// PER-LAYER DRAPE prototype: the peeled layers' tops and cones, so a
+		// pass can drape a surface the layer-1 raster hides under a roof.
+		// t24/t26 = layer 2 top/cone, t27/t28 = layer 3, matching the skin's
+		// slots so one set of shader accessors serves both paths.
+		if (settings.LayeredObjectDrape) {
+			ID3D11ShaderResourceView* peelSRVs[2] = {
+				(heightTop2Raw[heightCurrent] && heightTop2Raw[heightCurrent]->srv) ? heightTop2Raw[heightCurrent]->srv.get() : nullptr,
+				(objectSnowCone2 && objectSnowCone2->srv) ? objectSnowCone2->srv.get() : nullptr
+			};
+			ID3D11ShaderResourceView* peel3SRVs[2] = {
+				(heightTop3Raw[heightCurrent] && heightTop3Raw[heightCurrent]->srv) ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
+				(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr
+			};
+			context->VSSetShaderResources(24, 1, &peelSRVs[0]);
+			context->VSSetShaderResources(26, 1, &peelSRVs[1]);
+			context->VSSetShaderResources(27, 2, peel3SRVs);
+			if (tessellatePatch) {
+				context->DSSetShaderResources(24, 1, &peelSRVs[0]);
+				context->DSSetShaderResources(26, 1, &peelSRVs[1]);
+				context->DSSetShaderResources(27, 2, peel3SRVs);
+			}
+		}
+		// One pass per peeled layer. Layer 0 is the surface the patch has
+		// always drawn; 1 and 2 exist only under cover, so their lattices
+		// kill almost every vertex on an open scene - the cost is real but
+		// concentrated where architecture is.
+		const uint32_t layerPasses = settings.LayeredObjectDrape ? 3u : 1u;
+		for (uint32_t layer = 0; layer < layerPasses; layer++) {
+			scb.PatchLayer = float(layer);
+			staticsCB->Update(scb);
+			if (tessellatePatch)
+				context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
+			else
+				context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		}
 		if (tessellatePatch) {
-			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		} else {
-			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+		}
+		if (settings.LayeredObjectDrape) {
+			ID3D11ShaderResourceView* nullPeel[2] = { nullptr, nullptr };
+			context->VSSetShaderResources(24, 1, &nullPeel[0]);
+			context->VSSetShaderResources(26, 1, &nullPeel[0]);
+			context->VSSetShaderResources(27, 2, nullPeel);
+			context->DSSetShaderResources(24, 1, &nullPeel[0]);
+			context->DSSetShaderResources(26, 1, &nullPeel[0]);
+			context->DSSetShaderResources(27, 2, nullPeel);
 		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };

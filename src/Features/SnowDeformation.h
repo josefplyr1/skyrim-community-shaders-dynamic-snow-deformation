@@ -481,6 +481,8 @@ public:
 		float SnowSettlingPct = 50.0f;
 		/** @brief C0 spike (CONTAINER-SHELL-PLAN), debug A/B: draw the S4 shell as a CONSTANT-height container and find the snow surface per PIXEL by marching, instead of displacing vertices by the height field. Not serialised - a spike, off every launch. */
 		bool ContainerShellSpike = false;
+		/** @brief Per-layer drape prototype (CONTAINER-SHELL-PLAN pivot), debug A/B: draw the trench patch once per PEELED LAYER so a surface under cover (a walkway beneath a roof) gets its own drape instead of being hidden by the roof's. Answers whether the drape architecture can serve architecture at all. Not serialised. */
+		bool LayeredObjectDrape = false;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1590,7 +1592,8 @@ public:
 		float SkyExposureSk;
 		/** @brief C0 container spike (CONTAINER-SHELL-PLAN): >0.5 lifts every S4 vertex by a CONSTANT and lets the PS march the real surface per pixel. Debug A/B only. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ContainerSpike;
-		float padPile[1];
+		/** @brief Which peeled layer the current trench-patch pass draws (0 = top surface, 1/2 = the layers under cover). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float PatchLayer;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

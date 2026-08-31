@@ -1182,6 +1182,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::TextUnformatted(probeLine1);
 				ImGui::TextUnformatted(probeLine2);
 			}
+			ImGui::Checkbox(T(TKEY("layered_drape"), "Layered Object Drape (experimental)"), &settings.LayeredObjectDrape);
+			if (auto _ttDrape = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("layered_drape_tooltip"), "Draws the snow sheet that roads already use a second and third time, for surfaces hidden under something else - a walkway beneath a roof, a step under an eave. Without it those surfaces are covered by whatever stands above them and get no snow of their own. Being trialled to find out whether this way of drawing snow can serve buildings as well as it serves roads."));
+
 			ImGui::Checkbox(T(TKEY("container_spike"), "Container Shell (experimental)"), &settings.ContainerShellSpike);
 			if (auto _ttContainer = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("container_spike_tooltip"), "A different way of drawing object snow, being trialled. Instead of pushing the object's own corners upward to form the snow - which tears into triangles wherever neighbouring corners disagree about height - the shell is raised as a plain box and the snow surface inside it is found for every pixel on screen. Rims should read as smooth curves and the torn triangles should be impossible. Rougher than the normal path in other ways for now: no shadows from the new shape, and the dome ignores stacked planes and the pile-height limit."));
