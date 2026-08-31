@@ -809,6 +809,90 @@ float PatchTop3Point(float2 worldXY)
 	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
 	return ObjectTop3Raw.Load(int3(t, 0));
 }
+
+// SENTINEL-AWARE BILINEAR layer tops - THE PLEAT FIX. The layer select ran
+// on the POINT twins above, and nearest-neighbour is piecewise constant: it
+// jumps a full step at every texel boundary. Texels are 4 units; after the
+// rim tessellation vertices sit about a unit apart, so neighbouring
+// vertices read DIFFERENT texels, disagreed about which peeled plane owns
+// them, and lifted by a whole class depth apart - rasterised as the fence
+// of sliver triangles at every rim and the rifts under cover.
+//
+// Each texel contributes its bilinear weight only where it carries data,
+// and the sum renormalises, so a texel's influence fades to zero with
+// distance instead of switching: continuous everywhere at least one of the
+// four is valid. This also answers the bug that sent the select to POINT in
+// the first place - MAX-of-4 spread a higher neighbour a full texel outward
+// and flipped everything near a stair riser onto the upper tread, whereas
+// distance weighting gives that neighbour almost nothing until the sample
+// is genuinely near it. Across a riser the blend does pass through heights
+// that belong to neither tread; with the soft decisions downstream that
+// reads as ONE smooth transition over a texel, which is the intent.
+float PatchTopSmooth(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTopRaw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float4 h = float4(
+		ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0)),
+		ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0)));
+	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+	w *= (float4)(h > -50000.0);
+	float sum = w.x + w.y + w.z + w.w;
+	[flatten] if (sum < 1e-5)
+		return -1000000.0;
+	return dot(w, h) / sum;
+}
+
+float PatchTop2Smooth(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTop2Raw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float4 h = float4(
+		ObjectTop2Raw.Load(int3(t0.x, t0.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t0.y, 0)),
+		ObjectTop2Raw.Load(int3(t0.x, t1.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t1.y, 0)));
+	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+	w *= (float4)(h > -50000.0);
+	float sum = w.x + w.y + w.z + w.w;
+	[flatten] if (sum < 1e-5)
+		return -1000000.0;
+	return dot(w, h) / sum;
+}
+
+float PatchTop3Smooth(float2 worldXY)
+{
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		return -1000000.0;
+	float2 dims;
+	ObjectTop3Raw.GetDimensions(dims.x, dims.y);
+	float2 t = PatchTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float4 h = float4(
+		ObjectTop3Raw.Load(int3(t0.x, t0.y, 0)), ObjectTop3Raw.Load(int3(t1.x, t0.y, 0)),
+		ObjectTop3Raw.Load(int3(t0.x, t1.y, 0)), ObjectTop3Raw.Load(int3(t1.x, t1.y, 0)));
+	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+	w *= (float4)(h > -50000.0);
+	float sum = w.x + w.y + w.z + w.w;
+	[flatten] if (sum < 1e-5)
+		return -1000000.0;
+	return dot(w, h) / sum;
+}
 #endif
 
 #if ((defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)) || defined(PSHADER)
@@ -1699,7 +1783,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			// owns the surface and it gets NO roll data rather than a
 			// full-height interior borrowed from someone else's plane
 			// - which was the beam-streak and staircase-hole failure.
-			float top1 = PatchTopPoint(worldBase.xy);
+			// SMOOTH tops, not POINT (the pleat fix): nearest-neighbour
+			// jumps a full texel step between vertices a unit apart, and
+			// every jump here becomes a class-depth lift difference - the
+			// sliver fences and the under-cover rifts. See PatchTopSmooth.
+			float top1 = PatchTopSmooth(worldBase.xy);
 			[branch] if (top1 > -50000.0 && worldBase.z < top1 - PeelTol)
 			{
 				// "Ignore Cover Above" (Josef's rule): cover more than
@@ -1719,30 +1807,42 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				float coneDeep;
 				[branch] if (top1 - worldBase.z > OverheadIgnore)
 				{
-					float top2 = PatchTop2Point(worldBase.xy);
-					float top3 = PatchTop3Point(worldBase.xy);
-					bool planeHere = (top2 > -50000.0 && abs(worldBase.z - top2) <= PeelTol) ||
-					                 (top3 > -50000.0 && abs(worldBase.z - top3) <= PeelTol);
-					coneDeep = planeHere ? coneSeed : 0.0;
-					[flatten] if (!planeHere)
+					float top2 = PatchTop2Smooth(worldBase.xy);
+					float top3 = PatchTop3Smooth(worldBase.xy);
+					// GRADED plane ownership, not a bool. The old form was
+					// `planeHere ? coneSeed : 0.0` - full class depth or
+					// nothing, decided by two hard tolerance tests on
+					// point-sampled tops. Under cover that is a guaranteed
+					// pleat generator: neighbouring vertices land either
+					// side of the test and the surface tears between full
+					// height and ground. Ownership now fades over one peel
+					// tolerance, so the worst a disagreement can do is
+					// shade a vertex slightly.
+					float own2 = top2 > -50000.0 ? 1.0 - smoothstep(PeelTol, PeelTol * 2.0, abs(worldBase.z - top2)) : 0.0;
+					float own3 = top3 > -50000.0 ? 1.0 - smoothstep(PeelTol, PeelTol * 2.0, abs(worldBase.z - top3)) : 0.0;
+					float planeW = max(own2, own3);
+					coneDeep = coneSeed * planeW;
+					[flatten] if (planeW < 0.5)
 						debugLayer = 4.0;
 				}
 				else
 				{
-					float top2 = PatchTop2Point(worldBase.xy);
+					float top2 = PatchTop2Smooth(worldBase.xy);
 					float cone2v = ObjectConeDepth2(worldBase.xy);
 					coneDeep = cone2v;
 					debugLayer = 2.0;
 					[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
 					{
-						float top3 = PatchTop3Point(worldBase.xy);
+						float top3 = PatchTop3Smooth(worldBase.xy);
 						float cone3v = ObjectConeDepth3(worldBase.xy);
 						debugLayer = 3.0;
-						[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
-						{
-							cone3v = 0.0;
+						// Graded, for the same reason as the cover branch:
+						// the hard `cone3v = 0` cliffed the third layer's
+						// edge into the same fence.
+						float own3 = top3 > -50000.0 ? 1.0 - smoothstep(0.0, PeelTol, (top3 - PeelTol) - worldBase.z) : 0.0;
+						cone3v *= own3;
+						[flatten] if (own3 < 0.5)
 							debugLayer = 4.0;
-						}
 						// Same smooth hand-off as below, one layer deeper.
 						float f2 = top2 > -50000.0 ? smoothstep(PeelTol, PeelTol * 2.0, top2 - worldBase.z) : 1.0;
 						coneDeep = lerp(cone2v, cone3v, f2);
@@ -1858,7 +1958,10 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float open = SampleSkyOpenness(worldBase.xy);
 		[flatten] if (ProjPixelEnable > 1.5)
 		{
-			float coverTop = PatchTop(worldBase.xy);
+			// Smooth top, same reason as the layer select: MAX-of-4 is
+			// piecewise constant, and a texel-boundary jump here steps the
+			// DEPTH directly - visible as banding under cover.
+			float coverTop = PatchTopSmooth(worldBase.xy);
 			[flatten] if (coverTop > -50000.0)
 				open = min(open, 1.0 - smoothstep(kShelterNear, kShelterFar, coverTop - worldBase.z));
 		}
