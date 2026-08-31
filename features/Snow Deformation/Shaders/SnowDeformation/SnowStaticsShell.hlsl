@@ -781,7 +781,13 @@ float ObjectConeDepth3(float2 worldXY)
 // draw, plus a margin so the ray always starts in clear air above it.
 float ContainerHeight()
 {
-	return max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) * max(PileHeightRatio, 1.0) + 4.0;
+	// The margin (last term) is what the lid keeps between itself and the
+	// tallest possible snow. It has to survive INTERPOLATION as well as the
+	// field: the lid's height is computed per vertex and interpolated
+	// linearly across a triangle, while the field between those vertices is
+	// not linear, so a thin margin lets the lid dip under the surface
+	// mid-triangle. 8 units is two raster texels.
+	return max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) * max(PileHeightRatio, 1.0) + 8.0;
 }
 
 // The snow surface as a PURE FUNCTION OF WORLD XY - the object top plus the
@@ -1935,8 +1941,25 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// shadows keep the old shape rather than becoming a solid block.
 	[flatten] if (ContainerSpike > 0.5 && ProjPixelEnable > 1.5)
 	{
+		// THE LID MUST CLEAR THE FIELD, NOT THE MESH. v2 raised each vertex
+		// a constant above ITS OWN position, so the container was the
+		// object's FACETED MESH translated upward - while the snow surface
+		// it is supposed to enclose comes from the 4-unit raster, max-of-4
+		// dilated. Two different surfaces, disagreeing by several units.
+		// Wherever a facet sagged more than the margin below the raster's
+		// top, the ray STARTED BELOW the snow and the pixel missed, and
+		// that sign flips facet by facet - the triangles in the
+		// coverage-alpha view, which in container mode IS the hit/miss
+		// mask. It also explains triangles at depth 0, where there is no
+		// dome to pleat and only a mesh-versus-raster mismatch is left.
+		//
+		// Anchoring the lid to PatchTop - the same source ContainerSnowZ
+		// reads - makes the clearance exact everywhere and takes the mesh's
+		// faceting out of the decision entirely. The vertex's own height is
+		// kept as a floor so nothing sinks into the object it covers.
 		float containerH = ContainerHeight();
-		o.WorldAbs = worldBase + float3(0.0, 0.0, containerH);
+		float lidBase = max(worldBase.z, PatchTop(worldBase.xy));
+		o.WorldAbs = float3(worldBase.xy, lidBase + containerH);
 		o.Depth = containerH;
 		o.CoverDepth = containerH;
 	}
@@ -2415,13 +2438,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float prevT = 0.0;
 		float prevGap = originAbs.z - ContainerSnowZ(originAbs.xy);
 		float hitT = -1.0;
-		// An entry ALREADY below the field is the container's side skirt
-		// over a flank, not sky over snow - the v1 march "hit" at the
-		// entry and painted the skirt's stretched triangles white, which
-		// is why the fences came back worse. The surface visible from
-		// outside is only ever an above-to-below crossing; a skirt entry
-		// is bare flank and must miss.
-		[branch] if (prevGap > 0.0)
+		// Entry below the field. With the lid anchored to PatchTop this is
+		// no longer a side skirt over a flank (v2's meaning, which had to
+		// miss) - the lid has no skirts. It can now only mean the lid dipped
+		// under the surface between two vertices, where the interpolation is
+		// linear and the field is not. Degrade to the field directly beneath
+		// the entry: a continuous surface, off by at most the dip, instead
+		// of a hole or a painted lid. Rare by construction, and never a
+		// facet-following pattern.
+		[branch] if (prevGap <= 0.0)
+		{
+			float3 fallbackAbs = float3(originAbs.xy, ContainerSnowZ(originAbs.xy));
+			input.WorldPos = fallbackAbs - ShellCameraPosAdjust.xyz;
+			input.GridLocal = fallbackAbs.xy - GridOrigin;
+			const float gsf = 4.0;
+			float2 gradF = float2(
+				ContainerSnowZ(fallbackAbs.xy + float2(gsf, 0.0)) - ContainerSnowZ(fallbackAbs.xy - float2(gsf, 0.0)),
+				ContainerSnowZ(fallbackAbs.xy + float2(0.0, gsf)) - ContainerSnowZ(fallbackAbs.xy - float2(0.0, gsf))) / (2.0 * gsf);
+			normalWS = normalize(float3(-gradF, 1.0));
+			containerHit = true;
+		}
+		else
 		{
 			[loop] for (int ci = 1; ci <= kContainerSteps; ci++)
 			{
