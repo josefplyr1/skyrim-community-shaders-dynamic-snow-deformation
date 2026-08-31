@@ -989,6 +989,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	bool owns = false;
 	[branch] if (top > -50000.0 && skinDepth >= 1.0)
 	{
+		// OWNERSHIP FIRST, because the facade kills below must not fire on
+		// a road. Same predicate as RoadOwnsColumn, against this vertex's
+		// already-sampled top/roadTop. Evaluated before the de-jut can
+		// lower `top`, which only makes it more conservative: a real road
+		// column reads top == roadTop either way.
+		owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
@@ -1030,7 +1036,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// still samples tops partway up the smeared ramp and rises as a jagged
 	// rim along the wall. Clamping to the lowest valid neighbor plus a
 	// normal-slope allowance flattens the rim to the ground it belongs to.
-	[flatten] if (minNeighborTop < 1e8)
+	// NOT on a road: at a road's own edge the lowest valid neighbour is the
+	// terrain beside it, and clamping to it drags the road's snow down by
+	// the whole kerb height - the mismatched/floating road edges.
+	[flatten] if (minNeighborTop < 1e8 && !owns)
 		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
@@ -1052,6 +1061,19 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 			nearTall = true;
 	}
 	rim = rim || nearTall;
+
+	// A ROAD NEVER RIMS (Josef: road shells must never have holes, "even
+	// at their own edges"). Every kill above exists to keep the patch off
+	// building facades and off plateaus hugging walls - and a road's OWN
+	// edge trips the facade slope test by construction, since a RoadChunk
+	// stands proud of the terrain and drops far more than four units
+	// across the eight the gradient measures. The killed vertex takes the
+	// six triangles around it with it, and the road skin has already
+	// stepped aside on that column (RoadOwnsColumn is true there, the road
+	// IS the top), so nothing is left: the hexagonal holes photographed
+	// from underneath. The patch's silhouette dissolve still clips a real
+	// overhang in the PS, so dropping the vertex kill costs no protection.
+	rim = rim && !owns;
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
@@ -1085,9 +1107,8 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// cairn, wall or building standing on it - and draping road-depth snow
 	// over those was the plate regression. The road owns the column only
 	// where the column's top IS the road.
-	// Same predicate as RoadOwnsColumn, run against this vertex's own already
-	// sampled top/roadTop rather than re-reading the raster.
-	owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+	// `owns` is computed at the top of this block now - the facade kills
+	// have to know about it before they run.
 	roadField = RoadField > 0.5 && owns;
 
 	}  // end cheap gate
