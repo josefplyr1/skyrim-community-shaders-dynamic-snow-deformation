@@ -66,7 +66,7 @@ cbuffer StaticCB : register(b1)
 	float SkyExposureSk;    // layout sync with SnowStaticsShell; unused here
 	float ContainerSpike;   // layout sync with SnowStaticsShell; unused here
 	float PatchLayer;       // layout sync with SnowStaticsShell; unused here
-	float ObjectDrape;      // layout sync with SnowStaticsShell; unused here
+	float ObjectDrape;      // drape owns objects: they write their own class depth
 	float padDrape0;
 	float padDrape1;
 	float padDrape2;
@@ -121,7 +121,20 @@ VS_OUTPUT main(VS_INPUT input)
 	[flatten] if (ClassOverride > 1.5)
 		skinDepth = ObjectsDepth;
 	// Parked: only roads carve until object trenching is done properly.
-	[flatten] if (ObjectTrenches < 0.5 && LegacySkin < 0.5)
+	//
+	// THE DRAPE LIFTS THE PARK, and this line is why the road's shell and an
+	// object's were ONE shell. A non-road object wrote ZERO here, so a rock
+	// had no depth field of its own at all - everything it wore reached it
+	// from the road beneath through the raster's MAX blend. Hence Josef's two
+	// tells: the two shells are welded at every edge, and zeroing the Road
+	// Meshes slider deletes BOTH, because the object's only depth source was
+	// the road's. No amount of edge-cutting downstream could separate them
+	// while the object had nothing of its own to draw with.
+	//
+	// Gated on the drape so the A/B stays honest: with it off this is byte
+	// for byte the parked behaviour. Trenching stays parked either way - the
+	// patch's own mayTrample still refuses to carve an object column.
+	[flatten] if (ObjectTrenches < 0.5 && LegacySkin < 0.5 && ObjectDrape < 0.5)
 		skinDepth = 0.0;
 
 	VS_OUTPUT vsout;

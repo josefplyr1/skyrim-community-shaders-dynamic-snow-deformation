@@ -1645,6 +1645,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		// both gates have to reach this pass; without them every object reads
 		// as non-carving and the trench patch dies everywhere, roads included.
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		// Lifts the depth park for non-road objects, so a rock carries its own
+		// class depth instead of borrowing the road's through the MAX blend.
+		scb.ObjectDrape = settings.ObjectDrapeShell ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
