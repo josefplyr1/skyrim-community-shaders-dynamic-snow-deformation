@@ -2208,10 +2208,22 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 					//
 					// Both vanish at t=0, so the bottom of the roll stays pinned to
 					// the object's corner and the overhang opens above it.
-					float cancel = rollT;
-					float bulge = 4.0 * rollT * (1.0 - rollT);
-					float shoulder = 1.0 - smoothstep(0.70, 1.0, rollT);
-					corniceW = (cancel + bulge) * shoulder * heightScale;
+					// The bulge must peak near the BOTTOM of the roll. A throw that
+					// grows with height pushes the TOP out instead, which is the
+					// long flat shelf ending in a hook that Josef drew as wrong.
+					//
+					// Geometry, with t = rollT running 0 at the rim to 1 at the flat
+					// top: the surface sits about t roll-radii inside the rim, so a
+					// throw of t radii lands it back on the corner and anything more
+					// passes it. Concentrating the throw at low t makes the WIDEST
+					// point of the snow sit low, with the surface tucking back in
+					// both above it and below it into the corner - the rounded bulb.
+					//
+					// Peaks at t = 0.3 (about two thirds of the height) and is gone
+					// by t = 0.6, so the flat top never moves and needs no separate
+					// shoulder term. Zero at the rim keeps the foot pinned.
+					float u = saturate(rollT / 0.6);
+					corniceW = 4.0 * u * (1.0 - u) * heightScale;
 				}
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
