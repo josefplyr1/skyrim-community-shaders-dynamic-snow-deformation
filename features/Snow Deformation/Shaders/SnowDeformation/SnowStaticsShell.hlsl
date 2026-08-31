@@ -882,6 +882,17 @@ float2 PatchSkinDepth(float2 worldXY)
 //
 // Shared with RoadOwnsColumn because it is the SECOND reason the patch may
 // not draw, and the skin has to know about both.
+// Point load from whichever peeled top raster this pass is drawing. Layer 1
+// keeps the plain texture, so roads and skins are byte-identical.
+float LayerTopLoad(int2 c)
+{
+	float r = ObjectTopRaw.Load(int3(c.x, c.y, 0));
+	[branch] if (PatchLayer > 0.5)
+		r = (PatchLayer < 1.5) ? ObjectTop2Raw.Load(int3(c.x, c.y, 0)) :
+		                         ObjectTop3Raw.Load(int3(c.x, c.y, 0));
+	return r;
+}
+
 float PatchSilhouetteDrop(float2 worldXY)
 {
 	// Domain-warp WHERE the silhouette falls, on the landscape shell's own
@@ -904,10 +915,14 @@ float PatchSilhouetteDrop(float2 worldXY)
 	int2 c0 = (int2)t;
 	float2 cf = t - c0;
 	int2 c1 = min(c0 + 1, int2(dims) - 1);
-	float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
-	float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
-	float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
-	float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+	// The drop must be measured on the layer being DRAWN. Read on layer 1 it
+	// describes the roof's silhouette while a layer-2 pass drapes the walkway
+	// beneath, so the dissolve fires at the roof's edge and spares the real
+	// one. Same law as the neighbour tests and the depth authority.
+	float top00 = LayerTopLoad(int2(c0.x, c0.y));
+	float top10 = LayerTopLoad(int2(c1.x, c0.y));
+	float top01 = LayerTopLoad(int2(c0.x, c1.y));
+	float top11 = LayerTopLoad(int2(c1.x, c1.y));
 	float maxTop = max(max(top00, top10), max(top01, top11));
 	float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
 	return lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
@@ -1176,7 +1191,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// NOT on a road: at a road's own edge the lowest valid neighbour is the
 	// terrain beside it, and clamping to it drags the road's snow down by
 	// the whole kerb height - the mismatched/floating road edges.
-	[flatten] if (minNeighborTop < 1e8 && !owns && PatchLayer < 0.5)
+	[flatten] if (minNeighborTop < 1e8 && !owns)
 		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
@@ -1212,15 +1227,12 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// overhang in the PS, so dropping the vertex kill costs no protection.
 	rim = rim && !owns;
 
-	// BISECTION (round 36): every kill above is a LAYER-1 rule. Two of them
-	// were already proved this session to misread a peeled layer - the
-	// neighbour tests by index, the depth authority by column - and guessing at
-	// a third has cost two null rounds. So peeled layers draw with the kills
-	// OFF, which splits the search in one shot: if the drape still draws
-	// nothing, the fault is upstream of every gate and the hunt moves to the
-	// binds and the draw itself. Re-tighten, one rule at a time, once the drape
-	// is confirmed to put pixels on a walkway. Layer 1 is untouched.
-	rim = rim && (PatchLayer < 0.5);
+	// The bisection is over - the drape draws, and these kills are exactly what
+	// it needs. With them off, a peeled layer sheeted straight down every wall
+	// and rock standing on a road (Josef's yellow curtains): the facade slope
+	// kill and the rim clamp are the rules that keep a lattice off vertical
+	// faces. They are height-matched now rather than index-matched, so they
+	// finally mean on a peeled layer what they always meant on layer 1.
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
@@ -3183,11 +3195,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// ends where the object ends (to raster resolution).
 	// PatchSilhouetteDrop is shared with RoadOwnsColumn, which has to decline
 	// exactly the columns this dissolves or the skin steps aside into a hole.
-	// Layer-1 quantity again: the drop is measured on ObjectTopRaw, so under a
-	// roof it describes the ROOF's silhouette, not the walkway's. Peeled layers
-	// skip it for the bisection along with the vertex kills.
-	[branch] if (PatchLayer < 0.5)
-		coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
+	coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
