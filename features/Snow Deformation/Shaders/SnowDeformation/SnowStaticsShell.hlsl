@@ -1989,10 +1989,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	// The shape is settled here; everything past this point is distance LOD.
 	float coverDepth = depth;
-	// P5's cornice lip, carried out of the dome block: rollT and heightScale
-	// are local to it, and the lift lands much later.
-	float2 corniceDir = float2(0.0, 0.0);
-	float corniceW = 0.0;
 
 	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
 	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
@@ -2185,51 +2181,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				float dhdc = rimIn0 / max(sqrt(saturate(1.0 - rimIn0 * rimIn0)), 0.2);
 				domeNormal = normalize(float3(-coneGrad * dhdc, 1.0));
 				domeConeGrad = coneGrad;
-				// Outward is the cone gradient NEGATED - the cone rises away from
-				// a rim, so its gradient points inward. Weight peaks at the rim
-				// (rollT 0) and vanishes in the interior, where there is no edge
-				// to overhang.
-				float gLen = length(coneGrad);
-				[flatten] if (gLen > 1e-4)
-				{
-					corniceDir = -coneGrad / gLen;
-					// THE THROW HAS TO BEAT THE FILLET'S OWN INWARD RUN before any
-					// of it becomes overhang. The roll curves inward as it rises -
-					// at roll fraction t it stands about t roll-radii inside the
-					// rim - so a small push only straightens the curve. Flatter
-					// top, same height, drop moved outward: exactly what Josef
-					// drew as the WRONG result.
-					//
-					// So the throw is built in two parts. CANCEL undoes the inward
-					// run and lands the roll on a vertical wall above the object's
-					// own edge; BULGE is what actually passes it, peaking at
-					// mid-height where a real cornice's lip hangs. SHOULDER keeps
-					// the flat top where it was - only the rim band moves.
-					//
-					// Both vanish at t=0, so the bottom of the roll stays pinned to
-					// the object's corner and the overhang opens above it.
-					// THE LIP IS LOCATED VERTICALLY, not in plan. The cone field is
-					// per COLUMN, so every vertex down a vertical flank shares one
-					// rollT - weighting the throw by rollT alone pushed the whole
-					// face out as a slab, and the pushed band had nothing below it
-					// to curve back to. That is Josef's striped curtain hanging down
-					// the rock with a torn hem: it juts, then drops dead straight.
-					//
-					// A cornice is a band a few units under the object's own top
-					// edge. Measure the drop below that top and put the widest point
-					// there: zero AT the crown so the top surface keeps its rounded
-					// approach, maximum just below it, and back to zero within about
-					// one snow depth. The surface then returns inward under its own
-					// widest point instead of falling off a cliff - the tuck Josef
-					// drew, and the reason the hem stops tearing.
-					float lipReach = max(coneSeed, kMinSkinLift);
-					float crownDrop = saturate((top1 > -50000.0 ? top1 - worldBase.z : 0.0) / lipReach);
-					float u = saturate(crownDrop / 0.8);
-					// In plan the interior has no edge to hang over, so the throw is
-					// confined to the rim band the roll occupies.
-					float rimBand = 1.0 - smoothstep(0.35, 0.85, rollT);
-					corniceW = 4.0 * u * (1.0 - u) * rimBand * heightScale;
-				}
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
 			// mesh geometry, so nothing can span the physical void between
@@ -2316,15 +2267,35 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// The study's own warning is triangle inversion at concave rims, so the
 	// throw is a fraction of the depth and dies with it: a rim that grew no
 	// snow cannot move at all.
-	[branch] if (ObjCorniceLip > 0.001 && corniceW > 0.001)
+	// BOTH THE DIRECTION AND THE PARAMETER COME FROM THE SMOOTHED NORMAL.
+	// Everything raster-derived shattered here, and for one reason: near a rim
+	// the cone goes to zero and its gradient is dominated by 4-unit
+	// quantization, so NORMALIZING it amplified noise into wildly varying
+	// directions and adjacent triangles splayed - Josef's bush of shards. The
+	// magnitude had the same disease, a bump over a quantized raster top,
+	// which flipped ordering between neighbours and folded the surface.
+	//
+	// The smoothed normal is smooth BY CONSTRUCTION - it is the shading normal
+	// the shell already trusts - and on a rounded object its horizontal part
+	// points outward exactly where the surface turns over the edge. That IS
+	// the cornice band, so the same quantity gives both where to push and
+	// which way, with no raster in the loop at all.
+	//
+	// Tilt is |horizontal part|: 0 on a flat top, about 0.7 where the surface
+	// rolls over a rim, 1 on a vertical face. Push the turnover band only -
+	// nothing on the top, which keeps its rounded approach, and nothing on the
+	// face below, which is what hung the striped curtain down the rock last
+	// round. The surface returns inward on its own beneath the widest point.
+	[branch] if (ObjCorniceLip > 0.001 && depth > 0.01)
 	{
-		float lipScale = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-		// Scaled by the roll radius, which IS the class depth here, so the
-		// overhang stays in proportion as the depth slider moves. No depth
-		// factor: the weight already vanishes at the rim, and multiplying by
-		// the height again is what held the throw below the inward run.
-		[flatten] if (depth > 0.01)
-			o.WorldAbs.xy += corniceDir * (ObjCorniceLip * lipScale * corniceW);
+		float2 outXY = smoothWS.xy;
+		float tilt = length(outXY);
+		[flatten] if (tilt > 0.05)
+		{
+			float band = smoothstep(0.20, 0.55, tilt) * (1.0 - smoothstep(0.75, 0.95, tilt));
+			float lipScale = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+			o.WorldAbs.xy += (outXY / tilt) * (ObjCorniceLip * lipScale * band);
+		}
 	}
 
 #if !defined(SHADOWCAST)
