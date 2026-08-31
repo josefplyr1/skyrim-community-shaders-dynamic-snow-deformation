@@ -2193,7 +2193,25 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				[flatten] if (gLen > 1e-4)
 				{
 					corniceDir = -coneGrad / gLen;
-					corniceW = saturate(1.0 - rollT) * heightScale;
+					// THE THROW HAS TO BEAT THE FILLET'S OWN INWARD RUN before any
+					// of it becomes overhang. The roll curves inward as it rises -
+					// at roll fraction t it stands about t roll-radii inside the
+					// rim - so a small push only straightens the curve. Flatter
+					// top, same height, drop moved outward: exactly what Josef
+					// drew as the WRONG result.
+					//
+					// So the throw is built in two parts. CANCEL undoes the inward
+					// run and lands the roll on a vertical wall above the object's
+					// own edge; BULGE is what actually passes it, peaking at
+					// mid-height where a real cornice's lip hangs. SHOULDER keeps
+					// the flat top where it was - only the rim band moves.
+					//
+					// Both vanish at t=0, so the bottom of the roll stays pinned to
+					// the object's corner and the overhang opens above it.
+					float cancel = rollT;
+					float bulge = 4.0 * rollT * (1.0 - rollT);
+					float shoulder = 1.0 - smoothstep(0.70, 1.0, rollT);
+					corniceW = (cancel + bulge) * shoulder * heightScale;
 				}
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
@@ -2284,8 +2302,12 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (ObjCorniceLip > 0.001 && corniceW > 0.001)
 	{
 		float lipScale = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-		o.WorldAbs.xy += corniceDir * (ObjCorniceLip * lipScale * corniceW *
-									   saturate(depth / lipScale));
+		// Scaled by the roll radius, which IS the class depth here, so the
+		// overhang stays in proportion as the depth slider moves. No depth
+		// factor: the weight already vanishes at the rim, and multiplying by
+		// the height again is what held the throw below the inward run.
+		[flatten] if (depth > 0.01)
+			o.WorldAbs.xy += corniceDir * (ObjCorniceLip * lipScale * corniceW);
 	}
 
 #if !defined(SHADOWCAST)
