@@ -1989,6 +1989,12 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	// The shape is settled here; everything past this point is distance LOD.
 	float coverDepth = depth;
+	// THE CORNICE'S PROPORTIONAL CAP. hEff is the height this feature's own
+	// width can support - the crest freeze already computes it - so scaling the
+	// throw by it makes a narrow post get a narrow lip instead of the same
+	// absolute throw a boulder gets, which is what turned fence posts into
+	// mushroom discs. Falls back to the class depth where no dome ran.
+	float lipHeight = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 
 	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
 	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
@@ -2163,6 +2169,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, -tapD)));
 			}
 			float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
+			lipHeight = hEff;
 			heightScale = hEff / coneSeed;
 			rollT = saturate(cone / hEff);
 			// DOME SHADING (Josef: lee flanks must go dark like the
@@ -2292,9 +2299,25 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float tilt = length(outXY);
 		[flatten] if (tilt > 0.05)
 		{
-			float band = smoothstep(0.20, 0.55, tilt) * (1.0 - smoothstep(0.75, 0.95, tilt));
-			float lipScale = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-			o.WorldAbs.xy += (outXY / tilt) * (ObjCorniceLip * lipScale * band);
+			// ONE SMOOTH PEAK, no plateau. The previous band rose fast, held flat
+			// between 0.55 and 0.75, then fell fast - and a plateau in the throw
+			// is a flat disc in the geometry, which is the mushroom cap. A single
+			// peak with no flat section gives a profile that curves the whole way
+			// over instead of jutting out and hooking.
+			float u = saturate((tilt - 0.05) / 0.90);
+			float band = 4.0 * u * (1.0 - u);
+			float2 outDir = outXY / tilt;
+			o.WorldAbs.xy += outDir * (ObjCorniceLip * lipHeight * band);
+
+			// THE SIDE PROJECTION, by the same lever the roll walls use. The
+			// overhang is real geometry turning past vertical, but the shading
+			// normal still points up there, so the two-plane pick stays on the
+			// top plane and the texture smears down the face. Leaning the shade
+			// normal outward across the band engages the side plane exactly where
+			// the surface is steep - a perturbation confined to the band, never a
+			// replacement, since the plane pick rides this normal.
+			shadeNormal = normalize(lerp(shadeNormal, float3(outDir, 0.0),
+				saturate(band * 0.65)));
 		}
 	}
 
