@@ -296,7 +296,11 @@ cbuffer StaticCB : register(b1)
 	// SkyExposurePct / 100). Took a padPile slot; layout unchanged. Mirror
 	// in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float SkyExposureSk;
-	float2 padPile;
+	// C0 spike (CONTAINER-SHELL-PLAN): >0.5 = draw the S4 shell as a
+	// CONSTANT-height container and find the surface per pixel. Mirror in
+	// SnowHeightCapture.hlsl / SnowDeformation.h.
+	float ContainerSpike;
+	float padPile;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -770,6 +774,35 @@ float ObjectConeDepth3(float2 worldXY)
 	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// ---- C0 container spike (CONTAINER-SHELL-PLAN) --------------------------
+// Vertical extent of the container: the tallest the snow can stand for this
+// draw, plus a margin so the ray always starts in clear air above it.
+float ContainerHeight()
+{
+	return max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) * max(PileHeightRatio, 1.0) + 4.0;
+}
+
+// The snow surface as a PURE FUNCTION OF WORLD XY - the object top plus the
+// rolling-ball fillet over the repose cone. This is what makes marching
+// possible at all: the surface has a closed form the ray can be tested
+// against, independent of any mesh.
+//
+// SPIKE SIMPLIFICATIONS, deliberate: no peeled-layer select, no crest
+// freeze, no sky exposure. C0 only has to answer whether the fences die and
+// whether the roll reads as a curve; moving the whole field per pixel is
+// C1, and doing it here first would confuse a shape difference with an
+// architecture difference.
+float ContainerSnowZ(float2 worldXY)
+{
+	float top = PatchTop(worldXY);
+	[flatten] if (top < -50000.0)
+		return -1000000.0;
+	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+	float rollT = saturate(ObjectConeDepth(worldXY) / coneSeed);
+	float toRim = 1.0 - rollT;
+	return top + coneSeed * sqrt(saturate(1.0 - toRim * toRim));
 }
 
 // NEAREST-texel layer tops, for the lift's layer select only. The
@@ -1890,6 +1923,24 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	SkinLift o;
 	o.WorldAbs = worldBase + liftWS * depth;
+
+#if !defined(SHADOWCAST)
+	// C0 CONTAINER SPIKE (CONTAINER-SHELL-PLAN). Every vertex of the draw
+	// rises by the SAME constant - no field is sampled to place it, so no
+	// two vertices can disagree about height and the pleat is structurally
+	// impossible. What we draw is no longer the snow surface, it is a box
+	// that CONTAINS it; the pixel shader marches the real surface inside.
+	// Deliberately outside every mask: a container with holes in it lets
+	// the ray miss snow that is really there. The caster is excluded, so
+	// shadows keep the old shape rather than becoming a solid block.
+	[flatten] if (ContainerSpike > 0.5 && ProjPixelEnable > 1.5)
+	{
+		float containerH = ContainerHeight();
+		o.WorldAbs = worldBase + float3(0.0, 0.0, containerH);
+		o.Depth = containerH;
+		o.CoverDepth = containerH;
+	}
+#endif
 	o.Depth = depth;
 	o.CoverDepth = coverDepth;
 	o.RimT = rimT;
@@ -2331,6 +2382,68 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float3 normalWS = normalize(input.NormalWS);
+
+	// C0 CONTAINER SPIKE: find the snow surface INSIDE the container, per
+	// pixel. The rasterised position is the container's lid, not a surface
+	// - march the view ray down from it until it crosses ContainerSnowZ,
+	// then move this pixel's whole shading context to the crossing point.
+	// Everything downstream reads WorldPos and GridLocal, so relocating
+	// those two re-points the entire shader at the true surface, and the
+	// normal comes from the field's own gradient rather than a mesh.
+	//
+	// A miss does NOT discard here: killing pixels before the gradient
+	// operators further down would leave the quad's derivatives undefined.
+	// It records the miss and zeroes coverage at the gate instead.
+	bool containerHit = false;
+	bool containerMode = false;
+#if !defined(PATCH)
+	[branch] if (ContainerSpike > 0.5 && ProjPixelEnable > 1.5)
+	{
+		containerMode = true;
+		float3 rayDir = normalize(input.WorldPos);
+		float3 originAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
+		float containerH = ContainerHeight();
+		// Ray length that spans the container's vertical extent, capped so
+		// a grazing view marches a bounded distance rather than the horizon.
+		float span = min(containerH / max(abs(rayDir.z), 0.15), containerH * 8.0);
+		const int kContainerSteps = 32;
+		float stepLen = span / (float)kContainerSteps;
+		float prevT = 0.0;
+		float prevGap = originAbs.z - ContainerSnowZ(originAbs.xy);
+		float hitT = -1.0;
+		[loop] for (int ci = 1; ci <= kContainerSteps; ci++)
+		{
+			float t = stepLen * (float)ci;
+			float3 p = originAbs + rayDir * t;
+			float gap = p.z - ContainerSnowZ(p.xy);
+			[branch] if (gap <= 0.0)
+			{
+				// Linear refine across the crossing: the last sample above
+				// the surface and this one below bracket it.
+				hitT = lerp(prevT, t, saturate(prevGap / max(prevGap - gap, 1e-4)));
+				break;
+			}
+			prevT = t;
+			prevGap = gap;
+		}
+		[branch] if (hitT >= 0.0)
+		{
+			float3 hitAbs = originAbs + rayDir * hitT;
+			input.WorldPos = hitAbs - ShellCameraPosAdjust.xyz;
+			input.GridLocal = hitAbs.xy - GridOrigin;
+			// Analytic normal from the field gradient - the surface knows
+			// its own orientation, so the two-plane texture selection and
+			// the lighting both get the truth with no special case.
+			const float gs = 2.0;
+			float2 grad = float2(
+				ContainerSnowZ(hitAbs.xy + float2(gs, 0.0)) - ContainerSnowZ(hitAbs.xy - float2(gs, 0.0)),
+				ContainerSnowZ(hitAbs.xy + float2(0.0, gs)) - ContainerSnowZ(hitAbs.xy - float2(0.0, gs))) / (2.0 * gs);
+			normalWS = normalize(float3(-grad, 1.0));
+			containerHit = true;
+		}
+	}
+#endif
+
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
 	// Shared scope: the seam, down-kill and march gates below read this in
@@ -2581,6 +2694,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// triangular holes - which is the proof that a per-pixel rule cannot
 	// repair torn geometry. The tear is a vertex-rate disagreement; the
 	// fix is the container/march architecture, see CONTAINER-SHELL-PLAN.md.)
+
+	// C0: in container mode the march IS the coverage decision. Every gate
+	// above reconstructs where snow belongs from vertex data and the
+	// pre-shell G-buffer; the ray either found the surface or it did not,
+	// and that answer is exact. Binary on purpose - the silhouette is
+	// whatever the field's own outline says, which is the point of C0.
+	[flatten] if (containerMode)
+		pixelCoverage = containerHit ? 1.0 : 0.0;
 	// Coverage debug: the facing gates' product, and the two seam blends,
 	// captured separately so the rim band's owner is readable at a glance.
 	float dbgFacing = pixelCoverage;
@@ -3552,7 +3673,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// project the parallax hit point through the same (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
 	psout.Depth = input.Position.z;
-	[branch] if (trenchHitS > 0.0)
+	// C0: the container's lid was rasterised, but this pixel shades the
+	// surface found inside it - WorldPos already IS that point, so project
+	// it directly. Without this the snow would z-test as though it stood at
+	// the top of the container.
+	[branch] if (containerHit)
+	{
+		float4 boxClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		psout.Depth = boxClip.z / max(boxClip.w, 1e-4);
+	}
+	else [branch] if (trenchHitS > 0.0)
 	{
 		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
 		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);

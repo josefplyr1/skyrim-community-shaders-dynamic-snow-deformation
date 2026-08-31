@@ -479,6 +479,8 @@ public:
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
 		float SnowSettlingPct = 50.0f;
+		/** @brief C0 spike (CONTAINER-SHELL-PLAN), debug A/B: draw the S4 shell as a CONSTANT-height container and find the snow surface per PIXEL by marching, instead of displacing vertices by the height field. Not serialised - a spike, off every launch. */
+		bool ContainerShellSpike = false;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1586,7 +1588,9 @@ public:
 		float PileHeightRatio;
 		/** @brief Settings::SkyExposurePct / 100 - strength of the P3 sky-exposure depth weighting (took a padPile slot; layout unchanged). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkyExposureSk;
-		float padPile[2];
+		/** @brief C0 container spike (CONTAINER-SHELL-PLAN): >0.5 lifts every S4 vertex by a CONSTANT and lets the PS march the real surface per pixel. Debug A/B only. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ContainerSpike;
+		float padPile[1];
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
