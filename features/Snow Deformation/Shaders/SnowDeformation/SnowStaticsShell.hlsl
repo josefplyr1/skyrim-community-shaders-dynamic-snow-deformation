@@ -1012,8 +1012,25 @@ float CoverBottomL(float2 worldXY)
 		ObjectCoverBottom2.GetDimensions(dims.x, dims.y);
 		float2 tc = PatchTexel(worldXY, dims);
 		int2 c = int2(clamp(tc, 0.0, dims.x - 1.001));
-		r = (PatchLayer < 1.5) ? ObjectCoverBottom2.Load(int3(c.x, c.y, 0)) :
-		                         ObjectCoverBottom3.Load(int3(c.x, c.y, 0));
+		// MIN over a 3x3, which DILATES cover exactly as PatchTop's max-of-4
+		// dilates tops - lower cover means more covered, so min is the
+		// conservative direction. The raster is 4 units while the lattice is
+		// finer, so a vertex at a rock's edge can land on a texel the rock's
+		// geometry just missed, read nothing-above, and draw: the sliver under
+		// the cairn, the line down a post, the patch under a fallen boat. One
+		// texel of dilation costs the drape a texel at the edge of genuinely
+		// covered ground, which is the cheap direction to be wrong in.
+		[unroll] for (int dy = -1; dy <= 1; dy++)
+		{
+			[unroll] for (int dx = -1; dx <= 1; dx++)
+			{
+				int2 sc = int2(clamp(c.x + dx, 0, int(dims.x) - 1),
+					clamp(c.y + dy, 0, int(dims.y) - 1));
+				float cv = (PatchLayer < 1.5) ? ObjectCoverBottom2.Load(int3(sc.x, sc.y, 0)) :
+				                                ObjectCoverBottom3.Load(int3(sc.x, sc.y, 0));
+				r = min(r, cv);
+			}
+		}
 	}
 	return r;
 }
