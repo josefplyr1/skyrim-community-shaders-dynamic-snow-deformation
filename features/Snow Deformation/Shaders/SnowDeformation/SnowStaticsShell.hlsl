@@ -1331,6 +1331,21 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// vertices that would sheet down a wall, and they run before this.
 	objectField = ObjectDrape > 0.5 && !owns;
 
+	// THE DEPTH AUTHORITY, and the fifth time the wrong one has been asked.
+	// The skin-depth raster MAX-blends class depth across every column a
+	// footprint overlaps, so a rock standing on a road inherits the ROAD's
+	// depth. Josef's tell: raising the Road Meshes slider lifted a boulder's
+	// shell, which is the road's shell being extended onto the object rather
+	// than the object growing its own.
+	//
+	// The bleed was harmless while such a column could never draw - ownership
+	// kept the trample gate shut. Object ownership opened it, at the wrong
+	// class. A column the road does not own takes the object class straight
+	// from the CB, the only depth that is actually its own; the raster keeps
+	// arbitrating road columns, where its value IS the road's.
+	[flatten] if (objectField)
+		skinDepth = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+
 	}  // end cheap gate
 
 	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
