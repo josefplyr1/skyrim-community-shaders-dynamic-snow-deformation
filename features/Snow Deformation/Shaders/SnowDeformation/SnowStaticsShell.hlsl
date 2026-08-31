@@ -971,6 +971,39 @@ float ObjectConeDepthL(float2 worldXY)
 	return ObjectConeDepth3(worldXY);
 }
 
+// THE PEEL INDEX IS A STACKING ORDINAL, NOT A HEIGHT STRATUM. One column's
+// layer 3 is a walkway while its neighbour's layer 3 is a roof beam, purely
+// because the neighbour carries more surfaces above it. Every neighbour test
+// in the vertex builder asks whether the surface next door stands far above
+// or below this one, and reading the neighbour at the SAME INDEX answers a
+// different question entirely on a peeled layer: the rim clamp, the facade
+// slope kill, the de-jut and the tall-ray scan then all fire on nearly every
+// vertex, and the drape is culled before it draws anything (round 35, the
+// first prototype's null result). Match by HEIGHT instead - whichever of the
+// neighbour's three layers lies nearest this vertex - and report a sentinel
+// when none lies within the band, so an unrelated stack reads as "no
+// neighbour here" rather than as a cliff. Layer 1 keeps the plain lookup:
+// there the highest surface IS coherent across columns, which is why the
+// existing kills work, and roads must not shift by a texel.
+static const float kPeelNeighborBand = 256.0;
+float PatchTopNeighbor(float2 worldXY, float refZ)
+{
+	[branch] if (PatchLayer < 0.5)
+		return PatchTop(worldXY);
+	float cand[3] = { PatchTop(worldXY), PatchTop2(worldXY), PatchTop3(worldXY) };
+	float best = -1e9;
+	float bestDist = 1e9;
+	[unroll] for (uint peelI = 0; peelI < 3; peelI++)
+	{
+		[flatten] if (cand[peelI] > -50000.0 && abs(cand[peelI] - refZ) < bestDist)
+		{
+			bestDist = abs(cand[peelI] - refZ);
+			best = cand[peelI];
+		}
+	}
+	return bestDist <= kPeelNeighborBand ? best : -1e9;
+}
+
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
 // unit or two apart, so the trail-margin test uses a cheap 5-tap cross
@@ -1076,10 +1109,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
 	// rim, or the patch's edge ring is culled along every road chunk. Facade
 	// sheets still die by their own sentinel top.
-	float topXP = PatchTopL(worldXY + float2(kHeightTexel, 0.0));
-	float topXN = PatchTopL(worldXY - float2(kHeightTexel, 0.0));
-	float topYP = PatchTopL(worldXY + float2(0.0, kHeightTexel));
-	float topYN = PatchTopL(worldXY - float2(0.0, kHeightTexel));
+	float topXP = PatchTopNeighbor(worldXY + float2(kHeightTexel, 0.0), top);
+	float topXN = PatchTopNeighbor(worldXY - float2(kHeightTexel, 0.0), top);
+	float topYP = PatchTopNeighbor(worldXY + float2(0.0, kHeightTexel), top);
+	float topYN = PatchTopNeighbor(worldXY - float2(0.0, kHeightTexel), top);
 	float minNeighborTop = 1e9;
 	if (topXP > -50000.0)
 		minNeighborTop = min(minNeighborTop, topXP);
@@ -1131,7 +1164,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	bool nearTall = false;
 	[unroll] for (uint tallI = 0; tallI < 8; tallI++)
 	{
-		float tallTop = PatchTopL(worldXY + kTallRays[tallI]);
+		float tallTop = PatchTopNeighbor(worldXY + kTallRays[tallI], top);
 		[flatten] if (tallTop > -50000.0 && (tallTop - top) > 100.0)
 			nearTall = true;
 	}
@@ -1394,6 +1427,15 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.Flat = StaticsDebugView != 0.0 ?
 	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
 	                 0.0;
+	// Mode 6 covers the PATCH too now: which draw layer put this pixel here,
+	// in the skin's own green/yellow/red convention so one screenshot compares
+	// the two paths. The mode used to paint the patch dim gray, which is why a
+	// null drape result was indistinguishable from a culled one.
+	[flatten] if (StaticsDebugView > 5.5)
+	{
+		vsout.Coverage = (PatchLayer + 0.5) / 8.0;
+		vsout.Flat = 1.0;
+	}
 	// The patch is exempt from the lift gates; its walls are real geometry.
 	vsout.Lift = 1e6;
 	vsout.ProjFactor = 1.0;
@@ -3686,10 +3728,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH
-		[branch] if (StaticsDebugView > 4.5)
+		[branch] if (StaticsDebugView > 5.5)
 		{
-			// Layer/projected-mask modes compare skin data; the patch is
-			// outside both. Dim gray.
+			// Shell Layers: which DRAW LAYER drew this patch pixel. Green =
+			// layer 1 (the surface the patch has always drawn), yellow =
+			// layer 2, red = layer 3 - the same colors the skin uses for its
+			// peeled planes, so the two paths read as one picture.
+			float drawLayer = floor(saturate(input.Coverage) * 8.0);
+			preLit = drawLayer < 0.5 ? float3(0.1, 1.0, 0.1) :
+			                           (drawLayer < 1.5 ? float3(1.0, 0.9, 0.1) : float3(1.0, 0.15, 0.1));
+		}
+		else [branch] if (StaticsDebugView > 4.5)
+		{
+			// Projected-mask mode compares skin data; the patch is outside
+			// it. Dim gray.
 			preLit = float3(0.1, 0.1, 0.1);
 		}
 		else [branch] if (StaticsDebugView > 3.5)
