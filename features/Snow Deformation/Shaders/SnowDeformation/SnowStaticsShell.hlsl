@@ -1082,6 +1082,21 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		skinEdgeMin = skinDepth;
 		roadTop = skin.y;
 	}
+	// A PEELED LAYER CANNOT BE ARBITRATED BY A LAYER-1 QUANTITY. The skin-depth
+	// raster holds ONE value per column - the class depth of whatever the
+	// capture saw on TOP - so under a roof it describes the roof. Gating a
+	// layer-2 or layer-3 vertex on `skinDepth >= 1` and then carving it to that
+	// depth asks the roof how much snow the walkway gets, and where the roof's
+	// own draw wrote nothing the gate kills the whole column on every layer.
+	// The per-layer cone is the same quantity that DOES exist per layer: Josef's
+	// probe reads 4.9 on all three layers under a roof where this single raster
+	// cannot speak for the lower two.
+	[branch] if (PatchLayer > 0.5)
+	{
+		float layerCone = ObjectConeDepthL(worldXY);
+		skinDepth = max(skinDepth, layerCone);
+		skinEdgeMin = max(skinEdgeMin, layerCone);
+	}
 	float2 gridLocal = v.GridLocal;
 
 	// Everything below reads the raster 30-50 more times per vertex, and on a
@@ -1147,7 +1162,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// NOT on a road: at a road's own edge the lowest valid neighbour is the
 	// terrain beside it, and clamping to it drags the road's snow down by
 	// the whole kerb height - the mismatched/floating road edges.
-	[flatten] if (minNeighborTop < 1e8 && !owns)
+	[flatten] if (minNeighborTop < 1e8 && !owns && PatchLayer < 0.5)
 		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
@@ -1182,6 +1197,16 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// from underneath. The patch's silhouette dissolve still clips a real
 	// overhang in the PS, so dropping the vertex kill costs no protection.
 	rim = rim && !owns;
+
+	// BISECTION (round 36): every kill above is a LAYER-1 rule. Two of them
+	// were already proved this session to misread a peeled layer - the
+	// neighbour tests by index, the depth authority by column - and guessing at
+	// a third has cost two null rounds. So peeled layers draw with the kills
+	// OFF, which splits the search in one shot: if the drape still draws
+	// nothing, the fault is upstream of every gate and the hunt moves to the
+	// binds and the draw itself. Re-tighten, one rule at a time, once the drape
+	// is confirmed to put pixels on a walkway. Layer 1 is untouched.
+	rim = rim && (PatchLayer < 0.5);
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
@@ -3143,7 +3168,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// ends where the object ends (to raster resolution).
 	// PatchSilhouetteDrop is shared with RoadOwnsColumn, which has to decline
 	// exactly the columns this dissolves or the skin steps aside into a hole.
-	coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
+	// Layer-1 quantity again: the drop is measured on ObjectTopRaw, so under a
+	// roof it describes the ROOF's silhouette, not the walkway's. Peeled layers
+	// skip it for the bisection along with the vertex kills.
+	[branch] if (PatchLayer < 0.5)
+		coverageAlpha *= 1.0 - smoothstep(8.0, 24.0, PatchSilhouetteDrop(worldXY));
 #	endif
 
 	// Distance dissolve: from SkinFadeStart the skin stochastically thins
