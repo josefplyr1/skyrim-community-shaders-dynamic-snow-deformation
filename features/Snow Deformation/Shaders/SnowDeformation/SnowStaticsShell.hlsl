@@ -1458,10 +1458,18 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// REMOVE once answered: while it is here the drape toggle does nothing else.
 	[branch] if (PatchLayer > 0.5)
 	{
+		// The slab proved the passes RUN, so the fault is in what they read.
+		// It now carries the measurement itself: sample the two values the
+		// vertex gate consults and encode which of them came back alive, so
+		// one screenshot says whether the top raster, the cone, or both are
+		// dead on a peeled layer. Debug mode 6 paints it - red both dead,
+		// orange top only, green both good.
+		float probeTop = PatchTopL(worldXY);
+		float probeCone = ObjectConeDepthL(worldXY);
 		v.WorldAbs = float3(worldXY, ShellCameraPosAdjust.z - 100.0);
 		v.NormalWS = float3(0.0, 0.0, 1.0);
 		v.SkinDepth = 8.0;
-		v.Deform = 0.0;
+		v.Deform = (probeTop > -50000.0 ? 0.5 : 0.0) + (probeCone > 0.5 ? 0.5 : 0.0);
 		v.RoadBit = 0.0;
 		v.Killed = 0.0;
 	}
@@ -1493,7 +1501,9 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	[flatten] if (StaticsDebugView > 5.5)
 	{
 		vsout.Coverage = (PatchLayer + 0.5) / 8.0;
-		vsout.Flat = 1.0;
+		// Peeled layers carry the slab's read measurement here; layer 1 puts
+		// its deformation in the channel, which its own color path ignores.
+		vsout.Flat = v.Deform;
 	}
 	// The patch is exempt from the lift gates; its walls are real geometry.
 	vsout.Lift = 1e6;
@@ -3798,8 +3808,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// layer 2, red = layer 3 - the same colors the skin uses for its
 			// peeled planes, so the two paths read as one picture.
 			float drawLayer = floor(saturate(input.Coverage) * 8.0);
-			preLit = drawLayer < 0.5 ? float3(0.1, 1.0, 0.1) :
-			                           (drawLayer < 1.5 ? float3(1.0, 0.9, 0.1) : float3(1.0, 0.15, 0.1));
+			[branch] if (drawLayer < 0.5)
+			{
+				preLit = float3(0.1, 1.0, 0.1);
+			}
+			else
+			{
+				// DIAGNOSTIC SLAB readout: which peeled raster read survived.
+				// RED = both dead (top and cone), ORANGE = top alive but the
+				// cone dead, GREEN = both alive. Green here would mean the
+				// reads work and the kill is elsewhere entirely.
+				preLit = input.Flat < 0.25 ? float3(1.0, 0.1, 0.1) :
+				         (input.Flat < 0.75 ? float3(1.0, 0.55, 0.0) : float3(0.1, 1.0, 0.1));
+			}
 		}
 		else [branch] if (StaticsDebugView > 4.5)
 		{
