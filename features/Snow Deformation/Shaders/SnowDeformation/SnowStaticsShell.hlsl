@@ -1445,6 +1445,26 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		v.Deform = deform;
 		v.Killed = 0.0;
 	}
+
+	// DIAGNOSTIC SLAB. Three rounds of fixes were each correct and each changed
+	// nothing on screen, which means the most basic question was never actually
+	// answered: do the peeled-layer passes EXECUTE? A peeled layer here throws
+	// away every raster read and every gate above and emits one flat plane a
+	// hundred units under the camera. Unmissable by construction. If it appears
+	// the passes run and the fault is in what they READ; if it does not, the
+	// draw never happens and the fault is C++ side, not in this file. Written
+	// as an override before the single return, never an early return - an early
+	// return inside a branch is what cost rounds 34-37 (X4000).
+	// REMOVE once answered: while it is here the drape toggle does nothing else.
+	[branch] if (PatchLayer > 0.5)
+	{
+		v.WorldAbs = float3(worldXY, ShellCameraPosAdjust.z - 100.0);
+		v.NormalWS = float3(0.0, 0.0, 1.0);
+		v.SkinDepth = 8.0;
+		v.Deform = 0.0;
+		v.RoadBit = 0.0;
+		v.Killed = 0.0;
+	}
 	return v;
 }
 
