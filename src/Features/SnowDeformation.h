@@ -481,6 +481,8 @@ public:
 		float SnowSettlingPct = 50.0f;
 		/** @brief C0 spike (CONTAINER-SHELL-PLAN), debug A/B: draw the S4 shell as a CONSTANT-height container and find the snow surface per PIXEL by marching, instead of displacing vertices by the height field. Not serialised - a spike, off every launch. */
 		bool ContainerShellSpike = false;
+		/** @brief "Drape Objects": the drape pivot's A/B. Object columns get the same full-coverage lattice roads have, and the S4 skins step aside entirely so the two cannot fight. OFF is byte-identical to the skin-based shell. Not serialised - debug only. */
+		bool ObjectDrapeShell = false;
 		/** @brief Per-layer drape prototype (CONTAINER-SHELL-PLAN pivot), debug A/B: draw the trench patch once per PEELED LAYER so a surface under cover (a walkway beneath a roof) gets its own drape instead of being hidden by the roof's. Answers whether the drape architecture can serve architecture at all. Not serialised. */
 		bool LayeredObjectDrape = false;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
@@ -1594,6 +1596,12 @@ public:
 		float ContainerSpike;
 		/** @brief Which peeled layer the current trench-patch pass draws (0 = top surface, 1/2 = the layers under cover). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PatchLayer;
+
+		/** @brief Settings::ObjectDrapeShell - THE DRAPE PIVOT's A/B: object-owned columns get the full lattice surface the way road-owned ones already do, instead of only the trench around footprints. Paired with the S4 skins not drawing at all, so the two never fight for the depth buffer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ObjectDrape;
+		float padDrape0;
+		float padDrape1;
+		float padDrape2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

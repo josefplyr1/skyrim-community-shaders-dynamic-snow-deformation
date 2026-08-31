@@ -902,6 +902,10 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Layer 0 unless a per-layer pass overrides it after the fill. The
 	// shadow caster shares this recipe and draws the top surface only.
 	a_scb.PatchLayer = 0.0f;
+	// THE DRAPE PIVOT's A/B. Object columns take the whole lattice surface
+	// rather than only the trench around footprints; the skins step aside in
+	// the same breath, so the two can never fight for the depth buffer.
+	a_scb.ObjectDrape = settings.ObjectDrapeShell ? 1.0f : 0.0f;
 }
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
@@ -1649,7 +1653,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		// Same class pick as the skin: S4 shell draws are all ROUNDED.
 		{
-			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+			const bool s4Shell = settings.ObjectSnow3D && !settings.ObjectDrapeShell && !cap.road &&
 			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		}
@@ -2431,7 +2435,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// Lighting recolor still covers the technique-classified ones
 		// (fence family) flat. The classic shader path survives only
 		// because roads run through it.
-		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+		const bool s4Shell = settings.ObjectSnow3D && !settings.ObjectDrapeShell && !cap.road &&
 		                     cap.projThreshold > -0.5f && projNoiseSRV;
 		if (!cap.road && !s4Shell)
 			continue;

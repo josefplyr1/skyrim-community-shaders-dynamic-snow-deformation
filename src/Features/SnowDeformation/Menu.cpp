@@ -1182,6 +1182,9 @@ void SnowDeformation::DrawSettings()
 				ImGui::TextUnformatted(probeLine1);
 				ImGui::TextUnformatted(probeLine2);
 			}
+			ImGui::Checkbox(T(TKEY("object_drape"), "Drape Objects (experimental)"), &settings.ObjectDrapeShell);
+			if (auto _ttObjDrape = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_drape_tooltip"), "Covers objects with the same snow sheet the roads use, instead of the shell that is fitted to each object's own shape. While this is on the fitted shell is not drawn at all, so the two cannot overlap - which makes it a straight A/B: turn it off to compare against the shell you know. Rocks, walkways and steps should keep their snow; anything the sheet cannot stand on will lose it, and that is the finding."));
 			ImGui::Checkbox(T(TKEY("layered_drape"), "Layered Object Drape (experimental)"), &settings.LayeredObjectDrape);
 			if (auto _ttDrape = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("layered_drape_tooltip"), "Draws the snow sheet that roads already use a second and third time, for surfaces hidden under something else - a walkway beneath a roof, a step under an eave. Without it those surfaces are covered by whatever stands above them and get no snow of their own. Being trialled to find out whether this way of drawing snow can serve buildings as well as it serves roads."));

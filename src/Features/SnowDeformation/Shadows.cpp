@@ -610,7 +610,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				// Meshes slider. The patch deliberately does not cast either
 				// (the retired stretch experiment); the self-shadow march
 				// owns trench-wall shading on roads.
-				const bool s4Shell = settings.ObjectSnow3D && !cap.road && cap.projThreshold > -0.5f;
+				// Stands down with the visible draw: a skin that no longer renders
+				// must not keep casting, or the drape's objects wear a shadow
+				// cast by geometry nothing can see.
+				const bool s4Shell = settings.ObjectSnow3D && !settings.ObjectDrapeShell && !cap.road && cap.projThreshold > -0.5f;
 				if (!s4Shell)
 					continue;
 				auto triShape = geometry->AsTriShape();

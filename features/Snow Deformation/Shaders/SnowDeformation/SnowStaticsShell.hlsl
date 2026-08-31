@@ -304,6 +304,13 @@ cbuffer StaticCB : register(b1)
 	// the peeled layers under cover). Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
 	float PatchLayer;
+
+	// THE DRAPE PIVOT's A/B: object columns take the full lattice surface the
+	// way road columns already do, and the S4 skins do not draw at all.
+	float ObjectDrape;
+	float padDrape0;
+	float padDrape1;
+	float padDrape2;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1178,6 +1185,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	float aliveDeform = 0.0;
 	bool roadField = false;
 	bool owns = false;
+	bool objectField = false;
 	[branch] if (top > -50000.0 && skinDepth >= 1.0)
 	{
 		// OWNERSHIP FIRST, because the facade kills below must not fire on
@@ -1312,6 +1320,17 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// have to know about it before they run.
 	roadField = RoadField > 0.5 && owns;
 
+	// OBJECT OWNERSHIP - the drape pivot itself. A captured column whose top
+	// is not a road takes the WHOLE surface, exactly as a road-owned column
+	// does, instead of only the trench around a footprint. That single line is
+	// what turns the lattice from "roads plus trails" into "roads plus trails
+	// plus every object it can stand on".
+	//
+	// Ownership decides COVERAGE, not whether the lattice may stand on a
+	// facade: the rim clamp and the facade slope kill above still delete the
+	// vertices that would sheet down a wall, and they run before this.
+	objectField = ObjectDrape > 0.5 && !owns;
+
 	}  // end cheap gate
 
 	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
@@ -1344,7 +1363,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// layer-2 drape has no skin behind it: it exists precisely to put snow
 	// on a surface the roof above has been hiding, so gating it on
 	// deformation would leave the walkway bare, which is the whole point.
-	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample) || PatchLayer > 0.5;
+	bool trampled = roadField || objectField || (aliveDeform >= 0.005 && mayTrample) || PatchLayer > 0.5;
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
