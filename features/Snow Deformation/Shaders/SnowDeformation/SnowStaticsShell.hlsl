@@ -953,22 +953,33 @@ bool RoadOwnsColumn(float2 worldXY)
 // neighbours: the roof towers 100+ units over the walkway, the tall-ray
 // test would fire on every vertex, and the entire under-cover drape would
 // be culled before it drew anything.
+// SINGLE RETURN, INITIALIZED. These three accessors first shipped with early
+// returns inside [branch], which is the one form this file's own patch gate
+// documents as unsafe: fxc raised X4000 "potentially uninitialized" on all
+// three, and the drape they feed drew nothing for three rounds. fxc exits 0
+// with warnings, so a sweep that checks only the exit code passes it.
 float PatchTopL(float2 worldXY)
 {
+	float r = -1e9;
 	[branch] if (PatchLayer < 0.5)
-		return PatchTop(worldXY);
-	[branch] if (PatchLayer < 1.5)
-		return PatchTop2(worldXY);
-	return PatchTop3(worldXY);
+		r = PatchTop(worldXY);
+	else [branch] if (PatchLayer < 1.5)
+		r = PatchTop2(worldXY);
+	else
+		r = PatchTop3(worldXY);
+	return r;
 }
 
 float ObjectConeDepthL(float2 worldXY)
 {
+	float r = 0.0;
 	[branch] if (PatchLayer < 0.5)
-		return ObjectConeDepth(worldXY);
-	[branch] if (PatchLayer < 1.5)
-		return ObjectConeDepth2(worldXY);
-	return ObjectConeDepth3(worldXY);
+		r = ObjectConeDepth(worldXY);
+	else [branch] if (PatchLayer < 1.5)
+		r = ObjectConeDepth2(worldXY);
+	else
+		r = ObjectConeDepth3(worldXY);
+	return r;
 }
 
 // THE PEEL INDEX IS A STACKING ORDINAL, NOT A HEIGHT STRATUM. One column's
@@ -988,20 +999,23 @@ float ObjectConeDepthL(float2 worldXY)
 static const float kPeelNeighborBand = 256.0;
 float PatchTopNeighbor(float2 worldXY, float refZ)
 {
-	[branch] if (PatchLayer < 0.5)
-		return PatchTop(worldXY);
-	float cand[3] = { PatchTop(worldXY), PatchTop2(worldXY), PatchTop3(worldXY) };
-	float best = -1e9;
-	float bestDist = 1e9;
-	[unroll] for (uint peelI = 0; peelI < 3; peelI++)
+	float r = PatchTop(worldXY);
+	[branch] if (PatchLayer > 0.5)
 	{
-		[flatten] if (cand[peelI] > -50000.0 && abs(cand[peelI] - refZ) < bestDist)
+		float cand[3] = { r, PatchTop2(worldXY), PatchTop3(worldXY) };
+		float best = -1e9;
+		float bestDist = 1e9;
+		[unroll] for (uint peelI = 0; peelI < 3; peelI++)
 		{
-			bestDist = abs(cand[peelI] - refZ);
-			best = cand[peelI];
+			[flatten] if (cand[peelI] > -50000.0 && abs(cand[peelI] - refZ) < bestDist)
+			{
+				bestDist = abs(cand[peelI] - refZ);
+				best = cand[peelI];
+			}
 		}
+		r = bestDist <= kPeelNeighborBand ? best : -1e9;
 	}
-	return bestDist <= kPeelNeighborBand ? best : -1e9;
+	return r;
 }
 
 // Patch surface evaluation, shared by the legacy VS and the tessellated
