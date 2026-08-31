@@ -1082,6 +1082,58 @@ float PatchTopNeighbor(float2 worldXY, float refZ)
 	return r;
 }
 
+// THE DOME (Josef's 0/10/20/30 sketch), and the same recipe the skin already
+// runs rather than a second copy of it: a rolling-ball fillet over the repose
+// cone, whose RADIUS freezes at the feature's own crest. The moment the rolls
+// from both edges meet in the middle, growth stops whatever the depth slider
+// says - at ratio 1 the frozen shape is the half-dome exactly filling the
+// width. Without the freeze a narrow feature grows a fin instead of saturating.
+//
+// The cone reads through the layer accessor, so a peeled drape under a roof
+// gets its own layer's cone rather than the top surface's.
+float ObjectDomeDepth(float2 worldXY, float depthBase, out float3 domeNrm)
+{
+	domeNrm = float3(0.0, 0.0, 1.0);
+	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+	float cone = ObjectConeDepthL(worldXY);
+
+	// Crest freeze: the largest cone within half a roll radius. A feature
+	// narrow enough to saturate has its crest in reach; a wide one reads large
+	// and passes unclamped, keeping the plain fillet.
+	float tapR = 0.5 * coneSeed;
+	float tapD = tapR * 0.7071;
+	float crest = cone;
+	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapR, 0.0)));
+	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapR, 0.0)));
+	crest = max(crest, ObjectConeDepthL(worldXY + float2(0.0, tapR)));
+	crest = max(crest, ObjectConeDepthL(worldXY - float2(0.0, tapR)));
+	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapD, tapD)));
+	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapD, tapD)));
+	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapD, -tapD)));
+	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapD, -tapD)));
+
+	float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
+	float heightScale = hEff / coneSeed;
+	float rollT = saturate(cone / hEff);
+	float rimIn = 1.0 - rollT;
+
+	// The dome's shape lives in the CONE field, so a finite difference of the
+	// depth cannot see it - the shell shaded flat before the skin took its
+	// normal from here instead. Analytic surface normal: the cone gradient
+	// through the fillet's slope, clamped near the vertical rim so the rim
+	// does not blow the derivative up.
+	const float gs = 4.0;
+	float cXP = min(ObjectConeDepthL(worldXY + float2(gs, 0.0)), coneSeed);
+	float cXN = min(ObjectConeDepthL(worldXY - float2(gs, 0.0)), coneSeed);
+	float cYP = min(ObjectConeDepthL(worldXY + float2(0.0, gs)), coneSeed);
+	float cYN = min(ObjectConeDepthL(worldXY - float2(0.0, gs)), coneSeed);
+	float2 coneGrad = float2(cXP - cXN, cYP - cYN) / (2.0 * gs);
+	float dhdc = rimIn / max(sqrt(saturate(1.0 - rimIn * rimIn)), 0.2);
+	domeNrm = normalize(float3(-coneGrad * dhdc, 1.0));
+
+	return depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn));
+}
+
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
 // unit or two apart, so the trail-margin test uses a cheap 5-tap cross
@@ -1449,8 +1501,20 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float bermD = 0.0;
 		[branch] if (ObjBermHeightAmp > 0.005)
 			bermD = BermField(gridLocal);
-		float depth = CarveProfile(deform, skinDepth, worldXY) +
-		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
+		// An object column takes the DOME; the carve profile is the trench
+		// layer's shape and reads as a flat-topped slab on a boulder. The berm
+		// is a trail feature and has no business on an object either.
+		float3 domeNrm = float3(0.0, 0.0, 1.0);
+		float depth;
+		[branch] if (objectField)
+		{
+			depth = ObjectDomeDepth(worldXY, skinDepth, domeNrm);
+		}
+		else
+		{
+			depth = CarveProfile(deform, skinDepth, worldXY) +
+			        BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
+		}
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
 		// a fully worn floor has to clear the object under it or the two z-fight,
@@ -1562,7 +1626,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		}
 		// Surface z = top + profile, so normal.xy = -d(profile); the other
 		// fields RAISE the surface and subtract for the same reason.
-		v.NormalWS = normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
+		// The dome carries its own analytic normal; the profile gradient is
+		// blind to a shape that lives in the cone field.
+		v.NormalWS = objectField ? domeNrm :
+		                           normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
