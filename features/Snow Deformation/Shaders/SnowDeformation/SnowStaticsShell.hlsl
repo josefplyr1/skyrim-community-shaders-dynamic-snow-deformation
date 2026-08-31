@@ -1198,6 +1198,22 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// bridge's road ownership and take the road path's rim exemptions.
 		owns = PatchLayer < 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 
+		// OBJECT OWNERSHIP, resolved here for the same reason road ownership
+		// is: the facade kills below must know about it BEFORE they run.
+		objectField = ObjectDrape > 0.5 && !owns;
+
+		// THE DEPTH AUTHORITY, and the fifth time the wrong one was asked. The
+		// skin-depth raster MAX-blends class depth across every column a
+		// footprint overlaps, so a rock standing on a road inherits the ROAD's
+		// depth - Josef's tell: the Road Meshes slider lifted a boulder's
+		// shell. Harmless while such a column could never draw; object
+		// ownership opened that gate, at the wrong class. A column the road
+		// does not own takes the object class from the CB, the only depth that
+		// is its own. The raster still arbitrates road columns, where its
+		// value IS the road's.
+		[flatten] if (objectField)
+			skinDepth = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
@@ -1241,7 +1257,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// NOT on a road: at a road's own edge the lowest valid neighbour is the
 	// terrain beside it, and clamping to it drags the road's snow down by
 	// the whole kerb height - the mismatched/floating road edges.
-	[flatten] if (minNeighborTop < 1e8 && !owns)
+	[flatten] if (minNeighborTop < 1e8 && !owns && !objectField)
 		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
@@ -1275,7 +1291,26 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// IS the top), so nothing is left: the hexagonal holes photographed
 	// from underneath. The patch's silhouette dissolve still clips a real
 	// overhang in the PS, so dropping the vertex kill costs no protection.
-	rim = rim && !owns;
+	//
+	// AND NEITHER DOES AN OBJECT, for the identical reason (Josef: the rock
+	// wears the RoadChunk bug). A boulder's own edge trips the facade slope
+	// test by construction - it stands proud of the ground and drops far more
+	// than four units across the eight the gradient measures - so the kills
+	// ate the vertices around its rim and left the sawtooth holes with the
+	// rock showing through. The killed vertex takes six triangles with it.
+	//
+	// It is also what makes each object its OWN shell rather than one sheet
+	// welded to the road's. Cutting by vertex kill leaves the lattice spanning
+	// from the rock's top down to the ground as a solid wall of geometry;
+	// cutting in the PS by silhouette drop ends the rock's snow at the rock's
+	// edge and lets the ground's snow continue underneath, unconnected. That
+	// is exactly how a road chunk stops being welded to the terrain shell, and
+	// it is why roads read clean today.
+	//
+	// Safe now in a way it would not have been three rounds ago: the air test
+	// is what keeps a peeled layer off the inside of a wall, so the facade
+	// kills no longer carry that job alone.
+	rim = rim && !owns && !objectField;
 
 	// The bisection is over - the drape draws, and these kills are exactly what
 	// it needs. With them off, a peeled layer sheeted straight down every wall
@@ -1329,23 +1364,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// Ownership decides COVERAGE, not whether the lattice may stand on a
 	// facade: the rim clamp and the facade slope kill above still delete the
 	// vertices that would sheet down a wall, and they run before this.
-	objectField = ObjectDrape > 0.5 && !owns;
-
-	// THE DEPTH AUTHORITY, and the fifth time the wrong one has been asked.
-	// The skin-depth raster MAX-blends class depth across every column a
-	// footprint overlaps, so a rock standing on a road inherits the ROAD's
-	// depth. Josef's tell: raising the Road Meshes slider lifted a boulder's
-	// shell, which is the road's shell being extended onto the object rather
-	// than the object growing its own.
-	//
-	// The bleed was harmless while such a column could never draw - ownership
-	// kept the trample gate shut. Object ownership opened it, at the wrong
-	// class. A column the road does not own takes the object class straight
-	// from the CB, the only depth that is actually its own; the raster keeps
-	// arbitrating road columns, where its value IS the road's.
-	[flatten] if (objectField)
-		skinDepth = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-
 	}  // end cheap gate
 
 	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
