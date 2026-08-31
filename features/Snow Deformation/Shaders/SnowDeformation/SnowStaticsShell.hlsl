@@ -2403,28 +2403,55 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float3 rayDir = normalize(input.WorldPos);
 		float3 originAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
 		float containerH = ContainerHeight();
-		// Ray length that spans the container's vertical extent, capped so
-		// a grazing view marches a bounded distance rather than the horizon.
-		float span = min(containerH / max(abs(rayDir.z), 0.15), containerH * 8.0);
-		const int kContainerSteps = 32;
+		// Span: enough to traverse the container vertically at this ray's
+		// pitch, bounded by a fixed WORLD reach rather than a multiple of
+		// the height. The v1 cap of 8x height was Josef's view-dependent
+		// hole: at low camera angles the true crossing lies further along
+		// the ray than the cap reached, so lowering the camera GREW the
+		// miss region over the dome's top.
+		float span = min(containerH / max(abs(rayDir.z), 0.02), 320.0);
+		const int kContainerSteps = 48;
 		float stepLen = span / (float)kContainerSteps;
 		float prevT = 0.0;
 		float prevGap = originAbs.z - ContainerSnowZ(originAbs.xy);
 		float hitT = -1.0;
-		[loop] for (int ci = 1; ci <= kContainerSteps; ci++)
+		// An entry ALREADY below the field is the container's side skirt
+		// over a flank, not sky over snow - the v1 march "hit" at the
+		// entry and painted the skirt's stretched triangles white, which
+		// is why the fences came back worse. The surface visible from
+		// outside is only ever an above-to-below crossing; a skirt entry
+		// is bare flank and must miss.
+		[branch] if (prevGap > 0.0)
 		{
-			float t = stepLen * (float)ci;
-			float3 p = originAbs + rayDir * t;
-			float gap = p.z - ContainerSnowZ(p.xy);
-			[branch] if (gap <= 0.0)
+			[loop] for (int ci = 1; ci <= kContainerSteps; ci++)
 			{
-				// Linear refine across the crossing: the last sample above
-				// the surface and this one below bracket it.
-				hitT = lerp(prevT, t, saturate(prevGap / max(prevGap - gap, 1e-4)));
-				break;
+				float t = stepLen * (float)ci;
+				float3 p = originAbs + rayDir * t;
+				float gap = p.z - ContainerSnowZ(p.xy);
+				[branch] if (gap <= 0.0)
+				{
+					// Bisect the bracket. The v1 single linear guess left
+					// the hit quantized to the step length, which banded
+					// the texture into blocks at grazing views (smooth
+					// from above, blocky from the side). Five halvings
+					// take a ~7-unit step down to ~0.2 units.
+					float lo = prevT;
+					float hi = t;
+					[unroll] for (int bi = 0; bi < 5; bi++)
+					{
+						float mid = 0.5 * (lo + hi);
+						float3 pm = originAbs + rayDir * mid;
+						[flatten] if (pm.z - ContainerSnowZ(pm.xy) > 0.0)
+							lo = mid;
+						else
+							hi = mid;
+					}
+					hitT = 0.5 * (lo + hi);
+					break;
+				}
+				prevT = t;
+				prevGap = gap;
 			}
-			prevT = t;
-			prevGap = gap;
 		}
 		[branch] if (hitT >= 0.0)
 		{
@@ -2433,8 +2460,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 			input.GridLocal = hitAbs.xy - GridOrigin;
 			// Analytic normal from the field gradient - the surface knows
 			// its own orientation, so the two-plane texture selection and
-			// the lighting both get the truth with no special case.
-			const float gs = 2.0;
+			// the lighting both get the truth with no special case. Step =
+			// one raster texel: shorter steps read the bilinear facets
+			// inside a texel instead of the field's slope.
+			const float gs = 4.0;
 			float2 grad = float2(
 				ContainerSnowZ(hitAbs.xy + float2(gs, 0.0)) - ContainerSnowZ(hitAbs.xy - float2(gs, 0.0)),
 				ContainerSnowZ(hitAbs.xy + float2(0.0, gs)) - ContainerSnowZ(hitAbs.xy - float2(0.0, gs))) / (2.0 * gs);
