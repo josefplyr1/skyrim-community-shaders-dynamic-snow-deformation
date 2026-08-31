@@ -2059,6 +2059,10 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	a_scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
+	// P5's cornice lip. Rides FillSkinDrawCB so the shadow caster overhangs by
+	// exactly the same amount the visible shell does - a caster that kept the
+	// old silhouette would shadow an edge that is no longer there.
+	a_scb.ObjCorniceLip = std::clamp(settings.ObjCorniceLipAmt, 0.0f, 1.0f);
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;

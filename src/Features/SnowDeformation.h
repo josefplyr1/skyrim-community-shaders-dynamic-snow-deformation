@@ -475,6 +475,8 @@ public:
 		bool MeldCoPlanar = false;
 		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
 		float PileHeightRatio = 1.0f;
+		/** @brief "Cornice Lip": how far the snow's rim overhangs the object's own edge, as a fraction of the shell depth. 0 disables it and restores the pre-P5 silhouette exactly. */
+		float ObjCorniceLipAmt = 0.35f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
@@ -1599,7 +1601,8 @@ public:
 
 		/** @brief Settings::ObjectDrapeShell - THE DRAPE PIVOT's A/B: object-owned columns get the full lattice surface the way road-owned ones already do, instead of only the trench around footprints. Paired with the S4 skins not drawing at all, so the two never fight for the depth buffer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ObjectDrape;
-		float padDrape0;
+		/** @brief Settings::ObjCorniceLipAmt - P5's cheap form (edge study): the rim band is pushed OUTWARD along the cone gradient as well as up, so the outermost ring bulges past the object's silhouette. A displaced skin cannot otherwise overhang at all - its vertices are the object's vertices - and the overhang is what makes a cornice read as snow rather than as paint. Fraction of the class depth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ObjCorniceLip;
 		float padDrape1;
 		float padDrape2;
 	};

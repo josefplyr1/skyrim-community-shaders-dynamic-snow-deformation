@@ -247,6 +247,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttOverhead = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
 
+		ImGui::SliderFloat(T(TKEY("cornice_lip"), "Cornice Lip"), &settings.ObjCorniceLipAmt, 0.0f, 1.0f, "%.2f");
+		if (auto _ttLip = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cornice_lip_tooltip"), "How far the snow hangs out past the edge of the thing it is sitting on. Real snow builds a lip that overhangs a rim; snow that stops exactly where the object stops reads as paint instead. 0 keeps the old edge, which follows the object outline precisely."));
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));

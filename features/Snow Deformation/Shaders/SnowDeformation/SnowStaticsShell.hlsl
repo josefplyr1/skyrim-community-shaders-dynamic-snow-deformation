@@ -308,7 +308,9 @@ cbuffer StaticCB : register(b1)
 	// THE DRAPE PIVOT's A/B: object columns take the full lattice surface the
 	// way road columns already do, and the S4 skins do not draw at all.
 	float ObjectDrape;
-	float padDrape0;
+	// P5's cornice lip: how far the rim overhangs the object's silhouette,
+	// as a fraction of the class depth.
+	float ObjCorniceLip;
 	float padDrape1;
 	float padDrape2;
 }
@@ -1987,6 +1989,10 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	// The shape is settled here; everything past this point is distance LOD.
 	float coverDepth = depth;
+	// P5's cornice lip, carried out of the dome block: rollT and heightScale
+	// are local to it, and the lift lands much later.
+	float2 corniceDir = float2(0.0, 0.0);
+	float corniceW = 0.0;
 
 	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
 	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
@@ -2061,6 +2067,10 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float meldWall = 0.0;
 		float heightScale = 1.0;
 		float3 domeNormal = nrmWS;
+		// Kept for P5's lip: the cone gradient points INWARD (the cone rises
+		// away from a rim), so its negation is the outward direction the rim
+		// has to bulge along.
+		float2 domeConeGrad = float2(0.0, 0.0);
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
@@ -2174,6 +2184,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				float rimIn0 = 1.0 - rollT;
 				float dhdc = rimIn0 / max(sqrt(saturate(1.0 - rimIn0 * rimIn0)), 0.2);
 				domeNormal = normalize(float3(-coneGrad * dhdc, 1.0));
+				domeConeGrad = coneGrad;
+				// Outward is the cone gradient NEGATED - the cone rises away from
+				// a rim, so its gradient points inward. Weight peaks at the rim
+				// (rollT 0) and vanishes in the interior, where there is no edge
+				// to overhang.
+				float gLen = length(coneGrad);
+				[flatten] if (gLen > 1e-4)
+				{
+					corniceDir = -coneGrad / gLen;
+					corniceW = saturate(1.0 - rollT) * heightScale;
+				}
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
 			// mesh geometry, so nothing can span the physical void between
@@ -2242,6 +2263,30 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	SkinLift o;
 	o.WorldAbs = worldBase + liftWS * depth;
+
+	// P5 (edge study), the cheap form that fits the skin we actually ship:
+	// THE CORNICE LIP. A displaced skin can never overhang, because its
+	// vertices ARE the object's vertices - the snow's outline is forced to be
+	// the object's outline, and the roll has nowhere to go but inward. That is
+	// why the edge reads as paint rather than as snow however well the fillet
+	// is tuned. Pushing the rim band OUTWARD along the cone gradient as well as
+	// up bulges the outermost ring past the silhouette, which is the whole
+	// shape a cornice is.
+	//
+	// The weight vanishes at BOTH ends deliberately. In the interior there is
+	// no edge to overhang. At the exact rim the depth is zero, and a flange
+	// pushed out at ground level would z-fight the terrain. What is left is the
+	// steep mid-fillet - exactly where a real cornice's lip sits.
+	//
+	// The study's own warning is triangle inversion at concave rims, so the
+	// throw is a fraction of the depth and dies with it: a rim that grew no
+	// snow cannot move at all.
+	[branch] if (ObjCorniceLip > 0.001 && corniceW > 0.001)
+	{
+		float lipScale = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+		o.WorldAbs.xy += corniceDir * (ObjCorniceLip * lipScale * corniceW *
+									   saturate(depth / lipScale));
+	}
 
 #if !defined(SHADOWCAST)
 	// C0 CONTAINER SPIKE (CONTAINER-SHELL-PLAN). Every vertex of the draw
