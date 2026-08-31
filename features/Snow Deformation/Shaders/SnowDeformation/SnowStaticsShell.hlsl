@@ -1248,7 +1248,14 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
 		// under this; steep flanks belong to the skin.
 		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kHeightTexel);
-		rim = rim || length(topGrad) > 0.5;
+		// OBJECTS ARE EXEMPT FROM THIS ONE KILL, AND ONLY THIS ONE. A gradient
+		// of 0.5 across eight units is a four-unit drop, which ANY rock edge
+		// clears by construction - this is the kill that ate the boulder's rim
+		// and left Josef's sawtooth. The 100-unit neighbour clamp above and the
+		// tall-ray scan below still apply to objects, and they are what keep
+		// the lattice off a building facade: exempting objects from those too
+		// drowned every wall in Dawnstar in green curtains.
+		rim = rim || (length(topGrad) > 0.5 && !objectField);
 	}
 	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
 	// still samples tops partway up the smeared ramp and rises as a jagged
@@ -1300,17 +1307,15 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// rock showing through. The killed vertex takes six triangles with it.
 	//
 	// It is also what makes each object its OWN shell rather than one sheet
-	// welded to the road's. Cutting by vertex kill leaves the lattice spanning
-	// from the rock's top down to the ground as a solid wall of geometry;
-	// cutting in the PS by silhouette drop ends the rock's snow at the rock's
-	// edge and lets the ground's snow continue underneath, unconnected. That
-	// is exactly how a road chunk stops being welded to the terrain shell, and
-	// it is why roads read clean today.
+	// welded to the road's: cutting in the PS by silhouette drop ends the
+	// rock's snow at the rock's edge and lets the ground's continue
+	// underneath, exactly as a road chunk stops being welded to the terrain.
 	//
-	// Safe now in a way it would not have been three rounds ago: the air test
-	// is what keeps a peeled layer off the inside of a wall, so the facade
-	// kills no longer carry that job alone.
-	rim = rim && !owns && !objectField;
+	// The exemption is NARROW for objects - the slope kill only, applied
+	// above. Roads keep the blanket exemption because a road is low; objects
+	// include three-hundred-unit facades, and exempting them from the
+	// neighbour clamp and the tall-ray scan drowned every wall in Dawnstar.
+	rim = rim && !owns;
 
 	// The bisection is over - the drape draws, and these kills are exactly what
 	// it needs. With them off, a peeled layer sheeted straight down every wall
