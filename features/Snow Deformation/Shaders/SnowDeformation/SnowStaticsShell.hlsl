@@ -2208,22 +2208,27 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 					//
 					// Both vanish at t=0, so the bottom of the roll stays pinned to
 					// the object's corner and the overhang opens above it.
-					// The bulge must peak near the BOTTOM of the roll. A throw that
-					// grows with height pushes the TOP out instead, which is the
-					// long flat shelf ending in a hook that Josef drew as wrong.
+					// THE LIP IS LOCATED VERTICALLY, not in plan. The cone field is
+					// per COLUMN, so every vertex down a vertical flank shares one
+					// rollT - weighting the throw by rollT alone pushed the whole
+					// face out as a slab, and the pushed band had nothing below it
+					// to curve back to. That is Josef's striped curtain hanging down
+					// the rock with a torn hem: it juts, then drops dead straight.
 					//
-					// Geometry, with t = rollT running 0 at the rim to 1 at the flat
-					// top: the surface sits about t roll-radii inside the rim, so a
-					// throw of t radii lands it back on the corner and anything more
-					// passes it. Concentrating the throw at low t makes the WIDEST
-					// point of the snow sit low, with the surface tucking back in
-					// both above it and below it into the corner - the rounded bulb.
-					//
-					// Peaks at t = 0.3 (about two thirds of the height) and is gone
-					// by t = 0.6, so the flat top never moves and needs no separate
-					// shoulder term. Zero at the rim keeps the foot pinned.
-					float u = saturate(rollT / 0.6);
-					corniceW = 4.0 * u * (1.0 - u) * heightScale;
+					// A cornice is a band a few units under the object's own top
+					// edge. Measure the drop below that top and put the widest point
+					// there: zero AT the crown so the top surface keeps its rounded
+					// approach, maximum just below it, and back to zero within about
+					// one snow depth. The surface then returns inward under its own
+					// widest point instead of falling off a cliff - the tuck Josef
+					// drew, and the reason the hem stops tearing.
+					float lipReach = max(coneSeed, kMinSkinLift);
+					float crownDrop = saturate((top1 > -50000.0 ? top1 - worldBase.z : 0.0) / lipReach);
+					float u = saturate(crownDrop / 0.8);
+					// In plan the interior has no edge to hang over, so the throw is
+					// confined to the rim band the roll occupies.
+					float rimBand = 1.0 - smoothstep(0.35, 0.85, rollT);
+					corniceW = 4.0 * u * (1.0 - u) * rimBand * heightScale;
 				}
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
