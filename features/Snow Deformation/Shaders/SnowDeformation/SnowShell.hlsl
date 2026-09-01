@@ -2145,7 +2145,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// attenuated strength; the march's per-texel horizon steps stop
 		// reading as hard-edged blocks on distant snow.
 		float soft = lerp(0.06, 0.35, farShadowT);
-		sunShadow *= lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		// Penumbra CENTRED on the horizon: the old band was the same total
+		// width (3*soft) but sat entirely on the LIT side of
+		// sunTan == horizonTan, so the shadow always over-reached its
+		// geometric edge - worse the lower the sun. Kept identical to the
+		// statics march; the two shells must agree across the seam.
+		sunShadow *= lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 	}
 
 	// SSS gate diagnostics for ShellDebugData 4: x = mask darkness (what

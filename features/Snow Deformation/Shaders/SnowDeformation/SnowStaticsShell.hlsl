@@ -598,6 +598,9 @@ struct VS_OUTPUT
 	// the facing band: the weight already contains the slope term, and the
 	// band's mid-zone partial alpha dithers into a film on low-poly meshes.
 	float ProjFactor : TEXCOORD8;
+	// Post-shelter depth target for this column (no facing gate, no taper,
+	// no distance collapse). The PS rim band scales to it.
+	float LiftTarget : TEXCOORD9;
 };
 
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
@@ -1669,6 +1672,7 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	}
 	// The patch is exempt from the lift gates; its walls are real geometry.
 	vsout.Lift = 1e6;
+	vsout.LiftTarget = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 	vsout.ProjFactor = 1.0;
 	[branch] if (v.Killed > 0.5)
 	{
@@ -1862,6 +1866,10 @@ struct SkinLift
 	// Debug (Shell Layers view): which peeled plane owned this vertex.
 	// 0 = not an S4 draw, 1/2/3 = the layer, 4 = below all three.
 	float DebugLayer;
+	// Post-shelter depth target: the class depth with only the two shelter
+	// clamps applied. What this column would carry if it were interior and
+	// up-facing; the PS rim band scales to it.
+	float Target;
 	// S4 dome shading normal: the dome's shape lives in the CONE field,
 	// not the mesh normals, so without this the shell shaded flat - lee
 	// flanks as bright as sun-facing ones (Josef's report). Analytic
@@ -1885,6 +1893,9 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// mesh and z-fights itself invisible; the snow cover stays visible as a
 	// thin coat no matter the class sliders.
 	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift);
+	// depthBase carried through the SHELTER clamps only - no facing gate, no
+	// taper, no distance collapse. Exported as o.Target for the PS rim band.
+	float depthTarget = depthBase;
 
 	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
 	// bare, matching the vanilla projection's extent). flat meshes gate hard
@@ -1984,6 +1995,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		{
 			float shelterAmt = smoothstep(kShelterNear, kShelterFar, objTop - worldBase.z);
 			depth = lerp(depth, min(depth, kShelterDust), shelterAmt);
+			depthTarget = lerp(depthTarget, min(depthTarget, kShelterDust), shelterAmt);
 		}
 	}
 
@@ -2252,6 +2264,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float sheltered = (1.0 - open) * SkyExposureSk;
 		depth = lerp(depth, min(depth, kShelterDust), sheltered);
 		coverDepth = lerp(coverDepth, min(coverDepth, kShelterDust), sheltered);
+		depthTarget = lerp(depthTarget, min(depthTarget, kShelterDust), sheltered);
 	}
 
 	SkinLift o;
@@ -2357,6 +2370,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 #endif
 	o.Depth = depth;
 	o.CoverDepth = coverDepth;
+	o.Target = max(depthTarget, kMinSkinLift);
 	o.RimT = rimT;
 	o.Support = support;
 	o.UpFacing = upFacing;
@@ -2546,6 +2560,7 @@ VS_OUTPUT main(VS_INPUT input)
 	}
 	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
 	vsout.Lift = lift.CoverDepth;
+	vsout.LiftTarget = lift.Target;
 	// Authored-relief mode repurposes the interpolant: the raw authored
 	// vertex alpha, for the PS's per-pixel weight rebuild.
 	vsout.ProjFactor = ProjPixelEnable > 1.5 ? lift.ProjLinear : lift.ProjFactor;
@@ -2739,6 +2754,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	}
 	vsout.GridLocal = gridLocal;
 	vsout.Lift = lift.CoverDepth;
+	vsout.LiftTarget = lift.Target;
 	// Same repurposing as the untessellated VS: raw authored alpha in
 	// authored-relief mode.
 	vsout.ProjFactor = ProjPixelEnable > 1.5 ? lift.ProjLinear : lift.ProjFactor;
@@ -2963,7 +2979,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// World units spanned by this pixel. Every LOD term below keys off it
 	// rather than off camera distance, so they track resolution and FOV.
 	float footprint = length(abs(dPosX) + abs(dPosY));
-	float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+	// The column's OWN post-shelter depth target, NOT the class slider.
+	// Under a roof the target drops to kShelterDust while the slider does
+	// not, so a class-scaled rim band came out WIDER than the sheltered
+	// shell is thick and dissolved its whole interior; the fwidth term
+	// then finished it off at grazing angles. Only the rim band reads this.
+	float liftBase = max(input.LiftTarget, kMinSkinLift);
 
 	// Facing LOD: the interpolated normal over-reports up-ness on low-poly
 	// meshes, so every flank passes the gate below and a distant rock reads as
@@ -3793,13 +3814,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// cannot see under
 		// roofs: where it stands well above the surface being shaded, drop
 		// its term and let the cascades/SSS own the shading here.
-		// S4 shells skip the OBJECT taps outright (Josef's call): this
-		// march term predates the S4 shell - it was built to self-shadow
-		// trench walls from the raster when nothing else would - and on
-		// the new domes it only duplicates what the cascades already
-		// draw, in blocky 4-unit raster steps. The terrain taps below
-		// stay (a drift in a hill's lee still darkens smoothly).
-		bool objectTopUsable = HasObjectTop > 0.5 && !pdMode;
+		// The S4 skip is LIFTED. With the object taps off, skins took no
+		// heightfield occlusion at all (Josef, debug view 4: every skin black,
+		// the road patch green) while the landscape march occluded the ground
+		// beside them at full depth - so objects read brighter than the snow
+		// around them. The blockiness that motivated the skip was the POINT
+		// load, fixed below, not the taps.
+		bool objectTopUsable = HasObjectTop > 0.5;
 		[branch] if (objectTopUsable)
 		{
 			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
@@ -3848,7 +3869,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 						// skin, and the round-35 top term then stacked the
 						// ramp on the top as well - object snow fell into
 						// shadow at any low sun.
-						sh = topH + 2.0;
+						//
+						// Occluder = the CONE field, not a fixed dusting. A flat 2.0
+						// modelled every dome as 2 units tall, so skins never
+						// self-shadowed at their real height while the landscape march
+						// occluded the ground beside them at FULL depth. ObjectSkinDepth
+						// is unusable here (the capture parks it at 0 for every non-road
+						// object); the cone is the same angle-of-repose field the dome's
+						// own taper reads.
+						float2 tapWorld = GridOrigin + sampleLocal;
+						// Clamped to the deepest class in play: the cone raster returns
+						// a huge sentinel outside its window, and an unclamped occluder
+						// would put the whole scene in shadow.
+						float tapConeRaw = ObjectConeDepth(tapWorld);
+						float tapSnow = clamp(tapConeRaw, kMinSkinLift, max(max(RoundedDepth, ObjectsDepth), kMinSkinLift));
+						sh = topH + tapSnow;
 						dbgMarch.z += 0.2;
 
 						// Except on ROAD-OWNED columns, which carry a full
@@ -3865,7 +3900,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 						// interpolation) and the road must own the column;
 						// everywhere else - rocks, cairns, walls - the
 						// dusting above stands, so skins cannot regress.
-						float2 tapWorld = GridOrigin + sampleLocal;
 						float2 bt = PatchTexel(tapWorld, topDims);
 						int2 bt0 = (int2)bt;
 						float2 btf = bt - bt0;
@@ -3894,7 +3928,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 								// occluder regrows the walls the geometry
 								// tapered - the recurring shape/shadow split.
 								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
-								float tapCone = ObjectConeDepth(tapWorld);
+								float tapCone = tapConeRaw;
 								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
 								float tapDeform = SampleDeformation(sampleLocal);
 								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
@@ -3904,6 +3938,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 								dbgMarch.y += 0.2;
 								dbgMarch.z -= 0.2;
+							}
+							else
+							{
+								// Non-road object column: the SAME bilinear top the road path
+								// uses, so the occluder is as smooth as the drawn dome instead
+								// of stepping in 4-unit texels. The blockiness that got the
+								// object taps disabled on S4 was the POINT load, not the taps.
+								sh = topSmooth + tapSnow;
 							}
 						}
 						tapOnObject = true;
@@ -3929,7 +3971,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
 		float soft = lerp(0.06, 0.35, farShadowT);
-		float marchFactor = lerp(smoothstep(-0.12 - (soft - 0.06) * 2.0, soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		// Penumbra CENTRED on the horizon. The old band ran
+		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
+		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
+		// over-reached its geometric edge by h/(sunTan-soft) - h/sunTan on the
+		// ground. That grows fast as the sun drops - the low-sun bleed past
+		// drift crests. Width preserved exactly; the bias is gone.
+		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 		sunShadow *= marchFactor;
 		dbgMarch.x = 1.0 - marchFactor;
 		dbgMarchRan = 1.0;
