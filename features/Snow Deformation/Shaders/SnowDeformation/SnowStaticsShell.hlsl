@@ -4360,12 +4360,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// change is dimensionless, so it reads the same at any depth AND
 			// at any distance. StaticsDebugView is a constant, so these
 			// derivatives sit in uniform control flow.
-			// pleat = world units of LIFT change per world unit of SURFACE
-			// travel. Dimensionless, so it reads the same at any distance -
-			// dividing by the class depth (the first version) made the same
-			// geometry read red at depth 0 and green at 25.
-			float posPerPixel = max(length(ddx(input.WorldPos)), length(ddy(input.WorldPos)));
-			float pleat = fwidth(input.Lift) / max(posPerPixel, 1e-3);
+			// pleat = world units of LIFT change per world unit of BASE
+			// SURFACE travel. The base is WorldPos with the lift subtracted
+			// back out of z - and that subtraction is the whole instrument.
+			// Lift is baked into the drawn WorldPos, so dividing by the raw
+			// position travel divides the lift change by a quantity that
+			// CONTAINS the lift change: on a vertical wall the two move in
+			// lockstep and the ratio is bounded at ~1 however violent the
+			// tear. That bound is why iteration 2 (threshold 1.5) painted
+			// every wall red and iteration 3 (threshold ~19) painted the same
+			// walls green - the measure could never leave [0,1]. Against the
+			// base, a tear is two vertices at nearly the SAME base position
+			// with lifts a class depth apart: base travel ~0, ratio explodes.
+			// A real mesh wall or the roll moves its base too, and stays low.
+			float3 baseDX = ddx(input.WorldPos);
+			float3 baseDY = ddy(input.WorldPos);
+			baseDX.z -= ddx(input.Lift);
+			baseDY.z -= ddy(input.Lift);
+			float pleat = max(abs(ddx(input.Lift)) / max(length(baseDX), 1e-3),
+			                  abs(ddy(input.Lift)) / max(length(baseDY), 1e-3));
 			// Scored against the steepest slope the shell is SUPPOSED to have:
 			// the cornice roll drops the whole class depth over kCorniceRoll
 			// units, so depth/kCorniceRoll is a legitimate silhouette and must
