@@ -2091,7 +2091,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// and long soft ones at low sun angles.
 	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
-		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
+		// Redistributed toward the NEAR field. The first tap set the finest
+		// boundary the horizon can resolve, so at 28 units every shadow edge
+		// was smeared over at least that distance and the softness below had
+		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
+		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
 		float sunLen2D = max(length(L.xy), 1e-4);
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
@@ -2144,7 +2148,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Near: a crisp penumbra band. Far: a much wider penumbra plus
 		// attenuated strength; the march's per-texel horizon steps stop
 		// reading as hard-edged blocks on distant snow.
-		float soft = lerp(0.06, 0.35, farShadowT);
+		// Near softness halved: it existed to hide the tap quantisation the
+		// finer first taps now resolve. Far end untouched.
+		float soft = lerp(0.03, 0.35, farShadowT);
 		// Penumbra CENTRED on the horizon: the old band was the same total
 		// width (3*soft) but sat entirely on the LIT side of
 		// sunTan == horizonTan, so the shadow always over-reached its

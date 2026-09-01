@@ -2985,6 +2985,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shell is thick and dissolved its whole interior; the fwidth term
 	// then finished it off at grazing angles. Only the rim band reads this.
 	float liftBase = max(input.LiftTarget, kMinSkinLift);
+	// The coat reference, likewise capped by the column's own target. Every
+	// gate below thresholds the lift against kProjCoatLift; under a roof the
+	// lift is clamped to kShelterDust, which is BELOW that constant, so the
+	// gates scored a sheltered shell at a fraction of its coverage and the
+	// dither turned it into speckle. Unchanged in the open, where the target
+	// is the class depth and this saturates at kProjCoatLift.
+	float coatRef = min(kProjCoatLift, liftBase);
 
 	// Facing LOD: the interpolated normal over-reports up-ness on low-poly
 	// meshes, so every flank passes the gate below and a distant rock reads as
@@ -3081,7 +3088,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// pixel gate must let them through where the cone confirms a
 		// melded (unrimmed) column and the vertex actually lifted.
 		float upGateP = smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
-		[branch] if (MeldPlanesSk > 0.5 && upGateP < 0.99 && input.Lift > 0.3 * kProjCoatLift)
+		[branch] if (MeldPlanesSk > 0.5 && upGateP < 0.99 && input.Lift > 0.3 * coatRef)
 		{
 			float2 pixXY = input.WorldPos.xy + ShellCameraPosAdjust.xy;
 			float coneP = ObjectConeDepth(pixXY);
@@ -3096,7 +3103,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// - cut the material where the lift drops under the clearance and
 		// let the recolored PD carry on underneath (the two systems agree
 		// by construction, so the hand-off is a seam of height only).
-		pdCoverage *= smoothstep(0.3 * kProjCoatLift, kProjCoatLift, input.Lift);
+		pdCoverage *= smoothstep(0.3 * coatRef, coatRef, input.Lift);
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
 		// occlusion find, decoded by his coverage-alpha shot): every gate
 		// above reads nzPix / wpix from the PRE-SHELL G-buffer - the
@@ -3126,10 +3133,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// lost their floor, fell back to the screen-space gates and
 		// dithered into scattered holes. Taking the max is the only form
 		// that cannot be less permissive than either rule alone.
-		float liftFrac = input.Lift / max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
+		float liftFrac = input.Lift / max(input.LiftTarget, kMinSkinLift);
 		pdCoverage = max(pdCoverage, max(
 										smoothstep(0.5, 0.85, liftFrac),
-										smoothstep(1.5 * kProjCoatLift, 4.0 * kProjCoatLift, input.Lift)));
+										smoothstep(1.5 * coatRef, 4.0 * coatRef, input.Lift)));
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
@@ -3481,22 +3488,42 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// baked snow never matches the shell, so the skin persists at every
 	// loaded distance (geometry still collapses to flat paint by
 	// SkinHeightFadeEnd).
+	// Held SEPARATE from the shape gates: the shape cut below is hard, and a
+	// hard cut on a fade that runs over hundreds of units pops every distant
+	// skin in one frame.
+	float fadeAlpha = 1.0;
 	[flatten] if (FadeExempt < 0.5)
-		coverageAlpha *= 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
+		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 	// Captured before the override: mode 2 renders the value the dither sees.
-	float dbgAlpha = coverageAlpha;
+	float dbgAlpha = coverageAlpha * fadeAlpha;
 	// Debug view: full visibility; the dither must not hide geometry the
 	// diagnosis needs to see.
 	[branch] if (StaticsDebugView != 0.0)
+	{
 		coverageAlpha = 1.0;
+		fadeAlpha = 1.0;
+	}
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	// pdMode dithers LINEARLY: the squared reference survives low alphas
 	// at sqrt density, which brightened the fade's sparse end into a
 	// visible mid-level plateau (part of Josef's "steps"). The classic
 	// paths keep their tuned curve.
+	// THE SHAPE GATES NO LONGER DITHER (Josef, 2026-09-01: "dithering should
+	// be disabled, period"). Partial shape alpha used to resolve to a
+	// stochastic discard, which on any surface the gates scored below 1 -
+	// every sheltered shell, every rim, every grazing view - showed as
+	// see-through speckle rather than as snow. A hard contour instead: the
+	// shell ends where coverage crosses half, and everything inside it is
+	// OPAQUE. 0.5 is the old dither's own median (its reference is
+	// noise^2, so expected coverage was sqrt(alpha)).
+	if (coverageAlpha < 0.5)
+		discard;
+	coverageAlpha = 1.0;
+	// The distance fade keeps its dither - it IS a fade, and it is the only
+	// gate whose partial alpha spans enough screen area to need one.
 	float ditherRef = pdMode ? screenNoise : screenNoise * screenNoise;
-	if (ditherRef >= coverageAlpha)
+	if (ditherRef >= fadeAlpha)
 		discard;
 
 	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
@@ -3801,7 +3828,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float dbgMarchRan = 0.0;
 	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
-		static const float kMarchDist[5] = { 28.0, 70.0, 170.0, 420.0, 1000.0 };
+		// Redistributed toward the NEAR field. The first tap set the finest
+		// boundary the horizon can resolve, so at 28 units every shadow edge
+		// was smeared over at least that distance and the softness below had
+		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
+		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
 		float sunLen2D = max(length(L.xy), 1e-4);
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
@@ -3970,7 +4001,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 			horizonTan = max(horizonTan, (sh - surfZ) / d);
 		}
-		float soft = lerp(0.06, 0.35, farShadowT);
+		// Near softness halved: it existed to hide the tap quantisation the
+		// finer first taps now resolve. Far end untouched.
+		float soft = lerp(0.03, 0.35, farShadowT);
 		// Penumbra CENTRED on the horizon. The old band ran
 		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
 		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
@@ -4009,7 +4042,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
 
 		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
-		sunShadow *= lerp(1.0, parallaxShadow, bumpFade);
+		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
 
 	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
