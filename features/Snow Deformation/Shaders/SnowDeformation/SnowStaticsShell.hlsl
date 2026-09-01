@@ -2386,17 +2386,21 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float depth, float rimT)
 {
 	float depthBase = max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift);
-	[branch] if (isFlat > 0.5)
-	{
-		// Flat snow shades by the plate it sits on — a per-plank gradient
-		// stamps the same lighting onto every instance. The cornice roll is
-		// the exception: geometry that curves over but shades flat reads as a
-		// cut edge, so the last sliver before the rim bends toward the
-		// smoothed normal and nothing inboard of it changes.
-		float roll = 1.0 - smoothstep(0.0, 0.35, rimT);
-		return normalize(lerp(nrmWS, smoothWS, roll * 0.8));
-	}
-	return normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
+	// SINGLE RETURN, blend initialized first. An early `return` inside a
+	// `[branch]` raised X4000 here in the skin VS and the DS - the same shape
+	// that silently broke the three layer accessors, and the last one left in
+	// this shader. Behaviour is unchanged: same two blends, same operands.
+	//
+	// Rounded meshes: displaced snow shades by the smooth surface it forms,
+	// not the flat face beneath. Flat plates shade by the plate itself - a
+	// per-plank gradient stamps the same lighting onto every instance - except
+	// the cornice roll, where geometry that curves over but shades flat reads
+	// as a cut edge, so the last sliver before the rim bends toward the
+	// smoothed normal and nothing inboard of it changes.
+	float blend = saturate(depth / max(depthBase, 0.01)) * 0.85;
+	[flatten] if (isFlat > 0.5)
+		blend = (1.0 - smoothstep(0.0, 0.35, rimT)) * 0.8;
+	return normalize(lerp(nrmWS, smoothWS, blend));
 }
 
 // Vanilla's projected-UV weight, reconstructed from the same inputs
