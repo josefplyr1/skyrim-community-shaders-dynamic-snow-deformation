@@ -2105,6 +2105,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// away from a rim), so its negation is the outward direction the rim
 		// has to bulge along.
 		float2 domeConeGrad = float2(0.0, 0.0);
+		// The drawn surface's DEPTH gradient (dd/dx, dd/dy), zero until the
+		// dome runs. Carried explicitly rather than decoded back out of
+		// domeNormal: that is SEEDED with nrmWS, so on any draw where the
+		// dome never ran a mesh normal would decode as a bogus gradient.
+		float2 domeHeightGrad = float2(0.0, 0.0);
 		[branch] if (HasObjectTop > 0.5)
 		{
 			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
@@ -2220,6 +2225,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				float dhdc = rimIn0 / max(sqrt(saturate(1.0 - rimIn0 * rimIn0)), 0.2);
 				domeNormal = normalize(float3(-coneGrad * dhdc, 1.0));
 				domeConeGrad = coneGrad;
+				domeHeightGrad = coneGrad * dhdc;
 			}
 			// MELD WALL (Josef's gap-close sketch): the shell is displaced
 			// mesh geometry, so nothing can span the physical void between
@@ -2239,25 +2245,35 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
 		upFacing = mask;
-		// Shading: the smoothed-normal recipe is the BASE, so the texture
-		// planes and the lighting follow the shell surface's TRUE
-		// orientation at every angle - replacing it wholesale with the
-		// dome normal (which always points up-hemisphere by construction)
-		// top-projected every steep rock-family shell and flattened its
-		// lighting into a gray smear at distance (Josef's report). The
-		// dome curvature blends in ONLY where the surface is genuinely
-		// up-facing - where the fillet really IS the surface.
-		float3 smoothShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * kSkinShadeSmooth));
-		// The dome normal drives BOTH lighting and the PS's two-plane
-		// texture selection, so it must win on the ROLL WALLS - which are
-		// steepest exactly where depth is lowest, where a depth-only ramp
-		// suppressed it and left the walls top-projected into vertical
-		// streaks (Josef's fence shot). The tilt term hands the walls the
-		// same side-plane projection the trench walls use; the up-facing
-		// gate on the BASE surface still keeps rocks untouched.
-		float domeTilt = smoothstep(0.1, 0.35, 1.0 - domeNormal.z);
-		float domeBlend = mask * max(saturate(depth / (2.0 * kProjCoatLift)), domeTilt) * smoothstep(0.6, 0.85, nrmWS.z);
-		shadeNormal = normalize(lerp(smoothShade, domeNormal, domeBlend));
+		// OPTION 1 (Josef, 2026-09-01): shade by the gradient of the surface
+		// this shell ACTUALLY DRAWS - which is what the landscape shell does,
+		// and the reason the two matched only at depth 0.
+		//
+		// The skin IS its source mesh displaced VERTICALLY by d(x,y). Under
+		// that map the surface normal shears exactly:
+		//     n' = (nx - nz*dd/dx, ny - nz*dd/dy, nz)
+		// (the inverse-transpose of the displacement Jacobian). No taps, no
+		// tuning - it is the true normal of the drawn geometry.
+		//
+		// This is the GENERAL form of the dome normal, not a swap for it:
+		//   - on a flat top (n = 0,0,1) it reduces EXACTLY to (-dx, -dy, 1),
+		//     the heightfield normal the landscape shell builds;
+		//   - on a vertical face (nz = 0) it leaves the mesh normal ALONE.
+		// That second degeneracy is why the earlier wholesale swap to
+		// domeNormal failed: domeNormal is up-hemisphere by construction, so
+		// it top-projected every steep rock-family shell and smeared its
+		// lighting grey at distance. The shear cannot do that - it tilts in
+		// proportion to nz, so it vanishes precisely where that swap broke.
+		//
+		// It also subsumes the roll-wall term the old domeTilt hacked in:
+		// dhdc rises toward the rim, so the fillet's own gradient tilts the
+		// normal outward there and the PS picks the side plane on its own.
+		//
+		// kSkinShadeSmooth (0) still selects the BASE this shears - the mesh
+		// normal at 0, the position-averaged one at 1 - so the dial survives.
+		float3 baseShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * kSkinShadeSmooth));
+		float2 shadeGrad = domeHeightGrad * mask;
+		shadeNormal = normalize(float3(baseShade.xy - baseShade.z * shadeGrad, baseShade.z));
 	}
 
 	// P3 (edge-research study): SKY EXPOSURE weights the depth - the
