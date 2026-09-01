@@ -471,11 +471,13 @@ static const float kSkinBreakupScale = 24.0;
 // use site; the caster shares this lift and a hard mask makes it cast slivers.
 static const float kBreakupSoft = 0.35;
 static const float kBreakupMaxBare = 0.18;
-// Lift-gradient debug view: the pleat value that paints full red. The measure
-// is lift change per unit of the surface's OWN screen-space extent, so it is
-// dimensionless - 1.0 means the lift climbs as fast as the geometry recedes.
-// Above that the triangle is more wall than surface, which is a tear.
-static const float kPleatFullScale = 1.5;
+// Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
+// the shell is designed to have. That reference is the cornice roll, which
+// descends the whole class depth across kCorniceRoll world units - a slope of
+// depth/kCorniceRoll, i.e. 6.25:1 at depth 25. A flat threshold cannot work:
+// set below the roll it lights every legitimate silhouette, and the roll's
+// slope legitimately scales with the depth slider while a tear does not.
+static const float kPleatOverRoll = 3.0;
 static const float kShelterNear = 8.0;
 static const float kShelterFar = 32.0;
 // Depth a fully sheltered surface keeps. The landscape shell thins under
@@ -4358,9 +4360,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// change is dimensionless, so it reads the same at any depth AND
 			// at any distance. StaticsDebugView is a constant, so these
 			// derivatives sit in uniform control flow.
+			// pleat = world units of LIFT change per world unit of SURFACE
+			// travel. Dimensionless, so it reads the same at any distance -
+			// dividing by the class depth (the first version) made the same
+			// geometry read red at depth 0 and green at 25.
 			float posPerPixel = max(length(ddx(input.WorldPos)), length(ddy(input.WorldPos)));
 			float pleat = fwidth(input.Lift) / max(posPerPixel, 1e-3);
-			float hot = saturate(pleat / kPleatFullScale);
+			// Scored against the steepest slope the shell is SUPPOSED to have:
+			// the cornice roll drops the whole class depth over kCorniceRoll
+			// units, so depth/kCorniceRoll is a legitimate silhouette and must
+			// not saturate. A flat threshold lit every plank end and rock rim,
+			// which is why the un-scored view could not be read as a work
+			// queue. NOT rim-gated on purpose: round 30 established the fences
+			// ARE at the object's edges, so excluding rims would delete exactly
+			// the thing this view exists to find. Magnitude separates them -
+			// the roll spends the depth over 4 units, a sliver spends it over
+			// one triangle.
+			float rollSlope = max(liftBase, kMinSkinLift) / kCorniceRoll;
+			float hot = saturate(pleat / max(rollSlope * kPleatOverRoll, 1e-3));
 			// BRIGHTNESS = whether the shell actually DRAWS here. Every debug
 			// mode forces coverageAlpha and fadeAlpha to 1 ("full visibility;
 			// the dither must not hide geometry the diagnosis needs to see"),
