@@ -2807,6 +2807,53 @@ float CoverageNoise(float2 worldXY)
 	return lerp(lerp(n00, n10, f.x), lerp(n01, n11, f.x), f.y);
 }
 
+// Scene depth COPY (kPOST_ZPREPASS_COPY, or Terrain Blending's blended depth
+// when that feature owns it) - the same source, the same slot and the same
+// helper the terrain shell binds at t3. Never the bound DSV, so sampling it
+// while writing depth is legal.
+Texture2D<float> SceneDepth : register(t3);
+
+// SHELL-SURFACE SSS RE-MARCH, ported verbatim from SnowShell.hlsl (Josef
+// 2026-09-01: both shells must run the same shadow configuration). The only
+// change is SampleTerrainStatics for SampleTerrain - the same window, the same
+// bilinear, this shader's own accessor.
+//
+// The precomputed SSS mask describes only the BURIED surface: it is marched on
+// pre-shell depth, so no gate can make it mean anything about the snow on top.
+// This marches the same depth buffer from the SKIN surface and admits an
+// occluder only if it stands above the snow line at its own footprint.
+float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool thicknessWindow, float casterCap)
+{
+	const float kOccluderThickness = 48.0;
+	static const float kRemarchStep[8] = { 6.0, 13.0, 23.0, 38.0, 60.0, 92.0, 140.0, 210.0 };
+	float occl = 0.0;
+	[unroll] for (uint i = 0; i < 8; i++)
+	{
+		float3 sampleRel = relPos + L * (kRemarchStep[i] * (0.7 + 0.6 * noise));
+		float4 clip = mul(CameraViewProjUnjittered, float4(sampleRel, 1.0));
+		[branch] if (clip.w > 1.0)
+		{
+			float2 uv = (clip.xy / clip.w) * float2(0.5, -0.5) + 0.5;
+			[branch] if (all(uv > 0.0) && all(uv < 1.0))
+			{
+				int2 px = int2(uv * dynRes * SharedData::BufferDim.xy);
+				float occZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
+				[branch] if (occZ < clip.w - 1.0 && (!thicknessWindow || occZ > clip.w - kOccluderThickness))
+				{
+					float3 occRel = sampleRel * (occZ / max(clip.w, 1e-3));
+					float2 occLocal = occRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
+					float3 st = SampleTerrainStatics(occLocal);
+					float snowTop = st.x + max(st.y, 0.0);
+					float occH = occRel.z + ShellCameraPosAdjust.z - snowTop;
+					[flatten] if (occH > 2.0 && occH < casterCap)
+						occl = max(occl, 1.0 - float(i) * 0.045);
+				}
+			}
+		}
+	}
+	return 1.0 - occl;
+}
+
 PS_OUTPUT main(VS_OUTPUT input)
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
@@ -3543,10 +3590,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// agree, which is why the band vanished there; at 10 neither engages.
 	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
 #else
-	// Skins keep the later ramp: they wrap real 3D meshes whose mid-slope
-	// shoulders (rock flanks at n.z 0.4-0.7) are tuned around the top
-	// projection holding on longer.
-	float snowSteepness = smoothstep(0.55, 0.25, abs(normalWS.z));
+	// PARITY with the terrain shell and the patch (Josef 2026-09-01: object
+	// snow read a visibly different colour from the landscape beside it).
+	// This drives the two-plane blend for albedo, normal AND rmaos, so a
+	// different ramp is a different material on the same slope. WAS
+	// smoothstep(0.55, 0.25): a deliberate tune, to hold the top projection
+	// longer across rock flanks at n.z 0.4-0.7. Revert this line first if
+	// flanks now read stretched.
+	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
 #endif
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
 	// Captured, not recomputed: normalWS is perturbed further below (berm
@@ -3796,6 +3847,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
 
 	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	// Hoisted above the cascade call: the crisp path widens its PCF ring with
+	// distance exactly as the terrain shell does, or the far cascade's texels
+	// quantise into blocky patches on object snow while the ground beside it
+	// shows soft penumbra.
+	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
@@ -3803,7 +3859,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// (the round-31 seamShadowLift receiver raise is REVERTED -
 		// the RenderDoc replay proved no cascade shadow was missing at the
 		// seam, so the lift only risked boundary drift.)
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, 1.0, uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
@@ -3817,7 +3873,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// darkens its interior. Same tap ring, same carved-surface rule; the
 	// melt term reads the wide exclusion field alone (no near mask bound
 	// here). Object tops from the skin's own raster window join the horizon.
-	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
 	// March diagnostics for debug view 4: x = how much the march darkened
 	// this pixel, y = fraction of taps that rebuilt the road's carved
 	// surface, z = fraction that used the flat dusting. Ran = the guard
@@ -4021,8 +4076,40 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// UNDER the skin, and the crisp cascades already cover the skin).
 	[branch] if (ScreenSpaceShadowsActive > 0.5)
 	{
-		float sssBlend = SnowShadow::GetSssHandoff(pixelDist);
+		// THE TERRAIN SHELL'S GATES, not a bare distance hand-off. The mask was
+		// marched on PRE-shell depth, so it describes the surface UNDER the
+		// skin; applied with only the distance term it printed that surface's
+		// shadows onto risen snow, which is the shadow that reads as bleeding
+		// past an edge. Measured VERTICALLY, not along the view ray: the
+		// along-ray gap is depth / sin(elevation) and explodes at far grazing
+		// views. A thin coat on a plank hugs its surface and keeps the mask; a
+		// dome standing off a rock does not, and drops it.
+		float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		float shellZ = input.CurrentClip.w;
+		float sssRayGap = sceneZ - shellZ;
+		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
+		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
+		                 (1.0 - smoothstep(150.0, 400.0, sssRayGap));
+		// The terrain shell's buried-caster probe is deliberately NOT ported:
+		// its trigger (a captured top within 16 units above the receiver) is
+		// calibrated to a shell floating over bare ground, and on a skin the
+		// object's OWN raster sits exactly there - it would fire on every
+		// shallow skin and kill the mask outright rather than where a caster
+		// explains it.
+		sssBlend *= SnowShadow::GetSssHandoff(shellZ);
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
+
+	// Shell-surface re-march: the near-field counterpart to the mask above,
+	// same gate, same hand-off band, so the two never double.
+	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
+		SnowShadow::GetSssHandoff(input.CurrentClip.w) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		// Packed: integer part = mode (1 march, 2 march + thickness),
+		// fraction * 1000 = the caster height cap in units.
+		float remarchCap = frac(CompactLook.y) * 1000.0;
+		float remarch = SkinRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
+		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(input.CurrentClip.w));
 	}
 	// Parallax self-shadow on the snow grain, same term and constants as the
 	// terrain shell so object snow and ground snow shadow identically across

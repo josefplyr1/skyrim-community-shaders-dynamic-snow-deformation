@@ -2371,6 +2371,13 @@ void SnowDeformation::DrawCapturedStatics()
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
+	// Scene depth copy (PS t3): the SSS hug gate and the shell-surface
+	// re-march, both ported from the terrain shell, read it. Same helper and
+	// same slot the shell binds - a COPY (Terrain Blending's blended depth
+	// when that feature owns it, else kPOST_ZPREPASS_COPY), never the bound
+	// DSV, so sampling it while this pass writes depth is legal.
+	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
+	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
 	// Skin-depth raster (PS t12): the road skin runs the patch's own
 	// RoadOwnsColumn test before stepping aside, so it never discards into a
 	// column the patch declined.
@@ -2571,6 +2578,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(11, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(11, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(11, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(3, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
@@ -2628,6 +2636,10 @@ void SnowDeformation::DrawCapturedStatics()
 		// surface is the object top, not the terrain window's class ramp.
 		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
+		// Scene depth copy (PS t3), as for the skins: the skin pass unbinds it
+		// before this block, so it has to be bound again here.
+		ID3D11ShaderResourceView* patchDepthSRV = Util::GetCurrentSceneDepthSRV(false);
+		context->PSSetShaderResources(3, 1, &patchDepthSRV);
 		// Skin-depth raster (PS t12): the march rebuilds the carved layer on
 		// road-owned taps. Bound explicitly - inheriting the skin pass's bind
 		// through D3D11 state persistence worked but was one reorder away
