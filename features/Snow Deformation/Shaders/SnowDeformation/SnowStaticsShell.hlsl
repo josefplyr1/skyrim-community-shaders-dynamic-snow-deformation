@@ -2157,12 +2157,19 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// underneath everywhere else.
 	[branch] if (ProjPixelEnable > 1.5)
 	{
-		float wLin = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
+		// TIER 1: all three of this block's normal gates read weldNz, not
+		// nrmWS.z. mask becomes BOTH the depth and (via upFacing = mask) the
+		// coverage, so welding only the classic upFacing above left S4 draws -
+		// every walkway, deck and roof board - completely untouched. Same trap
+		// as Snow Breakup's first build: this block rebuilds what the code
+		// above it computed. Vertex ALPHA stays raw per S1.3 and is a second,
+		// separate source of twin disagreement if seams survive this.
+		float wLin = weldNz * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
 		// maskBase = the PD footprint and fill gates alone; the up-facing
 		// gate multiplies in below, and the meld wall bypasses ONLY it.
 		float maskBase = smoothstep(0.0, 0.05, wLin);
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		maskBase *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, nrmWS.z);
+		maskBase *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, weldNz);
 		float mask = maskBase;
 		// Vertical growth is only meaningful on up-facing surfaces - a wall
 		// lifted along +Z slides along itself, and at fill 100% the +0.1
@@ -2170,7 +2177,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// boards). Steep faces are the RECOLOR's job; the shell's geometry
 		// is the tops', and the cutoff is Josef's slider (ShellMinNz =
 		// cos of the max slope).
-		mask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, nrmWS.z);
+		mask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, weldNz);
 		// NO top-visibility cut (Josef, 2026-08-29): comparing against the
 		// GLOBAL column top made anything under a roof or railing lose its
 		// shell with a hard mid-plank cliff - the walkway's red-outlined
