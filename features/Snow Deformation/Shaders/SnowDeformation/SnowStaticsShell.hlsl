@@ -436,6 +436,26 @@ static const float kMinSkinLift = 0.1;
 // would shade coincident with the surface it covers) and the recolored
 // PD carries on underneath. Two units (~3 cm).
 static const float kProjCoatLift = 2.0;
+// How far a LIFTED skin's shading normal leans off the source mesh normal
+// toward the position-averaged smoothed one, at full class depth.
+//
+// SET TO 0 (Josef, 2026-09-01). At "3D Snow Shell Depth" 0 the object and
+// landscape shells match perfectly and above it they diverge, which isolated
+// the mismatch to exactly this term - it is the only depth-gated shading input
+// (bumpFade, the normal-map application, the snow UV, the glint fold and the
+// vertex-AO position are all byte-identical between the shells). A
+// mesh-AVERAGED normal is a different KIND of normal from the landscape's
+// field gradient: on a convex rock it is flatter than the real surface, so
+// object snow read uniform and bright beside the ground. Zero makes the
+// shading normal depth-INDEPENDENT and equal to the depth-0 case Josef
+// verified.
+//
+// TWO call sites share it on purpose: the S4 dome block re-implements this
+// formula inline (SkinShadingNormal is defined further down the file, after
+// ApplySkinLift), and the pair silently drifting is what made the X4000 fix
+// to the function invisible on the S4 shell - S4 draws set ProjPixelEnable = 2
+// and never call it.
+static const float kSkinShadeSmooth = 0.0;
 
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
@@ -2227,7 +2247,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// lighting into a gray smear at distance (Josef's report). The
 		// dome curvature blends in ONLY where the surface is genuinely
 		// up-facing - where the fillet really IS the surface.
-		float3 smoothShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * 0.85));
+		float3 smoothShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * kSkinShadeSmooth));
 		// The dome normal drives BOTH lighting and the PS's two-plane
 		// texture selection, so it must win on the ROLL WALLS - which are
 		// steepest exactly where depth is lowest, where a depth-only ramp
@@ -2397,7 +2417,7 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 	// the cornice roll, where geometry that curves over but shades flat reads
 	// as a cut edge, so the last sliver before the rim bends toward the
 	// smoothed normal and nothing inboard of it changes.
-	float blend = saturate(depth / max(depthBase, 0.01)) * 0.85;
+	float blend = saturate(depth / max(depthBase, 0.01)) * kSkinShadeSmooth;
 	[flatten] if (isFlat > 0.5)
 		blend = (1.0 - smoothstep(0.0, 0.35, rimT)) * 0.8;
 	return normalize(lerp(nrmWS, smoothWS, blend));
