@@ -69,7 +69,7 @@ cbuffer StaticCB : register(b1)
 	float ObjectDrape;      // drape owns objects: they write their own class depth
 	float ObjCorniceLip;    // layout sync with SnowStaticsShell; unused here
 	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
-	float padDrape2;
+	float SkinWeld;         // layout sync with SnowStaticsShell; unused here
 }
 
 struct VS_INPUT

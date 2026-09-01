@@ -104,6 +104,7 @@
 	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
 	X(SkinBreakupAmt) \
+	X(SkinWeldAmt) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \

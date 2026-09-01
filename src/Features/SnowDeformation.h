@@ -479,6 +479,8 @@ public:
 		float ObjCorniceLipAmt = 0.0f;
 		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
 		float SkinBreakupAmt = 0.0f;
+		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
+		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
@@ -1607,7 +1609,8 @@ public:
 		float ObjCorniceLip;
 		/** @brief Settings::SkinBreakupAmt - the DefoQ reference's negative-base-plus-noise shape (its thickness ships at -0.016 against noise +0.099). This fraction of the class depth is subtracted and handed back through a world-anchored noise, so coverage thins to BARE patches at the mesh's own scale instead of reading as an even coat; renormalised so full noise still reaches the class depth. 0 = the uniform coat exactly. Roads are exempt in the shader. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkinBreakup;
-		float padDrape2;
+		/** @brief Settings::SkinWeldAmt - Tier 1 seam weld. Slides the FLAT class's up-facing gate from the per-vertex RAW normal to the position-welded one (smoothWS, which SmoothNormalsCS makes identical for every vertex sharing a position). upFacing is the only term in the lift that is not already single-valued per position, so welding it removes the coincident-twin disagreement that draws sliver fences at hard edges. 0 = the raw-normal gate exactly, i.e. current behaviour. Trades away the deliberate "plank sides stay clean" property. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float SkinWeld;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

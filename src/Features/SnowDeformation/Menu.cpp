@@ -250,6 +250,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("cornice_lip"), "Cornice Lip"), &settings.ObjCorniceLipAmt, 0.0f, 1.5f, "%.2f");
 		if (auto _ttLip = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cornice_lip_tooltip"), "How far the snow hangs out past the edge of the thing it is sitting on. Real snow builds a lip that overhangs a rim; snow that stops exactly where the object stops reads as paint instead. 0 keeps the old edge, which follows the object outline precisely."));
+		ImGui::SliderFloat(T(TKEY("weld_seams"), "Weld Snow Seams"), &settings.SkinWeldAmt, 0.0f, 1.0f, "%.2f");
+		if (auto _ttWeld = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("weld_seams_tooltip"), "Fixes the torn slivers of snow that stick out of sharp edges - plank ends, log caps, roof boards. They happen because two corners of the mesh sitting in the exact same place can currently disagree about how deep the snow is there, and the sliver is the shell trying to span that gap. Raising this makes them agree. The trade: snow starts to take hold on the vertical sides of boards, which reads as the snow having a real thickness at the edge rather than stopping dead. 0 is the old behaviour. Rocks and cliffs are already smooth and will barely change."));
 		ImGui::SliderFloat(T(TKEY("snow_breakup"), "Snow Breakup"), &settings.SkinBreakupAmt, 0.0f, 1.0f, "%.2f");
 		if (auto _ttBreakup = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_breakup_tooltip"), "How ragged the snow layer's own coverage is. At 0 every surface that qualifies wears the full depth evenly, which reads like a coat of paint. Raising it eats into the layer with a soft world-scale noise, so patches thin out and the thinnest ones go bare and let the object show through - the way real cover breaks up rather than stopping at a clean line. Roads are unaffected."));

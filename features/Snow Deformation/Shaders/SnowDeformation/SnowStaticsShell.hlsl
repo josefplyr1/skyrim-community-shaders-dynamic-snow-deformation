@@ -314,7 +314,9 @@ cbuffer StaticCB : register(b1)
 	// Snow Breakup: fraction of the class depth taken off as a negative base
 	// and handed back through world noise. 0 = the uniform coat.
 	float SkinBreakup;
-	float padDrape2;
+	// Tier 1 seam weld: how far the FLAT class's up-facing gate slides from
+	// the per-vertex raw normal to the position-welded one. 0 = today.
+	float SkinWeld;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1971,7 +1973,29 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// almost the whole up-facing range of the SMOOTHED normal.
 	// The layer stays geometrically uncarved: trench relief is traced per
 	// pixel in the PS instead.
-	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, nrmWS.z) : smoothstep(0.05, 0.85, smoothWS.z);
+	// TIER 1 SEAM WELD (SkinWeld, 0 = the behaviour above, unchanged).
+	//
+	// The lift is single-valued per POSITION in every term except this one:
+	// depthBase is per-mesh, and the taper, shelter, sky and cone terms are all
+	// functions of worldBase.xy. Only upFacing reads a per-VERTEX quantity, and
+	// only on the flat class - so at a plank's top edge the top twin gates ~1
+	// and lifts a full class depth while the side twin gates ~0 and lifts
+	// nothing, FROM THE SAME POSITION. Zero base travel, a class depth of
+	// disagreement: the triangle spanning them is drawn as a wall, and that is
+	// the fence family the lift-gradient view lights up.
+	//
+	// smoothWS is the position-hash weld SmoothNormalsCS already builds, so it
+	// is IDENTICAL for every vertex sharing a position by construction. Sliding
+	// the gate toward it makes the twins agree exactly at 1.0 - which is the
+	// whole mechanism, not a tuning curve. Unresolved vertices fall back to the
+	// raw normal in BuildSkinVertex, so the lerp is a no-op there.
+	//
+	// The raw normal is here ON PURPOSE ("plank sides stay clean") and welding
+	// trades that away: a side face's twin now sees a partly up-facing normal
+	// and can take cover. That trade IS the vertical snow wall a thick layer
+	// should have at a plank's edge - but it is a taste call, hence the dial.
+	float weldNz = lerp(nrmWS.z, smoothWS.z, saturate(SkinWeld));
+	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, weldNz) : smoothstep(0.05, 0.85, smoothWS.z);
 	// The NIF's authored projected-snow term as a SUPPRESSOR (S2/S2b,
 	// SKIN-PLACEMENT-PLAN): it multiplies, never adds, so agreement zones
 	// keep their snow and vanilla-only zones (leaning walls, whose raw

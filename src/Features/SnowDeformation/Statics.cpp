@@ -2067,6 +2067,9 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// caster must break up exactly where the visible shell does, or a shadow
 	// falls from snow that is no longer there.
 	a_scb.SkinBreakup = std::clamp(settings.SkinBreakupAmt, 0.0f, 1.0f);
+	// Tier 1 seam weld. Rides FillSkinDrawCB with the rest: the caster must weld
+	// identically or its silhouette parts company with the shell's.
+	a_scb.SkinWeld = std::clamp(settings.SkinWeldAmt, 0.0f, 1.0f);
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
