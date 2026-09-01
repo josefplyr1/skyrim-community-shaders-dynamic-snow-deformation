@@ -2063,6 +2063,10 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// exactly the same amount the visible shell does - a caster that kept the
 	// old silhouette would shadow an edge that is no longer there.
 	a_scb.ObjCorniceLip = std::clamp(settings.ObjCorniceLipAmt, 0.0f, 1.5f);
+	// Snow Breakup rides FillSkinDrawCB for the same reason the lip does: the
+	// caster must break up exactly where the visible shell does, or a shadow
+	// falls from snow that is no longer there.
+	a_scb.SkinBreakup = std::clamp(settings.SkinBreakupAmt, 0.0f, 1.0f);
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;

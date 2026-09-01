@@ -68,7 +68,7 @@ cbuffer StaticCB : register(b1)
 	float PatchLayer;       // layout sync with SnowStaticsShell; unused here
 	float ObjectDrape;      // drape owns objects: they write their own class depth
 	float ObjCorniceLip;    // layout sync with SnowStaticsShell; unused here
-	float padDrape1;
+	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
 	float padDrape2;
 }
 

@@ -477,6 +477,8 @@ public:
 		float PileHeightRatio = 1.0f;
 		/** @brief "Cornice Lip": how far the snow's rim overhangs the object's own edge, as a fraction of the shell depth. 0 disables it and restores the pre-P5 silhouette exactly. */
 		float ObjCorniceLipAmt = 0.0f;
+		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
+		float SkinBreakupAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
@@ -1603,7 +1605,8 @@ public:
 		float ObjectDrape;
 		/** @brief Settings::ObjCorniceLipAmt - P5's cheap form (edge study): the rim band is pushed OUTWARD along the cone gradient as well as up, so the outermost ring bulges past the object's silhouette. A displaced skin cannot otherwise overhang at all - its vertices are the object's vertices - and the overhang is what makes a cornice read as snow rather than as paint. Fraction of the class depth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ObjCorniceLip;
-		float padDrape1;
+		/** @brief Settings::SkinBreakupAmt - the DefoQ reference's negative-base-plus-noise shape (its thickness ships at -0.016 against noise +0.099). This fraction of the class depth is subtracted and handed back through a world-anchored noise, so coverage thins to BARE patches at the mesh's own scale instead of reading as an even coat; renormalised so full noise still reaches the class depth. 0 = the uniform coat exactly. Roads are exempt in the shader. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float SkinBreakup;
 		float padDrape2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);

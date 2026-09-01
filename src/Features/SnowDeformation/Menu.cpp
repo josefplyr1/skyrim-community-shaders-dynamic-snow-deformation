@@ -250,6 +250,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("cornice_lip"), "Cornice Lip"), &settings.ObjCorniceLipAmt, 0.0f, 1.5f, "%.2f");
 		if (auto _ttLip = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cornice_lip_tooltip"), "How far the snow hangs out past the edge of the thing it is sitting on. Real snow builds a lip that overhangs a rim; snow that stops exactly where the object stops reads as paint instead. 0 keeps the old edge, which follows the object outline precisely."));
+		ImGui::SliderFloat(T(TKEY("snow_breakup"), "Snow Breakup"), &settings.SkinBreakupAmt, 0.0f, 1.0f, "%.2f");
+		if (auto _ttBreakup = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_breakup_tooltip"), "How ragged the snow layer's own coverage is. At 0 every surface that qualifies wears the full depth evenly, which reads like a coat of paint. Raising it eats into the layer with a soft world-scale noise, so patches thin out and the thinnest ones go bare and let the object show through - the way real cover breaks up rather than stopping at a clean line. Roads are unaffected."));
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
@@ -1162,8 +1165,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 
 		{
-			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers" };
+			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
 			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
+			if (auto _ttDbgView = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means neighbouring points of the layer agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences and the rifts under cover. The flat road/trench surface is dim gray because it cannot tear by construction. Nothing consumes this view; it only reports."));
 			// Height-field probe: the seven object maps under the player's
 			// feet, one frame old. The numbers behind every layer/height
 			// question - tops per peeled layer, the depth cones, and the

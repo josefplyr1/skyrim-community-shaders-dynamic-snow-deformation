@@ -311,7 +311,9 @@ cbuffer StaticCB : register(b1)
 	// P5's cornice lip: how far the rim overhangs the object's silhouette,
 	// as a fraction of the class depth.
 	float ObjCorniceLip;
-	float padDrape1;
+	// Snow Breakup: fraction of the class depth taken off as a negative base
+	// and handed back through world noise. 0 = the uniform coat.
+	float SkinBreakup;
 	float padDrape2;
 }
 
@@ -460,6 +462,14 @@ static const float kSkinShadeSmooth = 0.0;
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
 static const float kCorniceRoll = 4.0;
+// Snow Breakup's feature size, world units. Larger than the churn grain (16/7)
+// so it reads as patches of bare rather than as texture, and comparable to the
+// class depth so a bare spot is about as wide as the layer is thick.
+static const float kSkinBreakupScale = 24.0;
+// Lift-gradient debug view: the pleat value that paints full red. 0.45 is
+// round 30's own upper shred threshold, so the view and that rule agree on
+// what counts as a tear.
+static const float kPleatFullScale = 0.45;
 static const float kShelterNear = 8.0;
 static const float kShelterFar = 32.0;
 // Depth a fully sheltered surface keeps. The landscape shell thins under
@@ -1967,6 +1977,22 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		upFacing *= projFactor;
 	}
 	float depth = depthBase * upFacing;
+
+	// Snow Breakup: a NEGATIVE base plus positive noise, the shape the DefoQ
+	// reference ships (thickness -0.016 against noise strength +0.099). A
+	// uniform positive depth reads as paint; taking a constant fraction off and
+	// handing it back through world noise lets coverage thin to BARE at the
+	// mesh's own scale, so the break-up belongs to the layer instead of needing
+	// a mask of its own. Renormalised so full noise still reaches depthBase and
+	// 0 is exactly the uniform coat. World-anchored, so the caster evaluates the
+	// same function at the same worldBase and shadow and shell cannot disagree.
+	// Roads are exempt: their height stays in step with the landscape shell at
+	// the verge, which does not break up.
+	[branch] if (SkinBreakup > 0.001 && LegacySkin < 0.5)
+	{
+		float breakNoise = ShapeNoise(worldBase.xy / kSkinBreakupScale);
+		depth = max(depth * ((1.0 + SkinBreakup) * breakNoise - SkinBreakup), 0.0);
+	}
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
 	// the hand-off to the object's own projected snow has no silhouette to pop.
@@ -4243,7 +4269,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH
-		[branch] if (StaticsDebugView > 5.5)
+		[branch] if (StaticsDebugView > 6.5)
+		{
+			// Lift Gradient mode. The patch is a lattice whose Lift is a
+			// constant, so its gradient is zero BY CONSTRUCTION - it cannot
+			// pleat and there is nothing here to measure. Dim gray, so a
+			// screenshot cannot be misread as "the patch is clean too".
+			preLit = float3(0.1, 0.1, 0.1);
+		}
+		else [branch] if (StaticsDebugView > 5.5)
 		{
 			// Shell Layers: which DRAW LAYER drew this patch pixel. Green =
 			// layer 1 (the surface the patch has always drawn), yellow =
@@ -4270,7 +4304,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 5.5)
+		[branch] if (StaticsDebugView > 6.5)
+		{
+			// Lift Gradient mode (S-A Tier 0): how far this pixel's LIFT
+			// disagrees with its neighbours, as a fraction of the class depth.
+			// A coherent dome wall spends the class depth over many pixels; a
+			// sliver triangle spans it in one or two, so the screen-space lift
+			// gradient IS the tell - the same quantity round 30's shred rule
+			// thresholded before it was removed. Green = agreeing, amber = a
+			// real slope, red = a tear. MEASUREMENT ONLY: nothing consumes it,
+			// and it does not change what the shell draws.
+			float pleat = fwidth(input.Lift) / max(liftBase, kMinSkinLift);
+			float hot = saturate(pleat / kPleatFullScale);
+			preLit = float3(hot, 1.0 - hot, 0.15 * (1.0 - hot));
+		}
+		else [branch] if (StaticsDebugView > 5.5)
 		{
 			// Shell Layers mode: WHICH peeled plane owns each pixel and
 			// what depth it was granted. Green = layer 1, yellow = layer 2,

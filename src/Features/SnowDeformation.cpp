@@ -103,6 +103,7 @@
 	X(OverheadClearance) \
 	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
+	X(SkinBreakupAmt) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
