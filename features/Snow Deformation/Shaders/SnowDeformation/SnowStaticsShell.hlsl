@@ -2189,7 +2189,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float rollT = 1.0;
 		float meldWall = 0.0;
 		float heightScale = 1.0;
-		float3 domeNormal = nrmWS;
+		// TIER 1: the shading normal must be welded WITH the geometry or the
+		// two disagree. A welded side-face twin is now lifted into a snow wall,
+		// but seeded from the raw normal it still shades as the vertical wooden
+		// face it used to be - Josef's "the cover-up wall doesn't have the right
+		// shading". Blended by the SAME dial, so 0 is byte-for-byte today and
+		// the up-hemisphere risk that killed the wholesale domeNormal swap
+		// (grey-smeared steep rock shells at distance) can only appear in
+		// proportion to the walls the dial is creating.
+		float3 domeNormal = SkinWeld > 0.001 ? normalize(lerp(nrmWS, smoothWS, saturate(SkinWeld))) : nrmWS;
 		// Kept for P5's lip: the cone gradient points INWARD (the cone rises
 		// away from a rim), so its negation is the outward direction the rim
 		// has to bulge along.
