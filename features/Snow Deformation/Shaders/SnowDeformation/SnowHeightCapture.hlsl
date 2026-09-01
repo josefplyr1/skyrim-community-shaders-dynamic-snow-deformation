@@ -80,6 +80,7 @@ struct VS_INPUT
 {
 	float4 Position : POSITION0;
 	float4 Normal : NORMAL0;
+	uint VertexID : SV_VertexID;
 };
 
 struct VS_OUTPUT
@@ -93,6 +94,10 @@ struct VS_OUTPUT
 	// World-space normal z: the peel passes reject surfaces that cannot
 	// carry snow (undersides, walls) from owning a layer.
 	float NormalZ : TEXCOORD3;
+	// Blob Snow Shell: vanilla's projected-snow weight at this vertex, 0..1,
+	// reconstructed the way the skin's S2 gate does it and cut to the Snow
+	// Fill slice. Rasterised MAX into a per-layer mask the placement reads.
+	float PdMask : TEXCOORD4;
 };
 
 #ifdef VSHADER
@@ -152,6 +157,28 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS));
 	vsout.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
+	// Blob placement mask. Same three terms as the skin's authored gate so the
+	// blob shell follows the same sliders the recolour follows: nz x authored
+	// vertex alpha minus the draw's threshold (S2), cut to the Snow Fill's
+	// angular slice. Alpha is SmoothedNormals.w = 1 + alpha (0 = unresolved,
+	// which reads as full, as in BuildSkinVertex). A draw with no projected-UV
+	// data (ProjThreshold < 0) writes nothing, so nothing is placed on it.
+	float pdAlpha = 1.0;
+	[branch] if (HasSmoothedNormals > 0.5)
+	{
+		float4 smoothEntry = SmoothedNormals[input.VertexID];
+		[flatten] if (smoothEntry.w > 0.5)
+			pdAlpha = saturate(smoothEntry.w - 1.0);
+	}
+	float pdMask = 0.0;
+	[branch] if (ProjThreshold > -0.5)
+	{
+		float projWeight = vsout.NormalZ * pdAlpha - max(ProjThreshold, 0.0);
+		pdMask = saturate(5.0 * projWeight);
+		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
+		pdMask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, vsout.NormalZ);
+	}
+	vsout.PdMask = pdMask;
 	return vsout;
 }
 #endif
@@ -213,7 +240,16 @@ COVER_OUTPUT main(VS_OUTPUT input)
 	return psout;
 }
 #	else
-float main(VS_OUTPUT input) : SV_Target0
+// Blob Snow Shell: the peel writes its layer's placement mask beside the
+// top, into RT3 (MAX, the blend state's fourth slot); the C++ binds the
+// layer's own mask texture there.
+struct PEEL_OUTPUT
+{
+	float Top : SV_Target0;
+	float PdMask : SV_Target3;
+};
+
+PEEL_OUTPUT main(VS_OUTPUT input)
 {
 	// Only up-facing surfaces may OWN a peeled layer. The capture
 	// rasterizes both faces (the bottoms map needs undersides), and a
@@ -236,7 +272,10 @@ float main(VS_OUTPUT input) : SV_Target0
 	[branch] if (top2 < -50000.0 || input.WorldZ > top2 - PeelTol)
 		discard;
 #	endif
-	return input.WorldZ;
+	PEEL_OUTPUT o;
+	o.Top = input.WorldZ;
+	o.PdMask = input.PdMask;
+	return o;
 }
 #	endif
 #elif defined(PSHADER)
@@ -282,6 +321,8 @@ struct PS_OUTPUT
 	float Top : SV_Target0;
 	float Bottom : SV_Target1;
 	float2 SkinDepth : SV_Target2;
+	// Blob Snow Shell: layer-1 placement mask (RT3, MAX).
+	float PdMask : SV_Target3;
 };
 
 // Mirror of SnowDeformation.h kNoRoadTop.
@@ -298,6 +339,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the bottom-empty sentinel, a no-op under MIN blending.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
 	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
+	psout.PdMask = input.PdMask;
 	psout.SkinDepth = float2(input.SkinDepth.x,
 		input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
 	return psout;

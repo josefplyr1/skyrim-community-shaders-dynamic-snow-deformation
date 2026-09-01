@@ -458,3 +458,120 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	            0.25;
 	OutA[dtid.xy] = lerp(h, avg, saturate(DiffuseLambda));
 }
+
+// ---------------------------------------------------------------------------
+// BLOB SNOW SHELL - placement (Spike 1).
+//
+// One thread per cell of a world-space grid at BlobSpacing; the cell is
+// anchored to ABSOLUTE world coordinates (not to the scrolling window), so a
+// blob's position and size are a pure function of where it is in the world
+// and never crawl as the camera moves. Per peeled layer the cell samples the
+// layer's top and its placement mask - the projected-snow weight rasterised
+// by the capture - and appends one sphere where the mask passes. Radius and
+// how far the sphere sits proud of the surface are hashed per cell; a partial
+// mask thins the sphere rather than dropping it, so a Snow Fill below 100%
+// reads as a soft edge, not a cliff.
+//
+// Output is an instance list plus DrawIndexedInstancedIndirect args; the
+// instance count is bumped atomically here and capped at kBlobCap by BOTH the
+// writer and the vertex shader, so an overflow can only lose blobs, never
+// read past the buffer.
+// ---------------------------------------------------------------------------
+cbuffer BlobCB : register(b1)
+{
+	float BlobSpacing;
+	float BlobSize;
+	float BlobSizeNoise;
+	float BlobJut;
+	float BlobJutNoise;
+	float BlobMaskThreshold;
+	float BlobSeed;
+	float BlobLayers;
+}
+
+Texture2D<float> BlobMask1 : register(t4);
+Texture2D<float> BlobMask2 : register(t5);
+Texture2D<float> BlobMask3 : register(t6);
+// Two float4 per blob: [centre.xyz, radius], [surface top z, layer, mask, 0].
+RWStructuredBuffer<float4> OutBlobs : register(u3);
+// DrawIndexedInstancedIndirect args; dword 1 is the instance count.
+RWByteAddressBuffer OutBlobArgs : register(u4);
+// Mirror of SnowDeformation.h kBlobCap and SnowStaticsShell.hlsl kBlobCap.
+static const uint kBlobCap = 262144;
+
+float BlobHash(int2 cell, uint salt)
+{
+	uint h = (uint)cell.x * 0x8da6b343u ^ (uint)cell.y * 0xd8163841u ^ salt * 0xcb1ab31fu;
+	h ^= h >> 13;
+	h *= 0x5bd1e995u;
+	h ^= h >> 15;
+	return float(h & 0x00FFFFFFu) / 16777216.0;
+}
+
+[numthreads(8, 8, 1)] void BlobPlaceCS(uint3 dtid
+									   : SV_DispatchThreadID)
+{
+	uint2 dims;
+	InA.GetDimensions(dims.x, dims.y);
+	const float spacing = max(BlobSpacing, 2.0);
+	const uint cells = (uint)ceil(HeightHalfExtent * 2.0 / spacing);
+	if (dtid.x >= cells || dtid.y >= cells)
+		return;
+
+	// Absolute world cell: the window's lower-left corner floors onto the
+	// spacing lattice, then the thread offsets from there.
+	const int2 cellW = int2(floor((HeightWindowCenter - HeightHalfExtent.xx) / spacing)) + int2(dtid.xy);
+	const uint salt = (uint)max(BlobSeed, 0.0);
+	const float2 jitter = float2(BlobHash(cellW, salt + 1u), BlobHash(cellW, salt + 2u));
+	const float2 xy = (float2(cellW) + 0.5 + (jitter - 0.5) * 0.9) * spacing;
+
+	const float2 local = xy - HeightWindowCenter;
+	if (abs(local.x) >= HeightHalfExtent - 1.0 || abs(local.y) >= HeightHalfExtent - 1.0)
+		return;
+	// Same world->texel mapping as TexelWorldXY (v mirrors world +Y).
+	const float texel = HeightHalfExtent * 2.0 / dims.x;
+	const int2 t = int2(
+		clamp(int((local.x + HeightHalfExtent) / texel), 0, int(dims.x) - 1),
+		clamp(int((HeightHalfExtent - local.y) / texel), 0, int(dims.y) - 1));
+
+	float tops[3];
+	tops[0] = InA.Load(int3(t, 0));
+	tops[1] = InB.Load(int3(t, 0));
+	tops[2] = InC.Load(int3(t, 0));
+	float masks[3];
+	masks[0] = BlobMask1.Load(int3(t, 0));
+	masks[1] = BlobMask2.Load(int3(t, 0));
+	masks[2] = BlobMask3.Load(int3(t, 0));
+
+	const float hSize = BlobHash(cellW, salt + 3u);
+	const float hJut = BlobHash(cellW, salt + 4u);
+	const uint layers = (uint)clamp(BlobLayers, 1.0, 3.0);
+	const float threshold = saturate(BlobMaskThreshold);
+
+	[unroll] for (uint L = 0; L < 3; L++)
+	{
+		if (L >= layers)
+			break;
+		if (tops[L] < -50000.0)
+			continue;
+		const float m = masks[L];
+		if (m < threshold)
+			continue;
+		// Partial mask (the Snow Fill's soft edge, thin authored paint) thins
+		// the sphere toward 60% rather than switching it off.
+		const float maskT = saturate((m - threshold) / max(1.0 - threshold, 1e-3));
+		const float radius = max(BlobSize * (1.0 + BlobSizeNoise * (hSize * 2.0 - 1.0)) * lerp(0.6, 1.0, maskT), 0.5);
+		// Jut 0.5 = centre on the surface (a hemisphere shows); 1 = the whole
+		// sphere resting on top; toward 0 it sinks in.
+		const float jut = saturate(BlobJut * (1.0 + BlobJutNoise * (hJut * 2.0 - 1.0)));
+		const float centreZ = tops[L] + radius * (2.0 * jut - 1.0);
+
+		uint idx;
+		OutBlobArgs.InterlockedAdd(4, 1u, idx);
+		if (idx < kBlobCap)
+		{
+			OutBlobs[idx * 2] = float4(xy, centreZ, radius);
+			OutBlobs[idx * 2 + 1] = float4(tops[L], float(L), m, 0.0);
+		}
+	}
+}

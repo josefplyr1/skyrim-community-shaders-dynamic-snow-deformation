@@ -297,6 +297,38 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Experimental. Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
 
+		if (ImGui::TreeNodeEx(T(TKEY("blob_shell"), "Blob Snow Shell"))) {
+			if (auto _ttBlobCat = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_shell_tooltip"), "Experimental replacement for the fitted object shell: rounded snow spheres that collect on objects, placed only where the game's own projected snow is painted (so they follow the Authored Placement threshold and Snow Fill), on every level of a multi-storey object rather than just what is seen from above. Spike 1 - the spheres are not yet blended into each other."));
+			ImGui::Checkbox(T(TKEY("blob_shell_enable"), "Enable Blob Snow Shell"), &settings.EnableBlobShell);
+			ImGui::SliderInt(T(TKEY("blob_polygons"), "Polygons"), &settings.BlobPolygons, 0, 3);
+			if (auto _ttBlobPoly = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_polygons_tooltip"), "Sphere detail: 0 = 20 triangles, 1 = 80, 2 = 320, 3 = 1280. Higher is rounder up close and costs more per sphere."));
+			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Spacing"), &settings.BlobSpacing, 6.0f, 64.0f, "%.0f units");
+			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Distance between sphere centres. Smaller packs them tighter (more spheres, more overlap); larger spreads them out."));
+			ImGui::SliderFloat(T(TKEY("blob_size"), "Size"), &settings.BlobSize, 4.0f, 64.0f, "%.0f units");
+			if (auto _ttBlobSz = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_size_tooltip"), "Sphere radius. For spheres to read as one rounded surface rather than beads, keep Size at least a few times the Spacing."));
+			ImGui::SliderFloat(T(TKEY("blob_size_noise"), "Size Noise"), &settings.BlobSizeNoise, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobSn = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "How much each sphere's size varies from its neighbours, as a fraction of Size."));
+			ImGui::SliderFloat(T(TKEY("blob_jut"), "Jut"), &settings.BlobJut, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobJut = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_jut_tooltip"), "How far a sphere sits proud of the surface it lands on. 0.5 = half buried (a dome), 1 = the whole sphere resting on top, lower sinks it in."));
+			ImGui::SliderFloat(T(TKEY("blob_jut_noise"), "Jut Noise"), &settings.BlobJutNoise, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobJn = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_jut_noise_tooltip"), "How much each sphere's jut varies from its neighbours, as a fraction of Jut."));
+			ImGui::SliderFloat(T(TKEY("blob_mask_threshold"), "Placement Threshold"), &settings.BlobMaskThreshold, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobMt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "How strongly the game's projected snow must be painted at a spot before a sphere is placed there. Between this value and full paint the spheres thin toward 60% size, so a partial Snow Fill fades out instead of cutting off."));
+			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 3);
+			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces receive spheres: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway."));
+			ImGui::SliderInt(T(TKEY("blob_seed"), "Seed"), &settings.BlobSeed, 0, 99);
+			ImGui::TreePop();
+		}
+
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Debug Projected Snow Match"), &debugProjSnowView);
 		if (auto _ttProjDbg = Util::HoverTooltipWrapper())
@@ -1197,9 +1229,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttObjDrape = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("object_drape_tooltip"), "Covers objects with the same snow sheet the roads use, instead of the shell that is fitted to each object's own shape. While this is on the fitted shell is not drawn at all, so the two cannot overlap - which makes it a straight A/B: turn it off to compare against the shell you know. Rocks, walkways and steps should keep their snow; anything the sheet cannot stand on will lose it, and that is the finding."));
 			ImGui::Checkbox(T(TKEY("layered_drape"), "Layered Object Drape (experimental)"), &settings.LayeredObjectDrape);
-			ImGui::Checkbox(T(TKEY("blob_object_snow"), "Blob Object Snow (B0)"), &settings.BlobObjectSnow);
-			if (auto _ttBlob = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_object_snow_tooltip"), "The KH3-style experiment: with Drape Objects on, snow on objects becomes a bed of overlapping rounded mounds - one per height-map texel, sizes varied by position - merged into one soft surface by a smooth union. The snow's outline stops being the object's outline. Judge the SHAPE only: placement, coverage and edges come later if the shape reads as snow."));
 			if (auto _ttDrape = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("layered_drape_tooltip"), "Draws the snow sheet that roads already use a second and third time, for surfaces hidden under something else - a walkway beneath a roof, a step under an eave. Without it those surfaces are covered by whatever stands above them and get no snow of their own. Being trialled to find out whether this way of drawing snow can serve buildings as well as it serves roads."));
 

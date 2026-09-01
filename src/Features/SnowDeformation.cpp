@@ -105,6 +105,16 @@
 	X(PileHeightRatio) \
 	X(SkinBreakupAmt) \
 	X(SkinWeldAmt) \
+	X(EnableBlobShell) \
+	X(BlobPolygons) \
+	X(BlobSpacing) \
+	X(BlobSize) \
+	X(BlobSizeNoise) \
+	X(BlobJut) \
+	X(BlobJutNoise) \
+	X(BlobMaskThreshold) \
+	X(BlobLayers) \
+	X(BlobSeed) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
@@ -484,6 +494,7 @@ void SnowDeformation::SetupResources()
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
+	blobCB = new ConstantBuffer(ConstantBufferDesc<BlobCB>(), "SnowDeformation::BlobCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 
 	CreateHeightFieldResources();
@@ -493,7 +504,8 @@ void SnowDeformation::SetupResources()
 		// extreme surfaces win per texel in any draw order; no depth buffer.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
-		for (int i = 0; i < 3; i++) {
+		// RT3 (Blob Snow Shell): the per-layer placement mask, MAX like the tops.
+		for (int i = 0; i < 4; i++) {
 			minmaxBlendDesc.RenderTarget[i].BlendEnable = TRUE;
 			minmaxBlendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;

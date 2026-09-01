@@ -649,6 +649,26 @@ struct VS_OUTPUT
 	float LiftTarget : TEXCOORD9;
 };
 
+#if defined(BLOB)
+// BLOB SNOW SHELL (Spike 1): instanced unit spheres placed by BlobPlaceCS,
+// shaded with the shell's own snow material. No lift, no raster gates, no
+// coverage machinery - a sphere is a sphere. Same file so it shares every CB
+// and include; its own entry points so nothing here touches the skin.
+struct BLOB_VS_OUTPUT
+{
+	float4 Position : SV_POSITION;
+	float4 CurrentClip : TEXCOORD0;
+	float4 PreviousClip : TEXCOORD1;
+	float3 WorldPos : TEXCOORD2;
+	float3 NormalWS : TEXCOORD3;
+	// World z of the surface this sphere sits on: the PS clips below it so a
+	// thin plank does not grow a snow belly underneath.
+	float TopZ : TEXCOORD4;
+};
+// Mirror of SnowDeformation.h kBlobCap and HeightMapProcessCS.hlsl kBlobCap.
+static const uint kBlobCap = 262144;
+#endif
+
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
 // cone field to size tessellation against rim proximity.
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
@@ -2752,7 +2772,39 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	return v;
 }
 
-#if defined(SHADOWCAST)
+#if defined(BLOB)
+// Two float4 per instance, written by BlobPlaceCS: [centre.xyz, radius],
+// [surface top z, layer, mask, 0].
+StructuredBuffer<float4> BlobInstances : register(t32);
+
+struct BLOB_VS_INPUT
+{
+	float3 Position : POSITION0;
+	uint InstanceID : SV_InstanceID;
+};
+
+BLOB_VS_OUTPUT main(BLOB_VS_INPUT input)
+{
+	BLOB_VS_OUTPUT o = (BLOB_VS_OUTPUT)0;
+	// The placement caps its writes at kBlobCap but still counts past it;
+	// anything beyond is not a blob and collapses to a clipped point.
+	[branch] if (input.InstanceID >= kBlobCap)
+		return o;
+	const float4 a = BlobInstances[input.InstanceID * 2];
+	const float4 b = BlobInstances[input.InstanceID * 2 + 1];
+	const float3 n = normalize(input.Position);
+	const float3 worldAbs = a.xyz + n * a.w;
+	const float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
+	const float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
+	o.Position = mul(CameraViewProj, float4(rel, 1.0));
+	o.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	o.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	o.WorldPos = rel;
+	o.NormalWS = n;
+	o.TopZ = b.x;
+	return o;
+}
+#elif defined(SHADOWCAST)
 // Depth-only shadow caster VS (sun cascade injection): the FULL lift
 // math - the caster must be the exact surface the visible shell renders
 // or the shadow offsets from its own snow - but none of the shading
@@ -3026,6 +3078,10 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 
 
+#if defined(BLOB) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
+#	define SNOW_STATICS_NO_DEPTH_EXPORT
+#endif
+
 // SampleSnowPlanar / SnowParallaxOcclusionPlanar moved to SnowParallax.hlsli
 // (Stage 2 P3): the landscape shell runs the same two-plane blend now.
 
@@ -3114,6 +3170,100 @@ float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool t
 	return 1.0 - occl;
 }
 
+#if defined(BLOB)
+PS_OUTPUT main(BLOB_VS_OUTPUT input)
+{
+	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
+	// Below the surface the sphere rests on is inside the object.
+	clip(worldAbs.z - (input.TopZ - 2.0));
+
+	const float3 normalWS = normalize(input.NormalWS);
+	const float3 V = normalize(-input.WorldPos);
+	const float pixelDist = length(input.WorldPos);
+	const float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
+
+	// The shell's snow albedo, triplanar on the sphere (no authored UVs).
+	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
+	[branch] if (HasSnowTexture != 0)
+	{
+		float3 w = abs(normalWS);
+		w /= max(w.x + w.y + w.z, 1e-4);
+		const float3 cx = SnowDiffuse.Sample(SnowSampler, worldAbs.yz / kSnowUVTile).rgb;
+		const float3 cy = SnowDiffuse.Sample(SnowSampler, worldAbs.xz / kSnowUVTile).rgb;
+		const float3 cz = SnowDiffuse.Sample(SnowSampler, worldAbs.xy / kSnowUVTile).rgb;
+		kSnowAlbedo = cx * w.x + cy * w.y + cz * w.z;
+		[flatten] if (SnowTextureIsLinear != 0.0)
+			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
+	}
+	const float snowRoughness = 0.6;
+	const float3 snowF0 = float3(0.028, 0.028, 0.028);
+	const float snowAO = 1.0;
+
+	// Sun shadow: the skin's two paths, verbatim.
+	const float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	const float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
+	float sunShadow;
+	[branch] if (CrispShadows > 0.5)
+	{
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+	}
+	else
+	{
+		float detailedShadow;
+		const float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
+	}
+
+	const float2 glintUV = fmod(worldAbs.xy, 4096.0) / kSnowUVTile;
+	const float2 glintDuvdx = ddx(glintUV);
+	const float2 glintDuvdy = ddy(glintUV);
+	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
+		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
+		glintUV, glintDuvdx, glintDuvdy);
+	float3 specularLobe = sunLit.specularLobe;
+	float3 diffuseLobe = sunLit.diffuseLobe;
+	float3 directDiffuse = sunLit.directDiffuse;
+	float3 directSpecular = sunLit.directSpecular;
+
+	[branch] if (PointLightsActive > 0.5)
+	{
+		const float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
+		const float4 clipPos = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		const float2 screenUV = clipPos.xy / max(clipPos.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, worldAbs,
+			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
+	}
+
+	const float3 ambientColor = SnowAmbientColor(normalWS);
+	float3 ambientPart = ambientColor * diffuseLobe;
+	const float2 terrainLocal = worldAbs.xy - GridOrigin;
+	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
+	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
+	[branch] if (SkylightingActive > 0.5)
+	{
+		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
+		const float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
+		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
+	}
+	directDiffuse *= Color::PBRLightingScale;
+	directSpecular *= Color::PBRLightingScale;
+	diffuseLobe *= Color::PBRLightingScale;
+	const float3 preLit = ambientPart + directDiffuse;
+	const float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
+
+	PS_OUTPUT psout;
+	psout.Diffuse = float4(preLit, 1.0);
+	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, 0.0);
+	psout.Albedo = float4(diffuseLobe, 1.0);
+	psout.Specular = float4(directSpecular, 1.0);
+	psout.Reflectance = float4(specularLobe, 1.0);
+	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, 1.0);
+	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, 1.0);
+	return psout;
+}
+#else
 PS_OUTPUT main(VS_OUTPUT input)
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
@@ -4665,4 +4815,5 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
 }
+#endif  // BLOB
 #endif
