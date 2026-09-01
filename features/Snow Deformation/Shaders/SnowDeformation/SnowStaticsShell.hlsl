@@ -1927,6 +1927,24 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// taper, no distance collapse. Exported as o.Target for the PS rim band.
 	float depthTarget = depthBase;
 
+	// Snow Breakup: a NEGATIVE base plus positive noise, the shape the DefoQ
+	// reference ships (its thickness is -0.016 against noise strength +0.099).
+	// A uniform positive depth reads as paint; taking a constant fraction off
+	// and handing it back through world noise lets cover thin to BARE at the
+	// mesh's own scale, so the break-up belongs to the layer instead of needing
+	// a mask of its own. Renormalised so full noise still reaches 1, and 0 is
+	// exactly the uniform coat. World-anchored on purpose: the shadow caster
+	// evaluates the same function at the same worldBase, so shadow and shell
+	// cannot disagree. Roads are exempt - their height stays in step with the
+	// landscape shell at the verge, which does not break up. Consumed by BOTH
+	// the classic upFacing and the S4 mask; see the note at each site.
+	float breakupFactor = 1.0;
+	[branch] if (SkinBreakup > 0.001 && LegacySkin < 0.5)
+	{
+		float breakNoise = ShapeNoise(worldBase.xy / kSkinBreakupScale);
+		breakupFactor = saturate((1.0 + SkinBreakup) * breakNoise - SkinBreakup);
+	}
+
 	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
 	// bare, matching the vanilla projection's extent). flat meshes gate hard
 	// on the raw normal so plank sides stay clean; rounded meshes ramp over
@@ -1976,23 +1994,17 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			projFactor = saturate(5.0 * projWeight);
 		upFacing *= projFactor;
 	}
+	// Snow Breakup applies to the COVERAGE MASK, not to the depth, and that is
+	// not a detail: the S4 block below REBUILDS depth from depthBase (see
+	// "depth = depthBase * heightScale * ..."), so anything written into depth
+	// up here is discarded on exactly the draws the feature exists for. The
+	// masks are what both paths carry through to the end - classic multiplies
+	// depthBase by upFacing, S4 multiplies by mask and then exports mask AS
+	// upFacing - so scaling them takes depth and coverage together and the
+	// shell cannot end up thinned but still claiming to cover (the film-round
+	// failure, paid for four times).
+	upFacing *= breakupFactor;
 	float depth = depthBase * upFacing;
-
-	// Snow Breakup: a NEGATIVE base plus positive noise, the shape the DefoQ
-	// reference ships (thickness -0.016 against noise strength +0.099). A
-	// uniform positive depth reads as paint; taking a constant fraction off and
-	// handing it back through world noise lets coverage thin to BARE at the
-	// mesh's own scale, so the break-up belongs to the layer instead of needing
-	// a mask of its own. Renormalised so full noise still reaches depthBase and
-	// 0 is exactly the uniform coat. World-anchored, so the caster evaluates the
-	// same function at the same worldBase and shadow and shell cannot disagree.
-	// Roads are exempt: their height stays in step with the landscape shell at
-	// the verge, which does not break up.
-	[branch] if (SkinBreakup > 0.001 && LegacySkin < 0.5)
-	{
-		float breakNoise = ShapeNoise(worldBase.xy / kSkinBreakupScale);
-		depth = max(depth * ((1.0 + SkinBreakup) * breakNoise - SkinBreakup), 0.0);
-	}
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
 	// the hand-off to the object's own projected snow has no silhouette to pop.
@@ -2267,6 +2279,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				meldWall = smoothstep(0.85, 0.95, rollT) * heightScale;
 		}
 		mask = max(mask, maskBase * meldWall);
+		// Snow Breakup, S4's site. AFTER the meld max, so a melded wall cannot
+		// smuggle full cover back into a broken-up column, and BEFORE depth is
+		// rebuilt, so depth, coverDepth and upFacing all inherit it from the
+		// one multiply and stay consistent.
+		mask *= breakupFactor;
 		float rimIn = 1.0 - rollT;
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
@@ -4316,7 +4333,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// and it does not change what the shell draws.
 			float pleat = fwidth(input.Lift) / max(liftBase, kMinSkinLift);
 			float hot = saturate(pleat / kPleatFullScale);
-			preLit = float3(hot, 1.0 - hot, 0.15 * (1.0 - hot));
+			// BRIGHTNESS = whether the shell actually DRAWS here. Every debug
+			// mode forces coverageAlpha and fadeAlpha to 1 ("full visibility;
+			// the dither must not hide geometry the diagnosis needs to see"),
+			// so all of them paint the whole shell mesh, discards included -
+			// which is why an object reads as solid colour in every mode and
+			// why that is NOT a finding. dbgAlpha is that pass's real coverage,
+			// captured before the override. Bright red is a tear in snow you
+			// can see; dark red is a tear in geometry currently discarded -
+			// still worth knowing, not currently visible.
+			preLit = float3(hot, 1.0 - hot, 0.15 * (1.0 - hot)) * (0.2 + 0.8 * saturate(dbgAlpha));
 		}
 		else [branch] if (StaticsDebugView > 5.5)
 		{
