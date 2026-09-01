@@ -70,6 +70,10 @@ cbuffer StaticCB : register(b1)
 	float ObjCorniceLip;    // layout sync with SnowStaticsShell; unused here
 	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
 	float SkinWeld;         // layout sync with SnowStaticsShell; unused here
+	float BlobDrape;        // layout sync with SnowStaticsShell; unused here
+	float padBlob1;
+	float padBlob2;
+	float padBlob3;
 }
 
 struct VS_INPUT

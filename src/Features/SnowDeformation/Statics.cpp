@@ -906,6 +906,8 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// rather than only the trench around footprints; the skins step aside in
 	// the same breath, so the two can never fight for the depth buffer.
 	a_scb.ObjectDrape = settings.ObjectDrapeShell ? 1.0f : 0.0f;
+	// B0: rides the patch recipe so the caster evaluates the same field.
+	a_scb.BlobDrape = settings.BlobObjectSnow ? 1.0f : 0.0f;
 }
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()

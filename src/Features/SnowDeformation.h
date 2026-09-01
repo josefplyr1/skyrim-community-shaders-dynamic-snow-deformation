@@ -491,6 +491,8 @@ public:
 		bool ObjectDrapeShell = false;
 		/** @brief Per-layer drape prototype (CONTAINER-SHELL-PLAN pivot), debug A/B: draw the trench patch once per PEELED LAYER so a surface under cover (a walkway beneath a roof) gets its own drape instead of being hidden by the roof's. Answers whether the drape architecture can serve architecture at all. Not serialised. */
 		bool LayeredObjectDrape = false;
+		/** @brief B0 spike (BLOB-SNOW-PLAN R1): with the drape on, object columns take the smooth-union BLOB field - one hemisphere per raster texel, hashed radius, soft-max union - instead of the dome. The snow's silhouette stops being the object's. Debug toggle, not serialised. */
+		bool BlobObjectSnow = false;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1611,6 +1613,11 @@ public:
 		float SkinBreakup;
 		/** @brief Settings::SkinWeldAmt - Tier 1 seam weld. Slides the FLAT class's up-facing gate from the per-vertex RAW normal to the position-welded one (smoothWS, which SmoothNormalsCS makes identical for every vertex sharing a position). upFacing is the only term in the lift that is not already single-valued per position, so welding it removes the coincident-twin disagreement that draws sliver fences at hard edges. 0 = the raw-normal gate exactly, i.e. current behaviour. Trades away the deliberate "plank sides stay clean" property. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkinWeld;
+		/** @brief Settings::BlobObjectSnow - B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the smooth-union blob field instead of the dome profile. Debug spike. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float BlobDrape;
+		float padBlob1;
+		float padBlob2;
+		float padBlob3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

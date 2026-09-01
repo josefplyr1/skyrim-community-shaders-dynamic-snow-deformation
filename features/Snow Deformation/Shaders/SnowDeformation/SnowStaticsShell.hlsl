@@ -317,6 +317,12 @@ cbuffer StaticCB : register(b1)
 	// Tier 1 seam weld: how far the FLAT class's up-facing gate slides from
 	// the per-vertex raw normal to the position-welded one. 0 = today.
 	float SkinWeld;
+	// B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the blob field
+	// instead of the dome profile. Debug spike, off by default.
+	float BlobDrape;
+	float padBlob1;
+	float padBlob2;
+	float padBlob3;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -1179,6 +1185,112 @@ float ObjectDomeDepth(float2 worldXY, float depthBase, out float3 domeNrm)
 	return depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn));
 }
 
+// B0 - BLOB SNOW (BLOB-SNOW-PLAN route R1). Josef's KH3 observation and his
+// own sketch: a row of overlapping balls that merge into one soft sheet whose
+// outline is the SNOW's, not the object's.
+//
+// No ball is ever placed. The union of spheres over a surface IS a function of
+// XY, so the whole thing is one height field evaluated on the lattice the
+// roads already use - which is why it cannot fold, tear or pleat. Conceptually
+// there is a hemisphere sitting on the object top at every raster texel; here
+// we take a disc of taps around the query point, lift each by its own spherical
+// cap, and smooth-max the results. The smooth max IS the blend: frames 1-4 of
+// the sketch never exist separately, only the merged result.
+//
+// The number that decides whether this works, from the jSnow reference:
+// RADIUS / SPACING must stay above ~4, and 6-13 is the working band. Our raster
+// texel is 4 units, so a 24-52 unit radius is the target - and the module's
+// ~20-30 unit snow depth sits inside it. Below ~4 the union stops bridging and
+// the result reads as beads on a string.
+static const float kBlobTapRings = 2.0;
+// Softness of the union, as a fraction of the radius. Larger = rounder joins
+// and more bridging; 0 would be a plain max (visible creases where caps meet).
+static const float kBlobSoftFrac = 0.45;
+// 16 taps on two staggered rings plus the centre - the berm field's own
+// arrangement, for the same reason: tap COUNT is what keeps a ring from
+// printing a contour line.
+static const float2 kBlobTaps[16] = {
+	float2(0.38, 0.0), float2(0.27, 0.27), float2(0.0, 0.38), float2(-0.27, 0.27),
+	float2(-0.38, 0.0), float2(-0.27, -0.27), float2(0.0, -0.38), float2(0.27, -0.27),
+	float2(0.86, 0.36), float2(0.36, 0.86), float2(-0.36, 0.86), float2(-0.86, 0.36),
+	float2(-0.86, -0.36), float2(-0.36, -0.86), float2(0.36, -0.86), float2(0.86, -0.36)
+};
+
+// Smooth maximum (polynomial). The union of two blobs rounds off instead of
+// creasing, which is the entire visual difference between "one snow form" and
+// "two balls touching".
+float BlobSmoothMax(float a, float b, float k)
+{
+	float h = saturate(0.5 + 0.5 * (a - b) / max(k, 1e-4));
+	return lerp(b, a, h) + k * h * (1.0 - h);
+}
+
+// Per-blob radius jitter, hashed from the blob's own world position so it is
+// deterministic and cannot crawl as the camera moves (the plan's hard
+// requirement against ghosting and turn-around pop). jSnow randomises radius
+// over [H/2, H]; same range here.
+float BlobRadiusAt(float2 centreXY, float radius)
+{
+	float h = ShapeNoise(centreXY * 0.37);
+	return radius * lerp(0.5, 1.0, h);
+}
+
+float ObjectBlobDepth(float2 worldXY, float depthBase, out float3 blobNrm)
+{
+	blobNrm = float3(0.0, 0.0, 1.0);
+	// Radius from the class depth: a blob as wide as the snow is deep puts
+	// radius/spacing at ~5-7 against the 4-unit raster, inside the band.
+	float radius = max(depthBase, kMinSkinLift) * 1.25;
+	float soft = radius * kBlobSoftFrac;
+	float here = PatchTopL(worldXY);
+
+	// The centre blob, and the surface height it alone would give.
+	float best = (here > -50000.0) ? here + BlobRadiusAt(worldXY, radius) : -1e9;
+
+	[unroll] for (uint bi = 0; bi < 16; bi++)
+	{
+		float2 o = kBlobTaps[bi] * radius * kBlobTapRings;
+		float2 c = worldXY + o;
+		float t = PatchTopL(c);
+		[flatten] if (t > -50000.0)
+		{
+			// Spherical cap: this blob's contribution directly above the query
+			// point. Outside its radius it contributes nothing.
+			float r = BlobRadiusAt(c, radius);
+			float d2 = dot(o, o);
+			float cap = sqrt(max(r * r - d2, 0.0));
+			best = BlobSmoothMax(best, t + cap, soft);
+		}
+	}
+
+	[flatten] if (best < -1e8)
+		return 0.0;
+
+	// Height ABOVE this column's own surface, which is what the caller adds.
+	// Clamped so a blob centred on a neighbour's tall top cannot tower here -
+	// the union is a shape, not a licence to grow without limit.
+	float lift = best - max(here, -50000.0);
+	lift = clamp(lift, 0.0, depthBase * 2.0);
+
+	// Analytic normal from the field's own gradient, for the same reason the
+	// dome needs one: the shape lives in the field, so a finite difference of
+	// the mesh cannot see it. Four extra evaluations of the cheap centre term
+	// only - the full union per tap would be 5x the cost for a normal.
+	const float gs = 4.0;
+	float hXP = PatchTopL(worldXY + float2(gs, 0.0));
+	float hXN = PatchTopL(worldXY - float2(gs, 0.0));
+	float hYP = PatchTopL(worldXY + float2(0.0, gs));
+	float hYN = PatchTopL(worldXY - float2(0.0, gs));
+	[flatten] if (hXP > -50000.0 && hXN > -50000.0 && hYP > -50000.0 && hYN > -50000.0)
+	{
+		float2 g = float2(hXP - hXN, hYP - hYN) / (2.0 * gs);
+		// Damped: the blob top is much flatter than the surface under it, which
+		// is the whole point of a rolling ball.
+		blobNrm = normalize(float3(-g * 0.35, 1.0));
+	}
+	return lift;
+}
+
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
 // unit or two apart, so the trail-margin test uses a cheap 5-tap cross
@@ -1553,7 +1665,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float depth;
 		[branch] if (objectField)
 		{
-			depth = ObjectDomeDepth(worldXY, skinDepth, domeNrm);
+			// B0: the blob field replaces the dome on object columns only.
+			// Roads and trench columns keep CarveProfile untouched, so the
+			// A/B is confined to exactly the surfaces the spike is about.
+			[branch] if (BlobDrape > 0.5)
+				depth = ObjectBlobDepth(worldXY, skinDepth, domeNrm);
+			else
+				depth = ObjectDomeDepth(worldXY, skinDepth, domeNrm);
 		}
 		else
 		{
