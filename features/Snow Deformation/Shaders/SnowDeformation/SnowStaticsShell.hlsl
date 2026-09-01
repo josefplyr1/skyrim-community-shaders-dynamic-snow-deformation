@@ -466,10 +466,16 @@ static const float kCorniceRoll = 4.0;
 // so it reads as patches of bare rather than as texture, and comparable to the
 // class depth so a bare spot is about as wide as the layer is thick.
 static const float kSkinBreakupScale = 24.0;
-// Lift-gradient debug view: the pleat value that paints full red. 0.45 is
-// round 30's own upper shred threshold, so the view and that rule agree on
-// what counts as a tear.
-static const float kPleatFullScale = 0.45;
+// Snow Breakup's ramp width in NOISE units, and the share of the surface the
+// slider's top end takes to bare. Wide ramp on purpose - see the note at the
+// use site; the caster shares this lift and a hard mask makes it cast slivers.
+static const float kBreakupSoft = 0.35;
+static const float kBreakupMaxBare = 0.18;
+// Lift-gradient debug view: the pleat value that paints full red. The measure
+// is lift change per unit of the surface's OWN screen-space extent, so it is
+// dimensionless - 1.0 means the lift climbs as fast as the geometry recedes.
+// Above that the triangle is more wall than surface, which is a tear.
+static const float kPleatFullScale = 1.5;
 static const float kShelterNear = 8.0;
 static const float kShelterFar = 32.0;
 // Depth a fully sheltered surface keeps. The landscape shell thins under
@@ -1938,11 +1944,23 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// cannot disagree. Roads are exempt - their height stays in step with the
 	// landscape shell at the verge, which does not break up. Consumed by BOTH
 	// the classic upFacing and the S4 mask; see the note at each site.
+	// The cut walks up from BELOW the noise's range, so at slider 0 the factor
+	// is 1 for every value of the noise and there is no step off zero. The
+	// first version was saturate((1+b)*n - b), which at b=0.01 is ~n - i.e. it
+	// jumped straight from "uniform" to "the whole surface varies 0..1", which
+	// is what blotched a cliff at one hundredth of the slider.
+	//
+	// kBreakupSoft is deliberately WIDE. A hard mask in a DEPTH field builds
+	// vertical walls, the shadow caster shares this lift, and those walls are
+	// what cast the sliver self-shadows the first version showed. The visible
+	// EDGE stays crisp anyway: the shape gates binarize coverage at 0.5
+	// downstream, so a smooth depth ramp still ends in a hard contour.
 	float breakupFactor = 1.0;
 	[branch] if (SkinBreakup > 0.001 && LegacySkin < 0.5)
 	{
 		float breakNoise = ShapeNoise(worldBase.xy / kSkinBreakupScale);
-		breakupFactor = saturate((1.0 + SkinBreakup) * breakNoise - SkinBreakup);
+		float cut = lerp(-kBreakupSoft, kBreakupMaxBare, saturate(SkinBreakup));
+		breakupFactor = smoothstep(cut, cut + kBreakupSoft, breakNoise);
 	}
 
 	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
@@ -4331,7 +4349,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// thresholded before it was removed. Green = agreeing, amber = a
 			// real slope, red = a tear. MEASUREMENT ONLY: nothing consumes it,
 			// and it does not change what the shell draws.
-			float pleat = fwidth(input.Lift) / max(liftBase, kMinSkinLift);
+			// Normalised by the surface's OWN screen-space extent, not by the
+			// class depth. Dividing by liftBase made the same geometry read
+			// red at depth 0 and green at depth 25, because the divisor grows
+			// with the slider while a tear does not - Josef's 0-vs-25 pair,
+			// where the red vanished and every artifact it had been marking
+			// stayed. World units of lift change per world unit of surface
+			// change is dimensionless, so it reads the same at any depth AND
+			// at any distance. StaticsDebugView is a constant, so these
+			// derivatives sit in uniform control flow.
+			float posPerPixel = max(length(ddx(input.WorldPos)), length(ddy(input.WorldPos)));
+			float pleat = fwidth(input.Lift) / max(posPerPixel, 1e-3);
 			float hot = saturate(pleat / kPleatFullScale);
 			// BRIGHTNESS = whether the shell actually DRAWS here. Every debug
 			// mode forces coverageAlpha and fadeAlpha to 1 ("full visibility;
