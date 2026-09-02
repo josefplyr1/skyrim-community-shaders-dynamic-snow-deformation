@@ -1045,6 +1045,19 @@ void SnowDeformation::Prepass()
 	// Timed inside as two sequential passes (actors+bones, then the reference
 	// scan for props), so the bone walk's share can be read on its own.
 	GatherStamps(perFrameData);
+	// Moving props inside the contact window carve by their render mesh:
+	// drawn now, read by the stamp pass below. Dim 0 tells the pass there
+	// is no field this frame.
+	DrawContactCapture(context);
+	perFrameData.ContactCenter = contactCenter;
+	perFrameData.ContactHalfExtent = kContactHalfExtent;
+	perFrameData.ContactDim = contactDrawsLast > 0 ? float(kContactDim) : 0.0f;
+	{
+		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+		perFrameData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
+		perFrameData.TerrainTexelSize = kShellVertexSpacing;
+		perFrameData.TerrainDim = float(kShellWindowDim);
+	}
 
 	// Marked here, consumed by NEXT frame's roll: the map these stamps are
 	// about to be written into is the one that frame will be copying.
@@ -1151,7 +1164,8 @@ void SnowDeformation::Prepass()
 		perFrameData.DepositParams.x < 0.5f &&
 		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
-		perFrameData.ClearMap == 0;
+		perFrameData.ClearMap == 0 &&
+		perFrameData.ContactDim < 0.5f;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
 	deformIdleBlockers =
 		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
@@ -1161,7 +1175,8 @@ void SnowDeformation::Prepass()
 		(perFrameData.RefillAmount > 0.0f ? 16u : 0u) |
 		(perFrameData.ClearMap != 0 ? 32u : 0u) |
 		(deformFlagActive ? 64u : 0u) |
-		(deformFlagSeq <= deformLastNonIdleSeq ? 128u : 0u);
+		(deformFlagSeq <= deformLastNonIdleSeq ? 128u : 0u) |
+		(perFrameData.ContactDim > 0.5f ? 256u : 0u);
 	// The berm field is only rebuilt by an executed pass; re-enabling its A/B
 	// at rest needs one forced run or the stale bake stands until something moves.
 	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
@@ -1213,7 +1228,8 @@ void SnowDeformation::Prepass()
 		auto* map = deformationTextures[0];
 		auto* scratch = deformationTextures[1];
 		const bool ringRan = perFrameData.RingTotalTexels > 0;
-		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f;
+		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f ||
+		                      perFrameData.ContactDim > 0.5f;
 		// Whether the stamp pass actually wrote anything - a stamp set that
 		// lies entirely outside the window dispatches nothing and must not
 		// re-arm evolve.
@@ -1326,6 +1342,13 @@ void SnowDeformation::Prepass()
 			// capsule and wave); full-map only past the list cap or under the
 			// force-all-dirty cross-check - never a truncated list, which
 			// would be a silently frozen stamp.
+			{
+				ID3D11ShaderResourceView* contactSRVs[2] = {
+					(contactHeight && perFrameData.ContactDim > 0.5f) ? contactHeight->srv.get() : nullptr,
+					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr
+				};
+				context->CSSetShaderResources(7, 2, contactSRVs);
+			}
 			if (stampRan) {
 				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
 				stampTilesLast = tileCount == UINT32_MAX ? kStampTileCap + 1 : tileCount;
@@ -1359,6 +1382,10 @@ void SnowDeformation::Prepass()
 			} else {
 				stampTilesLast = 0;
 				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
+			}
+			{
+				ID3D11ShaderResourceView* nullContact[2] = { nullptr, nullptr };
+				context->CSSetShaderResources(7, 2, nullContact);
 			}
 		}
 
@@ -1714,6 +1741,15 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 				std::max(a_data.DepositPosDir[w].x, a_data.DepositShape[w].z) + r,
 				std::max(a_data.DepositPosDir[w].y, a_data.DepositShape[w].w) + r);
 		}
+	}
+
+	// Rasterized props: the field's own bounds, plus the stamp pass's
+	// one-texel dilation at contact resolution and the usual slop.
+	for (const auto& prop : contactProps) {
+		if (overflow)
+			break;
+		const float pad = 2.0f * texel;
+		addWorldBox(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad);
 	}
 
 	return overflow ? UINT32_MAX : (uint32_t)stampTileScratch.size();

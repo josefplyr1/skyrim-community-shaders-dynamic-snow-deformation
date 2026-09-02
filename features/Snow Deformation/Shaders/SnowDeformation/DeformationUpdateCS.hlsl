@@ -241,6 +241,16 @@ cbuffer PerFrame : register(b0)
 	float4 DepositParams;
 	float4 DepositPosDir[MAX_DEPOSIT_WAVES];   // xy world pos (the foot), zw unit travel direction
 	float4 DepositShape[MAX_DEPOSIT_WAVES];    // x push radius, y strength, zw previous foot position
+
+	// Rasterized prop contact (SnowContactCapture.hlsl): the field's world
+	// centre, half-extent and texel dim (0 = no field this frame), and the
+	// terrain window the carve measures against.
+	float2 ContactCenter;
+	float ContactHalfExtent;
+	float ContactDim;
+	float2 TerrainWindowOrigin;
+	float TerrainTexelSize;
+	float TerrainDim;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -276,6 +286,13 @@ RWStructuredBuffer<uint> EvolveTiles : register(u4);
 StructuredBuffer<uint> EvolveTilesIn : register(t3);
 // TileArgsCS: whatever list is bound at t5 becomes indirect args at u5.
 StructuredBuffer<uint> TileListIn : register(t5);
+// Lowest surface over each column this frame from the moving props' own
+// render meshes, MIN-blended; CONTACT_NONE where nothing was drawn. The
+// terrain window gives the ground and the layer depth the contact is
+// measured into. Stamp pass only.
+Texture2D<float> ContactHeight : register(t7);
+Texture2D<float4> TerrainWindow : register(t8);
+#define CONTACT_NONE 1.0e30
 RWByteAddressBuffer TileArgs : register(u5);
 
 // Per-tile "the map changed here this frame" - the berm bake's dirty set,
@@ -937,6 +954,44 @@ bool StampTexel(uint2 phys)
 				// second instead of opening outward from the middle.
 				meltTarget = max(meltTarget, Stamps[i].z * falloff);
 				meltRate += Stamps[i].z * StampEnds[i].w * falloff;
+			}
+		}
+	}
+
+	// Rasterized props: the lowest surface over this column, carved to the
+	// fraction it reaches into the layer - the limb rule, per texel. A 3x3
+	// MIN dilates by one contact texel so a blade thinner than a texel does
+	// not print dotted. Missing terrain reads far below and carves nothing.
+	[branch] if (ContactDim > 0.5)
+	{
+		float2 rel = (worldPos - ContactCenter) / ContactHalfExtent;
+		[branch] if (all(abs(rel) < 1.0))
+		{
+			int dim = (int)ContactDim;
+			int2 ct = int2((rel.x * 0.5 + 0.5) * ContactDim, (0.5 - rel.y * 0.5) * ContactDim);
+			float contact = CONTACT_NONE;
+			[unroll] for (int oy = -1; oy <= 1; oy++)
+				[unroll] for (int ox = -1; ox <= 1; ox++)
+					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
+			[branch] if (contact < CONTACT_NONE * 0.5)
+			{
+				float2 t = (worldPos - TerrainWindowOrigin) / TerrainTexelSize;
+				int tmax = (int)TerrainDim - 1;
+				int2 t0 = clamp(int2(floor(t)), 0, tmax);
+				int2 t1 = min(t0 + 1, tmax);
+				float2 f = saturate(t - float2(t0));
+				float4 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0));
+				float4 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0));
+				float4 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0));
+				float4 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0));
+				float2 terrain = lerp(lerp(s00.xy, s10.xy, f.x), lerp(s01.xy, s11.xy, f.x), f.y);
+				float ground = terrain.x;
+				float layer = max(terrain.y, 1.0);
+				float printed = saturate(1.0 - (contact - ground) / layer);
+				// Crust bears it like any carve of unknown weight: no force.
+				printed *= lerp(1.0, CrustPrintDepth, standingCrust);
+				carve = max(carve, printed);
+				crustBreak = max(crustBreak, saturate(printed * CrustBreakOnCarve));
 			}
 		}
 	}

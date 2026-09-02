@@ -2663,7 +2663,6 @@ void SnowDeformation::DrawCapturedStatics()
 	}
 
 	auto context = globals::d3d::context;
-	auto device = globals::d3d::device;
 
 	// Per-draw PS choice below; bound here so a fallback path still has one.
 	context->PSSetShader(staticsPS, nullptr, 0);
@@ -2833,43 +2832,10 @@ void SnowDeformation::DrawCapturedStatics()
 		// more elements than the VS consumes, so POSITION+NORMAL suffices.
 		uint64_t descKey;
 		memcpy(&descKey, &desc, sizeof(descKey));
-		auto& layout = staticsILCache[descKey];
-		if (!layout) {
-			// Position size = distance to the first following attribute (the
-			// descriptor's offset table is authoritative). The VF_FULLPREC
-			// flag is NOT reliable: logged runtime buffers carry 16-byte
-			// float4 positions with the flag clear, and reading them as
-			// halfs shreds geometry into screen-wide streaks.
-			uint32_t strideBytes = uint32_t(descKey & 0xF) * 4;
-			uint32_t positionBytes = strideBytes;
-			static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
-				{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
-				{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
-				{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
-				{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
-				{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
-				{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
-				{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
-				{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
-			};
-			for (auto [flag, attr] : kAttrs) {
-				if (desc.HasFlag(flag)) {
-					uint32_t attrOffset = desc.GetAttributeOffset(attr);
-					if (attrOffset > 0 && attrOffset < positionBytes)
-						positionBytes = attrOffset;
-				}
-			}
-
-			D3D11_INPUT_ELEMENT_DESC elements[2] = {
-				{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-				{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			};
-			if (FAILED(device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put())))
-				continue;  // null stays cached: this descriptor is skipped from now on
-		}
+		auto* layout = StaticsInputLayoutFor(descKey, desc);
 		if (!layout)
 			continue;
-		context->IASetInputLayout(layout.get());
+		context->IASetInputLayout(layout);
 
 		// Stride comes from the descriptor's low nibble (in dwords); the
 		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
@@ -3147,4 +3113,208 @@ void SnowDeformation::RenderExclusionField()
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	exclusionFieldValid = true;
+}
+
+ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+{
+	auto& layout = staticsILCache[a_descKey];
+	if (!layout && staticsVSBlob) {
+		// Position size = distance to the first following attribute (the
+		// descriptor's offset table is authoritative). The VF_FULLPREC
+		// flag is NOT reliable: logged runtime buffers carry 16-byte
+		// float4 positions with the flag clear, and reading them as
+		// halfs shreds geometry into screen-wide streaks.
+		uint32_t strideBytes = uint32_t(a_descKey & 0xF) * 4;
+		uint32_t positionBytes = strideBytes;
+		static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
+			{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
+			{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
+			{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
+			{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
+			{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
+			{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
+			{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
+			{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
+		};
+		for (auto [flag, attr] : kAttrs) {
+			if (a_desc.HasFlag(flag)) {
+				uint32_t attrOffset = a_desc.GetAttributeOffset(attr);
+				if (attrOffset > 0 && attrOffset < positionBytes)
+					positionBytes = attrOffset;
+			}
+		}
+
+		D3D11_INPUT_ELEMENT_DESC elements[2] = {
+			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		};
+		// Null stays cached: this descriptor is skipped from now on.
+		globals::d3d::device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put());
+	}
+	return layout.get();
+}
+
+bool SnowDeformation::EnsureContactResources()
+{
+	if (contactShadersFailed)
+		return false;
+	auto* device = globals::d3d::device;
+	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
+	if (!contactVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER"));
+		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactVS)))
+			Util::SetResourceName(contactVS, "SnowDeformation::ContactCaptureVS");
+	}
+	if (!contactPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
+		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactPS)))
+			Util::SetResourceName(contactPS, "SnowDeformation::ContactCapturePS");
+	}
+	if (!contactVS || !contactPS) {
+		contactShadersFailed = true;
+		logger::warn("[SNOW DEFORMATION] Prop contact capture disabled (shader compilation failed)");
+		return false;
+	}
+	if (!contactHeight) {
+		D3D11_TEXTURE2D_DESC desc = {
+			.Width = kContactDim,
+			.Height = kContactDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R32_FLOAT,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		contactHeight = new Texture2D(desc, "SnowDeformation::ContactHeight");
+		contactHeight->CreateSRV(srvDesc);
+		contactHeight->CreateRTV(rtvDesc);
+	}
+	if (!contactMinBlendState) {
+		D3D11_BLEND_DESC blendDesc{};
+		auto& rt = blendDesc.RenderTarget[0];
+		rt.BlendEnable = TRUE;
+		rt.SrcBlend = D3D11_BLEND_ONE;
+		rt.DestBlend = D3D11_BLEND_ONE;
+		rt.BlendOp = D3D11_BLEND_OP_MIN;
+		rt.SrcBlendAlpha = D3D11_BLEND_ONE;
+		rt.DestBlendAlpha = D3D11_BLEND_ONE;
+		rt.BlendOpAlpha = D3D11_BLEND_OP_MIN;
+		rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		if (FAILED(device->CreateBlendState(&blendDesc, contactMinBlendState.put()))) {
+			contactShadersFailed = true;
+			return false;
+		}
+	}
+	if (!contactRasterState) {
+		// Undersides are the surfaces that touch the snow: no culling.
+		D3D11_RASTERIZER_DESC rasterDesc{};
+		rasterDesc.FillMode = D3D11_FILL_SOLID;
+		rasterDesc.CullMode = D3D11_CULL_NONE;
+		rasterDesc.DepthClipEnable = TRUE;
+		if (FAILED(device->CreateRasterizerState(&rasterDesc, contactRasterState.put()))) {
+			contactShadersFailed = true;
+			return false;
+		}
+	}
+	return true;
+}
+
+// Rasterizes this frame's contact props (gathered by the prop scan) from
+// above into the contact field. Runs in Prepass after the stamp gather and
+// before the map update that reads it. Same per-geometry draw the height
+// capture uses; the rasterizer state is saved and put back because the
+// capture leaves the game's alone and so must this.
+void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
+{
+	contactDrawsLast = 0;
+	if (contactProps.empty() || !EnsureContactResources())
+		return;
+	auto* context = a_context;
+
+	const float clearValue[4] = { kContactNone, 0.0f, 0.0f, 0.0f };
+	context->ClearRenderTargetView(contactHeight->rtv.get(), clearValue);
+	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
+	context->OMSetRenderTargets(1, &rtv, nullptr);
+	context->OMSetBlendState(contactMinBlendState.get(), nullptr, 0xFFFFFFFF);
+	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
+	context->RSGetState(savedRaster.put());
+	context->RSSetState(contactRasterState.get());
+	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kContactDim), float(kContactDim), 0.0f, 1.0f };
+	context->RSSetViewports(1, &viewport);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(contactVS, nullptr, 0);
+	context->PSSetShader(contactPS, nullptr, 0);
+	ID3D11Buffer* cb1 = staticsCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+
+	globals::profiler->BeginPass("SnowDeformation::ContactCapture");
+	for (const auto& prop : contactProps) {
+		auto* root = prop.root.get();
+		if (!root)
+			continue;
+		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+			auto& runtime = a_geometry->GetGeometryRuntimeData();
+			if (runtime.skinInstance)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			auto* triShape = a_geometry->AsTriShape();
+			if (!triShape)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			auto* rendererData = runtime.rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				return RE::BSVisit::BSVisitControl::kContinue;
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto* layout = StaticsInputLayoutFor(descKey, desc);
+			if (!layout)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			const UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				return RE::BSVisit::BSVisitControl::kContinue;
+			UINT offset = 0;
+			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			context->IASetInputLayout(layout);
+			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+			StaticsCB scb{};
+			const auto& world = a_geometry->world;
+			const auto& rot = world.rotate;
+			const float scale = world.scale;
+			scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, world.translate.x };
+			scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, world.translate.y };
+			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, world.translate.z };
+			scb.HeightWindowCenter = contactCenter;
+			scb.HeightHalfExtent = kContactHalfExtent;
+			staticsCB->Update(scb);
+
+			context->DrawIndexed(indexCount, 0, 0);
+			contactDrawsLast++;
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
+	}
+	globals::profiler->EndPass();
+
+	ID3D11RenderTargetView* nullRTV = nullptr;
+	context->OMSetRenderTargets(1, &nullRTV, nullptr);
+	context->RSSetState(savedRaster.get());
 }

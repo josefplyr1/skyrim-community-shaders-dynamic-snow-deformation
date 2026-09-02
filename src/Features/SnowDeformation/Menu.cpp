@@ -1382,6 +1382,8 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
 		}
 
+		ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
+		ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
 		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {

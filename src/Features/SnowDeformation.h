@@ -40,6 +40,11 @@ public:
 	// so trench detail coarsens with range.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
+	/** @brief Prop contact field: texels across, and half the window (world units) it covers around the deformation centre - 3 units per texel, finer than the map it feeds. */
+	static constexpr uint kContactDim = 1024;
+	static constexpr float kContactHalfExtent = 1536.0f;
+	/** @brief Clear value of the contact field: nothing drawn over this column. */
+	static constexpr float kContactNone = 1.0e30f;
 	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
 	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
@@ -728,6 +733,13 @@ public:
 		float4 DepositParams;
 		float4 DepositPosDir[kMaxBowWaves];
 		float4 DepositShape[kMaxBowWaves];
+
+		float2 ContactCenter;
+		float ContactHalfExtent;
+		float ContactDim;
+		float2 TerrainWindowOrigin;
+		float TerrainTexelSize;
+		float TerrainDim;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -2066,6 +2078,29 @@ public:
 	bool staticsShadersFailed = false;
 	ConstantBuffer* staticsCB = nullptr;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
+	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
+	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+
+	/** @brief Prop contact field (MESH-CONTACT-PLAN Route B, rigid half): moving props' render meshes rasterized from above, MIN-blended world Z per column, over a fine window around the deformation centre. Per frame, never accumulated; the stamp pass carves from it per texel. */
+	Texture2D* contactHeight = nullptr;
+	winrt::com_ptr<ID3D11BlendState> contactMinBlendState;
+	winrt::com_ptr<ID3D11RasterizerState> contactRasterState;
+	ID3D11VertexShader* contactVS = nullptr;
+	ID3D11PixelShader* contactPS = nullptr;
+	bool contactShadersFailed = false;
+	struct ContactProp
+	{
+		RE::NiPointer<RE::NiAVObject> root;
+		float minX, minY, maxX, maxY;
+	};
+	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
+	std::vector<ContactProp> contactProps;
+	float2 contactCenter = { 0, 0 };
+	uint contactDrawsLast = 0;
+	/** @brief A/B, runtime-only, default ON: moving props inside the contact window carve by their render mesh. Off reverts them to collision-shape stamps. */
+	bool debugContactCapture = true;
+	bool EnsureContactResources();
+	void DrawContactCapture(ID3D11DeviceContext* a_context);
 
 	/** @brief Compiles the statics skin VS (keeping bytecode) and PS on first use. Implemented in SnowDeformation/Statics.cpp. */
 	bool EnsureStaticsShaders();
@@ -3215,6 +3250,8 @@ protected:
 		uint props = 0;
 		uint propRefs = 0;
 		uint propMovers = 0;
+		/** @brief Moving props that carved by their render mesh this frame instead of by collision shapes. */
+		uint propsRasterized = 0;
 		uint spells = 0;
 		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
 		uint beforeSpells = 0;
