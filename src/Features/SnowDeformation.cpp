@@ -1051,7 +1051,7 @@ void SnowDeformation::Prepass()
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
-	perFrameData.ContactDim = contactDrawsLast > 0 ? float(kContactDim) : 0.0f;
+	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0) ? float(kContactDim) : 0.0f;
 	{
 		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 		perFrameData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
@@ -1745,11 +1745,13 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 	// Rasterized props: the field's own bounds, plus the stamp pass's
 	// one-texel dilation at contact resolution and the usual slop.
-	for (const auto& prop : contactProps) {
-		if (overflow)
-			break;
-		const float pad = 2.0f * texel;
-		addWorldBox(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad);
+	for (const auto* list : { &contactProps, &contactActors }) {
+		for (const auto& prop : *list) {
+			if (overflow)
+				break;
+			const float pad = 2.0f * texel;
+			addWorldBox(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad);
+		}
 	}
 
 	return overflow ? UINT32_MAX : (uint32_t)stampTileScratch.size();

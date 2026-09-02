@@ -45,6 +45,10 @@ public:
 	static constexpr float kContactHalfExtent = 1536.0f;
 	/** @brief Clear value of the contact field: nothing drawn over this column. */
 	static constexpr float kContactNone = 1.0e30f;
+	/** @brief Bones a single skin partition may carry: 240 float4 rows at 3 per bone, the game's own ceiling. Partitions past it are skipped rather than truncated. */
+	static constexpr uint kContactMaxBones = 80;
+	/** @brief Actors rasterized per frame at most; a crowd must not turn the spike into a full character pass. */
+	static constexpr uint kContactMaxActors = 4;
 	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
 	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
@@ -2099,6 +2103,26 @@ public:
 	uint contactDrawsLast = 0;
 	/** @brief A/B, runtime-only, default ON: moving props inside the contact window carve by their render mesh. Off reverts them to collision-shape stamps. */
 	bool debugContactCapture = true;
+	/** @brief Bone palette for one skin partition, plus the capture window. Absolute world rows, so the VS needs no object transform and no pivot. */
+	struct alignas(16) ContactSkinCB
+	{
+		float4 BoneRows[240];
+		float2 SkinWindowCenter;
+		float SkinHalfExtent;
+		float SkinPad;
+	};
+	STATIC_ASSERT_ALIGNAS_16(ContactSkinCB);
+	ConstantBuffer* contactSkinCB = nullptr;
+	ID3D11VertexShader* contactSkinVS = nullptr;
+	/** @brief Input layouts for SKINNED vertex descriptors (POSITION + BLENDWEIGHT + BLENDINDICES); separate cache because the formats differ from the rigid layout. */
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> contactSkinILCache;
+	winrt::com_ptr<ID3DBlob> contactSkinVSBlob;
+	ID3D11InputLayout* ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped so the A/B compares like for like. */
+	std::vector<ContactProp> contactActors;
+	/** @brief S1 spike, runtime-only, default OFF: actors carve by their skinned render mesh instead of foot and limb capsules. */
+	bool debugActorContact = false;
+	uint contactSkinDrawsLast = 0;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);
 
@@ -3252,6 +3276,8 @@ protected:
 		uint propMovers = 0;
 		/** @brief Moving props that carved by their render mesh this frame instead of by collision shapes. */
 		uint propsRasterized = 0;
+		/** @brief Actors that carved by their skinned mesh this frame instead of by bones. */
+		uint actorsRasterized = 0;
 		uint spells = 0;
 		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
 		uint beforeSpells = 0;

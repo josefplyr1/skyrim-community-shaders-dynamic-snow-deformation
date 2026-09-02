@@ -3115,34 +3115,57 @@ void SnowDeformation::RenderExclusionField()
 	exclusionFieldValid = true;
 }
 
+// Position size = distance to the first following attribute (the descriptor's
+// offset table is authoritative). The VF_FULLPREC flag is NOT reliable: logged
+// runtime buffers carry 16-byte float4 positions with the flag clear, and
+// reading them as halfs shreds geometry into screen-wide streaks.
+static uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+{
+	uint32_t positionBytes = uint32_t(a_descKey & 0xF) * 4;
+	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
+		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
+		{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
+		{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
+		{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
+		{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
+		{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
+		{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
+		{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
+	};
+	for (auto [flag, attr] : kAttrs) {
+		if (a_desc.HasFlag(flag)) {
+			uint32_t attrOffset = a_desc.GetAttributeOffset(attr);
+			if (attrOffset > 0 && attrOffset < positionBytes)
+				positionBytes = attrOffset;
+		}
+	}
+	return positionBytes;
+}
+
+ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+{
+	auto& layout = contactSkinILCache[a_descKey];
+	if (!layout && contactSkinVSBlob) {
+		// SSE skinning block: four float16 weights then four UNORM byte
+		// indices, 12 bytes, at the descriptor's own skinning offset.
+		const uint32_t skinOffset = a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
+		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
+		D3D11_INPUT_ELEMENT_DESC elements[3] = {
+			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, skinOffset, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, skinOffset + 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		};
+		// Null stays cached: this descriptor is skipped from now on.
+		globals::d3d::device->CreateInputLayout(elements, 3, contactSkinVSBlob->GetBufferPointer(), contactSkinVSBlob->GetBufferSize(), layout.put());
+	}
+	return layout.get();
+}
+
 ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
 {
 	auto& layout = staticsILCache[a_descKey];
 	if (!layout && staticsVSBlob) {
-		// Position size = distance to the first following attribute (the
-		// descriptor's offset table is authoritative). The VF_FULLPREC
-		// flag is NOT reliable: logged runtime buffers carry 16-byte
-		// float4 positions with the flag clear, and reading them as
-		// halfs shreds geometry into screen-wide streaks.
-		uint32_t strideBytes = uint32_t(a_descKey & 0xF) * 4;
-		uint32_t positionBytes = strideBytes;
-		static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
-			{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
-			{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
-			{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
-			{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
-			{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
-			{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
-			{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
-			{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
-		};
-		for (auto [flag, attr] : kAttrs) {
-			if (a_desc.HasFlag(flag)) {
-				uint32_t attrOffset = a_desc.GetAttributeOffset(attr);
-				if (attrOffset > 0 && attrOffset < positionBytes)
-					positionBytes = attrOffset;
-			}
-		}
+		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
 
 		D3D11_INPUT_ELEMENT_DESC elements[2] = {
 			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -3171,6 +3194,24 @@ bool SnowDeformation::EnsureContactResources()
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
 		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactPS)))
 			Util::SetResourceName(contactPS, "SnowDeformation::ContactCapturePS");
+	}
+	if (!contactSkinVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED"));
+		if (blob) {
+			// Kept: input layouts must be created against the VS bytecode.
+			contactSkinVSBlob = blob;
+			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactSkinVS)))
+				Util::SetResourceName(contactSkinVS, "SnowDeformation::ContactCaptureSkinVS");
+		}
+	}
+	if (!contactSkinCB) {
+		D3D11_BUFFER_DESC cbDesc{};
+		cbDesc.ByteWidth = sizeof(ContactSkinCB);
+		cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+		cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		contactSkinCB = new ConstantBuffer(cbDesc, "SnowDeformation::ContactSkinCB");
 	}
 	if (!contactVS || !contactPS) {
 		contactShadersFailed = true;
@@ -3240,7 +3281,7 @@ bool SnowDeformation::EnsureContactResources()
 void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 {
 	contactDrawsLast = 0;
-	if (contactProps.empty() || !EnsureContactResources())
+	if ((contactProps.empty() && contactActors.empty()) || !EnsureContactResources())
 		return;
 	auto* context = a_context;
 
@@ -3313,6 +3354,88 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		});
 	}
 	globals::profiler->EndPass();
+
+	// S1 spike: actors, drawn from their SKINNED meshes. Bone palettes are
+	// built here as absolute world transforms (bone node world * that bone's
+	// skinToBone), one upload per skin partition, so the VS needs no object
+	// transform and none of the game's pivot convention. A missing bone
+	// contributes nothing rather than crashing - which is the whole
+	// edited-skeleton family, handled by construction.
+	contactSkinDrawsLast = 0;
+	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
+		globals::profiler->BeginPass("SnowDeformation::ContactSkin");
+		context->VSSetShader(contactSkinVS, nullptr, 0);
+		ID3D11Buffer* skinCB = contactSkinCB->CB();
+		context->VSSetConstantBuffers(2, 1, &skinCB);
+		for (const auto& actor : contactActors) {
+			auto* root = actor.root.get();
+			if (!root)
+				continue;
+			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+				auto& runtime = a_geometry->GetGeometryRuntimeData();
+				auto* skin = runtime.skinInstance.get();
+				if (!skin)
+					return RE::BSVisit::BSVisitControl::kContinue;
+				auto* skinData = skin->skinData.get();
+				auto* skinPartition = skin->skinPartition.get();
+				// Accessors, not the raw members: those are compiled out under
+				// cross-VR targeting, and these relocate per runtime.
+				if (!skinData || !skinPartition || !skin->bones)
+					return RE::BSVisit::BSVisitControl::kContinue;
+				const uint32_t boneCount = skinData->GetBoneCount();
+				for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
+					const auto& part = skinPartition->partitions[p];
+					auto* buff = part.buffData;
+					if (!buff || !buff->vertexBuffer || !buff->indexBuffer || !part.bones)
+						continue;
+					if (part.numBones == 0 || part.numBones > kContactMaxBones || part.triangles == 0)
+						continue;
+					auto partDesc = buff->vertexDesc;
+					if (!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) ||
+						!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED))
+						continue;
+					uint64_t descKey;
+					memcpy(&descKey, &partDesc, sizeof(descKey));
+					auto* layout = ContactSkinInputLayoutFor(descKey, partDesc);
+					if (!layout)
+						continue;
+					const UINT stride = uint32_t(descKey & 0xF) * 4;
+					if (stride == 0)
+						continue;
+
+					ContactSkinCB cb{};
+					cb.SkinWindowCenter = contactCenter;
+					cb.SkinHalfExtent = kContactHalfExtent;
+					for (uint16_t j = 0; j < part.numBones; ++j) {
+						const uint16_t b = part.bones[j];
+						if (b >= boneCount)
+							continue;
+						auto* boneNode = skin->bones[b];
+						if (!boneNode)
+							continue;  // an editor removed it; this bone simply moves nothing
+						const RE::NiTransform m = boneNode->world * skinData->GetBoneDataSkinToBone(b);
+						const auto& rot = m.rotate;
+						const float sc = m.scale;
+						cb.BoneRows[j * 3 + 0] = { rot.entry[0][0] * sc, rot.entry[0][1] * sc, rot.entry[0][2] * sc, m.translate.x };
+						cb.BoneRows[j * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
+						cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
+					}
+					contactSkinCB->Update(cb);
+
+					UINT offset = 0;
+					auto* vb = reinterpret_cast<ID3D11Buffer*>(buff->vertexBuffer);
+					auto* ib = reinterpret_cast<ID3D11Buffer*>(buff->indexBuffer);
+					context->IASetInputLayout(layout);
+					context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+					context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+					context->DrawIndexed(uint32_t(part.triangles) * 3, 0, 0);
+					contactSkinDrawsLast++;
+				}
+				return RE::BSVisit::BSVisitControl::kContinue;
+			});
+		}
+		globals::profiler->EndPass();
+	}
 
 	ID3D11RenderTargetView* nullRTV = nullptr;
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);

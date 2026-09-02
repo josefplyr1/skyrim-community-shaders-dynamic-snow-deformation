@@ -1384,6 +1384,10 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
 		ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
+		ImGui::Checkbox("Actor mesh contact [S1 SPIKE] (actors carve by skinned mesh, not bones)", &debugActorContact);
+		if (debugActorContact)
+			ImGui::Text("  actors: %u rasterized, %u partition draws (bone stamps skipped for these)",
+				stampStats.actorsRasterized, contactSkinDrawsLast);
 		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {

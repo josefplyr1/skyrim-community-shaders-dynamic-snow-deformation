@@ -533,6 +533,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	const bool probeActive = debugSkeletonProbe && skeletonProbeTarget != 0;
 	skeletonProbe.valid = false;
 	contactProps.clear();
+	contactActors.clear();
 	contactCenter = { windowOrigin.x + deformWorldSize * 0.5f, windowOrigin.y + deformWorldSize * 0.5f };
 
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
@@ -897,6 +898,24 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (probing)
 				skeletonProbe.verdict = "gated: alpha settling (newly seen actor)";
 			return;
+		}
+
+		// S1 spike: an actor inside the contact window carves by its skinned
+		// mesh instead of by bones. Placed AFTER the floating, incorporeal
+		// and settle gates, so a ghost is still refused; and it skips the
+		// bone stamps outright, so the A/B compares like for like.
+		if (debugActorContact && !contactShadersFailed && !isDead &&
+			contactActors.size() < kContactMaxActors) {
+			const auto& bound = root->worldBound;
+			if (bound.radius > 0.0f &&
+				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
+				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
+				contactActors.push_back({ RE::NiPointer<RE::NiAVObject>(root),
+					bound.center.x - bound.radius, bound.center.y - bound.radius,
+					bound.center.x + bound.radius, bound.center.y + bound.radius });
+				stampStats.actorsRasterized++;
+				return;
+			}
 		}
 
 		// Living actors need matched USABLE feet to take the bone path: a
