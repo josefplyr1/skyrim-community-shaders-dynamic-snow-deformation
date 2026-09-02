@@ -649,31 +649,11 @@ struct VS_OUTPUT
 	float LiftTarget : TEXCOORD9;
 };
 
-#if defined(BLOB)
-// BLOB SNOW SHELL (Spike 1): instanced unit spheres placed by BlobPlaceCS,
-// shaded with the shell's own snow material. No lift, no raster gates, no
-// coverage machinery - a sphere is a sphere. Same file so it shares every CB
-// and include; its own entry points so nothing here touches the skin.
-struct BLOB_VS_OUTPUT
-{
-	float4 Position : SV_POSITION;
-	float4 CurrentClip : TEXCOORD0;
-	float4 PreviousClip : TEXCOORD1;
-	float3 WorldPos : TEXCOORD2;
-	float3 NormalWS : TEXCOORD3;
-	// World z of the surface this sphere sits on: the PS clips below it so a
-	// thin plank does not grow a snow belly underneath.
-	float TopZ : TEXCOORD4;
-};
-// Mirror of SnowDeformation.h kBlobCap and HeightMapProcessCS.hlsl kBlobCap.
-static const uint kBlobCap = 524288;
-#endif
-
 #if defined(MELD)
-// BLOB SNOW SHELL, screen-space meld (pass 3 of 3): a full-screen composite
-// of the blurred nearest-sphere depth (BlobMeldCS.hlsl did pass 2) as ONE
-// surface, shaded once per pixel with the sphere material and z-tested as
-// real geometry. Depends on the spheres drawn this frame: no memory.
+// SCREEN-SPACE SNOW SHELL, the composite: a full-screen pass over the field
+// BlobSeedCS + BlobMeldCS built (x = |view z|, y = sheet), reconstructing
+// position and normal and shading once per pixel through the skin material,
+// z-tested as real geometry. No memory: it follows this frame's scene.
 struct MELD_VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
@@ -686,8 +666,8 @@ cbuffer MeldCB : register(b2)
 	row_major float4x4 MeldViewInverse;
 	float2 MeldDims;
 	float2 MeldDir;
-	float MeldRadiusWorld;
 	float MeldDepthRange;
+	float MeldSmoothRange;
 	float MeldMaxRadiusPx;
 	float MeldDebug;
 	float MeldSmoothing;
@@ -695,7 +675,7 @@ cbuffer MeldCB : register(b2)
 	float MeldFootBias;
 	float MeldSeed;
 	float MeldVerticalRange;
-	float MeldFeather;
+	float padMeld1;
 	float padMeld2;
 	float padMeld3;
 }
@@ -2806,39 +2786,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	return v;
 }
 
-#if defined(BLOB)
-// Two float4 per instance, written by BlobPlaceCS: [centre.xyz, radius],
-// [surface top z, layer, mask, 0].
-StructuredBuffer<float4> BlobInstances : register(t32);
-
-struct BLOB_VS_INPUT
-{
-	float3 Position : POSITION0;
-	uint InstanceID : SV_InstanceID;
-};
-
-BLOB_VS_OUTPUT main(BLOB_VS_INPUT input)
-{
-	BLOB_VS_OUTPUT o = (BLOB_VS_OUTPUT)0;
-	// The placement caps its writes at kBlobCap but still counts past it;
-	// anything beyond is not a blob and collapses to a clipped point.
-	[branch] if (input.InstanceID >= kBlobCap)
-		return o;
-	const float4 a = BlobInstances[input.InstanceID * 2];
-	const float4 b = BlobInstances[input.InstanceID * 2 + 1];
-	const float3 n = normalize(input.Position);
-	const float3 worldAbs = a.xyz + n * a.w;
-	const float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
-	const float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
-	o.Position = mul(CameraViewProj, float4(rel, 1.0));
-	o.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	o.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	o.WorldPos = rel;
-	o.NormalWS = n;
-	o.TopZ = b.x;
-	return o;
-}
-#elif defined(MELD)
+#if defined(MELD)
 MELD_VS_OUTPUT main(uint id
 					: SV_VertexID)
 {
@@ -3121,9 +3069,6 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 
 
-#if defined(BLOB) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
-#	define SNOW_STATICS_NO_DEPTH_EXPORT
-#endif
 
 // SampleSnowPlanar / SnowParallaxOcclusionPlanar moved to SnowParallax.hlsli
 // (Stage 2 P3): the landscape shell runs the same two-plane blend now.
@@ -3895,8 +3840,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	return r;
 }
 
-#if defined(BLOB) || defined(MELD)
-// Sphere snow shading shared by the direct BLOB draw and the MELD composite:
+#if defined(MELD)
+// Sheet shading for the MELD composite:
 // the shell's own material, sun, point lights and skylighting, once per
 // pixel of whichever surface the caller hands in.
 PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 motionVector, float depth, float4 curClip)
@@ -3932,27 +3877,7 @@ PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 mo
 }
 #endif
 
-#if defined(BLOB)
-#	if defined(BLOB_DEPTH)
-// Meld pass 1: the nearest sphere surface per pixel as |view z|, MIN-blended
-// into the meld depth target with the scene depth read-only.
-float main(BLOB_VS_OUTPUT input) : SV_Target0
-{
-	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
-	clip(worldAbs.z - (input.TopZ - 2.0));
-	return abs(mul(CameraView, float4(input.WorldPos, 1.0)).z);
-}
-#	else
-PS_OUTPUT main(BLOB_VS_OUTPUT input)
-{
-	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
-	// Below the surface the sphere rests on is inside the object.
-	clip(worldAbs.z - (input.TopZ - 2.0));
-	const float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
-	return BlobShade(input.WorldPos, normalize(input.NormalWS), input.Position.xy, motionVector, input.Position.z, input.CurrentClip);
-}
-#	endif
-#elif defined(MELD)
+#if defined(MELD)
 // View-space point at a pixel centre for a stored |view z|. Sign-agnostic:
 // the ray from the inverse projection carries the convention, |z| the scale.
 float3 MeldViewPos(float2 pixel, float z)
@@ -4960,5 +4885,5 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
 }
-#endif  // BLOB
+#endif  // MELD
 #endif

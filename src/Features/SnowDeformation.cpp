@@ -106,12 +106,9 @@
 	X(SkinBreakupAmt) \
 	X(SkinWeldAmt) \
 	X(EnableBlobShell) \
-	X(BlobPolygons) \
 	X(BlobSpacing) \
 	X(BlobSize) \
 	X(BlobSizeNoise) \
-	X(BlobJut) \
-	X(BlobJutNoise) \
 	X(BlobMaskThreshold) \
 	X(BlobLayers) \
 	X(BlobSeed) \
@@ -119,16 +116,13 @@
 	X(BlobEdgeBand) \
 	X(BlobEdgeDrop) \
 	X(BlobRadius) \
-	X(BlobEdgePull) \
-	X(BlobMeld) \
-	X(BlobMeldRadius) \
 	X(BlobMeldDepthRange) \
+	X(BlobMeldSmoothRange) \
 	X(BlobMeldIterations) \
 	X(BlobMeldMaxRadiusPx) \
 	X(BlobMeldSmoothing) \
 	X(BlobMeldAnchor) \
 	X(BlobMeldVerticalRange) \
-	X(BlobMeldFeather) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
@@ -510,6 +504,7 @@ void SnowDeformation::SetupResources()
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
 	blobCB = new ConstantBuffer(ConstantBufferDesc<BlobCB>(), "SnowDeformation::BlobCB");
 	meldCB = new ConstantBuffer(ConstantBufferDesc<MeldCB>(), "SnowDeformation::MeldCB");
+	meldSeedCB = new ConstantBuffer(ConstantBufferDesc<MeldSeedCB>(), "SnowDeformation::MeldSeedCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 
 	CreateHeightFieldResources();

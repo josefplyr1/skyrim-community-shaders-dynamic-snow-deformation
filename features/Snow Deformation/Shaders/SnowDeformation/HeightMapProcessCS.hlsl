@@ -460,30 +460,22 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 }
 
 // ---------------------------------------------------------------------------
-// BLOB SNOW SHELL - placement (Spike 1).
-//
-// One thread per cell of a world-space grid at BlobSpacing; the cell is
-// anchored to ABSOLUTE world coordinates (not to the scrolling window), so a
-// blob's position and size are a pure function of where it is in the world
-// and never crawl as the camera moves. Per peeled layer the cell samples the
-// layer's top and its placement mask - the projected-snow weight rasterised
-// by the capture - and appends one sphere where the mask passes. Radius and
-// how far the sphere sits proud of the surface are hashed per cell; a partial
-// mask thins the sphere rather than dropping it, so a Snow Fill below 100%
-// reads as a soft edge, not a cliff.
-//
-// Output is an instance list plus DrawIndexedInstancedIndirect args; the
-// instance count is bumped atomically here and capped at kBlobCap by BOTH the
-// writer and the vertex shader, so an overflow can only lose blobs, never
-// read past the buffer.
+// SCREEN-SPACE SNOW SHELL, pass 1 of 4: the SEED. For every screen pixel,
+// reconstruct its world position from the scene depth, find the peeled layer
+// whose fresh top matches its height, and read that layer's placement mask
+// (the recolour weight the capture wrote). Where the mask passes, the pixel
+// seeds the field: x = |view z|, y = the snow thickness it should carry
+// (Thickness with world-anchored value noise). BlobMeldCS then rolls a ball
+// of that thickness from every seed (offset surface: interior lifts by the
+// thickness, silhouettes grow a rounded lip), smooths, and the composite
+// shades it once per pixel through the skin material. No spheres.
 // ---------------------------------------------------------------------------
+// Mirror of SnowDeformation.h BlobCB.
 cbuffer BlobCB : register(b1)
 {
-	float BlobSpacing;
-	float BlobSize;
-	float BlobSizeNoise;
-	float BlobJut;
-	float BlobJutNoise;
+	float BlobNoiseScale;     // world units per noise cell
+	float BlobThickness;      // world units the sheet floats in front of the surface
+	float BlobThicknessNoise; // +/- fraction of thickness
 	float BlobMaskThreshold;
 	float BlobSeed;
 	float BlobLayers;
@@ -492,27 +484,31 @@ cbuffer BlobCB : register(b1)
 	float BlobEdgeDrop;
 	float BlobRadius;
 	float BlobRefZ;
-	float BlobEdgePull;
-	float padBlobB2;
-	float padBlobB3;
+	float BlobLayerTol;       // a pixel matches a layer within this height (world units)
+}
+// Mirror of SnowDeformation.h MeldSeedCB.
+cbuffer MeldSeedCB : register(b2)
+{
+	row_major float4x4 SeedProjInverse;
+	row_major float4x4 SeedViewInverse;
+	float4 SeedCamPosAdjust;
+	float2 SeedDims;
+	float2 padSeed;
 }
 
 Texture2D<float2> BlobMask1 : register(t4);
 Texture2D<float2> BlobMask2 : register(t5);
 Texture2D<float2> BlobMask3 : register(t6);
-// Layers 4-6 (Spike 1b): per-frame peels and their masks.
+// Layers 4-6: per-frame peels and their masks.
 Texture2D<float> BlobTop4 : register(t7);
 Texture2D<float> BlobTop5 : register(t8);
 Texture2D<float> BlobTop6 : register(t9);
 Texture2D<float2> BlobMask4 : register(t10);
 Texture2D<float2> BlobMask5 : register(t11);
 Texture2D<float2> BlobMask6 : register(t12);
-// Two float4 per blob: [centre.xyz, radius], [surface top z, layer, mask, 0].
-RWStructuredBuffer<float4> OutBlobs : register(u3);
-// DrawIndexedInstancedIndirect args; dword 1 is the instance count.
-RWByteAddressBuffer OutBlobArgs : register(u4);
-// Mirror of SnowDeformation.h kBlobCap and SnowStaticsShell.hlsl kBlobCap.
-static const uint kBlobCap = 524288;
+Texture2D<float> SeedSceneDepth : register(t13);
+// The meld field: x = |view z| (1e30 empty), y = thickness (0 = no seed).
+RWTexture2D<float2> OutSeed : register(u3);
 
 float BlobHash(int2 cell, uint salt)
 {
@@ -591,85 +587,100 @@ bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band, out float2 d
 	return edge;
 }
 
-[numthreads(8, 8, 1)] void BlobPlaceCS(uint3 dtid
-									   : SV_DispatchThreadID)
+// Smooth value noise over BlobNoiseScale-sized cells, world-anchored so it
+// never swims with the camera.
+float BlobValueNoise(float2 xy, uint salt)
 {
+	const float2 f = frac(xy);
+	const int2 c = int2(floor(xy));
+	const float2 u = f * f * (3.0 - 2.0 * f);
+	const float n00 = BlobHash(c, salt);
+	const float n10 = BlobHash(c + int2(1, 0), salt);
+	const float n01 = BlobHash(c + int2(0, 1), salt);
+	const float n11 = BlobHash(c + int2(1, 1), salt);
+	return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
+}
+
+[numthreads(8, 8, 1)] void BlobSeedCS(uint3 dtid
+									  : SV_DispatchThreadID)
+{
+	const int2 sdims = int2(SeedDims);
+	if (dtid.x >= (uint)sdims.x || dtid.y >= (uint)sdims.y)
+		return;
+	const int2 p = int2(dtid.xy);
+	float2 outv = float2(1e30, 0.0);
+
+	// Scene depth -> view position -> world position.
+	const float d = SeedSceneDepth.Load(int3(p, 0));
+	const float2 ndc = float2((float(p.x) + 0.5) / SeedDims.x * 2.0 - 1.0, 1.0 - (float(p.y) + 0.5) / SeedDims.y * 2.0);
+	float4 v = mul(SeedProjInverse, float4(ndc, d, 1.0));
+	v.xyz /= max(abs(v.w), 1e-8) * sign(v.w);
+	const float z = abs(v.z);
+	[branch] if (z > 1e7 || isnan(z))
+	{
+		OutSeed[p] = outv;
+		return;
+	}
+	const float3 rel = mul(SeedViewInverse, float4(v.xyz, 1.0)).xyz;
+	const float3 worldAbs = rel + SeedCamPosAdjust.xyz;
+
+	// Inside the placement radius and the raster window.
+	const float2 local = worldAbs.xy - HeightWindowCenter;
+	const float radius = clamp(BlobRadius, 64.0, HeightHalfExtent - 8.0);
+	[branch] if (dot(local, local) > radius * radius || abs(local.x) >= HeightHalfExtent - 1.0 || abs(local.y) >= HeightHalfExtent - 1.0)
+	{
+		OutSeed[p] = outv;
+		return;
+	}
 	uint2 dims;
 	InA.GetDimensions(dims.x, dims.y);
-	const float spacing = max(BlobSpacing, 1.0);
-	const float radius = clamp(BlobRadius, 64.0, HeightHalfExtent - 8.0);
-	const uint cells = (uint)ceil(radius * 2.0 / spacing);
-	if (dtid.x >= cells || dtid.y >= cells)
-		return;
-
-	// Absolute world cell: the placement square's lower-left corner floors
-	// onto the spacing lattice, then the thread offsets from there.
-	const int2 cellW = int2(floor((HeightWindowCenter - radius.xx) / spacing)) + int2(dtid.xy);
-	const uint salt = (uint)max(BlobSeed, 0.0);
-	const float2 jitter = float2(BlobHash(cellW, salt + 1u), BlobHash(cellW, salt + 2u));
-	const float2 xy = (float2(cellW) + 0.5 + (jitter - 0.5) * 0.9) * spacing;
-
-	const float2 local = xy - HeightWindowCenter;
-	const float dist = length(local);
-	if (dist >= radius)
-		return;
-	if (abs(local.x) >= HeightHalfExtent - 1.0 || abs(local.y) >= HeightHalfExtent - 1.0)
-		return;
-	// The outer half thins toward nothing, so the cap is never filled by far
-	// cells before near ones get their turn.
-	const float keep = saturate((radius - dist) / (radius * 0.5));
-	if (keep < 1.0 && BlobHash(cellW, salt + 5u) > keep)
-		return;
-	// Same world->texel mapping as TexelWorldXY (v mirrors world +Y).
 	const float texel = HeightHalfExtent * 2.0 / dims.x;
 	const int2 t = int2(
 		clamp(int((local.x + HeightHalfExtent) / texel), 0, int(dims.x) - 1),
 		clamp(int((HeightHalfExtent - local.y) / texel), 0, int(dims.y) - 1));
 
-	const float hSize = BlobHash(cellW, salt + 3u);
-	const float hJut = BlobHash(cellW, salt + 4u);
+	// The layer whose fresh top is this pixel's surface.
 	const uint layers = (uint)clamp(BlobLayers, 1.0, 6.0);
-	const float threshold = saturate(BlobMaskThreshold);
-	const uint band = max(1u, (uint)round(BlobEdgeBand / texel));
-	const bool edgesOnly = BlobEdgesOnly > 0.5;
-
+	float bestDz = BlobLayerTol;
+	float bestMask = 0.0;
+	float bestTop = 0.0;
+	bool found = false;
 	for (uint L = 0; L < layers; L++)
 	{
-		// Height from the mask target's fresh channel, never the accumulated
-		// top: that one decays 0.5/frame while the game culls the surface's
-		// draw, and the sphere would ride the ghost down.
 		const float2 mk = BlobLayerMask(L, t);
-		const float m = mk.x;
-		if (m < threshold || mk.y <= 0.0)
+		if (mk.y <= 0.0)
 			continue;
 		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
-		float2 dropDir;
-		float dropStep;
-		if (edgesOnly && !BlobIsEdge(t, int2(dims), top, layers, band, dropDir, dropStep))
-			continue;
-		// Edge Pull: slide the sphere from its cell toward the lip it found,
-		// which sits between this texel's centre and the dropped neighbour's.
-		float2 xyL = xy;
-		[branch] if (edgesOnly && BlobEdgePull > 0.0 && dropStep > 0.0)
+		const float dz = abs(top - worldAbs.z);
+		if (dz < bestDz)
 		{
-			const float2 lip = TexelWorldXY(uint2(t), dims) + dropDir * ((dropStep - 0.5) * texel);
-			xyL = lerp(xy, lip, saturate(BlobEdgePull));
-		}
-		// Partial mask (the Snow Fill's soft edge, thin authored paint) thins
-		// the sphere toward 60% rather than switching it off.
-		const float maskT = saturate((m - threshold) / max(1.0 - threshold, 1e-3));
-		const float r = max(BlobSize * (1.0 + BlobSizeNoise * (hSize * 2.0 - 1.0)) * lerp(0.6, 1.0, maskT), 0.25);
-		// Jut 0.5 = centre on the surface (a hemisphere shows); 1 = the whole
-		// sphere resting on top; toward 0 it sinks in.
-		const float jut = saturate(BlobJut * (1.0 + BlobJutNoise * (hJut * 2.0 - 1.0)));
-		const float centreZ = top + r * (2.0 * jut - 1.0);
-
-		uint idx;
-		OutBlobArgs.InterlockedAdd(4, 1u, idx);
-		if (idx < kBlobCap)
-		{
-			OutBlobs[idx * 2] = float4(xyL, centreZ, r);
-			OutBlobs[idx * 2 + 1] = float4(top, float(L), m, 0.0);
+			bestDz = dz;
+			bestMask = mk.x;
+			bestTop = top;
+			found = true;
 		}
 	}
+	const float threshold = saturate(BlobMaskThreshold);
+	[branch] if (!found || bestMask < threshold)
+	{
+		OutSeed[p] = outv;
+		return;
+	}
+	[branch] if (BlobEdgesOnly > 0.5)
+	{
+		const uint band = max(1u, (uint)round(BlobEdgeBand / texel));
+		float2 dropDir;
+		float dropStep;
+		if (!BlobIsEdge(t, int2(dims), bestTop, layers, band, dropDir, dropStep))
+		{
+			OutSeed[p] = outv;
+			return;
+		}
+	}
+	// Thickness: the slider, undulated by world-anchored noise, thinned toward
+	// the mask threshold so partial paint fades rather than cuts.
+	const float maskT = saturate((bestMask - threshold) / max(1.0 - threshold, 1e-3));
+	const float n = BlobValueNoise(worldAbs.xy / max(BlobNoiseScale, 1.0), (uint)max(BlobSeed, 0.0) + 7u) * 2.0 - 1.0;
+	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * n) * lerp(0.6, 1.0, maskT), 0.05);
+	OutSeed[p] = float2(z, thickness);
 }

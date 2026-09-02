@@ -493,55 +493,43 @@ public:
 		bool LayeredObjectDrape = false;
 		/** @brief B0 spike (BLOB-SNOW-PLAN R1): with the drape on, object columns take the smooth-union BLOB field - one hemisphere per raster texel, hashed radius, soft-max union - instead of the dome. The snow's silhouette stops being the object's. Debug toggle, not serialised. */
 		bool BlobObjectSnow = false;
-		/** @brief BLOB SNOW SHELL (Spike 1, Josef's literal-spheres design): instanced unit spheres placed on every peeled layer wherever the capture's projected-snow mask passes, shaded with the shell's snow material. Nothing else in the object path is touched. Off by default. */
+		/** @brief SCREEN-SPACE SNOW SHELL: every screen pixel whose surface matches a peeled layer with the projected-snow mask above Placement Threshold seeds a field; a ball of the pixel's Thickness is rolled from every seed toward the camera (offset surface with rounded lips), smoothed, and composited once per pixel through the skin material. No spheres. Off by default. */
 		bool EnableBlobShell = false;
-		/** @brief Icosphere subdivision level, 0-3 = 20 / 80 / 320 / 1280 triangles per sphere. The mesh is rebuilt when this changes. */
-		int BlobPolygons = 0;
-		/** @brief World units between blob centres (the placement lattice). Josef's "spacing" crank. */
-		float BlobSpacing = 2.0f;
-		/** @brief Blob radius in world units before noise and mask thinning. Josef's "size" crank. */
-		float BlobSize = 3.0f;
-		/** @brief +/- fraction of BlobSize hashed per blob. */
+		/** @brief World units per cell of the thickness noise. */
+		float BlobSpacing = 16.0f;
+		/** @brief How far the sheet floats in front of the surface, world units. */
+		float BlobSize = 4.0f;
+		/** @brief +/- fraction of Thickness from world-anchored value noise. */
 		float BlobSizeNoise = 0.5f;
-		/** @brief How far a sphere sits proud of its surface: 0.5 = centre on the surface (hemisphere), 1 = whole sphere resting on top. */
-		float BlobJut = 0.75f;
-		/** @brief +/- fraction of BlobJut hashed per blob. */
-		float BlobJutNoise = 0.25f;
-		/** @brief Projected-snow mask value a cell must reach before a blob is placed there; between this and 1 the blob thins toward 60% size. Tracks the recolour's own threshold and Snow Fill through the mask itself. */
+		/** @brief The mask (up-facing weight x painted snow) a pixel's layer must reach; on architecture 0.5 is about a 60 degree cutoff. Between this and 1 the thickness thins toward 60%. */
 		float BlobMaskThreshold = 0.5f;
-		/** @brief How many peeled layers receive blobs (1 = top surface only, 3 = also under cover, 4-6 = three more peels, each a full re-rasterization of every captured object per frame). */
+		/** @brief How many peeled layers a pixel may match (4-6 = three more peels, each a full re-rasterization). */
 		int BlobLayers = 6;
-		/** @brief Placement hash salt. */
+		/** @brief Noise hash salt. */
 		int BlobSeed = 0;
-		/** @brief Spike 1b: place spheres only within BlobEdgeBand of a drop in their plane (a plank end, a roof edge, the base of a wall). The fitted skin keeps the interior. */
-		bool BlobEdgesOnly = true;
+		/** @brief Seed only within BlobEdgeBand of a drop in the surface's plane. */
+		bool BlobEdgesOnly = false;
 		/** @brief World units back from an edge that still count as the edge (rounded up to whole raster texels, 4 units each). */
 		float BlobEdgeBand = 6.0f;
 		/** @brief A neighbouring texel with no layer within this many units of the plane's height makes an edge. */
 		float BlobEdgeDrop = 15.0f;
-		/** @brief Placement radius around the player (world units). The outer half thins toward nothing, so distant cells never take the instance cap from nearby ones. */
+		/** @brief Seeding radius around the player, world units. */
 		float BlobRadius = 2048.0f;
-		/** @brief How far an edge sphere slides from its cell toward the lip it found: 0 = stays put, 1 = sits on the lip. Concentrates without adding spheres. */
-		float BlobEdgePull = 0.5f;
-		/** @brief Screen-space meld: spheres draw depth-only, a ball of BlobMeldRadius is rolled over that depth (morphological closing, anchored to the scene), and the result composites once per pixel as one surface. */
-		bool BlobMeld = false;
-		/** @brief Closing ball radius in world units: valleys narrower than twice this fill in. */
-		float BlobMeldRadius = 4.0f;
-		/** @brief Smoothing pass: depth difference (units) beyond which two pixels do not average. */
-		float BlobMeldDepthRange = 64.0f;
-		/** @brief Optional bilateral smoothing radius after the closing, world units; 0 = off. */
+		/** @brief Dilation gate: two pixels further apart along the view than this are different surfaces and never roll into each other. */
+		float BlobMeldDepthRange = 16.0f;
+		/** @brief Smoothing gate: depth difference beyond which two pixels do not average. */
+		float BlobMeldSmoothRange = 64.0f;
+		/** @brief Bilateral smoothing radius after the dilation, world units; 0 = off. */
 		float BlobMeldSmoothing = 2.0f;
-		/** @brief Scene depth seeds the closing, so the sheet runs down from a sphere onto the shell or plank beneath it. */
+		/** @brief The scene depth gates the dilation where there is no seed, so a lip never grows across a far background but does drape onto a near plank face. */
 		bool BlobMeldAnchor = false;
-		/** @brief Two surfaces further apart in world height than this do not meld (a rail's spheres stay off the plank below). 0 = no limit. */
+		/** @brief Two surfaces further apart in world height than this do not meld. 0 = no limit. */
 		float BlobMeldVerticalRange = 12.0f;
-		/** @brief The sheet's edge fillets down onto a surface close behind it over this many world units, so it meets the landscape shell without a step. 0 = hard edge. */
-		float BlobMeldFeather = 4.0f;
-		/** @brief Blur passes (each is one horizontal + one vertical). */
+		/** @brief Smoothing passes (each is one horizontal + one vertical). */
 		int BlobMeldIterations = 2;
-		/** @brief Pixel cap on the projected kernel, for cost up close. */
+		/** @brief Pixel cap on the projected kernels, for cost up close. */
 		int BlobMeldMaxRadiusPx = 48;
-		/** @brief Meld composite debug: 0 off, 1 blurred depth, 2 reconstructed normals. Not serialised. */
+		/** @brief Composite debug: 0 off, 1 field depth, 2 reconstructed normals. Not serialised. */
 		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
@@ -1785,65 +1773,29 @@ public:
 	/** @brief P4: one Jacobi settling iteration over a cone depth field (ObjectConeDiffuseCS). */
 	ID3D11ComputeShader* objectConeDiffuseCS = nullptr;
 
-	// ---- Blob Snow Shell (Spike 1) ----
-	/** @brief Per-layer projected-snow placement masks (R8, cleared each frame, MAX-blended as RT3 of the capture and each peel). */
+	// ---- Screen-space snow shell ----
+	/** @brief Per-layer placement masks (R16G16: mask, fresh top; cleared each frame, MAX-blended as RT3 of the capture and each peel). */
 	Texture2D* blobMask[6] = {};
-	/** @brief Layers 4-6 tops (Spike 1b): three more PEEL2 passes, rebuilt from scratch each frame (not scrolled), only while BlobLayers > 3. */
+	/** @brief Layers 4-6 tops: three more PEEL2 passes, rebuilt from scratch each frame (not scrolled), only while BlobLayers > 3. */
 	Texture2D* blobTop[3] = {};
-	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobPlaceCS decode against it. */
+	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobSeedCS decode against it. */
 	float blobRefZ = 0.0f;
-	// ---- screen-space meld ----
-	/** @brief The meld field (x = |view z|, y = coverage / sheet), ping-pong for the separable passes; screen-sized, rebuilt on resize. */
+	/** @brief The field (x = |view z|, y = thickness / sheet), ping-pong for the separable passes; screen-sized, rebuilt on resize. */
 	Texture2D* blobMeldDepth[2] = {};
 	uint32_t blobMeldW = 0;
 	uint32_t blobMeldH = 0;
-	winrt::com_ptr<ID3D11BlendState> blobMeldMinBlend;
-	/** @brief The game's depth-stencil state with depth writes off, for the sphere depth pass; rebuilt when the source state changes. */
-	winrt::com_ptr<ID3D11DepthStencilState> blobMeldNoWriteDSS;
-	ID3D11DepthStencilState* blobMeldNoWriteSource = nullptr;
-	ID3D11PixelShader* blobDepthPS = nullptr;
 	ID3D11VertexShader* meldVS = nullptr;
 	ID3D11PixelShader* meldPS = nullptr;
+	ID3D11ComputeShader* blobSeedCS = nullptr;
 	ID3D11ComputeShader* meldDilateCS = nullptr;
-	ID3D11ComputeShader* meldErodeCS = nullptr;
 	ID3D11ComputeShader* meldSmoothCS = nullptr;
 	ID3D11ComputeShader* meldSheetCS = nullptr;
-	ID3D11ComputeShader* meldFeatherHCS = nullptr;
-	ID3D11ComputeShader* meldFeatherVCS = nullptr;
-	ConstantBuffer* meldCB = nullptr;
-	/** @brief (Re)creates the two meld depth targets at the main render target's size. */
-	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
-	/** @brief The three meld passes: sphere depth (MIN, scene depth read-only), bilateral blur, full-screen composite. */
-	void DrawBlobShellMelded();
-	/** @brief Instance list written by BlobPlaceCS: two float4 per blob. */
-	winrt::com_ptr<ID3D11Buffer> blobInstanceBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> blobInstanceUAV;
-	winrt::com_ptr<ID3D11ShaderResourceView> blobInstanceSRV;
-	/** @brief DrawIndexedInstancedIndirect args; dword 1 is bumped by the placement. */
-	winrt::com_ptr<ID3D11Buffer> blobArgsBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> blobArgsUAV;
-	/** @brief Staging copy of the indirect args, read one frame late so the menu can show how many spheres were placed against the cap. */
-	winrt::com_ptr<ID3D11Buffer> blobArgsStaging;
-	uint32_t blobPlacedLastFrame = 0;
-	/** @brief The radius placement actually used: shrinks while last frame's count exceeded the budget, grows back slowly, so far cells give way before near ones. */
-	float blobEffectiveRadius = 0.0f;
-	winrt::com_ptr<ID3D11Buffer> blobSphereVB;
-	winrt::com_ptr<ID3D11Buffer> blobSphereIB;
-	uint32_t blobSphereIndexCount = 0;
-	int blobSphereLevel = -1;
-	winrt::com_ptr<ID3D11InputLayout> blobIL;
-	winrt::com_ptr<ID3D11RasterizerState> blobRasterState;
-	ID3D11VertexShader* blobVS = nullptr;
-	ID3D11PixelShader* blobPS = nullptr;
-	ID3D11ComputeShader* blobPlaceCS = nullptr;
 	ConstantBuffer* blobCB = nullptr;
-	/** @brief Mirror of kBlobCap in HeightMapProcessCS.hlsl and SnowStaticsShell.hlsl. */
-	static constexpr uint32_t kBlobCap = 524288;
-	/** @brief (Re)builds the unit icosphere VB/IB at Settings::BlobPolygons; no-op when the level is unchanged. */
-	void EnsureBlobSphereMesh();
-	/** @brief Runs BlobPlaceCS over the finished layer tops and masks; end of RenderObjectHeightMap. */
-	void DispatchBlobPlacement();
-	/** @brief Draws the instance list into the G-buffer; end of DrawCapturedStatics. */
+	ConstantBuffer* meldCB = nullptr;
+	ConstantBuffer* meldSeedCB = nullptr;
+	/** @brief (Re)creates the two field targets at the main render target's size. */
+	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
+	/** @brief Seed from the scene depth, dilate, smooth, sheet test, composite; end of DrawCapturedStatics. */
 	void DrawBlobShell();
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
@@ -1881,14 +1833,12 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 
-	/** @brief Blob Snow Shell placement constants (BlobPlaceCS, b1). Layout must match BlobCB in HeightMapProcessCS.hlsl. */
+	/** @brief Screen-space snow seed constants (BlobSeedCS, b1). Layout must match BlobCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) BlobCB
 	{
-		float Spacing;
-		float Size;
-		float SizeNoise;
-		float Jut;
-		float JutNoise;
+		float NoiseScale;
+		float Thickness;
+		float ThicknessNoise;
 		float MaskThreshold;
 		float Seed;
 		float Layers;
@@ -1897,12 +1847,10 @@ public:
 		float EdgeDrop;
 		float Radius;
 		float RefZ;
-		float EdgePull;
-		float padB2;
-		float padB3;
+		float LayerTol;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);
-	/** @brief Screen-space meld constants (BlobMeldCS b0, MELD composite b2). Layout must match MeldCB in BlobMeldCS.hlsl and SnowStaticsShell.hlsl. */
+	/** @brief Field-pass constants (BlobMeldCS b0, MELD composite b2). Layout must match MeldCB in BlobMeldCS.hlsl and SnowStaticsShell.hlsl. */
 	struct alignas(16) MeldCB
 	{
 		Matrix Proj;
@@ -1910,8 +1858,8 @@ public:
 		Matrix ViewInverse;
 		float2 Dims;
 		float2 Dir;
-		float RadiusWorld;
 		float DepthRange;
+		float SmoothRange;
 		float MaxRadiusPx;
 		float Debug;
 		float Smoothing;
@@ -1919,11 +1867,21 @@ public:
 		float FootBias;
 		float Seed;
 		float VerticalRange;
-		float Feather;
+		float padM1;
 		float padM2;
 		float padM3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(MeldCB);
+	/** @brief Seed-pass constants (BlobSeedCS b2). Layout must match MeldSeedCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) MeldSeedCB
+	{
+		Matrix ProjInverse;
+		Matrix ViewInverse;
+		float4 CamPosAdjust;
+		float2 Dims;
+		float2 pad;
+	};
+	STATIC_ASSERT_ALIGNAS_16(MeldSeedCB);
 	ConstantBuffer* heightProcessCB = nullptr;
 
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----

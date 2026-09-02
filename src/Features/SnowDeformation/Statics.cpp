@@ -762,7 +762,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		              loweredName.find("catwalk") != std::string::npos;
 		// Blob Snow Shell: a drift or snow pile has no bare edge to round.
 		driftFamily = loweredName.find("drift") != std::string::npos ||
-		              loweredName.find("snowpile") != std::string::npos;
+		              loweredName.find("snowpile") != std::string::npos ||
+		              loweredName.find("roadchunk") != std::string::npos;
 		if (!driftFamily)
 			if (auto* driftMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
 				if (auto driftTextures = driftMaterial->textureSet.get())
@@ -1034,38 +1035,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
 		}
 	}
-	// Blob Snow Shell (BLOB define): instanced spheres. Its own input layout,
-	// built from its own VS blob - the Bethesda vertex layouts do not apply.
-	if (!blobVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "BLOB"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &blobVS)))
-				Util::SetResourceName(blobVS, "SnowDeformation::BlobShellVS");
-			const D3D11_INPUT_ELEMENT_DESC blobLayout[] = {
-				{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 }
-			};
-			if (SUCCEEDED(globals::d3d::device->CreateInputLayout(blobLayout, 1, blob->GetBufferPointer(), blob->GetBufferSize(), blobIL.put())))
-				Util::SetResourceName(blobIL.get(), "SnowDeformation::BlobShellIL");
-		}
-	}
-	if (!blobPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "BLOB", ehfDefine, iblDefine));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &blobPS)))
-				Util::SetResourceName(blobPS, "SnowDeformation::BlobShellPS");
-		}
-	}
-	// Screen-space meld: sphere depth (pass 1), full-screen composite (pass 3).
-	if (!blobDepthPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "BLOB", "BLOB_DEPTH"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &blobDepthPS)))
-				Util::SetResourceName(blobDepthPS, "SnowDeformation::BlobDepthPS");
-		}
-	}
 	if (!meldVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "MELD"));
@@ -1086,16 +1055,10 @@ bool SnowDeformation::EnsureStaticsShaders()
 		constexpr auto meldPath = L"Data\\Shaders\\SnowDeformation\\BlobMeldCS.hlsl";
 		if (!meldDilateCS)
 			meldDilateCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldDilateCS"));
-		if (!meldErodeCS)
-			meldErodeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldErodeCS"));
 		if (!meldSmoothCS)
 			meldSmoothCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSmoothCS"));
 		if (!meldSheetCS)
 			meldSheetCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSheetCS"));
-		if (!meldFeatherHCS)
-			meldFeatherHCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldFeatherHCS"));
-		if (!meldFeatherVCS)
-			meldFeatherVCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldFeatherVCS"));
 	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1186,8 +1149,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectSkyOpenCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectSkyOpenCS"));
 	if (!objectConeDiffuseCS)
 		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
-	if (!blobPlaceCS)
-		blobPlaceCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "BlobPlaceCS"));
+	if (!blobSeedCS)
+		blobSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "BlobSeedCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1328,248 +1291,10 @@ void SnowDeformation::CreateHeightFieldResources()
 		blobTop[0] = makeHeightTexture("SnowDeformation::BlobTop4");
 		blobTop[1] = makeHeightTexture("SnowDeformation::BlobTop5");
 		blobTop[2] = makeHeightTexture("SnowDeformation::BlobTop6");
-
-		// Instance list: two float4 per blob.
-		D3D11_BUFFER_DESC instDesc{};
-		instDesc.ByteWidth = kBlobCap * 2 * sizeof(float4);
-		instDesc.Usage = D3D11_USAGE_DEFAULT;
-		instDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		instDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		instDesc.StructureByteStride = sizeof(float4);
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&instDesc, nullptr, blobInstanceBuffer.put()));
-		Util::SetResourceName(blobInstanceBuffer.get(), "SnowDeformation::BlobInstances");
-		D3D11_SHADER_RESOURCE_VIEW_DESC instSrvDesc{};
-		instSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		instSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		instSrvDesc.Buffer.NumElements = kBlobCap * 2;
-		DX::ThrowIfFailed(globals::d3d::device->CreateShaderResourceView(blobInstanceBuffer.get(), &instSrvDesc, blobInstanceSRV.put()));
-		Util::SetResourceName(blobInstanceSRV.get(), "SnowDeformation::BlobInstances SRV");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC instUavDesc{};
-		instUavDesc.Format = DXGI_FORMAT_UNKNOWN;
-		instUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		instUavDesc.Buffer.NumElements = kBlobCap * 2;
-		DX::ThrowIfFailed(globals::d3d::device->CreateUnorderedAccessView(blobInstanceBuffer.get(), &instUavDesc, blobInstanceUAV.put()));
-		Util::SetResourceName(blobInstanceUAV.get(), "SnowDeformation::BlobInstances UAV");
-
-		// DrawIndexedInstancedIndirect args: five dwords, raw UAV so the
-		// placement can InterlockedAdd the instance count in place.
-		D3D11_BUFFER_DESC argsDesc{};
-		argsDesc.ByteWidth = 5 * sizeof(uint32_t);
-		argsDesc.Usage = D3D11_USAGE_DEFAULT;
-		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&argsDesc, nullptr, blobArgsBuffer.put()));
-		Util::SetResourceName(blobArgsBuffer.get(), "SnowDeformation::BlobArgs");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUavDesc{};
-		argsUavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		argsUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		argsUavDesc.Buffer.NumElements = 5;
-		argsUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		DX::ThrowIfFailed(globals::d3d::device->CreateUnorderedAccessView(blobArgsBuffer.get(), &argsUavDesc, blobArgsUAV.put()));
-		Util::SetResourceName(blobArgsUAV.get(), "SnowDeformation::BlobArgs UAV");
-		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = 5 * sizeof(uint32_t);
-		stagingDesc.Usage = D3D11_USAGE_STAGING;
-		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&stagingDesc, nullptr, blobArgsStaging.put()));
-		Util::SetResourceName(blobArgsStaging.get(), "SnowDeformation::BlobArgs staging");
-
-		// Spheres are convex; both faces drawn so the generated winding
-		// cannot matter, and depth hides the back anyway.
-		D3D11_RASTERIZER_DESC blobRaster{};
-		blobRaster.FillMode = D3D11_FILL_SOLID;
-		blobRaster.CullMode = D3D11_CULL_NONE;
-		blobRaster.DepthClipEnable = TRUE;
-		DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&blobRaster, blobRasterState.put()));
-		Util::SetResourceName(blobRasterState.get(), "SnowDeformation::BlobRaster");
-
-		// Meld pass 1: nearest sphere wins per pixel.
-		D3D11_BLEND_DESC meldBlend{};
-		meldBlend.RenderTarget[0].BlendEnable = TRUE;
-		meldBlend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
-		meldBlend.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
-		meldBlend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_MIN;
-		meldBlend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
-		meldBlend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
-		meldBlend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_MIN;
-		meldBlend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
-		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&meldBlend, blobMeldMinBlend.put()));
-		Util::SetResourceName(blobMeldMinBlend.get(), "SnowDeformation::BlobMeldMinBlend");
 	}
 }
 
-void SnowDeformation::EnsureBlobSphereMesh()
-{
-	const int level = std::clamp(settings.BlobPolygons, 0, 3);
-	if (level == blobSphereLevel && blobSphereVB && blobSphereIB)
-		return;
-	blobSphereVB = nullptr;
-	blobSphereIB = nullptr;
-	blobSphereIndexCount = 0;
 
-	// Unit icosphere: the icosahedron, midpoint-subdivided `level` times with
-	// every new vertex pushed back onto the sphere. 12/42/162/642 vertices,
-	// 20/80/320/1280 triangles.
-	const float t = (1.0f + std::sqrt(5.0f)) * 0.5f;
-	std::vector<float3> verts = {
-		{ -1, t, 0 }, { 1, t, 0 }, { -1, -t, 0 }, { 1, -t, 0 },
-		{ 0, -1, t }, { 0, 1, t }, { 0, -1, -t }, { 0, 1, -t },
-		{ t, 0, -1 }, { t, 0, 1 }, { -t, 0, -1 }, { -t, 0, 1 }
-	};
-	for (auto& v : verts) {
-		const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
-		v = { v.x / len, v.y / len, v.z / len };
-	}
-	std::vector<uint32_t> tris = {
-		0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11,
-		1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7, 1, 8,
-		3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9,
-		4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9, 8, 1
-	};
-	for (int pass = 0; pass < level; pass++) {
-		std::map<uint64_t, uint32_t> midpoints;
-		auto midpoint = [&](uint32_t a, uint32_t b) {
-			const uint64_t key = (uint64_t(std::min(a, b)) << 32) | std::max(a, b);
-			auto it = midpoints.find(key);
-			if (it != midpoints.end())
-				return it->second;
-			const float3 m = { verts[a].x + verts[b].x, verts[a].y + verts[b].y, verts[a].z + verts[b].z };
-			const float len = std::sqrt(m.x * m.x + m.y * m.y + m.z * m.z);
-			verts.push_back({ m.x / len, m.y / len, m.z / len });
-			const uint32_t index = uint32_t(verts.size() - 1);
-			midpoints.emplace(key, index);
-			return index;
-		};
-		std::vector<uint32_t> next;
-		next.reserve(tris.size() * 4);
-		for (size_t i = 0; i + 2 < tris.size(); i += 3) {
-			const uint32_t a = tris[i], b = tris[i + 1], c = tris[i + 2];
-			const uint32_t ab = midpoint(a, b), bc = midpoint(b, c), ca = midpoint(c, a);
-			const uint32_t quad[12] = { a, ab, ca, b, bc, ab, c, ca, bc, ab, bc, ca };
-			next.insert(next.end(), std::begin(quad), std::end(quad));
-		}
-		tris.swap(next);
-	}
-	std::vector<uint16_t> indices16(tris.size());
-	for (size_t i = 0; i < tris.size(); i++)
-		indices16[i] = uint16_t(tris[i]);
-
-	D3D11_BUFFER_DESC vbDesc{};
-	vbDesc.ByteWidth = UINT(verts.size() * sizeof(float3));
-	vbDesc.Usage = D3D11_USAGE_IMMUTABLE;
-	vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-	D3D11_SUBRESOURCE_DATA vbInit{ verts.data(), 0, 0 };
-	DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&vbDesc, &vbInit, blobSphereVB.put()));
-	Util::SetResourceName(blobSphereVB.get(), "SnowDeformation::BlobSphereVB");
-	D3D11_BUFFER_DESC ibDesc{};
-	ibDesc.ByteWidth = UINT(indices16.size() * sizeof(uint16_t));
-	ibDesc.Usage = D3D11_USAGE_IMMUTABLE;
-	ibDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-	D3D11_SUBRESOURCE_DATA ibInit{ indices16.data(), 0, 0 };
-	DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&ibDesc, &ibInit, blobSphereIB.put()));
-	Util::SetResourceName(blobSphereIB.get(), "SnowDeformation::BlobSphereIB");
-	blobSphereIndexCount = uint32_t(indices16.size());
-	blobSphereLevel = level;
-}
-
-void SnowDeformation::DispatchBlobPlacement()
-{
-	if (!settings.EnableBlobShell || !blobPlaceCS || !blobInstanceUAV || !blobArgsUAV || !blobArgsBuffer || !blobCB)
-		return;
-	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent])
-		return;
-	for (int i = 0; i < 6; i++)
-		if (!blobMask[i] || (i < 3 && !blobTop[i]))
-			return;
-	auto context = globals::d3d::context;
-	EnsureBlobSphereMesh();
-	if (!blobSphereIndexCount)
-		return;
-
-	// Last frame's count, one frame late and never stalling (the draw copied
-	// the args into the staging buffer after consuming them).
-	if (blobArgsStaging) {
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		if (SUCCEEDED(context->Map(blobArgsStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
-			blobPlacedLastFrame = static_cast<const uint32_t*>(mapped.pData)[1];
-			context->Unmap(blobArgsStaging.get(), 0);
-		}
-	}
-	// Args reset every frame: index count from the mesh, instance count 0,
-	// the placement bumps dword 1.
-	const uint32_t args[5] = { blobSphereIndexCount, 0, 0, 0, 0 };
-	context->UpdateSubresource(blobArgsBuffer.get(), 0, nullptr, args, 0, 0);
-
-	BlobCB cb{};
-	cb.Spacing = std::clamp(settings.BlobSpacing, 1.0f, 256.0f);
-	cb.Size = std::clamp(settings.BlobSize, 0.5f, 256.0f);
-	cb.SizeNoise = std::clamp(settings.BlobSizeNoise, 0.0f, 1.0f);
-	cb.Jut = std::clamp(settings.BlobJut, 0.0f, 1.0f);
-	cb.JutNoise = std::clamp(settings.BlobJutNoise, 0.0f, 1.0f);
-	cb.MaskThreshold = std::clamp(settings.BlobMaskThreshold, 0.0f, 1.0f);
-	cb.Seed = float(std::max(settings.BlobSeed, 0));
-	cb.Layers = float(std::clamp(settings.BlobLayers, 1, 6));
-	cb.EdgesOnly = settings.BlobEdgesOnly ? 1.0f : 0.0f;
-	cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
-	cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
-	// Nearest first under the cap: Placement Radius is a maximum. While last
-	// frame's count exceeded the budget the radius shrinks by the area ratio
-	// (count scales with area), and it grows back a little per frame once
-	// there is room, so the far edge thins away instead of near spheres
-	// being dropped at random.
-	const float maxRadius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
-	if (blobEffectiveRadius <= 0.0f)
-		blobEffectiveRadius = maxRadius;
-	const float budget = float(kBlobCap) * 0.9f;
-	if (float(blobPlacedLastFrame) > budget)
-		blobEffectiveRadius *= std::sqrt(budget / float(blobPlacedLastFrame));
-	else if (float(blobPlacedLastFrame) < budget * 0.8f)
-		blobEffectiveRadius *= 1.02f;
-	blobEffectiveRadius = std::clamp(blobEffectiveRadius, 64.0f, maxRadius);
-	cb.Radius = blobEffectiveRadius;
-	cb.RefZ = blobRefZ;
-	cb.EdgePull = std::clamp(settings.BlobEdgePull, 0.0f, 1.0f);
-	blobCB->Update(cb);
-
-	// The masks were render targets a moment ago; nothing may still hold
-	// them. The capture unbinds its RTs, but the UAV slots of the cone chain
-	// are cleared here explicitly so t0/t1/t3 cannot alias a bound UAV.
-	ID3D11UnorderedAccessView* nullUAV3[3] = { nullptr, nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
-	ID3D11Buffer* cbs[2] = { heightProcessCB->CB(), blobCB->CB() };
-	context->CSSetConstantBuffers(0, 2, cbs);
-	ID3D11ShaderResourceView* srvs[13] = {
-		heightTopRaw[heightCurrent]->srv.get(),
-		heightTop2Raw[heightCurrent]->srv.get(),
-		nullptr,
-		heightTop3Raw[heightCurrent]->srv.get(),
-		blobMask[0]->srv.get(),
-		blobMask[1]->srv.get(),
-		blobMask[2]->srv.get(),
-		blobTop[0]->srv.get(),
-		blobTop[1]->srv.get(),
-		blobTop[2]->srv.get(),
-		blobMask[3]->srv.get(),
-		blobMask[4]->srv.get(),
-		blobMask[5]->srv.get()
-	};
-	context->CSSetShaderResources(0, 13, srvs);
-	ID3D11UnorderedAccessView* uavs[2] = { blobInstanceUAV.get(), blobArgsUAV.get() };
-	context->CSSetUnorderedAccessViews(3, 2, uavs, nullptr);
-	context->CSSetShader(blobPlaceCS, nullptr, 0);
-	const uint32_t cells = uint32_t(std::ceil(cb.Radius * 2.0f / cb.Spacing));
-	globals::profiler->BeginPass("SnowDeformation::BlobPlace");
-	context->Dispatch((cells + 7) / 8, (cells + 7) / 8, 1);
-	globals::profiler->EndPass();
-
-	ID3D11UnorderedAccessView* nullUAV2[2] = { nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(3, 2, nullUAV2, nullptr);
-	ID3D11ShaderResourceView* nullSRV13[13] = {};
-	context->CSSetShaderResources(0, 13, nullSRV13);
-	ID3D11Buffer* nullCB1 = nullptr;
-	context->CSSetConstantBuffers(1, 1, &nullCB1);
-	context->CSSetShader(nullptr, nullptr, 0);
-}
 
 void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
 {
@@ -1609,8 +1334,16 @@ void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
 	blobMeldH = a_height;
 }
 
-void SnowDeformation::DrawBlobShellMelded()
+
+void SnowDeformation::DrawBlobShell()
 {
+	if (!settings.EnableBlobShell || !blobSeedCS || !meldVS || !meldPS || !meldDilateCS || !meldSmoothCS || !meldSheetCS || !blobCB || !meldCB || !meldSeedCB)
+		return;
+	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent] || !heightProcessCB)
+		return;
+	for (int i = 0; i < 6; i++)
+		if (!blobMask[i] || (i < 3 && !blobTop[i]))
+			return;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	const auto& fb = globals::game::frameBufferCached;
@@ -1630,85 +1363,78 @@ void SnowDeformation::DrawBlobShellMelded()
 	ID3D11RenderTargetView* prevRTVs[8] = {};
 	ID3D11DepthStencilView* prevDSV = nullptr;
 	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
-	ID3D11DepthStencilState* prevDSS = nullptr;
-	UINT prevStencilRef = 0;
-	context->OMGetDepthStencilState(&prevDSS, &prevStencilRef);
-	ID3D11BlendState* prevBlend = nullptr;
-	float prevBlendFactor[4] = {};
-	UINT prevSampleMask = 0xFFFFFFFF;
-	context->OMGetBlendState(&prevBlend, prevBlendFactor, &prevSampleMask);
-	if (prevDSS && prevDSS != blobMeldNoWriteSource) {
-		D3D11_DEPTH_STENCIL_DESC dsDesc{};
-		prevDSS->GetDesc(&dsDesc);
-		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		dsDesc.StencilEnable = FALSE;
-		blobMeldNoWriteDSS = nullptr;
-		if (SUCCEEDED(globals::d3d::device->CreateDepthStencilState(&dsDesc, blobMeldNoWriteDSS.put()))) {
-			Util::SetResourceName(blobMeldNoWriteDSS.get(), "SnowDeformation::BlobMeldNoWriteDSS");
-			blobMeldNoWriteSource = prevDSS;
-		}
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
+
+	globals::profiler->BeginPass("SnowDeformation::ScreenSpaceSnow");
+	// Pass 1: seed from the scene depth through the layer masks.
+	{
+		BlobCB cb{};
+		cb.NoiseScale = std::clamp(settings.BlobSpacing, 1.0f, 512.0f);
+		cb.Thickness = std::clamp(settings.BlobSize, 0.25f, 64.0f);
+		cb.ThicknessNoise = std::clamp(settings.BlobSizeNoise, 0.0f, 1.0f);
+		cb.MaskThreshold = std::clamp(settings.BlobMaskThreshold, 0.0f, 1.0f);
+		cb.Seed = float(std::max(settings.BlobSeed, 0));
+		cb.Layers = float(std::clamp(settings.BlobLayers, 1, 6));
+		cb.EdgesOnly = settings.BlobEdgesOnly ? 1.0f : 0.0f;
+		cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
+		cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
+		cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
+		cb.RefZ = blobRefZ;
+		cb.LayerTol = 8.0f;
+		blobCB->Update(cb);
+		MeldSeedCB sc{};
+		sc.ProjInverse = fb.GetCameraProjInverse();
+		sc.ViewInverse = fb.GetCameraViewInverse();
+		sc.CamPosAdjust = fb.GetCameraPosAdjust();
+		sc.Dims = { float(dw), float(dh) };
+		meldSeedCB->Update(sc);
+		ID3D11Buffer* cbs[3] = { heightProcessCB->CB(), blobCB->CB(), meldSeedCB->CB() };
+		context->CSSetConstantBuffers(0, 3, cbs);
+		ID3D11ShaderResourceView* srvs[14] = {
+			heightTopRaw[heightCurrent]->srv.get(),
+			heightTop2Raw[heightCurrent]->srv.get(),
+			nullptr,
+			heightTop3Raw[heightCurrent]->srv.get(),
+			blobMask[0]->srv.get(),
+			blobMask[1]->srv.get(),
+			blobMask[2]->srv.get(),
+			blobTop[0]->srv.get(),
+			blobTop[1]->srv.get(),
+			blobTop[2]->srv.get(),
+			blobMask[3]->srv.get(),
+			blobMask[4]->srv.get(),
+			blobMask[5]->srv.get(),
+			sceneDepthSRV
+		};
+		context->CSSetShaderResources(0, 14, srvs);
+		ID3D11UnorderedAccessView* seedUAV = blobMeldDepth[0]->uav.get();
+		context->CSSetUnorderedAccessViews(3, 1, &seedUAV, nullptr);
+		context->CSSetShader(blobSeedCS, nullptr, 0);
+		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
+		ID3D11UnorderedAccessView* nullUAV = nullptr;
+		context->CSSetUnorderedAccessViews(3, 1, &nullUAV, nullptr);
+		ID3D11ShaderResourceView* nullSRVs[14] = {};
+		context->CSSetShaderResources(0, 14, nullSRVs);
+		ID3D11Buffer* nullCBs[3] = {};
+		context->CSSetConstantBuffers(0, 3, nullCBs);
 	}
 
-	globals::profiler->BeginPass("SnowDeformation::BlobMeld");
-	// Pass 1: sphere depth, MIN per pixel, z-tested against the scene without
-	// writing it.
-	const float farClear[4] = { 1e30f, 1e30f, 1e30f, 1e30f };
-	context->ClearRenderTargetView(blobMeldDepth[0]->rtv.get(), farClear);
-	ID3D11RenderTargetView* depthRT = blobMeldDepth[0]->rtv.get();
-	context->OMSetRenderTargets(1, &depthRT, prevDSV);
-	if (blobMeldNoWriteDSS)
-		context->OMSetDepthStencilState(blobMeldNoWriteDSS.get(), prevStencilRef);
-	context->OMSetBlendState(blobMeldMinBlend.get(), nullptr, 0xFFFFFFFF);
-	context->VSSetShader(blobVS, nullptr, 0);
-	context->HSSetShader(nullptr, nullptr, 0);
-	context->DSSetShader(nullptr, nullptr, 0);
-	context->PSSetShader(blobDepthPS, nullptr, 0);
-	ID3D11Buffer* cb0 = shellCB->CB();
-	context->VSSetConstantBuffers(0, 1, &cb0);
-	context->PSSetConstantBuffers(0, 1, &cb0);
-	context->IASetInputLayout(blobIL.get());
-	const UINT stride = sizeof(float3);
-	const UINT offset = 0;
-	ID3D11Buffer* vb = blobSphereVB.get();
-	context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-	context->IASetIndexBuffer(blobSphereIB.get(), DXGI_FORMAT_R16_UINT, 0);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	ID3D11ShaderResourceView* instanceSRV = blobInstanceSRV.get();
-	context->VSSetShaderResources(32, 1, &instanceSRV);
-	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
-	context->RSGetState(prevRaster.put());
-	context->RSSetState(blobRasterState.get());
-	context->DrawIndexedInstancedIndirect(blobArgsBuffer.get(), 0);
-	if (blobArgsStaging)
-		context->CopyResource(blobArgsStaging.get(), blobArgsBuffer.get());
-	ID3D11ShaderResourceView* nullSRV = nullptr;
-	context->VSSetShaderResources(32, 1, &nullSRV);
-	ID3D11Buffer* nullVB = nullptr;
-	const UINT zero = 0;
-	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
-	context->IASetInputLayout(nullptr);
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-
-	// Pass 2: the field passes. Ball closing (dilate H/V, erode H/V) seeded
-	// with the scene depth as anchor, optional smoothing, then the sheet
-	// test. Ping-pong; `src` ends on the buffer the composite reads.
+	// Passes 2-4: dilate by each seed's thickness (H, V), smooth, sheet test.
 	MeldCB m{};
 	m.Proj = fb.GetCameraProj();
 	m.ProjInverse = fb.GetCameraProjInverse();
 	m.ViewInverse = fb.GetCameraViewInverse();
 	m.Dims = { float(dw), float(dh) };
-	m.RadiusWorld = std::clamp(settings.BlobMeldRadius, 0.5f, 64.0f);
 	m.DepthRange = std::clamp(settings.BlobMeldDepthRange, 0.5f, 256.0f);
+	m.SmoothRange = std::clamp(settings.BlobMeldSmoothRange, 0.5f, 256.0f);
 	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
 	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
 	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
 	m.Anchor = settings.BlobMeldAnchor ? 1.0f : 0.0f;
 	m.FootBias = 0.1f;
 	m.VerticalRange = std::clamp(settings.BlobMeldVerticalRange, 0.0f, 256.0f);
-	m.Feather = std::clamp(settings.BlobMeldFeather, 0.0f, 64.0f);
-	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
 	int src = 0;
 	auto fieldPass = [&](ID3D11ComputeShader* a_cs, float a_dirX, float a_dirY, float a_seed) {
 		m.Dir = { a_dirX, a_dirY };
@@ -1730,8 +1456,6 @@ void SnowDeformation::DrawBlobShellMelded()
 	};
 	fieldPass(meldDilateCS, 1.0f, 0.0f, 1.0f);
 	fieldPass(meldDilateCS, 0.0f, 1.0f, 0.0f);
-	fieldPass(meldErodeCS, 1.0f, 0.0f, 0.0f);
-	fieldPass(meldErodeCS, 0.0f, 1.0f, 0.0f);
 	if (m.Smoothing > 0.0f) {
 		const int iterations = std::clamp(settings.BlobMeldIterations, 1, 4);
 		for (int it = 0; it < iterations; it++) {
@@ -1740,31 +1464,36 @@ void SnowDeformation::DrawBlobShellMelded()
 		}
 	}
 	fieldPass(meldSheetCS, 1.0f, 0.0f, 0.0f);
-	if (m.Feather > 0.0f) {
-		fieldPass(meldFeatherHCS, 1.0f, 0.0f, 0.0f);
-		fieldPass(meldFeatherVCS, 0.0f, 1.0f, 0.0f);
-	}
 	ID3D11Buffer* nullCsCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCsCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	// Pass 3: composite as one surface into the game's targets, depth written.
+	// Composite as one surface into the game's targets, depth written.
 	context->OMSetRenderTargets(8, prevRTVs, prevDSV);
-	context->OMSetDepthStencilState(prevDSS, prevStencilRef);
-	context->OMSetBlendState(prevBlend, prevBlendFactor, prevSampleMask);
 	context->VSSetShader(meldVS, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(meldPS, nullptr, 0);
+	ID3D11Buffer* cb0 = shellCB->CB();
+	context->VSSetConstantBuffers(0, 1, &cb0);
+	context->PSSetConstantBuffers(0, 1, &cb0);
 	m.Dir = { 0.0f, 0.0f };
 	meldCB->Update(m);
 	ID3D11Buffer* mcb2 = meldCB->CB();
 	context->PSSetConstantBuffers(2, 1, &mcb2);
 	ID3D11ShaderResourceView* meldSRV = blobMeldDepth[src]->srv.get();
 	context->PSSetShaderResources(33, 1, &meldSRV);
+	context->IASetInputLayout(nullptr);
+	ID3D11Buffer* nullVB = nullptr;
+	const UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	context->Draw(3, 0);
+	ID3D11ShaderResourceView* nullSRV = nullptr;
 	context->PSSetShaderResources(33, 1, &nullSRV);
 	ID3D11Buffer* nullCB2 = nullptr;
 	context->PSSetConstantBuffers(2, 1, &nullCB2);
-	context->RSSetState(prevRaster.get());
 	globals::profiler->EndPass();
 
 	for (auto* rtv : prevRTVs)
@@ -1772,57 +1501,6 @@ void SnowDeformation::DrawBlobShellMelded()
 			rtv->Release();
 	if (prevDSV)
 		prevDSV->Release();
-	if (prevDSS)
-		prevDSS->Release();
-	if (prevBlend)
-		prevBlend->Release();
-}
-
-void SnowDeformation::DrawBlobShell()
-{
-	if (!settings.EnableBlobShell || !blobVS || !blobPS || !blobIL || !blobSphereVB || !blobSphereIB || !blobArgsBuffer || !blobInstanceSRV || !blobRasterState)
-		return;
-	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldDilateCS && meldErodeCS && meldSmoothCS && meldSheetCS && meldFeatherHCS && meldFeatherVCS && meldCB && blobMeldMinBlend) {
-		DrawBlobShellMelded();
-		return;
-	}
-	auto context = globals::d3d::context;
-	globals::profiler->BeginPass("SnowDeformation::BlobShell");
-	context->VSSetShader(blobVS, nullptr, 0);
-	context->HSSetShader(nullptr, nullptr, 0);
-	context->DSSetShader(nullptr, nullptr, 0);
-	context->PSSetShader(blobPS, nullptr, 0);
-	// ShellCB (b0) explicitly for both stages; the skin inherits it from the
-	// landscape pass, but this draw should not depend on that ordering.
-	ID3D11Buffer* cb0 = shellCB->CB();
-	context->VSSetConstantBuffers(0, 1, &cb0);
-	context->PSSetConstantBuffers(0, 1, &cb0);
-	context->IASetInputLayout(blobIL.get());
-	const UINT stride = sizeof(float3);
-	const UINT offset = 0;
-	ID3D11Buffer* vb = blobSphereVB.get();
-	context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-	context->IASetIndexBuffer(blobSphereIB.get(), DXGI_FORMAT_R16_UINT, 0);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	ID3D11ShaderResourceView* instanceSRV = blobInstanceSRV.get();
-	context->VSSetShaderResources(32, 1, &instanceSRV);
-	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
-	context->RSGetState(prevRaster.put());
-	context->RSSetState(blobRasterState.get());
-
-	context->DrawIndexedInstancedIndirect(blobArgsBuffer.get(), 0);
-	if (blobArgsStaging)
-		context->CopyResource(blobArgsStaging.get(), blobArgsBuffer.get());
-
-	context->RSSetState(prevRaster.get());
-	ID3D11ShaderResourceView* nullSRV = nullptr;
-	context->VSSetShaderResources(32, 1, &nullSRV);
-	ID3D11Buffer* nullVB = nullptr;
-	const UINT zero = 0;
-	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
-	context->IASetInputLayout(nullptr);
-	globals::profiler->EndPass();
 }
 
 void SnowDeformation::RenderObjectHeightMap()
@@ -2623,8 +2301,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetShaderResources(2, 2, nullTailSRVs);
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
-
-	DispatchBlobPlacement();
 
 	// Height-field probe (Debugging Options): the seven object maps read
 	// back at the player's texel. Copy this frame, map LAST frame's copy
