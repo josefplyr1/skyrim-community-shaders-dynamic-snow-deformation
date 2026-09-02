@@ -1387,24 +1387,34 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox("Actor mesh contact [S1 SPIKE] (actors carve by skinned mesh, not bones)", &debugActorContact);
 		ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
 		if (debugContactView) {
-			ImGui::Text("Red = contact reaching into the layer (carve fraction), green = hovering above the surface, black = nothing drawn, blue cross = window centre. %.0f m across, %g units per texel, +Y up. Yellow box = the player's world bound, mapped the way the carve pass maps it.",
-				2.0f * kContactHalfExtent / kUnitsPerMeter, 2.0f * kContactHalfExtent / (float)kContactDim);
-			const ImVec2 viewTopLeft = ImGui::GetCursorScreenPos();
+			constexpr float viewHalf = 192.0f;
+			ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
+				2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
 			if (contactViewSRV) {
-				ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f });
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-					if (auto* root = player->Get3D(false)) {
-						const auto& bound = root->worldBound;
-						const float scale = 512.0f / (2.0f * kContactHalfExtent);
-						auto toX = [&](float a_wx) { return viewTopLeft.x + (a_wx - (contactCenter.x - kContactHalfExtent)) * scale; };
-						auto toY = [&](float a_wy) { return viewTopLeft.y + ((contactCenter.y + kContactHalfExtent) - a_wy) * scale; };
-						ImGui::GetWindowDrawList()->AddRect(
-							{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
-							{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
-							IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
-						ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | field centre (%.0f, %.0f)",
-							bound.center.x, bound.center.y, bound.radius, contactCenter.x, contactCenter.y);
+				const float scale = 512.0f / (2.0f * viewHalf);
+				const float2 center = contactViewCenter;
+				auto drawHalf = [&](float a_v0, float a_v1) {
+					const ImVec2 topLeft = ImGui::GetCursorScreenPos();
+					ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 1.0f, a_v1 });
+					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						if (auto* root = player->Get3D(false)) {
+							const auto& bound = root->worldBound;
+							auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
+							auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
+							ImGui::GetWindowDrawList()->AddRect(
+								{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
+								{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
+								IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+						}
 					}
+				};
+				drawHalf(0.0f, 0.5f);
+				drawHalf(0.5f, 1.0f);
+				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					if (auto* root = player->Get3D(false))
+						ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units",
+							root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, contactCenter.x, contactCenter.y,
+							contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
 				}
 			} else {
 				ImGui::Text("(no field this frame)");

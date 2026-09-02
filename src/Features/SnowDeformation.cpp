@@ -1058,6 +1058,15 @@ void SnowDeformation::Prepass()
 		perFrameData.TerrainTexelSize = kShellVertexSpacing;
 		perFrameData.TerrainDim = float(kShellWindowDim);
 	}
+	perFrameData.ViewCenter = contactCenter;
+	if (debugContactView) {
+		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+			if (auto* root = player->Get3D(false))
+				perFrameData.ViewCenter = { root->worldBound.center.x, root->worldBound.center.y };
+		}
+	}
+	contactViewCenter = perFrameData.ViewCenter;
+	contactViewTexelSize = perFrameData.TexelSize;
 
 	// Marked here, consumed by NEXT frame's roll: the map these stamps are
 	// about to be written into is the one that frame will be copying.

@@ -251,6 +251,9 @@ cbuffer PerFrame : register(b0)
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	float TerrainDim;
+	// Debug view crop centre (the player), world XY.
+	float2 ViewCenter;
+	float2 ViewPad;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -1167,29 +1170,58 @@ bool StampTexel(uint2 phys)
 	}
 }
 
-// Contact field view: what the rasterizer wrote this frame, as the carve
-// pass reads it. Red = contact reaching into the layer (the carve fraction),
-// green = hovering above the surface, black = nothing drawn. Own dispatch;
-// the RGBA8 view rides the ActivityView slot.
+// Contact field view, cropped +-VIEW_HALF units around the player at 512 px
+// a side. Top half: the field as the carve pass samples it (red = carve
+// fraction, green = hovering). Bottom half: the deformation map over the
+// SAME ground (red = carve depth, faint blue = map texel edges). The two
+// crops share one world mapping, so a trench wider than its silhouette is
+// visible as such. Own dispatch; the RGBA8 view rides the ActivityView slot.
+#define VIEW_HALF 192.0
+#define VIEW_PX 512
 [numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
 										 : SV_DispatchThreadID) {
 	const uint dim = (uint)ContactDim;
-	if (dim == 0 || any(DTid.xy >= dim))
+	if (dim == 0 || any(DTid.xy >= uint2(VIEW_PX, 2 * VIEW_PX)))
 		return;
+	const bool mapHalf = DTid.y >= VIEW_PX;
+	const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
+	float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);
+	float2 worldPos = ViewCenter + rel * VIEW_HALF;
 	float4 color = float4(0.0, 0.0, 0.0, 1.0);
-	const float contact = ContactHeight.Load(int3(DTid.xy, 0));
-	[branch] if (contact < CONTACT_NONE * 0.5)
+	[branch] if (!mapHalf)
 	{
-		// Inverse of the raster mapping: row 0 is the window's +Y edge.
-		float2 rel = float2((DTid.x + 0.5) / dim * 2.0 - 1.0, 1.0 - (DTid.y + 0.5) / dim * 2.0);
-		float2 worldPos = ContactCenter + rel * ContactHalfExtent;
-		float2 groundLayer = TerrainGroundLayer(worldPos);
-		float above = (contact - groundLayer.x) / groundLayer.y;
-		float carve = saturate(1.0 - above);
-		color = float4(carve, saturate(above), 0.0, 1.0);
+		// Same texel selection as StampTexel, minus its 3x3 MIN.
+		float2 crel = (worldPos - ContactCenter) / ContactHalfExtent;
+		[branch] if (all(abs(crel) < 1.0))
+		{
+			int2 ct = int2((crel.x * 0.5 + 0.5) * ContactDim, (0.5 - crel.y * 0.5) * ContactDim);
+			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
+			[branch] if (contact < CONTACT_NONE * 0.5)
+			{
+				float2 groundLayer = TerrainGroundLayer(worldPos);
+				float above = (contact - groundLayer.x) / groundLayer.y;
+				color = float4(saturate(1.0 - above), saturate(above), 0.0, 1.0);
+			}
+		}
 	}
-	// A one-texel cross at the window centre, so orientation reads at a glance.
-	if (DTid.x == dim / 2 || DTid.y == dim / 2)
+	else
+	{
+		uint2 dims;
+		CurrentDeformation.GetDimensions(dims.x, dims.y);
+		float2 t = (worldPos - WindowOrigin) / TexelSize;
+		int2 logical = int2(floor(t));
+		[branch] if (all(logical >= 0) && all(logical < int2(dims)))
+		{
+			uint2 phys = uint2((logical + MapOrigin) & (int2(dims) - 1));
+			const float depth = CurrentDeformation[phys].x;
+			color = float4(depth, depth * 0.25, 0.0, 1.0);
+			float2 f = frac(t);
+			if (any(f < 0.08))
+				color.b = 0.3;
+		}
+	}
+	// One-pixel cross at the crop centre (the player's bound centre).
+	if (px.x == VIEW_PX / 2 || px.y == VIEW_PX / 2)
 		color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
 	ActivityView[DTid.xy] = color;
 }

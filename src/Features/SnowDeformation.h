@@ -744,6 +744,9 @@ public:
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		float TerrainDim;
+		/** @brief Debug view crop centre (the player's bound centre), world XY. */
+		float2 ViewCenter;
+		float2 ViewPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -2145,6 +2148,9 @@ public:
 	uint contactSkinDrawsLast = 0;
 	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
 	uint32_t contactYawTraceFrames = 0;
+	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */
+	float2 contactViewCenter{};
+	float contactViewTexelSize = 0.0f;
 	float contactYawTraceAngle = 0.0f;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);
