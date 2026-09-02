@@ -1248,7 +1248,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	std::unordered_map<uint32_t, RE::NiPoint3> currentPropPositions;
 	const auto tes = RE::TES::GetSingleton();
 	auto* playerRef = RE::PlayerCharacter::GetSingleton();
-	const bool fullScan = propScanFrame == 0 || propPrevPositions.empty();
+	// Hazards present means a wall or rune spell is live: those spawn a
+	// SERIES of hazard references as they spread, and a segment placed
+	// between scans is invisible until the next one - the wall's growing
+	// edge flickered. Scan every frame while any hazard stands; spell
+	// combat is brief, and the throttle holds for the rest of play.
+	const bool fullScan = propScanFrame == 0 || propPrevPositions.empty() || !propScanHazards.empty();
 	propScanFrame = (propScanFrame + 1) % kPropScanInterval;
 	auto considerProp = [&](RE::TESObjectREFR* a_ref) {
 		auto* base = a_ref->GetBaseObject();

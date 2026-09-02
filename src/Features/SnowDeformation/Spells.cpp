@@ -497,6 +497,10 @@ RE::BSEventNotifyControl SnowDeformation::SpellCastSink::ProcessEvent(
 	auto* spell = form ? form->As<RE::MagicItem>() : nullptr;
 	if (!spell)
 		return RE::BSEventNotifyControl::kContinue;
+	// A cast may place a hazard this frame; the throttled reference scan
+	// would otherwise miss it for up to an interval. A hint, not a
+	// synchronised write: the render thread reads it next frame either way.
+	feature.propScanFrame = 0;
 
 	// A SHOUT ploughs the ground in front of the shouter, and nothing else in
 	// the feature can express that: a cone is not a capsule, and the breaths
