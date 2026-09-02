@@ -23,7 +23,7 @@ cbuffer MeldCB : register(b0)
 	float MeldFootBias;   // sheet must float this far in front of the scene
 	float MeldSeed;       // 1 on the first dilation (scene anchors are read)
 	float MeldVerticalRange;  // surfaces further apart in world height do not meld (0 = off)
-	float padMeld1;
+	float MeldTaper;          // thickness tapers to zero over this many world units at the sheet's boundary
 	float padMeld2;
 	float padMeld3;
 }
@@ -176,5 +176,76 @@ float MeldWorldZ(int2 p, float z)
 		const float sz = MeldSceneZ(p);
 		sheet = (c.x < sz - MeldFootBias) ? 1.0 : 0.0;
 	}
+	// Provenance view: keep the thickness (it encodes the mask) for the composite.
+	[flatten] if (MeldDebug > 2.5 && sheet > 0.5)
+		sheet = c.y;
 	OutField[p] = float2(c.x, sheet);
 }
+
+// Edge taper, pass 1 of 2 (horizontal), BEFORE the dilation: for each seed
+// the distance in pixels to the nearest non-seed pixel along the row, up to
+// the taper width at this depth (F + 1 = none in reach). y packs it above the
+// thickness: y = d * 100 + thickness (thickness < 100).
+[numthreads(8, 8, 1)] void MeldTaperHCS(uint3 dtid
+										: SV_DispatchThreadID)
+{
+	const int2 dims = int2(MeldDims);
+	if (dtid.x >= (uint)dims.x || dtid.y >= (uint)dims.y)
+		return;
+	const int2 p = int2(dtid.xy);
+	const float2 c = InField[p];
+	if (c.x > 1e29 || c.y <= 0.0)
+	{
+		OutField[p] = float2(c.x, 0.0);
+		return;
+	}
+	const float pw = MeldPixelWorld(c.x);
+	const int F = clamp((int)ceil(MeldTaper / max(pw, 1e-4)), 0, (int)MeldMaxRadiusPx);
+	float d = float(F + 1);
+	for (int i = 1; i <= F; i++)
+	{
+		const float a = InField[clamp(p + int2(i, 0), int2(0, 0), dims - 1)].y;
+		const float b = InField[clamp(p - int2(i, 0), int2(0, 0), dims - 1)].y;
+		if (a <= 0.0 || b <= 0.0)
+		{
+			d = float(i);
+			break;
+		}
+	}
+	OutField[p] = float2(c.x, d * 100.0 + min(c.y, 99.0));
+}
+
+// Edge taper, pass 2 of 2 (vertical): Chebyshev distance to the boundary
+// from the row distances, then the thickness ramps to zero toward it, so the
+// rolled sheet descends into the surface instead of ending in a wall.
+[numthreads(8, 8, 1)] void MeldTaperVCS(uint3 dtid
+										: SV_DispatchThreadID)
+{
+	const int2 dims = int2(MeldDims);
+	if (dtid.x >= (uint)dims.x || dtid.y >= (uint)dims.y)
+		return;
+	const int2 p = int2(dtid.xy);
+	const float2 c = InField[p];
+	if (c.x > 1e29 || c.y <= 0.0)
+	{
+		OutField[p] = float2(c.x, 0.0);
+		return;
+	}
+	const float pw = MeldPixelWorld(c.x);
+	const int F = clamp((int)ceil(MeldTaper / max(pw, 1e-4)), 0, (int)MeldMaxRadiusPx);
+	float d = floor(c.y / 100.0);
+	const float thickness = c.y - d * 100.0;
+	for (int j = 1; j <= F; j++)
+	{
+		const float u = InField[clamp(p + int2(0, j), int2(0, 0), dims - 1)].y;
+		const float v = InField[clamp(p - int2(0, j), int2(0, 0), dims - 1)].y;
+		const float du = u <= 0.0 ? float(j) : max(float(j), floor(u / 100.0));
+		const float dv = v <= 0.0 ? float(j) : max(float(j), floor(v / 100.0));
+		d = min(d, min(du, dv));
+	}
+	float t = 1.0;
+	[flatten] if (F > 0 && d <= float(F))
+		t = smoothstep(0.0, 1.0, saturate((d - 0.5) / float(F)));
+	OutField[p] = float2(c.x, max(thickness * t, 0.02));
+}
+

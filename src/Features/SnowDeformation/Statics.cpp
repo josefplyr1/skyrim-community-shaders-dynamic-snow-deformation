@@ -1070,6 +1070,10 @@ bool SnowDeformation::EnsureStaticsShaders()
 			meldSmoothCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSmoothCS"));
 		if (!meldSheetCS)
 			meldSheetCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSheetCS"));
+		if (!meldTaperHCS)
+			meldTaperHCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldTaperHCS"));
+		if (!meldTaperVCS)
+			meldTaperVCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldTaperVCS"));
 	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1348,7 +1352,7 @@ void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
 
 void SnowDeformation::DrawBlobShell()
 {
-	if (!settings.EnableBlobShell || !blobSeedCS || !meldVS || !meldPS || !meldDilateCS || !meldSmoothCS || !meldSheetCS || !blobCB || !meldCB || !meldSeedCB)
+	if (!settings.EnableBlobShell || !blobSeedCS || !meldVS || !meldPS || !meldDilateCS || !meldSmoothCS || !meldSheetCS || !meldTaperHCS || !meldTaperVCS || !blobCB || !meldCB || !meldSeedCB)
 		return;
 	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent] || !heightProcessCB)
 		return;
@@ -1404,6 +1408,7 @@ void SnowDeformation::DrawBlobShell()
 		sc.ViewInverse = fb.GetCameraViewInverse();
 		sc.CamPosAdjust = fb.GetCameraPosAdjust();
 		sc.Dims = { float(dw), float(dh) };
+		sc.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 3));
 		meldSeedCB->Update(sc);
 		ID3D11Buffer* cbs[3] = { heightProcessCB->CB(), blobCB->CB(), meldSeedCB->CB() };
 		context->CSSetConstantBuffers(0, 3, cbs);
@@ -1445,7 +1450,8 @@ void SnowDeformation::DrawBlobShell()
 	m.DepthRange = std::clamp(settings.BlobMeldDepthRange, 0.5f, 256.0f);
 	m.SmoothRange = std::clamp(settings.BlobMeldSmoothRange, 0.5f, 256.0f);
 	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
-	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
+	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 3));
+	m.Taper = std::clamp(settings.BlobMeldTaper, 0.0f, 64.0f);
 	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
 	m.Anchor = 0.0f;
 	m.FootBias = 0.1f;
@@ -1469,6 +1475,10 @@ void SnowDeformation::DrawBlobShell()
 		context->CSSetUnorderedAccessViews(0, 1, &nullOut, nullptr);
 		src = 1 - src;
 	};
+	if (m.Taper > 0.0f) {
+		fieldPass(meldTaperHCS, 1.0f, 0.0f, 0.0f);
+		fieldPass(meldTaperVCS, 0.0f, 1.0f, 0.0f);
+	}
 	fieldPass(meldDilateCS, 1.0f, 0.0f, 1.0f);
 	fieldPass(meldDilateCS, 0.0f, 1.0f, 0.0f);
 	if (m.Smoothing > 0.0f) {

@@ -117,6 +117,7 @@
 	X(BlobRadius) \
 	X(BlobMeldDepthRange) \
 	X(BlobMeldSmoothRange) \
+	X(BlobMeldTaper) \
 	X(BlobMeldIterations) \
 	X(BlobMeldMaxRadiusPx) \
 	X(BlobMeldSmoothing) \

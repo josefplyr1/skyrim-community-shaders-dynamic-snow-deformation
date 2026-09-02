@@ -675,7 +675,7 @@ cbuffer MeldCB : register(b2)
 	float MeldFootBias;
 	float MeldSeed;
 	float MeldVerticalRange;
-	float padMeld1;
+	float MeldTaper;
 	float padMeld2;
 	float padMeld3;
 }
@@ -3930,7 +3930,10 @@ PS_OUTPUT main(MELD_VS_OUTPUT input)
 	PS_OUTPUT psout = BlobShade(rel, normalWS, pixel, motionVector, depth, cur);
 	[branch] if (MeldDebug > 0.5)
 	{
-		const float3 dbg = MeldDebug > 1.5 ? normalWS * 0.5 + 0.5 : saturate(z / 4096.0).xxx;
+		// 1 depth, 2 normals, 3 provenance: the mask the seed read (dark =
+		// mask 0, an excluded draw; bright = fully painted).
+		const float3 dbg = MeldDebug > 2.5 ? saturate((md.y - 1.0) / 10.0).xxx :
+		                                     (MeldDebug > 1.5 ? normalWS * 0.5 + 0.5 : saturate(z / 4096.0).xxx);
 		psout.Diffuse = float4(dbg, 1.0);
 		psout.Albedo = float4(dbg, 1.0);
 	}

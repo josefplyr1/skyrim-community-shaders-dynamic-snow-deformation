@@ -493,7 +493,8 @@ cbuffer MeldSeedCB : register(b2)
 	row_major float4x4 SeedViewInverse;
 	float4 SeedCamPosAdjust;
 	float2 SeedDims;
-	float2 padSeed;
+	float SeedDebug;  // 3 = thickness encodes the mask the seed read (provenance view)
+	float padSeed;
 }
 
 Texture2D<float2> BlobMask1 : register(t4);
@@ -653,8 +654,23 @@ float SeedTexelMask(int2 t, float worldZ, uint layers, out bool present, out flo
 	const float m01 = SeedTexelMask(t0 + int2(0, 1), worldAbs.z, layers, p01, r01);
 	const float m11 = SeedTexelMask(t0 + int2(1, 1), worldAbs.z, layers, p11, r11);
 	const float mask = lerp(lerp(m00, m10, fw.x), lerp(m01, m11, fw.x), fw.y);
-	const float threshold = saturate(BlobMaskThreshold);
+	// Border Noise moves the BOUNDARY, not the surface: world-anchored fine
+	// noise jitters the paint threshold and the slope cutoff per position,
+	// and bites into the footprint edge, so where the sheet begins is an
+	// irregular line rather than the raster's or the cutoff's clean one.
+	const float cell = max(BlobNoiseScale, 1.0);
+	const float nBroad = BlobValueNoise(worldAbs.xy / cell, 7u) * 2.0 - 1.0;
+	const float nFine = BlobValueNoise(worldAbs.xy / (cell * 0.25) + 31.7, 13u) * 2.0 - 1.0;
+	const float threshold = saturate(BlobMaskThreshold + BlobBorderNoise * 0.25 * nFine);
 	[branch] if (mask < threshold)
+	{
+		OutSeed[p] = empty;
+		return;
+	}
+	// Footprint edge (within one raster texel of where the surface ends at
+	// this height): the noise eats into it.
+	const bool border = !(p00 && p10 && p01 && p11);
+	[branch] if (border && nFine > 1.0 - 2.0 * BlobBorderNoise)
 	{
 		OutSeed[p] = empty;
 		return;
@@ -663,22 +679,19 @@ float SeedTexelMask(int2 t, float worldZ, uint layers, out bool present, out flo
 	// object limit, the mountain/cliff family the rock limit. Neither reads
 	// any other slope setting.
 	const float rock = (fw.x < 0.5) ? ((fw.y < 0.5) ? r00 : r01) : ((fw.y < 0.5) ? r10 : r11);
-	const float slopeNz = rock > 0.5 ? BlobRockMaxSlopeNz : BlobMaxSlopeNz;
+	const float slopeNz = saturate((rock > 0.5 ? BlobRockMaxSlopeNz : BlobMaxSlopeNz) + BlobBorderNoise * 0.12 * nFine);
 	const float slopeW = smoothstep(slopeNz - 0.05, slopeNz + 0.05, nz);
 	[branch] if (slopeW <= 0.0)
 	{
 		OutSeed[p] = empty;
 		return;
 	}
-	// Border = within one raster texel of the surface's footprint at this
-	// height; only there does the fine noise apply.
-	const float borderW = (p00 && p10 && p01 && p11) ? 0.0 : 1.0;
-	// Thickness: the slider, undulated by broad world-anchored noise, the fine
-	// noise at the border, tapered toward the mask threshold and the slope.
+	// Thickness: the slider, undulated by broad world-anchored noise, tapered
+	// toward the paint threshold and the slope cutoff.
 	const float maskT = saturate((mask - threshold) / max(1.0 - threshold, 1e-3));
-	const float cell = max(BlobNoiseScale, 1.0);
-	const float nBroad = BlobValueNoise(worldAbs.xy / cell, 7u) * 2.0 - 1.0;
-	const float nFine = BlobValueNoise(worldAbs.xy / (cell * 0.25) + 31.7, 13u) * 2.0 - 1.0;
-	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * nBroad + BlobBorderNoise * nFine * borderW) * lerp(0.6, 1.0, maskT) * slopeW, 0.05);
+	float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * nBroad) * lerp(0.6, 1.0, maskT) * slopeW, 0.05);
+	// Provenance view: the thickness carries the mask (1 = mask 0, 11 = full).
+	[flatten] if (SeedDebug > 2.5)
+		thickness = 1.0 + mask * 10.0;
 	OutSeed[p] = float2(z, thickness);
 }

@@ -507,7 +507,7 @@ public:
 		int BlobLayers = 6;
 		/** @brief Steepest surface (degrees from horizontal) that takes the sheet, from the pixel's own depth-reconstructed normal. Independent of every other slope setting. */
 		float BlobMaxSlopeDeg = 62.0f;
-		/** @brief Fine thickness noise (a quarter of Noise Scale) applied only within one raster texel of the surface's footprint, +/- fraction of Thickness: breaks up the lip outline. */
+		/** @brief How much world-anchored fine noise moves the sheet's BOUNDARY: it jitters the paint threshold and the slope cutoff per position and bites into the footprint edge. */
 		float BlobBorderNoise = 0.25f;
 		/** @brief Max Slope for the mountain/cliff family (the same name match the fitted shell's Rock Max Slope uses). */
 		float BlobRockMaxSlopeDeg = 80.0f;
@@ -525,7 +525,9 @@ public:
 		int BlobMeldIterations = 1;
 		/** @brief Pixel cap on the projected kernels, for cost up close. */
 		int BlobMeldMaxRadiusPx = 64;
-		/** @brief Composite debug: 0 off, 1 field depth, 2 reconstructed normals. Not serialised. */
+		/** @brief The thickness tapers to zero over this many world units at the sheet's boundary, before the roll, so the sheet descends into the surface instead of ending in a wall. 0 = hard edge. */
+		float BlobMeldTaper = 8.0f;
+		/** @brief Composite debug: 0 off, 1 field depth, 2 reconstructed normals, 3 provenance (the mask the seed read). Not serialised. */
 		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
@@ -1787,6 +1789,8 @@ public:
 	ID3D11ComputeShader* meldDilateCS = nullptr;
 	ID3D11ComputeShader* meldSmoothCS = nullptr;
 	ID3D11ComputeShader* meldSheetCS = nullptr;
+	ID3D11ComputeShader* meldTaperHCS = nullptr;
+	ID3D11ComputeShader* meldTaperVCS = nullptr;
 	ConstantBuffer* blobCB = nullptr;
 	ConstantBuffer* meldCB = nullptr;
 	ConstantBuffer* meldSeedCB = nullptr;
@@ -1864,7 +1868,7 @@ public:
 		float FootBias;
 		float Seed;
 		float VerticalRange;
-		float padM1;
+		float Taper;
 		float padM2;
 		float padM3;
 	};
@@ -1876,7 +1880,8 @@ public:
 		Matrix ViewInverse;
 		float4 CamPosAdjust;
 		float2 Dims;
-		float2 pad;
+		float Debug;
+		float pad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(MeldSeedCB);
 	ConstantBuffer* heightProcessCB = nullptr;
