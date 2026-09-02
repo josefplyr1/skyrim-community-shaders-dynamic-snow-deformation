@@ -310,6 +310,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("blob_edge_drop"), "Edge Drop"), &settings.BlobEdgeDrop, 2.0f, 64.0f, "%.0f units");
 			if (auto _ttBlobEd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_edge_drop_tooltip"), "How far the surface must fall away (or a wall rise) beside a spot for it to count as an edge. Lower catches small steps between planks; higher keeps only real drops."));
+			ImGui::SliderFloat(T(TKEY("blob_edge_pull"), "Edge Pull"), &settings.BlobEdgePull, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobEp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_edge_pull_tooltip"), "Slides each edge sphere from its cell toward the lip it found. 0 leaves them spread across the Edge Band, 1 stacks them on the lip. Concentrates without adding spheres; to have fewer, lower Edge Band (4 = one raster texel)."));
 			ImGui::SliderInt(T(TKEY("blob_polygons"), "Polygons"), &settings.BlobPolygons, 0, 3);
 			if (auto _ttBlobPoly = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_polygons_tooltip"), "Sphere detail: 0 = 20 triangles, 1 = 80, 2 = 320, 3 = 1280. The meld pass will hide the facets, so 0 is the default."));
@@ -345,6 +348,26 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderInt(T(TKEY("blob_seed"), "Seed"), &settings.BlobSeed, 0, 99);
 			if (auto _ttBlobSeed = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_seed_tooltip"), "Reseeds the per-sphere jitter, size and jut noise. Same seed, same spheres."));
+
+			ImGui::SeparatorText(T(TKEY("blob_meld_header"), "Screen Space Melding"));
+			ImGui::Checkbox(T(TKEY("blob_meld"), "Enable Melding"), &settings.BlobMeld);
+			if (auto _ttMeld = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_tooltip"), "The spheres draw depth only, that depth is blurred with a world-sized kernel, and the result is composited as one rounded surface, lit once per pixel. Off: every sphere draws and lights itself. The meld has no memory: it follows whatever spheres exist this frame."));
+			ImGui::SliderFloat(T(TKEY("blob_meld_radius"), "Meld Radius"), &settings.BlobMeldRadius, 1.0f, 32.0f, "%.1f units");
+			if (auto _ttMeldR = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_radius_tooltip"), "How far, in world units, neighbouring spheres blend into each other. Around the sphere Size reads as one surface; much larger flattens the lumps away."));
+			ImGui::SliderFloat(T(TKEY("blob_meld_depth_range"), "Meld Depth Range"), &settings.BlobMeldDepthRange, 1.0f, 64.0f, "%.0f units");
+			if (auto _ttMeldD = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "Two pixels further apart in depth than this do not meld, so a sphere in front never bleeds into one behind. A few times the sphere Size is a good start."));
+			ImGui::SliderInt(T(TKEY("blob_meld_iterations"), "Meld Passes"), &settings.BlobMeldIterations, 1, 4);
+			if (auto _ttMeldI = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_iterations_tooltip"), "Blur passes. More is smoother and costs a full-screen pass pair each."));
+			ImGui::SliderInt(T(TKEY("blob_meld_max_px"), "Meld Pixel Cap"), &settings.BlobMeldMaxRadiusPx, 4, 48);
+			if (auto _ttMeldP = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_max_px_tooltip"), "Upper limit on the kernel in pixels, which is what the radius becomes up close. Keeps the cost bounded when a sphere fills the screen."));
+			ImGui::SliderInt(T(TKEY("blob_meld_debug"), "Meld Debug View"), &settings.BlobMeldDebug, 0, 2);
+			if (auto _ttMeldDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_debug_tooltip"), "1 paints the melded surface with its blurred depth, 2 with its reconstructed normals."));
 			ImGui::TreePop();
 		}
 

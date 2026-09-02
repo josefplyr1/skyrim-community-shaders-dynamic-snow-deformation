@@ -521,6 +521,20 @@ public:
 		float BlobEdgeDrop = 15.0f;
 		/** @brief Placement radius around the player (world units). The outer half thins toward nothing, so distant cells never take the instance cap from nearby ones. */
 		float BlobRadius = 3072.0f;
+		/** @brief How far an edge sphere slides from its cell toward the lip it found: 0 = stays put, 1 = sits on the lip. Concentrates without adding spheres. */
+		float BlobEdgePull = 0.5f;
+		/** @brief Screen-space meld: spheres draw depth-only, the depth is blurred with a world-sized bilateral kernel, and the result composites once per pixel as one surface. */
+		bool BlobMeld = true;
+		/** @brief Meld kernel radius in world units, projected to pixels per depth. */
+		float BlobMeldRadius = 6.0f;
+		/** @brief Depth difference (units) beyond which two pixels do not meld (keeps a near sphere off a far one). */
+		float BlobMeldDepthRange = 12.0f;
+		/** @brief Blur passes (each is one horizontal + one vertical). */
+		int BlobMeldIterations = 2;
+		/** @brief Pixel cap on the projected kernel, for cost up close. */
+		int BlobMeldMaxRadiusPx = 24;
+		/** @brief Meld composite debug: 0 off, 1 blurred depth, 2 reconstructed normals. Not serialised. */
+		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1770,6 +1784,24 @@ public:
 	Texture2D* blobTop[3] = {};
 	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobPlaceCS decode against it. */
 	float blobRefZ = 0.0f;
+	// ---- screen-space meld ----
+	/** @brief Nearest-sphere |view z| per pixel, ping-pong for the separable blur; screen-sized, rebuilt on resize. */
+	Texture2D* blobMeldDepth[2] = {};
+	uint32_t blobMeldW = 0;
+	uint32_t blobMeldH = 0;
+	winrt::com_ptr<ID3D11BlendState> blobMeldMinBlend;
+	/** @brief The game's depth-stencil state with depth writes off, for the sphere depth pass; rebuilt when the source state changes. */
+	winrt::com_ptr<ID3D11DepthStencilState> blobMeldNoWriteDSS;
+	ID3D11DepthStencilState* blobMeldNoWriteSource = nullptr;
+	ID3D11PixelShader* blobDepthPS = nullptr;
+	ID3D11VertexShader* meldVS = nullptr;
+	ID3D11PixelShader* meldPS = nullptr;
+	ID3D11ComputeShader* meldBlurCS = nullptr;
+	ConstantBuffer* meldCB = nullptr;
+	/** @brief (Re)creates the two meld depth targets at the main render target's size. */
+	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
+	/** @brief The three meld passes: sphere depth (MIN, scene depth read-only), bilateral blur, full-screen composite. */
+	void DrawBlobShellMelded();
 	/** @brief Instance list written by BlobPlaceCS: two float4 per blob. */
 	winrt::com_ptr<ID3D11Buffer> blobInstanceBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> blobInstanceUAV;
@@ -1847,11 +1879,25 @@ public:
 		float EdgeDrop;
 		float Radius;
 		float RefZ;
-		float padB1;
+		float EdgePull;
 		float padB2;
 		float padB3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);
+	/** @brief Screen-space meld constants (BlobMeldCS b0, MELD composite b2). Layout must match MeldCB in BlobMeldCS.hlsl and SnowStaticsShell.hlsl. */
+	struct alignas(16) MeldCB
+	{
+		Matrix Proj;
+		Matrix ProjInverse;
+		Matrix ViewInverse;
+		float2 Dims;
+		float2 Dir;
+		float RadiusWorld;
+		float DepthRange;
+		float MaxRadiusPx;
+		float Debug;
+	};
+	STATIC_ASSERT_ALIGNAS_16(MeldCB);
 	ConstantBuffer* heightProcessCB = nullptr;
 
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----

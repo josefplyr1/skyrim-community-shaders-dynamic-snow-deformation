@@ -492,7 +492,7 @@ cbuffer BlobCB : register(b1)
 	float BlobEdgeDrop;
 	float BlobRadius;
 	float BlobRefZ;
-	float padBlobB1;
+	float BlobEdgePull;
 	float padBlobB2;
 	float padBlobB3;
 }
@@ -554,16 +554,19 @@ static const int2 kBlobDirs[8] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, 
 // plane on within BlobEdgeDrop of its height. A drop and a wall rising both
 // count; the plane continuing at ANY layer index does not, so a shelf under
 // a roof keeps its edge and loses the roof's.
-bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
+bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band, out float2 dropDir, out float dropStep)
 {
 	// Flag, not an early return: a return inside an unrolled loop reads as
 	// "potentially uninitialized" to fxc (X4000, the patch gate's old trap).
 	bool edge = false;
+	dropDir = float2(0.0, 0.0);
+	dropStep = 0.0;
 	const uint half = max(band >> 1, 1u);
 	const uint rings = (half == band) ? 1u : 2u;
+	// Nearest ring first, so the reported drop is the closest lip.
 	for (uint r = 0; r < rings && !edge; r++)
 	{
-		const int step = int(r == 0 ? band : half);
+		const int step = int(r == 0 ? half : band);
 		for (uint d = 0; d < 8 && !edge; d++)
 		{
 			const int2 n = t + kBlobDirs[d] * step;
@@ -577,6 +580,12 @@ bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
 					best = min(best, abs(tn - h));
 			}
 			edge = best > BlobEdgeDrop;
+			if (edge)
+			{
+				// Texel +y is world -y (TexelWorldXY mirrors v).
+				dropDir = normalize(float2(kBlobDirs[d].x, -kBlobDirs[d].y));
+				dropStep = float(step);
+			}
 		}
 	}
 	return edge;
@@ -634,8 +643,18 @@ bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
 		if (m < threshold || mk.y <= 0.0)
 			continue;
 		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
-		if (edgesOnly && !BlobIsEdge(t, int2(dims), top, layers, band))
+		float2 dropDir;
+		float dropStep;
+		if (edgesOnly && !BlobIsEdge(t, int2(dims), top, layers, band, dropDir, dropStep))
 			continue;
+		// Edge Pull: slide the sphere from its cell toward the lip it found,
+		// which sits between this texel's centre and the dropped neighbour's.
+		float2 xyL = xy;
+		[branch] if (edgesOnly && BlobEdgePull > 0.0 && dropStep > 0.0)
+		{
+			const float2 lip = TexelWorldXY(uint2(t), dims) + dropDir * ((dropStep - 0.5) * texel);
+			xyL = lerp(xy, lip, saturate(BlobEdgePull));
+		}
 		// Partial mask (the Snow Fill's soft edge, thin authored paint) thins
 		// the sphere toward 60% rather than switching it off.
 		const float maskT = saturate((m - threshold) / max(1.0 - threshold, 1e-3));
@@ -649,7 +668,7 @@ bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
 		OutBlobArgs.InterlockedAdd(4, 1u, idx);
 		if (idx < kBlobCap)
 		{
-			OutBlobs[idx * 2] = float4(xy, centreZ, r);
+			OutBlobs[idx * 2] = float4(xyL, centreZ, r);
 			OutBlobs[idx * 2 + 1] = float4(top, float(L), m, 0.0);
 		}
 	}

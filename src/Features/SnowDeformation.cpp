@@ -119,6 +119,12 @@
 	X(BlobEdgeBand) \
 	X(BlobEdgeDrop) \
 	X(BlobRadius) \
+	X(BlobEdgePull) \
+	X(BlobMeld) \
+	X(BlobMeldRadius) \
+	X(BlobMeldDepthRange) \
+	X(BlobMeldIterations) \
+	X(BlobMeldMaxRadiusPx) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
@@ -499,6 +505,7 @@ void SnowDeformation::SetupResources()
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
 	blobCB = new ConstantBuffer(ConstantBufferDesc<BlobCB>(), "SnowDeformation::BlobCB");
+	meldCB = new ConstantBuffer(ConstantBufferDesc<MeldCB>(), "SnowDeformation::MeldCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 
 	CreateHeightFieldResources();

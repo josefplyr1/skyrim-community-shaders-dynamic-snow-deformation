@@ -669,6 +669,31 @@ struct BLOB_VS_OUTPUT
 static const uint kBlobCap = 524288;
 #endif
 
+#if defined(MELD)
+// BLOB SNOW SHELL, screen-space meld (pass 3 of 3): a full-screen composite
+// of the blurred nearest-sphere depth (BlobMeldCS.hlsl did pass 2) as ONE
+// surface, shaded once per pixel with the sphere material and z-tested as
+// real geometry. Depends on the spheres drawn this frame: no memory.
+struct MELD_VS_OUTPUT
+{
+	float4 Position : SV_POSITION;
+};
+// Mirror of SnowDeformation.h MeldCB and BlobMeldCS.hlsl MeldCB.
+cbuffer MeldCB : register(b2)
+{
+	row_major float4x4 MeldProj;
+	row_major float4x4 MeldProjInverse;
+	row_major float4x4 MeldViewInverse;
+	float2 MeldDims;
+	float2 MeldDir;
+	float MeldRadiusWorld;
+	float MeldDepthRange;
+	float MeldMaxRadiusPx;
+	float MeldDebug;
+}
+Texture2D<float> MeldDepth : register(t33);
+#endif
+
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
 // cone field to size tessellation against rim proximity.
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
@@ -2804,6 +2829,15 @@ BLOB_VS_OUTPUT main(BLOB_VS_INPUT input)
 	o.TopZ = b.x;
 	return o;
 }
+#elif defined(MELD)
+MELD_VS_OUTPUT main(uint id
+					: SV_VertexID)
+{
+	MELD_VS_OUTPUT o;
+	const float2 uv = float2((id << 1) & 2, id & 2);
+	o.Position = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+	return o;
+}
 #elif defined(SHADOWCAST)
 // Depth-only shadow caster VS (sun cascade injection): the FULL lift
 // math - the caster must be the exact surface the visible shell renders
@@ -3170,17 +3204,16 @@ float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool t
 	return 1.0 - occl;
 }
 
-#if defined(BLOB)
-PS_OUTPUT main(BLOB_VS_OUTPUT input)
+#if defined(BLOB) || defined(MELD)
+// Sphere snow shading shared by the direct BLOB draw and the MELD composite:
+// the shell's own material, sun, point lights and skylighting, once per
+// pixel of whichever surface the caller hands in.
+PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 motionVector, float depth)
 {
-	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
-	// Below the surface the sphere rests on is inside the object.
-	clip(worldAbs.z - (input.TopZ - 2.0));
+	const float3 worldAbs = worldPos + ShellCameraPosAdjust.xyz;
 
-	const float3 normalWS = normalize(input.NormalWS);
-	const float3 V = normalize(-input.WorldPos);
-	const float pixelDist = length(input.WorldPos);
-	const float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
+	const float3 V = normalize(-worldPos);
+	const float pixelDist = length(worldPos);
 
 	// The shell's snow albedo, triplanar on the sphere (no authored UVs).
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
@@ -3200,17 +3233,17 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 	const float snowAO = 1.0;
 
 	// Sun shadow: the skin's two paths, verbatim.
-	const float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	const float worldShadow = ShadowSampling::GetWorldShadow(worldPos, ShellCameraPosAdjust.xyz);
 	const float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(worldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
 		float detailedShadow;
-		const float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
+		const float dynamicShadow = ShadowSampling::GetLightingShadow(worldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
 
@@ -3218,8 +3251,8 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 	const float2 glintDuvdx = ddx(glintUV);
 	const float2 glintDuvdy = ddy(glintUV);
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
+		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, pixelPos);
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, worldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
@@ -3228,10 +3261,10 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 
 	[branch] if (PointLightsActive > 0.5)
 	{
-		const float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
-		const float4 clipPos = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		const float viewZ = mul(CameraView, float4(worldPos, 1.0)).z;
+		const float4 clipPos = mul(CameraViewProj, float4(worldPos, 1.0));
 		const float2 screenUV = clipPos.xy / max(clipPos.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, worldAbs,
+		SnowLights::AccumulatePointLights(snowMtl, worldPos, worldAbs,
 			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
 	}
 
@@ -3242,8 +3275,8 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
 	[branch] if (SkylightingActive > 0.5)
 	{
-		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		const float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
+		sh2 skylightingSH = Skylighting::Sample(worldPos, normalWS);
+		const float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, worldPos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
 	directDiffuse *= Color::PBRLightingScale;
@@ -3261,6 +3294,87 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 	psout.Reflectance = float4(specularLobe, 1.0);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, 1.0);
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, 1.0);
+#	if defined(MELD)
+	psout.Depth = depth;
+#	endif
+	return psout;
+}
+#endif
+
+#if defined(BLOB)
+#	if defined(BLOB_DEPTH)
+// Meld pass 1: the nearest sphere surface per pixel as |view z|, MIN-blended
+// into the meld depth target with the scene depth read-only.
+float main(BLOB_VS_OUTPUT input) : SV_Target0
+{
+	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
+	clip(worldAbs.z - (input.TopZ - 2.0));
+	return abs(mul(CameraView, float4(input.WorldPos, 1.0)).z);
+}
+#	else
+PS_OUTPUT main(BLOB_VS_OUTPUT input)
+{
+	const float3 worldAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
+	// Below the surface the sphere rests on is inside the object.
+	clip(worldAbs.z - (input.TopZ - 2.0));
+	const float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
+	return BlobShade(input.WorldPos, normalize(input.NormalWS), input.Position.xy, motionVector, 0.0);
+}
+#	endif
+#elif defined(MELD)
+// View-space point at a pixel centre for a stored |view z|. Sign-agnostic:
+// the ray from the inverse projection carries the convention, |z| the scale.
+float3 MeldViewPos(float2 pixel, float z)
+{
+	const float2 ndc = float2(pixel.x / MeldDims.x * 2.0 - 1.0, 1.0 - pixel.y / MeldDims.y * 2.0);
+	float4 v = mul(MeldProjInverse, float4(ndc, 1.0, 1.0));
+	v.xyz /= v.w;
+	return v.xyz * (z / max(abs(v.z), 1e-5));
+}
+
+PS_OUTPUT main(MELD_VS_OUTPUT input)
+{
+	const float2 pixel = input.Position.xy;
+	const int2 px = int2(pixel);
+	const float z = MeldDepth.Load(int3(px, 0));
+	[branch] if (z > 1e29)
+		discard;
+	const int2 last = int2(MeldDims) - 1;
+	float zl = MeldDepth.Load(int3(max(px.x - 1, 0), px.y, 0));
+	float zr = MeldDepth.Load(int3(min(px.x + 1, last.x), px.y, 0));
+	float zu = MeldDepth.Load(int3(px.x, max(px.y - 1, 0), 0));
+	float zd = MeldDepth.Load(int3(px.x, min(px.y + 1, last.y), 0));
+	zl = zl > 1e29 ? z : zl;
+	zr = zr > 1e29 ? z : zr;
+	zu = zu > 1e29 ? z : zu;
+	zd = zd > 1e29 ? z : zd;
+	const float3 viewPos = MeldViewPos(pixel, z);
+	const float3 pl = MeldViewPos(pixel + float2(-1.0, 0.0), zl);
+	const float3 pr = MeldViewPos(pixel + float2(1.0, 0.0), zr);
+	const float3 pu = MeldViewPos(pixel + float2(0.0, -1.0), zu);
+	const float3 pd = MeldViewPos(pixel + float2(0.0, 1.0), zd);
+	// The smaller difference on each axis, so a silhouette against the far
+	// side does not tilt the normal.
+	const float3 dx = (abs(zr - z) < abs(zl - z)) ? (pr - viewPos) : (viewPos - pl);
+	const float3 dy = (abs(zd - z) < abs(zu - z)) ? (pd - viewPos) : (viewPos - pu);
+	float3 nView = normalize(cross(dx, dy));
+	[flatten] if (dot(nView, -viewPos) < 0.0)
+		nView = -nView;
+	const float3 rel = mul(MeldViewInverse, float4(viewPos, 1.0)).xyz;
+	const float3 normalWS = normalize(mul((float3x3)MeldViewInverse, nView));
+	const float4 clipPos = mul(CameraViewProj, float4(rel, 1.0));
+	const float depth = clipPos.z / max(clipPos.w, 1e-5);
+	const float4 cur = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	const float3 prevRel = rel + (ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz);
+	const float4 prev = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	const float2 motionVector = float2(-0.5, 0.5) * (cur.xy / cur.w - prev.xy / prev.w);
+	PS_OUTPUT psout = BlobShade(rel, normalWS, pixel, motionVector, depth);
+	[branch] if (MeldDebug > 0.5)
+	{
+		const float3 dbg = MeldDebug > 1.5 ? normalWS * 0.5 + 0.5 : saturate(z / 4096.0).xxx;
+		psout.Diffuse = float4(dbg, 1.0);
+		psout.Albedo = float4(dbg, 1.0);
+	}
 	return psout;
 }
 #else

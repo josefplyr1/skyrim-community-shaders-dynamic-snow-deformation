@@ -763,6 +763,16 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// Blob Snow Shell: a drift or snow pile has no bare edge to round.
 		driftFamily = loweredName.find("drift") != std::string::npos ||
 		              loweredName.find("snowpile") != std::string::npos;
+		if (!driftFamily)
+			if (auto* driftMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
+				if (auto driftTextures = driftMaterial->textureSet.get())
+					if (auto driftPath = driftTextures->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+						std::string loweredPath(driftPath);
+						std::transform(loweredPath.begin(), loweredPath.end(), loweredPath.begin(),
+							[](unsigned char c) { return (char)std::tolower(c); });
+						driftFamily = loweredPath.find("drift") != std::string::npos ||
+						              loweredPath.find("snowpile") != std::string::npos;
+					}
 		// (Drift-family special-casing removed: drifts ride the general
 		// fully-painted default above, like every technique-classified
 		// draw without property-level projection data.)
@@ -1047,6 +1057,35 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(blobPS, "SnowDeformation::BlobShellPS");
 		}
 	}
+	// Screen-space meld: sphere depth (pass 1), full-screen composite (pass 3).
+	if (!blobDepthPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "BLOB", "BLOB_DEPTH"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &blobDepthPS)))
+				Util::SetResourceName(blobDepthPS, "SnowDeformation::BlobDepthPS");
+		}
+	}
+	if (!meldVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "MELD"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &meldVS)))
+				Util::SetResourceName(meldVS, "SnowDeformation::BlobMeldVS");
+		}
+	}
+	if (!meldPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "MELD", ehfDefine, iblDefine));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &meldPS)))
+				Util::SetResourceName(meldPS, "SnowDeformation::BlobMeldPS");
+		}
+	}
+	if (!meldBlurCS) {
+		constexpr auto meldPath = L"Data\\Shaders\\SnowDeformation\\BlobMeldCS.hlsl";
+		meldBlurCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldBlurCS"));
+	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_TESS"));
@@ -1326,6 +1365,19 @@ void SnowDeformation::CreateHeightFieldResources()
 		blobRaster.DepthClipEnable = TRUE;
 		DX::ThrowIfFailed(globals::d3d::device->CreateRasterizerState(&blobRaster, blobRasterState.put()));
 		Util::SetResourceName(blobRasterState.get(), "SnowDeformation::BlobRaster");
+
+		// Meld pass 1: nearest sphere wins per pixel.
+		D3D11_BLEND_DESC meldBlend{};
+		meldBlend.RenderTarget[0].BlendEnable = TRUE;
+		meldBlend.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+		meldBlend.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+		meldBlend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_MIN;
+		meldBlend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+		meldBlend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+		meldBlend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_MIN;
+		meldBlend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBlendState(&meldBlend, blobMeldMinBlend.put()));
+		Util::SetResourceName(blobMeldMinBlend.get(), "SnowDeformation::BlobMeldMinBlend");
 	}
 }
 
@@ -1436,6 +1488,7 @@ void SnowDeformation::DispatchBlobPlacement()
 	cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
 	cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
 	cb.RefZ = blobRefZ;
+	cb.EdgePull = std::clamp(settings.BlobEdgePull, 0.0f, 1.0f);
 	blobCB->Update(cb);
 
 	// The masks were render targets a moment ago; nothing may still hold
@@ -1478,10 +1531,196 @@ void SnowDeformation::DispatchBlobPlacement()
 	context->CSSetShader(nullptr, nullptr, 0);
 }
 
+void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
+{
+	if (blobMeldDepth[0] && blobMeldDepth[1] && blobMeldW == a_width && blobMeldH == a_height)
+		return;
+	for (auto& t : blobMeldDepth) {
+		delete t;
+		t = nullptr;
+	}
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = a_width;
+	desc.Height = a_height;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R32_FLOAT;
+	desc.SampleDesc = { 1, 0 };
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+	srvDesc.Format = desc.Format;
+	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Texture2D.MipLevels = 1;
+	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
+	rtvDesc.Format = desc.Format;
+	rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+	uavDesc.Format = desc.Format;
+	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+	const char* names[2] = { "SnowDeformation::BlobMeldDepth0", "SnowDeformation::BlobMeldDepth1" };
+	for (int i = 0; i < 2; i++) {
+		blobMeldDepth[i] = new Texture2D(desc, names[i]);
+		blobMeldDepth[i]->CreateSRV(srvDesc);
+		blobMeldDepth[i]->CreateRTV(rtvDesc);
+		blobMeldDepth[i]->CreateUAV(uavDesc);
+	}
+	blobMeldW = a_width;
+	blobMeldH = a_height;
+}
+
+void SnowDeformation::DrawBlobShellMelded()
+{
+	auto context = globals::d3d::context;
+	auto renderer = globals::game::renderer;
+	const auto& fb = globals::game::frameBufferCached;
+	auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+	if (!mainRT.texture)
+		return;
+	D3D11_TEXTURE2D_DESC mainDesc{};
+	mainRT.texture->GetDesc(&mainDesc);
+	EnsureMeldResources(mainDesc.Width, mainDesc.Height);
+	if (!blobMeldDepth[0] || !blobMeldDepth[1])
+		return;
+	const float4 dynRes = fb.GetDynamicResolutionParams1();
+	const uint32_t dw = std::max(1u, uint32_t(float(mainDesc.Width) * std::clamp(dynRes.x, 0.05f, 1.0f)));
+	const uint32_t dh = std::max(1u, uint32_t(float(mainDesc.Height) * std::clamp(dynRes.y, 0.05f, 1.0f)));
+
+	// The game's output state, restored for the composite and afterwards.
+	ID3D11RenderTargetView* prevRTVs[8] = {};
+	ID3D11DepthStencilView* prevDSV = nullptr;
+	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
+	ID3D11DepthStencilState* prevDSS = nullptr;
+	UINT prevStencilRef = 0;
+	context->OMGetDepthStencilState(&prevDSS, &prevStencilRef);
+	ID3D11BlendState* prevBlend = nullptr;
+	float prevBlendFactor[4] = {};
+	UINT prevSampleMask = 0xFFFFFFFF;
+	context->OMGetBlendState(&prevBlend, prevBlendFactor, &prevSampleMask);
+	if (prevDSS && prevDSS != blobMeldNoWriteSource) {
+		D3D11_DEPTH_STENCIL_DESC dsDesc{};
+		prevDSS->GetDesc(&dsDesc);
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.StencilEnable = FALSE;
+		blobMeldNoWriteDSS = nullptr;
+		if (SUCCEEDED(globals::d3d::device->CreateDepthStencilState(&dsDesc, blobMeldNoWriteDSS.put()))) {
+			Util::SetResourceName(blobMeldNoWriteDSS.get(), "SnowDeformation::BlobMeldNoWriteDSS");
+			blobMeldNoWriteSource = prevDSS;
+		}
+	}
+
+	globals::profiler->BeginPass("SnowDeformation::BlobMeld");
+	// Pass 1: sphere depth, MIN per pixel, z-tested against the scene without
+	// writing it.
+	const float farClear[4] = { 1e30f, 1e30f, 1e30f, 1e30f };
+	context->ClearRenderTargetView(blobMeldDepth[0]->rtv.get(), farClear);
+	ID3D11RenderTargetView* depthRT = blobMeldDepth[0]->rtv.get();
+	context->OMSetRenderTargets(1, &depthRT, prevDSV);
+	if (blobMeldNoWriteDSS)
+		context->OMSetDepthStencilState(blobMeldNoWriteDSS.get(), prevStencilRef);
+	context->OMSetBlendState(blobMeldMinBlend.get(), nullptr, 0xFFFFFFFF);
+	context->VSSetShader(blobVS, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(blobDepthPS, nullptr, 0);
+	ID3D11Buffer* cb0 = shellCB->CB();
+	context->VSSetConstantBuffers(0, 1, &cb0);
+	context->PSSetConstantBuffers(0, 1, &cb0);
+	context->IASetInputLayout(blobIL.get());
+	const UINT stride = sizeof(float3);
+	const UINT offset = 0;
+	ID3D11Buffer* vb = blobSphereVB.get();
+	context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+	context->IASetIndexBuffer(blobSphereIB.get(), DXGI_FORMAT_R16_UINT, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11ShaderResourceView* instanceSRV = blobInstanceSRV.get();
+	context->VSSetShaderResources(32, 1, &instanceSRV);
+	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
+	context->RSGetState(prevRaster.put());
+	context->RSSetState(blobRasterState.get());
+	context->DrawIndexedInstancedIndirect(blobArgsBuffer.get(), 0);
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->VSSetShaderResources(32, 1, &nullSRV);
+	ID3D11Buffer* nullVB = nullptr;
+	const UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
+	context->IASetInputLayout(nullptr);
+	context->OMSetRenderTargets(0, nullptr, nullptr);
+
+	// Pass 2: separable bilateral blur, ping-pong, ending back in [0].
+	MeldCB m{};
+	m.Proj = fb.GetCameraProj();
+	m.ProjInverse = fb.GetCameraProjInverse();
+	m.ViewInverse = fb.GetCameraViewInverse();
+	m.Dims = { float(dw), float(dh) };
+	m.RadiusWorld = std::clamp(settings.BlobMeldRadius, 0.5f, 64.0f);
+	m.DepthRange = std::clamp(settings.BlobMeldDepthRange, 0.5f, 256.0f);
+	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
+	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
+	const int iterations = std::clamp(settings.BlobMeldIterations, 1, 4);
+	context->CSSetShader(meldBlurCS, nullptr, 0);
+	int src = 0;
+	for (int it = 0; it < iterations; it++) {
+		for (int axis = 0; axis < 2; axis++) {
+			m.Dir = axis == 0 ? float2{ 1.0f, 0.0f } : float2{ 0.0f, 1.0f };
+			meldCB->Update(m);
+			ID3D11Buffer* mcb = meldCB->CB();
+			context->CSSetConstantBuffers(0, 1, &mcb);
+			ID3D11ShaderResourceView* in = blobMeldDepth[src]->srv.get();
+			ID3D11UnorderedAccessView* out = blobMeldDepth[1 - src]->uav.get();
+			context->CSSetShaderResources(0, 1, &in);
+			context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+			context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
+			ID3D11ShaderResourceView* nullIn = nullptr;
+			ID3D11UnorderedAccessView* nullOut = nullptr;
+			context->CSSetShaderResources(0, 1, &nullIn);
+			context->CSSetUnorderedAccessViews(0, 1, &nullOut, nullptr);
+			src = 1 - src;
+		}
+	}
+	ID3D11Buffer* nullCsCB = nullptr;
+	context->CSSetConstantBuffers(0, 1, &nullCsCB);
+	context->CSSetShader(nullptr, nullptr, 0);
+
+	// Pass 3: composite as one surface into the game's targets, depth written.
+	context->OMSetRenderTargets(8, prevRTVs, prevDSV);
+	context->OMSetDepthStencilState(prevDSS, prevStencilRef);
+	context->OMSetBlendState(prevBlend, prevBlendFactor, prevSampleMask);
+	context->VSSetShader(meldVS, nullptr, 0);
+	context->PSSetShader(meldPS, nullptr, 0);
+	m.Dir = { 0.0f, 0.0f };
+	meldCB->Update(m);
+	ID3D11Buffer* mcb2 = meldCB->CB();
+	context->PSSetConstantBuffers(2, 1, &mcb2);
+	ID3D11ShaderResourceView* meldSRV = blobMeldDepth[src]->srv.get();
+	context->PSSetShaderResources(33, 1, &meldSRV);
+	context->Draw(3, 0);
+	context->PSSetShaderResources(33, 1, &nullSRV);
+	ID3D11Buffer* nullCB2 = nullptr;
+	context->PSSetConstantBuffers(2, 1, &nullCB2);
+	context->RSSetState(prevRaster.get());
+	globals::profiler->EndPass();
+
+	for (auto* rtv : prevRTVs)
+		if (rtv)
+			rtv->Release();
+	if (prevDSV)
+		prevDSV->Release();
+	if (prevDSS)
+		prevDSS->Release();
+	if (prevBlend)
+		prevBlend->Release();
+}
+
 void SnowDeformation::DrawBlobShell()
 {
 	if (!settings.EnableBlobShell || !blobVS || !blobPS || !blobIL || !blobSphereVB || !blobSphereIB || !blobArgsBuffer || !blobInstanceSRV || !blobRasterState)
 		return;
+	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldBlurCS && meldCB && blobMeldMinBlend) {
+		DrawBlobShellMelded();
+		return;
+	}
 	auto context = globals::d3d::context;
 	globals::profiler->BeginPass("SnowDeformation::BlobShell");
 	context->VSSetShader(blobVS, nullptr, 0);
