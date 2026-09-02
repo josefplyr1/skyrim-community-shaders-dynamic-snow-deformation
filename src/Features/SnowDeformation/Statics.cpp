@@ -1508,7 +1508,21 @@ void SnowDeformation::DispatchBlobPlacement()
 	cb.EdgesOnly = settings.BlobEdgesOnly ? 1.0f : 0.0f;
 	cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
 	cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
-	cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
+	// Nearest first under the cap: Placement Radius is a maximum. While last
+	// frame's count exceeded the budget the radius shrinks by the area ratio
+	// (count scales with area), and it grows back a little per frame once
+	// there is room, so the far edge thins away instead of near spheres
+	// being dropped at random.
+	const float maxRadius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
+	if (blobEffectiveRadius <= 0.0f)
+		blobEffectiveRadius = maxRadius;
+	const float budget = float(kBlobCap) * 0.9f;
+	if (float(blobPlacedLastFrame) > budget)
+		blobEffectiveRadius *= std::sqrt(budget / float(blobPlacedLastFrame));
+	else if (float(blobPlacedLastFrame) < budget * 0.8f)
+		blobEffectiveRadius *= 1.02f;
+	blobEffectiveRadius = std::clamp(blobEffectiveRadius, 64.0f, maxRadius);
+	cb.Radius = blobEffectiveRadius;
 	cb.RefZ = blobRefZ;
 	cb.EdgePull = std::clamp(settings.BlobEdgePull, 0.0f, 1.0f);
 	blobCB->Update(cb);

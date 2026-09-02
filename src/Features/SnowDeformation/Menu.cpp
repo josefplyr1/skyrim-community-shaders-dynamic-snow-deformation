@@ -304,7 +304,8 @@ void SnowDeformation::DrawSettings()
 			{
 				const bool atCap = blobPlacedLastFrame >= kBlobCap;
 				ImGui::TextColored(atCap ? ImVec4(1.0f, 0.4f, 0.3f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
-					"Spheres placed last frame: %u / %u%s", unsigned(blobPlacedLastFrame), unsigned(kBlobCap), atCap ? "  (CAP HIT: spheres drop at random, expect flicker)" : "");
+					"Spheres placed last frame: %u / %u, effective radius %.0f%s", unsigned(blobPlacedLastFrame), unsigned(kBlobCap), blobEffectiveRadius,
+					atCap ? "  (CAP HIT this frame; the radius is pulling in)" : "");
 			}
 			ImGui::Checkbox(T(TKEY("blob_edges_only"), "Edges Only"), &settings.BlobEdgesOnly);
 			if (auto _ttBlobEo = Util::HoverTooltipWrapper())
@@ -349,7 +350,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces receive spheres: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
 			ImGui::SliderFloat(T(TKEY("blob_radius"), "Placement Radius"), &settings.BlobRadius, 256.0f, 4096.0f, "%.0f units");
 			if (auto _ttBlobRd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_radius_tooltip"), "Spheres are placed only this far from the player. The outer half thins out gradually, so distant cells never crowd nearby ones out of the instance budget."));
+				ImGui::Text("%s", T(TKEY("blob_radius_tooltip"), "The most distance spheres may be placed from the player. When the sphere budget would be exceeded the effective radius pulls in automatically so the nearest spheres always survive; the readout above shows where it currently sits. The outer half thins out gradually."));
 			ImGui::SliderInt(T(TKEY("blob_seed"), "Seed"), &settings.BlobSeed, 0, 99);
 			if (auto _ttBlobSeed = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_seed_tooltip"), "Reseeds the per-sphere jitter, size and jut noise. Same seed, same spheres."));

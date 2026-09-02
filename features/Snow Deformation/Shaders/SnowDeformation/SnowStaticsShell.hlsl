@@ -3213,96 +3213,718 @@ float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool t
 	return 1.0 - occl;
 }
 
-#if defined(BLOB) || defined(MELD)
-// Sphere snow shading shared by the direct BLOB draw and the MELD composite:
-// the shell's own material, sun, point lights and skylighting, once per
-// pixel of whichever surface the caller hands in.
-PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 motionVector, float depth)
+// THE skin material and lighting, factored out so the Blob Snow Shell (direct
+// spheres and the melded composite) shades through the same code as the
+// skin: taps, two-plane projection, parallax, normal map, frost/crust,
+// RMAOS, cascades + heightfield march + screen-space shadows, sun PBR,
+// point lights, skylighting. One recipe. The skin's own main calls this
+// verbatim; a change here changes both.
+struct SkinShadeInput
 {
-	const float3 worldAbs = worldPos + ShellCameraPosAdjust.xyz;
+	float3 WorldPos;
+	float4 Position;
+	float4 CurrentClip;
+	float Flat;
+	float2 GridLocal;
+	float2 trenchGridLocal;
+	float2 worldXY;
+	float pixelDist;
+	float pixelDeform;
+	float screenNoise;
+};
+struct SkinShadeResult
+{
+	float3 normalWS;
+	float3 viewNormal;
+	float3 ambientPart;
+	float3 diffuseLobe;
+	float3 directSpecular;
+	float3 specularLobe;
+	float3 preLit;
+	float3 dbgMarch;
+	float dbgMarchRan;
+	float landVertexAO;
+	float snowRoughness;
+};
+SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
+{
+	const float2 trenchGridLocal = input.trenchGridLocal;
+	const float2 worldXY = input.worldXY;
+	const float pixelDist = input.pixelDist;
+	const float pixelDeform = input.pixelDeform;
+	const float screenNoise = input.screenNoise;
+	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
+	// parallax-corrected position. Steep drape sides re-project along the
+	// facing wall plane, since the top-down projection stretches down flanks.
+	// Blended as SAMPLES, never as coordinates: lerping UVs gives a field
+	// belonging to neither plane, so the whole transition band smears.
+	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
+#ifdef PATCH
+	// The landscape ramp, not the statics one. The patch is the landscape
+	// recipe on objects and its trench walls live in the same 40-65 degree
+	// band the shell's comment describes - at 30-unit depth a wall's n.z is
+	// ~0.45, which the shell hands fully to the side plane while the statics
+	// ramp below leaves it two-thirds top-projected: stretched grain, a
+	// grain-shadow march over stretched UVs, the bright warped band along
+	// road trench walls. At 64 the wall is steep enough that both ramps
+	// agree, which is why the band vanished there; at 10 neither engages.
+	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
+#else
+	// PARITY with the terrain shell and the patch (Josef 2026-09-01: object
+	// snow read a visibly different colour from the landscape beside it).
+	// This drives the two-plane blend for albedo, normal AND rmaos, so a
+	// different ramp is a different material on the same slope. WAS
+	// smoothstep(0.55, 0.25): a deliberate tune, to hold the top projection
+	// longer across rock flanks at n.z 0.4-0.7. Revert this line first if
+	// flanks now read stretched.
+	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
+#endif
+	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
+	// Captured, not recomputed: normalWS is perturbed further below (berm
+	// ridge, normal map), and the parallax shadow must resolve the light into
+	// the SAME plane these uvs were built on.
+	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
+	float2 snowSidePlane = snowSideDropsX ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
+	// NO SnowUVOffset here + static 4096-unit fold, in step with the
+	// landscape shell (see its comment): the offset compensates a rebasing
+	// coordinate, and this plane is absolute - adding it slid drape-side
+	// texture on every grid scroll, just too subtly to notice on small
+	// near-vertical sides.
+	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
+	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
+	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
+	// The distance fade WITHOUT the crust flattening applied: the frost
+	// crystal replacing the powder grain must not fade with it.
+	const float bumpFadeRaw = bumpFade;
+	// Spell marks (landscape parity): crust flattens the powder
+	// grain here; albedo/polish/grazing terms follow below. Stable grid
+	// position for the fetch (round-31 lesson).
+	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
+	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
+	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
+	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
+	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
+	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
+	// Uniform flow: the parallax shadow branch below is divergent, and
+	// derivatives taken inside it would be garbage at its edges.
+	float snowHeightMip = SnowHeightMip(snowUV);
+	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
 
-	const float3 V = normalize(-worldPos);
-	const float pixelDist = length(worldPos);
+	// Object trench detail: shading-only berm ridge along trails; also the
+	// compaction weight's berm term. Geometry berm waits for the skin
+	// rework.
+	float bermC = 0.0;
+	[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.x > 0.001)
+		bermC = BermField(trenchGridLocal);
+#ifdef PATCH
+	// The patch's berm is real geometry (BuildPatchVertex), shaded by the
+	// vertex normal it displaced. Adding the shading ridge here too would
+	// double it.
+	[branch] if (false)
+#else
+	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
+#endif
+	{
+		const float bStep = 4.0;
+		float2 bermGrad = float2(
+			BermShape(BermField(trenchGridLocal + float2(bStep, 0.0))) - BermShape(BermField(trenchGridLocal - float2(bStep, 0.0))),
+			BermShape(BermField(trenchGridLocal + float2(0.0, bStep))) - BermShape(BermField(trenchGridLocal - float2(0.0, bStep)))) / (2.0 * bStep);
+		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
+		// Centre-masked rather than per-tap: this berm is shading-only, and
+		// the mask's job is just to keep the ridge off the dug floor.
+		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
+		// P6 clods, shading-only like this whole ridge (geometry berm
+		// waits for the skin rework); same weight recipe as the landscape.
+		[branch] if (RimStyle.z > 0.01)
+		{
+			float2 clodXY = GridOrigin + trenchGridLocal;
+			float kXP = ChurnNoiseScaled(clodXY + float2(bStep, 0.0), kClodSizeScale);
+			float kXN = ChurnNoiseScaled(clodXY - float2(bStep, 0.0), kClodSizeScale);
+			float kYP = ChurnNoiseScaled(clodXY + float2(0.0, bStep), kClodSizeScale);
+			float kYN = ChurnNoiseScaled(clodXY - float2(0.0, bStep), kClodSizeScale);
+			normalWS = normalize(normalWS + float3(-float2(kXP - kXN, kYP - kYN) / (2.0 * bStep) *
+				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
+		}
+	}
 
-	// The shell's snow albedo, triplanar on the sphere (no authored UVs).
+#ifdef PATCH
+	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
+	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
+	// the lumps sit at 4/1.75 units, under even the dense band's vertex
+	// spacing, and the interpolated gradient shaded trampled floors as
+	// pristine top snow. Geometry keeps its coarse displacement; the normal
+	// carries the look, as with the landscape's dunes.
+	// UNCARVED depth, exactly as the landscape weighs it (its pixelDepth is
+	// the ramp depth, not the carve): trench floors shade at full churn
+	// whenever the layer is deep enough to churn at all. The carved depth
+	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
+	[branch] if (ObjChurnHeightAmp > 0.01)
+	{
+		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(PatchSkinDepth(worldXY).x / 10.0);
+		[branch] if (churnWPix > 0.001)
+		{
+			const float cStep = 3.0;
+			float2 churnGradPix = float2(
+				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
+				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
+			normalWS = normalize(normalWS + float3(-churnGradPix * ObjChurnHeightAmp * churnWPix, 0.0));
+		}
+	}
+#endif
+
+	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
+	// Built from the geometric normal before the normal map perturbs it, and
+	// shared with the parallax shadow below.
+	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
+	float3 bumpB = cross(normalWS, bumpT);
+
+	float3 V = -normalize(input.WorldPos);
+
+	// Pre-parallax derivatives for the glint grid (Lighting.hlsl's uvOriginal
+	// pattern; see SnowShell.hlsl): the POM offset is view-dependent and
+	// glints must not ride it. The uv itself is rebuilt world-anchored below.
+	const float2 glintDuvdx = snowTaps.duvdx;
+	const float2 glintDuvdy = snowTaps.duvdy;
+
+	// Parallax occlusion, same marcher the landscape shell uses (shared in
+	// SnowParallax.hlsli, so the two cannot drift). Object snow needs it in
+	// BOTH projections, and unlike SampleSnowPlanar the two cannot share one
+	// march: each projection has its own uv axes, so the view resolves to a
+	// different 2D direction in each and the offsets are not interchangeable.
+	// Each plane therefore marches itself and shifts its OWN tap set; the
+	// existing sample blend then mixes them exactly as before.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
+	{
+		DisplacementParams pomParams = SnowDisplacementParams();
+		pomParams.HeightScale *= SnowParallax.z;
+
+		// Top plane: bumpT/bumpB ARE its uv axes.
+		float3x3 tbnTop = float3x3(bumpT, bumpB, normalWS);
+		float2 offsetTop = SnowParallaxOffset(snowTaps, snowUV, V, tbnTop, pixelDist, snowHeightMip, screenNoise, pomParams);
+		// Faded with steepness, in step with the landscape shell: on a steep
+		// side the top TBN follows the surface normal while snowUV stays a
+		// top-down projection, and marching that mismatched frame redraws
+		// the face whenever the camera changes position.
+		offsetTop *= 1.0 - snowSteepness;
+		snowUV += offsetTop;
+		snowTaps = OffsetSnowTaps(snowTaps, offsetTop);
+
+		// Side plane: raw world axes by construction, matching how
+		// snowSidePlane was built. Only steep pixels pay for it. The plane
+		// normal is flipped toward the viewer (the old path took abs of the
+		// view's N component for the same tolerance).
+		[branch] if (snowSteepness > 0.001)
+		{
+			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+			float3 sideB = float3(0.0, 0.0, 1.0);
+			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
+			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
+			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
+			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, pixelDist, snowHeightMipSide, screenNoise, pomParams);
+			snowUVSide += offsetSide;
+			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
+		}
+	}
+
+	// Micro-relief; identical recipe to the terrain shell so ground and
+	// object snow carry the same grain: real PBR normal map when available,
+	// luminance height-proxy fallback otherwise. Applied after the coverage
+	// gate: bending the normal first would jitter the up-facing test into
+	// speckled edges.
+	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
+	{
+		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
+		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
+		texN.y = -texN.y;
+		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
+	}
+	else if (HasSnowTexture != 0 && bumpFade > 0.001)
+	{
+		const float kBumpTile = 64.0;
+		const float kBumpHeight = 0.55;
+		float2 texDims;
+		SnowDiffuse.GetDimensions(texDims.x, texDims.y);
+		float e = 1.5 / texDims.x;
+		float2 detailUV = worldXY / kBumpTile;
+		const float3 kLum = float3(0.30, 0.45, 0.25);
+		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
+		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
+		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
+		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
+		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
+	}
+
+	// Frost crystal (landscape recipe): the pattern normal rides bumpFadeRaw
+	// so the crystal survives the crust's flattening of the powder grain.
+	FrostTaps frost;
+	frost.normal = float3(0.0, 0.0, 1.0);
+	frost.crystal = 0.0;
+	frost.valid = false;
+	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
+	[branch] if (frostAmount > 0.001)
+	{
+		frost = SampleFrostPattern(worldXY, CrustLook2.z);
+		normalWS = normalize(normalWS +
+		                     (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
+	}
+
+	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
+
+	// Snow material; same albedo path as the terrain shell.
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
 	[branch] if (HasSnowTexture != 0)
 	{
-		float3 w = abs(normalWS);
-		w /= max(w.x + w.y + w.z, 1e-4);
-		const float3 cx = SnowDiffuse.Sample(SnowSampler, worldAbs.yz / kSnowUVTile).rgb;
-		const float3 cy = SnowDiffuse.Sample(SnowSampler, worldAbs.xz / kSnowUVTile).rgb;
-		const float3 cz = SnowDiffuse.Sample(SnowSampler, worldAbs.xy / kSnowUVTile).rgb;
-		kSnowAlbedo = cx * w.x + cy * w.y + cz * w.z;
+		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	const float snowRoughness = 0.6;
-	const float3 snowF0 = float3(0.028, 0.028, 0.028);
-	const float snowAO = 1.0;
+	// Compaction weight (Stage 1), shared constant with the terrain shell;
+	// feeds the glint suppression alone (the darken/roughen halves were
+	// retired - IBL + DALC already darken trenches).
+	float churnMat = ChurnWeight(pixelDeform, bermC);
 
-	// Sun shadow: the skin's two paths, verbatim.
-	const float worldShadow = ShadowSampling::GetWorldShadow(worldPos, ShellCameraPosAdjust.xyz);
-	const float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
+	// Spell marks on the albedo; the landscape recipes verbatim.
+	{
+		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
+		[branch] if (scorch > 0.001)
+			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
+	}
+	[branch] if (crustAmount > 0.001)
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
+	[branch] if (frost.valid)
+		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
+
+	// PBR response; identical constants to the terrain shell.
+	static const float kSnowRoughness = 0.6;
+	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
+
+	float snowRoughness = kSnowRoughness;
+	float3 snowF0 = kSnowF0;
+	float snowAO = 1.0;
+	[branch] if (HasSnowRmaos > 0.5)
+	{
+		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
+		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
+		snowAO = rmaos.z;
+		snowF0 = rmaos.w * SnowSpecularLevel;
+	}
+
+	// Crust polishes whatever the material ended up being; after the RMAOS
+	// block or an installed map silently discards it (landscape lesson).
+	[branch] if (crustAmount > 0.001)
+	{
+		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
+		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
+	}
+	[branch] if (frost.valid)
+	{
+		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
+		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
+	}
+
+	float3 L = SharedData::DirLightDirection.xyz;
+	float satNdotL = saturate(dot(normalWS, L));
+	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
+
+	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
+	// Hoisted above the cascade call: the crisp path widens its PCF ring with
+	// distance exactly as the terrain shell does, or the far cascade's texels
+	// quantise into blocky patches on object snow while the ground beside it
+	// shows soft penumbra.
+	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(worldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		// Full-resolution comparison PCF; same path as the terrain shell.
+		// (the round-31 seamShadowLift receiver raise is REVERTED -
+		// the RenderDoc replay proved no cascade shadow was missing at the
+		// seam, so the lift only risked boundary drift.)
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
 	}
 	else
 	{
 		float detailedShadow;
-		const float dynamicShadow = ShadowSampling::GetLightingShadow(worldPos, detailedShadow);
+		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
+	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
+	//: hills, berms and drift rims cast the same soft shadows onto
+	// object snow as onto the ground beside it, and a trench's own rim
+	// darkens its interior. Same tap ring, same carved-surface rule; the
+	// melt term reads the wide exclusion field alone (no near mask bound
+	// here). Object tops from the skin's own raster window join the horizon.
+	// March diagnostics for debug view 4: x = how much the march darkened
+	// this pixel, y = fraction of taps that rebuilt the road's carved
+	// surface, z = fraction that used the flat dusting. Ran = the guard
+	// below passed at all (a pixel the cascades already darkened, or a sun
+	// too low, never marches - the view paints those dim magenta so "march
+	// skipped" cannot be misread as "march found nothing").
+	float3 dbgMarch = float3(0.0, 0.0, 0.0);
+	float dbgMarchRan = 0.0;
+	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		// Redistributed toward the NEAR field. The first tap set the finest
+		// boundary the horizon can resolve, so at 28 units every shadow edge
+		// was smeared over at least that distance and the softness below had
+		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
+		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
+		float sunLen2D = max(length(L.xy), 1e-4);
+		float sunTan = L.z / sunLen2D;
+		float2 stepDir = L.xy / sunLen2D;
+		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		float horizonTan = -10.0;
+		// The top raster stores only the HIGHEST surface per texel, so under
+		// a multi-level object's overhang it records the deck ABOVE the
+		// receiver and every tap reads "inside a hill" — full shadow in
+		// raster-texel steps on surfaces plainly in the sun. The raster
+		// cannot see under
+		// roofs: where it stands well above the surface being shaded, drop
+		// its term and let the cascades/SSS own the shading here.
+		// The S4 skip is LIFTED. With the object taps off, skins took no
+		// heightfield occlusion at all (Josef, debug view 4: every skin black,
+		// the road patch green) while the landscape march occluded the ground
+		// beside them at full depth - so objects read brighter than the snow
+		// around them. The blockiness that motivated the skip was the POINT
+		// load, fixed below, not the taps.
+		bool objectTopUsable = HasObjectTop > 0.5;
+		[branch] if (objectTopUsable)
+		{
+			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
+			[flatten] if (all(abs(selfLocal) < 0.98))
+			{
+				float2 topDims;
+				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
+				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
+				// 6 units: about one raster texel above the floor.
+				// On normal tops the raster sits at or below the lifted skin
+				// surface (selfTop - surfZ is negative by the skin depth),
+				// so a small positive margin only fires under genuine upper
+				// decks; 32 missed low ledges, 12 still missed some.
+				// FLOOR: the raster is 4-unit texels holding the HIGHEST
+				// surface per texel, so on a steep facet a tap can legitimately
+				// read a few units above its receiver. Below ~5 the guard
+				// starts firing on that quantisation alone and object tops
+				// stop shadowing themselves at all — do not go lower without
+				// a finer raster.
+				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
+					objectTopUsable = false;
+			}
+		}
+		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
+		{
+			float d = kMarchDist[marchI];
+			float2 sampleLocal = input.GridLocal + stepDir * d;
+			float sh = -100000.0;
+			bool tapOnObject = false;
+			[branch] if (objectTopUsable)
+			{
+				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
+				[flatten] if (all(abs(topLocal) < 0.98))
+				{
+					float2 topDims;
+					ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
+					float2 topUV = float2(topLocal.x * 0.5 + 0.5, 0.5 - topLocal.y * 0.5);
+					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
+					[flatten] if (topH > -50000.0)
+					{
+						// Inside an object's footprint the surface is its top
+						// plus a skin dusting. The terrain window's class-ramp
+						// surface does not exist here: marching against it
+						// fabricated a snow slab a class depth above every
+						// skin, and the round-35 top term then stacked the
+						// ramp on the top as well - object snow fell into
+						// shadow at any low sun.
+						//
+						// Occluder = the CONE field, not a fixed dusting. A flat 2.0
+						// modelled every dome as 2 units tall, so skins never
+						// self-shadowed at their real height while the landscape march
+						// occluded the ground beside them at FULL depth. ObjectSkinDepth
+						// is unusable here (the capture parks it at 0 for every non-road
+						// object); the cone is the same angle-of-repose field the dome's
+						// own taper reads.
+						float2 tapWorld = GridOrigin + sampleLocal;
+						// Clamped to the deepest class in play: the cone raster returns
+						// a huge sentinel outside its window, and an unclamped occluder
+						// would put the whole scene in shadow.
+						float tapConeRaw = ObjectConeDepth(tapWorld);
+						float tapSnow = clamp(tapConeRaw, kMinSkinLift, max(max(RoundedDepth, ObjectsDepth), kMinSkinLift));
+						sh = topH + tapSnow;
+						dbgMarch.z += 0.2;
 
-	const float2 glintUV = fmod(worldAbs.xy, 4096.0) / kSnowUVTile;
-	const float2 glintDuvdx = ddx(glintUV);
-	const float2 glintDuvdy = ddy(glintUV);
+						// Except on ROAD-OWNED columns, which carry a full
+						// carved layer: a dusting occluder leaves the trench
+						// floor unshadowed by its own walls - the bright
+						// streak down every road trail. Rebuild the surface
+						// the patch draws, from BILINEAR reads: attempt one
+						// (reverted) fed the point-Load top and the max-of-4
+						// depth into the carve and the occluder stepped in
+						// 4-unit texels, which read as blocky shadows.
+						// Bilinear over the same lattice is the smoothness
+						// class of the patch's own drawn geometry. All four
+						// top texels must be valid (a sentinel poisons the
+						// interpolation) and the road must own the column;
+						// everywhere else - rocks, cairns, walls - the
+						// dusting above stands, so skins cannot regress.
+						float2 bt = PatchTexel(tapWorld, topDims);
+						int2 bt0 = (int2)bt;
+						float2 btf = bt - bt0;
+						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
+						float4 tapTops = float4(
+							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
+							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
+						[branch] if (all(tapTops > -50000.0))
+						{
+							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
+							float2 sd10 = ObjectSkinDepth.Load(int3(bt1.x, bt0.y, 0));
+							float2 sd01 = ObjectSkinDepth.Load(int3(bt0.x, bt1.y, 0));
+							float2 sd11 = ObjectSkinDepth.Load(int3(bt1.x, bt1.y, 0));
+							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
+							float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
+							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
+							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && (topSmooth - tapRoadTop) < kRoadOwnsTop && depthSmooth >= 1.0)
+							{
+								// Same assembly as the off-object branch below:
+								// carve + berm, undulation riding on the result;
+								// churn and clods skipped, as both marches skip
+								// them. Baked berm only, the march's own
+								// convention - the 17-tap live field is not
+								// worth 5 taps of it per pixel.
+								// Same verge blend as BuildPatchVertex, or the
+								// occluder regrows the walls the geometry
+								// tapered - the recurring shape/shadow split.
+								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
+								float tapCone = tapConeRaw;
+								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
+								float tapDeform = SampleDeformation(sampleLocal);
+								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
+								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
+								// Live undulation on purpose - see SnowShell's march note.
+								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								dbgMarch.y += 0.2;
+								dbgMarch.z -= 0.2;
+							}
+							else
+							{
+								// Non-road object column: the SAME bilinear top the road path
+								// uses, so the occluder is as smooth as the drawn dome instead
+								// of stepping in 4-unit texels. The blockiness that got the
+								// object taps disabled on S4 was the POINT load, not the taps.
+								sh = topSmooth + tapSnow;
+							}
+						}
+						tapOnObject = true;
+					}
+				}
+			}
+			[branch] if (!tapOnObject)
+			{
+				float3 st = SampleTerrainStatics(sampleLocal);
+				float sampleDepth = max(st.y, 0.0);
+				{
+					float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
+					sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
+				}
+				float sampleDeform = SampleDeformation(sampleLocal);
+				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
+				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
+				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
+				// Sentinel terrain contributes a hugely negative horizon: a
+				// no-op through the max below, same as the landscape's edge.
+				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
+			}
+			horizonTan = max(horizonTan, (sh - surfZ) / d);
+		}
+		// Near softness halved: it existed to hide the tap quantisation the
+		// finer first taps now resolve. Far end untouched.
+		float soft = lerp(0.03, 0.35, farShadowT);
+		// Penumbra CENTRED on the horizon. The old band ran
+		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
+		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
+		// over-reached its geometric edge by h/(sunTan-soft) - h/sunTan on the
+		// ground. That grows fast as the sun drops - the low-sun bleed past
+		// drift crests. Width preserved exactly; the bias is gone.
+		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		sunShadow *= marchFactor;
+		dbgMarch.x = 1.0 - marchFactor;
+		dbgMarchRan = 1.0;
+	}
+	// Screen-Space Shadows: same long-range term bare ground multiplies in,
+	// distance-blended past the cascades like the landscape shell (the SSS
+	// march ran on the PREPASS depth; near, it belongs to the surface
+	// UNDER the skin, and the crisp cascades already cover the skin).
+	[branch] if (ScreenSpaceShadowsActive > 0.5)
+	{
+		// THE TERRAIN SHELL'S GATES, not a bare distance hand-off. The mask was
+		// marched on PRE-shell depth, so it describes the surface UNDER the
+		// skin; applied with only the distance term it printed that surface's
+		// shadows onto risen snow, which is the shadow that reads as bleeding
+		// past an edge. Measured VERTICALLY, not along the view ray: the
+		// along-ray gap is depth / sin(elevation) and explodes at far grazing
+		// views. A thin coat on a plank hugs its surface and keeps the mask; a
+		// dome standing off a rock does not, and drops it.
+		float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		float shellZ = input.CurrentClip.w;
+		float sssRayGap = sceneZ - shellZ;
+		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
+		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
+		                 (1.0 - smoothstep(150.0, 400.0, sssRayGap));
+		// The terrain shell's buried-caster probe is deliberately NOT ported:
+		// its trigger (a captured top within 16 units above the receiver) is
+		// calibrated to a shell floating over bare ground, and on a skin the
+		// object's OWN raster sits exactly there - it would fire on every
+		// shallow skin and kill the mask outright rather than where a caster
+		// explains it.
+		sssBlend *= SnowShadow::GetSssHandoff(shellZ);
+		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
+	}
+
+	// Shell-surface re-march: the near-field counterpart to the mask above,
+	// same gate, same hand-off band, so the two never double.
+	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
+		SnowShadow::GetSssHandoff(input.CurrentClip.w) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	{
+		// Packed: integer part = mode (1 march, 2 march + thickness),
+		// fraction * 1000 = the caster height cap in units.
+		float remarchCap = frac(CompactLook.y) * 1000.0;
+		float remarch = SkinRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
+		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(input.CurrentClip.w));
+	}
+	// Parallax self-shadow on the snow grain, same term and constants as the
+	// terrain shell so object snow and ground snow shadow identically across
+	// the seam where they meet. Object snow needs it in both projections:
+	// a rock's flank is exactly where the side plane owns the pixel.
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.y > 0.001 && bumpFade > 0.001 &&
+		sunShadow > 0.01 && satNdotL > 0.001)
+	{
+		// Top plane's uv axes are bumpT/bumpB. The side plane is raw world
+		// axes by construction, and it only owns near-vertical pixels, where
+		// the wall and the projection plane nearly coincide.
+		float2 lightUVTop = float2(dot(L, bumpT), dot(L, bumpB));
+		float2 lightUVSide = snowSideDropsX ? float2(L.y, L.z) : float2(L.x, L.z);
+
+		float occlusion = SnowParallaxOcclusionPlanar(snowTaps, snowTapsSide, snowSteepness,
+			lightUVTop, lightUVSide, snowHeightMip, snowHeightMipSide,
+			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
+
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
+		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
+	}
+
+	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
+	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
+	// ground snow shade identically across the seam where they meet.
+	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
+	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
+	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
+	// Built once, shared by the sun and every point light (M3).
+	// Compaction thins the glint field toward the smooth-GGX fallback
+	// (same recipe as SnowShell.hlsl; density under the 1.1 gate = no
+	// glints at all).
+	float4 glintParamsC = SnowGlintParams;
+	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, pixelPos);
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, worldPos, ShellCameraPosAdjust.xyz, sunShadow,
+		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
 	float3 directSpecular = sunLit.directSpecular;
 
+	// Ice reads at GRAZING angles (landscape recipe): the one thing white
+	// snow cannot already be doing.
+	[branch] if (crustAmount > 0.001)
+	{
+		float grazing = pow(1.0 - satNdotV, 4.0);
+		directSpecular += grazing * crustAmount * CrustLook.w * SharedData::DirLightColor.xyz * sunShadow;
+	}
+
+	// Placed lights: same clustered path as the terrain shell, with each
+	// shadow-casting light's own map sampled at the skin/patch surface.
 	[branch] if (PointLightsActive > 0.5)
 	{
-		const float viewZ = mul(CameraView, float4(worldPos, 1.0)).z;
-		const float4 clipPos = mul(CameraViewProj, float4(worldPos, 1.0));
-		const float2 screenUV = clipPos.xy / max(clipPos.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(snowMtl, worldPos, worldAbs,
+		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
+		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
+		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
 			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
 	}
 
-	const float3 ambientColor = SnowAmbientColor(normalWS);
+	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
+	float3 ambientColor = SnowAmbientColor(normalWS);
 	float3 ambientPart = ambientColor * diffuseLobe;
-	const float2 terrainLocal = worldAbs.xy - GridOrigin;
+	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
+	// on a rock in a dark grove shares the grove's baked shade, and using the
+	// same source as the terrain shell keeps the seam flat.
+	float2 terrainLocal = (input.WorldPos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
 	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
 	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
+	// Skylighting parity; same path as the terrain shell.
 	[branch] if (SkylightingActive > 0.5)
 	{
-		sh2 skylightingSH = Skylighting::Sample(worldPos, normalWS);
-		const float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, worldPos, normalWS, landVertexAO);
+		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
 		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
 	}
+	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
+	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
+	// lobe does not - the composite assumes exactly this split.
+	ambientPart *= Color::PBRLightingScale;
 	directDiffuse *= Color::PBRLightingScale;
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
-	const float3 preLit = ambientPart + directDiffuse;
-	const float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
+	float3 preLit = ambientPart + directDiffuse;
+
+	// Debug view: decision data as flat colors. Patch: R = trample,
+	// G = skin depth (packed by FinishPatchVertex). Skins: teal, brightness
+	// by up-facing coverage. Absent pixels = absent geometry.
+	SkinShadeResult r;
+	r.normalWS = normalWS;
+	r.viewNormal = viewNormal;
+	r.ambientPart = ambientPart;
+	r.diffuseLobe = diffuseLobe;
+	r.directSpecular = directSpecular;
+	r.specularLobe = specularLobe;
+	r.preLit = preLit;
+	r.dbgMarch = dbgMarch;
+	r.dbgMarchRan = dbgMarchRan;
+	r.landVertexAO = landVertexAO;
+	r.snowRoughness = snowRoughness;
+	return r;
+}
+
+#if defined(BLOB) || defined(MELD)
+// Sphere snow shading shared by the direct BLOB draw and the MELD composite:
+// the shell's own material, sun, point lights and skylighting, once per
+// pixel of whichever surface the caller hands in.
+PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 motionVector, float depth, float4 curClip)
+{
+	// The skin's own material and lighting, on the sphere or melded surface.
+	// Flat class, no trench, grid-local from the world position.
+	SkinShadeInput si;
+	si.WorldPos = worldPos;
+	si.Position = float4(pixelPos, depth, 1.0);
+	si.CurrentClip = curClip;
+	si.Flat = 1.0;
+	si.worldXY = worldPos.xy + ShellCameraPosAdjust.xy;
+	si.GridLocal = si.worldXY - GridOrigin;
+	si.trenchGridLocal = si.GridLocal;
+	si.pixelDist = length(worldPos);
+	si.pixelDeform = 0.0;
+	si.screenNoise = Random::InterleavedGradientNoise(pixelPos, SharedData::FrameCount);
+	SkinShadeResult r = SkinShadeSurface(si, normalWS);
 
 	PS_OUTPUT psout;
-	psout.Diffuse = float4(preLit, 1.0);
+	psout.Diffuse = float4(r.preLit, 1.0);
 	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, 0.0);
-	psout.Albedo = float4(diffuseLobe, 1.0);
-	psout.Specular = float4(directSpecular, 1.0);
-	psout.Reflectance = float4(specularLobe, 1.0);
-	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, 1.0);
-	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, 1.0);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 1.0);
+	psout.Albedo = float4(r.diffuseLobe, 1.0);
+	psout.Specular = float4(r.directSpecular, 1.0);
+	psout.Reflectance = float4(r.specularLobe, 1.0);
+	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(r.ambientPart).x, 1.0);
+	psout.Masks2 = float4(1.0 - r.landVertexAO, 0.0, 0.0, 1.0);
 #	if defined(MELD)
 	psout.Depth = depth;
 #	endif
@@ -3327,7 +3949,7 @@ PS_OUTPUT main(BLOB_VS_OUTPUT input)
 	// Below the surface the sphere rests on is inside the object.
 	clip(worldAbs.z - (input.TopZ - 2.0));
 	const float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
-	return BlobShade(input.WorldPos, normalize(input.NormalWS), input.Position.xy, motionVector, 0.0);
+	return BlobShade(input.WorldPos, normalize(input.NormalWS), input.Position.xy, motionVector, input.Position.z, input.CurrentClip);
 }
 #	endif
 #elif defined(MELD)
@@ -3380,7 +4002,7 @@ PS_OUTPUT main(MELD_VS_OUTPUT input)
 	const float3 prevRel = rel + (ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz);
 	const float4 prev = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	const float2 motionVector = float2(-0.5, 0.5) * (cur.xy / cur.w - prev.xy / prev.w);
-	PS_OUTPUT psout = BlobShade(rel, normalWS, pixel, motionVector, depth);
+	PS_OUTPUT psout = BlobShade(rel, normalWS, pixel, motionVector, depth, cur);
 	[branch] if (MeldDebug > 0.5)
 	{
 		const float3 dbg = MeldDebug > 1.5 ? normalWS * 0.5 + 0.5 : saturate(z / 4096.0).xxx;
@@ -4109,633 +4731,30 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (ditherRef >= fadeAlpha)
 		discard;
 
-	// Snow texture taps, shared by albedo, normal and RMAOS, sampled at the
-	// parallax-corrected position. Steep drape sides re-project along the
-	// facing wall plane, since the top-down projection stretches down flanks.
-	// Blended as SAMPLES, never as coordinates: lerping UVs gives a field
-	// belonging to neither plane, so the whole transition band smears.
-	float2 snowUV = (SnowUVOffset + trenchGridLocal) / kSnowUVTile;
-#ifdef PATCH
-	// The landscape ramp, not the statics one. The patch is the landscape
-	// recipe on objects and its trench walls live in the same 40-65 degree
-	// band the shell's comment describes - at 30-unit depth a wall's n.z is
-	// ~0.45, which the shell hands fully to the side plane while the statics
-	// ramp below leaves it two-thirds top-projected: stretched grain, a
-	// grain-shadow march over stretched UVs, the bright warped band along
-	// road trench walls. At 64 the wall is steep enough that both ramps
-	// agree, which is why the band vanished there; at 10 neither engages.
-	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
-#else
-	// PARITY with the terrain shell and the patch (Josef 2026-09-01: object
-	// snow read a visibly different colour from the landscape beside it).
-	// This drives the two-plane blend for albedo, normal AND rmaos, so a
-	// different ramp is a different material on the same slope. WAS
-	// smoothstep(0.55, 0.25): a deliberate tune, to hold the top projection
-	// longer across rock flanks at n.z 0.4-0.7. Revert this line first if
-	// flanks now read stretched.
-	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
-#endif
-	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
-	// Captured, not recomputed: normalWS is perturbed further below (berm
-	// ridge, normal map), and the parallax shadow must resolve the light into
-	// the SAME plane these uvs were built on.
-	bool snowSideDropsX = abs(normalWS.x) > abs(normalWS.y);
-	float2 snowSidePlane = snowSideDropsX ? float2(worldXY.y, snowWorldZAbs) : float2(worldXY.x, snowWorldZAbs);
-	// NO SnowUVOffset here + static 4096-unit fold, in step with the
-	// landscape shell (see its comment): the offset compensates a rebasing
-	// coordinate, and this plane is absolute - adding it slid drape-side
-	// texture on every grid scroll, just too subtly to notice on small
-	// near-vertical sides.
-	float2 snowUVSideUnfolded = snowSidePlane / kSnowUVTile;
-	float2 snowUVSide = (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile;
-	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, pixelDist);
-	// The distance fade WITHOUT the crust flattening applied: the frost
-	// crystal replacing the powder grain must not fade with it.
-	const float bumpFadeRaw = bumpFade;
-	// Spell marks (landscape parity): crust flattens the powder
-	// grain here; albedo/polish/grazing terms follow below. Stable grid
-	// position for the fetch (round-31 lesson).
-	float crustAmount = saturate(SampleCrust(input.GridLocal) * SpellShading.y);
-	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
-	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXY);
-	SnowTaps snowTapsSide = ComputeSnowTaps(snowUVSide, snowSidePlane);
-	snowTapsSide.duvdx = ddx(snowUVSideUnfolded);
-	snowTapsSide.duvdy = ddy(snowUVSideUnfolded);
-	// Uniform flow: the parallax shadow branch below is divergent, and
-	// derivatives taken inside it would be garbage at its edges.
-	float snowHeightMip = SnowHeightMip(snowUV);
-	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
-
-	// Object trench detail: shading-only berm ridge along trails; also the
-	// compaction weight's berm term. Geometry berm waits for the skin
-	// rework.
-	float bermC = 0.0;
-	[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.x > 0.001)
-		bermC = BermField(trenchGridLocal);
-#ifdef PATCH
-	// The patch's berm is real geometry (BuildPatchVertex), shaded by the
-	// vertex normal it displaced. Adding the shading ridge here too would
-	// double it.
-	[branch] if (false)
-#else
-	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
-#endif
-	{
-		const float bStep = 4.0;
-		float2 bermGrad = float2(
-			BermShape(BermField(trenchGridLocal + float2(bStep, 0.0))) - BermShape(BermField(trenchGridLocal - float2(bStep, 0.0))),
-			BermShape(BermField(trenchGridLocal + float2(0.0, bStep))) - BermShape(BermField(trenchGridLocal - float2(0.0, bStep)))) / (2.0 * bStep);
-		float bermDepth = min(lerp(RoundedDepth, ObjectsDepth, input.Flat), 12.0);
-		// Centre-masked rather than per-tap: this berm is shading-only, and
-		// the mask's job is just to keep the ridge off the dug floor.
-		normalWS = normalize(normalWS + float3(-bermGrad * saturate(1.0 - pixelDeform) * bermDepth * ObjBermHeightAmp * BermDepthGate(bermDepth), 0.0));
-		// P6 clods, shading-only like this whole ridge (geometry berm
-		// waits for the skin rework); same weight recipe as the landscape.
-		[branch] if (RimStyle.z > 0.01)
-		{
-			float2 clodXY = GridOrigin + trenchGridLocal;
-			float kXP = ChurnNoiseScaled(clodXY + float2(bStep, 0.0), kClodSizeScale);
-			float kXN = ChurnNoiseScaled(clodXY - float2(bStep, 0.0), kClodSizeScale);
-			float kYP = ChurnNoiseScaled(clodXY + float2(0.0, bStep), kClodSizeScale);
-			float kYN = ChurnNoiseScaled(clodXY - float2(0.0, bStep), kClodSizeScale);
-			normalWS = normalize(normalWS + float3(-float2(kXP - kXN, kYP - kYN) / (2.0 * bStep) *
-				RimStyle.z * BermShape(bermC) * saturate(1.0 - pixelDeform) * BermDepthGate(bermDepth), 0.0));
-		}
-	}
-
-#ifdef PATCH
-	// Churn shading at PIXEL rate, the landscape PS's own recipe (weight =
-	// ChurnWeight x depth/10). Not in the vertex normal: at ChurnSize 0.25
-	// the lumps sit at 4/1.75 units, under even the dense band's vertex
-	// spacing, and the interpolated gradient shaded trampled floors as
-	// pristine top snow. Geometry keeps its coarse displacement; the normal
-	// carries the look, as with the landscape's dunes.
-	// UNCARVED depth, exactly as the landscape weighs it (its pixelDepth is
-	// the ramp depth, not the carve): trench floors shade at full churn
-	// whenever the layer is deep enough to churn at all. The carved depth
-	// here read floors at ~30% of the landscape's - Josef's "boosted" gap.
-	[branch] if (ObjChurnHeightAmp > 0.01)
-	{
-		float churnWPix = ChurnWeight(pixelDeform, bermC) * saturate(PatchSkinDepth(worldXY).x / 10.0);
-		[branch] if (churnWPix > 0.001)
-		{
-			const float cStep = 3.0;
-			float2 churnGradPix = float2(
-				ChurnNoise(worldXY + float2(cStep, 0.0)) - ChurnNoise(worldXY - float2(cStep, 0.0)),
-				ChurnNoise(worldXY + float2(0.0, cStep)) - ChurnNoise(worldXY - float2(0.0, cStep))) / (2.0 * cStep);
-			normalWS = normalize(normalWS + float3(-churnGradPix * ObjChurnHeightAmp * churnWPix, 0.0));
-		}
-	}
-#endif
-
-	// Tangent basis for the TOP projection's uv axes (see SnowShell.hlsl).
-	// Built from the geometric normal before the normal map perturbs it, and
-	// shared with the parallax shadow below.
-	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 bumpB = cross(normalWS, bumpT);
-
-	float3 V = -normalize(input.WorldPos);
-
-	// Pre-parallax derivatives for the glint grid (Lighting.hlsl's uvOriginal
-	// pattern; see SnowShell.hlsl): the POM offset is view-dependent and
-	// glints must not ride it. The uv itself is rebuilt world-anchored below.
-	const float2 glintDuvdx = snowTaps.duvdx;
-	const float2 glintDuvdy = snowTaps.duvdy;
-
-	// Parallax occlusion, same marcher the landscape shell uses (shared in
-	// SnowParallax.hlsli, so the two cannot drift). Object snow needs it in
-	// BOTH projections, and unlike SampleSnowPlanar the two cannot share one
-	// march: each projection has its own uv axes, so the view resolves to a
-	// different 2D direction in each and the offsets are not interchangeable.
-	// Each plane therefore marches itself and shifts its OWN tap set; the
-	// existing sample blend then mixes them exactly as before.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
-	{
-		DisplacementParams pomParams = SnowDisplacementParams();
-		pomParams.HeightScale *= SnowParallax.z;
-
-		// Top plane: bumpT/bumpB ARE its uv axes.
-		float3x3 tbnTop = float3x3(bumpT, bumpB, normalWS);
-		float2 offsetTop = SnowParallaxOffset(snowTaps, snowUV, V, tbnTop, pixelDist, snowHeightMip, screenNoise, pomParams);
-		// Faded with steepness, in step with the landscape shell: on a steep
-		// side the top TBN follows the surface normal while snowUV stays a
-		// top-down projection, and marching that mismatched frame redraws
-		// the face whenever the camera changes position.
-		offsetTop *= 1.0 - snowSteepness;
-		snowUV += offsetTop;
-		snowTaps = OffsetSnowTaps(snowTaps, offsetTop);
-
-		// Side plane: raw world axes by construction, matching how
-		// snowSidePlane was built. Only steep pixels pay for it. The plane
-		// normal is flipped toward the viewer (the old path took abs of the
-		// view's N component for the same tolerance).
-		[branch] if (snowSteepness > 0.001)
-		{
-			float3 sideT = snowSideDropsX ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-			float3 sideB = float3(0.0, 0.0, 1.0);
-			float3 sideN = normalize(snowSideDropsX ? float3(normalWS.x, 0.0, 0.0) : float3(0.0, normalWS.y, 0.0));
-			sideN = dot(V, sideN) < 0.0 ? -sideN : sideN;
-			float3x3 tbnSide = float3x3(sideT, sideB, sideN);
-			float2 offsetSide = SnowParallaxOffset(snowTapsSide, snowUVSide, V, tbnSide, pixelDist, snowHeightMipSide, screenNoise, pomParams);
-			snowUVSide += offsetSide;
-			snowTapsSide = OffsetSnowTaps(snowTapsSide, offsetSide);
-		}
-	}
-
-	// Micro-relief; identical recipe to the terrain shell so ground and
-	// object snow carry the same grain: real PBR normal map when available,
-	// luminance height-proxy fallback otherwise. Applied after the coverage
-	// gate: bending the normal first would jitter the up-facing test into
-	// speckled edges.
-	[branch] if (HasSnowNormal > 0.5 && bumpFade > 0.001)
-	{
-		float3 texN = SampleSnowPlanar(SnowNormalMap, snowTaps, snowTapsSide, snowSteepness).xyz * 2.0 - 1.0;
-		texN.z = sqrt(saturate(1.0 - dot(texN.xy, texN.xy)));
-		texN.y = -texN.y;
-		normalWS = normalize(normalWS + (bumpT * texN.x + bumpB * texN.y) * bumpFade);
-	}
-	else if (HasSnowTexture != 0 && bumpFade > 0.001)
-	{
-		const float kBumpTile = 64.0;
-		const float kBumpHeight = 0.55;
-		float2 texDims;
-		SnowDiffuse.GetDimensions(texDims.x, texDims.y);
-		float e = 1.5 / texDims.x;
-		float2 detailUV = worldXY / kBumpTile;
-		const float3 kLum = float3(0.30, 0.45, 0.25);
-		float h0 = dot(SnowDiffuse.Sample(SnowSampler, detailUV).rgb, kLum);
-		float hx = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(e, 0.0)).rgb, kLum);
-		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
-		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
-		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
-	}
-
-	// Frost crystal (landscape recipe): the pattern normal rides bumpFadeRaw
-	// so the crystal survives the crust's flattening of the powder grain.
-	FrostTaps frost;
-	frost.normal = float3(0.0, 0.0, 1.0);
-	frost.crystal = 0.0;
-	frost.valid = false;
-	const float frostAmount = (CrustLook2.w > 0.5) ? crustAmount * saturate(CrustLook2.y) : 0.0;
-	[branch] if (frostAmount > 0.001)
-	{
-		frost = SampleFrostPattern(worldXY, CrustLook2.z);
-		normalWS = normalize(normalWS +
-		                     (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
-	}
-
-	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
-
-	// Snow material; same albedo path as the terrain shell.
-	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
-	[branch] if (HasSnowTexture != 0)
-	{
-		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
-		[flatten] if (SnowTextureIsLinear != 0.0)
-			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
-	}
-	// Compaction weight (Stage 1), shared constant with the terrain shell;
-	// feeds the glint suppression alone (the darken/roughen halves were
-	// retired - IBL + DALC already darken trenches).
-	float churnMat = ChurnWeight(pixelDeform, bermC);
-
-	// Spell marks on the albedo; the landscape recipes verbatim.
-	{
-		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
-		[branch] if (scorch > 0.001)
-			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
-	}
-	[branch] if (crustAmount > 0.001)
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
-	[branch] if (frost.valid)
-		kSnowAlbedo *= lerp(1.0, lerp(0.94, 1.0, frost.crystal), frostAmount);
-
-	// PBR response; identical constants to the terrain shell.
-	static const float kSnowRoughness = 0.6;
-	static const float3 kSnowF0 = float3(0.028, 0.028, 0.028);
-
-	float snowRoughness = kSnowRoughness;
-	float3 snowF0 = kSnowF0;
-	float snowAO = 1.0;
-	[branch] if (HasSnowRmaos > 0.5)
-	{
-		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
-		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
-		snowAO = rmaos.z;
-		snowF0 = rmaos.w * SnowSpecularLevel;
-	}
-
-	// Crust polishes whatever the material ended up being; after the RMAOS
-	// block or an installed map silently discards it (landscape lesson).
-	[branch] if (crustAmount > 0.001)
-	{
-		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
-		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
-	}
-	[branch] if (frost.valid)
-	{
-		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
-		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
-	}
-
-	float3 L = SharedData::DirLightDirection.xyz;
-	float satNdotL = saturate(dot(normalWS, L));
-	float satNdotV = saturate(abs(dot(normalWS, V)) + 1e-5);
-
-	float worldShadow = ShadowSampling::GetWorldShadow(input.WorldPos, ShellCameraPosAdjust.xyz);
-	// Hoisted above the cascade call: the crisp path widens its PCF ring with
-	// distance exactly as the terrain shell does, or the far cascade's texels
-	// quantise into blocky patches on object snow while the ground beside it
-	// shows soft penumbra.
-	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
-	float sunShadow;
-	[branch] if (CrispShadows > 0.5)
-	{
-		// Full-resolution comparison PCF; same path as the terrain shell.
-		// (the round-31 seamShadowLift receiver raise is REVERTED -
-		// the RenderDoc replay proved no cascade shadow was missing at the
-		// seam, so the lift only risked boundary drift.)
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
-	}
-	else
-	{
-		float detailedShadow;
-		float dynamicShadow = ShadowSampling::GetLightingShadow(input.WorldPos, detailedShadow);
-		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
-	}
-	// Heightfield self-shadowing, the landscape shell's 5-tap horizon march
-	//: hills, berms and drift rims cast the same soft shadows onto
-	// object snow as onto the ground beside it, and a trench's own rim
-	// darkens its interior. Same tap ring, same carved-surface rule; the
-	// melt term reads the wide exclusion field alone (no near mask bound
-	// here). Object tops from the skin's own raster window join the horizon.
-	// March diagnostics for debug view 4: x = how much the march darkened
-	// this pixel, y = fraction of taps that rebuilt the road's carved
-	// surface, z = fraction that used the flat dusting. Ran = the guard
-	// below passed at all (a pixel the cascades already darkened, or a sun
-	// too low, never marches - the view paints those dim magenta so "march
-	// skipped" cannot be misread as "march found nothing").
-	float3 dbgMarch = float3(0.0, 0.0, 0.0);
-	float dbgMarchRan = 0.0;
-	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
-	{
-		// Redistributed toward the NEAR field. The first tap set the finest
-		// boundary the horizon can resolve, so at 28 units every shadow edge
-		// was smeared over at least that distance and the softness below had
-		// to be wide enough to hide it. Same tap COUNT, same 1000-unit reach.
-		static const float kMarchDist[5] = { 12.0, 32.0, 90.0, 300.0, 1000.0 };
-		float sunLen2D = max(length(L.xy), 1e-4);
-		float sunTan = L.z / sunLen2D;
-		float2 stepDir = L.xy / sunLen2D;
-		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-		float horizonTan = -10.0;
-		// The top raster stores only the HIGHEST surface per texel, so under
-		// a multi-level object's overhang it records the deck ABOVE the
-		// receiver and every tap reads "inside a hill" — full shadow in
-		// raster-texel steps on surfaces plainly in the sun. The raster
-		// cannot see under
-		// roofs: where it stands well above the surface being shaded, drop
-		// its term and let the cascades/SSS own the shading here.
-		// The S4 skip is LIFTED. With the object taps off, skins took no
-		// heightfield occlusion at all (Josef, debug view 4: every skin black,
-		// the road patch green) while the landscape march occluded the ground
-		// beside them at full depth - so objects read brighter than the snow
-		// around them. The blockiness that motivated the skip was the POINT
-		// load, fixed below, not the taps.
-		bool objectTopUsable = HasObjectTop > 0.5;
-		[branch] if (objectTopUsable)
-		{
-			float2 selfLocal = (GridOrigin + input.GridLocal - HeightWindowCenter) / HeightHalfExtent;
-			[flatten] if (all(abs(selfLocal) < 0.98))
-			{
-				float2 topDims;
-				ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-				float2 selfUV = float2(selfLocal.x * 0.5 + 0.5, 0.5 - selfLocal.y * 0.5);
-				float selfTop = ObjectTopRaw.Load(int3((int2)clamp(selfUV * topDims, 0.0, topDims - 1.0), 0));
-				// 6 units: about one raster texel above the floor.
-				// On normal tops the raster sits at or below the lifted skin
-				// surface (selfTop - surfZ is negative by the skin depth),
-				// so a small positive margin only fires under genuine upper
-				// decks; 32 missed low ledges, 12 still missed some.
-				// FLOOR: the raster is 4-unit texels holding the HIGHEST
-				// surface per texel, so on a steep facet a tap can legitimately
-				// read a few units above its receiver. Below ~5 the guard
-				// starts firing on that quantisation alone and object tops
-				// stop shadowing themselves at all — do not go lower without
-				// a finer raster.
-				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
-					objectTopUsable = false;
-			}
-		}
-		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
-		{
-			float d = kMarchDist[marchI];
-			float2 sampleLocal = input.GridLocal + stepDir * d;
-			float sh = -100000.0;
-			bool tapOnObject = false;
-			[branch] if (objectTopUsable)
-			{
-				float2 topLocal = (GridOrigin + sampleLocal - HeightWindowCenter) / HeightHalfExtent;
-				[flatten] if (all(abs(topLocal) < 0.98))
-				{
-					float2 topDims;
-					ObjectTopRaw.GetDimensions(topDims.x, topDims.y);
-					float2 topUV = float2(topLocal.x * 0.5 + 0.5, 0.5 - topLocal.y * 0.5);
-					float topH = ObjectTopRaw.Load(int3((int2)clamp(topUV * topDims, 0.0, topDims - 1.0), 0));
-					[flatten] if (topH > -50000.0)
-					{
-						// Inside an object's footprint the surface is its top
-						// plus a skin dusting. The terrain window's class-ramp
-						// surface does not exist here: marching against it
-						// fabricated a snow slab a class depth above every
-						// skin, and the round-35 top term then stacked the
-						// ramp on the top as well - object snow fell into
-						// shadow at any low sun.
-						//
-						// Occluder = the CONE field, not a fixed dusting. A flat 2.0
-						// modelled every dome as 2 units tall, so skins never
-						// self-shadowed at their real height while the landscape march
-						// occluded the ground beside them at FULL depth. ObjectSkinDepth
-						// is unusable here (the capture parks it at 0 for every non-road
-						// object); the cone is the same angle-of-repose field the dome's
-						// own taper reads.
-						float2 tapWorld = GridOrigin + sampleLocal;
-						// Clamped to the deepest class in play: the cone raster returns
-						// a huge sentinel outside its window, and an unclamped occluder
-						// would put the whole scene in shadow.
-						float tapConeRaw = ObjectConeDepth(tapWorld);
-						float tapSnow = clamp(tapConeRaw, kMinSkinLift, max(max(RoundedDepth, ObjectsDepth), kMinSkinLift));
-						sh = topH + tapSnow;
-						dbgMarch.z += 0.2;
-
-						// Except on ROAD-OWNED columns, which carry a full
-						// carved layer: a dusting occluder leaves the trench
-						// floor unshadowed by its own walls - the bright
-						// streak down every road trail. Rebuild the surface
-						// the patch draws, from BILINEAR reads: attempt one
-						// (reverted) fed the point-Load top and the max-of-4
-						// depth into the carve and the occluder stepped in
-						// 4-unit texels, which read as blocky shadows.
-						// Bilinear over the same lattice is the smoothness
-						// class of the patch's own drawn geometry. All four
-						// top texels must be valid (a sentinel poisons the
-						// interpolation) and the road must own the column;
-						// everywhere else - rocks, cairns, walls - the
-						// dusting above stands, so skins cannot regress.
-						float2 bt = PatchTexel(tapWorld, topDims);
-						int2 bt0 = (int2)bt;
-						float2 btf = bt - bt0;
-						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
-						float4 tapTops = float4(
-							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
-							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
-						[branch] if (all(tapTops > -50000.0))
-						{
-							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
-							float2 sd10 = ObjectSkinDepth.Load(int3(bt1.x, bt0.y, 0));
-							float2 sd01 = ObjectSkinDepth.Load(int3(bt0.x, bt1.y, 0));
-							float2 sd11 = ObjectSkinDepth.Load(int3(bt1.x, bt1.y, 0));
-							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
-							float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
-							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
-							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && (topSmooth - tapRoadTop) < kRoadOwnsTop && depthSmooth >= 1.0)
-							{
-								// Same assembly as the off-object branch below:
-								// carve + berm, undulation riding on the result;
-								// churn and clods skipped, as both marches skip
-								// them. Baked berm only, the march's own
-								// convention - the 17-tap live field is not
-								// worth 5 taps of it per pixel.
-								// Same verge blend as BuildPatchVertex, or the
-								// occluder regrows the walls the geometry
-								// tapered - the recurring shape/shadow split.
-								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
-								float tapCone = tapConeRaw;
-								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
-								float tapDeform = SampleDeformation(sampleLocal);
-								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
-								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-								// Live undulation on purpose - see SnowShell's march note.
-								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
-								dbgMarch.y += 0.2;
-								dbgMarch.z -= 0.2;
-							}
-							else
-							{
-								// Non-road object column: the SAME bilinear top the road path
-								// uses, so the occluder is as smooth as the drawn dome instead
-								// of stepping in 4-unit texels. The blockiness that got the
-								// object taps disabled on S4 was the POINT load, not the taps.
-								sh = topSmooth + tapSnow;
-							}
-						}
-						tapOnObject = true;
-					}
-				}
-			}
-			[branch] if (!tapOnObject)
-			{
-				float3 st = SampleTerrainStatics(sampleLocal);
-				float sampleDepth = max(st.y, 0.0);
-				{
-					float sampleMelt = saturate(SampleExclusionField(GridOrigin + sampleLocal).y);
-					sampleDepth = lerp(sampleDepth, min(sampleDepth, kFireMeltFloor), sampleMelt);
-				}
-				float sampleDeform = SampleDeformation(sampleLocal);
-				float sampleBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
-				sampleDepth = CarveProfile(sampleDeform, sampleDepth, GridOrigin + sampleLocal) +
-				              BermShape(sampleBerm) * saturate(1.0 - sampleDeform) * sampleDepth * BermHeightAmp * BermDepthGate(sampleDepth);
-				// Sentinel terrain contributes a hugely negative horizon: a
-				// no-op through the max below, same as the landscape's edge.
-				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
-			}
-			horizonTan = max(horizonTan, (sh - surfZ) / d);
-		}
-		// Near softness halved: it existed to hide the tap quantisation the
-		// finer first taps now resolve. Far end untouched.
-		float soft = lerp(0.03, 0.35, farShadowT);
-		// Penumbra CENTRED on the horizon. The old band ran
-		// [-0.12 - (soft-0.06)*2, +soft]: the same total width (3*soft) but
-		// entirely on the LIT side of sunTan == horizonTan, so the shadow always
-		// over-reached its geometric edge by h/(sunTan-soft) - h/sunTan on the
-		// ground. That grows fast as the sun drops - the low-sun bleed past
-		// drift crests. Width preserved exactly; the bias is gone.
-		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
-		sunShadow *= marchFactor;
-		dbgMarch.x = 1.0 - marchFactor;
-		dbgMarchRan = 1.0;
-	}
-	// Screen-Space Shadows: same long-range term bare ground multiplies in,
-	// distance-blended past the cascades like the landscape shell (the SSS
-	// march ran on the PREPASS depth; near, it belongs to the surface
-	// UNDER the skin, and the crisp cascades already cover the skin).
-	[branch] if (ScreenSpaceShadowsActive > 0.5)
-	{
-		// THE TERRAIN SHELL'S GATES, not a bare distance hand-off. The mask was
-		// marched on PRE-shell depth, so it describes the surface UNDER the
-		// skin; applied with only the distance term it printed that surface's
-		// shadows onto risen snow, which is the shadow that reads as bleeding
-		// past an edge. Measured VERTICALLY, not along the view ray: the
-		// along-ray gap is depth / sin(elevation) and explodes at far grazing
-		// views. A thin coat on a plank hugs its surface and keeps the mask; a
-		// dome standing off a rock does not, and drops it.
-		float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-		float shellZ = input.CurrentClip.w;
-		float sssRayGap = sceneZ - shellZ;
-		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
-		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
-		                 (1.0 - smoothstep(150.0, 400.0, sssRayGap));
-		// The terrain shell's buried-caster probe is deliberately NOT ported:
-		// its trigger (a captured top within 16 units above the receiver) is
-		// calibrated to a shell floating over bare ground, and on a skin the
-		// object's OWN raster sits exactly there - it would fire on every
-		// shallow skin and kill the mask outright rather than where a caster
-		// explains it.
-		sssBlend *= SnowShadow::GetSssHandoff(shellZ);
-		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
-	}
-
-	// Shell-surface re-march: the near-field counterpart to the mask above,
-	// same gate, same hand-off band, so the two never double.
-	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
-		SnowShadow::GetSssHandoff(input.CurrentClip.w) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
-	{
-		// Packed: integer part = mode (1 march, 2 march + thickness),
-		// fraction * 1000 = the caster height cap in units.
-		float remarchCap = frac(CompactLook.y) * 1000.0;
-		float remarch = SkinRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
-		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(input.CurrentClip.w));
-	}
-	// Parallax self-shadow on the snow grain, same term and constants as the
-	// terrain shell so object snow and ground snow shadow identically across
-	// the seam where they meet. Object snow needs it in both projections:
-	// a rock's flank is exactly where the side plane owns the pixel.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallax.y > 0.001 && bumpFade > 0.001 &&
-		sunShadow > 0.01 && satNdotL > 0.001)
-	{
-		// Top plane's uv axes are bumpT/bumpB. The side plane is raw world
-		// axes by construction, and it only owns near-vertical pixels, where
-		// the wall and the projection plane nearly coincide.
-		float2 lightUVTop = float2(dot(L, bumpT), dot(L, bumpB));
-		float2 lightUVSide = snowSideDropsX ? float2(L.y, L.z) : float2(L.x, L.z);
-
-		float occlusion = SnowParallaxOcclusionPlanar(snowTaps, snowTapsSide, snowSteepness,
-			lightUVTop, lightUVSide, snowHeightMip, snowHeightMipSide,
-			SnowParallaxQuality(pixelDist), screenNoise, SnowDisplacementParams());
-
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
-		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
-	}
-
-	// Sun BRDF + indirect lobes through CS's own PBR path (SnowShading.hlsli,
-	// ROUTING-ROADMAP M1); same call as the terrain shell so object snow and
-	// ground snow shade identically across the seam where they meet.
-	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
-	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
-	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
-	// Built once, shared by the sun and every point light (M3).
-	// Compaction thins the glint field toward the smooth-GGX fallback
-	// (same recipe as SnowShell.hlsl; density under the 1.1 gate = no
-	// glints at all).
-	float4 glintParamsC = SnowGlintParams;
-	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
-	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
-	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
-		glintUV, glintDuvdx, glintDuvdy);
-	float3 specularLobe = sunLit.specularLobe;
-	float3 diffuseLobe = sunLit.diffuseLobe;
-	float3 directDiffuse = sunLit.directDiffuse;
-	float3 directSpecular = sunLit.directSpecular;
-
-	// Ice reads at GRAZING angles (landscape recipe): the one thing white
-	// snow cannot already be doing.
-	[branch] if (crustAmount > 0.001)
-	{
-		float grazing = pow(1.0 - satNdotV, 4.0);
-		directSpecular += grazing * crustAmount * CrustLook.w * SharedData::DirLightColor.xyz * sunShadow;
-	}
-
-	// Placed lights: same clustered path as the terrain shell, with each
-	// shadow-casting light's own map sampled at the skin/patch surface.
-	[branch] if (PointLightsActive > 0.5)
-	{
-		float viewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
-		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
-		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
-		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
-	}
-
-	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
-	float3 ambientColor = SnowAmbientColor(normalWS);
-	float3 ambientPart = ambientColor * diffuseLobe;
-	// The land's baked vertex AO under the object (see SnowShell.hlsl): snow
-	// on a rock in a dark grove shares the grove's baked shade, and using the
-	// same source as the terrain shell keeps the seam flat.
-	float2 terrainLocal = (input.WorldPos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
-	float landVertexAO = Color::ColorToLinear(SampleTerrainVertexAO(terrainLocal).xxx).x;
-	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
-	// Skylighting parity; same path as the terrain shell.
-	[branch] if (SkylightingActive > 0.5)
-	{
-		sh2 skylightingSH = Skylighting::Sample(input.WorldPos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, input.WorldPos, normalWS, landVertexAO);
-		ambientPart = Color::IrradianceToGamma(Color::IrradianceToLinear(ambientPart) * MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
-	}
-	// TruePBR G-buffer units (Lighting.hlsl:2766-2774): diffuse, specular,
-	// ambient and the Albedo payload carry PBRLightingScale; the Reflectance
-	// lobe does not - the composite assumes exactly this split.
-	ambientPart *= Color::PBRLightingScale;
-	directDiffuse *= Color::PBRLightingScale;
-	directSpecular *= Color::PBRLightingScale;
-	diffuseLobe *= Color::PBRLightingScale;
-	float3 preLit = ambientPart + directDiffuse;
-
-	// Debug view: decision data as flat colors. Patch: R = trample,
-	// G = skin depth (packed by FinishPatchVertex). Skins: teal, brightness
-	// by up-facing coverage. Absent pixels = absent geometry.
+	// The material and lighting, shared with the Blob Snow Shell.
+	SkinShadeInput ssi;
+	ssi.WorldPos = input.WorldPos;
+	ssi.Position = input.Position;
+	ssi.CurrentClip = input.CurrentClip;
+	ssi.Flat = input.Flat;
+	ssi.GridLocal = input.GridLocal;
+	ssi.trenchGridLocal = trenchGridLocal;
+	ssi.worldXY = worldXY;
+	ssi.pixelDist = pixelDist;
+	ssi.pixelDeform = pixelDeform;
+	ssi.screenNoise = screenNoise;
+	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
+	normalWS = ssr.normalWS;
+	float3 viewNormal = ssr.viewNormal;
+	float3 ambientPart = ssr.ambientPart;
+	float3 diffuseLobe = ssr.diffuseLobe;
+	float3 directSpecular = ssr.directSpecular;
+	float3 specularLobe = ssr.specularLobe;
+	float3 preLit = ssr.preLit;
+	float3 dbgMarch = ssr.dbgMarch;
+	float dbgMarchRan = ssr.dbgMarchRan;
+	float landVertexAO = ssr.landVertexAO;
+	float snowRoughness = ssr.snowRoughness;
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH

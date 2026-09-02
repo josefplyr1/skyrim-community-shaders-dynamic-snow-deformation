@@ -1821,6 +1821,8 @@ public:
 	/** @brief Staging copy of the indirect args, read one frame late so the menu can show how many spheres were placed against the cap. */
 	winrt::com_ptr<ID3D11Buffer> blobArgsStaging;
 	uint32_t blobPlacedLastFrame = 0;
+	/** @brief The radius placement actually used: shrinks while last frame's count exceeded the budget, grows back slowly, so far cells give way before near ones. */
+	float blobEffectiveRadius = 0.0f;
 	winrt::com_ptr<ID3D11Buffer> blobSphereVB;
 	winrt::com_ptr<ID3D11Buffer> blobSphereIB;
 	uint32_t blobSphereIndexCount = 0;
