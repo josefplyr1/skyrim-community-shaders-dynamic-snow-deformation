@@ -1891,6 +1891,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
+	// The PS reads BlobRefZ (fresh-top channel of the blob mask) from b1 too;
+	// unbound here it read 0 and every layer-1 height clamped out of range.
+	context->PSSetConstantBuffers(1, 1, &cb1);
 	// The capture PS rejects grounded fragments from the bottoms raster
 	// (elevated undersides only); it reads terrain via the process CB.
 	ID3D11Buffer* captureCB0 = heightProcessCB->CB();
