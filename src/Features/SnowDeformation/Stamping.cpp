@@ -470,6 +470,35 @@ float SnowDeformation::CrustBreakForce(float a_radius) const
 	return std::clamp((a_radius - threshold) / threshold, 0.0f, 1.0f);
 }
 
+// A collision shape's stamp: its own silhouette on the ground (a capsule
+// along its longest horizontal extent, as wide as the next) when that covers
+// this frame's motion, else the sweep from where it was. Subtracting the
+// width from the length keeps the capsule's end caps inside the shape - a
+// sphere collapses to the point it always was.
+struct ShapeStamp
+{
+	float2 a;
+	float2 b;
+	float radius;
+};
+static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_current, float2 a_previous,
+	float a_boundRadius, bool a_footprints)
+{
+	ShapeStamp out{ a_current, a_previous, a_boundRadius };
+	float ax, ay, halfLen, halfWid;
+	if (!a_footprints || !Util::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid))
+		return out;
+	const float seg = std::max(halfLen - halfWid, 0.0f);
+	const float dx = a_current.x - a_previous.x;
+	const float dy = a_current.y - a_previous.y;
+	out.radius = halfWid;
+	if (dx * dx + dy * dy <= seg * seg) {
+		out.a = { a_current.x + ax * seg, a_current.y + ay * seg };
+		out.b = { a_current.x - ax * seg, a_current.y - ay * seg };
+	}
+	return out;
+}
+
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
 	globals::profiler->BeginPass("SnowDeformation::GatherStamps");
@@ -1192,15 +1221,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// the snow deforms as the body moves through it.
 					currentPositions[key] = current;
 
+					const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
 					float4 stamp{};
-					stamp.x = current.x;
-					stamp.y = current.y;
+					stamp.x = shapeStamp.a.x;
+					stamp.y = shapeStamp.a.y;
 					stamp.z = 1.0f;
-					// StampRadius scales the shape's own radius.
-					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
+					// StampRadius scales the shape's own radius; the crust reads the
+					// bound sphere, the mass proxy, unchanged.
+					stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
 						texelFloor);
 					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+					perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
 						CrustBreakForce(radius) };
 					stampCount++;
 					stampStats.shapes++;
@@ -1361,13 +1392,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				currentPositions[key] = current;
 
+				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
 				float4 stamp{};
-				stamp.x = current.x;
-				stamp.y = current.y;
+				stamp.x = shapeStamp.a.x;
+				stamp.y = shapeStamp.a.y;
 				stamp.z = 1.0f;
-				stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+				stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+				perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
 					CrustBreakForce(radius) };
 				stampCount++;
 				stampStats.props++;

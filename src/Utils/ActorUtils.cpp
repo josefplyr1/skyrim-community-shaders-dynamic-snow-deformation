@@ -23,26 +23,70 @@ namespace Util
 		return false;
 	}
 
+	bool ExtractShapeHalfExtents(const RE::hkpShape* shape, float& hx, float& hy, float& hz)
+	{
+		if (!shape)
+			return false;
+		// Support mapping along each local axis, both ways, so the extents are
+		// offset-invariant whatever the shape's origin.
+		auto project = [shape](float x, float y, float z) {
+			return shape->GetMaximumProjection(RE::hkVector4{ x, y, z, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
+		};
+		hx = 0.5f * (project(1.0f, 0.0f, 0.0f) - project(-1.0f, 0.0f, 0.0f));
+		hy = 0.5f * (project(0.0f, 1.0f, 0.0f) - project(0.0f, -1.0f, 0.0f));
+		hz = 0.5f * (project(0.0f, 0.0f, 1.0f) - project(0.0f, 0.0f, -1.0f));
+		return true;
+	}
+
+	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth)
+	{
+		if (!collisionObj || !collisionObj->sceneObject)
+			return false;
+		RE::bhkRigidBody* bhkRigid = collisionObj->body.get() ? collisionObj->body.get()->AsBhkRigidBody() : nullptr;
+		RE::hkpRigidBody* hkpRigid = bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(bhkRigid->referencedObject.get()) : nullptr;
+		if (!bhkRigid || !hkpRigid || skyrim_cast<RE::hkpListShape*>(hkpRigid))  // hkpListShape unsupported, as in GetShapeBound
+			return false;
+		float h[3];
+		if (!ExtractShapeHalfExtents(hkpRigid->collidable.GetShape(), h[0], h[1], h[2]))
+			return false;
+
+		// Each local axis, scaled by its extent, rotated by the node Havok
+		// drives, then flattened onto the ground.
+		const auto& rot = collisionObj->sceneObject->world.rotate;
+		const RE::NiPoint3 axes[3] = { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } };
+		float px[3], py[3], len[3];
+		int longest = 0;
+		for (int i = 0; i < 3; ++i) {
+			const RE::NiPoint3 world = rot * axes[i];
+			px[i] = world.x * h[i];
+			py[i] = world.y * h[i];
+			len[i] = sqrtf(px[i] * px[i] + py[i] * py[i]);
+			if (len[i] > len[longest])
+				longest = i;
+		}
+		halfLength = len[longest];
+		halfWidth = 0.0f;
+		for (int i = 0; i < 3; ++i)
+			if (i != longest)
+				halfWidth = std::max(halfWidth, len[i]);
+		if (halfLength > 1e-3f) {
+			axisX = px[longest] / halfLength;
+			axisY = py[longest] / halfLength;
+		} else {
+			axisX = 1.0f;
+			axisY = 0.0f;
+		}
+		return true;
+	}
+
 	bool ExtractShapeBound(const RE::hkpShape* shape, float& radius)
 	{
 		using ShapeType = RE::hkpShapeType;
 		if (!shape)
 			return false;
 
-		// Helpers to avoid repeating projection math and ensure offset-invariant half-extents
-		auto project = [shape](float x, float y, float z) {
-			return shape->GetMaximumProjection(RE::hkVector4{ x, y, z, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
-		};
-		auto symmetricHalfExtents = [&project](float& hx, float& hy, float& hz) {
-			float x_pos = project(1.0f, 0.0f, 0.0f);
-			float x_neg = project(-1.0f, 0.0f, 0.0f);
-			float y_pos = project(0.0f, 1.0f, 0.0f);
-			float y_neg = project(0.0f, -1.0f, 0.0f);
-			float z_pos = project(0.0f, 0.0f, 1.0f);
-			float z_neg = project(0.0f, 0.0f, -1.0f);
-			hx = 0.5f * (x_pos - x_neg);
-			hy = 0.5f * (y_pos - y_neg);
-			hz = 0.5f * (z_pos - z_neg);
+		auto symmetricHalfExtents = [shape](float& hx, float& hy, float& hz) {
+			ExtractShapeHalfExtents(shape, hx, hy, hz);
 		};
 		auto halfDiagonal = [](float hx, float hy, float hz) {
 			return sqrtf(hx * hx + hy * hy + hz * hz);

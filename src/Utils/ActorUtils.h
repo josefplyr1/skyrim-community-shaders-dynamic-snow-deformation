@@ -33,6 +33,31 @@ namespace Util
 	bool ExtractShapeBound(const RE::hkpShape* shape, float& radius);
 
 	/**
+     * @brief Half-extents of a hkpShape along its own local axes, in world units.
+     * @param shape Pointer to the shape.
+     * @param hx Output: half-extent along local X.
+     * @param hy Output: half-extent along local Y.
+     * @param hz Output: half-extent along local Z.
+     * @return True if the shape could be measured, false otherwise.
+     */
+	bool ExtractShapeHalfExtents(const RE::hkpShape* shape, float& hx, float& hy, float& hz);
+
+	/**
+     * @brief The shape's silhouette on the ground: a segment along its longest horizontal extent, and the extent across it.
+     *
+     * The three local half-extents are rotated by the owning scene node and projected onto XY;
+     * the longest projection is the segment, the longer of the other two the width. A sphere
+     * reports equal length and width, so a caller subtracting one from the other gets a point.
+     * @param collisionObj Pointer to the collision object.
+     * @param axisX Output: unit direction of the segment on the ground (X).
+     * @param axisY Output: unit direction of the segment on the ground (Y).
+     * @param halfLength Output: half of the projected extent along the segment.
+     * @param halfWidth Output: half of the projected extent across it.
+     * @return True if the footprint could be measured, false otherwise.
+     */
+	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth);
+
+	/**
      * @brief Holds display info for an actor (used in UI tables).
      */
 	struct ActorDisplayInfo

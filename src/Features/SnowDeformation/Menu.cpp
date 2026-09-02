@@ -1382,6 +1382,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
 		}
 
+		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {
 			ImGui::SameLine();

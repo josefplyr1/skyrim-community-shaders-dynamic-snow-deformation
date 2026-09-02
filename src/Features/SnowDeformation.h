@@ -3254,6 +3254,8 @@ protected:
 
 	/** @brief Runtime-only skeleton probe: per-foot trenching status of one NPC (the nearest, latched by formID with one frame of lag), plus which gate ate the actor when nothing carved. Filled by GatherStamps only while debugSkeletonProbe is on; drawn in Debugging Options. */
 	bool debugSkeletonProbe = false;
+	/** @brief A/B, runtime-only, default ON: collision shapes stamp their ground silhouette (a capsule along the longest horizontal extent) instead of a bounding sphere. Off reproduces the sphere for comparison. */
+	bool debugShapeFootprint = true;
 	/** @brief One-shot: log the probed actor's whole node tree (names, scales, match classification) to CommunityShaders.log, for tester reports. */
 	bool skeletonProbeDumpRequested = false;
 	/** @brief FormID the probe follows: last frame's nearest non-player actor. */
