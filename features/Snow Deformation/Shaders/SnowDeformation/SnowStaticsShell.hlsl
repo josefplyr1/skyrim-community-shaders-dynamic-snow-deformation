@@ -666,7 +666,7 @@ struct BLOB_VS_OUTPUT
 	float TopZ : TEXCOORD4;
 };
 // Mirror of SnowDeformation.h kBlobCap and HeightMapProcessCS.hlsl kBlobCap.
-static const uint kBlobCap = 262144;
+static const uint kBlobCap = 524288;
 #endif
 
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the

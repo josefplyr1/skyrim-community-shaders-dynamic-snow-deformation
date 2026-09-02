@@ -1262,12 +1262,17 @@ void SnowDeformation::CreateHeightFieldResources()
 		blobMaskSrvDesc.Format = blobMaskDesc.Format;
 		D3D11_RENDER_TARGET_VIEW_DESC blobMaskRtvDesc = heightRtvDesc;
 		blobMaskRtvDesc.Format = blobMaskDesc.Format;
-		const char* blobMaskNames[3] = { "SnowDeformation::BlobMask1", "SnowDeformation::BlobMask2", "SnowDeformation::BlobMask3" };
-		for (int i = 0; i < 3; i++) {
+		const char* blobMaskNames[6] = { "SnowDeformation::BlobMask1", "SnowDeformation::BlobMask2", "SnowDeformation::BlobMask3",
+			"SnowDeformation::BlobMask4", "SnowDeformation::BlobMask5", "SnowDeformation::BlobMask6" };
+		for (int i = 0; i < 6; i++) {
 			blobMask[i] = new Texture2D(blobMaskDesc, blobMaskNames[i]);
 			blobMask[i]->CreateSRV(blobMaskSrvDesc);
 			blobMask[i]->CreateRTV(blobMaskRtvDesc);
 		}
+		// Layers 4-6: same shape as the peeled tops, rebuilt per frame.
+		blobTop[0] = makeHeightTexture("SnowDeformation::BlobTop4");
+		blobTop[1] = makeHeightTexture("SnowDeformation::BlobTop5");
+		blobTop[2] = makeHeightTexture("SnowDeformation::BlobTop6");
 
 		// Instance list: two float4 per blob.
 		D3D11_BUFFER_DESC instDesc{};
@@ -1397,8 +1402,11 @@ void SnowDeformation::DispatchBlobPlacement()
 {
 	if (!settings.EnableBlobShell || !blobPlaceCS || !blobInstanceUAV || !blobArgsUAV || !blobArgsBuffer || !blobCB)
 		return;
-	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent] || !blobMask[0] || !blobMask[1] || !blobMask[2])
+	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent])
 		return;
+	for (int i = 0; i < 6; i++)
+		if (!blobMask[i] || (i < 3 && !blobTop[i]))
+			return;
 	auto context = globals::d3d::context;
 	EnsureBlobSphereMesh();
 	if (!blobSphereIndexCount)
@@ -1410,14 +1418,18 @@ void SnowDeformation::DispatchBlobPlacement()
 	context->UpdateSubresource(blobArgsBuffer.get(), 0, nullptr, args, 0, 0);
 
 	BlobCB cb{};
-	cb.Spacing = std::clamp(settings.BlobSpacing, 2.0f, 256.0f);
+	cb.Spacing = std::clamp(settings.BlobSpacing, 1.0f, 256.0f);
 	cb.Size = std::clamp(settings.BlobSize, 0.5f, 256.0f);
 	cb.SizeNoise = std::clamp(settings.BlobSizeNoise, 0.0f, 1.0f);
 	cb.Jut = std::clamp(settings.BlobJut, 0.0f, 1.0f);
 	cb.JutNoise = std::clamp(settings.BlobJutNoise, 0.0f, 1.0f);
 	cb.MaskThreshold = std::clamp(settings.BlobMaskThreshold, 0.0f, 1.0f);
 	cb.Seed = float(std::max(settings.BlobSeed, 0));
-	cb.Layers = float(std::clamp(settings.BlobLayers, 1, 3));
+	cb.Layers = float(std::clamp(settings.BlobLayers, 1, 6));
+	cb.EdgesOnly = settings.BlobEdgesOnly ? 1.0f : 0.0f;
+	cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
+	cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
+	cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
 	blobCB->Update(cb);
 
 	// The masks were render targets a moment ago; nothing may still hold
@@ -1427,28 +1439,34 @@ void SnowDeformation::DispatchBlobPlacement()
 	context->CSSetUnorderedAccessViews(0, 3, nullUAV3, nullptr);
 	ID3D11Buffer* cbs[2] = { heightProcessCB->CB(), blobCB->CB() };
 	context->CSSetConstantBuffers(0, 2, cbs);
-	ID3D11ShaderResourceView* srvs[7] = {
+	ID3D11ShaderResourceView* srvs[13] = {
 		heightTopRaw[heightCurrent]->srv.get(),
 		heightTop2Raw[heightCurrent]->srv.get(),
 		nullptr,
 		heightTop3Raw[heightCurrent]->srv.get(),
 		blobMask[0]->srv.get(),
 		blobMask[1]->srv.get(),
-		blobMask[2]->srv.get()
+		blobMask[2]->srv.get(),
+		blobTop[0]->srv.get(),
+		blobTop[1]->srv.get(),
+		blobTop[2]->srv.get(),
+		blobMask[3]->srv.get(),
+		blobMask[4]->srv.get(),
+		blobMask[5]->srv.get()
 	};
-	context->CSSetShaderResources(0, 7, srvs);
+	context->CSSetShaderResources(0, 13, srvs);
 	ID3D11UnorderedAccessView* uavs[2] = { blobInstanceUAV.get(), blobArgsUAV.get() };
 	context->CSSetUnorderedAccessViews(3, 2, uavs, nullptr);
 	context->CSSetShader(blobPlaceCS, nullptr, 0);
-	const uint32_t cells = uint32_t(std::ceil(kHeightMapHalfExtent * 2.0f / cb.Spacing));
+	const uint32_t cells = uint32_t(std::ceil(cb.Radius * 2.0f / cb.Spacing));
 	globals::profiler->BeginPass("SnowDeformation::BlobPlace");
 	context->Dispatch((cells + 7) / 8, (cells + 7) / 8, 1);
 	globals::profiler->EndPass();
 
 	ID3D11UnorderedAccessView* nullUAV2[2] = { nullptr, nullptr };
 	context->CSSetUnorderedAccessViews(3, 2, nullUAV2, nullptr);
-	ID3D11ShaderResourceView* nullSRV7[7] = {};
-	context->CSSetShaderResources(0, 7, nullSRV7);
+	ID3D11ShaderResourceView* nullSRV13[13] = {};
+	context->CSSetShaderResources(0, 13, nullSRV13);
 	ID3D11Buffer* nullCB1 = nullptr;
 	context->CSSetConstantBuffers(1, 1, &nullCB1);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -1851,7 +1869,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// skin depth. Layer 1 rides the base capture as RT3; the peels below
 	// bind their own layer's mask in the same slot.
 	const float maskClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	for (int i = 0; i < 3; i++)
+	for (int i = 0; i < 6; i++)
 		if (blobMask[i])
 			context->ClearRenderTargetView(blobMask[i]->rtv.get(), maskClear);
 	ID3D11RenderTargetView* heightRTVs[4] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get(),
@@ -1970,16 +1988,31 @@ void SnowDeformation::RenderObjectHeightMap()
 								objectCoverBottom2 && objectCoverBottom3) ?
 	                            2 :
 	                            0;
-	for (int pass = 0; pass < 2 + coverPasses; pass++) {
-		const bool coverPass = pass >= 2;
-		const int peelLayer = coverPass ? pass - 2 : pass;
+	// Blob Snow Shell layers 4-6: three more peels of the same shape (PEEL2
+	// against the previous layer), rebuilt per frame, only while asked for.
+	Texture2D* layerTops[6] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
+		blobTop[0], blobTop[1], blobTop[2] };
+	const int extraPeels = (settings.EnableBlobShell && heightPeel2PS && blobTop[0] && blobTop[1] && blobTop[2]) ?
+	                           std::max(0, std::clamp(settings.BlobLayers, 1, 6) - 3) :
+	                           0;
+	const int peelPasses = 2 + extraPeels;
+	static const char* const peelPassNames[5] = { "SnowDeformation::ObjectHeightPeel", "SnowDeformation::ObjectHeightPeel2",
+		"SnowDeformation::ObjectHeightPeel4", "SnowDeformation::ObjectHeightPeel5", "SnowDeformation::ObjectHeightPeel6" };
+	for (int pass = 0; pass < peelPasses + coverPasses; pass++) {
+		const bool coverPass = pass >= peelPasses;
+		const int peelLayer = coverPass ? pass - peelPasses : pass;
 		ID3D11PixelShader* peelPS = coverPass ? heightCoverPS :
 		                                        (peelLayer == 0 ? heightPeelPS : heightPeel2PS);
 		Texture2D* peelTarget = coverPass ?
 		                            (peelLayer == 0 ? objectCoverBottom2 : objectCoverBottom3) :
-		                            (peelLayer == 0 ? heightTop2Raw[heightCurrent] : heightTop3Raw[heightCurrent]);
+		                            layerTops[peelLayer + 1];
 		if (!peelPS || !peelTarget)
 			break;
+		if (!coverPass && peelLayer >= 2) {
+			// Not scrolled like layers 2 and 3: starts empty every frame.
+			const float emptyTop[4] = { -100000.0f, -100000.0f, -100000.0f, -100000.0f };
+			context->ClearRenderTargetView(peelTarget->rtv.get(), emptyTop);
+		}
 		if (coverPass) {
 			// The MIN op lives on RT1 in the capture's blend state, so bind the
 			// target THERE with RT0 null and let the existing state supply it
@@ -2005,7 +2038,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			coverPass ?
 				(peelLayer == 0 ? heightTop2Raw[heightCurrent]->srv.get() : heightTop3Raw[heightCurrent]->srv.get()) :
 				heightTopRaw[heightCurrent]->srv.get(),
-			(!coverPass && peelLayer == 1) ? heightTop2Raw[heightCurrent]->srv.get() : nullptr
+			(!coverPass && peelLayer >= 1) ? layerTops[peelLayer]->srv.get() : nullptr
 		};
 		context->PSSetShaderResources(3, 2, peelSRVs);
 		// The peel PS addresses the layer maps through StaticCB's window
@@ -2014,7 +2047,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 		globals::profiler->BeginPass(coverPass ?
 				(peelLayer == 0 ? "SnowDeformation::ObjectCoverBottom2" : "SnowDeformation::ObjectCoverBottom3") :
-				(peelLayer == 0 ? "SnowDeformation::ObjectHeightPeel" : "SnowDeformation::ObjectHeightPeel2"));
+				peelPassNames[peelLayer]);
 		for (const auto& cap : capturedStatics) {
 			auto* geometry = cap.geometry.get();
 			if (!geometry)

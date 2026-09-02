@@ -496,23 +496,31 @@ public:
 		/** @brief BLOB SNOW SHELL (Spike 1, Josef's literal-spheres design): instanced unit spheres placed on every peeled layer wherever the capture's projected-snow mask passes, shaded with the shell's snow material. Nothing else in the object path is touched. Off by default. */
 		bool EnableBlobShell = false;
 		/** @brief Icosphere subdivision level, 0-3 = 20 / 80 / 320 / 1280 triangles per sphere. The mesh is rebuilt when this changes. */
-		int BlobPolygons = 2;
+		int BlobPolygons = 0;
 		/** @brief World units between blob centres (the placement lattice). Josef's "spacing" crank. */
-		float BlobSpacing = 24.0f;
+		float BlobSpacing = 9.0f;
 		/** @brief Blob radius in world units before noise and mask thinning. Josef's "size" crank. */
-		float BlobSize = 28.0f;
+		float BlobSize = 4.0f;
 		/** @brief +/- fraction of BlobSize hashed per blob. */
-		float BlobSizeNoise = 0.35f;
+		float BlobSizeNoise = 0.25f;
 		/** @brief How far a sphere sits proud of its surface: 0.5 = centre on the surface (hemisphere), 1 = whole sphere resting on top. */
-		float BlobJut = 0.6f;
+		float BlobJut = 0.5f;
 		/** @brief +/- fraction of BlobJut hashed per blob. */
 		float BlobJutNoise = 0.25f;
 		/** @brief Projected-snow mask value a cell must reach before a blob is placed there; between this and 1 the blob thins toward 60% size. Tracks the recolour's own threshold and Snow Fill through the mask itself. */
 		float BlobMaskThreshold = 0.5f;
-		/** @brief How many peeled layers receive blobs (1 = top surface only, 3 = also under cover). */
+		/** @brief How many peeled layers receive blobs (1 = top surface only, 3 = also under cover, 4-6 = three more peels, each a full re-rasterization of every captured object per frame). */
 		int BlobLayers = 3;
 		/** @brief Placement hash salt. */
 		int BlobSeed = 0;
+		/** @brief Spike 1b: place spheres only within BlobEdgeBand of a drop in their plane (a plank end, a roof edge, the base of a wall). The fitted skin keeps the interior. */
+		bool BlobEdgesOnly = true;
+		/** @brief World units back from an edge that still count as the edge (rounded up to whole raster texels, 4 units each). */
+		float BlobEdgeBand = 12.0f;
+		/** @brief A neighbouring texel with no layer within this many units of the plane's height makes an edge. */
+		float BlobEdgeDrop = 8.0f;
+		/** @brief Placement radius around the player (world units). The outer half thins toward nothing, so distant cells never take the instance cap from nearby ones. */
+		float BlobRadius = 2048.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1753,7 +1761,9 @@ public:
 
 	// ---- Blob Snow Shell (Spike 1) ----
 	/** @brief Per-layer projected-snow placement masks (R8, cleared each frame, MAX-blended as RT3 of the capture and each peel). */
-	Texture2D* blobMask[3] = { nullptr, nullptr, nullptr };
+	Texture2D* blobMask[6] = {};
+	/** @brief Layers 4-6 tops (Spike 1b): three more PEEL2 passes, rebuilt from scratch each frame (not scrolled), only while BlobLayers > 3. */
+	Texture2D* blobTop[3] = {};
 	/** @brief Instance list written by BlobPlaceCS: two float4 per blob. */
 	winrt::com_ptr<ID3D11Buffer> blobInstanceBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> blobInstanceUAV;
@@ -1772,7 +1782,7 @@ public:
 	ID3D11ComputeShader* blobPlaceCS = nullptr;
 	ConstantBuffer* blobCB = nullptr;
 	/** @brief Mirror of kBlobCap in HeightMapProcessCS.hlsl and SnowStaticsShell.hlsl. */
-	static constexpr uint32_t kBlobCap = 262144;
+	static constexpr uint32_t kBlobCap = 524288;
 	/** @brief (Re)builds the unit icosphere VB/IB at Settings::BlobPolygons; no-op when the level is unchanged. */
 	void EnsureBlobSphereMesh();
 	/** @brief Runs BlobPlaceCS over the finished layer tops and masks; end of RenderObjectHeightMap. */
@@ -1826,6 +1836,10 @@ public:
 		float MaskThreshold;
 		float Seed;
 		float Layers;
+		float EdgesOnly;
+		float EdgeBand;
+		float EdgeDrop;
+		float Radius;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);
 	ConstantBuffer* heightProcessCB = nullptr;

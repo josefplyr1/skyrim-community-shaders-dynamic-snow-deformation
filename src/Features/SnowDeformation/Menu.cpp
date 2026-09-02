@@ -299,33 +299,52 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("blob_shell"), "Blob Snow Shell"))) {
 			if (auto _ttBlobCat = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_shell_tooltip"), "Experimental replacement for the fitted object shell: rounded snow spheres that collect on objects, placed only where the game's own projected snow is painted (so they follow the Authored Placement threshold and Snow Fill), on every level of a multi-storey object rather than just what is seen from above. Spike 1 - the spheres are not yet blended into each other."));
+				ImGui::Text("%s", T(TKEY("blob_shell_tooltip"), "Experimental. Rounded snow spheres that gather along the EDGES of an object's surfaces (plank ends, roof edges, the foot of a wall), placed only where the game's own projected snow is painted, on every level of a multi-storey object. The fitted shell keeps the interior. Spike 1b: the spheres are not yet blended into each other."));
 			ImGui::Checkbox(T(TKEY("blob_shell_enable"), "Enable Blob Snow Shell"), &settings.EnableBlobShell);
+			ImGui::Checkbox(T(TKEY("blob_edges_only"), "Edges Only"), &settings.BlobEdgesOnly);
+			if (auto _ttBlobEo = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_edges_only_tooltip"), "On: spheres appear only within Edge Band of a drop in their surface. Off: the whole painted surface is covered, which is many more spheres."));
+			ImGui::SliderFloat(T(TKEY("blob_edge_band"), "Edge Band"), &settings.BlobEdgeBand, 4.0f, 64.0f, "%.0f units");
+			if (auto _ttBlobEb = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_edge_band_tooltip"), "How far back from an edge still counts as the edge. The height raster is 4 units per texel, so the band rounds to whole texels."));
+			ImGui::SliderFloat(T(TKEY("blob_edge_drop"), "Edge Drop"), &settings.BlobEdgeDrop, 2.0f, 64.0f, "%.0f units");
+			if (auto _ttBlobEd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_edge_drop_tooltip"), "How far the surface must fall away (or a wall rise) beside a spot for it to count as an edge. Lower catches small steps between planks; higher keeps only real drops."));
 			ImGui::SliderInt(T(TKEY("blob_polygons"), "Polygons"), &settings.BlobPolygons, 0, 3);
 			if (auto _ttBlobPoly = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_polygons_tooltip"), "Sphere detail: 0 = 20 triangles, 1 = 80, 2 = 320, 3 = 1280. Higher is rounder up close and costs more per sphere."));
-			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Spacing"), &settings.BlobSpacing, 6.0f, 64.0f, "%.0f units");
+				ImGui::Text("%s", T(TKEY("blob_polygons_tooltip"), "Sphere detail: 0 = 20 triangles, 1 = 80, 2 = 320, 3 = 1280. The meld pass will hide the facets, so 0 is the default."));
+			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Spacing"), &settings.BlobSpacing, 1.0f, 64.0f, "%.1f units");
 			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Distance between sphere centres. Smaller packs them tighter (more spheres, more overlap); larger spreads them out."));
-			ImGui::SliderFloat(T(TKEY("blob_size"), "Size"), &settings.BlobSize, 4.0f, 64.0f, "%.0f units");
+				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Distance between sphere centres. Smaller packs them tighter: more spheres, more overlap. Below 4 there are several spheres per raster texel and the placement pass gets expensive."));
+			ImGui::SliderFloat(T(TKEY("blob_size"), "Size"), &settings.BlobSize, 1.0f, 64.0f, "%.1f units");
 			if (auto _ttBlobSz = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_size_tooltip"), "Sphere radius. For spheres to read as one rounded surface rather than beads, keep Size at least a few times the Spacing."));
+				ImGui::Text("%s", T(TKEY("blob_size_tooltip"), "Sphere radius. For spheres to read as one rounded surface rather than beads, Size has to be several times the Spacing."));
+			float blobRatio = settings.BlobSize / std::max(settings.BlobSpacing, 0.01f);
+			if (ImGui::SliderFloat(T(TKEY("blob_ratio"), "Size ÷ Spacing"), &blobRatio, 0.3f, 6.0f, "%.2f"))
+				settings.BlobSpacing = std::clamp(settings.BlobSize / std::max(blobRatio, 0.01f), 1.0f, 64.0f);
+			if (auto _ttBlobRt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_ratio_tooltip"), "Radius over spacing. Below 1 the spheres never touch; the Blender reference sits at 6 to 13. Dragging this moves Spacing to match the current Size. Spacing cannot go below 1, so with a small Size the top of this range is out of reach."));
 			ImGui::SliderFloat(T(TKEY("blob_size_noise"), "Size Noise"), &settings.BlobSizeNoise, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobSn = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "How much each sphere's size varies from its neighbours, as a fraction of Size."));
 			ImGui::SliderFloat(T(TKEY("blob_jut"), "Jut"), &settings.BlobJut, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobJut = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_jut_tooltip"), "How far a sphere sits proud of the surface it lands on. 0.5 = half buried (a dome), 1 = the whole sphere resting on top, lower sinks it in."));
+				ImGui::Text("%s", T(TKEY("blob_jut_tooltip"), "How far a sphere sits proud of the surface it lands on. 0.5 = half buried (a dome), 1 = the whole sphere resting on top, lower sinks it in. Vertical only for now."));
 			ImGui::SliderFloat(T(TKEY("blob_jut_noise"), "Jut Noise"), &settings.BlobJutNoise, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobJn = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_jut_noise_tooltip"), "How much each sphere's jut varies from its neighbours, as a fraction of Jut."));
 			ImGui::SliderFloat(T(TKEY("blob_mask_threshold"), "Placement Threshold"), &settings.BlobMaskThreshold, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobMt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "How strongly the game's projected snow must be painted at a spot before a sphere is placed there. Between this value and full paint the spheres thin toward 60% size, so a partial Snow Fill fades out instead of cutting off."));
-			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 3);
+				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "How strongly the game's projected snow must be painted at a spot before a sphere is placed there. On architecture the paint is all-or-nothing, so this mostly matters on rock and terrain-like objects."));
+			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 6);
 			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces receive spheres: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway."));
+				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces receive spheres: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
+			ImGui::SliderFloat(T(TKEY("blob_radius"), "Placement Radius"), &settings.BlobRadius, 256.0f, 4096.0f, "%.0f units");
+			if (auto _ttBlobRd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_radius_tooltip"), "Spheres are placed only this far from the player. The outer half thins out gradually, so distant cells never crowd nearby ones out of the instance budget."));
 			ImGui::SliderInt(T(TKEY("blob_seed"), "Seed"), &settings.BlobSeed, 0, 99);
+			if (auto _ttBlobSeed = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_seed_tooltip"), "Reseeds the per-sphere jitter, size and jut noise. Same seed, same spheres."));
 			ImGui::TreePop();
 		}
 

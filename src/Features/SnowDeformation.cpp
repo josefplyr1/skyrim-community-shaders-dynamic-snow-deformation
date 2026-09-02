@@ -115,6 +115,10 @@
 	X(BlobMaskThreshold) \
 	X(BlobLayers) \
 	X(BlobSeed) \
+	X(BlobEdgesOnly) \
+	X(BlobEdgeBand) \
+	X(BlobEdgeDrop) \
+	X(BlobRadius) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \

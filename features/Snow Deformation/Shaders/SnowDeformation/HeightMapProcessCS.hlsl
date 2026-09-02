@@ -487,17 +487,28 @@ cbuffer BlobCB : register(b1)
 	float BlobMaskThreshold;
 	float BlobSeed;
 	float BlobLayers;
+	float BlobEdgesOnly;
+	float BlobEdgeBand;
+	float BlobEdgeDrop;
+	float BlobRadius;
 }
 
 Texture2D<float> BlobMask1 : register(t4);
 Texture2D<float> BlobMask2 : register(t5);
 Texture2D<float> BlobMask3 : register(t6);
+// Layers 4-6 (Spike 1b): per-frame peels and their masks.
+Texture2D<float> BlobTop4 : register(t7);
+Texture2D<float> BlobTop5 : register(t8);
+Texture2D<float> BlobTop6 : register(t9);
+Texture2D<float> BlobMask4 : register(t10);
+Texture2D<float> BlobMask5 : register(t11);
+Texture2D<float> BlobMask6 : register(t12);
 // Two float4 per blob: [centre.xyz, radius], [surface top z, layer, mask, 0].
 RWStructuredBuffer<float4> OutBlobs : register(u3);
 // DrawIndexedInstancedIndirect args; dword 1 is the instance count.
 RWByteAddressBuffer OutBlobArgs : register(u4);
 // Mirror of SnowDeformation.h kBlobCap and SnowStaticsShell.hlsl kBlobCap.
-static const uint kBlobCap = 262144;
+static const uint kBlobCap = 524288;
 
 float BlobHash(int2 cell, uint salt)
 {
@@ -508,25 +519,92 @@ float BlobHash(int2 cell, uint salt)
 	return float(h & 0x00FFFFFFu) / 16777216.0;
 }
 
+float BlobLayerTop(uint L, int2 p)
+{
+	switch (L) {
+	case 0: return InA.Load(int3(p, 0));
+	case 1: return InB.Load(int3(p, 0));
+	case 2: return InC.Load(int3(p, 0));
+	case 3: return BlobTop4.Load(int3(p, 0));
+	case 4: return BlobTop5.Load(int3(p, 0));
+	default: return BlobTop6.Load(int3(p, 0));
+	}
+}
+
+float BlobLayerMask(uint L, int2 p)
+{
+	switch (L) {
+	case 0: return BlobMask1.Load(int3(p, 0));
+	case 1: return BlobMask2.Load(int3(p, 0));
+	case 2: return BlobMask3.Load(int3(p, 0));
+	case 3: return BlobMask4.Load(int3(p, 0));
+	case 4: return BlobMask5.Load(int3(p, 0));
+	default: return BlobMask6.Load(int3(p, 0));
+	}
+}
+
+static const int2 kBlobDirs[8] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1), int2(1, 1), int2(-1, 1), int2(1, -1), int2(-1, -1) };
+
+// Edge test: in some direction, no layer of the neighbour texel carries this
+// plane on within BlobEdgeDrop of its height. A drop and a wall rising both
+// count; the plane continuing at ANY layer index does not, so a shelf under
+// a roof keeps its edge and loses the roof's.
+bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
+{
+	// Flag, not an early return: a return inside an unrolled loop reads as
+	// "potentially uninitialized" to fxc (X4000, the patch gate's old trap).
+	bool edge = false;
+	const uint half = max(band >> 1, 1u);
+	const uint rings = (half == band) ? 1u : 2u;
+	for (uint r = 0; r < rings && !edge; r++)
+	{
+		const int step = int(r == 0 ? band : half);
+		for (uint d = 0; d < 8 && !edge; d++)
+		{
+			const int2 n = t + kBlobDirs[d] * step;
+			if (any(n < 0) || any(n >= dims))
+				continue;
+			float best = 1e9;
+			for (uint L = 0; L < layers; L++)
+			{
+				const float tn = BlobLayerTop(L, n);
+				if (tn > -50000.0)
+					best = min(best, abs(tn - h));
+			}
+			edge = best > BlobEdgeDrop;
+		}
+	}
+	return edge;
+}
+
 [numthreads(8, 8, 1)] void BlobPlaceCS(uint3 dtid
 									   : SV_DispatchThreadID)
 {
 	uint2 dims;
 	InA.GetDimensions(dims.x, dims.y);
-	const float spacing = max(BlobSpacing, 2.0);
-	const uint cells = (uint)ceil(HeightHalfExtent * 2.0 / spacing);
+	const float spacing = max(BlobSpacing, 1.0);
+	const float radius = clamp(BlobRadius, 64.0, HeightHalfExtent - 8.0);
+	const uint cells = (uint)ceil(radius * 2.0 / spacing);
 	if (dtid.x >= cells || dtid.y >= cells)
 		return;
 
-	// Absolute world cell: the window's lower-left corner floors onto the
-	// spacing lattice, then the thread offsets from there.
-	const int2 cellW = int2(floor((HeightWindowCenter - HeightHalfExtent.xx) / spacing)) + int2(dtid.xy);
+	// Absolute world cell: the placement square's lower-left corner floors
+	// onto the spacing lattice, then the thread offsets from there.
+	const int2 cellW = int2(floor((HeightWindowCenter - radius.xx) / spacing)) + int2(dtid.xy);
 	const uint salt = (uint)max(BlobSeed, 0.0);
 	const float2 jitter = float2(BlobHash(cellW, salt + 1u), BlobHash(cellW, salt + 2u));
 	const float2 xy = (float2(cellW) + 0.5 + (jitter - 0.5) * 0.9) * spacing;
 
 	const float2 local = xy - HeightWindowCenter;
+	const float dist = length(local);
+	if (dist >= radius)
+		return;
 	if (abs(local.x) >= HeightHalfExtent - 1.0 || abs(local.y) >= HeightHalfExtent - 1.0)
+		return;
+	// The outer half thins toward nothing, so the cap is never filled by far
+	// cells before near ones get their turn.
+	const float keep = saturate((radius - dist) / (radius * 0.5));
+	if (keep < 1.0 && BlobHash(cellW, salt + 5u) > keep)
 		return;
 	// Same world->texel mapping as TexelWorldXY (v mirrors world +Y).
 	const float texel = HeightHalfExtent * 2.0 / dims.x;
@@ -534,44 +612,38 @@ float BlobHash(int2 cell, uint salt)
 		clamp(int((local.x + HeightHalfExtent) / texel), 0, int(dims.x) - 1),
 		clamp(int((HeightHalfExtent - local.y) / texel), 0, int(dims.y) - 1));
 
-	float tops[3];
-	tops[0] = InA.Load(int3(t, 0));
-	tops[1] = InB.Load(int3(t, 0));
-	tops[2] = InC.Load(int3(t, 0));
-	float masks[3];
-	masks[0] = BlobMask1.Load(int3(t, 0));
-	masks[1] = BlobMask2.Load(int3(t, 0));
-	masks[2] = BlobMask3.Load(int3(t, 0));
-
 	const float hSize = BlobHash(cellW, salt + 3u);
 	const float hJut = BlobHash(cellW, salt + 4u);
-	const uint layers = (uint)clamp(BlobLayers, 1.0, 3.0);
+	const uint layers = (uint)clamp(BlobLayers, 1.0, 6.0);
 	const float threshold = saturate(BlobMaskThreshold);
+	const uint band = max(1u, (uint)round(BlobEdgeBand / texel));
+	const bool edgesOnly = BlobEdgesOnly > 0.5;
 
-	[unroll] for (uint L = 0; L < 3; L++)
+	for (uint L = 0; L < layers; L++)
 	{
-		if (L >= layers)
-			break;
-		if (tops[L] < -50000.0)
+		const float top = BlobLayerTop(L, t);
+		if (top < -50000.0)
 			continue;
-		const float m = masks[L];
+		const float m = BlobLayerMask(L, t);
 		if (m < threshold)
+			continue;
+		if (edgesOnly && !BlobIsEdge(t, int2(dims), top, layers, band))
 			continue;
 		// Partial mask (the Snow Fill's soft edge, thin authored paint) thins
 		// the sphere toward 60% rather than switching it off.
 		const float maskT = saturate((m - threshold) / max(1.0 - threshold, 1e-3));
-		const float radius = max(BlobSize * (1.0 + BlobSizeNoise * (hSize * 2.0 - 1.0)) * lerp(0.6, 1.0, maskT), 0.5);
+		const float r = max(BlobSize * (1.0 + BlobSizeNoise * (hSize * 2.0 - 1.0)) * lerp(0.6, 1.0, maskT), 0.25);
 		// Jut 0.5 = centre on the surface (a hemisphere shows); 1 = the whole
 		// sphere resting on top; toward 0 it sinks in.
 		const float jut = saturate(BlobJut * (1.0 + BlobJutNoise * (hJut * 2.0 - 1.0)));
-		const float centreZ = tops[L] + radius * (2.0 * jut - 1.0);
+		const float centreZ = top + r * (2.0 * jut - 1.0);
 
 		uint idx;
 		OutBlobArgs.InterlockedAdd(4, 1u, idx);
 		if (idx < kBlobCap)
 		{
-			OutBlobs[idx * 2] = float4(xy, centreZ, radius);
-			OutBlobs[idx * 2 + 1] = float4(tops[L], float(L), m, 0.0);
+			OutBlobs[idx * 2] = float4(xy, centreZ, r);
+			OutBlobs[idx * 2 + 1] = float4(top, float(L), m, 0.0);
 		}
 	}
 }
