@@ -125,6 +125,8 @@
 	X(BlobMeldDepthRange) \
 	X(BlobMeldIterations) \
 	X(BlobMeldMaxRadiusPx) \
+	X(BlobMeldSmoothing) \
+	X(BlobMeldAnchor) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \

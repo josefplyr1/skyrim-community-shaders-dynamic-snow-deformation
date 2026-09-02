@@ -1082,9 +1082,16 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(meldPS, "SnowDeformation::BlobMeldPS");
 		}
 	}
-	if (!meldBlurCS) {
+	{
 		constexpr auto meldPath = L"Data\\Shaders\\SnowDeformation\\BlobMeldCS.hlsl";
-		meldBlurCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldBlurCS"));
+		if (!meldDilateCS)
+			meldDilateCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldDilateCS"));
+		if (!meldErodeCS)
+			meldErodeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldErodeCS"));
+		if (!meldSmoothCS)
+			meldSmoothCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSmoothCS"));
+		if (!meldSheetCS)
+			meldSheetCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSheetCS"));
 	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1544,7 +1551,7 @@ void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
 	desc.Height = a_height;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R32_FLOAT;
+	desc.Format = DXGI_FORMAT_R32G32_FLOAT;
 	desc.SampleDesc = { 1, 0 };
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
@@ -1648,7 +1655,9 @@ void SnowDeformation::DrawBlobShellMelded()
 	context->IASetInputLayout(nullptr);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 
-	// Pass 2: separable bilateral blur, ping-pong, ending back in [0].
+	// Pass 2: the field passes. Ball closing (dilate H/V, erode H/V) seeded
+	// with the scene depth as anchor, optional smoothing, then the sheet
+	// test. Ping-pong; `src` ends on the buffer the composite reads.
 	MeldCB m{};
 	m.Proj = fb.GetCameraProj();
 	m.ProjInverse = fb.GetCameraProjInverse();
@@ -1658,27 +1667,42 @@ void SnowDeformation::DrawBlobShellMelded()
 	m.DepthRange = std::clamp(settings.BlobMeldDepthRange, 0.5f, 256.0f);
 	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
 	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
-	const int iterations = std::clamp(settings.BlobMeldIterations, 1, 4);
-	context->CSSetShader(meldBlurCS, nullptr, 0);
+	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
+	m.Anchor = settings.BlobMeldAnchor ? 1.0f : 0.0f;
+	m.FootBias = 0.1f;
+	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
+	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
 	int src = 0;
-	for (int it = 0; it < iterations; it++) {
-		for (int axis = 0; axis < 2; axis++) {
-			m.Dir = axis == 0 ? float2{ 1.0f, 0.0f } : float2{ 0.0f, 1.0f };
-			meldCB->Update(m);
-			ID3D11Buffer* mcb = meldCB->CB();
-			context->CSSetConstantBuffers(0, 1, &mcb);
-			ID3D11ShaderResourceView* in = blobMeldDepth[src]->srv.get();
-			ID3D11UnorderedAccessView* out = blobMeldDepth[1 - src]->uav.get();
-			context->CSSetShaderResources(0, 1, &in);
-			context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
-			context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-			ID3D11ShaderResourceView* nullIn = nullptr;
-			ID3D11UnorderedAccessView* nullOut = nullptr;
-			context->CSSetShaderResources(0, 1, &nullIn);
-			context->CSSetUnorderedAccessViews(0, 1, &nullOut, nullptr);
-			src = 1 - src;
+	auto fieldPass = [&](ID3D11ComputeShader* a_cs, float a_dirX, float a_dirY, float a_seed) {
+		m.Dir = { a_dirX, a_dirY };
+		m.Seed = a_seed;
+		meldCB->Update(m);
+		ID3D11Buffer* mcb = meldCB->CB();
+		context->CSSetConstantBuffers(0, 1, &mcb);
+		ID3D11ShaderResourceView* ins[2] = { blobMeldDepth[src]->srv.get(), sceneDepthSRV };
+		ID3D11UnorderedAccessView* out = blobMeldDepth[1 - src]->uav.get();
+		context->CSSetShaderResources(0, 2, ins);
+		context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
+		context->CSSetShader(a_cs, nullptr, 0);
+		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
+		ID3D11ShaderResourceView* nullIns[2] = { nullptr, nullptr };
+		ID3D11UnorderedAccessView* nullOut = nullptr;
+		context->CSSetShaderResources(0, 2, nullIns);
+		context->CSSetUnorderedAccessViews(0, 1, &nullOut, nullptr);
+		src = 1 - src;
+	};
+	fieldPass(meldDilateCS, 1.0f, 0.0f, 1.0f);
+	fieldPass(meldDilateCS, 0.0f, 1.0f, 0.0f);
+	fieldPass(meldErodeCS, 1.0f, 0.0f, 0.0f);
+	fieldPass(meldErodeCS, 0.0f, 1.0f, 0.0f);
+	if (m.Smoothing > 0.0f) {
+		const int iterations = std::clamp(settings.BlobMeldIterations, 1, 4);
+		for (int it = 0; it < iterations; it++) {
+			fieldPass(meldSmoothCS, 1.0f, 0.0f, 0.0f);
+			fieldPass(meldSmoothCS, 0.0f, 1.0f, 0.0f);
 		}
 	}
+	fieldPass(meldSheetCS, 1.0f, 0.0f, 0.0f);
 	ID3D11Buffer* nullCsCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCsCB);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -1717,7 +1741,7 @@ void SnowDeformation::DrawBlobShell()
 {
 	if (!settings.EnableBlobShell || !blobVS || !blobPS || !blobIL || !blobSphereVB || !blobSphereIB || !blobArgsBuffer || !blobInstanceSRV || !blobRasterState)
 		return;
-	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldBlurCS && meldCB && blobMeldMinBlend) {
+	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldDilateCS && meldErodeCS && meldSmoothCS && meldSheetCS && meldCB && blobMeldMinBlend) {
 		DrawBlobShellMelded();
 		return;
 	}

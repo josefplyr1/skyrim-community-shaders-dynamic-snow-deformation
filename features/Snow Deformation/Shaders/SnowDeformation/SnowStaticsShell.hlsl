@@ -690,8 +690,13 @@ cbuffer MeldCB : register(b2)
 	float MeldDepthRange;
 	float MeldMaxRadiusPx;
 	float MeldDebug;
+	float MeldSmoothing;
+	float MeldAnchor;
+	float MeldFootBias;
+	float MeldSeed;
 }
-Texture2D<float> MeldDepth : register(t33);
+// x = closed |view z| (1e30 empty), y = 1 where the sheet floats in front of the scene.
+Texture2D<float2> MeldDepth : register(t33);
 #endif
 
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
@@ -3336,18 +3341,21 @@ PS_OUTPUT main(MELD_VS_OUTPUT input)
 {
 	const float2 pixel = input.Position.xy;
 	const int2 px = int2(pixel);
-	const float z = MeldDepth.Load(int3(px, 0));
-	[branch] if (z > 1e29)
+	const float2 md = MeldDepth.Load(int3(px, 0));
+	const float z = md.x;
+	[branch] if (z > 1e29 || md.y < 0.5)
 		discard;
 	const int2 last = int2(MeldDims) - 1;
-	float zl = MeldDepth.Load(int3(max(px.x - 1, 0), px.y, 0));
-	float zr = MeldDepth.Load(int3(min(px.x + 1, last.x), px.y, 0));
-	float zu = MeldDepth.Load(int3(px.x, max(px.y - 1, 0), 0));
-	float zd = MeldDepth.Load(int3(px.x, min(px.y + 1, last.y), 0));
-	zl = zl > 1e29 ? z : zl;
-	zr = zr > 1e29 ? z : zr;
-	zu = zu > 1e29 ? z : zu;
-	zd = zd > 1e29 ? z : zd;
+	// Neighbours off the sheet fall back to the centre so the normal there
+	// is taken from the surviving side only.
+	float2 ml = MeldDepth.Load(int3(max(px.x - 1, 0), px.y, 0));
+	float2 mr = MeldDepth.Load(int3(min(px.x + 1, last.x), px.y, 0));
+	float2 mu = MeldDepth.Load(int3(px.x, max(px.y - 1, 0), 0));
+	float2 mdn = MeldDepth.Load(int3(px.x, min(px.y + 1, last.y), 0));
+	const float zl = (ml.x > 1e29 || ml.y < 0.5) ? z : ml.x;
+	const float zr = (mr.x > 1e29 || mr.y < 0.5) ? z : mr.x;
+	const float zu = (mu.x > 1e29 || mu.y < 0.5) ? z : mu.x;
+	const float zd = (mdn.x > 1e29 || mdn.y < 0.5) ? z : mdn.x;
 	const float3 viewPos = MeldViewPos(pixel, z);
 	const float3 pl = MeldViewPos(pixel + float2(-1.0, 0.0), zl);
 	const float3 pr = MeldViewPos(pixel + float2(1.0, 0.0), zr);

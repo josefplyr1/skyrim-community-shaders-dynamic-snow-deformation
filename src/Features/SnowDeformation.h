@@ -523,12 +523,16 @@ public:
 		float BlobRadius = 3072.0f;
 		/** @brief How far an edge sphere slides from its cell toward the lip it found: 0 = stays put, 1 = sits on the lip. Concentrates without adding spheres. */
 		float BlobEdgePull = 0.5f;
-		/** @brief Screen-space meld: spheres draw depth-only, the depth is blurred with a world-sized bilateral kernel, and the result composites once per pixel as one surface. */
+		/** @brief Screen-space meld: spheres draw depth-only, a ball of BlobMeldRadius is rolled over that depth (morphological closing, anchored to the scene), and the result composites once per pixel as one surface. */
 		bool BlobMeld = true;
-		/** @brief Meld kernel radius in world units, projected to pixels per depth. */
+		/** @brief Closing ball radius in world units: valleys narrower than twice this fill in. */
 		float BlobMeldRadius = 6.0f;
-		/** @brief Depth difference (units) beyond which two pixels do not meld (keeps a near sphere off a far one). */
+		/** @brief Smoothing pass: depth difference (units) beyond which two pixels do not average. */
 		float BlobMeldDepthRange = 12.0f;
+		/** @brief Optional bilateral smoothing radius after the closing, world units; 0 = off. */
+		float BlobMeldSmoothing = 1.0f;
+		/** @brief Scene depth seeds the closing, so the sheet runs down from a sphere onto the shell or plank beneath it. */
+		bool BlobMeldAnchor = true;
 		/** @brief Blur passes (each is one horizontal + one vertical). */
 		int BlobMeldIterations = 2;
 		/** @brief Pixel cap on the projected kernel, for cost up close. */
@@ -1785,7 +1789,7 @@ public:
 	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobPlaceCS decode against it. */
 	float blobRefZ = 0.0f;
 	// ---- screen-space meld ----
-	/** @brief Nearest-sphere |view z| per pixel, ping-pong for the separable blur; screen-sized, rebuilt on resize. */
+	/** @brief The meld field (x = |view z|, y = coverage / sheet), ping-pong for the separable passes; screen-sized, rebuilt on resize. */
 	Texture2D* blobMeldDepth[2] = {};
 	uint32_t blobMeldW = 0;
 	uint32_t blobMeldH = 0;
@@ -1796,7 +1800,10 @@ public:
 	ID3D11PixelShader* blobDepthPS = nullptr;
 	ID3D11VertexShader* meldVS = nullptr;
 	ID3D11PixelShader* meldPS = nullptr;
-	ID3D11ComputeShader* meldBlurCS = nullptr;
+	ID3D11ComputeShader* meldDilateCS = nullptr;
+	ID3D11ComputeShader* meldErodeCS = nullptr;
+	ID3D11ComputeShader* meldSmoothCS = nullptr;
+	ID3D11ComputeShader* meldSheetCS = nullptr;
 	ConstantBuffer* meldCB = nullptr;
 	/** @brief (Re)creates the two meld depth targets at the main render target's size. */
 	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
@@ -1896,6 +1903,10 @@ public:
 		float DepthRange;
 		float MaxRadiusPx;
 		float Debug;
+		float Smoothing;
+		float Anchor;
+		float FootBias;
+		float Seed;
 	};
 	STATIC_ASSERT_ALIGNAS_16(MeldCB);
 	ConstantBuffer* heightProcessCB = nullptr;
