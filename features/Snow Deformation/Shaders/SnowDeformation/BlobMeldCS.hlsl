@@ -29,6 +29,10 @@ cbuffer MeldCB : register(b0)
 	float MeldAnchor;     // 1 = scene depth seeds the field
 	float MeldFootBias;   // sheet must float this far in front of the scene
 	float MeldSeed;       // 1 on the first dilation: seed coverage and anchors
+	float MeldVerticalRange;  // surfaces further apart in world height do not meld (0 = off)
+	float padMeld1;
+	float padMeld2;
+	float padMeld3;
 }
 
 Texture2D<float2> InField : register(t0);
@@ -55,6 +59,16 @@ float MeldSceneZ(int2 p)
 	return (z > 1e7 || isnan(z)) ? kMeldEmpty : z;
 }
 
+// World height (camera-relative) of a pixel at depth z, for the vertical gate.
+float MeldWorldZ(int2 p, float z)
+{
+	const float2 ndc = float2((float(p.x) + 0.5) / MeldDims.x * 2.0 - 1.0, 1.0 - (float(p.y) + 0.5) / MeldDims.y * 2.0);
+	float4 v = mul(MeldProjInverse, float4(ndc, 1.0, 1.0));
+	v.xyz /= v.w;
+	const float3 viewPos = v.xyz * (z / max(abs(v.z), 1e-5));
+	return mul(MeldViewInverse, float4(viewPos, 1.0)).z;
+}
+
 [numthreads(8, 8, 1)] void MeldDilateCS(uint3 dtid
 										: SV_DispatchThreadID)
 {
@@ -65,6 +79,14 @@ float MeldSceneZ(int2 p)
 	const int2 dir = int2(MeldDir);
 	const float R = max(MeldRadiusWorld, 0.01);
 	const int cap = (int)MeldMaxRadiusPx;
+	// The centre's own surface height, for the vertical gate: a surface much
+	// higher or lower than this one may not push it (a rail over a plank).
+	float2 cf = InField[p];
+	float zc = cf.x;
+	[flatten] if (MeldSeed > 0.5 && zc > 1e29 && MeldAnchor > 0.5)
+		zc = MeldSceneZ(p);
+	const bool gate = MeldVerticalRange > 0.0 && zc < 1e29;
+	const float wzc = gate ? MeldWorldZ(p, zc) : 0.0;
 	float best = kMeldEmpty;
 	float cov = 0.0;
 	for (int i = -cap; i <= cap; i++)
@@ -80,6 +102,8 @@ float MeldSceneZ(int2 p)
 				zq = MeldSceneZ(q);
 		}
 		if (zq > 1e29)
+			continue;
+		if (gate && i != 0 && abs(MeldWorldZ(q, zq) - wzc) > MeldVerticalRange)
 			continue;
 		const float s = abs(float(i)) * MeldPixelWorld(zq);
 		if (s >= R)
@@ -107,6 +131,8 @@ float MeldSceneZ(int2 p)
 	const float R = max(MeldRadiusWorld, 0.01);
 	const float pw = MeldPixelWorld(c.x);
 	const int r = min((int)MeldMaxRadiusPx, (int)ceil(R / max(pw, 1e-4)));
+	const bool gate = MeldVerticalRange > 0.0;
+	const float wzc = gate ? MeldWorldZ(p, c.x) : 0.0;
 	float best = -kMeldEmpty;
 	float cov = 1.0;
 	bool hole = false;
@@ -118,6 +144,10 @@ float MeldSceneZ(int2 p)
 			continue;
 		const float2 f = InField[q];
 		hole = f.x > 1e29;
+		if (hole)
+			break;
+		if (gate && i != 0 && abs(MeldWorldZ(q, f.x) - wzc) > MeldVerticalRange)
+			continue;
 		best = max(best, f.x + sqrt(R * R - s * s));
 		cov = min(cov, f.y);
 	}

@@ -127,6 +127,7 @@
 	X(BlobMeldMaxRadiusPx) \
 	X(BlobMeldSmoothing) \
 	X(BlobMeldAnchor) \
+	X(BlobMeldVerticalRange) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \

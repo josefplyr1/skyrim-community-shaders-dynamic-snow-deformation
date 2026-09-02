@@ -504,9 +504,9 @@ public:
 		/** @brief +/- fraction of BlobSize hashed per blob. */
 		float BlobSizeNoise = 0.5f;
 		/** @brief How far a sphere sits proud of its surface: 0.5 = centre on the surface (hemisphere), 1 = whole sphere resting on top. */
-		float BlobJut = 0.5f;
+		float BlobJut = 0.75f;
 		/** @brief +/- fraction of BlobJut hashed per blob. */
-		float BlobJutNoise = 0.5f;
+		float BlobJutNoise = 0.25f;
 		/** @brief Projected-snow mask value a cell must reach before a blob is placed there; between this and 1 the blob thins toward 60% size. Tracks the recolour's own threshold and Snow Fill through the mask itself. */
 		float BlobMaskThreshold = 0.5f;
 		/** @brief How many peeled layers receive blobs (1 = top surface only, 3 = also under cover, 4-6 = three more peels, each a full re-rasterization of every captured object per frame). */
@@ -520,23 +520,25 @@ public:
 		/** @brief A neighbouring texel with no layer within this many units of the plane's height makes an edge. */
 		float BlobEdgeDrop = 15.0f;
 		/** @brief Placement radius around the player (world units). The outer half thins toward nothing, so distant cells never take the instance cap from nearby ones. */
-		float BlobRadius = 3072.0f;
+		float BlobRadius = 2048.0f;
 		/** @brief How far an edge sphere slides from its cell toward the lip it found: 0 = stays put, 1 = sits on the lip. Concentrates without adding spheres. */
 		float BlobEdgePull = 0.5f;
 		/** @brief Screen-space meld: spheres draw depth-only, a ball of BlobMeldRadius is rolled over that depth (morphological closing, anchored to the scene), and the result composites once per pixel as one surface. */
-		bool BlobMeld = true;
+		bool BlobMeld = false;
 		/** @brief Closing ball radius in world units: valleys narrower than twice this fill in. */
-		float BlobMeldRadius = 6.0f;
+		float BlobMeldRadius = 4.0f;
 		/** @brief Smoothing pass: depth difference (units) beyond which two pixels do not average. */
-		float BlobMeldDepthRange = 12.0f;
+		float BlobMeldDepthRange = 64.0f;
 		/** @brief Optional bilateral smoothing radius after the closing, world units; 0 = off. */
-		float BlobMeldSmoothing = 1.0f;
+		float BlobMeldSmoothing = 2.0f;
 		/** @brief Scene depth seeds the closing, so the sheet runs down from a sphere onto the shell or plank beneath it. */
-		bool BlobMeldAnchor = true;
+		bool BlobMeldAnchor = false;
+		/** @brief Two surfaces further apart in world height than this do not meld (a rail's spheres stay off the plank below). 0 = no limit. */
+		float BlobMeldVerticalRange = 12.0f;
 		/** @brief Blur passes (each is one horizontal + one vertical). */
 		int BlobMeldIterations = 2;
 		/** @brief Pixel cap on the projected kernel, for cost up close. */
-		int BlobMeldMaxRadiusPx = 24;
+		int BlobMeldMaxRadiusPx = 48;
 		/** @brief Meld composite debug: 0 off, 1 blurred depth, 2 reconstructed normals. Not serialised. */
 		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
@@ -1816,6 +1818,9 @@ public:
 	/** @brief DrawIndexedInstancedIndirect args; dword 1 is bumped by the placement. */
 	winrt::com_ptr<ID3D11Buffer> blobArgsBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> blobArgsUAV;
+	/** @brief Staging copy of the indirect args, read one frame late so the menu can show how many spheres were placed against the cap. */
+	winrt::com_ptr<ID3D11Buffer> blobArgsStaging;
+	uint32_t blobPlacedLastFrame = 0;
 	winrt::com_ptr<ID3D11Buffer> blobSphereVB;
 	winrt::com_ptr<ID3D11Buffer> blobSphereIB;
 	uint32_t blobSphereIndexCount = 0;
@@ -1907,6 +1912,10 @@ public:
 		float Anchor;
 		float FootBias;
 		float Seed;
+		float VerticalRange;
+		float padM1;
+		float padM2;
+		float padM3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(MeldCB);
 	ConstantBuffer* heightProcessCB = nullptr;

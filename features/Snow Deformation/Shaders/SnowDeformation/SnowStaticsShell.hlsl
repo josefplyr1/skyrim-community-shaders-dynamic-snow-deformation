@@ -694,6 +694,10 @@ cbuffer MeldCB : register(b2)
 	float MeldAnchor;
 	float MeldFootBias;
 	float MeldSeed;
+	float MeldVerticalRange;
+	float padMeld1;
+	float padMeld2;
+	float padMeld3;
 }
 // x = closed |view z| (1e30 empty), y = 1 where the sheet floats in front of the scene.
 Texture2D<float2> MeldDepth : register(t33);

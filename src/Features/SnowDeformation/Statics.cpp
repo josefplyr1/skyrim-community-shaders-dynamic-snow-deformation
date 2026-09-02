@@ -1363,6 +1363,12 @@ void SnowDeformation::CreateHeightFieldResources()
 		argsUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
 		DX::ThrowIfFailed(globals::d3d::device->CreateUnorderedAccessView(blobArgsBuffer.get(), &argsUavDesc, blobArgsUAV.put()));
 		Util::SetResourceName(blobArgsUAV.get(), "SnowDeformation::BlobArgs UAV");
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = 5 * sizeof(uint32_t);
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		DX::ThrowIfFailed(globals::d3d::device->CreateBuffer(&stagingDesc, nullptr, blobArgsStaging.put()));
+		Util::SetResourceName(blobArgsStaging.get(), "SnowDeformation::BlobArgs staging");
 
 		// Spheres are convex; both faces drawn so the generated winding
 		// cannot matter, and depth hides the back anyway.
@@ -1476,6 +1482,15 @@ void SnowDeformation::DispatchBlobPlacement()
 	if (!blobSphereIndexCount)
 		return;
 
+	// Last frame's count, one frame late and never stalling (the draw copied
+	// the args into the staging buffer after consuming them).
+	if (blobArgsStaging) {
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(context->Map(blobArgsStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+			blobPlacedLastFrame = static_cast<const uint32_t*>(mapped.pData)[1];
+			context->Unmap(blobArgsStaging.get(), 0);
+		}
+	}
 	// Args reset every frame: index count from the mesh, instance count 0,
 	// the placement bumps dword 1.
 	const uint32_t args[5] = { blobSphereIndexCount, 0, 0, 0, 0 };
@@ -1646,6 +1661,8 @@ void SnowDeformation::DrawBlobShellMelded()
 	context->RSGetState(prevRaster.put());
 	context->RSSetState(blobRasterState.get());
 	context->DrawIndexedInstancedIndirect(blobArgsBuffer.get(), 0);
+	if (blobArgsStaging)
+		context->CopyResource(blobArgsStaging.get(), blobArgsBuffer.get());
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	context->VSSetShaderResources(32, 1, &nullSRV);
 	ID3D11Buffer* nullVB = nullptr;
@@ -1670,6 +1687,7 @@ void SnowDeformation::DrawBlobShellMelded()
 	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
 	m.Anchor = settings.BlobMeldAnchor ? 1.0f : 0.0f;
 	m.FootBias = 0.1f;
+	m.VerticalRange = std::clamp(settings.BlobMeldVerticalRange, 0.0f, 256.0f);
 	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
 	int src = 0;
@@ -1770,6 +1788,8 @@ void SnowDeformation::DrawBlobShell()
 	context->RSSetState(blobRasterState.get());
 
 	context->DrawIndexedInstancedIndirect(blobArgsBuffer.get(), 0);
+	if (blobArgsStaging)
+		context->CopyResource(blobArgsStaging.get(), blobArgsBuffer.get());
 
 	context->RSSetState(prevRaster.get());
 	ID3D11ShaderResourceView* nullSRV = nullptr;

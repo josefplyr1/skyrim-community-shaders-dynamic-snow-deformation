@@ -301,6 +301,11 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBlobCat = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_shell_tooltip"), "Experimental. Rounded snow spheres that gather along the EDGES of an object's surfaces (plank ends, roof edges, the foot of a wall), placed only where the game's own projected snow is painted, on every level of a multi-storey object. The fitted shell keeps the interior. Spike 1b: the spheres are not yet blended into each other."));
 			ImGui::Checkbox(T(TKEY("blob_shell_enable"), "Enable Blob Snow Shell"), &settings.EnableBlobShell);
+			{
+				const bool atCap = blobPlacedLastFrame >= kBlobCap;
+				ImGui::TextColored(atCap ? ImVec4(1.0f, 0.4f, 0.3f, 1.0f) : ImVec4(0.6f, 0.6f, 0.6f, 1.0f),
+					"Spheres placed last frame: %u / %u%s", unsigned(blobPlacedLastFrame), unsigned(kBlobCap), atCap ? "  (CAP HIT: spheres drop at random, expect flicker)" : "");
+			}
 			ImGui::Checkbox(T(TKEY("blob_edges_only"), "Edges Only"), &settings.BlobEdgesOnly);
 			if (auto _ttBlobEo = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_edges_only_tooltip"), "On: spheres appear only within Edge Band of a drop in their surface. Off: the whole painted surface is covered, which is many more spheres."));
@@ -359,6 +364,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("blob_meld_anchor"), "Meld Into Scene"), &settings.BlobMeldAnchor);
 			if (auto _ttMeldA = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_anchor_tooltip"), "The surface under and beside a sphere joins the roll, so the sheet runs down from the sphere onto the fitted shell or the plank face instead of ending in mid-air. Off: the sheet only ever touches spheres."));
+			ImGui::SliderFloat(T(TKEY("blob_meld_vertical"), "Meld Vertical Range"), &settings.BlobMeldVerticalRange, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttMeldV = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_vertical_tooltip"), "Two surfaces further apart in world height than this never meld, so a rail's spheres stay off the plank below and a step's off the step beneath. 0 removes the limit."));
 			ImGui::SliderFloat(T(TKEY("blob_meld_smoothing"), "Meld Smoothing"), &settings.BlobMeldSmoothing, 0.0f, 8.0f, "%.1f units");
 			if (auto _ttMeldS = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_smoothing_tooltip"), "A light blur after the roll, world units, to take the pixel steps off the sheet. Keep it well below the sphere Size; large values flatten the shape and the lighting goes wrong."));
