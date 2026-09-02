@@ -1395,7 +1395,8 @@ void SnowDeformation::DrawSettings()
 				const float2 center = contactViewCenter;
 				auto drawHalf = [&](float a_v0, float a_v1) {
 					const ImVec2 topLeft = ImGui::GetCursorScreenPos();
-					ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 1.0f, a_v1 });
+					// The crop is the left 512 texels of the 1024-wide view.
+					ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 0.5f, a_v1 });
 					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 						if (auto* root = player->Get3D(false)) {
 							const auto& bound = root->worldBound;
@@ -1405,6 +1406,20 @@ void SnowDeformation::DrawSettings()
 								{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
 								{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
 								IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+							// Bone positions over the silhouette: feet white, hands cyan,
+							// head/spine magenta. A mesh stretched against its own bones
+							// shows as a silhouette reaching past them.
+							struct BoneDot { const char* name; ImU32 color; };
+							static const BoneDot dots[] = {
+								{ "NPC L Foot [Lft ]", IM_COL32(255, 255, 255, 255) }, { "NPC R Foot [Rft ]", IM_COL32(255, 255, 255, 255) },
+								{ "NPC L Hand [LHnd]", IM_COL32(80, 240, 255, 255) }, { "NPC R Hand [RHnd]", IM_COL32(80, 240, 255, 255) },
+								{ "NPC Head [Head]", IM_COL32(255, 80, 255, 255) }, { "NPC Spine2 [Spn2]", IM_COL32(255, 80, 255, 255) },
+								{ "NPC L Calf [LClf]", IM_COL32(200, 200, 200, 255) }, { "NPC R Calf [RClf]", IM_COL32(200, 200, 200, 255) },
+							};
+							for (const auto& dot : dots) {
+								if (auto* node = root->GetObjectByName(RE::BSFixedString(dot.name)))
+									ImGui::GetWindowDrawList()->AddCircle({ toX(node->world.translate.x), toY(node->world.translate.y) }, 4.0f, dot.color, 0, 1.5f);
+							}
 						}
 					}
 				};
@@ -1412,8 +1427,8 @@ void SnowDeformation::DrawSettings()
 				drawHalf(0.5f, 1.0f);
 				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 					if (auto* root = player->Get3D(false))
-						ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units",
-							root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, contactCenter.x, contactCenter.y,
+						ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
+							root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(), contactCenter.x, contactCenter.y,
 							contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
 				}
 			} else {
