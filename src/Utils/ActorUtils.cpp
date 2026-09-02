@@ -38,7 +38,7 @@ namespace Util
 		return true;
 	}
 
-	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth)
+	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth, float& halfHeight)
 	{
 		if (!collisionObj || !collisionObj->sceneObject)
 			return false;
@@ -56,11 +56,16 @@ namespace Util
 		const RE::NiPoint3 axes[3] = { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } };
 		float px[3], py[3], len[3];
 		int longest = 0;
+		// The oriented box's vertical half-extent is the sum of what each
+		// scaled axis contributes along Z - exact for a box, so a flat shield
+		// lying down reports its thickness, not its width.
+		halfHeight = 0.0f;
 		for (int i = 0; i < 3; ++i) {
 			const RE::NiPoint3 world = rot * axes[i];
 			px[i] = world.x * h[i];
 			py[i] = world.y * h[i];
 			len[i] = sqrtf(px[i] * px[i] + py[i] * py[i]);
+			halfHeight += fabsf(world.z) * h[i];
 			if (len[i] > len[longest])
 				longest = i;
 		}

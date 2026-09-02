@@ -53,9 +53,10 @@ namespace Util
      * @param axisY Output: unit direction of the segment on the ground (Y).
      * @param halfLength Output: half of the projected extent along the segment.
      * @param halfWidth Output: half of the projected extent across it.
+     * @param halfHeight Output: half of the shape's vertical extent in this orientation, so centre - halfHeight is its underside.
      * @return True if the footprint could be measured, false otherwise.
      */
-	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth);
+	bool GetShapeFootprint(RE::bhkNiCollisionObject* collisionObj, float& axisX, float& axisY, float& halfLength, float& halfWidth, float& halfHeight);
 
 	/**
      * @brief Holds display info for an actor (used in UI tables).

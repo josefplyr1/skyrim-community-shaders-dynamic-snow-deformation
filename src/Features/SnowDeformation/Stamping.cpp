@@ -480,14 +480,18 @@ struct ShapeStamp
 	float2 a;
 	float2 b;
 	float radius;
+	// Vertical half-extent in this orientation; the bound radius when the
+	// footprint is unavailable, which is what the old underside used.
+	float halfHeight;
 };
 static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_current, float2 a_previous,
 	float a_boundRadius, bool a_footprints)
 {
-	ShapeStamp out{ a_current, a_previous, a_boundRadius };
-	float ax, ay, halfLen, halfWid;
-	if (!a_footprints || !Util::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid))
+	ShapeStamp out{ a_current, a_previous, a_boundRadius, a_boundRadius };
+	float ax, ay, halfLen, halfWid, halfHgt;
+	if (!a_footprints || !Util::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid, halfHgt))
 		return out;
+	out.halfHeight = halfHgt;
 	const float seg = std::max(halfLen - halfWid, 0.0f);
 	const float dx = a_current.x - a_previous.x;
 	const float dy = a_current.y - a_previous.y;
@@ -1222,10 +1226,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					currentPositions[key] = current;
 
 					const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
+					// Carve to the fraction the underside reaches into the layer,
+					// as limbs do: a shape hovering over the shell must not print
+					// to the ground. After the trail and settle bookkeeping above,
+					// so a hovering shape keeps its anchor.
+					const float carve = std::clamp(
+						1.0f - (centerPos.z - shapeStamp.halfHeight - bandRefZ) / nominalDepth, 0.0f, 1.0f);
+					if (carve < kMinLimbCarve)
+						return RE::BSVisit::BSVisitControl::kContinue;
 					float4 stamp{};
 					stamp.x = shapeStamp.a.x;
 					stamp.y = shapeStamp.a.y;
-					stamp.z = 1.0f;
+					stamp.z = carve;
 					// StampRadius scales the shape's own radius; the crust reads the
 					// bound sphere, the mass proxy, unchanged.
 					stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale,
@@ -1361,8 +1373,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// root — elevated resting surfaces keep their stamps.
 		const float supportZ = std::max(groundZ, position.z);
 
-		const float depthScale = std::clamp(
-			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
+		const float nominalDepth = std::max(
+			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
+		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 		uint32_t shapeIndex = 0;
 		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
@@ -1393,10 +1406,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				currentPositions[key] = current;
 
 				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius, debugShapeFootprint);
+				// Depth from the underside, as limbs do - see the actor site.
+				const float carve = std::clamp(
+					1.0f - (centerPos.z - shapeStamp.halfHeight - supportZ) / nominalDepth, 0.0f, 1.0f);
+				if (carve < kMinLimbCarve)
+					return RE::BSVisit::BSVisitControl::kContinue;
 				float4 stamp{};
 				stamp.x = shapeStamp.a.x;
 				stamp.y = shapeStamp.a.y;
-				stamp.z = 1.0f;
+				stamp.z = carve;
 				stamp.w = std::max(shapeStamp.radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
 				perFrameData.Stamps[stampCount] = stamp;
 				perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
@@ -1424,16 +1442,20 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				currentPositions[key] = current;
 
-				float4 stamp{};
-				stamp.x = current.x;
-				stamp.y = current.y;
-				stamp.z = 1.0f;
-				stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
-				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
-					CrustBreakForce(radius) };
-				stampCount++;
-				stampStats.props++;
+				const float carve = std::clamp(
+					1.0f - (bound.center.z - radius - supportZ) / nominalDepth, 0.0f, 1.0f);
+				if (carve >= kMinLimbCarve) {
+					float4 stamp{};
+					stamp.x = current.x;
+					stamp.y = current.y;
+					stamp.z = carve;
+					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+					perFrameData.Stamps[stampCount] = stamp;
+					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+						CrustBreakForce(radius) };
+					stampCount++;
+					stampStats.props++;
+				}
 			}
 		}
 		return;
