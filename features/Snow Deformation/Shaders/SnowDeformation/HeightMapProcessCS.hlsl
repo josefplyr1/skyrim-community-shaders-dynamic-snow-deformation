@@ -475,16 +475,16 @@ cbuffer BlobCB : register(b1)
 {
 	float BlobNoiseScale;     // world units per noise cell
 	float BlobThickness;      // world units the sheet floats in front of the surface
-	float BlobThicknessNoise; // +/- fraction of thickness
+	float BlobThicknessNoise; // +/- fraction of thickness, broad noise
 	float BlobMaskThreshold;
-	float BlobSeed;
 	float BlobLayers;
-	float BlobEdgesOnly;
-	float BlobEdgeBand;
-	float BlobEdgeDrop;
 	float BlobRadius;
 	float BlobRefZ;
 	float BlobLayerTol;       // a pixel matches a layer within this height (world units)
+	float BlobMaxSlopeNz;     // cos(Max Slope): the pixel's own normal must be at least this upright
+	float BlobBorderNoise;    // +/- fraction of thickness, fine noise (a quarter of the cell)
+	float padBlobS1;
+	float padBlobS2;
 }
 // Mirror of SnowDeformation.h MeldSeedCB.
 cbuffer MeldSeedCB : register(b2)
@@ -519,18 +519,6 @@ float BlobHash(int2 cell, uint salt)
 	return float(h & 0x00FFFFFFu) / 16777216.0;
 }
 
-float BlobLayerTop(uint L, int2 p)
-{
-	switch (L) {
-	case 0: return InA.Load(int3(p, 0));
-	case 1: return InB.Load(int3(p, 0));
-	case 2: return InC.Load(int3(p, 0));
-	case 3: return BlobTop4.Load(int3(p, 0));
-	case 4: return BlobTop5.Load(int3(p, 0));
-	default: return BlobTop6.Load(int3(p, 0));
-	}
-}
-
 // .x = placement mask, .y = fresh-top code (0 = no fragment this frame).
 float2 BlobLayerMask(uint L, int2 p)
 {
@@ -542,49 +530,6 @@ float2 BlobLayerMask(uint L, int2 p)
 	case 4: return BlobMask5.Load(int3(p, 0));
 	default: return BlobMask6.Load(int3(p, 0));
 	}
-}
-
-static const int2 kBlobDirs[8] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1), int2(1, 1), int2(-1, 1), int2(1, -1), int2(-1, -1) };
-
-// Edge test: in some direction, no layer of the neighbour texel carries this
-// plane on within BlobEdgeDrop of its height. A drop and a wall rising both
-// count; the plane continuing at ANY layer index does not, so a shelf under
-// a roof keeps its edge and loses the roof's.
-bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band, out float2 dropDir, out float dropStep)
-{
-	// Flag, not an early return: a return inside an unrolled loop reads as
-	// "potentially uninitialized" to fxc (X4000, the patch gate's old trap).
-	bool edge = false;
-	dropDir = float2(0.0, 0.0);
-	dropStep = 0.0;
-	const uint half = max(band >> 1, 1u);
-	const uint rings = (half == band) ? 1u : 2u;
-	// Nearest ring first, so the reported drop is the closest lip.
-	for (uint r = 0; r < rings && !edge; r++)
-	{
-		const int step = int(r == 0 ? half : band);
-		for (uint d = 0; d < 8 && !edge; d++)
-		{
-			const int2 n = t + kBlobDirs[d] * step;
-			if (any(n < 0) || any(n >= dims))
-				continue;
-			float best = 1e9;
-			for (uint L = 0; L < layers; L++)
-			{
-				const float tn = BlobLayerTop(L, n);
-				if (tn > -50000.0)
-					best = min(best, abs(tn - h));
-			}
-			edge = best > BlobEdgeDrop;
-			if (edge)
-			{
-				// Texel +y is world -y (TexelWorldXY mirrors v).
-				dropDir = normalize(float2(kBlobDirs[d].x, -kBlobDirs[d].y));
-				dropStep = float(step);
-			}
-		}
-	}
-	return edge;
 }
 
 // Smooth value noise over BlobNoiseScale-sized cells, world-anchored so it
@@ -601,6 +546,37 @@ float BlobValueNoise(float2 xy, uint salt)
 	return lerp(lerp(n00, n10, u.x), lerp(n01, n11, u.x), u.y);
 }
 
+// View-space position of a screen pixel from the depth buffer.
+float3 SeedViewPos(int2 p, out float depthRaw)
+{
+	depthRaw = SeedSceneDepth.Load(int3(p, 0));
+	const float2 ndc = float2((float(p.x) + 0.5) / SeedDims.x * 2.0 - 1.0, 1.0 - (float(p.y) + 0.5) / SeedDims.y * 2.0);
+	float4 v = mul(SeedProjInverse, float4(ndc, depthRaw, 1.0));
+	return v.xyz / (max(abs(v.w), 1e-8) * sign(v.w));
+}
+
+// The mask of the layer whose fresh top matches a height at one texel
+// (0 where no layer does).
+float SeedTexelMask(int2 t, float worldZ, uint layers)
+{
+	float bestDz = BlobLayerTol;
+	float bestMask = 0.0;
+	for (uint L = 0; L < layers; L++)
+	{
+		const float2 mk = BlobLayerMask(L, t);
+		if (mk.y <= 0.0)
+			continue;
+		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
+		const float dz = abs(top - worldZ);
+		[flatten] if (dz < bestDz)
+		{
+			bestDz = dz;
+			bestMask = mk.x;
+		}
+	}
+	return bestMask;
+}
+
 [numthreads(8, 8, 1)] void BlobSeedCS(uint3 dtid
 									  : SV_DispatchThreadID)
 {
@@ -608,79 +584,77 @@ float BlobValueNoise(float2 xy, uint salt)
 	if (dtid.x >= (uint)sdims.x || dtid.y >= (uint)sdims.y)
 		return;
 	const int2 p = int2(dtid.xy);
-	float2 outv = float2(1e30, 0.0);
+	const float2 empty = float2(1e30, 0.0);
 
 	// Scene depth -> view position -> world position.
-	const float d = SeedSceneDepth.Load(int3(p, 0));
-	const float2 ndc = float2((float(p.x) + 0.5) / SeedDims.x * 2.0 - 1.0, 1.0 - (float(p.y) + 0.5) / SeedDims.y * 2.0);
-	float4 v = mul(SeedProjInverse, float4(ndc, d, 1.0));
-	v.xyz /= max(abs(v.w), 1e-8) * sign(v.w);
-	const float z = abs(v.z);
+	float dRaw;
+	const float3 vp = SeedViewPos(p, dRaw);
+	const float z = abs(vp.z);
 	[branch] if (z > 1e7 || isnan(z))
 	{
-		OutSeed[p] = outv;
+		OutSeed[p] = empty;
 		return;
 	}
-	const float3 rel = mul(SeedViewInverse, float4(v.xyz, 1.0)).xyz;
+	const float3 rel = mul(SeedViewInverse, float4(vp, 1.0)).xyz;
 	const float3 worldAbs = rel + SeedCamPosAdjust.xyz;
 
 	// Inside the placement radius and the raster window.
 	const float2 local = worldAbs.xy - HeightWindowCenter;
 	const float radius = clamp(BlobRadius, 64.0, HeightHalfExtent - 8.0);
-	[branch] if (dot(local, local) > radius * radius || abs(local.x) >= HeightHalfExtent - 1.0 || abs(local.y) >= HeightHalfExtent - 1.0)
+	[branch] if (dot(local, local) > radius * radius || abs(local.x) >= HeightHalfExtent - 2.0 || abs(local.y) >= HeightHalfExtent - 2.0)
 	{
-		OutSeed[p] = outv;
+		OutSeed[p] = empty;
 		return;
 	}
+
+	// Max Slope from the pixel's OWN normal (depth-reconstructed, smaller
+	// difference per axis), independent of every other slope setting.
+	float dl, dr, du, dd;
+	const float3 pl = SeedViewPos(int2(max(p.x - 1, 0), p.y), dl);
+	const float3 pr = SeedViewPos(int2(min(p.x + 1, sdims.x - 1), p.y), dr);
+	const float3 pu = SeedViewPos(int2(p.x, max(p.y - 1, 0)), du);
+	const float3 pd = SeedViewPos(int2(p.x, min(p.y + 1, sdims.y - 1)), dd);
+	const float3 dx = (abs(abs(pr.z) - z) < abs(abs(pl.z) - z)) ? (pr - vp) : (vp - pl);
+	const float3 dy = (abs(abs(pd.z) - z) < abs(abs(pu.z) - z)) ? (pd - vp) : (vp - pu);
+	float3 nView = normalize(cross(dx, dy));
+	[flatten] if (dot(nView, -vp) < 0.0)
+		nView = -nView;
+	const float nz = normalize(mul((float3x3)SeedViewInverse, nView)).z;
+	const float slopeW = smoothstep(BlobMaxSlopeNz - 0.05, BlobMaxSlopeNz + 0.05, nz);
+	[branch] if (slopeW <= 0.0)
+	{
+		OutSeed[p] = empty;
+		return;
+	}
+
+	// Sub-texel classification: the four raster texels around the pixel's
+	// world position, each matched to the layer at this height, blended by
+	// bilinear weight. A diagonal roof edge is then a smooth line, not 4-unit
+	// steps, and the thickness tapers into it.
 	uint2 dims;
 	InA.GetDimensions(dims.x, dims.y);
 	const float texel = HeightHalfExtent * 2.0 / dims.x;
-	const int2 t = int2(
-		clamp(int((local.x + HeightHalfExtent) / texel), 0, int(dims.x) - 1),
-		clamp(int((HeightHalfExtent - local.y) / texel), 0, int(dims.y) - 1));
-
-	// The layer whose fresh top is this pixel's surface.
+	const float2 tf = float2((local.x + HeightHalfExtent) / texel, (HeightHalfExtent - local.y) / texel) - 0.5;
+	const int2 t0 = clamp(int2(floor(tf)), int2(0, 0), int2(dims) - 2);
+	const float2 fw = saturate(tf - float2(t0));
 	const uint layers = (uint)clamp(BlobLayers, 1.0, 6.0);
-	float bestDz = BlobLayerTol;
-	float bestMask = 0.0;
-	float bestTop = 0.0;
-	bool found = false;
-	for (uint L = 0; L < layers; L++)
-	{
-		const float2 mk = BlobLayerMask(L, t);
-		if (mk.y <= 0.0)
-			continue;
-		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
-		const float dz = abs(top - worldAbs.z);
-		if (dz < bestDz)
-		{
-			bestDz = dz;
-			bestMask = mk.x;
-			bestTop = top;
-			found = true;
-		}
-	}
+	const float m00 = SeedTexelMask(t0, worldAbs.z, layers);
+	const float m10 = SeedTexelMask(t0 + int2(1, 0), worldAbs.z, layers);
+	const float m01 = SeedTexelMask(t0 + int2(0, 1), worldAbs.z, layers);
+	const float m11 = SeedTexelMask(t0 + int2(1, 1), worldAbs.z, layers);
+	const float mask = lerp(lerp(m00, m10, fw.x), lerp(m01, m11, fw.x), fw.y);
 	const float threshold = saturate(BlobMaskThreshold);
-	[branch] if (!found || bestMask < threshold)
+	[branch] if (mask < threshold)
 	{
-		OutSeed[p] = outv;
+		OutSeed[p] = empty;
 		return;
 	}
-	[branch] if (BlobEdgesOnly > 0.5)
-	{
-		const uint band = max(1u, (uint)round(BlobEdgeBand / texel));
-		float2 dropDir;
-		float dropStep;
-		if (!BlobIsEdge(t, int2(dims), bestTop, layers, band, dropDir, dropStep))
-		{
-			OutSeed[p] = outv;
-			return;
-		}
-	}
-	// Thickness: the slider, undulated by world-anchored noise, thinned toward
-	// the mask threshold so partial paint fades rather than cuts.
-	const float maskT = saturate((bestMask - threshold) / max(1.0 - threshold, 1e-3));
-	const float n = BlobValueNoise(worldAbs.xy / max(BlobNoiseScale, 1.0), (uint)max(BlobSeed, 0.0) + 7u) * 2.0 - 1.0;
-	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * n) * lerp(0.6, 1.0, maskT), 0.05);
+	// Thickness: the slider, undulated by broad and fine world-anchored noise,
+	// tapered toward the mask threshold and the slope cutoff.
+	const float maskT = saturate((mask - threshold) / max(1.0 - threshold, 1e-3));
+	const float cell = max(BlobNoiseScale, 1.0);
+	const float nBroad = BlobValueNoise(worldAbs.xy / cell, 7u) * 2.0 - 1.0;
+	const float nFine = BlobValueNoise(worldAbs.xy / (cell * 0.25) + 31.7, 13u) * 2.0 - 1.0;
+	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * nBroad + BlobBorderNoise * 0.5 * nFine) * lerp(0.6, 1.0, maskT) * slopeW, 0.05);
 	OutSeed[p] = float2(z, thickness);
 }

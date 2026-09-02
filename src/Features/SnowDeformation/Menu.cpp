@@ -306,31 +306,25 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_size_tooltip"), "How far the sheet floats in front of the surface, and the radius of the rounded lip at its edges."));
 			ImGui::SliderFloat(T(TKEY("blob_size_noise"), "Thickness Noise"), &settings.BlobSizeNoise, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobSn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "How much the thickness undulates, as a fraction of Thickness. World-anchored, so it does not swim with the camera."));
+				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "Broad undulation of the thickness, as a fraction of Thickness, one wave per Noise Scale. World-anchored, so it does not swim with the camera."));
+			ImGui::SliderFloat(T(TKEY("blob_border_noise"), "Border Noise"), &settings.BlobBorderNoise, 0.0f, 1.0f, "%.2f");
+			if (auto _ttBlobBn = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Fine thickness noise at a quarter of Noise Scale. Because the lip's outline follows the thickness, this breaks the edge into an irregular line and adds small-scale variation to the surface."));
 			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Noise Scale"), &settings.BlobSpacing, 2.0f, 128.0f, "%.0f units");
 			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Size of one undulation of the thickness noise, world units."));
 			ImGui::SliderFloat(T(TKEY("blob_mask_threshold"), "Placement Threshold"), &settings.BlobMaskThreshold, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobMt = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "The only slope control: the mask is the surface's up-facing weight times the game's painted snow, so on architecture 0.5 is about a 60 degree cutoff, lower reaches steeper faces, higher keeps only flatter ones. 3D Shell Max Slope does not apply here."));
-			ImGui::Checkbox(T(TKEY("blob_edges_only"), "Edges Only"), &settings.BlobEdgesOnly);
-			if (auto _ttBlobEo = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_edges_only_tooltip"), "On: only within Edge Band of a drop in the surface. Off: the whole painted surface."));
-			ImGui::SliderFloat(T(TKEY("blob_edge_band"), "Edge Band"), &settings.BlobEdgeBand, 4.0f, 64.0f, "%.0f units");
-			if (auto _ttBlobEb = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_edge_band_tooltip"), "How far back from an edge still counts as the edge. The height raster is 4 units per texel, so the band rounds to whole texels."));
-			ImGui::SliderFloat(T(TKEY("blob_edge_drop"), "Edge Drop"), &settings.BlobEdgeDrop, 2.0f, 64.0f, "%.0f units");
-			if (auto _ttBlobEd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_edge_drop_tooltip"), "How far the surface must fall away (or a wall rise) beside a spot for it to count as an edge."));
+			ImGui::SliderFloat(T(TKEY("blob_max_slope"), "Max Slope"), &settings.BlobMaxSlopeDeg, 0.0f, 90.0f, "%.0f deg");
+			if (auto _ttBlobMs = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_max_slope_tooltip"), "Steepest surface that takes the sheet, measured from the pixel's own normal. Independent of 3D Shell Max Slope, Rock Max Slope and Placement Threshold; the sheet thins out over the last few degrees."));
 			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 6);
 			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces a pixel may belong to: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
 			ImGui::SliderFloat(T(TKEY("blob_radius"), "Placement Radius"), &settings.BlobRadius, 256.0f, 4096.0f, "%.0f units");
 			if (auto _ttBlobRd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_radius_tooltip"), "Surfaces further than this from the player take no sheet."));
-			ImGui::SliderInt(T(TKEY("blob_seed"), "Seed"), &settings.BlobSeed, 0, 99);
-			if (auto _ttBlobSeed = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_seed_tooltip"), "Reseeds the thickness noise."));
 
 			ImGui::SeparatorText(T(TKEY("blob_meld_header"), "Melding"));
 			ImGui::SliderFloat(T(TKEY("blob_meld_depth_range"), "Meld Depth Range"), &settings.BlobMeldDepthRange, 1.0f, 64.0f, "%.0f units");

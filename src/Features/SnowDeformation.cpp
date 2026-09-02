@@ -110,11 +110,9 @@
 	X(BlobSize) \
 	X(BlobSizeNoise) \
 	X(BlobMaskThreshold) \
+	X(BlobMaxSlopeDeg) \
+	X(BlobBorderNoise) \
 	X(BlobLayers) \
-	X(BlobSeed) \
-	X(BlobEdgesOnly) \
-	X(BlobEdgeBand) \
-	X(BlobEdgeDrop) \
 	X(BlobRadius) \
 	X(BlobMeldDepthRange) \
 	X(BlobMeldSmoothRange) \

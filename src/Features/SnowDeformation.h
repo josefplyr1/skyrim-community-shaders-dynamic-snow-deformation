@@ -505,14 +505,10 @@ public:
 		float BlobMaskThreshold = 0.5f;
 		/** @brief How many peeled layers a pixel may match (4-6 = three more peels, each a full re-rasterization). */
 		int BlobLayers = 6;
-		/** @brief Noise hash salt. */
-		int BlobSeed = 0;
-		/** @brief Seed only within BlobEdgeBand of a drop in the surface's plane. */
-		bool BlobEdgesOnly = false;
-		/** @brief World units back from an edge that still count as the edge (rounded up to whole raster texels, 4 units each). */
-		float BlobEdgeBand = 6.0f;
-		/** @brief A neighbouring texel with no layer within this many units of the plane's height makes an edge. */
-		float BlobEdgeDrop = 15.0f;
+		/** @brief Steepest surface (degrees from horizontal) that takes the sheet, from the pixel's own depth-reconstructed normal. Independent of every other slope setting. */
+		float BlobMaxSlopeDeg = 65.0f;
+		/** @brief Fine thickness noise (a quarter of Noise Scale), +/- fraction of Thickness: breaks up the lip outline and the surface. */
+		float BlobBorderNoise = 0.5f;
 		/** @brief Seeding radius around the player, world units. */
 		float BlobRadius = 2048.0f;
 		/** @brief Dilation gate: two pixels further apart along the view than this are different surfaces and never roll into each other. */
@@ -1840,14 +1836,14 @@ public:
 		float Thickness;
 		float ThicknessNoise;
 		float MaskThreshold;
-		float Seed;
 		float Layers;
-		float EdgesOnly;
-		float EdgeBand;
-		float EdgeDrop;
 		float Radius;
 		float RefZ;
 		float LayerTol;
+		float MaxSlopeNz;
+		float BorderNoise;
+		float padS1;
+		float padS2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);
 	/** @brief Field-pass constants (BlobMeldCS b0, MELD composite b2). Layout must match MeldCB in BlobMeldCS.hlsl and SnowStaticsShell.hlsl. */

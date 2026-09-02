@@ -1375,14 +1375,15 @@ void SnowDeformation::DrawBlobShell()
 		cb.Thickness = std::clamp(settings.BlobSize, 0.25f, 64.0f);
 		cb.ThicknessNoise = std::clamp(settings.BlobSizeNoise, 0.0f, 1.0f);
 		cb.MaskThreshold = std::clamp(settings.BlobMaskThreshold, 0.0f, 1.0f);
-		cb.Seed = float(std::max(settings.BlobSeed, 0));
 		cb.Layers = float(std::clamp(settings.BlobLayers, 1, 6));
-		cb.EdgesOnly = settings.BlobEdgesOnly ? 1.0f : 0.0f;
-		cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
-		cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
 		cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
 		cb.RefZ = blobRefZ;
-		cb.LayerTol = 8.0f;
+		// The fitted shell's pixels sit up to the class depth above the raster
+		// top; letting them match folds the shell into the field, so sheet and
+		// shell roll into one surface.
+		cb.LayerTol = 8.0f + std::max(0.0f, std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth));
+		cb.MaxSlopeNz = std::cos(std::clamp(settings.BlobMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+		cb.BorderNoise = std::clamp(settings.BlobBorderNoise, 0.0f, 1.0f);
 		blobCB->Update(cb);
 		MeldSeedCB sc{};
 		sc.ProjInverse = fb.GetCameraProjInverse();
