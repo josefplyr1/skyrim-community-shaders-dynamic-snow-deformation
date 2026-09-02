@@ -3119,6 +3119,35 @@ void SnowDeformation::RenderExclusionField()
 // offset table is authoritative). The VF_FULLPREC flag is NOT reliable: logged
 // runtime buffers carry 16-byte float4 positions with the flag clear, and
 // reading them as halfs shreds geometry into screen-wide streaks.
+// IEEE half to float, for the CPU replica of the skinned contact draw.
+static float SD_HalfToFloat(uint16_t a_h)
+{
+	const uint32_t sign = (a_h & 0x8000u) << 16;
+	uint32_t exp = (a_h >> 10) & 0x1Fu;
+	uint32_t mant = a_h & 0x3FFu;
+	uint32_t bits;
+	if (exp == 0) {
+		if (mant == 0) {
+			bits = sign;
+		} else {
+			exp = 127 - 15 + 1;
+			while ((mant & 0x400u) == 0) {
+				mant <<= 1;
+				exp--;
+			}
+			mant &= 0x3FFu;
+			bits = sign | (exp << 23) | (mant << 13);
+		}
+	} else if (exp == 31) {
+		bits = sign | 0x7F800000u | (mant << 13);
+	} else {
+		bits = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+	}
+	float f;
+	std::memcpy(&f, &bits, sizeof(f));
+	return f;
+}
+
 static uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
 {
 	uint32_t positionBytes = uint32_t(a_descKey & 0xF) * 4;
@@ -3475,6 +3504,69 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
 					}
 					contactSkinCB->Update(cb);
+
+					// CPU replica of the draw for the soloed geometry, once a second:
+					// skin the partition's own vertex copy with the palette just
+					// uploaded and report what the GPU should be painting. A halo
+					// in the field that this bbox does not predict is the IL or the
+					// shader; one it does predict is the data or the palette.
+					if (debugContactSolo >= 0 && geometryIndex == debugContactSolo && contactYawTraceFrames == 0 &&
+						buff->rawVertexData && buff->rawIndexData) {
+						const uint32_t positionBytes = SD_PositionBytes(descKey, partDesc);
+						const uint32_t skinOffset = partDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
+						const uint32_t vertexCount = part.vertices;
+						uint32_t badWeight = 0, badIndex = 0, badRow = 0, maxRef = 0;
+						float minX = 1e30f, minY = 1e30f, minZ = 1e30f, maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
+						for (uint32_t v = 0; v < vertexCount; ++v) {
+							const uint8_t* base = buff->rawVertexData + size_t(v) * stride;
+							float pos[3];
+							if (positionBytes >= 16) {
+								std::memcpy(pos, base, sizeof(pos));
+							} else {
+								uint16_t h[3];
+								std::memcpy(h, base, sizeof(h));
+								for (int k = 0; k < 3; ++k)
+									pos[k] = SD_HalfToFloat(h[k]);
+							}
+							uint16_t wh[4];
+							std::memcpy(wh, base + skinOffset, sizeof(wh));
+							uint8_t idx[4];
+							std::memcpy(idx, base + skinOffset + 8, sizeof(idx));
+							float w[4], wsum = 0.0f;
+							for (int k = 0; k < 4; ++k) {
+								w[k] = SD_HalfToFloat(wh[k]);
+								wsum += w[k];
+							}
+							if (std::abs(wsum - 1.0f) > 0.02f)
+								badWeight++;
+							float out[3] = { 0.0f, 0.0f, 0.0f };
+							for (int k = 0; k < 4; ++k) {
+								if (w[k] == 0.0f)
+									continue;
+								if (idx[k] >= part.numBones)
+									badIndex++;
+								const uint32_t row = uint32_t(idx[k]) * 3;
+								if (row + 2 >= 240) {
+									badRow++;
+									continue;
+								}
+								for (int r = 0; r < 3; ++r) {
+									const auto& R = cb.BoneRows[row + r];
+									out[r] += w[k] * (R.x * pos[0] + R.y * pos[1] + R.z * pos[2] + R.w);
+								}
+							}
+							minX = std::min(minX, out[0]); maxX = std::max(maxX, out[0]);
+							minY = std::min(minY, out[1]); maxY = std::max(maxY, out[1]);
+							minZ = std::min(minZ, out[2]); maxZ = std::max(maxZ, out[2]);
+						}
+						for (uint32_t i = 0; i < indexCount; ++i)
+							maxRef = std::max(maxRef, uint32_t(buff->rawIndexData[thisStart + i]));
+						const auto& bc = root->worldBound.center;
+						logger::info("[SNOW DEFORMATION] solo replica '{}' part {}: {} verts, stride {}, pos {} B, skin @{} | bbox rel. bound centre X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | Z [{:.0f}, {:.0f}] (actor Z {:.0f}) | bad weights {}, bad indices {}, bad rows {}, max index ref {} / {} verts, index start {}",
+							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", p, vertexCount, stride, positionBytes, skinOffset,
+							minX - bc.x, maxX - bc.x, minY - bc.y, maxY - bc.y, minZ, maxZ, ref->GetPositionZ(),
+							badWeight, badIndex, badRow, maxRef, vertexCount, thisStart);
+					}
 
 					UINT offset = 0;
 					auto* vb = reinterpret_cast<ID3D11Buffer*>(buff->vertexBuffer);
