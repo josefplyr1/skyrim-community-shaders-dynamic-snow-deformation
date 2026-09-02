@@ -857,10 +857,12 @@ public:
 	ID3D11ComputeShader* GetDeformationStampCS();
 	/** @brief Returns the full-map stamp fallback (tile list past its cap, or force-all-dirty). */
 	ID3D11ComputeShader* GetDeformationStampAllCS();
+	ID3D11ComputeShader* GetContactViewCS();
 	ID3D11ComputeShader* deformationRingCS = nullptr;
 	ID3D11ComputeShader* deformationEvolveCS = nullptr;
 	ID3D11ComputeShader* deformationStampCS = nullptr;
 	ID3D11ComputeShader* deformationStampAllCS = nullptr;
+	ID3D11ComputeShader* contactViewCS = nullptr;
 
 	// ---- Tile dispatch (DEFORMATION-UPDATE-PLAN S3) ----
 	/** @brief Stamp-pass tile list capacity. 256 stamps at walking bboxes are a few thousand tiles; past the cap the pass falls back to full-map rather than truncate (a truncated list is a silently frozen stamp). */
@@ -2134,6 +2136,12 @@ public:
 	std::vector<ContactProp> contactActors;
 	/** @brief S1 spike, runtime-only, default OFF: actors carve by their skinned render mesh instead of foot and limb capsules. */
 	bool debugActorContact = false;
+	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
+	bool debugContactView = false;
+	winrt::com_ptr<ID3D11Texture2D> contactViewTexture;
+	winrt::com_ptr<ID3D11ShaderResourceView> contactViewSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;
+	void EnsureContactViewTexture();
 	uint contactSkinDrawsLast = 0;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);

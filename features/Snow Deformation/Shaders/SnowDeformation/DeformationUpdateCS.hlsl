@@ -743,6 +743,25 @@ bool EvolveTexel(uint2 phys)
 // value - no neighbour reads - which is what lets this pass run in place and
 // be dispatched over the stamps' bounding tiles only. Returns whether the
 // texel holds anything, for the group's occupancy write.
+// Ground height and nominal layer depth at a world XY, bilinear from the
+// shell's own terrain window. Missing terrain reads far below, so a
+// contact measured against it carves nothing. One helper for the carve and
+// the field view, so the two can never disagree.
+float2 TerrainGroundLayer(float2 worldPos)
+{
+	float2 t = (worldPos - TerrainWindowOrigin) / TerrainTexelSize;
+	int tmax = (int)TerrainDim - 1;
+	int2 t0 = clamp(int2(floor(t)), 0, tmax);
+	int2 t1 = min(t0 + 1, tmax);
+	float2 f = saturate(t - float2(t0));
+	float4 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0));
+	float4 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0));
+	float4 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0));
+	float4 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0));
+	float2 terrain = lerp(lerp(s00.xy, s10.xy, f.x), lerp(s01.xy, s11.xy, f.x), f.y);
+	return float2(terrain.x, max(terrain.y, 1.0));
+}
+
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -975,18 +994,9 @@ bool StampTexel(uint2 phys)
 					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float2 t = (worldPos - TerrainWindowOrigin) / TerrainTexelSize;
-				int tmax = (int)TerrainDim - 1;
-				int2 t0 = clamp(int2(floor(t)), 0, tmax);
-				int2 t1 = min(t0 + 1, tmax);
-				float2 f = saturate(t - float2(t0));
-				float4 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0));
-				float4 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0));
-				float4 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0));
-				float4 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0));
-				float2 terrain = lerp(lerp(s00.xy, s10.xy, f.x), lerp(s01.xy, s11.xy, f.x), f.y);
-				float ground = terrain.x;
-				float layer = max(terrain.y, 1.0);
+				float2 groundLayer = TerrainGroundLayer(worldPos);
+				float ground = groundLayer.x;
+				float layer = groundLayer.y;
 				float printed = saturate(1.0 - (contact - ground) / layer);
 				// Crust bears it like any carve of unknown weight: no force.
 				printed *= lerp(1.0, CrustPrintDepth, standingCrust);
@@ -1155,4 +1165,31 @@ bool StampTexel(uint2 phys)
 		if (gActivity != 0)
 			BermDirty[Gid.xy] = 1u;
 	}
+}
+
+// Contact field view: what the rasterizer wrote this frame, as the carve
+// pass reads it. Red = contact reaching into the layer (the carve fraction),
+// green = hovering above the surface, black = nothing drawn. Own dispatch;
+// the RGBA8 view rides the ActivityView slot.
+[numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
+										 : SV_DispatchThreadID) {
+	const uint dim = (uint)ContactDim;
+	if (dim == 0 || any(DTid.xy >= dim))
+		return;
+	float4 color = float4(0.0, 0.0, 0.0, 1.0);
+	const float contact = ContactHeight.Load(int3(DTid.xy, 0));
+	[branch] if (contact < CONTACT_NONE * 0.5)
+	{
+		// Inverse of the raster mapping: row 0 is the window's +Y edge.
+		float2 rel = float2((DTid.x + 0.5) / dim * 2.0 - 1.0, 1.0 - (DTid.y + 0.5) / dim * 2.0);
+		float2 worldPos = ContactCenter + rel * ContactHalfExtent;
+		float2 groundLayer = TerrainGroundLayer(worldPos);
+		float above = (contact - groundLayer.x) / groundLayer.y;
+		float carve = saturate(1.0 - above);
+		color = float4(carve, saturate(above), 0.0, 1.0);
+	}
+	// A one-texel cross at the window centre, so orientation reads at a glance.
+	if (DTid.x == dim / 2 || DTid.y == dim / 2)
+		color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
+	ActivityView[DTid.xy] = color;
 }

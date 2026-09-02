@@ -1383,6 +1383,19 @@ void SnowDeformation::Prepass()
 				stampTilesLast = 0;
 				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationStamps");
 			}
+			// Field view, while the contact SRVs are still bound: the same
+			// texels the stamp pass just read, painted as it read them.
+			if (debugContactView && perFrameData.ContactDim > 0.5f) {
+				EnsureContactViewTexture();
+				if (auto* viewCS = GetContactViewCS(); viewCS && contactViewUAV) {
+					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
+					context->CSSetUnorderedAccessViews(2, 1, &viewUAV, nullptr);
+					context->CSSetShader(viewCS, nullptr, 0);
+					context->Dispatch(kContactDim / 8, kContactDim / 8, 1);
+					ID3D11UnorderedAccessView* nullView = nullptr;
+					context->CSSetUnorderedAccessViews(2, 1, &nullView, nullptr);
+				}
+			}
 			{
 				ID3D11ShaderResourceView* nullContact[2] = { nullptr, nullptr };
 				context->CSSetShaderResources(7, 2, nullContact);
@@ -1548,6 +1561,38 @@ ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
 		deformationStampCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampCS"));
 	}
 	return deformationStampCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetContactViewCS()
+{
+	if (!contactViewCS) {
+		logger::debug("Compiling DeformationUpdateCS:ContactViewCS");
+		contactViewCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ContactViewCS"));
+	}
+	return contactViewCS;
+}
+
+void SnowDeformation::EnsureContactViewTexture()
+{
+	if (contactViewTexture)
+		return;
+	auto device = globals::d3d::device;
+	if (!device)
+		return;
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = kContactDim;
+	desc.Height = kContactDim;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	if (FAILED(device->CreateTexture2D(&desc, nullptr, contactViewTexture.put())))
+		return;
+	Util::SetResourceName(contactViewTexture.get(), "SnowDeformation::ContactView");
+	device->CreateShaderResourceView(contactViewTexture.get(), nullptr, contactViewSRV.put());
+	device->CreateUnorderedAccessView(contactViewTexture.get(), nullptr, contactViewUAV.put());
 }
 
 ID3D11ComputeShader* SnowDeformation::GetDeformationStampAllCS()
