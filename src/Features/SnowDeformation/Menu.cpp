@@ -1431,6 +1431,23 @@ void SnowDeformation::DrawSettings()
 							root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(), contactCenter.x, contactCenter.y,
 							contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
 				}
+				// Heights against the baked ground: what the carve's (contact - ground) / layer
+				// sees, in numbers. Red arms with hands 60 units up means the raster's Z
+				// or the ground sample is wrong, not the silhouette.
+				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					if (auto* root = player->Get3D(false)) {
+						const auto probe = ProbeShellData(player->GetPositionX(), player->GetPositionY());
+						ImGui::Text("  ground at player (baked vertex): %.1f, layer %.1f | player Z %.1f (%.1f above ground)",
+							probe.height, probe.rampDepth, player->GetPositionZ(), player->GetPositionZ() - probe.height);
+						static const char* heightBones[] = { "NPC L Foot [Lft ]", "NPC R Foot [Rft ]", "NPC L Hand [LHnd]", "NPC R Hand [RHnd]", "NPC Head [Head]" };
+						std::string line = "  bone Z above ground:";
+						for (const char* name : heightBones) {
+							if (auto* node = root->GetObjectByName(RE::BSFixedString(name)))
+								line += std::format(" {} {:.0f} |", name, node->world.translate.z - probe.height);
+						}
+						ImGui::TextUnformatted(line.c_str());
+					}
+				}
 			} else {
 				ImGui::Text("(no field this frame)");
 			}
