@@ -2092,9 +2092,19 @@ public:
 	ID3D11VertexShader* contactVS = nullptr;
 	ID3D11PixelShader* contactPS = nullptr;
 	bool contactShadersFailed = false;
+	/**
+	 * @brief One body queued for contact rasterization: a HANDLE, never a NiPointer.
+	 *
+	 * Holding NiPointer to a live 3D root across a frame makes this module a
+	 * co-owner of the scene graph, and the last release runs the destructor -
+	 * so an actor whose 3D the game swapped or unloaded that frame would be
+	 * destroyed HERE, on the render thread, while animation jobs may still be
+	 * walking it. The handle re-resolves at draw time instead: current 3D or
+	 * nothing, and this module never owns a node.
+	 */
 	struct ContactProp
 	{
-		RE::NiPointer<RE::NiAVObject> root;
+		RE::ObjectRefHandle ref;
 		float minX, minY, maxX, maxY;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */

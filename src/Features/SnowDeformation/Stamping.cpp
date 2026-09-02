@@ -910,7 +910,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
-				contactActors.push_back({ RE::NiPointer<RE::NiAVObject>(root),
+				contactActors.push_back({ actor->CreateRefHandle(),
 					bound.center.x - bound.radius, bound.center.y - bound.radius,
 					bound.center.x + bound.radius, bound.center.y + bound.radius });
 				stampStats.actorsRasterized++;
@@ -1398,7 +1398,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
-				contactProps.push_back({ RE::NiPointer<RE::NiAVObject>(root),
+				contactProps.push_back({ a_ref->CreateRefHandle(),
 					bound.center.x - bound.radius, bound.center.y - bound.radius,
 					bound.center.x + bound.radius, bound.center.y + bound.radius });
 				stampStats.propsRasterized++;

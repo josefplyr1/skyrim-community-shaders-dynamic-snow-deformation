@@ -3303,7 +3303,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 
 	globals::profiler->BeginPass("SnowDeformation::ContactCapture");
 	for (const auto& prop : contactProps) {
-		auto* root = prop.root.get();
+		// Re-resolved, not held: see ContactProp. A body whose 3D went away
+		// this frame simply drops out.
+		auto ref = prop.ref.get();
+		auto* root = ref ? ref->Get3D(false) : nullptr;
 		if (!root)
 			continue;
 		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
@@ -3368,7 +3371,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
 		for (const auto& actor : contactActors) {
-			auto* root = actor.root.get();
+			auto ref = actor.ref.get();
+			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
 				continue;
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
@@ -3380,7 +3384,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				auto* skinPartition = skin->skinPartition.get();
 				// Accessors, not the raw members: those are compiled out under
 				// cross-VR targeting, and these relocate per runtime.
-				if (!skinData || !skinPartition || !skin->bones)
+				// partitions is a bare array behind a count; an instance mid-
+				// rebuild can carry a count with no array.
+				if (!skinData || !skinPartition || !skin->bones || !skinPartition->partitions.data())
 					return RE::BSVisit::BSVisitControl::kContinue;
 				const uint32_t boneCount = skinData->GetBoneCount();
 				if (contactSkinLogged.size() < 16 && contactSkinLogged.insert(skin).second) {
