@@ -2141,6 +2141,9 @@ public:
 	bool debugActorContact = false;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
+	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
+	int debugContactSolo = -1;
+	std::string contactSoloName;
 	winrt::com_ptr<ID3D11Texture2D> contactViewTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> contactViewSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;

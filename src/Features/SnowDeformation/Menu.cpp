@@ -1386,6 +1386,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
 		ImGui::Checkbox("Actor mesh contact [S1 SPIKE] (actors carve by skinned mesh, not bones)", &debugActorContact);
 		ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
+		ImGui::SliderInt("Solo skinned geometry (-1 = all; step through to find whose silhouette is wide)", &debugContactSolo, -1, 31);
+		if (debugContactSolo >= 0)
+			ImGui::Text("  soloed: %s", contactSoloName.c_str());
 		if (debugContactView) {
 			constexpr float viewHalf = 192.0f;
 			ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",

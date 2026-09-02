@@ -3377,11 +3377,20 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			if (!root)
 				continue;
 			contactYawTraceAngle = ref->GetAngleZ();
+			int geometryIndex = -1;
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
 				if (!skin)
 					return RE::BSVisit::BSVisitControl::kContinue;
+				// Solo: draw one skinned geometry only, so the field shows whose
+				// silhouette is which. -1 draws them all.
+				++geometryIndex;
+				if (debugContactSolo >= 0) {
+					if (geometryIndex != debugContactSolo)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					contactSoloName = a_geometry->name.c_str() ? a_geometry->name.c_str() : "(unnamed)";
+				}
 				auto* skinData = skin->skinData.get();
 				auto* skinPartition = skin->skinPartition.get();
 				// Accessors, not the raw members: those are compiled out under
