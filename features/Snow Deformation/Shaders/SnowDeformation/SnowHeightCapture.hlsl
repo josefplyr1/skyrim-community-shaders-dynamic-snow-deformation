@@ -184,13 +184,13 @@ VS_OUTPUT main(VS_INPUT input)
 	float pdMask = 0.0;
 	[branch] if (ProjThreshold > -0.5 && BlobExclude < 0.5)
 	{
-		float projWeight = vsout.NormalZ * pdAlpha - max(ProjThreshold, 0.0);
-		pdMask = saturate(5.0 * projWeight);
+		// GRADED by slope, not saturated: the mask is nz x alpha minus the
+		// draw's threshold, so Placement Threshold reads as a slope cutoff
+		// (0.5 = about 60 degrees on fully painted architecture) and is the
+		// only slope control the blob shell answers to. No repose gate.
+		pdMask = saturate(vsout.NormalZ * pdAlpha - max(ProjThreshold, 0.0));
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		pdMask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, vsout.NormalZ);
-		// The skin's own angle-of-repose gate: walls and steep faces take no
-		// spheres, so the budget goes to real edges.
-		pdMask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, vsout.NormalZ);
 	}
 	vsout.PdMask = pdMask;
 	return vsout;

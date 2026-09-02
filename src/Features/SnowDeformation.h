@@ -535,6 +535,8 @@ public:
 		bool BlobMeldAnchor = false;
 		/** @brief Two surfaces further apart in world height than this do not meld (a rail's spheres stay off the plank below). 0 = no limit. */
 		float BlobMeldVerticalRange = 12.0f;
+		/** @brief The sheet's edge fillets down onto a surface close behind it over this many world units, so it meets the landscape shell without a step. 0 = hard edge. */
+		float BlobMeldFeather = 4.0f;
 		/** @brief Blur passes (each is one horizontal + one vertical). */
 		int BlobMeldIterations = 2;
 		/** @brief Pixel cap on the projected kernel, for cost up close. */
@@ -1806,6 +1808,8 @@ public:
 	ID3D11ComputeShader* meldErodeCS = nullptr;
 	ID3D11ComputeShader* meldSmoothCS = nullptr;
 	ID3D11ComputeShader* meldSheetCS = nullptr;
+	ID3D11ComputeShader* meldFeatherHCS = nullptr;
+	ID3D11ComputeShader* meldFeatherVCS = nullptr;
 	ConstantBuffer* meldCB = nullptr;
 	/** @brief (Re)creates the two meld depth targets at the main render target's size. */
 	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
@@ -1915,7 +1919,7 @@ public:
 		float FootBias;
 		float Seed;
 		float VerticalRange;
-		float padM1;
+		float Feather;
 		float padM2;
 		float padM3;
 	};

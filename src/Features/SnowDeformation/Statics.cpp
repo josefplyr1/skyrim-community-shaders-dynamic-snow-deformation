@@ -1092,6 +1092,10 @@ bool SnowDeformation::EnsureStaticsShaders()
 			meldSmoothCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSmoothCS"));
 		if (!meldSheetCS)
 			meldSheetCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSheetCS"));
+		if (!meldFeatherHCS)
+			meldFeatherHCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldFeatherHCS"));
+		if (!meldFeatherVCS)
+			meldFeatherVCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldFeatherVCS"));
 	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1702,6 +1706,7 @@ void SnowDeformation::DrawBlobShellMelded()
 	m.Anchor = settings.BlobMeldAnchor ? 1.0f : 0.0f;
 	m.FootBias = 0.1f;
 	m.VerticalRange = std::clamp(settings.BlobMeldVerticalRange, 0.0f, 256.0f);
+	m.Feather = std::clamp(settings.BlobMeldFeather, 0.0f, 64.0f);
 	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
 	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
 	int src = 0;
@@ -1735,6 +1740,10 @@ void SnowDeformation::DrawBlobShellMelded()
 		}
 	}
 	fieldPass(meldSheetCS, 1.0f, 0.0f, 0.0f);
+	if (m.Feather > 0.0f) {
+		fieldPass(meldFeatherHCS, 1.0f, 0.0f, 0.0f);
+		fieldPass(meldFeatherVCS, 0.0f, 1.0f, 0.0f);
+	}
 	ID3D11Buffer* nullCsCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullCsCB);
 	context->CSSetShader(nullptr, nullptr, 0);
@@ -1773,7 +1782,7 @@ void SnowDeformation::DrawBlobShell()
 {
 	if (!settings.EnableBlobShell || !blobVS || !blobPS || !blobIL || !blobSphereVB || !blobSphereIB || !blobArgsBuffer || !blobInstanceSRV || !blobRasterState)
 		return;
-	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldDilateCS && meldErodeCS && meldSmoothCS && meldSheetCS && meldCB && blobMeldMinBlend) {
+	if (settings.BlobMeld && blobDepthPS && meldVS && meldPS && meldDilateCS && meldErodeCS && meldSmoothCS && meldSheetCS && meldFeatherHCS && meldFeatherVCS && meldCB && blobMeldMinBlend) {
 		DrawBlobShellMelded();
 		return;
 	}

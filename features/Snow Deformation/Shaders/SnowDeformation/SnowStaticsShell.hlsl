@@ -695,7 +695,7 @@ cbuffer MeldCB : register(b2)
 	float MeldFootBias;
 	float MeldSeed;
 	float MeldVerticalRange;
-	float padMeld1;
+	float MeldFeather;
 	float padMeld2;
 	float padMeld3;
 }

@@ -344,7 +344,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_jut_noise_tooltip"), "How much each sphere's jut varies from its neighbours, as a fraction of Jut."));
 			ImGui::SliderFloat(T(TKEY("blob_mask_threshold"), "Placement Threshold"), &settings.BlobMaskThreshold, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobMt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "How strongly the game's projected snow must be painted at a spot before a sphere is placed there. On architecture the paint is all-or-nothing, so this mostly matters on rock and terrain-like objects."));
+				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "The only slope control the blob shell answers to: the mask is the surface's up-facing weight times the game's painted snow, so on architecture 0.5 is about a 60 degree cutoff, lower reaches steeper faces, higher keeps only flatter ones. 3D Shell Max Slope no longer applies here."));
 			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 6);
 			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces receive spheres: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
@@ -373,7 +373,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_meld_smoothing_tooltip"), "A light blur after the roll, world units, to take the pixel steps off the sheet. Keep it well below the sphere Size; large values flatten the shape and the lighting goes wrong."));
 			ImGui::SliderFloat(T(TKEY("blob_meld_depth_range"), "Meld Depth Range"), &settings.BlobMeldDepthRange, 1.0f, 64.0f, "%.0f units");
 			if (auto _ttMeldD = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "Smoothing only: two pixels further apart in depth than this do not average, so a sphere in front never bleeds into one behind."));
+				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "Two pixels further apart along the view than this belong to different surfaces: they neither roll into each other nor average, so a sheet in front never bleeds into one behind. Also the reach of the edge feather onto the surface behind."));
+			ImGui::SliderFloat(T(TKEY("blob_meld_feather"), "Meld Feather"), &settings.BlobMeldFeather, 0.0f, 16.0f, "%.1f units");
+			if (auto _ttMeldF = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_meld_feather_tooltip"), "The sheet's edge fillets down onto whatever sits close behind it (the landscape shell, a plank) over this distance, so the join is a curve rather than a step. Edges against a far background stay sharp. 0 = hard edge."));
 			ImGui::SliderInt(T(TKEY("blob_meld_iterations"), "Meld Passes"), &settings.BlobMeldIterations, 1, 4);
 			if (auto _ttMeldI = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_iterations_tooltip"), "Smoothing passes. More is smoother and costs a full-screen pass pair each."));

@@ -30,7 +30,7 @@ cbuffer MeldCB : register(b0)
 	float MeldFootBias;   // sheet must float this far in front of the scene
 	float MeldSeed;       // 1 on the first dilation: seed coverage and anchors
 	float MeldVerticalRange;  // surfaces further apart in world height do not meld (0 = off)
-	float padMeld1;
+	float MeldFeather;        // sheet edge fillets onto a surface close behind over this many world units
 	float padMeld2;
 	float padMeld3;
 }
@@ -105,6 +105,10 @@ float MeldWorldZ(int2 p, float z)
 			continue;
 		if (gate && i != 0 && abs(MeldWorldZ(q, zq) - wzc) > MeldVerticalRange)
 			continue;
+		// Depth gate: a surface further along the view than Meld Depth Range
+		// is another surface; its ball neither pushes this one nor is pushed.
+		if (zc < 1e29 && i != 0 && abs(zq - zc) > MeldDepthRange)
+			continue;
 		const float s = abs(float(i)) * MeldPixelWorld(zq);
 		if (s >= R)
 			continue;
@@ -147,6 +151,8 @@ float MeldWorldZ(int2 p, float z)
 		if (hole)
 			break;
 		if (gate && i != 0 && abs(MeldWorldZ(q, f.x) - wzc) > MeldVerticalRange)
+			continue;
+		if (i != 0 && abs(f.x - c.x) > MeldDepthRange)
 			continue;
 		best = max(best, f.x + sqrt(R * R - s * s));
 		cov = min(cov, f.y);
@@ -209,4 +215,79 @@ float MeldWorldZ(int2 p, float z)
 		sheet = (c.x < sz - MeldFootBias) ? 1.0 : 0.0;
 	}
 	OutField[p] = float2(c.x, sheet);
+}
+
+// Feather, pass 1 of 2 (horizontal): for each sheet pixel, the distance in
+// pixels to the nearest non-sheet pixel along the row (F + 1 = none within
+// reach); non-sheet pixels carry -1.
+[numthreads(8, 8, 1)] void MeldFeatherHCS(uint3 dtid
+										  : SV_DispatchThreadID)
+{
+	const int2 dims = int2(MeldDims);
+	if (dtid.x >= (uint)dims.x || dtid.y >= (uint)dims.y)
+		return;
+	const int2 p = int2(dtid.xy);
+	const float2 c = InField[p];
+	if (c.y < 0.5 || c.x > 1e29)
+	{
+		OutField[p] = float2(c.x, -1.0);
+		return;
+	}
+	const float pw = MeldPixelWorld(c.x);
+	const int F = clamp((int)ceil(MeldFeather / max(pw, 1e-4)), 0, (int)MeldMaxRadiusPx);
+	float d = float(F + 1);
+	for (int i = 1; i <= F; i++)
+	{
+		const float a = InField[clamp(p + int2(i, 0), int2(0, 0), dims - 1)].y;
+		const float b = InField[clamp(p - int2(i, 0), int2(0, 0), dims - 1)].y;
+		if (a < 0.5 || b < 0.5)
+		{
+			d = float(i);
+			break;
+		}
+	}
+	OutField[p] = float2(c.x, d);
+}
+
+// Feather, pass 2 of 2 (vertical): Chebyshev distance to the sheet edge from
+// the row distances, then the edge ramps down onto a surface close behind it
+// (the landscape shell, the plank) so the two meet in a fillet instead of a
+// step. Against a far background the edge stays where it is.
+[numthreads(8, 8, 1)] void MeldFeatherVCS(uint3 dtid
+										  : SV_DispatchThreadID)
+{
+	const int2 dims = int2(MeldDims);
+	if (dtid.x >= (uint)dims.x || dtid.y >= (uint)dims.y)
+		return;
+	const int2 p = int2(dtid.xy);
+	const float2 c = InField[p];
+	if (c.y < 0.0 || c.x > 1e29)
+	{
+		OutField[p] = float2(kMeldEmpty, 0.0);
+		return;
+	}
+	const float pw = MeldPixelWorld(c.x);
+	const int F = clamp((int)ceil(MeldFeather / max(pw, 1e-4)), 0, (int)MeldMaxRadiusPx);
+	float d = c.y;
+	for (int j = 1; j <= F; j++)
+	{
+		const float u = InField[clamp(p + int2(0, j), int2(0, 0), dims - 1)].y;
+		const float v = InField[clamp(p - int2(0, j), int2(0, 0), dims - 1)].y;
+		const float du = u < 0.0 ? float(j) : max(float(j), u);
+		const float dv = v < 0.0 ? float(j) : max(float(j), v);
+		d = min(d, min(du, dv));
+	}
+	float z = c.x;
+	float sheet = 1.0;
+	[branch] if (F > 0 && d <= float(F))
+	{
+		const float sz = MeldSceneZ(p);
+		[branch] if (sz < 1e29 && (sz - z) < MeldDepthRange)
+		{
+			const float t = smoothstep(0.0, 1.0, saturate((d - 0.5) / float(F)));
+			z = lerp(sz, z, t);
+			sheet = (z < sz - MeldFootBias) ? 1.0 : 0.0;
+		}
+	}
+	OutField[p] = float2(z, sheet);
 }
