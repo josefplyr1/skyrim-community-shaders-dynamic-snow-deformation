@@ -3517,6 +3517,20 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						const uint32_t vertexCount = part.vertices;
 						uint32_t badWeight = 0, badIndex = 0, badRow = 0, maxRef = 0;
 						float minX = 1e30f, minY = 1e30f, minZ = 1e30f, maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
+						// Two rival readings of the vertex bone index, skinned alongside:
+						// B = the index names a bone in the SKIN's list, not the partition's
+						// slot; C = the partition slot, but with the rotation transposed.
+						float bMin[3] = { 1e30f, 1e30f, 1e30f }, bMax[3] = { -1e30f, -1e30f, -1e30f };
+						float cMin[3] = { 1e30f, 1e30f, 1e30f }, cMax[3] = { -1e30f, -1e30f, -1e30f };
+						auto skinWith = [&](const RE::NiTransform& a_m, const float a_pos[3], float a_w, float a_out[3], bool a_transpose) {
+							const auto& R = a_m.rotate;
+							for (int r = 0; r < 3; ++r) {
+								float acc = a_m.translate[r];
+								for (int c = 0; c < 3; ++c)
+									acc += (a_transpose ? R.entry[c][r] : R.entry[r][c]) * a_m.scale * a_pos[c];
+								a_out[r] += a_w * acc;
+							}
+						};
 						for (uint32_t v = 0; v < vertexCount; ++v) {
 							const uint8_t* base = buff->rawVertexData + size_t(v) * stride;
 							float pos[3];
@@ -3558,7 +3572,26 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							minX = std::min(minX, out[0]); maxX = std::max(maxX, out[0]);
 							minY = std::min(minY, out[1]); maxY = std::max(maxY, out[1]);
 							minZ = std::min(minZ, out[2]); maxZ = std::max(maxZ, out[2]);
+							float outB[3] = { 0.0f, 0.0f, 0.0f }, outC[3] = { 0.0f, 0.0f, 0.0f };
+							for (int k = 0; k < 4; ++k) {
+								if (w[k] == 0.0f)
+									continue;
+								if (idx[k] < boneCount && skin->bones[idx[k]])
+									skinWith(skin->bones[idx[k]]->world * skinData->GetBoneDataSkinToBone(idx[k]), pos, w[k], outB, false);
+								if (idx[k] < part.numBones) {
+									const uint16_t gb = part.bones[idx[k]];
+									if (gb < boneCount && skin->bones[gb])
+										skinWith(skin->bones[gb]->world * skinData->GetBoneDataSkinToBone(gb), pos, w[k], outC, true);
+								}
+							}
+							for (int r = 0; r < 3; ++r) {
+								bMin[r] = std::min(bMin[r], outB[r]); bMax[r] = std::max(bMax[r], outB[r]);
+								cMin[r] = std::min(cMin[r], outC[r]); cMax[r] = std::max(cMax[r], outC[r]);
+							}
 						}
+						std::string boneMap;
+						for (uint16_t j = 0; j < part.numBones && j < 40; ++j)
+							boneMap += std::format("{} ", part.bones[j]);
 						for (uint32_t i = 0; i < indexCount; ++i)
 							maxRef = std::max(maxRef, uint32_t(buff->rawIndexData[thisStart + i]));
 						const auto& bc = root->worldBound.center;
@@ -3566,6 +3599,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", p, vertexCount, stride, positionBytes, skinOffset,
 							minX - bc.x, maxX - bc.x, minY - bc.y, maxY - bc.y, minZ, maxZ, ref->GetPositionZ(),
 							badWeight, badIndex, badRow, maxRef, vertexCount, thisStart);
+						logger::info("[SNOW DEFORMATION] solo replica rivals: B (index = skin bone) X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] Z [{:.0f}, {:.0f}] | C (slot, transposed rot) X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] Z [{:.0f}, {:.0f}] | skin bones {} | part.bones: {}",
+							bMin[0] - bc.x, bMax[0] - bc.x, bMin[1] - bc.y, bMax[1] - bc.y, bMin[2], bMax[2],
+							cMin[0] - bc.x, cMax[0] - bc.x, cMin[1] - bc.y, cMax[1] - bc.y, cMin[2], cMax[2],
+							boneCount, boneMap);
 					}
 
 					UINT offset = 0;
