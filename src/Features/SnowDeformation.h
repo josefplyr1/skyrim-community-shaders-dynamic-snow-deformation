@@ -3296,6 +3296,14 @@ protected:
 
 	/** @brief Last 3D-root position per loose prop (formID), rebuilt every frame from the in-range scan. The position gate runs before any collision traversal, so resting clutter costs one hash lookup per frame. */
 	std::unordered_map<uint32_t, RE::NiPoint3> propPrevPositions;
+	/** @brief Frames since the last full reference scan (0 = scan this frame). The scan runs every kPropScanInterval frames; between scans only propScanMovers and propScanHazards are revisited and anchors update in place. */
+	uint32_t propScanFrame = 0;
+	/** @brief Props the last full scan saw moving, revisited every frame until the next scan. */
+	std::vector<RE::ObjectRefHandle> propScanMovers;
+	/** @brief Placed hazards the last full scan found, replayed through ConsiderHazard every frame because the emitter list is rebuilt per frame. */
+	std::vector<RE::ObjectRefHandle> propScanHazards;
+	/** @brief References visited by the last full scan, for the menu; stampStats.propRefs counts only the movers on the frames between. */
+	uint propScanRefs = 0;
 
 	/** @brief Stillness latch per corpse (formID). Once settled, only a large accumulated displacement (dragging, explosions) wakes it, so ragdoll micro-drift cannot re-trench under a buried corpse. Erased when the actor is seen alive again. */
 	struct CorpseRest

@@ -1367,9 +1367,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_stats"), "Statistics"));
 		// Diagnostics: plain text by existing convention (no i18n).
-		ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (prop refs %u, movers %u)",
+		ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (refs at last scan %u, movers %u, scan every 6 frames)",
 			stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
-			stampStats.propRefs, stampStats.propMovers);
+			propScanRefs, stampStats.propMovers);
 		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
 		ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
 			settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");

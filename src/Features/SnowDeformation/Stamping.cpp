@@ -19,6 +19,10 @@ static constexpr float kStampRadiusNeutral = 20.0f;
 static constexpr float kTrailBreakDistance = 256.0f;
 // Movement below this counts as standing still.
 static constexpr float kStampMovementGate = 3.0f;
+// Full reference scan cadence, in frames. Between scans only the movers and
+// hazards the last scan found are revisited; a prop's first motion waits at
+// most one interval (~100 ms), which no one has seen.
+static constexpr uint32_t kPropScanInterval = 6;
 // Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
@@ -1235,170 +1239,197 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// every reference in range each frame whether or not anything moves.
 	globals::profiler->BeginPass("SnowDeformation::GatherProps");
 	// Loose props carve while moving. The cheap root-position gate runs
-	// before any collision traversal.
+	// before any collision traversal. The reference scan itself is the cost
+	// (0.31 ms to visit 144 refs and find 0 movers, measured), so it runs
+	// every kPropScanInterval frames; between scans only the movers and
+	// hazards it found are revisited, and anchors update in place rather
+	// than being rebuilt. Hazards replay every frame from the cache because
+	// the emitter list is cleared per frame.
 	std::unordered_map<uint32_t, RE::NiPoint3> currentPropPositions;
 	const auto tes = RE::TES::GetSingleton();
 	auto* playerRef = RE::PlayerCharacter::GetSingleton();
-	if (tes && playerRef) {
+	const bool fullScan = propScanFrame == 0 || propPrevPositions.empty();
+	propScanFrame = (propScanFrame + 1) % kPropScanInterval;
+	auto considerProp = [&](RE::TESObjectREFR* a_ref) {
+		auto* base = a_ref->GetBaseObject();
+		if (!base)
+			return;
+		// Havok-movable base types only; projectiles must not carve
+		// under their flight path.
+		switch (base->GetFormType()) {
+		case RE::FormType::Misc:
+		case RE::FormType::Weapon:
+		case RE::FormType::Armor:
+		case RE::FormType::Ammo:
+		case RE::FormType::Book:
+		case RE::FormType::Ingredient:
+		case RE::FormType::AlchemyItem:
+		case RE::FormType::SoulGem:
+		case RE::FormType::KeyMaster:
+		case RE::FormType::Light:
+		case RE::FormType::MovableStatic:
+			break;
+		default:
+			return;
+		}
+		if (!a_ref->Is3DLoaded())
+			return;
+		auto root = a_ref->Get3D(false);
+		if (!root)
+			return;
+
+		// Gate on the 3D root's world transform, not the reference
+		// position: Havok moves the scene graph every frame while the
+		// reference position lags until the body settles.
+		stampStats.propRefs++;
+		const auto position = root->world.translate;
+		const uint32_t formID = a_ref->formID;
+		// Full scan rebuilds the anchors; between scans they update in place.
+		auto& anchors = fullScan ? currentPropPositions : propPrevPositions;
+		auto prevIt = propPrevPositions.find(formID);
+		if (prevIt == propPrevPositions.end()) {
+			anchors[formID] = position;
+			return;  // first sight: baseline only
+		}
+		// Frozen anchor: slow motion accumulates toward the gate instead
+		// of resetting every frame.
+		const bool propMoved = position.GetSquaredDistance(prevIt->second) >= kStampMovementGate * kStampMovementGate;
+		anchors[formID] = propMoved ? position : prevIt->second;
+		if (propMoved) {
+			stampStats.propMovers++;
+			if (fullScan)
+				propScanMovers.push_back(a_ref->CreateRefHandle());
+		}
+		if (!propMoved)
+			return;  // at rest: the refill buries it
+		if (stampCount >= actorCeiling)
+			return;  // keep collecting anchors
+
+		// Fast-falling props must not carve under their arc; supported
+		// ones stamp wherever they lie, including on top of statics.
+		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
+		if ((position.z - prevIt->second.z) / dt < -kFallSpeedGate)
+			return;
+
+		float groundZ = position.z;
+		tes->GetLandHeight(position, groundZ);
+		// Props on ELEVATED surfaces, or simply hanging in the air, do not
+		// carve - the same gate the living have obeyed since the walkway
+		// rounds, and for the same reason. The band below measures against
+		// the prop's own root, so it can never find the prop too high;
+		// something dropped on a table or still falling therefore cut the
+		// ground a storey beneath it at full depth.
+		if (position.z - groundZ > kElevatedStampCutoff)
+			return;
+		// Band reference: whichever is higher, the land or the prop's own
+		// root — elevated resting surfaces keep their stamps.
+		const float supportZ = std::max(groundZ, position.z);
+
+		const float depthScale = std::clamp(
+			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
+			kStampDepthScaleMin, kStampDepthScaleMax);
+		uint32_t shapeIndex = 0;
+		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			RE::NiPoint3 centerPos;
+			float radius;
+			if (Util::GetShapeBound(a_object, centerPos, radius)) {
+				const uint32_t thisIndex = shapeIndex++;
+				if (stampCount >= actorCeiling)
+					return RE::BSVisit::BSVisitControl::kStop;
+				if (centerPos.z - radius > supportZ + kStampSurfaceBand)
+					return RE::BSVisit::BSVisitControl::kContinue;
+				// Small item shapes (daggers, gems) are real: floored at
+				// stamp time instead of skipped like actor shapes.
+				if (radius > kMaxStampShapeRadius)
+					return RE::BSVisit::BSVisitControl::kContinue;
+
+				// Props share the (formID << 16 | shape) keyspace with
+				// actors; formIDs are unique.
+				float2 current = { centerPos.x, centerPos.y };
+				float2 previous = current;
+				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
+				auto it = stampPrevPositions.find(key);
+				if (it != stampPrevPositions.end()) {
+					float2 delta = { current.x - it->second.x, current.y - it->second.y };
+					if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
+						previous = it->second;
+				}
+				currentPositions[key] = current;
+
+				float4 stamp{};
+				stamp.x = current.x;
+				stamp.y = current.y;
+				stamp.z = 1.0f;
+				stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+				perFrameData.Stamps[stampCount] = stamp;
+				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+					CrustBreakForce(radius) };
+				stampCount++;
+				stampStats.props++;
+			}
+			return RE::BSVisit::BSVisitControl::kContinue;
+		});
+
+		// Shape types with no bound extractor (MOPP/list): one stamp from
+		// the root's bound sphere.
+		if (shapeIndex == 0 && stampCount < actorCeiling) {
+			const auto& bound = root->worldBound;
+			float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
+			if (bound.center.z - radius <= supportZ + kStampSurfaceBand) {
+				float2 current = { bound.center.x, bound.center.y };
+				float2 previous = current;
+				const uint64_t key = (uint64_t(formID) << 16) | 0xFFFFull;
+				auto it = stampPrevPositions.find(key);
+				if (it != stampPrevPositions.end()) {
+					float2 delta = { current.x - it->second.x, current.y - it->second.y };
+					if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
+						previous = it->second;
+				}
+				currentPositions[key] = current;
+
+				float4 stamp{};
+				stamp.x = current.x;
+				stamp.y = current.y;
+				stamp.z = 1.0f;
+				stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
+				perFrameData.Stamps[stampCount] = stamp;
+				perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
+					CrustBreakForce(radius) };
+				stampCount++;
+				stampStats.props++;
+			}
+		}
+		return;
+	};
+	if (tes && playerRef && fullScan) {
+		propScanMovers.clear();
+		propScanHazards.clear();
 		tes->ForEachReferenceInRange(playerRef, 0.5f * deformWorldSize, [&](RE::TESObjectREFR* a_ref) {
 			if (!a_ref || a_ref->As<RE::Actor>())
 				return RE::BSContainer::ForEachResult::kContinue;
 			// Spell walls and runes ride this scan instead of adding one of
 			// their own: they are ordinary references and this pass already
-			// runs every frame at the right radius. Note the form type is
-			// PlacedHazard - Hazard is the base form, and filtering on that
-			// silently matches nothing.
+			// runs at the right radius. Note the form type is PlacedHazard -
+			// Hazard is the base form, and filtering on that silently
+			// matches nothing.
 			if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
 				ConsiderHazard(a_ref);
+				propScanHazards.push_back(a_ref->CreateRefHandle());
 				return RE::BSContainer::ForEachResult::kContinue;
 			}
-			auto* base = a_ref->GetBaseObject();
-			if (!base)
-				return RE::BSContainer::ForEachResult::kContinue;
-			// Havok-movable base types only; projectiles must not carve
-			// under their flight path.
-			switch (base->GetFormType()) {
-			case RE::FormType::Misc:
-			case RE::FormType::Weapon:
-			case RE::FormType::Armor:
-			case RE::FormType::Ammo:
-			case RE::FormType::Book:
-			case RE::FormType::Ingredient:
-			case RE::FormType::AlchemyItem:
-			case RE::FormType::SoulGem:
-			case RE::FormType::KeyMaster:
-			case RE::FormType::Light:
-			case RE::FormType::MovableStatic:
-				break;
-			default:
-				return RE::BSContainer::ForEachResult::kContinue;
-			}
-			if (!a_ref->Is3DLoaded())
-				return RE::BSContainer::ForEachResult::kContinue;
-			auto root = a_ref->Get3D(false);
-			if (!root)
-				return RE::BSContainer::ForEachResult::kContinue;
-
-			// Gate on the 3D root's world transform, not the reference
-			// position: Havok moves the scene graph every frame while the
-			// reference position lags until the body settles.
-			stampStats.propRefs++;
-			const auto position = root->world.translate;
-			const uint32_t formID = a_ref->formID;
-			auto prevIt = propPrevPositions.find(formID);
-			if (prevIt == propPrevPositions.end()) {
-				currentPropPositions[formID] = position;
-				return RE::BSContainer::ForEachResult::kContinue;  // first sight: baseline only
-			}
-			// Frozen anchor: slow motion accumulates toward the gate instead
-			// of resetting every frame.
-			const bool propMoved = position.GetSquaredDistance(prevIt->second) >= kStampMovementGate * kStampMovementGate;
-			currentPropPositions[formID] = propMoved ? position : prevIt->second;
-			if (propMoved)
-				stampStats.propMovers++;
-			if (!propMoved)
-				return RE::BSContainer::ForEachResult::kContinue;  // at rest: the refill buries it
-			if (stampCount >= actorCeiling)
-				return RE::BSContainer::ForEachResult::kContinue;  // keep collecting anchors
-
-			// Fast-falling props must not carve under their arc; supported
-			// ones stamp wherever they lie, including on top of statics.
-			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
-			if ((position.z - prevIt->second.z) / dt < -kFallSpeedGate)
-				return RE::BSContainer::ForEachResult::kContinue;
-
-			float groundZ = position.z;
-			tes->GetLandHeight(position, groundZ);
-			// Props on ELEVATED surfaces, or simply hanging in the air, do not
-			// carve - the same gate the living have obeyed since the walkway
-			// rounds, and for the same reason. The band below measures against
-			// the prop's own root, so it can never find the prop too high;
-			// something dropped on a table or still falling therefore cut the
-			// ground a storey beneath it at full depth.
-			if (position.z - groundZ > kElevatedStampCutoff)
-				return RE::BSContainer::ForEachResult::kContinue;
-			// Band reference: whichever is higher, the land or the prop's own
-			// root — elevated resting surfaces keep their stamps.
-			const float supportZ = std::max(groundZ, position.z);
-
-			const float depthScale = std::clamp(
-				GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference) / kStampDepthReference,
-				kStampDepthScaleMin, kStampDepthScaleMax);
-			uint32_t shapeIndex = 0;
-			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
-				RE::NiPoint3 centerPos;
-				float radius;
-				if (Util::GetShapeBound(a_object, centerPos, radius)) {
-					const uint32_t thisIndex = shapeIndex++;
-					if (stampCount >= actorCeiling)
-						return RE::BSVisit::BSVisitControl::kStop;
-					if (centerPos.z - radius > supportZ + kStampSurfaceBand)
-						return RE::BSVisit::BSVisitControl::kContinue;
-					// Small item shapes (daggers, gems) are real: floored at
-					// stamp time instead of skipped like actor shapes.
-					if (radius > kMaxStampShapeRadius)
-						return RE::BSVisit::BSVisitControl::kContinue;
-
-					// Props share the (formID << 16 | shape) keyspace with
-					// actors; formIDs are unique.
-					float2 current = { centerPos.x, centerPos.y };
-					float2 previous = current;
-					const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
-					auto it = stampPrevPositions.find(key);
-					if (it != stampPrevPositions.end()) {
-						float2 delta = { current.x - it->second.x, current.y - it->second.y };
-						if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-							previous = it->second;
-					}
-					currentPositions[key] = current;
-
-					float4 stamp{};
-					stamp.x = current.x;
-					stamp.y = current.y;
-					stamp.z = 1.0f;
-					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
-					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
-						CrustBreakForce(radius) };
-					stampCount++;
-					stampStats.props++;
-				}
-				return RE::BSVisit::BSVisitControl::kContinue;
-			});
-
-			// Shape types with no bound extractor (MOPP/list): one stamp from
-			// the root's bound sphere.
-			if (shapeIndex == 0 && stampCount < actorCeiling) {
-				const auto& bound = root->worldBound;
-				float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
-				if (bound.center.z - radius <= supportZ + kStampSurfaceBand) {
-					float2 current = { bound.center.x, bound.center.y };
-					float2 previous = current;
-					const uint64_t key = (uint64_t(formID) << 16) | 0xFFFFull;
-					auto it = stampPrevPositions.find(key);
-					if (it != stampPrevPositions.end()) {
-						float2 delta = { current.x - it->second.x, current.y - it->second.y };
-						if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-							previous = it->second;
-					}
-					currentPositions[key] = current;
-
-					float4 stamp{};
-					stamp.x = current.x;
-					stamp.y = current.y;
-					stamp.z = 1.0f;
-					stamp.w = std::max(radius * settings.StampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
-					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
-						CrustBreakForce(radius) };
-					stampCount++;
-					stampStats.props++;
-				}
-			}
+			considerProp(a_ref);
 			return RE::BSContainer::ForEachResult::kContinue;
 		});
+		propScanRefs = stampStats.propRefs;
+		propPrevPositions = std::move(currentPropPositions);
+	} else if (tes && playerRef) {
+		for (const auto& handle : propScanHazards)
+			if (auto ref = handle.get(); ref)
+				ConsiderHazard(ref.get());
+		for (const auto& handle : propScanMovers)
+			if (auto ref = handle.get(); ref)
+				considerProp(ref.get());
 	}
-	propPrevPositions = std::move(currentPropPositions);
 
 	// Spell emitters melt rather than displace. Appended AFTER actors and
 	// props on purpose: a busy fight must not starve foot prints out of the
