@@ -3383,12 +3383,36 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				if (!skinData || !skinPartition || !skin->bones)
 					return RE::BSVisit::BSVisitControl::kContinue;
 				const uint32_t boneCount = skinData->GetBoneCount();
+				if (contactSkinLogged.size() < 16 && contactSkinLogged.insert(skin).second) {
+					std::string layout;
+					for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
+						const auto& part = skinPartition->partitions[p];
+						layout += std::format("[{} tris, {} bones, buf {:p}] ", part.triangles, part.numBones, (const void*)part.buffData);
+					}
+					logger::info("[SNOW DEFORMATION] contact skin '{}': {} partitions {}",
+						a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skinPartition->numPartitions, layout);
+				}
+				// SSE partitions share one shape buffer and each owns a contiguous
+				// triangle RANGE of it, in order. Drawing every partition from
+				// index 0 skins the first partition's triangles with every other
+				// partition's palette: vertices follow the wrong bones, the mesh
+				// smears wide and stretched triangles comb the snow. A partition
+				// with its own buffer starts at 0; a skipped one still advances.
+				RE::BSGraphics::TriShape* rangeBuff = nullptr;
+				uint32_t indexStart = 0;
 				for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
 					const auto& part = skinPartition->partitions[p];
 					auto* buff = part.buffData;
-					if (!buff || !buff->vertexBuffer || !buff->indexBuffer || !part.bones)
+					if (!buff || !buff->vertexBuffer || !buff->indexBuffer)
 						continue;
-					if (part.numBones == 0 || part.numBones > kContactMaxBones || part.triangles == 0)
+					if (buff != rangeBuff) {
+						rangeBuff = buff;
+						indexStart = 0;
+					}
+					const uint32_t indexCount = uint32_t(part.triangles) * 3;
+					const uint32_t thisStart = indexStart;
+					indexStart += indexCount;
+					if (!part.bones || part.numBones == 0 || part.numBones > kContactMaxBones || indexCount == 0)
 						continue;
 					auto partDesc = buff->vertexDesc;
 					if (!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) ||
@@ -3428,7 +3452,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					context->IASetInputLayout(layout);
 					context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 					context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-					context->DrawIndexed(uint32_t(part.triangles) * 3, 0, 0);
+					context->DrawIndexed(indexCount, thisStart, 0);
 					contactSkinDrawsLast++;
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;

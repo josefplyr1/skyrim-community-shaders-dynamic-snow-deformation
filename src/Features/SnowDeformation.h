@@ -2099,6 +2099,8 @@ public:
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;
+	/** @brief Skin instances whose partition layout has been logged once (capped), so the log states whether partitions share a buffer rather than the code assuming it. */
+	std::unordered_set<const void*> contactSkinLogged;
 	float2 contactCenter = { 0, 0 };
 	uint contactDrawsLast = 0;
 	/** @brief A/B, runtime-only, default ON: moving props inside the contact window carve by their render mesh. Off reverts them to collision-shape stamps. */
