@@ -2143,6 +2143,9 @@ public:
 	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;
 	void EnsureContactViewTexture();
 	uint contactSkinDrawsLast = 0;
+	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
+	uint32_t contactYawTraceFrames = 0;
+	float contactYawTraceAngle = 0.0f;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);
 

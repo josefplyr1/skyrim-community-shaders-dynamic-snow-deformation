@@ -3370,11 +3370,13 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
+		contactYawTraceFrames = (contactYawTraceFrames + 1) % 60;
 		for (const auto& actor : contactActors) {
 			auto ref = actor.ref.get();
 			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
 				continue;
+			contactYawTraceAngle = ref->GetAngleZ();
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
@@ -3446,6 +3448,19 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						const RE::NiTransform m = boneNode->world * skinData->GetBoneDataSkinToBone(b);
 						const auto& rot = m.rotate;
 						const float sc = m.scale;
+						// Yaw trace, once a second while the field view is up: does the
+						// composed row turn with the actor? Each factor logged apart,
+						// so the log names the one that drops the facing.
+						if (debugContactView && contactYawTraceFrames == 0 && p == 0 && j == 0) {
+							const auto& bw = boneNode->world.rotate;
+							const auto& s2b = skinData->GetBoneDataSkinToBone(b).rotate;
+							const char* boneName = boneNode->name.c_str() ? boneNode->name.c_str() : "";
+							logger::info("[SNOW DEFORMATION] yaw trace '{}' bone '{}': actor yaw {:.2f} rad | bone world row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) | skinToBone row0 ({:.2f} {:.2f} {:.2f}) | composed row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) scale {:.3f}",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", boneName, contactYawTraceAngle,
+								bw.entry[0][0], bw.entry[0][1], bw.entry[0][2], bw.entry[1][0], bw.entry[1][1], bw.entry[1][2],
+								s2b.entry[0][0], s2b.entry[0][1], s2b.entry[0][2],
+								rot.entry[0][0], rot.entry[0][1], rot.entry[0][2], rot.entry[1][0], rot.entry[1][1], rot.entry[1][2], sc);
+						}
 						cb.BoneRows[j * 3 + 0] = { rot.entry[0][0] * sc, rot.entry[0][1] * sc, rot.entry[0][2] * sc, m.translate.x };
 						cb.BoneRows[j * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
 						cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
