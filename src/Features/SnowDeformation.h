@@ -494,7 +494,7 @@ public:
 		/** @brief B0 spike (BLOB-SNOW-PLAN R1): with the drape on, object columns take the smooth-union BLOB field - one hemisphere per raster texel, hashed radius, soft-max union - instead of the dome. The snow's silhouette stops being the object's. Debug toggle, not serialised. */
 		bool BlobObjectSnow = false;
 		/** @brief SCREEN-SPACE SNOW SHELL: every screen pixel whose surface matches a peeled layer with the projected-snow mask above Placement Threshold seeds a field; a ball of the pixel's Thickness is rolled from every seed toward the camera (offset surface with rounded lips), smoothed, and composited once per pixel through the skin material. No spheres. Off by default. */
-		bool EnableBlobShell = true;
+		bool EnableBlobShell = false;
 		/** @brief World units per cell of the thickness noise. */
 		float BlobSpacing = 25.0f;
 		/** @brief How far the sheet floats in front of the surface, world units. */
