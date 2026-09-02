@@ -309,7 +309,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "Broad undulation of the thickness, as a fraction of Thickness, one wave per Noise Scale. World-anchored, so it does not swim with the camera."));
 			ImGui::SliderFloat(T(TKEY("blob_border_noise"), "Border Noise"), &settings.BlobBorderNoise, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobBn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Moves the line where the sheet begins: world-anchored fine noise jitters the paint threshold and the slope cutoff per position and bites into the footprint edge, so the boundary is ragged instead of clean. Does not change the surface itself."));
+				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Fine thickness noise at a quarter of Noise Scale, applied only within one raster texel of the surface's footprint, so the lip's outline breaks into an irregular line while the plane itself keeps only the broad noise."));
 			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Noise Scale"), &settings.BlobSpacing, 2.0f, 128.0f, "%.0f units");
 			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Size of one undulation of the thickness noise, world units."));
@@ -348,12 +348,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderInt(T(TKEY("blob_meld_max_px"), "Meld Pixel Cap"), &settings.BlobMeldMaxRadiusPx, 4, 64);
 			if (auto _ttMeldP = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_max_px_tooltip"), "Upper limit on every kernel in pixels, which is what Thickness becomes up close. Keeps the cost bounded when a surface fills the screen."));
-			ImGui::SliderFloat(T(TKEY("blob_meld_taper"), "Edge Taper"), &settings.BlobMeldTaper, 0.0f, 32.0f, "%.1f units");
-			if (auto _ttMeldT = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_taper_tooltip"), "The thickness thins to nothing over this distance at the sheet's boundary, before the roll, so the sheet descends into the surface instead of stopping in a wall that shades as a dark outline. 0 = hard edge."));
-			ImGui::SliderInt(T(TKEY("blob_meld_debug"), "Meld Debug View"), &settings.BlobMeldDebug, 0, 3);
+			ImGui::SliderInt(T(TKEY("blob_meld_debug"), "Meld Debug View"), &settings.BlobMeldDebug, 0, 2);
 			if (auto _ttMeldDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_debug_tooltip"), "1 paints the sheet with its field depth, 2 with its reconstructed normals, 3 with the mask its seed read: dark means the draw wrote no paint (excluded), bright means fully painted. Use 3 on a road that still takes the sheet."));
+				ImGui::Text("%s", T(TKEY("blob_meld_debug_tooltip"), "1 paints the sheet with its field depth, 2 with its reconstructed normals."));
 			ImGui::TreePop();
 		}
 
