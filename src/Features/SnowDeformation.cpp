@@ -1042,9 +1042,9 @@ void SnowDeformation::Prepass()
 	GatherSpellEmitters();
 	globals::profiler->EndPass();
 
-	globals::profiler->BeginPass("SnowDeformation::GatherStamps");
+	// Timed inside as two sequential passes (actors+bones, then the reference
+	// scan for props), so the bone walk's share can be read on its own.
 	GatherStamps(perFrameData);
-	globals::profiler->EndPass();
 
 	// Marked here, consumed by NEXT frame's roll: the map these stamps are
 	// about to be written into is the one that frame will be copying.

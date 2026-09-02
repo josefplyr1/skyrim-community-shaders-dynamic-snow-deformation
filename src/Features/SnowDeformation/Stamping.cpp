@@ -468,6 +468,7 @@ float SnowDeformation::CrustBreakForce(float a_radius) const
 
 void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
+	globals::profiler->BeginPass("SnowDeformation::GatherStamps");
 	uint stampCount = 0;
 	// Actors and props stop short of the pool so spells always have somewhere
 	// to land. They are read first and in engine order, so without this a
@@ -1228,7 +1229,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// and fills during the next, so the pick is settled before any row is
 	// written.
 	skeletonProbeTarget = stampStats.nearestValid ? stampStats.nearestFormID : 0;
+	globals::profiler->EndPass();
 
+	// The reference scan, timed apart from the actor walk above: it visits
+	// every reference in range each frame whether or not anything moves.
+	globals::profiler->BeginPass("SnowDeformation::GatherProps");
 	// Loose props carve while moving. The cheap root-position gate runs
 	// before any collision traversal.
 	std::unordered_map<uint32_t, RE::NiPoint3> currentPropPositions;
@@ -1481,4 +1486,5 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		std::sort(bowWaves.begin(), bowWaves.end(),
 			[](const BowWave& a, const BowWave& b) { return a.distSq < b.distSq; });
 	perFrameData.StampCount = stampCount;
+	globals::profiler->EndPass();
 }
