@@ -494,37 +494,37 @@ public:
 		/** @brief B0 spike (BLOB-SNOW-PLAN R1): with the drape on, object columns take the smooth-union BLOB field - one hemisphere per raster texel, hashed radius, soft-max union - instead of the dome. The snow's silhouette stops being the object's. Debug toggle, not serialised. */
 		bool BlobObjectSnow = false;
 		/** @brief SCREEN-SPACE SNOW SHELL: every screen pixel whose surface matches a peeled layer with the projected-snow mask above Placement Threshold seeds a field; a ball of the pixel's Thickness is rolled from every seed toward the camera (offset surface with rounded lips), smoothed, and composited once per pixel through the skin material. No spheres. Off by default. */
-		bool EnableBlobShell = false;
+		bool EnableBlobShell = true;
 		/** @brief World units per cell of the thickness noise. */
-		float BlobSpacing = 16.0f;
+		float BlobSpacing = 25.0f;
 		/** @brief How far the sheet floats in front of the surface, world units. */
-		float BlobSize = 4.0f;
+		float BlobSize = 5.0f;
 		/** @brief +/- fraction of Thickness from world-anchored value noise. */
-		float BlobSizeNoise = 0.5f;
+		float BlobSizeNoise = 0.25f;
 		/** @brief The mask (up-facing weight x painted snow) a pixel's layer must reach; on architecture 0.5 is about a 60 degree cutoff. Between this and 1 the thickness thins toward 60%. */
-		float BlobMaskThreshold = 0.5f;
+		float BlobMaskThreshold = 0.01f;
 		/** @brief How many peeled layers a pixel may match (4-6 = three more peels, each a full re-rasterization). */
 		int BlobLayers = 6;
 		/** @brief Steepest surface (degrees from horizontal) that takes the sheet, from the pixel's own depth-reconstructed normal. Independent of every other slope setting. */
-		float BlobMaxSlopeDeg = 65.0f;
-		/** @brief Fine thickness noise (a quarter of Noise Scale), +/- fraction of Thickness: breaks up the lip outline and the surface. */
-		float BlobBorderNoise = 0.5f;
+		float BlobMaxSlopeDeg = 62.0f;
+		/** @brief Fine thickness noise (a quarter of Noise Scale) applied only within one raster texel of the surface's footprint, +/- fraction of Thickness: breaks up the lip outline. */
+		float BlobBorderNoise = 0.25f;
+		/** @brief Max Slope for the mountain/cliff family (the same name match the fitted shell's Rock Max Slope uses). */
+		float BlobRockMaxSlopeDeg = 80.0f;
 		/** @brief Seeding radius around the player, world units. */
-		float BlobRadius = 2048.0f;
+		float BlobRadius = 4096.0f;
 		/** @brief Dilation gate: two pixels further apart along the view than this are different surfaces and never roll into each other. */
-		float BlobMeldDepthRange = 16.0f;
+		float BlobMeldDepthRange = 64.0f;
 		/** @brief Smoothing gate: depth difference beyond which two pixels do not average. */
-		float BlobMeldSmoothRange = 64.0f;
+		float BlobMeldSmoothRange = 128.0f;
 		/** @brief Bilateral smoothing radius after the dilation, world units; 0 = off. */
-		float BlobMeldSmoothing = 2.0f;
-		/** @brief The scene depth gates the dilation where there is no seed, so a lip never grows across a far background but does drape onto a near plank face. */
-		bool BlobMeldAnchor = false;
+		float BlobMeldSmoothing = 3.0f;
 		/** @brief Two surfaces further apart in world height than this do not meld. 0 = no limit. */
-		float BlobMeldVerticalRange = 12.0f;
+		float BlobMeldVerticalRange = 0.0f;
 		/** @brief Smoothing passes (each is one horizontal + one vertical). */
-		int BlobMeldIterations = 2;
+		int BlobMeldIterations = 1;
 		/** @brief Pixel cap on the projected kernels, for cost up close. */
-		int BlobMeldMaxRadiusPx = 48;
+		int BlobMeldMaxRadiusPx = 64;
 		/** @brief Composite debug: 0 off, 1 field depth, 2 reconstructed normals. Not serialised. */
 		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
@@ -1655,7 +1655,8 @@ public:
 		float BlobExclude;
 		/** @brief Blob Snow Shell: camera Z the capture's fresh-top channel is encoded against (R16 UNORM over +/-2048). */
 		float BlobRefZ;
-		float padBlob3;
+		/** @brief Blob Snow Shell: 1 = mountain/cliff family, so the seed applies the rock slope limit. Rides the fresh channel's low bit. */
+		float BlobRockClass;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -1842,7 +1843,7 @@ public:
 		float LayerTol;
 		float MaxSlopeNz;
 		float BorderNoise;
-		float padS1;
+		float RockMaxSlopeNz;
 		float padS2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);

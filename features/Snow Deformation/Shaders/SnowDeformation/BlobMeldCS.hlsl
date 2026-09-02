@@ -19,7 +19,7 @@ cbuffer MeldCB : register(b0)
 	float MeldMaxRadiusPx;  // pixel cap on every kernel
 	float MeldDebug;
 	float MeldSmoothing;  // smoothing radius, world units (0 = off)
-	float MeldAnchor;     // 1 = scene depth gates the dilation where there is no seed
+	float MeldAnchor;     // unused (kept for layout)
 	float MeldFootBias;   // sheet must float this far in front of the scene
 	float MeldSeed;       // 1 on the first dilation (scene anchors are read)
 	float MeldVerticalRange;  // surfaces further apart in world height do not meld (0 = off)
@@ -76,14 +76,13 @@ float MeldWorldZ(int2 p, float z)
 	// The centre's reference depth for the gates: its own seed, else (first
 	// pass, anchored) the scene behind it.
 	const float2 cf = InField[p];
-	float zc = cf.x;
-	[flatten] if (MeldSeed > 0.5 && zc > 1e29 && MeldAnchor > 0.5)
-		zc = MeldSceneZ(p);
+	const float zc = cf.x;
 	const bool hasC = zc < 1e29;
 	const bool vgate = MeldVerticalRange > 0.0 && hasC;
 	const float wzc = vgate ? MeldWorldZ(p, zc) : 0.0;
 	float best = kMeldEmpty;
 	float bestR = 0.0;
+	float bestZ = 0.0;
 	for (int i = -cap; i <= cap; i++)
 	{
 		const int2 q = clamp(p + dir * i, int2(0, 0), dims - 1);
@@ -92,7 +91,10 @@ float MeldWorldZ(int2 p, float z)
 		const float rq = f.y;
 		if (zq > 1e29 || rq <= 0.0)
 			continue;
-		if (hasC && i != 0 && abs(zq - zc) > MeldDepthRange)
+		// One-directional depth gate: a surface BEHIND this one by more than
+		// the range is another surface and may not push it; a nearer one is
+		// in front and occludes, as it should.
+		if (hasC && i != 0 && (zq - zc) > MeldDepthRange)
 			continue;
 		if (vgate && i != 0 && abs(MeldWorldZ(q, zq) - wzc) > MeldVerticalRange)
 			continue;
@@ -104,7 +106,20 @@ float MeldWorldZ(int2 p, float z)
 		{
 			best = cand;
 			bestR = rq;
+			bestZ = zq;
 		}
+	}
+	// Lip hug: where a lip reaches a pixel with no seed of its own and the
+	// visible surface there sits at or behind the lip's apex but within the
+	// range, the lip follows that surface just in front of it, so the sheet
+	// runs onto the landscape shell or a plank face instead of stopping in
+	// mid-air above it. A surface in FRONT of the apex is an occluder and is
+	// left alone.
+	[branch] if (!hasC && best < 1e29)
+	{
+		const float sz = MeldSceneZ(p);
+		[flatten] if (sz < 1e29 && sz >= bestZ - bestR && (sz - bestZ) < MeldDepthRange && best > sz - 2.0 * MeldFootBias)
+			best = sz - 2.0 * MeldFootBias;
 	}
 	OutField[p] = float2(best, bestR);
 }

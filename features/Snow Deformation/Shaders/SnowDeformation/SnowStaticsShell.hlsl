@@ -322,7 +322,7 @@ cbuffer StaticCB : register(b1)
 	float BlobDrape;
 	float BlobExclude;  // Blob Snow Shell, capture only; layout sync
 	float BlobRefZ;     // Blob Snow Shell, capture only; layout sync
-	float padBlob3;
+	float BlobRockClass;  // Blob Snow Shell, capture only; layout sync
 }
 
 Texture2D<float4> DeformationMap : register(t1);

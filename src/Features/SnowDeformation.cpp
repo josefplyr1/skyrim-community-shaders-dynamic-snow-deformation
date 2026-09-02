@@ -111,6 +111,7 @@
 	X(BlobSizeNoise) \
 	X(BlobMaskThreshold) \
 	X(BlobMaxSlopeDeg) \
+	X(BlobRockMaxSlopeDeg) \
 	X(BlobBorderNoise) \
 	X(BlobLayers) \
 	X(BlobRadius) \
@@ -119,7 +120,6 @@
 	X(BlobMeldIterations) \
 	X(BlobMeldMaxRadiusPx) \
 	X(BlobMeldSmoothing) \
-	X(BlobMeldAnchor) \
 	X(BlobMeldVerticalRange) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \

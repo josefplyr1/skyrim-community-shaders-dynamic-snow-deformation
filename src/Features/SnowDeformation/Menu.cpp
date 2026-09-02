@@ -309,7 +309,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "Broad undulation of the thickness, as a fraction of Thickness, one wave per Noise Scale. World-anchored, so it does not swim with the camera."));
 			ImGui::SliderFloat(T(TKEY("blob_border_noise"), "Border Noise"), &settings.BlobBorderNoise, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBlobBn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Fine thickness noise at a quarter of Noise Scale. Because the lip's outline follows the thickness, this breaks the edge into an irregular line and adds small-scale variation to the surface."));
+				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Fine thickness noise at a quarter of Noise Scale, applied only within one raster texel of the surface's footprint, so the lip's outline breaks into an irregular line while the plane itself keeps only the broad noise."));
 			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Noise Scale"), &settings.BlobSpacing, 2.0f, 128.0f, "%.0f units");
 			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Size of one undulation of the thickness noise, world units."));
@@ -318,7 +318,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "The only slope control: the mask is the surface's up-facing weight times the game's painted snow, so on architecture 0.5 is about a 60 degree cutoff, lower reaches steeper faces, higher keeps only flatter ones. 3D Shell Max Slope does not apply here."));
 			ImGui::SliderFloat(T(TKEY("blob_max_slope"), "Max Slope"), &settings.BlobMaxSlopeDeg, 0.0f, 90.0f, "%.0f deg");
 			if (auto _ttBlobMs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_max_slope_tooltip"), "Steepest surface that takes the sheet, measured from the pixel's own normal. Independent of 3D Shell Max Slope, Rock Max Slope and Placement Threshold; the sheet thins out over the last few degrees."));
+				ImGui::Text("%s", T(TKEY("blob_max_slope_tooltip"), "Steepest OBJECT surface that takes the sheet, measured from the pixel's own normal. Independent of 3D Shell Max Slope and Placement Threshold; the sheet thins out over the last few degrees."));
+			ImGui::SliderFloat(T(TKEY("blob_rock_max_slope"), "Rock Max Slope"), &settings.BlobRockMaxSlopeDeg, 0.0f, 90.0f, "%.0f deg");
+			if (auto _ttBlobRms = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blob_rock_max_slope_tooltip"), "The same limit for the mountain/cliff family, the very meshes the fitted shell's Rock Max Slope classifies. Independent of that setting."));
 			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 6);
 			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces a pixel may belong to: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
@@ -329,13 +332,10 @@ void SnowDeformation::DrawSettings()
 			ImGui::SeparatorText(T(TKEY("blob_meld_header"), "Melding"));
 			ImGui::SliderFloat(T(TKEY("blob_meld_depth_range"), "Meld Depth Range"), &settings.BlobMeldDepthRange, 1.0f, 64.0f, "%.0f units");
 			if (auto _ttMeldD = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "Two pixels further apart along the view than this are different surfaces: they never roll into each other, so a sheet in front never bleeds into one behind. Smoothing has its own range below."));
+				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "A surface further BEHIND along the view than this is a different surface and never pushes into this one; a nearer surface always occludes. Also how far behind a lip the landscape shell or a plank may be for the lip to run down onto it. Smoothing has its own range below."));
 			ImGui::SliderFloat(T(TKEY("blob_meld_vertical"), "Meld Vertical Range"), &settings.BlobMeldVerticalRange, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttMeldV = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_vertical_tooltip"), "Two surfaces further apart in world height than this never meld, so a rail's sheet stays off the plank below. 0 removes the limit."));
-			ImGui::Checkbox(T(TKEY("blob_meld_anchor"), "Meld Into Scene"), &settings.BlobMeldAnchor);
-			if (auto _ttMeldA = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_anchor_tooltip"), "The scene behind an empty pixel gates the lip: it may drape onto a plank face close behind, never across a far background. Off: lips grow over anything."));
 			ImGui::SliderFloat(T(TKEY("blob_meld_smoothing"), "Meld Smoothing"), &settings.BlobMeldSmoothing, 0.0f, 8.0f, "%.1f units");
 			if (auto _ttMeldS = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blob_meld_smoothing_tooltip"), "A light blur after the roll, world units, to take the pixel steps off the sheet. Keep it well below Thickness; large values flatten the shape and the lighting goes wrong."));

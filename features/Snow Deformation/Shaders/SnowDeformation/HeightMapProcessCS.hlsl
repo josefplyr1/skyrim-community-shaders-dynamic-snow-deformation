@@ -481,9 +481,9 @@ cbuffer BlobCB : register(b1)
 	float BlobRadius;
 	float BlobRefZ;
 	float BlobLayerTol;       // a pixel matches a layer within this height (world units)
-	float BlobMaxSlopeNz;     // cos(Max Slope): the pixel's own normal must be at least this upright
-	float BlobBorderNoise;    // +/- fraction of thickness, fine noise (a quarter of the cell)
-	float padBlobS1;
+	float BlobMaxSlopeNz;     // cos(Max Slope) for objects
+	float BlobBorderNoise;    // +/- fraction of thickness, fine noise at the border only
+	float BlobRockMaxSlopeNz; // cos(Max Slope) for the mountain/cliff family
 	float padBlobS2;
 }
 // Mirror of SnowDeformation.h MeldSeedCB.
@@ -555,26 +555,40 @@ float3 SeedViewPos(int2 p, out float depthRaw)
 	return v.xyz / (max(abs(v.w), 1e-8) * sign(v.w));
 }
 
-// The mask of the layer whose fresh top matches a height at one texel
-// (0 where no layer does).
-float SeedTexelMask(int2 t, float worldZ, uint layers)
+// The fresh channel is packed: bits 1..15 height, bit 0 the rock class.
+float SeedDecodeTop(float enc, out float rockClass)
 {
-	float bestDz = BlobLayerTol;
+	const float raw = round(enc * 65535.0);
+	rockClass = fmod(raw, 2.0);
+	return floor(raw * 0.5) / 32767.0 * 4096.0 - 2048.0 + BlobRefZ;
+}
+
+// The mask of the layer whose fresh top is nearest this height at one
+// texel, weighted SOFTLY by the height gap: a hard cutoff flickered in
+// raster squares wherever a surface sat near the tolerance and the jitter
+// nudged it across.
+float SeedTexelMask(int2 t, float worldZ, uint layers, out bool present, out float rock)
+{
+	float bestDz = 1e9;
 	float bestMask = 0.0;
+	rock = 0.0;
 	for (uint L = 0; L < layers; L++)
 	{
 		const float2 mk = BlobLayerMask(L, t);
 		if (mk.y <= 0.0)
 			continue;
-		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
+		float cls;
+		const float top = SeedDecodeTop(mk.y, cls);
 		const float dz = abs(top - worldZ);
 		[flatten] if (dz < bestDz)
 		{
 			bestDz = dz;
 			bestMask = mk.x;
+			rock = cls;
 		}
 	}
-	return bestMask;
+	present = bestDz < BlobLayerTol;
+	return present ? bestMask * (1.0 - smoothstep(BlobLayerTol * 0.5, BlobLayerTol, bestDz)) : 0.0;
 }
 
 [numthreads(8, 8, 1)] void BlobSeedCS(uint3 dtid
@@ -620,12 +634,6 @@ float SeedTexelMask(int2 t, float worldZ, uint layers)
 	[flatten] if (dot(nView, -vp) < 0.0)
 		nView = -nView;
 	const float nz = normalize(mul((float3x3)SeedViewInverse, nView)).z;
-	const float slopeW = smoothstep(BlobMaxSlopeNz - 0.05, BlobMaxSlopeNz + 0.05, nz);
-	[branch] if (slopeW <= 0.0)
-	{
-		OutSeed[p] = empty;
-		return;
-	}
 
 	// Sub-texel classification: the four raster texels around the pixel's
 	// world position, each matched to the layer at this height, blended by
@@ -638,10 +646,12 @@ float SeedTexelMask(int2 t, float worldZ, uint layers)
 	const int2 t0 = clamp(int2(floor(tf)), int2(0, 0), int2(dims) - 2);
 	const float2 fw = saturate(tf - float2(t0));
 	const uint layers = (uint)clamp(BlobLayers, 1.0, 6.0);
-	const float m00 = SeedTexelMask(t0, worldAbs.z, layers);
-	const float m10 = SeedTexelMask(t0 + int2(1, 0), worldAbs.z, layers);
-	const float m01 = SeedTexelMask(t0 + int2(0, 1), worldAbs.z, layers);
-	const float m11 = SeedTexelMask(t0 + int2(1, 1), worldAbs.z, layers);
+	bool p00, p10, p01, p11;
+	float r00, r10, r01, r11;
+	const float m00 = SeedTexelMask(t0, worldAbs.z, layers, p00, r00);
+	const float m10 = SeedTexelMask(t0 + int2(1, 0), worldAbs.z, layers, p10, r10);
+	const float m01 = SeedTexelMask(t0 + int2(0, 1), worldAbs.z, layers, p01, r01);
+	const float m11 = SeedTexelMask(t0 + int2(1, 1), worldAbs.z, layers, p11, r11);
 	const float mask = lerp(lerp(m00, m10, fw.x), lerp(m01, m11, fw.x), fw.y);
 	const float threshold = saturate(BlobMaskThreshold);
 	[branch] if (mask < threshold)
@@ -649,12 +659,26 @@ float SeedTexelMask(int2 t, float worldZ, uint layers)
 		OutSeed[p] = empty;
 		return;
 	}
-	// Thickness: the slider, undulated by broad and fine world-anchored noise,
-	// tapered toward the mask threshold and the slope cutoff.
+	// Max Slope by class, the class from the nearest texel: objects take the
+	// object limit, the mountain/cliff family the rock limit. Neither reads
+	// any other slope setting.
+	const float rock = (fw.x < 0.5) ? ((fw.y < 0.5) ? r00 : r01) : ((fw.y < 0.5) ? r10 : r11);
+	const float slopeNz = rock > 0.5 ? BlobRockMaxSlopeNz : BlobMaxSlopeNz;
+	const float slopeW = smoothstep(slopeNz - 0.05, slopeNz + 0.05, nz);
+	[branch] if (slopeW <= 0.0)
+	{
+		OutSeed[p] = empty;
+		return;
+	}
+	// Border = within one raster texel of the surface's footprint at this
+	// height; only there does the fine noise apply.
+	const float borderW = (p00 && p10 && p01 && p11) ? 0.0 : 1.0;
+	// Thickness: the slider, undulated by broad world-anchored noise, the fine
+	// noise at the border, tapered toward the mask threshold and the slope.
 	const float maskT = saturate((mask - threshold) / max(1.0 - threshold, 1e-3));
 	const float cell = max(BlobNoiseScale, 1.0);
 	const float nBroad = BlobValueNoise(worldAbs.xy / cell, 7u) * 2.0 - 1.0;
 	const float nFine = BlobValueNoise(worldAbs.xy / (cell * 0.25) + 31.7, 13u) * 2.0 - 1.0;
-	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * nBroad + BlobBorderNoise * 0.5 * nFine) * lerp(0.6, 1.0, maskT) * slopeW, 0.05);
+	const float thickness = max(BlobThickness * (1.0 + BlobThicknessNoise * nBroad + BlobBorderNoise * nFine * borderW) * lerp(0.6, 1.0, maskT) * slopeW, 0.05);
 	OutSeed[p] = float2(z, thickness);
 }

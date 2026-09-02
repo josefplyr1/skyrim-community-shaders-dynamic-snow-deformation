@@ -76,15 +76,19 @@ cbuffer StaticCB : register(b1)
 	// Blob Snow Shell: camera Z the mask target's fresh-top channel is
 	// encoded against (R16 UNORM over +/-2048 around it).
 	float BlobRefZ;
-	float padBlob3;
+	// Blob Snow Shell: 1 = mountain/cliff family (rock slope limit applies).
+	float BlobRockClass;
 }
 
 // Fresh-top channel of the blob mask target: THIS frame's fragment height,
 // so a sphere never sits on a decayed ghost of a surface the game culled.
 // 0 is reserved for "no fragment".
+// Packed R16: bits 1..15 = height (0.125-unit steps over +/-2048), bit 0 =
+// the rock class. MAX blending still orders by height; the class rides along.
 float BlobFreshEnc(float worldZ)
 {
-	return clamp((worldZ - BlobRefZ + 2048.0) / 4096.0, 1.0 / 65535.0, 1.0);
+	const float k = floor(clamp((worldZ - BlobRefZ + 2048.0) / 4096.0, 1.0 / 32767.0, 1.0) * 32767.0);
+	return (k * 2.0 + (BlobRockClass > 0.5 ? 1.0 : 0.0)) / 65535.0;
 }
 
 struct VS_INPUT

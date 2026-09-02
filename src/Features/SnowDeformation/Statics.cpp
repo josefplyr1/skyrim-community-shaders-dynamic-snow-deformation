@@ -764,6 +764,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		driftFamily = loweredName.find("drift") != std::string::npos ||
 		              loweredName.find("snowpile") != std::string::npos ||
 		              loweredName.find("roadchunk") != std::string::npos;
+		// A mesh that already IS snow (drifts, the snow overlays and decals
+		// Bethesda lays over roads and drifts) takes no sheet, whatever it is
+		// named: the material classifier's landscape-snow match, plus decals.
+		if (!driftFamily && captureMaterial && ClassifySnowPath(captureMaterial).base)
+			driftFamily = true;
+		if (!driftFamily) {
+			const auto& exFlags = a_pass->shaderProperty->flags;
+			using ExFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+			if (exFlags.any(ExFlag::kDecal) || exFlags.any(ExFlag::kDynamicDecal))
+				driftFamily = true;
+		}
 		if (!driftFamily)
 			if (auto* driftMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
 				if (auto driftTextures = driftMaterial->textureSet.get())
@@ -1381,8 +1392,11 @@ void SnowDeformation::DrawBlobShell()
 		// The fitted shell's pixels sit up to the class depth above the raster
 		// top; letting them match folds the shell into the field, so sheet and
 		// shell roll into one surface.
-		cb.LayerTol = 8.0f + std::max(0.0f, std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth));
+		// Soft match (half weight at half this gap), wide enough for the shell's
+		// lift on top of the raster top plus a margin the jitter cannot cross.
+		cb.LayerTol = 16.0f + std::max(0.0f, std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth));
 		cb.MaxSlopeNz = std::cos(std::clamp(settings.BlobMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+		cb.RockMaxSlopeNz = std::cos(std::clamp(settings.BlobRockMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
 		cb.BorderNoise = std::clamp(settings.BlobBorderNoise, 0.0f, 1.0f);
 		blobCB->Update(cb);
 		MeldSeedCB sc{};
@@ -1433,7 +1447,7 @@ void SnowDeformation::DrawBlobShell()
 	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
 	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
 	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
-	m.Anchor = settings.BlobMeldAnchor ? 1.0f : 0.0f;
+	m.Anchor = 0.0f;
 	m.FootBias = 0.1f;
 	m.VerticalRange = std::clamp(settings.BlobMeldVerticalRange, 0.0f, 256.0f);
 	int src = 0;
@@ -1948,6 +1962,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// the skin's own repose gate; the fresh-top reference.
 		scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
 		scb.BlobRefZ = blobRefZ;
+		scb.BlobRockClass = cap.forceRounded ? 1.0f : 0.0f;
 		{
 			const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
 			scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
@@ -2096,6 +2111,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 			scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
 			scb.BlobRefZ = blobRefZ;
+			scb.BlobRockClass = cap.forceRounded ? 1.0f : 0.0f;
 			{
 				const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
 				scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
