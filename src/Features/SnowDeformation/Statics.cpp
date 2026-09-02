@@ -740,6 +740,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// positive forces rounded on something already rounded, a no-op.
 	bool forceRounded = false;
 	bool plankFamily = false;
+	bool driftFamily = false;
 	{
 		std::string loweredName(a_pass->geometry->name.c_str());
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
@@ -759,6 +760,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		plankFamily = loweredName.find("plank") != std::string::npos ||
 		              loweredName.find("walkway") != std::string::npos ||
 		              loweredName.find("catwalk") != std::string::npos;
+		// Blob Snow Shell: a drift or snow pile has no bare edge to round.
+		driftFamily = loweredName.find("drift") != std::string::npos ||
+		              loweredName.find("snowpile") != std::string::npos;
 		// (Drift-family special-casing removed: drifts ride the general
 		// fully-painted default above, like every technique-classified
 		// draw without property-level projection data.)
@@ -771,7 +775,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, driftFamily });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1253,10 +1257,11 @@ void SnowDeformation::CreateHeightFieldResources()
 
 	// ---- Blob Snow Shell (Spike 1) ----
 	{
-		// Per-layer placement masks: R8 is plenty for a value the placement
-		// only thresholds and lerps. Cleared each frame like the skin depth.
+		// Per-layer placement masks, R = mask, G = this frame's fragment height
+		// (camera-relative, so a sphere never sits on a decayed ghost). Cleared
+		// each frame like the skin depth.
 		D3D11_TEXTURE2D_DESC blobMaskDesc = heightDesc;
-		blobMaskDesc.Format = DXGI_FORMAT_R8_UNORM;
+		blobMaskDesc.Format = DXGI_FORMAT_R16G16_UNORM;
 		blobMaskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		D3D11_SHADER_RESOURCE_VIEW_DESC blobMaskSrvDesc = heightSrvDesc;
 		blobMaskSrvDesc.Format = blobMaskDesc.Format;
@@ -1430,6 +1435,7 @@ void SnowDeformation::DispatchBlobPlacement()
 	cb.EdgeBand = std::clamp(settings.BlobEdgeBand, 1.0f, 256.0f);
 	cb.EdgeDrop = std::clamp(settings.BlobEdgeDrop, 0.5f, 512.0f);
 	cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
+	cb.RefZ = blobRefZ;
 	blobCB->Update(cb);
 
 	// The masks were render targets a moment ago; nothing may still hold
@@ -1549,6 +1555,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.DiffuseLambda = std::clamp(settings.SnowSettlingPct, 0.0f, 100.0f) * 0.005f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
+	blobRefZ = eye.z;
 	heightMapValid = true;
 
 	// Exclusion zones. Static sources (doors, campfires, heat sources,
@@ -1949,6 +1956,14 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
+		// Blob Snow Shell mask inputs: no spheres on roads, bridges or drifts;
+		// the skin's own repose gate; the fresh-top reference.
+		scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
+		scb.BlobRefZ = blobRefZ;
+		{
+			const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
+			scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+		}
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		// Same class pick as the skin: S4 shell draws are all ROUNDED.
@@ -2091,6 +2106,12 @@ void SnowDeformation::RenderObjectHeightMap()
 			// Blob placement mask inputs (the base pass sets the same three).
 			scb.ProjThreshold = cap.projThreshold;
 			scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
+			scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
+			scb.BlobRefZ = blobRefZ;
+			{
+				const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
+				scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+			}
 			scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 			ID3D11ShaderResourceView* peelSmoothSRV = EnsureSmoothedNormals(geometry);
 			context->VSSetShaderResources(10, 1, &peelSmoothSRV);

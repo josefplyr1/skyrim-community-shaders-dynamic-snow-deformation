@@ -491,18 +491,22 @@ cbuffer BlobCB : register(b1)
 	float BlobEdgeBand;
 	float BlobEdgeDrop;
 	float BlobRadius;
+	float BlobRefZ;
+	float padBlobB1;
+	float padBlobB2;
+	float padBlobB3;
 }
 
-Texture2D<float> BlobMask1 : register(t4);
-Texture2D<float> BlobMask2 : register(t5);
-Texture2D<float> BlobMask3 : register(t6);
+Texture2D<float2> BlobMask1 : register(t4);
+Texture2D<float2> BlobMask2 : register(t5);
+Texture2D<float2> BlobMask3 : register(t6);
 // Layers 4-6 (Spike 1b): per-frame peels and their masks.
 Texture2D<float> BlobTop4 : register(t7);
 Texture2D<float> BlobTop5 : register(t8);
 Texture2D<float> BlobTop6 : register(t9);
-Texture2D<float> BlobMask4 : register(t10);
-Texture2D<float> BlobMask5 : register(t11);
-Texture2D<float> BlobMask6 : register(t12);
+Texture2D<float2> BlobMask4 : register(t10);
+Texture2D<float2> BlobMask5 : register(t11);
+Texture2D<float2> BlobMask6 : register(t12);
 // Two float4 per blob: [centre.xyz, radius], [surface top z, layer, mask, 0].
 RWStructuredBuffer<float4> OutBlobs : register(u3);
 // DrawIndexedInstancedIndirect args; dword 1 is the instance count.
@@ -531,7 +535,8 @@ float BlobLayerTop(uint L, int2 p)
 	}
 }
 
-float BlobLayerMask(uint L, int2 p)
+// .x = placement mask, .y = fresh-top code (0 = no fragment this frame).
+float2 BlobLayerMask(uint L, int2 p)
 {
 	switch (L) {
 	case 0: return BlobMask1.Load(int3(p, 0));
@@ -621,12 +626,14 @@ bool BlobIsEdge(int2 t, int2 dims, float h, uint layers, uint band)
 
 	for (uint L = 0; L < layers; L++)
 	{
-		const float top = BlobLayerTop(L, t);
-		if (top < -50000.0)
+		// Height from the mask target's fresh channel, never the accumulated
+		// top: that one decays 0.5/frame while the game culls the surface's
+		// draw, and the sphere would ride the ghost down.
+		const float2 mk = BlobLayerMask(L, t);
+		const float m = mk.x;
+		if (m < threshold || mk.y <= 0.0)
 			continue;
-		const float m = BlobLayerMask(L, t);
-		if (m < threshold)
-			continue;
+		const float top = mk.y * 4096.0 - 2048.0 + BlobRefZ;
 		if (edgesOnly && !BlobIsEdge(t, int2(dims), top, layers, band))
 			continue;
 		// Partial mask (the Snow Fill's soft edge, thin authored paint) thins

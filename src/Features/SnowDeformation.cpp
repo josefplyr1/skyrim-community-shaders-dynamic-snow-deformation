@@ -518,8 +518,9 @@ void SnowDeformation::SetupResources()
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
 			// RT2 carries a second channel (G = road-heightfield bit); MAX on
-			// it means "any road wrote this texel".
-			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = i == 2 ?
+			// it means "any road wrote this texel". RT3 too: G = the blob
+			// mask's fresh-top channel.
+			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = (i == 2 || i == 3) ?
 			                                                            (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN) :
 			                                                            D3D11_COLOR_WRITE_ENABLE_RED;
 		}

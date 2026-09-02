@@ -320,8 +320,8 @@ cbuffer StaticCB : register(b1)
 	// B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the blob field
 	// instead of the dome profile. Debug spike, off by default.
 	float BlobDrape;
-	float padBlob1;
-	float padBlob2;
+	float BlobExclude;  // Blob Snow Shell, capture only; layout sync
+	float BlobRefZ;     // Blob Snow Shell, capture only; layout sync
 	float padBlob3;
 }
 

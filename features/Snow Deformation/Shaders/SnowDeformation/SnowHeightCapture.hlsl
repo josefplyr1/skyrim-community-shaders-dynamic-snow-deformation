@@ -71,9 +71,20 @@ cbuffer StaticCB : register(b1)
 	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
 	float SkinWeld;         // layout sync with SnowStaticsShell; unused here
 	float BlobDrape;        // layout sync with SnowStaticsShell; unused here
-	float padBlob1;
-	float padBlob2;
+	// Blob Snow Shell: 1 = this draw takes no spheres (road, bridge, drift).
+	float BlobExclude;
+	// Blob Snow Shell: camera Z the mask target's fresh-top channel is
+	// encoded against (R16 UNORM over +/-2048 around it).
+	float BlobRefZ;
 	float padBlob3;
+}
+
+// Fresh-top channel of the blob mask target: THIS frame's fragment height,
+// so a sphere never sits on a decayed ghost of a surface the game culled.
+// 0 is reserved for "no fragment".
+float BlobFreshEnc(float worldZ)
+{
+	return clamp((worldZ - BlobRefZ + 2048.0) / 4096.0, 1.0 / 65535.0, 1.0);
 }
 
 struct VS_INPUT
@@ -171,12 +182,15 @@ VS_OUTPUT main(VS_INPUT input)
 			pdAlpha = saturate(smoothEntry.w - 1.0);
 	}
 	float pdMask = 0.0;
-	[branch] if (ProjThreshold > -0.5)
+	[branch] if (ProjThreshold > -0.5 && BlobExclude < 0.5)
 	{
 		float projWeight = vsout.NormalZ * pdAlpha - max(ProjThreshold, 0.0);
 		pdMask = saturate(5.0 * projWeight);
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		pdMask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, vsout.NormalZ);
+		// The skin's own angle-of-repose gate: walls and steep faces take no
+		// spheres, so the budget goes to real edges.
+		pdMask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, vsout.NormalZ);
 	}
 	vsout.PdMask = pdMask;
 	return vsout;
@@ -246,7 +260,7 @@ COVER_OUTPUT main(VS_OUTPUT input)
 struct PEEL_OUTPUT
 {
 	float Top : SV_Target0;
-	float PdMask : SV_Target3;
+	float2 PdMask : SV_Target3;
 };
 
 PEEL_OUTPUT main(VS_OUTPUT input)
@@ -274,7 +288,7 @@ PEEL_OUTPUT main(VS_OUTPUT input)
 #	endif
 	PEEL_OUTPUT o;
 	o.Top = input.WorldZ;
-	o.PdMask = input.PdMask;
+	o.PdMask = float2(input.PdMask, BlobFreshEnc(input.WorldZ));
 	return o;
 }
 #	endif
@@ -322,7 +336,7 @@ struct PS_OUTPUT
 	float Bottom : SV_Target1;
 	float2 SkinDepth : SV_Target2;
 	// Blob Snow Shell: layer-1 placement mask (RT3, MAX).
-	float PdMask : SV_Target3;
+	float2 PdMask : SV_Target3;
 };
 
 // Mirror of SnowDeformation.h kNoRoadTop.
@@ -339,7 +353,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the bottom-empty sentinel, a no-op under MIN blending.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
 	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
-	psout.PdMask = input.PdMask;
+	psout.PdMask = float2(input.PdMask, BlobFreshEnc(input.WorldZ));
 	psout.SkinDepth = float2(input.SkinDepth.x,
 		input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
 	return psout;

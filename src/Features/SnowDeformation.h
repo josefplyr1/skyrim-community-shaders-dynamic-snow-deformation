@@ -498,29 +498,29 @@ public:
 		/** @brief Icosphere subdivision level, 0-3 = 20 / 80 / 320 / 1280 triangles per sphere. The mesh is rebuilt when this changes. */
 		int BlobPolygons = 0;
 		/** @brief World units between blob centres (the placement lattice). Josef's "spacing" crank. */
-		float BlobSpacing = 9.0f;
+		float BlobSpacing = 2.0f;
 		/** @brief Blob radius in world units before noise and mask thinning. Josef's "size" crank. */
-		float BlobSize = 4.0f;
+		float BlobSize = 3.0f;
 		/** @brief +/- fraction of BlobSize hashed per blob. */
-		float BlobSizeNoise = 0.25f;
+		float BlobSizeNoise = 0.5f;
 		/** @brief How far a sphere sits proud of its surface: 0.5 = centre on the surface (hemisphere), 1 = whole sphere resting on top. */
 		float BlobJut = 0.5f;
 		/** @brief +/- fraction of BlobJut hashed per blob. */
-		float BlobJutNoise = 0.25f;
+		float BlobJutNoise = 0.5f;
 		/** @brief Projected-snow mask value a cell must reach before a blob is placed there; between this and 1 the blob thins toward 60% size. Tracks the recolour's own threshold and Snow Fill through the mask itself. */
 		float BlobMaskThreshold = 0.5f;
 		/** @brief How many peeled layers receive blobs (1 = top surface only, 3 = also under cover, 4-6 = three more peels, each a full re-rasterization of every captured object per frame). */
-		int BlobLayers = 3;
+		int BlobLayers = 6;
 		/** @brief Placement hash salt. */
 		int BlobSeed = 0;
 		/** @brief Spike 1b: place spheres only within BlobEdgeBand of a drop in their plane (a plank end, a roof edge, the base of a wall). The fitted skin keeps the interior. */
 		bool BlobEdgesOnly = true;
 		/** @brief World units back from an edge that still count as the edge (rounded up to whole raster texels, 4 units each). */
-		float BlobEdgeBand = 12.0f;
+		float BlobEdgeBand = 6.0f;
 		/** @brief A neighbouring texel with no layer within this many units of the plane's height makes an edge. */
-		float BlobEdgeDrop = 8.0f;
+		float BlobEdgeDrop = 15.0f;
 		/** @brief Placement radius around the player (world units). The outer half thins toward nothing, so distant cells never take the instance cap from nearby ones. */
-		float BlobRadius = 2048.0f;
+		float BlobRadius = 3072.0f;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1454,6 +1454,8 @@ public:
 		bool forceRounded;
 		/** @brief Plank family by geometry name (plank/walkway/catwalk). Currently DECIDES NOTHING - Josef's round-5 call classifies ALL PD draws rounded; the match is kept (and logged once per name) for the future cornice treatment when the 3D shell returns. */
 		bool plankFamily;
+		/** @brief Mesh name says drift or snow pile: no blob spheres (a drift has no bare edge to round). */
+		bool driftFamily;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1643,8 +1645,10 @@ public:
 		float SkinWeld;
 		/** @brief Settings::BlobObjectSnow - B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the smooth-union blob field instead of the dome profile. Debug spike. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float BlobDrape;
-		float padBlob1;
-		float padBlob2;
+		/** @brief Blob Snow Shell: 1 = this draw takes no spheres (road, bridge, drift). Mirror in SnowHeightCapture.hlsl / SnowStaticsShell.hlsl. */
+		float BlobExclude;
+		/** @brief Blob Snow Shell: camera Z the capture's fresh-top channel is encoded against (R16 UNORM over +/-2048). */
+		float BlobRefZ;
 		float padBlob3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
@@ -1764,6 +1768,8 @@ public:
 	Texture2D* blobMask[6] = {};
 	/** @brief Layers 4-6 tops (Spike 1b): three more PEEL2 passes, rebuilt from scratch each frame (not scrolled), only while BlobLayers > 3. */
 	Texture2D* blobTop[3] = {};
+	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobPlaceCS decode against it. */
+	float blobRefZ = 0.0f;
 	/** @brief Instance list written by BlobPlaceCS: two float4 per blob. */
 	winrt::com_ptr<ID3D11Buffer> blobInstanceBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> blobInstanceUAV;
@@ -1840,6 +1846,10 @@ public:
 		float EdgeBand;
 		float EdgeDrop;
 		float Radius;
+		float RefZ;
+		float padB1;
+		float padB2;
+		float padB3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BlobCB);
 	ConstantBuffer* heightProcessCB = nullptr;
