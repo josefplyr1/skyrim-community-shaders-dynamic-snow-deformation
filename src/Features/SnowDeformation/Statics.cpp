@@ -3430,6 +3430,56 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				if (!skinData || !skinPartition || !skin->bones || !skinPartition->partitions.data())
 					return RE::BSVisit::BSVisitControl::kContinue;
 				const uint32_t boneCount = skinData->GetBoneCount();
+				// One composed transform per skin bone, built on first use: every
+				// partition of this geometry that names the bone reuses it.
+				contactPaletteScratch.resize(boneCount);
+				contactPaletteBuilt.assign(boneCount, 0);
+				auto composedFor = [&](uint16_t a_bone, uint32_t a_partition, uint16_t a_slot) -> const RE::NiTransform& {
+					static RE::NiTransform standIn;
+					auto* boneNode = a_bone < boneCount ? skin->bones[a_bone] : nullptr;
+					if (!boneNode) {
+						// A bone the skeleton lacks (an editor removed it) or one past the
+						// skin data's count cannot be left as zero rows: the vertex would
+						// keep its weight on nothing and be pulled toward the world origin
+						// by that fraction - the comb. Stand in with the skin's root at the
+						// bone's bind pose, which holds the vertex near the body.
+						contactSkinMissingLast++;
+						RE::NiAVObject* stand = skin->rootParent ? skin->rootParent : root;
+						standIn = a_bone < boneCount ? stand->world * skinData->GetBoneDataSkinToBone(a_bone) : stand->world;
+						if (contactSkinMissingLogged.size() < 32 && contactSkinMissingLogged.insert(skin).second)
+							logger::info("[SNOW DEFORMATION] contact skin '{}' on '{}': partition {} slot {} names bone {} of {} which the skeleton lacks; standing in with '{}'",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), a_partition, a_slot, a_bone, boneCount,
+								stand->name.c_str() ? stand->name.c_str() : "");
+						return standIn;
+					}
+					if (!contactPaletteBuilt[a_bone]) {
+						contactPaletteScratch[a_bone] = boneNode->world * skinData->GetBoneDataSkinToBone(a_bone);
+						contactPaletteBuilt[a_bone] = 1;
+						// Yaw trace, once a second while the field view is up: does the
+						// composed row turn with the actor? Each factor logged apart,
+						// so the log names the one that drops the facing.
+						if (debugContactView && contactYawTraceFrames == 0 && a_partition == 0 && a_slot == 0) {
+							const auto& m = contactPaletteScratch[a_bone];
+							const auto& rot = m.rotate;
+							const auto& bw = boneNode->world.rotate;
+							const auto& s2b = skinData->GetBoneDataSkinToBone(a_bone).rotate;
+							const char* boneName = boneNode->name.c_str() ? boneNode->name.c_str() : "";
+							logger::info("[SNOW DEFORMATION] yaw trace '{}' bone '{}': actor yaw {:.2f} rad | bone world row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) | skinToBone row0 ({:.2f} {:.2f} {:.2f}) | composed row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) scale {:.3f}",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", boneName, contactYawTraceAngle,
+								bw.entry[0][0], bw.entry[0][1], bw.entry[0][2], bw.entry[1][0], bw.entry[1][1], bw.entry[1][2],
+								s2b.entry[0][0], s2b.entry[0][1], s2b.entry[0][2],
+								rot.entry[0][0], rot.entry[0][1], rot.entry[0][2], rot.entry[1][0], rot.entry[1][1], rot.entry[1][2], m.scale);
+						}
+					}
+					return contactPaletteScratch[a_bone];
+				};
+				// The constant buffer is uploaded once per DISTINCT bone list: the
+				// partitions of one garment usually share theirs.
+				ContactSkinCB cb{};
+				cb.SkinWindowCenter = contactCenter;
+				cb.SkinHalfExtent = kContactHalfExtent;
+				const uint16_t* paletteBones = nullptr;
+				uint16_t paletteCount = 0;
 				if (contactSkinLogged.size() < 16 && contactSkinLogged.insert(skin).second) {
 					std::string layout;
 					for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
@@ -3474,49 +3524,21 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					if (stride == 0)
 						continue;
 
-					ContactSkinCB cb{};
-					cb.SkinWindowCenter = contactCenter;
-					cb.SkinHalfExtent = kContactHalfExtent;
-					for (uint16_t j = 0; j < part.numBones; ++j) {
-						const uint16_t b = part.bones[j];
-						// A bone the skeleton lacks (an editor removed it) or one past the
-						// skin data's count cannot be left as zero rows: the vertex would
-						// keep its weight on nothing and be pulled toward the world origin
-						// by that fraction - the comb. Stand in with the skin's root at the
-						// bone's bind pose, which holds the vertex near the body.
-						auto* boneNode = b < boneCount ? skin->bones[b] : nullptr;
-						RE::NiTransform m;
-						if (boneNode) {
-							m = boneNode->world * skinData->GetBoneDataSkinToBone(b);
-						} else {
-							contactSkinMissingLast++;
-							RE::NiAVObject* stand = skin->rootParent ? skin->rootParent : root;
-							m = b < boneCount ? stand->world * skinData->GetBoneDataSkinToBone(b) : stand->world;
-							if (contactSkinMissingLogged.size() < 32 && contactSkinMissingLogged.insert(skin).second)
-								logger::info("[SNOW DEFORMATION] contact skin '{}' on '{}': partition {} slot {} names bone {} of {} which the skeleton lacks; standing in with '{}'",
-									a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), p, j, b, boneCount,
-									stand->name.c_str() ? stand->name.c_str() : "");
+					const bool samePalette = paletteBones && paletteCount == part.numBones &&
+					                         std::memcmp(paletteBones, part.bones, size_t(part.numBones) * sizeof(uint16_t)) == 0;
+					if (!samePalette) {
+						for (uint16_t j = 0; j < part.numBones; ++j) {
+							const RE::NiTransform& m = composedFor(part.bones[j], p, j);
+							const auto& rot = m.rotate;
+							const float sc = m.scale;
+							cb.BoneRows[j * 3 + 0] = { rot.entry[0][0] * sc, rot.entry[0][1] * sc, rot.entry[0][2] * sc, m.translate.x };
+							cb.BoneRows[j * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
+							cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
 						}
-						const auto& rot = m.rotate;
-						const float sc = m.scale;
-						// Yaw trace, once a second while the field view is up: does the
-						// composed row turn with the actor? Each factor logged apart,
-						// so the log names the one that drops the facing.
-						if (debugContactView && contactYawTraceFrames == 0 && p == 0 && j == 0) {
-							const auto& bw = boneNode->world.rotate;
-							const auto& s2b = skinData->GetBoneDataSkinToBone(b).rotate;
-							const char* boneName = boneNode->name.c_str() ? boneNode->name.c_str() : "";
-							logger::info("[SNOW DEFORMATION] yaw trace '{}' bone '{}': actor yaw {:.2f} rad | bone world row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) | skinToBone row0 ({:.2f} {:.2f} {:.2f}) | composed row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) scale {:.3f}",
-								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", boneName, contactYawTraceAngle,
-								bw.entry[0][0], bw.entry[0][1], bw.entry[0][2], bw.entry[1][0], bw.entry[1][1], bw.entry[1][2],
-								s2b.entry[0][0], s2b.entry[0][1], s2b.entry[0][2],
-								rot.entry[0][0], rot.entry[0][1], rot.entry[0][2], rot.entry[1][0], rot.entry[1][1], rot.entry[1][2], sc);
-						}
-						cb.BoneRows[j * 3 + 0] = { rot.entry[0][0] * sc, rot.entry[0][1] * sc, rot.entry[0][2] * sc, m.translate.x };
-						cb.BoneRows[j * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
-						cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
+						contactSkinCB->Update(cb);
+						paletteBones = part.bones;
+						paletteCount = part.numBones;
 					}
-					contactSkinCB->Update(cb);
 
 					// CPU replica of the draw for the soloed geometry, once a second:
 					// skin the partition's own vertex copy with the palette just

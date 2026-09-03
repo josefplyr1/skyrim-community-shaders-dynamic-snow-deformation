@@ -29,6 +29,8 @@ static constexpr uint16_t kCorpseSettleFrames = 90;
 // Per-frame speed below which an unsettled corpse shape counts as still for
 // the settle counter (ragdoll jitter sits below, real motion above).
 static constexpr float kCorpseStillSpeed = 0.5f;
+// Contact-drawn corpses wake when the body has left its resting place by this much: a loot jiggle stays under it, a drag or a kick does not.
+static constexpr float kCorpseRasterWake = 12.0f;
 // Depth-scaled stamps: the nominal snow depth at the mover's position
 // scales its stamp radii (shallow snow takes narrower trenches). The clamp
 // keeps bare and unbaked ground recording readable trails.
@@ -534,6 +536,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	skeletonProbe.valid = false;
 	contactProps.clear();
 	contactActors.clear();
+	contactLivingCount = 0;
+	contactCorpseCount = 0;
 	contactCenter = { windowOrigin.x + deformWorldSize * 0.5f, windowOrigin.y + deformWorldSize * 0.5f };
 
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
@@ -900,20 +904,59 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
-		// S1 spike: an actor inside the contact window carves by its skinned
-		// mesh instead of by bones. Placed AFTER the floating, incorporeal
-		// and settle gates, so a ghost is still refused; and it skips the
-		// bone stamps outright, so the A/B compares like for like.
-		if (debugActorContact && !contactShadersFailed && !isDead &&
-			contactActors.size() < kContactMaxActors) {
+		// S1: an actor inside the contact window carves by its skinned mesh
+		// instead of by bones. Placed AFTER the floating, incorporeal and
+		// settle gates, so a ghost is still refused; and it skips the bone
+		// stamps outright, so the A/B compares like for like. The living and
+		// the dead draw from separate budgets: a corpse is drawn while its
+		// body translates and for the settle window after, then latched out
+		// on the same rest state the bone corpse path uses; a latched corpse
+		// takes NO path - its print is already in the map - until the body
+		// moves off its resting place again.
+		if (debugActorContact && !contactShadersFailed) {
 			const auto& bound = root->worldBound;
-			if (bound.radius > 0.0f &&
+			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : contactLivingCount < kContactMaxActors;
+			if (budget && bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
-				contactActors.push_back({ actor->CreateRefHandle(),
-					bound.center.x - bound.radius, bound.center.y - bound.radius,
-					bound.center.x + bound.radius, bound.center.y + bound.radius });
-				stampStats.actorsRasterized++;
+				bool draw = true;
+				if (isDead && rest) {
+					const RE::NiPoint3 center = bound.center;
+					if (rest->hasPrevCenter) {
+						const float step = center.GetDistance(rest->prevCenter);
+						if (step >= kFootDryTeleport) {
+							// A cell load or a physics wake moved the body wholesale:
+							// a new placement, printed afresh.
+							rest->settled = false;
+							rest->stillFrames = 0;
+						} else if (rest->settled) {
+							if (center.GetDistance(rest->restCenter) > kCorpseRasterWake) {
+								rest->settled = false;
+								rest->stillFrames = 0;
+							}
+						} else if (step > kCorpseStillSpeed) {
+							rest->stillFrames = 0;
+						} else if (++rest->stillFrames >= kCorpseSettleFrames) {
+							rest->settled = true;
+							rest->restCenter = center;
+						}
+					}
+					rest->prevCenter = center;
+					rest->hasPrevCenter = true;
+					draw = !rest->settled;
+				}
+				if (draw) {
+					contactActors.push_back({ actor->CreateRefHandle(),
+						bound.center.x - bound.radius, bound.center.y - bound.radius,
+						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead });
+					if (isDead) {
+						contactCorpseCount++;
+						stampStats.corpsesRasterized++;
+					} else {
+						contactLivingCount++;
+						stampStats.actorsRasterized++;
+					}
+				}
 				return;
 			}
 		}

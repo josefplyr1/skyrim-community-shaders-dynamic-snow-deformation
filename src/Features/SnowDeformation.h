@@ -48,7 +48,9 @@ public:
 	/** @brief Bones a single skin partition may carry: 240 float4 rows at 3 per bone, the game's own ceiling. Partitions past it are skipped rather than truncated. */
 	static constexpr uint kContactMaxBones = 80;
 	/** @brief Actors rasterized per frame at most; a crowd must not turn the spike into a full character pass. */
-	static constexpr uint kContactMaxActors = 4;
+	static constexpr uint kContactMaxActors = 8;
+	/** @brief Corpses drawn by the contact pass, budgeted apart from the living: a corpse holds its slot only until it settles. */
+	static constexpr uint kContactMaxCorpses = 8;
 	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
 	static constexpr size_t kMaxBowWaves = 16;
 	/** @brief StampEnds[i].z selector. Carve displaces snow (instantaneous depth, max-blended); melt removes it while a heat source stands there (additive, dt-scaled, so dwell time deepens the bowl). Must match DeformationUpdateCS.hlsl. */
@@ -2111,6 +2113,7 @@ public:
 	{
 		RE::ObjectRefHandle ref;
 		float minX, minY, maxX, maxY;
+		bool corpse = false;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;
@@ -2137,6 +2140,12 @@ public:
 	ID3D11InputLayout* ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped so the A/B compares like for like. */
 	std::vector<ContactProp> contactActors;
+	/** @brief This frame's living and corpse entries in contactActors, against their separate caps. */
+	uint contactLivingCount = 0;
+	uint contactCorpseCount = 0;
+	/** @brief Per-geometry scratch for the skinned contact palette: one composed transform per skin bone, built on first use and shared by every partition of the geometry. */
+	std::vector<RE::NiTransform> contactPaletteScratch;
+	std::vector<uint8_t> contactPaletteBuilt;
 	/** @brief S1 spike, runtime-only, default OFF: actors carve by their skinned render mesh instead of foot and limb capsules. */
 	bool debugActorContact = false;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
@@ -3313,6 +3322,8 @@ protected:
 		uint propsRasterized = 0;
 		/** @brief Actors that carved by their skinned mesh this frame instead of by bones. */
 		uint actorsRasterized = 0;
+		/** @brief Corpses drawn by the contact pass this frame (still settling, or woken). */
+		uint corpsesRasterized = 0;
 		uint spells = 0;
 		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
 		uint beforeSpells = 0;
@@ -3410,6 +3421,10 @@ protected:
 	{
 		uint16_t stillFrames = 0;
 		bool settled = false;
+		/** @brief Contact-drawn corpses: the bound centre last frame (motion source) and where it came to rest (wake reference). */
+		RE::NiPoint3 prevCenter;
+		bool hasPrevCenter = false;
+		RE::NiPoint3 restCenter;
 		/** @brief Root z from the previous frame, for the flight gate. */
 		float prevZ = 0.0f;
 		bool hasPrevZ = false;
