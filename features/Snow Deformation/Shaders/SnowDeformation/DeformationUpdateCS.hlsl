@@ -134,8 +134,15 @@
 // Displaced() keeps scorch instead - a berm is spoil thrown, this is ground
 // bearing weight.
 #define SLUMP_RADII 3
-// Radii up to this index gate; beyond it they only deepen.
-#define SLUMP_GATE_RADII 2
+// Radii up to this index gate; beyond it they only deepen. ONE radius: a fin
+// engages only with dug snow within 16 units on BOTH sides - a 32-unit fin
+// at most. Two radii let a 64-unit fin engage, which is not a fin between
+// two boot trails but the whole floor between a horse's left and right
+// hooves; standing still, the fill then counts as support for the next
+// ring and the body's entire hull settles as if the belly had pressed it.
+// A rasterized walker's trail is already continuous, so along-trail
+// merging no longer needs the longer gate.
+#define SLUMP_GATE_RADII 1
 static const float kSlumpRadius[SLUMP_RADII] = { 16.0, 32.0, 64.0 };
 static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
 // A strip settles PARTWAY toward its neighbors' floor, not onto it - about

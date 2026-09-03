@@ -3453,6 +3453,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactSkinMissingLast = 0;
 	contactCarriedLast = 0;
 	contactOverlaysLast = 0;
+	contactShellsLast = 0;
 	contactSweepLast = 0;
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
@@ -3480,6 +3481,19 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				if (const char* name = a_geometry->name.c_str(); name && (std::strstr(name, "[Ovl") || std::strstr(name, "[SOvl"))) {
 					contactOverlaysLast++;
 					return RE::BSVisit::BSVisitControl::kContinue;
+				}
+				// Creature fur is shells: the body duplicated and pushed out along
+				// its normals up to sixteen times, alpha-tested so only strands
+				// show. Solid, each is an inflated body; the base mesh under them
+				// is the surface. Bethesda names every one '*shell*'. Blended
+				// (translucent) geometry is not a surface either.
+				if (auto* alpha = runtime.alphaProperty.get()) {
+					const char* name = a_geometry->name.c_str();
+					const bool shell = alpha->GetAlphaTesting() && name && (std::strstr(name, "shell") || std::strstr(name, "Shell"));
+					if (shell || alpha->GetAlphaBlending()) {
+						contactShellsLast++;
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
 				}
 				// Draw only what the game draws: a geometry hidden by itself or by
 				// any ancestor (dismembered parts, physics helper meshes, alternate

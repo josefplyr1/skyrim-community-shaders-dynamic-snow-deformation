@@ -1384,7 +1384,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
 		ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
-		ImGui::Checkbox("Actor mesh contact [S1 SPIKE] (actors carve by skinned mesh, not bones)", &debugActorContact);
+		ImGui::Checkbox("Actor mesh contact (actors and corpses carve by their render mesh; off = bones)", &debugActorContact);
 		ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
 		ImGui::SliderInt("Solo skinned geometry (-1 = all; step through to find whose silhouette is wide)", &debugContactSolo, -1, 31);
 		if (debugContactSolo >= 0)
@@ -1456,8 +1456,8 @@ void SnowDeformation::DrawSettings()
 			}
 		}
 		if (debugActorContact)
-			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays declined, %u missing-bone stand-ins",
-				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactSkinMissingLast);
+			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u missing-bone stand-ins",
+				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactSkinMissingLast);
 		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {

@@ -2151,7 +2151,7 @@ public:
 	std::vector<RE::NiTransform> contactPaletteScratch;
 	std::vector<uint8_t> contactPaletteBuilt;
 	/** @brief S1 spike, runtime-only, default OFF: actors carve by their skinned render mesh instead of foot and limb capsules. */
-	bool debugActorContact = false;
+	bool debugActorContact = true;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
 	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
@@ -2168,6 +2168,8 @@ public:
 	uint contactCarriedLast = 0;
 	/** @brief RaceMenu overlay clones the actor contact pass declined this frame. */
 	uint contactOverlaysLast = 0;
+	/** @brief Creature fur shells the actor contact pass declined this frame. */
+	uint contactShellsLast = 0;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */
 	uint contactSweepLast = 0;
 	/** @brief Previous frame's world transform per carried mesh, keyed by geometry, for the sweep. Identity only - never dereferenced. */

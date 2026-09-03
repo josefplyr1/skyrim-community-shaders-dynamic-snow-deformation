@@ -350,8 +350,12 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 			shader = sp->GetRTTI() && sp->GetRTTI()->GetName() ? sp->GetRTTI()->GetName() : "shader";
 		const auto& b = a_geometry->worldBound;
 		uint32_t tris = 0;
-		if (auto* ts = a_geometry->AsTriShape())
+		if (auto* si = runtime.skinInstance.get(); si && si->skinPartition && si->skinPartition->partitions.data()) {
+			for (uint32_t p = 0; p < si->skinPartition->numPartitions; ++p)
+				tris += si->skinPartition->partitions[p].triangles;
+		} else if (auto* ts = a_geometry->AsTriShape()) {
 			tris = ts->GetTrishapeRuntimeData().triangleCount;
+		}
 		logger::info("[SNOW DEFORMATION] geom '{}': {} | {} tris | {} | {} | bound rel root ({:.0f}, {:.0f}, {:.0f}) r {:.0f} | parent '{}'",
 			a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skin, tris, shader, hidden ? "HIDDEN" : "visible",
 			b.center.x - rootPos.x, b.center.y - rootPos.y, b.center.z - rootPos.z, b.radius,
