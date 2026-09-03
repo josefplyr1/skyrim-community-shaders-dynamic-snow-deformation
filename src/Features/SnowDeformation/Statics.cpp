@@ -3394,6 +3394,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	// contributes nothing rather than crashing - which is the whole
 	// edited-skeleton family, handled by construction.
 	contactSkinDrawsLast = 0;
+	contactSkinMissingLast = 0;
 	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::ContactSkin");
 		context->VSSetShader(contactSkinVS, nullptr, 0);
@@ -3478,12 +3479,24 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					cb.SkinHalfExtent = kContactHalfExtent;
 					for (uint16_t j = 0; j < part.numBones; ++j) {
 						const uint16_t b = part.bones[j];
-						if (b >= boneCount)
-							continue;
-						auto* boneNode = skin->bones[b];
-						if (!boneNode)
-							continue;  // an editor removed it; this bone simply moves nothing
-						const RE::NiTransform m = boneNode->world * skinData->GetBoneDataSkinToBone(b);
+						// A bone the skeleton lacks (an editor removed it) or one past the
+						// skin data's count cannot be left as zero rows: the vertex would
+						// keep its weight on nothing and be pulled toward the world origin
+						// by that fraction - the comb. Stand in with the skin's root at the
+						// bone's bind pose, which holds the vertex near the body.
+						auto* boneNode = b < boneCount ? skin->bones[b] : nullptr;
+						RE::NiTransform m;
+						if (boneNode) {
+							m = boneNode->world * skinData->GetBoneDataSkinToBone(b);
+						} else {
+							contactSkinMissingLast++;
+							RE::NiAVObject* stand = skin->rootParent ? skin->rootParent : root;
+							m = b < boneCount ? stand->world * skinData->GetBoneDataSkinToBone(b) : stand->world;
+							if (contactSkinMissingLogged.size() < 32 && contactSkinMissingLogged.insert(skin).second)
+								logger::info("[SNOW DEFORMATION] contact skin '{}' on '{}': partition {} slot {} names bone {} of {} which the skeleton lacks; standing in with '{}'",
+									a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), p, j, b, boneCount,
+									stand->name.c_str() ? stand->name.c_str() : "");
+						}
 						const auto& rot = m.rotate;
 						const float sc = m.scale;
 						// Yaw trace, once a second while the field view is up: does the

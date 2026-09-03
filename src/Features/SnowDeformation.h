@@ -2149,6 +2149,9 @@ public:
 	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;
 	void EnsureContactViewTexture();
 	uint contactSkinDrawsLast = 0;
+	/** @brief Bone slots the actor contact pass had to stand in for this frame (skeleton lacks the bone), and the skins already reported. */
+	uint contactSkinMissingLast = 0;
+	std::unordered_set<const void*> contactSkinMissingLogged;
 	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
 	uint32_t contactYawTraceFrames = 0;
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */
