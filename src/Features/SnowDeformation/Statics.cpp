@@ -3413,6 +3413,27 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				auto* skin = runtime.skinInstance.get();
 				if (!skin)
 					return RE::BSVisit::BSVisitControl::kContinue;
+				// Draw only what the game draws: a geometry hidden by itself or by
+				// any ancestor (dismembered parts, physics helper meshes, alternate
+				// variants) never reaches the screen and must not reach the snow.
+				{
+					bool hidden = false;
+					for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
+						hidden = n->GetAppCulled();
+					if (hidden) {
+						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(skin).second)
+							logger::info("[SNOW DEFORMATION] contact skin '{}' on '{}' is hidden by the game (bound radius {:.0f}); not drawn",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), a_geometry->worldBound.radius);
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+				}
+				// A part whose whole bound floats above the layer's reach carves
+				// nothing: hair, face and raised hands cost draws for no print.
+				{
+					const auto& gb = a_geometry->worldBound;
+					if (gb.radius > 0.0f && gb.center.z - gb.radius > ref->GetPositionZ() + kContactSkipAbove)
+						return RE::BSVisit::BSVisitControl::kContinue;
+				}
 				// Solo: draw one skinned geometry only, so the field shows whose
 				// silhouette is which. -1 draws them all.
 				++geometryIndex;
@@ -3437,7 +3458,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				auto composedFor = [&](uint16_t a_bone, uint32_t a_partition, uint16_t a_slot) -> const RE::NiTransform& {
 					static RE::NiTransform standIn;
 					auto* boneNode = a_bone < boneCount ? skin->bones[a_bone] : nullptr;
-					if (!boneNode) {
+					const RE::NiTransform* boneWorld = boneNode ? &boneNode->world : nullptr;
+					if (a_bone < boneCount && skin->boneWorldTransforms && skin->boneWorldTransforms[a_bone])
+						boneWorld = skin->boneWorldTransforms[a_bone];  // the engine's own per-bone pointer, valid where the node slot is not
+					if (!boneWorld) {
 						// A bone the skeleton lacks (an editor removed it) or one past the
 						// skin data's count cannot be left as zero rows: the vertex would
 						// keep its weight on nothing and be pulled toward the world origin
@@ -3453,15 +3477,15 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						return standIn;
 					}
 					if (!contactPaletteBuilt[a_bone]) {
-						contactPaletteScratch[a_bone] = boneNode->world * skinData->GetBoneDataSkinToBone(a_bone);
+						contactPaletteScratch[a_bone] = *boneWorld * skinData->GetBoneDataSkinToBone(a_bone);
 						contactPaletteBuilt[a_bone] = 1;
 						// Yaw trace, once a second while the field view is up: does the
 						// composed row turn with the actor? Each factor logged apart,
 						// so the log names the one that drops the facing.
-						if (debugContactView && contactYawTraceFrames == 0 && a_partition == 0 && a_slot == 0) {
+						if (debugContactView && contactYawTraceFrames == 0 && a_partition == 0 && a_slot == 0 && boneNode) {
 							const auto& m = contactPaletteScratch[a_bone];
 							const auto& rot = m.rotate;
-							const auto& bw = boneNode->world.rotate;
+							const auto& bw = boneWorld->rotate;
 							const auto& s2b = skinData->GetBoneDataSkinToBone(a_bone).rotate;
 							const char* boneName = boneNode->name.c_str() ? boneNode->name.c_str() : "";
 							logger::info("[SNOW DEFORMATION] yaw trace '{}' bone '{}': actor yaw {:.2f} rad | bone world row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) | skinToBone row0 ({:.2f} {:.2f} {:.2f}) | composed row0 ({:.2f} {:.2f} {:.2f}) row1 ({:.2f} {:.2f} {:.2f}) scale {:.3f}",
@@ -3535,6 +3559,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							cb.BoneRows[j * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
 							cb.BoneRows[j * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
 						}
+						cb.SkinBoneCount = float(part.numBones);
 						contactSkinCB->Update(cb);
 						paletteBones = part.bones;
 						paletteCount = part.numBones;

@@ -2129,7 +2129,8 @@ public:
 		float4 BoneRows[240];
 		float2 SkinWindowCenter;
 		float SkinHalfExtent;
-		float SkinPad;
+		/** @brief Bones in this partition's palette, so the shader can refuse an index past it. */
+		float SkinBoneCount;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ContactSkinCB);
 	ConstantBuffer* contactSkinCB = nullptr;
@@ -2161,6 +2162,10 @@ public:
 	/** @brief Bone slots the actor contact pass had to stand in for this frame (skeleton lacks the bone), and the skins already reported. */
 	uint contactSkinMissingLast = 0;
 	std::unordered_set<const void*> contactSkinMissingLogged;
+	/** @brief Skinned geometries the contact pass refused because the game itself hides them, reported once each. */
+	std::unordered_set<const void*> contactSkinHiddenLogged;
+	/** @brief A part whose bound bottom sits this far above the actor's feet cannot reach the layer and is not drawn. */
+	static constexpr float kContactSkipAbove = 80.0f;
 	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
 	uint32_t contactYawTraceFrames = 0;
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */

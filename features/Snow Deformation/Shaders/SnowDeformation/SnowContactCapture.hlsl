@@ -27,7 +27,8 @@ cbuffer ContactSkinCB : register(b2)
 	float4 BoneRows[240];
 	float2 SkinWindowCenter;
 	float SkinHalfExtent;
-	float SkinPad;
+	// Bones in this partition's palette; an index past it names no bone.
+	float SkinBoneCount;
 }
 
 struct VS_INPUT_SKIN
@@ -62,7 +63,24 @@ VS_OUTPUT main(VS_INPUT_SKIN input)
 	// shifts a vertex by that error times the world position - hundreds of
 	// units, along the world position's own direction. The game's rows are
 	// pivot-relative and never see this; ours must renormalize.
-	float4 w = input.BoneWeights / max(dot(input.BoneWeights, 1.0), 1e-4);
+	// A weight on an index past the palette, or a vertex with no weight at
+	// all, would blend zero rows and slide toward the world origin - the
+	// comb. The game hides such vertices at its pivot; here they ride the
+	// partition's first bone instead.
+	float4 w = input.BoneWeights;
+	const int lastRow = int(SkinBoneCount) * 3;
+	w.x = rows.x < lastRow ? w.x : 0.0;
+	w.y = rows.y < lastRow ? w.y : 0.0;
+	w.z = rows.z < lastRow ? w.z : 0.0;
+	w.w = rows.w < lastRow ? w.w : 0.0;
+	const float wsum = dot(w, 1.0);
+	[flatten] if (wsum < 1e-3)
+	{
+		w = float4(1.0, 0.0, 0.0, 0.0);
+		rows = int4(0, 0, 0, 0);
+	}
+	else
+		w /= wsum;
 	float3x4 m =
 		float3x4(BoneRows[rows.x], BoneRows[rows.x + 1], BoneRows[rows.x + 2]) * w.x +
 		float3x4(BoneRows[rows.y], BoneRows[rows.y + 1], BoneRows[rows.y + 2]) * w.y +
