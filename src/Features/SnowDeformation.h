@@ -751,7 +751,9 @@ public:
 		float TerrainDim;
 		/** @brief Debug view crop centre (the player's bound centre), world XY. */
 		float2 ViewCenter;
-		float2 ViewPad;
+		/** @brief Debug view crop half-extent, world units. */
+		float ViewHalf;
+		float ViewPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 
@@ -2159,6 +2161,10 @@ public:
 	bool debugActorContact = true;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
+	/** @brief Runtime-only: half-extent of the field view's crop around the player, world units (192 = a body, 1536 = the whole field). */
+	float debugContactViewHalf = 192.0f;
+	/** @brief Runtime-only A/B: when off, no living body counts as still and every rasterized actor draws every frame. */
+	bool debugContactStillGate = true;
 	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
 	int debugContactSolo = -1;
 	std::string contactSoloName;

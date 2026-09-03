@@ -264,7 +264,9 @@ cbuffer PerFrame : register(b0)
 	float TerrainDim;
 	// Debug view crop centre (the player), world XY.
 	float2 ViewCenter;
-	float2 ViewPad;
+	// Debug view crop half-extent, world units.
+	float ViewHalf;
+	float ViewPad;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -1181,13 +1183,12 @@ bool StampTexel(uint2 phys)
 	}
 }
 
-// Contact field view, cropped +-VIEW_HALF units around the player at 512 px
+// Contact field view, cropped +-ViewHalf units around the player at 512 px
 // a side. Top half: the field as the carve pass samples it (red = carve
 // fraction, green = hovering). Bottom half: the deformation map over the
 // SAME ground (red = carve depth, faint blue = map texel edges). The two
 // crops share one world mapping, so a trench wider than its silhouette is
 // visible as such. Own dispatch; the RGBA8 view rides the ActivityView slot.
-#define VIEW_HALF 192.0
 #define VIEW_PX 512
 [numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
 										 : SV_DispatchThreadID) {
@@ -1204,7 +1205,7 @@ bool StampTexel(uint2 phys)
 	const bool mapHalf = DTid.y >= VIEW_PX;
 	const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
 	float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);
-	float2 worldPos = ViewCenter + rel * VIEW_HALF;
+	float2 worldPos = ViewCenter + rel * ViewHalf;
 	float4 color = float4(0.0, 0.0, 0.0, 1.0);
 	[branch] if (!mapHalf)
 	{

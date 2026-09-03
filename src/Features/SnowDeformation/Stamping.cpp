@@ -1021,7 +1021,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// is in the map already; skipping the draw is what lets the field
 					// go empty and the update pass sleep beside an idling NPC.
 					const bool bodyStill = cache.hasPrevPos && dryStep < kContactStillStep;
-					const bool still = !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
+					const bool still = debugContactStillGate && !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
 						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,

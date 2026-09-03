@@ -1390,7 +1390,9 @@ void SnowDeformation::DrawSettings()
 		if (debugContactSolo >= 0)
 			ImGui::Text("  soloed: %s", contactSoloName.c_str());
 		if (debugContactView) {
-			constexpr float viewHalf = 192.0f;
+			ImGui::SliderFloat("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
+			ImGui::Checkbox("Still bodies skip the draw (A/B; off = every rasterized actor draws every frame)", &debugContactStillGate);
+			const float viewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
 			ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
 				2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
 			if (contactViewSRV) {

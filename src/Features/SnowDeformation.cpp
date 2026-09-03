@@ -1060,6 +1060,7 @@ void SnowDeformation::Prepass()
 		perFrameData.TerrainDim = float(kShellWindowDim);
 	}
 	perFrameData.ViewCenter = contactCenter;
+	perFrameData.ViewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
 	if (debugContactView) {
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 			if (auto* root = player->Get3D(false))
@@ -1191,7 +1192,8 @@ void SnowDeformation::Prepass()
 	// at rest needs one forced run or the stale bake stands until something moves.
 	const bool bermHeal = prevBermBakeDisabled && !shellBermBakeDisabled;
 	prevBermBakeDisabled = shellBermBakeDisabled;
-	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !debugForceDeformationUpdate;
+	// The field view keeps the pass awake: a frozen picture is worse than no sleep.
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermHeal && !(debugForceDeformationUpdate || debugContactView);
 
 	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
 	// the hash quantum every few frames) reads identically in a single-frame
@@ -1229,7 +1231,7 @@ void SnowDeformation::Prepass()
 	// settled.
 	const bool evolveQuiet = !evolveFlagActive && evolveVerdictSeq > evolveLastArmSeq;
 	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet ||
-	                          debugForceDeformationUpdate;
+	                          (debugForceDeformationUpdate || debugContactView);
 	evolveIdleLastFrame = !deformIdleSkipped && !evolveNeeded;
 
 	if (!deformIdleSkipped) {
