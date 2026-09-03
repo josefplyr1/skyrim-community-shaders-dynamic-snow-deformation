@@ -57,11 +57,17 @@ VS_OUTPUT main(VS_INPUT_SKIN input)
 	// Bone indices arrive as UNORM bytes; 765.01 = 255 * 3.0004 turns each
 	// into the index of its first row, the game's own convention.
 	int4 rows = int4(765.01 * input.BoneIndices);
+	// The weights are half floats and sum to 1 only to about 2e-3. The rows
+	// carry ABSOLUTE world translations (~1e5), so an unnormalized blend
+	// shifts a vertex by that error times the world position - hundreds of
+	// units, along the world position's own direction. The game's rows are
+	// pivot-relative and never see this; ours must renormalize.
+	float4 w = input.BoneWeights / max(dot(input.BoneWeights, 1.0), 1e-4);
 	float3x4 m =
-		float3x4(BoneRows[rows.x], BoneRows[rows.x + 1], BoneRows[rows.x + 2]) * input.BoneWeights.x +
-		float3x4(BoneRows[rows.y], BoneRows[rows.y + 1], BoneRows[rows.y + 2]) * input.BoneWeights.y +
-		float3x4(BoneRows[rows.z], BoneRows[rows.z + 1], BoneRows[rows.z + 2]) * input.BoneWeights.z +
-		float3x4(BoneRows[rows.w], BoneRows[rows.w + 1], BoneRows[rows.w + 2]) * input.BoneWeights.w;
+		float3x4(BoneRows[rows.x], BoneRows[rows.x + 1], BoneRows[rows.x + 2]) * w.x +
+		float3x4(BoneRows[rows.y], BoneRows[rows.y + 1], BoneRows[rows.y + 2]) * w.y +
+		float3x4(BoneRows[rows.z], BoneRows[rows.z + 1], BoneRows[rows.z + 2]) * w.z +
+		float3x4(BoneRows[rows.w], BoneRows[rows.w + 1], BoneRows[rows.w + 2]) * w.w;
 
 	// The rows are absolute world, so this is the world position outright -
 	// no object transform, and no pivot to add back.

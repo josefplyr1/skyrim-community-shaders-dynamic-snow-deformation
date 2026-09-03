@@ -3539,6 +3539,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							}
 							if (std::abs(wsum - 1.0f) > 0.02f)
 								badWeight++;
+							// Renormalize as the shader does; see SnowContactCapture.hlsl.
+							for (int k = 0; k < 4; ++k)
+								w[k] /= std::max(wsum, 1e-4f);
 							float out[3] = { 0.0f, 0.0f, 0.0f };
 							for (int k = 0; k < 4; ++k) {
 								if (w[k] == 0.0f)
@@ -3652,8 +3655,13 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 								std::memcpy(vIdx[v].data(), base + skinOffset + 8, 4);
 								bool dom = false;
 								float o[3] = { 0.0f, 0.0f, 0.0f };
+								float wsum = 0.0f;
 								for (int k = 0; k < 4; ++k) {
 									vW[v][k] = SD_HalfToFloat(wh[k]);
+									wsum += vW[v][k];
+								}
+								for (int k = 0; k < 4; ++k) {
+									vW[v][k] /= std::max(wsum, 1e-4f);
 									if (vW[v][k] >= 0.9f)
 										dom = true;
 									if (vW[v][k] == 0.0f)
