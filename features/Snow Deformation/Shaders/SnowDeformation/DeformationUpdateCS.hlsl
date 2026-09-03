@@ -1192,8 +1192,15 @@ bool StampTexel(uint2 phys)
 [numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
 										 : SV_DispatchThreadID) {
 	const uint dim = (uint)ContactDim;
-	if (dim == 0 || any(DTid.xy >= uint2(VIEW_PX, 2 * VIEW_PX)))
+	if (any(DTid.xy >= uint2(VIEW_PX, 2 * VIEW_PX)))
 		return;
+	// No field this frame (nothing drew - a still crowd): the top half goes
+	// black rather than holding the last frame that had one.
+	if (dim == 0 && DTid.y < VIEW_PX)
+	{
+		ActivityView[DTid.xy] = float4(0.0, 0.0, 0.0, 1.0);
+		return;
+	}
 	const bool mapHalf = DTid.y >= VIEW_PX;
 	const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
 	float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);

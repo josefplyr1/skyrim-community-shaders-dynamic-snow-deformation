@@ -1395,7 +1395,7 @@ void SnowDeformation::Prepass()
 			}
 			// Field view, while the contact SRVs are still bound: the same
 			// texels the stamp pass just read, painted as it read them.
-			if (debugContactView && perFrameData.ContactDim > 0.5f) {
+			if (debugContactView) {
 				EnsureContactViewTexture();
 				if (auto* viewCS = GetContactViewCS(); viewCS && contactViewUAV) {
 					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
