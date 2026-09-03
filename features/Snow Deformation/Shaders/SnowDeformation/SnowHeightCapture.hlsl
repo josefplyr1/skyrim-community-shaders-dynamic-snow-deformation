@@ -78,6 +78,11 @@ cbuffer StaticCB : register(b1)
 	float BlobRefZ;
 	// Blob Snow Shell: 1 = mountain/cliff family (rock slope limit applies).
 	float BlobRockClass;
+
+	float EdgeBreakupReach;  // layout sync with SnowStaticsShell; unused here
+	float EdgeBreakupScale;  // layout sync with SnowStaticsShell; unused here
+	float padEdge0;
+	float padEdge1;
 }
 
 // Fresh-top channel of the blob mask target: THIS frame's fragment height,

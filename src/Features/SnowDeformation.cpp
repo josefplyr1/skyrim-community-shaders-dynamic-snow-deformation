@@ -105,6 +105,8 @@
 	X(PileHeightRatio) \
 	X(SkinBreakupAmt) \
 	X(SkinWeldAmt) \
+	X(SkinEdgeBreakup) \
+	X(SkinEdgeLumpSize) \
 	X(EnableBlobShell) \
 	X(BlobSpacing) \
 	X(BlobSize) \

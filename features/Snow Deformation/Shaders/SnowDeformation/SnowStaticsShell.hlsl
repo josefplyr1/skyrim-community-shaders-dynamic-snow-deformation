@@ -323,6 +323,14 @@ cbuffer StaticCB : register(b1)
 	float BlobExclude;  // Blob Snow Shell, capture only; layout sync
 	float BlobRefZ;     // Blob Snow Shell, capture only; layout sync
 	float BlobRockClass;  // Blob Snow Shell, capture only; layout sync
+
+	// Edge breakup: reach of the rim erosion in world units (0 = off) and
+	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
+	// SnowDeformation.h.
+	float EdgeBreakupReach;
+	float EdgeBreakupScale;
+	float padEdge0;
+	float padEdge1;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -479,6 +487,11 @@ static const float kSkinBreakupScale = 24.0;
 // use site; the caster shares this lift and a hard mask makes it cast slivers.
 static const float kBreakupSoft = 0.35;
 static const float kBreakupMaxBare = 0.18;
+// Edge breakup: lump cell sizes in world units (coarse lobes, fine islands)
+// and the shading tilt per unit of lump-field gradient.
+static const float kEdgeLumpBig = 12.0;
+static const float kEdgeLumpSmall = 4.5;
+static const float kEdgeLumpTilt = 5.0;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -873,6 +886,46 @@ float ObjectConeDepth3(float2 worldXY)
 	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Cone depth of the peeled layer a pixel's BASE surface belongs to: the PS
+// twin of the skin lift's layer select, blended over one peel tolerance the
+// same way. No plane under the cover reads as interior.
+float EdgeRimCone(float2 worldXY, float baseZ)
+{
+	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+	float cone = ObjectConeDepth(worldXY);
+	float top1 = PatchTop(worldXY);
+	[branch] if (top1 > -50000.0 && top1 - baseZ > PeelTol)
+	{
+		float coneDeep = coneSeed;
+		[branch] if (top1 - baseZ <= OverheadIgnore)
+		{
+			float top2 = PatchTop2(worldXY);
+			coneDeep = ObjectConeDepth2(worldXY);
+			[branch] if (top2 < -50000.0 || baseZ < top2 - PeelTol)
+			{
+				float top3 = PatchTop3(worldXY);
+				float cone3 = ObjectConeDepth3(worldXY);
+				[flatten] if (top3 < -50000.0 || baseZ < top3 - PeelTol)
+					cone3 = coneSeed;
+				float f2 = top2 > -50000.0 ? smoothstep(PeelTol, PeelTol * 2.0, top2 - baseZ) : 1.0;
+				coneDeep = lerp(coneDeep, cone3, f2);
+			}
+		}
+		cone = lerp(cone, coneDeep, smoothstep(PeelTol, PeelTol * 2.0, top1 - baseZ));
+	}
+	return cone;
+}
+
+// Edge breakup lump field, [0,1]: coarse lobes plus a fine octave that
+// splits the front into islands. lodFine retires the fine octave to its
+// mean when it drops under a few pixels.
+float EdgeLumpNoise(float2 worldXY, float scale, float lodFine)
+{
+	float nBig = ShapeNoise(worldXY / (kEdgeLumpBig * scale));
+	float nSmall = ShapeNoise(worldXY / (kEdgeLumpSmall * scale) + 17.3);
+	return nBig * 0.65 + lerp(0.5, nSmall, lodFine) * 0.35;
 }
 
 // ---- C0 container spike (CONTAINER-SHELL-PLAN) --------------------------
@@ -4624,6 +4677,39 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float fadeAlpha = 1.0;
 	[flatten] if (FadeExempt < 0.5)
 		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
+
+#	ifndef PATCH
+	// Edge breakup: the rim erodes inward through a world-anchored lump
+	// field instead of ending on a contour. Removal only - past the reach
+	// nothing changes, so on a plank the lumps sit inside the roll at the
+	// plank's own edge. The distance dissolve rides the same field, rim
+	// first, and needs no dither. lod 0 is the plain contour (keep >= 0).
+	[branch] if (EdgeBreakupReach > 0.01 && LegacySkin < 0.5 && HasObjectTop > 0.5 && !containerMode)
+	{
+		float steep = clamp(MoundSteepness, 0.5, 3.0);
+		float rimDist = EdgeRimCone(worldXY, pixelAbsZ - input.Lift) / steep;
+		float dN = saturate(rimDist / EdgeBreakupReach);
+		float scale = max(EdgeBreakupScale, 0.25);
+		// Each octave retires as it drops under ~3 px; sub-pixel lumps alias.
+		float lodFine = 1.0 - smoothstep(1.0, 2.5, footprint / scale);
+		float lod = 1.0 - smoothstep(3.0, 7.0, footprint / scale);
+		float n = EdgeLumpNoise(worldXY, scale, lodFine);
+		float keep = 1.3 * dN + lerp(0.5, 0.2, lod) - lerp(0.5, n, lod) - 1.5 * (1.0 - fadeAlpha);
+		fadeAlpha = 1.0;
+		coverageAlpha *= keep >= 0.0 ? 1.0 : 0.0;
+		// Lobes read as mounds: tilt the normal up the field's gradient at
+		// the cut so each lump's edge rounds off instead of shading flat.
+		float tiltW = lod * (1.0 - smoothstep(0.0, 0.3, keep));
+		[branch] if (tiltW > 0.001)
+		{
+			const float ns = 1.0;
+			float2 gN = float2(
+				EdgeLumpNoise(worldXY + float2(ns, 0.0), scale, lodFine) - EdgeLumpNoise(worldXY - float2(ns, 0.0), scale, lodFine),
+				EdgeLumpNoise(worldXY + float2(0.0, ns), scale, lodFine) - EdgeLumpNoise(worldXY - float2(0.0, ns), scale, lodFine)) / (2.0 * ns);
+			normalWS = normalize(normalWS + float3(gN * kEdgeLumpTilt * tiltW, 0.0));
+		}
+	}
+#	endif
 
 	// Captured before the override: mode 2 renders the value the dither sees.
 	float dbgAlpha = coverageAlpha * fadeAlpha;

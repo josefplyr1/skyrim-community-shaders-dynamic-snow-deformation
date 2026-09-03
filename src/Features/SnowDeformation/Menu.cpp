@@ -256,6 +256,12 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("snow_breakup"), "Snow Breakup"), &settings.SkinBreakupAmt, 0.0f, 1.0f, "%.2f");
 		if (auto _ttBreakup = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_breakup_tooltip"), "How ragged the snow layer's own coverage is. At 0 every surface that qualifies wears the full depth evenly, which reads like a coat of paint. Raising it eats into the layer with a soft world-scale noise, so patches thin out and the thinnest ones go bare and let the object show through - the way real cover breaks up rather than stopping at a clean line. Roads are unaffected."));
+		ImGui::SliderFloat(T(TKEY("edge_breakup"), "Edge Breakup"), &settings.SkinEdgeBreakup, 0.0f, 32.0f, "%.0f units");
+		if (auto _ttEdgeB = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("edge_breakup_tooltip"), "How far in from its edge the object snow breaks into small lumps that thin out toward the rim, instead of stopping on a clean line. The lumps only ever eat inward from where the snow already ends, so on a narrow board they hug the board's own edge, while on a rounded rock they spread over the shoulder. The distance fade rides the same lumps, shedding snow from the rim inward instead of dithering. 0 = the plain edge and the old dithered fade. Roads are unaffected."));
+		ImGui::SliderFloat(T(TKEY("edge_lump_size"), "Edge Lump Size"), &settings.SkinEdgeLumpSize, 0.5f, 3.0f, "%.2fx");
+		if (auto _ttEdgeL = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("edge_lump_size_tooltip"), "Size of the lumps along the snow's edge. 1 is a few centimetres across; higher gives broader, softer lobes, lower a finer crumble."));
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));

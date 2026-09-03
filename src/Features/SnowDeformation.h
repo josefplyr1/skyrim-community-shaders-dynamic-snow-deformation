@@ -496,6 +496,10 @@ public:
 		float ObjCorniceLipAmt = 0.0f;
 		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
 		float SkinBreakupAmt = 0.0f;
+		/** @brief "Edge Breakup", world units: how far in from its rim the object snow erodes into lumps through a world-anchored noise field, removal only. The distance dissolve rides the same field (rim first) instead of the stochastic dither. 0 = the plain contour and the dithered fade. Feeds StaticsCB::EdgeBreakupReach. */
+		float SkinEdgeBreakup = 12.0f;
+		/** @brief "Edge Lump Size": multiplier on the edge lump cell sizes (kEdgeLumpBig / kEdgeLumpSmall in SnowStaticsShell.hlsl). Feeds StaticsCB::EdgeBreakupScale. */
+		float SkinEdgeLumpSize = 1.0f;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
@@ -1688,6 +1692,13 @@ public:
 		float BlobRefZ;
 		/** @brief Blob Snow Shell: 1 = mountain/cliff family, so the seed applies the rock slope limit. Rides the fresh channel's low bit. */
 		float BlobRockClass;
+
+		/** @brief Settings::SkinEdgeBreakup - reach of the rim erosion in world units, 0 = off. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float EdgeBreakupReach;
+		/** @brief Settings::SkinEdgeLumpSize - lump cell-size multiplier. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float EdgeBreakupScale;
+		float padEdge0;
+		float padEdge1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
