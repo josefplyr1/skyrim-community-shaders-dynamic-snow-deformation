@@ -3330,9 +3330,15 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
+	// A carried mesh that jumps further than this in one frame was equipped,
+	// swapped or teleported, not swung: it prints where it now stands.
+	constexpr float kContactSweepTeleport = 200.0f;
 	// One rigid mesh into the field, by its own world transform. Props use it
-	// for every mesh; actors use it for what they carry.
-	auto drawRigid = [&](RE::BSGeometry* a_geometry) -> bool {
+	// for every mesh; actors use it for what they carry. With a_sweep, the
+	// mesh is also drawn at interpolated poses back toward where it stood
+	// last frame: the field is a snapshot, and a swung blade crosses several
+	// texels between frames, which prints as rungs rather than a slash.
+	auto drawRigid = [&](RE::BSGeometry* a_geometry, bool a_sweep = false) -> bool {
 		auto& runtime = a_geometry->GetGeometryRuntimeData();
 		auto* triShape = a_geometry->AsTriShape();
 		if (!triShape)
@@ -3361,18 +3367,61 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-		StaticsCB scb{};
 		const auto& world = a_geometry->world;
-		const auto& rot = world.rotate;
-		const float scale = world.scale;
-		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, world.translate.x };
-		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, world.translate.y };
-		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, world.translate.z };
-		scb.HeightWindowCenter = contactCenter;
-		scb.HeightHalfExtent = kContactHalfExtent;
-		staticsCB->Update(scb);
+		auto rowsFrom = [&](const RE::NiTransform& a_x, StaticsCB& a_cb) {
+			const auto& r = a_x.rotate;
+			const float sc = a_x.scale;
+			a_cb.WorldRow0 = { r.entry[0][0] * sc, r.entry[0][1] * sc, r.entry[0][2] * sc, a_x.translate.x };
+			a_cb.WorldRow1 = { r.entry[1][0] * sc, r.entry[1][1] * sc, r.entry[1][2] * sc, a_x.translate.y };
+			a_cb.WorldRow2 = { r.entry[2][0] * sc, r.entry[2][1] * sc, r.entry[2][2] * sc, a_x.translate.z };
+			a_cb.HeightWindowCenter = contactCenter;
+			a_cb.HeightHalfExtent = kContactHalfExtent;
+		};
 
-		context->DrawIndexed(indexCount, 0, 0);
+		uint32_t steps = 1;
+		RE::NiTransform previous;
+		if (a_sweep) {
+			auto& state = contactSweepStates[a_geometry];
+			const bool fresh = state.frame + 1 != contactSweepFrame;
+			previous = state.world;
+			state.world = world;
+			state.frame = contactSweepFrame;
+			if (!fresh) {
+				// How far the mesh's far edge travelled: the origin's own step plus
+				// the arc its radius swept. cos(angle) from the relative rotation.
+				const float radius = a_geometry->worldBound.radius;
+				float trace = 0.0f;
+				for (int r = 0; r < 3; ++r)
+					for (int c = 0; c < 3; ++c)
+						trace += world.rotate.entry[r][c] * previous.rotate.entry[r][c];
+				const float angle = std::acos(std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f));
+				const float travel = world.translate.GetDistance(previous.translate) + radius * angle;
+				// A jump this large is a new placement (equip, cell load), not a swing.
+				if (travel < kContactSweepTeleport)
+					steps = std::clamp(uint32_t(std::ceil(travel / kContactSweepStep)), 1u, kContactMaxSweep);
+			}
+		}
+
+		StaticsCB scb{};
+		for (uint32_t step = 1; step <= steps; ++step) {
+			if (step == steps) {
+				rowsFrom(world, scb);
+			} else {
+				// Straight lerp of the rows: over one frame's rotation the chord
+				// shortens the mesh by a fraction of a percent, far under a texel.
+				const float t = float(step) / float(steps);
+				RE::NiTransform blend = world;
+				for (int r = 0; r < 3; ++r)
+					for (int c = 0; c < 3; ++c)
+						blend.rotate.entry[r][c] = std::lerp(previous.rotate.entry[r][c], world.rotate.entry[r][c], t);
+				blend.translate = previous.translate * (1.0f - t) + world.translate * t;
+				blend.scale = std::lerp(previous.scale, world.scale, t);
+				rowsFrom(blend, scb);
+				contactSweepLast++;
+			}
+			staticsCB->Update(scb);
+			context->DrawIndexed(indexCount, 0, 0);
+		}
 		return true;
 	};
 
@@ -3403,6 +3452,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactSkinDrawsLast = 0;
 	contactSkinMissingLast = 0;
 	contactCarriedLast = 0;
+	contactSweepLast = 0;
+	contactSweepFrame++;
+	if (contactSweepStates.size() > 512)
+		contactSweepStates.clear();
 	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::ContactSkin");
 		context->VSSetShader(contactSkinVS, nullptr, 0);
@@ -3428,11 +3481,17 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					bool hidden = false;
 					for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
 						hidden = n->GetAppCulled();
-					if (hidden || !runtime.shaderProperty) {
+					// Effect art - glows, light rays, runes, blood decals, an ENB light's
+					// 500-unit billboard - is drawn with an effect shader, never a
+					// lighting one. It is not a surface and must not carve snow.
+					auto* property = runtime.shaderProperty.get();
+					const bool lit = property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get();
+					if (hidden || !lit) {
 						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(a_geometry).second)
 							logger::info("[SNOW DEFORMATION] contact geometry '{}' on '{}' is {} (bound radius {:.0f}); not drawn",
 								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(),
-								hidden ? "hidden by the game" : "without a shader", a_geometry->worldBound.radius);
+								hidden ? "hidden by the game" : (property ? "effect art, not a surface" : "without a shader"),
+								a_geometry->worldBound.radius);
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
@@ -3452,7 +3511,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						context->VSSetShader(contactVS, nullptr, 0);
 						skinnedVSBound = false;
 					}
-					if (drawRigid(a_geometry))
+					if (drawRigid(a_geometry, true))
 						contactCarriedLast++;
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}

@@ -2163,6 +2163,19 @@ public:
 	uint contactSkinMissingLast = 0;
 	/** @brief Rigid meshes carried by rasterized actors (weapons, shields) drawn into the field this frame. */
 	uint contactCarriedLast = 0;
+	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */
+	uint contactSweepLast = 0;
+	/** @brief Previous frame's world transform per carried mesh, keyed by geometry, for the sweep. Identity only - never dereferenced. */
+	struct ContactSweep
+	{
+		RE::NiTransform world;
+		uint32_t frame = 0;
+	};
+	std::unordered_map<const void*, ContactSweep> contactSweepStates;
+	uint32_t contactSweepFrame = 0;
+	/** @brief World units a sweeping mesh may advance between sub-steps (two contact texels), and the ceiling on sub-steps for one mesh. */
+	static constexpr float kContactSweepStep = 6.0f;
+	static constexpr uint32_t kContactMaxSweep = 8;
 	std::unordered_set<const void*> contactSkinMissingLogged;
 	/** @brief Skinned geometries the contact pass refused because the game itself hides them, reported once each. */
 	std::unordered_set<const void*> contactSkinHiddenLogged;

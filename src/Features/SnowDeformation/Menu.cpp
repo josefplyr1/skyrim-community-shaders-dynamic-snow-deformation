@@ -1456,8 +1456,8 @@ void SnowDeformation::DrawSettings()
 			}
 		}
 		if (debugActorContact)
-			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (bone stamps skipped for these), %u missing-bone stand-ins",
-				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSkinMissingLast);
+			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u missing-bone stand-ins",
+				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactSkinMissingLast);
 		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {
