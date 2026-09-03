@@ -4684,11 +4684,37 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// nothing changes, so on a plank the lumps sit inside the roll at the
 	// plank's own edge. The distance dissolve rides the same field, rim
 	// first, and needs no dither. lod 0 is the plain contour (keep >= 0).
+	// The band lives in the ROLL: the cone field saturates at the class
+	// depth (and below a narrow feature's crest never reaches it), so a
+	// reach in raw cone units eroded whole surfaces at shallow depths. The
+	// reach is capped at the run the geometry itself rolls over - the
+	// crest-capped hEff on the 3D shell, kCorniceRoll on classic draws -
+	// so the interior and every crest read dN = 1 whatever the depth.
 	[branch] if (EdgeBreakupReach > 0.01 && LegacySkin < 0.5 && HasObjectTop > 0.5 && !containerMode)
 	{
 		float steep = clamp(MoundSteepness, 0.5, 3.0);
-		float rimDist = EdgeRimCone(worldXY, pixelAbsZ - input.Lift) / steep;
-		float dN = saturate(rimDist / EdgeBreakupReach);
+		float cone = EdgeRimCone(worldXY, pixelAbsZ - input.Lift);
+		float reachCone = EdgeBreakupReach * steep;
+		float rollCap = kCorniceRoll * steep;
+		[branch] if (pdMode && cone < reachCone)
+		{
+			// ObjectDomeDepth's crest freeze, per pixel. Top-layer taps for
+			// the ring: the crest only matters on narrow features.
+			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+			float tapR = 0.5 * coneSeed;
+			float tapD = tapR * 0.7071;
+			float crest = cone;
+			crest = max(crest, ObjectConeDepth(worldXY + float2(tapR, 0.0)));
+			crest = max(crest, ObjectConeDepth(worldXY - float2(tapR, 0.0)));
+			crest = max(crest, ObjectConeDepth(worldXY + float2(0.0, tapR)));
+			crest = max(crest, ObjectConeDepth(worldXY - float2(0.0, tapR)));
+			crest = max(crest, ObjectConeDepth(worldXY + float2(tapD, tapD)));
+			crest = max(crest, ObjectConeDepth(worldXY - float2(tapD, tapD)));
+			crest = max(crest, ObjectConeDepth(worldXY + float2(tapD, -tapD)));
+			crest = max(crest, ObjectConeDepth(worldXY - float2(tapD, -tapD)));
+			rollCap = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
+		}
+		float dN = saturate(cone / max(min(reachCone, rollCap), 1e-3));
 		float scale = max(EdgeBreakupScale, 0.25);
 		// Each octave retires as it drops under ~3 px; sub-pixel lumps alias.
 		float lodFine = 1.0 - smoothstep(1.0, 2.5, footprint / scale);
