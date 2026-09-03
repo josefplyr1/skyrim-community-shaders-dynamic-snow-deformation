@@ -501,6 +501,8 @@ static const float kEdgeFlankLift = 0.4;
 // Reconstructed projected weight (vanilla projWeight + 0.1; the game's blend
 // is smoothstep(0,1,5w), 0 at w=0, 1 at w=0.2) at which the coat is solid.
 static const float kCoatSolidW = 0.15;
+// Edge Lump Reach 1 in world units past the solid contour.
+static const float kEdgeReachUnits = 32.0;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -4157,6 +4159,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// World units spanned by this pixel. Every LOD term below keys off it
 	// rather than off camera distance, so they track resolution and FOV.
 	float footprint = length(abs(dPosX) + abs(dPosY));
+	// Screen derivatives of the SMOOTH projected weight (vertex normal, no
+	// noise, no normal map) and of the vertex normal z: the edge lumps turn
+	// "how far below the solid weight" into world units past the solid
+	// contour with these. Uniform flow; the users sit inside branches.
+	float edgeWVert = input.Coverage * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
+	float2 edgeWGrad = float2(ddx(edgeWVert), ddy(edgeWVert));
+	float2 edgeNzGrad = float2(ddx(input.Coverage), ddy(input.Coverage));
 	// The column's OWN post-shelter depth target, NOT the class slider.
 	// Under a roof the target drops to kShelterDust while the slider does
 	// not, so a class-scaled rim band came out WIDER than the sheltered
@@ -4221,7 +4230,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// values the gates do, so their edge is the shell's.
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
-	float edgeFill = 0.0;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -4267,7 +4275,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(-0.18, 0.08, wSmooth) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		edgeW = wpix;
-		edgeFill = smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
@@ -4683,19 +4690,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 #	ifndef PATCH
-	// THE COAT AND THE EDGE LUMPS (projected-snow draws, Recolor Projected
-	// Snow on). The game blends its projected snow by smoothstep(0,1,5w)
-	// over the reconstructed weight w (edgeW): a wall sits near 0.15 of
-	// that blend, a rock top at 1. The coat draws the shell's own material
-	// where that blend is solid (w >= kCoatSolidW), lifted off the object
-	// along the view ray for the z-test; below it, round blobs thin out
-	// through the fade, reaching w = 0 at Edge Lump Reach 1 and nothing at
-	// 0. The blobs only ever live OUTSIDE the solid edge; pixels the 3D
-	// shell already covers are never touched. Draws without projection
-	// data get the blobs in a slope band below the shell's cut instead.
-	// The distance dissolve erodes solid pixels through the same field,
-	// no dither. At lod 0 (blobs under a few px) the coat keeps its plain
-	// edge and no blobs are drawn.
+	// THE COAT AND THE EDGE LUMPS. The game blends its projected snow by
+	// smoothstep(0,1,5w) over the reconstructed weight w (edgeW, per pixel:
+	// normal map and noise texture included, so it is ragged the way the
+	// game's own edge is). The coat draws the shell's material where that
+	// blend is solid (w >= kCoatSolidW), lifted off the object along the
+	// view ray for the z-test. Below it the lumps hang on for a DISTANCE:
+	// the smooth weight's gradient turns the shortfall into world units past
+	// the solid contour, and the band ends at Edge Lump Reach. A wall's
+	// faint uniform frosting has no gradient, so it is infinitely far from
+	// any edge and gets neither coat nor lumps, while a rock's flank fades
+	// over a few units and does. The far part of the band breaks into round
+	// blobs (Edge Lump Size). Pixels the 3D shell covers are never touched.
+	// Draws without projection data hang lumps below the shell's slope cut
+	// the same way, from the vertex normal. The distance dissolve erodes
+	// solid pixels through the blob field, no dither.
 	float edgeFlankLift = 0.0;
 	bool lumpsOn = EdgeFlankWidth > 0.001;
 	[branch] if (LegacySkin < 0.5 && !containerMode && (EdgeCoat > 0.5 || lumpsOn || fadeAlpha < 0.5))
@@ -4708,24 +4717,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float s = 0.0;
 		[branch] if (!inside)
 		{
-			[flatten] if (pdMode)
-			{
-				[flatten] if (EdgeCoat > 0.5)
-				{
-					// Snow Fill, exactly as the recolor applies it.
-					float wEff = edgeW;
-					[flatten] if (edgeW > 0.003)
-						wEff = max(wEff, 0.2 * edgeFill);
-					s = (wEff - kCoatSolidW) / max(0.2 * EdgeFlankWidth, 1e-3);
-					solid = wEff >= kCoatSolidW;
-					needField = solid ? (fadeIn < 0.5) : (lumpsOn && s > -0.8);
-				}
-			}
-			else
-			{
-				s = -saturate((0.55 - edgeNz) / max(EdgeFlankWidth, 0.02));
-				needField = lumpsOn && s < 0.0 && s > -0.8 && input.Coverage > 0.05;
-			}
+			bool coat = pdMode && EdgeCoat > 0.5;
+			float wPix = pdMode ? edgeW : edgeNz;
+			float2 wG = pdMode ? edgeWGrad : edgeNzGrad;
+			float w0 = pdMode ? (coat ? kCoatSolidW : 0.0) : 0.55;
+			float gradW = length(float2(wG.x / max(length(dPosX), 1e-4), wG.y / max(length(dPosY), 1e-4)));
+			float dist = (w0 - wPix) / max(gradW, 1e-3);
+			float reach = kEdgeReachUnits * EdgeFlankWidth;
+			solid = coat && wPix >= w0;
+			s = -dist / max(reach, 1e-3);
+			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && input.Coverage > -0.05);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
@@ -4737,21 +4738,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float3 lumpW = pow(abs(normalWS), 4.0);
 			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
 			float blob = EdgeLumpField(lumpPos, lumpW, cell);
+			// Solid: only the distance fade. Band: kept outright next to the
+			// contour, breaking into blob cores toward the reach, gone at it.
 			[flatten] if (solid)
 				keep = lerp(0.5, blob, lod) + 2.4 * fadeIn - 1.2;
 			else
-				keep = 1.3 * s + lod * blob - 1.5 * (1.0 - fadeIn);
+				keep = 1.0 + 1.3 * s + 0.5 * lod * (blob - 0.5) - 1.5 * (1.0 - fadeIn);
 			// Each blob shades as a mound: tilt the normal down its own
 			// slope, along the pixel's world tangents so it stays in the
-			// surface on tops and flanks alike.
-			[branch] if (!solid && keep >= 0.0 && lod > 0.001)
+			// surface on tops and flanks alike; strongest where the band
+			// has broken into islands.
+			float tiltW = lod * saturate(-s);
+			[branch] if (!solid && keep >= 0.0 && tiltW > 0.001)
 			{
 				const float ns = 0.5;
 				float3 tX = normalize(dPosX);
 				float3 tY = normalize(dPosY);
 				float gU = (EdgeLumpField(lumpPos + tX * ns, lumpW, cell) - blob) / ns;
 				float gV = (EdgeLumpField(lumpPos + tY * ns, lumpW, cell) - blob) / ns;
-				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * lod);
+				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * tiltW);
 			}
 		}
 		[flatten] if (inside && keep < 0.0)

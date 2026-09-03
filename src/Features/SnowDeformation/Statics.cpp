@@ -2421,7 +2421,10 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// silhouette keeps the plain contour (as the lift-band cut always did).
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.25f, 3.0f);
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
-	a_scb.EdgeCoat = settings.ProjSnowMatch ? 1.0f : 0.0f;
+	// Same veto as the Lighting-side recolor: sand and moss projections
+	// keep their look.
+	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.geometry &&
+	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;

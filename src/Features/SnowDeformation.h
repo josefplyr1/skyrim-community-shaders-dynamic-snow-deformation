@@ -498,7 +498,7 @@ public:
 		float SkinBreakupAmt = 0.0f;
 		/** @brief "Edge Lump Size": multiplier on the edge lump cell sizes (kEdgeLumpBig / kEdgeLumpSmall in SnowStaticsShell.hlsl). Feeds StaticsCB::EdgeBreakupScale. */
 		float SkinEdgeLumpSize = 0.25f;
-		/** @brief "Edge Lump Reach", 0-1: how far past the coat's solid edge the round lumps reach into the game's own projected-snow fade (1 = the whole fade, 0 = no lumps). On draws without projection data a normal-z band below the shell's cut. Feeds StaticsCB::EdgeFlankWidth. */
+		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.5f;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
