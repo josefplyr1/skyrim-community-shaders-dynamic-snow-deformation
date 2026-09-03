@@ -2166,6 +2166,8 @@ public:
 	uint contactSkinMissingLast = 0;
 	/** @brief Rigid meshes carried by rasterized actors (weapons, shields) drawn into the field this frame. */
 	uint contactCarriedLast = 0;
+	/** @brief RaceMenu overlay clones the actor contact pass declined this frame. */
+	uint contactOverlaysLast = 0;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */
 	uint contactSweepLast = 0;
 	/** @brief Previous frame's world transform per carried mesh, keyed by geometry, for the sweep. Identity only - never dereferenced. */

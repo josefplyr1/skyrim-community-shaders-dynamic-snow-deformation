@@ -3452,6 +3452,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactSkinDrawsLast = 0;
 	contactSkinMissingLast = 0;
 	contactCarriedLast = 0;
+	contactOverlaysLast = 0;
 	contactSweepLast = 0;
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
@@ -3473,6 +3474,13 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
+				// RaceMenu overlays ('[Ovl0]'..'[Ovl5]', '[SOvl0]') are clones of the
+				// body and hands that exist to layer textures: the same surface
+				// again, up to seven times over. One copy is enough.
+				if (const char* name = a_geometry->name.c_str(); name && (std::strstr(name, "[Ovl") || std::strstr(name, "[SOvl"))) {
+					contactOverlaysLast++;
+					return RE::BSVisit::BSVisitControl::kContinue;
+				}
 				// Draw only what the game draws: a geometry hidden by itself or by
 				// any ancestor (dismembered parts, physics helper meshes, alternate
 				// variants), or one with no shader to render it, never reaches the
