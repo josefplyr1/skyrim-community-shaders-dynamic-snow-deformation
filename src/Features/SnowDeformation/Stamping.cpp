@@ -340,10 +340,25 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 		for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
 			hidden = n->GetAppCulled();
 		std::string skin = "rigid";
+		std::string boneTable;
 		if (auto* si = runtime.skinInstance.get()) {
 			uint32_t parts = si->skinPartition ? si->skinPartition->numPartitions : 0;
 			uint32_t bones = si->skinData ? si->skinData->GetBoneCount() : 0;
-			skin = std::format("skinned {} partitions / {} bones", parts, bones);
+			skin = std::format("skinned {} partitions / {} bones, {} matrices", parts, bones, si->numMatrices);
+			// Per bone: the node the skin resolved, or which of the two sources is
+			// empty. A creature whose belly moves on a null slot names it here.
+			uint32_t nullNodes = 0, nullPointers = 0;
+			for (uint32_t b = 0; b < bones && b < 96; ++b) {
+				auto* node = si->bones ? si->bones[b] : nullptr;
+				const bool ptr = si->boneWorldTransforms && si->boneWorldTransforms[b];
+				if (!node)
+					nullNodes++;
+				if (!ptr)
+					nullPointers++;
+				if (!node || !ptr)
+					boneTable += std::format("[{}: node {} / ptr {}] ", b, node ? (node->name.c_str() ? node->name.c_str() : "?") : "NULL", ptr ? "ok" : "NULL");
+			}
+			boneTable = std::format(" | null nodes {} / null pointers {} of {}: ", nullNodes, nullPointers, bones) + boneTable;
 		}
 		const char* shader = "NO SHADER";
 		if (auto* sp = runtime.shaderProperty.get())
@@ -360,6 +375,8 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 			a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skin, tris, shader, hidden ? "HIDDEN" : "visible",
 			b.center.x - rootPos.x, b.center.y - rootPos.y, b.center.z - rootPos.z, b.radius,
 			(a_geometry->parent && a_geometry->parent->name.c_str()) ? a_geometry->parent->name.c_str() : "");
+		if (!boneTable.empty())
+			logger::info("[SNOW DEFORMATION] geom '{}' bones{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", boneTable);
 		return RE::BSVisit::BSVisitControl::kContinue;
 	});
 }
