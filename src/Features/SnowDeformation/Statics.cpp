@@ -3389,6 +3389,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			if (!fresh) {
 				// How far the mesh's far edge travelled: the origin's own step plus
 				// the arc its radius swept. cos(angle) from the relative rotation.
+				// Below a texel of travel there is nothing new to print - a sheathed
+				// sword on a standing body, or a shield at rest - and not drawing it
+				// is what keeps the field empty for the update pass's sleep.
 				const float radius = a_geometry->worldBound.radius;
 				float trace = 0.0f;
 				for (int r = 0; r < 3; ++r)
@@ -3396,6 +3399,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						trace += world.rotate.entry[r][c] * previous.rotate.entry[r][c];
 				const float angle = std::acos(std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f));
 				const float travel = world.translate.GetDistance(previous.translate) + radius * angle;
+				if (travel < kContactStillStep)
+					return false;
 				// A jump this large is a new placement (equip, cell load), not a swing.
 				if (travel < kContactSweepTeleport)
 					steps = std::clamp(uint32_t(std::ceil(travel / kContactSweepStep)), 1u, kContactMaxSweep);
@@ -3454,6 +3459,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactCarriedLast = 0;
 	contactOverlaysLast = 0;
 	contactShellsLast = 0;
+	contactStillLast = 0;
 	contactSweepLast = 0;
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
@@ -3469,6 +3475,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
 				continue;
+			if (actor.still)
+				contactStillLast++;
 			contactYawTraceAngle = ref->GetAngleZ();
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
@@ -3538,6 +3546,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						contactCarriedLast++;
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
+				// A still body's print is already in the map: its skin is not drawn.
+				if (actor.still)
+					return RE::BSVisit::BSVisitControl::kContinue;
 				if (!skinnedVSBound) {
 					context->VSSetShader(contactSkinVS, nullptr, 0);
 					skinnedVSBound = true;

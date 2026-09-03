@@ -779,9 +779,22 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// actor with none usable must not take the bone path, or the collision
 		// fallback its skeleton needs is unreachable.
 		uint usableFeet = 0;
-		for (const auto& foot : cache.feet)
-			if (auto* n = foot.node.get(); n && n->world.scale >= 0.01f)
-				usableFeet++;
+		// Stillness for the contact pass: a living body whose usable feet all
+		// stood where they stood last frame has nothing new to press into the
+		// snow. Feet, not the pelvis: an idle shifts weight and turns the
+		// head while the boots stay planted, and it is the boots that print.
+		bool feetStill = true;
+		for (auto& foot : cache.feet) {
+			auto* n = foot.node.get();
+			if (!n || n->world.scale < 0.01f)
+				continue;
+			usableFeet++;
+			const RE::NiPoint3 now = n->world.translate;
+			if (!foot.hasPrev || now.GetDistance(foot.prev) > kContactStillStep)
+				feetStill = false;
+			foot.prev = now;
+			foot.hasPrev = true;
+		}
 		if (!cache.feet.empty() || !cache.limbs.empty())
 			bones = &cache;
 		const bool footPath = !isDead && usableFeet > 0 && !cache.collisionFallback;
@@ -985,10 +998,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					draw = !rest->settled;
 				}
 				if (draw) {
+					// The living latch is per frame, not per settle window: the body
+					// is still when it has not translated and every usable foot is
+					// planted (or, footless, the body itself has not moved). Its print
+					// is in the map already; skipping the draw is what lets the field
+					// go empty and the update pass sleep beside an idling NPC.
+					const bool bodyStill = cache.hasPrevPos && dryStep < kContactStillStep;
+					const bool still = !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
 						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,
-						groundZ, nominalDepth });
+						groundZ, nominalDepth, still });
 					if (isDead) {
 						contactCorpseCount++;
 						stampStats.corpsesRasterized++;

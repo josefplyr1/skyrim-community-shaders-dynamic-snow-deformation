@@ -275,6 +275,9 @@ public:
 		{
 			RE::NiPointer<RE::NiAVObject> node;
 			RE::NiPointer<RE::NiAVObject> toe;
+			/** @brief Where the foot stood last frame, for the contact stillness gate. */
+			RE::NiPoint3 prev;
+			bool hasPrev = false;
 		};
 		std::vector<Foot> feet;
 		struct Limb
@@ -2117,6 +2120,8 @@ public:
 		/** @brief Actors only: the ground under the feet and the layer depth there, so the draw can refuse parts that cannot reach the snow. */
 		float groundZ = 0.0f;
 		float layer = 0.0f;
+		/** @brief Living actor whose feet and body have not moved since last frame: its print is already in the map, so its skin is not drawn (carried gear still is, when it moves). */
+		bool still = false;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;
@@ -2170,6 +2175,10 @@ public:
 	uint contactOverlaysLast = 0;
 	/** @brief Creature fur shells the actor contact pass declined this frame. */
 	uint contactShellsLast = 0;
+	/** @brief Rasterized living actors that stood still this frame and were not drawn. */
+	uint contactStillLast = 0;
+	/** @brief A foot or body that moved less than this since last frame counts as still. */
+	static constexpr float kContactStillStep = 1.0f;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */
 	uint contactSweepLast = 0;
 	/** @brief Previous frame's world transform per carried mesh, keyed by geometry, for the sweep. Identity only - never dereferenced. */

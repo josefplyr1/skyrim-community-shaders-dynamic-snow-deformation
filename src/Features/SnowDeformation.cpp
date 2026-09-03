@@ -1051,7 +1051,8 @@ void SnowDeformation::Prepass()
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
-	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0) ? float(kContactDim) : 0.0f;
+	// No draw, no field: a still crowd leaves the pass free to sleep.
+	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0 || contactCarriedLast > 0) ? float(kContactDim) : 0.0f;
 	{
 		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 		perFrameData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
