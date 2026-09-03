@@ -2212,12 +2212,9 @@ public:
 	std::unordered_set<const void*> contactSkinHiddenLogged;
 	/** @brief Margin over the layer depth before a part is refused as unreachable: the terrain window's bilinear ground can sit this far off the actor's feet on a slope. */
 	static constexpr float kContactSkipMargin = 16.0f;
-	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
-	uint32_t contactYawTraceFrames = 0;
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */
 	float2 contactViewCenter{};
 	float contactViewTexelSize = 0.0f;
-	float contactYawTraceAngle = 0.0f;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);
 
