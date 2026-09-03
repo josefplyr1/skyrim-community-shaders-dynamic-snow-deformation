@@ -985,9 +985,9 @@ void SnowDeformation::DrawSettings()
 			else
 				ImGui::Text("Update pass: idle (skipped)");
 		} else {
-			static const char* kBlockerNames[8] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale" };
+			static const char* kBlockerNames[9] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
 			std::string held;
-			for (int bit = 0; bit < 8; bit++)
+			for (int bit = 0; bit < 9; bit++)
 				if (deformIdleBlockers & (1u << bit)) {
 					if (!held.empty())
 						held += ", ";

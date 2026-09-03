@@ -3399,7 +3399,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						trace += world.rotate.entry[r][c] * previous.rotate.entry[r][c];
 				const float angle = std::acos(std::clamp((trace - 1.0f) * 0.5f, -1.0f, 1.0f));
 				const float travel = world.translate.GetDistance(previous.translate) + radius * angle;
-				if (travel < kContactStillStep)
+				if (travel < kContactSweepStep)
 					return false;
 				// A jump this large is a new placement (equip, cell load), not a swing.
 				if (travel < kContactSweepTeleport)
@@ -3478,6 +3478,47 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			if (actor.still)
 				contactStillLast++;
 			contactYawTraceAngle = ref->GetAngleZ();
+			// Palette trace: the game's own uploaded bone matrices beside ours, raw,
+			// so the layout and the pivot read off the log. Once a second while the
+			// field view is up, the first skinned mesh of the first actor, whether
+			// or not that actor is drawn this frame.
+			if (debugContactView && contactYawTraceFrames == 0 && &actor == &contactActors.front()) {
+				RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+					auto* si = a_geometry->GetGeometryRuntimeData().skinInstance.get();
+					if (!si || !si->skinData || !si->skinPartition || !si->skinPartition->partitions.data() || !si->boneMatrices || si->numMatrices < 2)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					const auto& part = si->skinPartition->partitions[0];
+					if (!part.bones || part.numBones < 2)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					const uint32_t count = si->skinData->GetBoneCount();
+					auto composed = [&](uint16_t b) -> RE::NiTransform {
+						const RE::NiTransform* w = nullptr;
+						if (b < count && si->boneWorldTransforms && si->boneWorldTransforms[b])
+							w = si->boneWorldTransforms[b];
+						else if (b < count && si->bones && si->bones[b])
+							w = &si->bones[b]->world;
+						else
+							w = &root->world;
+						return b < count ? *w * si->skinData->GetBoneDataSkinToBone(b) : *w;
+					};
+					const float* gm = reinterpret_cast<const float*>(si->boneMatrices);
+					std::string raw;
+					for (uint32_t i = 0; i < 32; ++i)
+						raw += std::format("{:.1f} ", gm[i]);
+					auto* playerCamera = RE::PlayerCamera::GetSingleton();
+					const RE::NiPoint3 cam = (playerCamera && playerCamera->cameraRoot) ? playerCamera->cameraRoot->world.translate : RE::NiPoint3{};
+					const RE::NiTransform b0 = composed(part.bones[0]);
+					const RE::NiTransform b1 = composed(part.bones[1]);
+					logger::info("[SNOW DEFORMATION] palette trace '{}' on '{}': {} matrices, frame {} | game raw[0..31]: {}| ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) row1 ({:.2f} {:.2f} {:.2f} | {:.1f}) row2 ({:.2f} {:.2f} {:.2f} | {:.1f}) | ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) row1 (.. | {:.1f}) row2 (.. | {:.1f}) | root ({:.1f} {:.1f} {:.1f}) camera ({:.1f} {:.1f} {:.1f})",
+						a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), si->numMatrices, si->frameID, raw,
+						part.bones[0], b0.rotate.entry[0][0] * b0.scale, b0.rotate.entry[0][1] * b0.scale, b0.rotate.entry[0][2] * b0.scale, b0.translate.x,
+						b0.rotate.entry[1][0] * b0.scale, b0.rotate.entry[1][1] * b0.scale, b0.rotate.entry[1][2] * b0.scale, b0.translate.y,
+						b0.rotate.entry[2][0] * b0.scale, b0.rotate.entry[2][1] * b0.scale, b0.rotate.entry[2][2] * b0.scale, b0.translate.z,
+						part.bones[1], b1.rotate.entry[0][0] * b1.scale, b1.rotate.entry[0][1] * b1.scale, b1.rotate.entry[0][2] * b1.scale, b1.translate.x, b1.translate.y, b1.translate.z,
+						root->world.translate.x, root->world.translate.y, root->world.translate.z, cam.x, cam.y, cam.z);
+					return RE::BSVisit::BSVisitControl::kStop;
+				});
+			}
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
@@ -3680,26 +3721,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						}
 						cb.SkinBoneCount = float(part.numBones);
 						contactSkinCB->Update(cb);
-						// Palette trace: the game's own uploaded bone matrices beside ours,
-						// raw, so the layout and the pivot read off the log. Once a second
-						// while the field view is up, first partition only.
-						if (debugContactView && contactYawTraceFrames == 0 && p == 0 && skin->boneMatrices && skin->numMatrices >= 2) {
-							const float* gm = reinterpret_cast<const float*>(skin->boneMatrices);
-							std::string raw;
-							for (uint32_t i = 0; i < 32; ++i)
-								raw += std::format("{:.1f} ", gm[i]);
-							auto* playerCamera = RE::PlayerCamera::GetSingleton();
-							const RE::NiPoint3 cam = (playerCamera && playerCamera->cameraRoot) ? playerCamera->cameraRoot->world.translate : RE::NiPoint3{};
-							const RE::NiTransform& b0 = composedFor(part.bones[0], p, 0);
-							const RE::NiTransform& b1 = part.numBones > 1 ? composedFor(part.bones[1], p, 1) : b0;
-							logger::info("[SNOW DEFORMATION] palette trace '{}' on '{}': {} matrices, frame {} | game raw[0..31]: {}| ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) row1 ({:.2f} {:.2f} {:.2f} | {:.1f}) row2 ({:.2f} {:.2f} {:.2f} | {:.1f}) | ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) | root ({:.1f} {:.1f} {:.1f}) camera ({:.1f} {:.1f} {:.1f})",
-								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), skin->numMatrices, skin->frameID, raw,
-								part.bones[0], b0.rotate.entry[0][0] * b0.scale, b0.rotate.entry[0][1] * b0.scale, b0.rotate.entry[0][2] * b0.scale, b0.translate.x,
-								b0.rotate.entry[1][0] * b0.scale, b0.rotate.entry[1][1] * b0.scale, b0.rotate.entry[1][2] * b0.scale, b0.translate.y,
-								b0.rotate.entry[2][0] * b0.scale, b0.rotate.entry[2][1] * b0.scale, b0.rotate.entry[2][2] * b0.scale, b0.translate.z,
-								part.numBones > 1 ? part.bones[1] : part.bones[0], b1.rotate.entry[0][0] * b1.scale, b1.rotate.entry[0][1] * b1.scale, b1.rotate.entry[0][2] * b1.scale, b1.translate.x,
-								root->world.translate.x, root->world.translate.y, root->world.translate.z, cam.x, cam.y, cam.z);
-						}
 						paletteBones = part.bones;
 						paletteCount = part.numBones;
 					}
