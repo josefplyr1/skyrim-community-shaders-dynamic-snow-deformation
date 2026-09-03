@@ -3559,6 +3559,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							minY = std::min(minY, out[1]); maxY = std::max(maxY, out[1]);
 							minZ = std::min(minZ, out[2]); maxZ = std::max(maxZ, out[2]);
 						}
+						const auto& bc = root->worldBound.center;
 						// Convention scoring: a vertex dominated (w >= 0.9) by one bone
 						// must land within a few units of that bone. Each candidate
 						// palette formula is scored by the mean distance; the tight
@@ -3625,13 +3626,95 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							boneLocalMag += (s2b * pt).Length();
 							skinMag += pt.Length();
 						}
+						// Topology: skin every vertex (uploaded rows), then walk the
+						// partition's triangles. A halo made of slivers shows as long
+						// edges; the longest triangle is logged with its vertices' bone
+						// slots and weights, so the bridge names its own endpoints.
+						{
+							std::vector<std::array<float, 3>> skinned(vertexCount);
+							std::vector<std::array<uint8_t, 4>> vIdx(vertexCount);
+							std::vector<std::array<float, 4>> vW(vertexCount);
+							float domMin[3] = { 1e30f, 1e30f, 1e30f }, domMax[3] = { -1e30f, -1e30f, -1e30f };
+							float blendMin[3] = { 1e30f, 1e30f, 1e30f }, blendMax[3] = { -1e30f, -1e30f, -1e30f };
+							for (uint32_t v = 0; v < vertexCount; ++v) {
+								const uint8_t* base = buff->rawVertexData + size_t(v) * stride;
+								float pos[3];
+								if (positionBytes >= 16) {
+									std::memcpy(pos, base, sizeof(pos));
+								} else {
+									uint16_t h[3];
+									std::memcpy(h, base, sizeof(h));
+									for (int k = 0; k < 3; ++k)
+										pos[k] = SD_HalfToFloat(h[k]);
+								}
+								uint16_t wh[4];
+								std::memcpy(wh, base + skinOffset, sizeof(wh));
+								std::memcpy(vIdx[v].data(), base + skinOffset + 8, 4);
+								bool dom = false;
+								float o[3] = { 0.0f, 0.0f, 0.0f };
+								for (int k = 0; k < 4; ++k) {
+									vW[v][k] = SD_HalfToFloat(wh[k]);
+									if (vW[v][k] >= 0.9f)
+										dom = true;
+									if (vW[v][k] == 0.0f)
+										continue;
+									const uint32_t row = uint32_t(vIdx[v][k]) * 3;
+									if (row + 2 >= 240)
+										continue;
+									for (int r = 0; r < 3; ++r) {
+										const auto& R = cb.BoneRows[row + r];
+										o[r] += vW[v][k] * (R.x * pos[0] + R.y * pos[1] + R.z * pos[2] + R.w);
+									}
+								}
+								skinned[v] = { o[0], o[1], o[2] };
+								for (int r = 0; r < 3; ++r) {
+									if (dom) { domMin[r] = std::min(domMin[r], o[r]); domMax[r] = std::max(domMax[r], o[r]); }
+									else { blendMin[r] = std::min(blendMin[r], o[r]); blendMax[r] = std::max(blendMax[r], o[r]); }
+								}
+							}
+							float longest = 0.0f;
+							uint32_t longTris = 0, longTri = 0;
+							const uint32_t triCount = indexCount / 3;
+							for (uint32_t t = 0; t < triCount; ++t) {
+								const uint16_t* tri = buff->rawIndexData + thisStart + t * 3;
+								float triLongest = 0.0f;
+								for (int e = 0; e < 3; ++e) {
+									const uint16_t a = tri[e], b = tri[(e + 1) % 3];
+									if (a >= vertexCount || b >= vertexCount)
+										continue;
+									const float dx = skinned[a][0] - skinned[b][0], dy = skinned[a][1] - skinned[b][1], dz = skinned[a][2] - skinned[b][2];
+									triLongest = std::max(triLongest, std::sqrt(dx * dx + dy * dy + dz * dz));
+								}
+								if (triLongest > 25.0f)
+									longTris++;
+								if (triLongest > longest) {
+									longest = triLongest;
+									longTri = t;
+								}
+							}
+							std::string longDesc;
+							if (longest > 0.0f) {
+								const uint16_t* tri = buff->rawIndexData + thisStart + longTri * 3;
+								for (int e = 0; e < 3; ++e) {
+									const uint16_t v = tri[e];
+									if (v >= vertexCount)
+										continue;
+									longDesc += std::format("v{} at ({:.0f}, {:.0f}, {:.0f}) slots ({} {} {} {}) w ({:.2f} {:.2f} {:.2f} {:.2f}); ",
+										v, skinned[v][0] - bc.x, skinned[v][1] - bc.y, skinned[v][2],
+										vIdx[v][0], vIdx[v][1], vIdx[v][2], vIdx[v][3], vW[v][0], vW[v][1], vW[v][2], vW[v][3]);
+								}
+							}
+							logger::info("[SNOW DEFORMATION] solo topology '{}': {} tris, {} with an edge > 25 units, longest edge {:.1f} | dominated bbox X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | blended bbox X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | longest tri: {}",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", triCount, longTris, longest,
+								domMin[0] - bc.x, domMax[0] - bc.x, domMin[1] - bc.y, domMax[1] - bc.y,
+								blendMin[0] - bc.x, blendMax[0] - bc.x, blendMin[1] - bc.y, blendMax[1] - bc.y, longDesc);
+						}
 						std::string score;
 						for (const auto& hyp : hyps)
 							score += std::format("{}: mean {:.1f} worst {:.1f} | ", hyp.name, dominated ? hyp.sum / dominated : 0.0, hyp.worst);
 						logger::info("[SNOW DEFORMATION] solo conventions '{}': {} dominated verts, mean |skin-space p| {:.1f}, mean |s2b*p| {:.1f} | {}",
 							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", dominated,
 							dominated ? skinMag / dominated : 0.0, dominated ? boneLocalMag / dominated : 0.0, score);
-						const auto& bc = root->worldBound.center;
 						logger::info("[SNOW DEFORMATION] solo replica '{}' part {}: {} verts, stride {}, pos {} B, skin @{} | bbox rel. bound centre X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | Z [{:.0f}, {:.0f}] (actor Z {:.0f}) | bad weights {}, bad indices {}, bad rows {}, max index ref {} / {} verts, index start {}",
 							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", p, vertexCount, stride, positionBytes, skinOffset,
 							minX - bc.x, maxX - bc.x, minY - bc.y, maxY - bc.y, minZ, maxZ, ref->GetPositionZ(),
