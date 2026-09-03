@@ -2114,6 +2114,9 @@ public:
 		RE::ObjectRefHandle ref;
 		float minX, minY, maxX, maxY;
 		bool corpse = false;
+		/** @brief Actors only: the ground under the feet and the layer depth there, so the draw can refuse parts that cannot reach the snow. */
+		float groundZ = 0.0f;
+		float layer = 0.0f;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;
@@ -2179,8 +2182,8 @@ public:
 	std::unordered_set<const void*> contactSkinMissingLogged;
 	/** @brief Skinned geometries the contact pass refused because the game itself hides them, reported once each. */
 	std::unordered_set<const void*> contactSkinHiddenLogged;
-	/** @brief A part whose bound bottom sits this far above the actor's feet cannot reach the layer and is not drawn. */
-	static constexpr float kContactSkipAbove = 80.0f;
+	/** @brief Margin over the layer depth before a part is refused as unreachable: the terrain window's bilinear ground can sit this far off the actor's feet on a slope. */
+	static constexpr float kContactSkipMargin = 16.0f;
 	/** @brief Yaw trace cadence and the current actor's yaw, for the once-a-second palette log the field view enables. */
 	uint32_t contactYawTraceFrames = 0;
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */

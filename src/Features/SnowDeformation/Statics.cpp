@@ -3495,12 +3495,13 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
-				// A part whose whole bound floats above the layer's reach carves
-				// nothing: hair, face, raised hands and a sheathed sword cost draws
-				// for no print.
+				// A part whose whole bound floats above the layer carves nothing,
+				// and the draws are the cost: on a standing actor that leaves the
+				// boots and calves, and a sheathed sword at the hip stays out until
+				// a swing brings it down. Corpses lie low and keep everything.
 				{
 					const auto& gb = a_geometry->worldBound;
-					if (gb.radius > 0.0f && gb.center.z - gb.radius > ref->GetPositionZ() + kContactSkipAbove)
+					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin)
 						return RE::BSVisit::BSVisitControl::kContinue;
 				}
 				// Carried gear - weapons, shields, torches - is rigid, hung off a

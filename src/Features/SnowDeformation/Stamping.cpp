@@ -983,7 +983,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (draw) {
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
-						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead });
+						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,
+						groundZ, nominalDepth });
 					if (isDead) {
 						contactCorpseCount++;
 						stampStats.corpsesRasterized++;
