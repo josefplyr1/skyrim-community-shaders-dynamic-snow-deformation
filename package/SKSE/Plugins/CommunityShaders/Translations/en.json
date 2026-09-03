@@ -1493,7 +1493,7 @@
     "feature.snow_deformation.edge_breakup": "Edge Breakup",
     "feature.snow_deformation.edge_breakup_tooltip": "How far in from its edge the object snow breaks into small lumps that thin out toward the rim, instead of stopping on a clean line. The lumps only ever eat inward from where the snow already ends, so on a narrow board they hug the board's own edge, while on a rounded rock they spread over the shoulder. The distance fade rides the same lumps, shedding snow from the rim inward instead of dithering. 0 = the plain edge and the old dithered fade. Roads are unaffected.",
     "feature.snow_deformation.edge_lump_size": "Edge Lump Size",
-    "feature.snow_deformation.edge_lump_size_tooltip": "Size of the lumps along the snow's edge. 1 is a few centimetres across; higher gives broader, softer lobes, lower a finer crumble.",
+    "feature.snow_deformation.edge_lump_size_tooltip": "Size of the lumps along the snow's edge. 0.25 is a few centimetres across; higher gives broader, softer lobes, lower a finer crumble.",
     "feature.snow_deformation.enable": "Enable Snow Deformation",
     "feature.snow_deformation.enable_accumulation": "Snow Accumulation",
     "feature.snow_deformation.enable_accumulation_tooltip": "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two.",

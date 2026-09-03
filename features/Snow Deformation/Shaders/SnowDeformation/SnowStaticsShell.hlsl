@@ -492,6 +492,10 @@ static const float kBreakupMaxBare = 0.18;
 static const float kEdgeLumpBig = 12.0;
 static const float kEdgeLumpSmall = 4.5;
 static const float kEdgeLumpTilt = 5.0;
+// Flank band past the shell's slope cut, in normal-z; and the view-ray bias
+// (world units) that keeps a zero-lift flank lump off the object's z.
+static const float kEdgeFlankSlope = 0.35;
+static const float kEdgeFlankLift = 0.4;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -919,12 +923,15 @@ float EdgeRimCone(float2 worldXY, float baseZ)
 }
 
 // Edge breakup lump field, [0,1]: coarse lobes plus a fine octave that
-// splits the front into islands. lodFine retires the fine octave to its
-// mean when it drops under a few pixels.
-float EdgeLumpNoise(float2 worldXY, float scale, float lodFine)
+// splits the front into islands. Triplanar (w = axis weights), so a flank
+// gets lumps rather than the XY field stretched into drips. lodFine retires
+// the fine octave to its mean when it drops under a few pixels.
+float EdgeLumpNoise(float3 p, float3 w, float scale, float lodFine)
 {
-	float nBig = ShapeNoise(worldXY / (kEdgeLumpBig * scale));
-	float nSmall = ShapeNoise(worldXY / (kEdgeLumpSmall * scale) + 17.3);
+	float sB = kEdgeLumpBig * scale;
+	float sS = kEdgeLumpSmall * scale;
+	float nBig = w.z * ShapeNoise(p.xy / sB) + w.x * ShapeNoise(p.yz / sB + 31.7) + w.y * ShapeNoise(p.xz / sB + 63.1);
+	float nSmall = w.z * ShapeNoise(p.xy / sS + 17.3) + w.x * ShapeNoise(p.yz / sS + 48.9) + w.y * ShapeNoise(p.xz / sS + 80.5);
 	return nBig * 0.65 + lerp(0.5, nSmall, lodFine) * 0.35;
 }
 
@@ -4221,6 +4228,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 projGradX, projGradY;
 	Triplanar::ComputeGradients(projWorldPos, ProjNoiseTiling, projGradX, projGradY);
 	float pdCoverage = 0.0;
+	// The normal z the slope cut reads; the edge breakup's flank band keys
+	// off the same value so its edge is the shell's.
+	float edgeNz = normalWS.z;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -4239,6 +4249,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				nzPix = mul(GBuffer::DecodeNormal(rawN), (float3x3)CameraView).z;
 			}
 		}
+		edgeNz = nzPix;
 		// The footprint: vanilla's weight in FULL, noise always included -
 		// the coat's pattern IS the purple, at every fill level. Superset
 		// margin on the cut: the reconstruction can never be
@@ -4679,17 +4690,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 #	ifndef PATCH
-	// Edge breakup: the rim erodes inward through a world-anchored lump
-	// field instead of ending on a contour. Removal only - past the reach
-	// nothing changes, so on a plank the lumps sit inside the roll at the
-	// plank's own edge. The distance dissolve rides the same field, rim
-	// first, and needs no dither. lod 0 is the plain contour (keep >= 0).
-	// The band lives in the ROLL: the cone field saturates at the class
-	// depth (and below a narrow feature's crest never reaches it), so a
-	// reach in raw cone units eroded whole surfaces at shallow depths. The
-	// reach is capped at the run the geometry itself rolls over - the
-	// crest-capped hEff on the 3D shell, kCorniceRoll on classic draws -
-	// so the interior and every crest read dN = 1 whatever the depth.
+	// Edge breakup: the rim ends in lumps instead of a contour, on BOTH
+	// sides of the shell's edge. Inside, the reach is measured in the roll:
+	// the cone field saturates at the class depth (and never reaches it
+	// under a narrow feature's crest), so the reach is capped at the run
+	// the geometry rolls over - the crest-capped hEff on the 3D shell,
+	// kCorniceRoll on classic draws - and interiors and crests read dN = 1
+	// at every depth. Outside, the band continues in SLOPE: the shell ends
+	// where the per-pixel normal crosses the max-slope cut, and the lumps
+	// carry on down the flank until it steepens by kEdgeFlankSlope, so the
+	// edge breaks up at depth 0 as well. One field, one signed coordinate
+	// s (+ inside, - outside), one cut. Flank lumps are lifted off the
+	// object along the view ray for the z-test. The distance dissolve rides
+	// the same field, rim first, and needs no dither. At lod 0 the cut is
+	// exactly the old edge (keep = 1.3 s: inside kept, outside not).
+	float edgeFlankLift = 0.0;
 	[branch] if (EdgeBreakupReach > 0.01 && LegacySkin < 0.5 && HasObjectTop > 0.5 && !containerMode)
 	{
 		float steep = clamp(MoundSteepness, 0.5, 3.0);
@@ -4715,24 +4730,49 @@ PS_OUTPUT main(VS_OUTPUT input)
 			rollCap = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
 		}
 		float dN = saturate(cone / max(min(reachCone, rollCap), 1e-3));
-		float scale = max(EdgeBreakupScale, 0.25);
-		// Each octave retires as it drops under ~3 px; sub-pixel lumps alias.
-		float lodFine = 1.0 - smoothstep(1.0, 2.5, footprint / scale);
-		float lod = 1.0 - smoothstep(3.0, 7.0, footprint / scale);
-		float n = EdgeLumpNoise(worldXY, scale, lodFine);
-		float keep = 1.3 * dN + lerp(0.5, 0.2, lod) - lerp(0.5, n, lod) - 1.5 * (1.0 - fadeAlpha);
+		// Coverage 0.5 is the old cut's own median, so this is the edge.
+		bool inside = coverageAlpha >= 0.5;
+		float edgeRef = pdMode ? ShellMinNz + 0.075 : 0.55;
+		float fN = saturate((edgeRef - edgeNz) / kEdgeFlankSlope);
+		float s = inside ? dN : -fN;
+		// Outside only where the SLOPE ended the shell (below the cut, not
+		// an underside), and never once the band has died. Interiors skip
+		// the field until the distance fade can reach them.
+		bool candidate = inside ? !(dN >= 1.0 && fadeAlpha > 0.45)
+		                        : (fN > 0.0 && fN < 0.6 && input.Coverage > 0.05);
 		fadeAlpha = 1.0;
-		coverageAlpha *= keep >= 0.0 ? 1.0 : 0.0;
-		// Lobes read as mounds: tilt the normal up the field's gradient at
-		// the cut so each lump's edge rounds off instead of shading flat.
-		float tiltW = lod * (1.0 - smoothstep(0.0, 0.3, keep));
-		[branch] if (tiltW > 0.001)
+		[branch] if (candidate)
 		{
-			const float ns = 1.0;
-			float2 gN = float2(
-				EdgeLumpNoise(worldXY + float2(ns, 0.0), scale, lodFine) - EdgeLumpNoise(worldXY - float2(ns, 0.0), scale, lodFine),
-				EdgeLumpNoise(worldXY + float2(0.0, ns), scale, lodFine) - EdgeLumpNoise(worldXY - float2(0.0, ns), scale, lodFine)) / (2.0 * ns);
-			normalWS = normalize(normalWS + float3(gN * kEdgeLumpTilt * tiltW, 0.0));
+			float scale = max(EdgeBreakupScale, 0.25);
+			// Each octave retires as it drops under ~3 px; sub-pixel lumps alias.
+			float lodFine = 1.0 - smoothstep(1.0, 2.5, footprint / scale);
+			float lod = 1.0 - smoothstep(3.0, 7.0, footprint / scale);
+			float3 lumpPos = float3(worldXY, pixelAbsZ - input.Lift);
+			float3 lumpW = pow(abs(normalWS), 4.0);
+			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
+			float n = EdgeLumpNoise(lumpPos, lumpW, scale, lodFine);
+			float keep = 1.3 * s + lerp(0.5, 0.6, lod) - lerp(0.5, n, lod) - 1.5 * (1.0 - fadeAlpha);
+			[flatten] if (inside && keep < 0.0)
+				coverageAlpha = 0.0;
+			[flatten] if (!inside && keep >= 0.0)
+			{
+				coverageAlpha = 1.0;
+				edgeFlankLift = kEdgeFlankLift;
+			}
+			// Lobes read as mounds: tilt the normal up the field's gradient
+			// at the cut so each lump's edge rounds off instead of shading
+			// flat. Gradient along the pixel's own world tangents, so it is
+			// in the surface whether this is a top or a flank.
+			float tiltW = lod * (1.0 - smoothstep(0.0, 0.3, keep));
+			[branch] if (keep >= 0.0 && tiltW > 0.001)
+			{
+				const float ns = 1.0;
+				float3 tX = normalize(dPosX);
+				float3 tY = normalize(dPosY);
+				float gU = (EdgeLumpNoise(lumpPos + tX * ns, lumpW, scale, lodFine) - n) / ns;
+				float gV = (EdgeLumpNoise(lumpPos + tY * ns, lumpW, scale, lodFine) - n) / ns;
+				normalWS = normalize(normalWS + (tX * gU + tY * gV) * kEdgeLumpTilt * tiltW);
+			}
 		}
 	}
 #	endif
@@ -4982,6 +5022,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
 		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
+	}
+	else [branch] if (edgeFlankLift > 0.0)
+	{
+		float4 lumpClip = mul(CameraViewProj, float4(input.WorldPos - viewDirWS * edgeFlankLift, 1.0));
+		psout.Depth = lumpClip.z / max(lumpClip.w, 1e-4);
 	}
 #	endif
 	psout.Diffuse = float4(preLit, coverageAlpha);
