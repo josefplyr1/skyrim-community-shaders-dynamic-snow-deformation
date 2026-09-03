@@ -149,9 +149,13 @@ static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
 // half: the fin survives as a low bump inside the channel rather than
 // melting to the bottom.
 #define SLUMP_SETTLE 0.5
-// Least min-support inside the gate radii that engages an axis. Well above
-// refill remnants and trench shoulders, well below a walked trail's floor.
-#define SLUMP_MIN_SUPPORT 0.25
+// Least min-support inside the gate radii that engages an axis. HALF depth:
+// a fin engages only between prints pressed to the floor - two boot trails -
+// never between the soft flanks a thick leg leaves as it flares out of the
+// snow, and never on slumped fill itself, which settles to half depth at
+// most and so can never serve as support for the next ring. That is what
+// stops a mammoth's four leg holes from settling into one hull.
+#define SLUMP_MIN_SUPPORT 0.5
 // Eight axes 22.5 degrees apart (taps go both ways, so 180 covers the
 // circle). Four showed up as a cross pattern on diagonal fins.
 #define SLUMP_AXES 8
