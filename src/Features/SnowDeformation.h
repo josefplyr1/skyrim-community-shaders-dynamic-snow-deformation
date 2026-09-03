@@ -2183,6 +2183,8 @@ public:
 	uint contactShellsLast = 0;
 	/** @brief Rasterized living actors that stood still this frame and were not drawn. */
 	uint contactStillLast = 0;
+	/** @brief Skin partitions the actor contact pass declined this frame: dismember partitions the game hides, or partitions whose bones resolve to nothing. */
+	uint contactHiddenPartsLast = 0;
 	/** @brief A foot or body that moved less than this since last frame counts as still. */
 	static constexpr float kContactStillStep = 1.0f;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */

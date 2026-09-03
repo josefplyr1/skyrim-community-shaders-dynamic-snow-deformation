@@ -3460,6 +3460,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactOverlaysLast = 0;
 	contactShellsLast = 0;
 	contactStillLast = 0;
+	contactHiddenPartsLast = 0;
 	contactSweepLast = 0;
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
@@ -3570,6 +3571,40 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				if (!skinData || !skinPartition || !skin->bones || !skinPartition->partitions.data())
 					return RE::BSVisit::BSVisitControl::kContinue;
 				const uint32_t boneCount = skinData->GetBoneCount();
+				// Dismember partitions carry the game's own visibility: a creature
+				// keeps alternate or severable parts in partitions it hides by
+				// default, and the bones only those parts use resolve to no node.
+				// Drawn anyway, their vertices collapse to the world origin as
+				// slivers. Honour the flag, then refuse any partition whose bones
+				// resolve to nothing at all as the same case without the flag.
+				auto* dismember = netimmerse_cast<RE::BSDismemberSkinInstance*>(skin);
+				const RE::BSDismemberSkinInstance::Data* dismemberParts = nullptr;
+				uint32_t dismemberCount = 0;
+				if (dismember) {
+					const auto& rd = dismember->GetRuntimeData();
+					if (rd.partitions && rd.numPartitions > 0) {
+						dismemberParts = rd.partitions;
+						dismemberCount = uint32_t(rd.numPartitions);
+					}
+				}
+				auto boneResolves = [&](uint16_t a_bone) -> bool {
+					if (a_bone >= boneCount)
+						return false;
+					if (skin->bones[a_bone])
+						return true;
+					if (!skin->boneMatrices || a_bone >= skin->numMatrices)
+						return false;
+					// An unset matrix in the game's palette: all-zero rows, or an
+					// identity rotation sitting at the world origin.
+					const float* m = reinterpret_cast<const float*>(skin->boneMatrices) + size_t(a_bone) * 12;
+					float rot = 0.0f, pos = 0.0f;
+					for (int r = 0; r < 3; ++r) {
+						for (int c = 0; c < 3; ++c)
+							rot += std::abs(m[r * 4 + c]);
+						pos += std::abs(m[r * 4 + 3]);
+					}
+					return rot > 1e-3f && pos > 1.0f;
+				};
 				// One composed transform per skin bone, built on first use: every
 				// partition of this geometry that names the bone reuses it.
 				contactPaletteScratch.resize(boneCount);
@@ -3672,6 +3707,19 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					indexStart += indexCount;
 					if (!part.bones || part.numBones == 0 || part.numBones > kContactMaxBones || indexCount == 0)
 						continue;
+					if (dismemberParts && p < dismemberCount && !dismemberParts[p].editorVisible) {
+						contactHiddenPartsLast++;
+						continue;
+					}
+					{
+						bool orphan = false;
+						for (uint16_t j = 0; j < part.numBones && !orphan; ++j)
+							orphan = !boneResolves(part.bones[j]);
+						if (orphan) {
+							contactHiddenPartsLast++;
+							continue;
+						}
+					}
 					auto partDesc = buff->vertexDesc;
 					if (!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) ||
 						!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED))

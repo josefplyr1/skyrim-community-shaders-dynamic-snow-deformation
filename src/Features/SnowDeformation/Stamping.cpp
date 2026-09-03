@@ -359,6 +359,12 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 					boneTable += std::format("[{}: node {} / ptr {}] ", b, node ? (node->name.c_str() ? node->name.c_str() : "?") : "NULL", ptr ? "ok" : "NULL");
 			}
 			boneTable = std::format(" | null nodes {} / null pointers {} of {}: ", nullNodes, nullPointers, bones) + boneTable;
+			if (auto* dismember = netimmerse_cast<RE::BSDismemberSkinInstance*>(si)) {
+				const auto& rd = dismember->GetRuntimeData();
+				boneTable += " | dismember: ";
+				for (int32_t p = 0; rd.partitions && p < rd.numPartitions; ++p)
+					boneTable += std::format("[p{} slot {} {}] ", p, rd.partitions[p].slot, rd.partitions[p].editorVisible ? "visible" : "HIDDEN");
+			}
 		}
 		const char* shader = "NO SHADER";
 		if (auto* sp = runtime.shaderProperty.get())
