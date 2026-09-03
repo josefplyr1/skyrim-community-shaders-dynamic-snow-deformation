@@ -327,13 +327,13 @@ cbuffer StaticCB : register(b1)
 	// Edge breakup: reach of the rim erosion in world units (0 = off) and
 	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
-	float EdgeBreakupReach;
+	float padEdge0;
 	float EdgeBreakupScale;
 	// How far past the edge the lumps reach: a fraction of the projected
 	// weight's own fade on coated draws, a normal-z band elsewhere.
 	float EdgeFlankWidth;
-	// >0.5: the shell's material coats every pixel the projected snow
-	// paints, at zero lift.
+	// >0.5 (Recolor Projected Snow): the shell's material coats every
+	// pixel the projected snow paints solidly, at zero lift.
 	float EdgeCoat;
 }
 
@@ -498,6 +498,9 @@ static const float kEdgeLumpTilt = 0.6;
 // View-ray bias (world units) that keeps a zero-lift coat/lump pixel off
 // the object's own z.
 static const float kEdgeFlankLift = 0.4;
+// Reconstructed projected weight (vanilla projWeight + 0.1; the game's blend
+// is smoothstep(0,1,5w), 0 at w=0, 1 at w=0.2) at which the coat is solid.
+static const float kCoatSolidW = 0.15;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -892,36 +895,6 @@ float ObjectConeDepth3(float2 worldXY)
 	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
-// Cone depth of the peeled layer a pixel's BASE surface belongs to: the PS
-// twin of the skin lift's layer select, blended over one peel tolerance the
-// same way. No plane under the cover reads as interior.
-float EdgeRimCone(float2 worldXY, float baseZ)
-{
-	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-	float cone = ObjectConeDepth(worldXY);
-	float top1 = PatchTop(worldXY);
-	[branch] if (top1 > -50000.0 && top1 - baseZ > PeelTol)
-	{
-		float coneDeep = coneSeed;
-		[branch] if (top1 - baseZ <= OverheadIgnore)
-		{
-			float top2 = PatchTop2(worldXY);
-			coneDeep = ObjectConeDepth2(worldXY);
-			[branch] if (top2 < -50000.0 || baseZ < top2 - PeelTol)
-			{
-				float top3 = PatchTop3(worldXY);
-				float cone3 = ObjectConeDepth3(worldXY);
-				[flatten] if (top3 < -50000.0 || baseZ < top3 - PeelTol)
-					cone3 = coneSeed;
-				float f2 = top2 > -50000.0 ? smoothstep(PeelTol, PeelTol * 2.0, top2 - baseZ) : 1.0;
-				coneDeep = lerp(coneDeep, cone3, f2);
-			}
-		}
-		cone = lerp(cone, coneDeep, smoothstep(PeelTol, PeelTol * 2.0, top1 - baseZ));
-	}
-	return cone;
 }
 
 // ---- C0 container spike (CONTAINER-SHELL-PLAN) --------------------------
@@ -4710,99 +4683,75 @@ PS_OUTPUT main(VS_OUTPUT input)
 		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 #	ifndef PATCH
-	// Edge breakup and the coat. One signed coordinate s (+ inside, -
-	// outside) feeds one blob field and one cut, so the lumps sit on the
-	// edge and continue past it.
-	// Inside the shell: s is the roll. The cone field saturates at the
-	// class depth (never reached under a narrow feature's crest), so the
-	// reach is capped at the run the geometry rolls over - crest-capped
-	// hEff on the 3D shell, kCorniceRoll on classic draws.
-	// Outside, coated projected-snow draws: s is the reconstructed vanilla
-	// weight, continuous across the paint's own fade at every angle; the
-	// coat keeps the paint's whole footprint in the shell's material at
-	// zero lift, lifted off the object along the view ray for the z-test.
-	// Outside, other draws: a normal-z band below the shell's slope cut.
-	// The distance dissolve rides the same field, rim first, no dither.
-	// lod 0 is exactly the old edge (keep = 1.3 s: inside kept, outside
-	// not, coat solid where painted).
+	// THE COAT AND THE EDGE LUMPS (projected-snow draws, Recolor Projected
+	// Snow on). The game blends its projected snow by smoothstep(0,1,5w)
+	// over the reconstructed weight w (edgeW): a wall sits near 0.15 of
+	// that blend, a rock top at 1. The coat draws the shell's own material
+	// where that blend is solid (w >= kCoatSolidW), lifted off the object
+	// along the view ray for the z-test; below it, round blobs thin out
+	// through the fade, reaching w = 0 at Edge Lump Reach 1 and nothing at
+	// 0. The blobs only ever live OUTSIDE the solid edge; pixels the 3D
+	// shell already covers are never touched. Draws without projection
+	// data get the blobs in a slope band below the shell's cut instead.
+	// The distance dissolve erodes solid pixels through the same field,
+	// no dither. At lod 0 (blobs under a few px) the coat keeps its plain
+	// edge and no blobs are drawn.
 	float edgeFlankLift = 0.0;
-	[branch] if (EdgeBreakupReach > 0.01 && LegacySkin < 0.5 && HasObjectTop > 0.5 && !containerMode)
+	bool lumpsOn = EdgeFlankWidth > 0.001;
+	[branch] if (LegacySkin < 0.5 && !containerMode && (EdgeCoat > 0.5 || lumpsOn || fadeAlpha < 0.5))
 	{
-		float steep = clamp(MoundSteepness, 0.5, 3.0);
-		float cone = EdgeRimCone(worldXY, pixelAbsZ - input.Lift);
-		float reachCone = EdgeBreakupReach * steep;
-		float rollCap = kCorniceRoll * steep;
-		[branch] if (pdMode && cone < reachCone)
-		{
-			// ObjectDomeDepth's crest freeze, per pixel. Top-layer taps for
-			// the ring: the crest only matters on narrow features.
-			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-			float tapR = 0.5 * coneSeed;
-			float tapD = tapR * 0.7071;
-			float crest = cone;
-			crest = max(crest, ObjectConeDepth(worldXY + float2(tapR, 0.0)));
-			crest = max(crest, ObjectConeDepth(worldXY - float2(tapR, 0.0)));
-			crest = max(crest, ObjectConeDepth(worldXY + float2(0.0, tapR)));
-			crest = max(crest, ObjectConeDepth(worldXY - float2(0.0, tapR)));
-			crest = max(crest, ObjectConeDepth(worldXY + float2(tapD, tapD)));
-			crest = max(crest, ObjectConeDepth(worldXY - float2(tapD, tapD)));
-			crest = max(crest, ObjectConeDepth(worldXY + float2(tapD, -tapD)));
-			crest = max(crest, ObjectConeDepth(worldXY - float2(tapD, -tapD)));
-			rollCap = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
-		}
-		float dN = saturate(cone / max(min(reachCone, rollCap), 1e-3));
+		const float fadeIn = fadeAlpha;
 		// Coverage 0.5 is the old cut's own median, so this is the edge.
 		bool inside = coverageAlpha >= 0.5;
-		bool coat = pdMode && EdgeCoat > 0.5;
-		float width = max(EdgeFlankWidth, 0.02);
-		float s = dN;
-		float keep = -1.0;
-		bool needField = false;
-		[flatten] if (inside)
+		bool solid = inside;
+		bool needField = inside && fadeIn < 0.5;
+		float s = 0.0;
+		[branch] if (!inside)
 		{
-			// Interiors skip the field until the distance fade can reach them.
-			needField = !(dN >= 1.0 && fadeAlpha > 0.45);
-			keep = needField ? -1.0 : 1.0;
-		}
-		else [flatten] if (coat)
-		{
-			s = edgeW / (0.5 * width);
-			bool painted = edgeFill > 0.5 && input.Coverage > -0.05;
-			bool solid = s >= 1.0 && fadeAlpha > 0.45;
-			needField = painted && !solid && s > -0.6;
-			keep = (painted && solid) ? 1.0 : -1.0;
-		}
-		else
-		{
-			// Below the cut, not an underside, never once the band has died.
-			float edgeRef = pdMode ? ShellMinNz + 0.075 : 0.55;
-			s = -saturate((edgeRef - edgeNz) / width);
-			needField = s < 0.0 && s > -0.6 && input.Coverage > 0.05;
+			[flatten] if (pdMode)
+			{
+				[flatten] if (EdgeCoat > 0.5)
+				{
+					// Snow Fill, exactly as the recolor applies it.
+					float wEff = edgeW;
+					[flatten] if (edgeW > 0.003)
+						wEff = max(wEff, 0.2 * edgeFill);
+					s = (wEff - kCoatSolidW) / max(0.2 * EdgeFlankWidth, 1e-3);
+					solid = wEff >= kCoatSolidW;
+					needField = solid ? (fadeIn < 0.5) : (lumpsOn && s > -0.8);
+				}
+			}
+			else
+			{
+				s = -saturate((0.55 - edgeNz) / max(EdgeFlankWidth, 0.02));
+				needField = lumpsOn && s < 0.0 && s > -0.8 && input.Coverage > 0.05;
+			}
 		}
 		fadeAlpha = 1.0;
+		float keep = solid ? 1.0 : -1.0;
 		[branch] if (needField)
 		{
 			float cell = kEdgeLumpBig * max(EdgeBreakupScale, 0.25);
-			// Blobs under ~5 px alias; the field retires to the plain edge.
 			float lod = smoothstep(2.0, 5.0, cell / max(footprint, 1e-3));
 			float3 lumpPos = float3(worldXY, pixelAbsZ - input.Lift);
 			float3 lumpW = pow(abs(normalWS), 4.0);
 			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
 			float blob = EdgeLumpField(lumpPos, lumpW, cell);
-			keep = 1.3 * s + lod * (blob - 0.4) - 1.5 * (1.0 - fadeAlpha);
+			[flatten] if (solid)
+				keep = lerp(0.5, blob, lod) + 2.4 * fadeIn - 1.2;
+			else
+				keep = 1.3 * s + lod * blob - 1.5 * (1.0 - fadeIn);
 			// Each blob shades as a mound: tilt the normal down its own
-			// slope. Gradient along the pixel's world tangents, so it is in
-			// the surface on tops and flanks alike; fades out toward the
-			// smooth interior.
-			float tiltW = lod * (1.0 - saturate(s));
-			[branch] if (keep >= 0.0 && tiltW > 0.001)
+			// slope, along the pixel's world tangents so it stays in the
+			// surface on tops and flanks alike.
+			[branch] if (!solid && keep >= 0.0 && lod > 0.001)
 			{
 				const float ns = 0.5;
 				float3 tX = normalize(dPosX);
 				float3 tY = normalize(dPosY);
 				float gU = (EdgeLumpField(lumpPos + tX * ns, lumpW, cell) - blob) / ns;
 				float gV = (EdgeLumpField(lumpPos + tY * ns, lumpW, cell) - blob) / ns;
-				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * tiltW);
+				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * lod);
 			}
 		}
 		[flatten] if (inside && keep < 0.0)

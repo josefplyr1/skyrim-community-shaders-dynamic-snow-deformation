@@ -496,14 +496,10 @@ public:
 		float ObjCorniceLipAmt = 0.0f;
 		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
 		float SkinBreakupAmt = 0.0f;
-		/** @brief "Edge Breakup", world units: how far in from its rim the object snow erodes into lumps through a world-anchored noise field, removal only. The distance dissolve rides the same field (rim first) instead of the stochastic dither. 0 = the plain contour and the dithered fade. Feeds StaticsCB::EdgeBreakupReach. */
-		float SkinEdgeBreakup = 12.0f;
 		/** @brief "Edge Lump Size": multiplier on the edge lump cell sizes (kEdgeLumpBig / kEdgeLumpSmall in SnowStaticsShell.hlsl). Feeds StaticsCB::EdgeBreakupScale. */
 		float SkinEdgeLumpSize = 0.25f;
-		/** @brief "Edge Lump Reach": how far past the snow's edge the lumps reach. On coated projected-snow draws a fraction of the paint weight's own fade (works at every angle); elsewhere a normal-z band below the shell's slope cut. Feeds StaticsCB::EdgeFlankWidth. */
-		float SkinEdgeFlankWidth = 0.3f;
-		/** @brief "Shell Coat on Projected Snow": the object shell's own material is drawn over every pixel the game's projected snow paints, at zero lift, so painted snow and the raised shell are one material. The Lighting-side recolor stays underneath for the distance. Feeds StaticsCB::EdgeCoat. */
-		bool ProjSnowCoat = true;
+		/** @brief "Edge Lump Reach", 0-1: how far past the coat's solid edge the round lumps reach into the game's own projected-snow fade (1 = the whole fade, 0 = no lumps). On draws without projection data a normal-z band below the shell's cut. Feeds StaticsCB::EdgeFlankWidth. */
+		float SkinEdgeFlankWidth = 0.5f;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
@@ -1697,13 +1693,12 @@ public:
 		/** @brief Blob Snow Shell: 1 = mountain/cliff family, so the seed applies the rock slope limit. Rides the fresh channel's low bit. */
 		float BlobRockClass;
 
-		/** @brief Settings::SkinEdgeBreakup - reach of the rim erosion in world units, 0 = off. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float EdgeBreakupReach;
+		float padEdge0;
 		/** @brief Settings::SkinEdgeLumpSize - lump cell-size multiplier. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeBreakupScale;
 		/** @brief Settings::SkinEdgeFlankWidth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeFlankWidth;
-		/** @brief Settings::ProjSnowCoat as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief Settings::ProjSnowMatch as 0/1: the skin coats the solidly painted projected snow with its own material near the camera. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeCoat;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);

@@ -79,7 +79,7 @@ cbuffer StaticCB : register(b1)
 	// Blob Snow Shell: 1 = mountain/cliff family (rock slope limit applies).
 	float BlobRockClass;
 
-	float EdgeBreakupReach;  // layout sync with SnowStaticsShell; unused here
+	float padEdge0;
 	float EdgeBreakupScale;  // layout sync with SnowStaticsShell; unused here
 	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
