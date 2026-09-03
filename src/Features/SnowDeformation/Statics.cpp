@@ -3699,9 +3699,32 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 									const uint16_t v = tri[e];
 									if (v >= vertexCount)
 										continue;
-									longDesc += std::format("v{} at ({:.0f}, {:.0f}, {:.0f}) slots ({} {} {} {}) w ({:.2f} {:.2f} {:.2f} {:.2f}); ",
-										v, skinned[v][0] - bc.x, skinned[v][1] - bc.y, skinned[v][2],
-										vIdx[v][0], vIdx[v][1], vIdx[v][2], vIdx[v][3], vW[v][0], vW[v][1], vW[v][2], vW[v][3]);
+									// Raw skin-space position and, per weighted bone, how far the
+									// vertex sits from that bone in bone space: a glove vertex
+									// belongs within ~20 units of every bone that moves it.
+									const uint8_t* vbase = buff->rawVertexData + size_t(v) * stride;
+									float vp[3];
+									if (positionBytes >= 16) {
+										std::memcpy(vp, vbase, sizeof(vp));
+									} else {
+										uint16_t h[3];
+										std::memcpy(h, vbase, sizeof(h));
+										for (int k = 0; k < 3; ++k)
+											vp[k] = SD_HalfToFloat(h[k]);
+									}
+									std::string boneDist;
+									for (int k = 0; k < 4; ++k) {
+										if (vW[v][k] == 0.0f || vIdx[v][k] >= part.numBones)
+											continue;
+										const uint16_t gb = part.bones[vIdx[v][k]];
+										if (gb >= boneCount || !skin->bones[gb])
+											continue;
+										const RE::NiPoint3 local = skinData->GetBoneDataSkinToBone(gb) * RE::NiPoint3{ vp[0], vp[1], vp[2] };
+										boneDist += std::format("slot {} {:.0f}u ", vIdx[v][k], local.Length());
+									}
+									longDesc += std::format("v{} at ({:.0f}, {:.0f}, {:.0f}) skin p ({:.1f}, {:.1f}, {:.1f}) slots ({} {} {} {}) w ({:.2f} {:.2f} {:.2f} {:.2f}) bone-space dist {}; ",
+										v, skinned[v][0] - bc.x, skinned[v][1] - bc.y, skinned[v][2], vp[0], vp[1], vp[2],
+										vIdx[v][0], vIdx[v][1], vIdx[v][2], vIdx[v][3], vW[v][0], vW[v][1], vW[v][2], vW[v][3], boneDist);
 								}
 							}
 							logger::info("[SNOW DEFORMATION] solo topology '{}': {} tris, {} with an edge > 25 units, longest edge {:.1f} | dominated bbox X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | blended bbox X [{:.0f}, {:.0f}] Y [{:.0f}, {:.0f}] | longest tri: {}",
