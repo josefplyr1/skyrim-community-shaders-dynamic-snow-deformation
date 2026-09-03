@@ -306,6 +306,9 @@ public:
 		bool dryRecollected = false;
 		/** @brief Latched demotion to collision-shape stamping (and collision-measured floating), cleared when the 3D root changes. The failsafe for skeletons whose feet exist but never plant. */
 		bool collisionFallback = false;
+		/** @brief Where the body stood when the contact pass last drew it: stillness is measured against the last DRAWN pose, so slow motion accumulates into a redraw. */
+		RE::NiPoint3 contactPrev;
+		bool hasContactPrev = false;
 	};
 
 	struct Settings

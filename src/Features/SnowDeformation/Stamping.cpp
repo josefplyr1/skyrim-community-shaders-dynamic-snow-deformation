@@ -812,11 +812,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (!n || n->world.scale < 0.01f)
 				continue;
 			usableFeet++;
-			const RE::NiPoint3 now = n->world.translate;
-			if (!foot.hasPrev || now.GetDistance(foot.prev) > kContactStillStep)
+			// Against the pose last DRAWN, not last frame: a body turning a few
+			// degrees a second never moves a unit in one frame, but it moves far
+			// in a hundred, and its print has to follow.
+			if (!foot.hasPrev || n->world.translate.GetDistance(foot.prev) > kContactStillStep)
 				feetStill = false;
-			foot.prev = now;
-			foot.hasPrev = true;
 		}
 		if (!cache.feet.empty() || !cache.limbs.empty())
 			bones = &cache;
@@ -1026,8 +1026,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// planted (or, footless, the body itself has not moved). Its print
 					// is in the map already; skipping the draw is what lets the field
 					// go empty and the update pass sleep beside an idling NPC.
-					const bool bodyStill = cache.hasPrevPos && dryStep < kContactStillStep;
+					const bool bodyStill = cache.hasContactPrev && position.GetDistance(cache.contactPrev) < kContactStillStep &&
+					                       position.GetDistance(cache.contactPrev) < kFootDryTeleport;
 					const bool still = debugContactStillGate && !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
+					if (!still) {
+						cache.contactPrev = position;
+						cache.hasContactPrev = true;
+						for (auto& foot : cache.feet)
+							if (auto* n = foot.node.get()) {
+								foot.prev = n->world.translate;
+								foot.hasPrev = true;
+							}
+					}
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
 						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,
