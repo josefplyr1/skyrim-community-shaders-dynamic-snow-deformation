@@ -1458,8 +1458,8 @@ void SnowDeformation::DrawSettings()
 			}
 		}
 		if (debugActorContact)
-			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u standing still (not drawn), %u hidden/orphan partitions declined, %u missing-bone stand-ins",
-				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactStillLast, contactHiddenPartsLast, contactSkinMissingLast);
+			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u standing still (not drawn), %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
+				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactStillLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
 		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
 		if (debugSkeletonProbe) {

@@ -2185,6 +2185,10 @@ public:
 	uint contactStillLast = 0;
 	/** @brief Skin partitions the actor contact pass declined this frame: dismember partitions the game hides, or partitions whose bones resolve to nothing. */
 	uint contactHiddenPartsLast = 0;
+	/** @brief Per skin instance, how its vertices index bones: 1 = each partition's own list, 2 = the skin's full list. Audited once from the raw vertex copy. Identity key only, never dereferenced. */
+	std::unordered_map<const void*, uint8_t> contactSkinIndexing;
+	/** @brief Skinned partitions drawn this frame from a whole-skin palette because their vertices index the skin's full bone list. */
+	uint contactGlobalPartsLast = 0;
 	/** @brief A foot or body that moved less than this since last frame counts as still. */
 	static constexpr float kContactStillStep = 1.0f;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */

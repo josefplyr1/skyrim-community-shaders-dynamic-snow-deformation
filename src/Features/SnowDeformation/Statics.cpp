@@ -3461,6 +3461,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactShellsLast = 0;
 	contactStillLast = 0;
 	contactHiddenPartsLast = 0;
+	contactGlobalPartsLast = 0;
+	if (contactSkinIndexing.size() > 1024)
+		contactSkinIndexing.clear();
 	contactSweepLast = 0;
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
@@ -3587,6 +3590,60 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						dismemberCount = uint32_t(rd.numPartitions);
 					}
 				}
+				// How this skin's vertices index bones. SSE partitions were assumed to
+				// carry partition-local indices, and the shader refuses an index past
+				// the partition's count - parking the vertex on slot 0. A mesh whose
+				// vertices index the skin's FULL list instead fans every high-boned
+				// vertex onto one bone: the mammoth's spikes. Audit once from the raw
+				// vertex copy; a skin that ever indexes past a partition's count is
+				// drawn from a whole-skin palette.
+				uint8_t indexing = 0;
+				if (auto it = contactSkinIndexing.find(skin); it != contactSkinIndexing.end()) {
+					indexing = it->second;
+				} else {
+					indexing = 1;
+					std::string audit;
+					for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
+						const auto& part = skinPartition->partitions[p];
+						auto* buff = part.buffData;
+						if (!buff || !buff->rawVertexData || !part.bones || part.numBones == 0)
+							continue;
+						auto partDesc = buff->vertexDesc;
+						if (!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED))
+							continue;
+						uint64_t key;
+						memcpy(&key, &partDesc, sizeof(key));
+						const uint32_t stride = uint32_t(key & 0xF) * 4;
+						const uint32_t skinOffset = partDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
+						if (stride == 0)
+							continue;
+						uint32_t over = 0, maxIndex = 0;
+						for (uint32_t v = 0; v < part.vertices; ++v) {
+							const uint8_t* base = buff->rawVertexData + size_t(v) * stride;
+							uint16_t wh[4];
+							std::memcpy(wh, base + skinOffset, sizeof(wh));
+							uint8_t idx[4];
+							std::memcpy(idx, base + skinOffset + 8, sizeof(idx));
+							bool vOver = false;
+							for (int k = 0; k < 4; ++k) {
+								if (wh[k] == 0)
+									continue;
+								maxIndex = std::max(maxIndex, uint32_t(idx[k]));
+								vOver |= idx[k] >= part.numBones;
+							}
+							over += vOver;
+						}
+						if (over > 0)
+							indexing = 2;
+						audit += std::format("[p{}: {} bones, max index {}, {} of {} verts past the partition] ", p, part.numBones, maxIndex, over, part.vertices);
+					}
+					contactSkinIndexing[skin] = indexing;
+					if (indexing == 2 || contactSkinIndexing.size() <= 24)
+						logger::info("[SNOW DEFORMATION] index audit '{}' on '{}': {} bones in the skin -> {} {}",
+							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), boneCount,
+							indexing == 2 ? "GLOBAL (whole-skin palette)" : "local", audit);
+				}
+				bool globalUploaded = false;
 				auto boneResolves = [&](uint16_t a_bone) -> bool {
 					if (a_bone >= boneCount)
 						return false;
@@ -3711,7 +3768,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						contactHiddenPartsLast++;
 						continue;
 					}
-					{
+					if (indexing != 2) {
 						bool orphan = false;
 						for (uint16_t j = 0; j < part.numBones && !orphan; ++j)
 							orphan = !boneResolves(part.bones[j]);
@@ -3733,6 +3790,23 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					if (stride == 0)
 						continue;
 
+					if (indexing == 2 && boneCount <= kContactMaxBones) {
+						if (!globalUploaded) {
+							for (uint32_t b = 0; b < boneCount; ++b) {
+								const RE::NiTransform& m = composedFor(uint16_t(b), p, uint16_t(b));
+								const auto& rot = m.rotate;
+								const float sc = m.scale;
+								cb.BoneRows[b * 3 + 0] = { rot.entry[0][0] * sc, rot.entry[0][1] * sc, rot.entry[0][2] * sc, m.translate.x };
+								cb.BoneRows[b * 3 + 1] = { rot.entry[1][0] * sc, rot.entry[1][1] * sc, rot.entry[1][2] * sc, m.translate.y };
+								cb.BoneRows[b * 3 + 2] = { rot.entry[2][0] * sc, rot.entry[2][1] * sc, rot.entry[2][2] * sc, m.translate.z };
+							}
+							cb.SkinBoneCount = float(boneCount);
+							contactSkinCB->Update(cb);
+							globalUploaded = true;
+							paletteBones = nullptr;
+						}
+						contactGlobalPartsLast++;
+					} else {
 					const bool samePalette = paletteBones && paletteCount == part.numBones &&
 					                         std::memcmp(paletteBones, part.bones, size_t(part.numBones) * sizeof(uint16_t)) == 0;
 					if (!samePalette) {
@@ -3748,6 +3822,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						contactSkinCB->Update(cb);
 						paletteBones = part.bones;
 						paletteCount = part.numBones;
+					}
 					}
 
 					// CPU replica of the draw for the soloed geometry, once a second:
