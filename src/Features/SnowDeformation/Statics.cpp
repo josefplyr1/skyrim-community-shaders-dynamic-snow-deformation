@@ -3330,6 +3330,52 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
+	// One rigid mesh into the field, by its own world transform. Props use it
+	// for every mesh; actors use it for what they carry.
+	auto drawRigid = [&](RE::BSGeometry* a_geometry) -> bool {
+		auto& runtime = a_geometry->GetGeometryRuntimeData();
+		auto* triShape = a_geometry->AsTriShape();
+		if (!triShape)
+			return false;
+		auto* rendererData = runtime.rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+			return false;
+		const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0)
+			return false;
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+			return false;
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto* layout = StaticsInputLayoutFor(descKey, desc);
+		if (!layout)
+			return false;
+		const UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0)
+			return false;
+		UINT offset = 0;
+		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+		context->IASetInputLayout(layout);
+		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+		StaticsCB scb{};
+		const auto& world = a_geometry->world;
+		const auto& rot = world.rotate;
+		const float scale = world.scale;
+		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, world.translate.x };
+		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, world.translate.y };
+		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, world.translate.z };
+		scb.HeightWindowCenter = contactCenter;
+		scb.HeightHalfExtent = kContactHalfExtent;
+		staticsCB->Update(scb);
+
+		context->DrawIndexed(indexCount, 0, 0);
+		return true;
+	};
+
 	globals::profiler->BeginPass("SnowDeformation::ContactCapture");
 	for (const auto& prop : contactProps) {
 		// Re-resolved, not held: see ContactProp. A body whose 3D went away
@@ -3339,49 +3385,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		if (!root)
 			continue;
 		RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
-			auto& runtime = a_geometry->GetGeometryRuntimeData();
-			if (runtime.skinInstance)
+			if (a_geometry->GetGeometryRuntimeData().skinInstance)
 				return RE::BSVisit::BSVisitControl::kContinue;
-			auto* triShape = a_geometry->AsTriShape();
-			if (!triShape)
-				return RE::BSVisit::BSVisitControl::kContinue;
-			auto* rendererData = runtime.rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				return RE::BSVisit::BSVisitControl::kContinue;
-			const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				return RE::BSVisit::BSVisitControl::kContinue;
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				return RE::BSVisit::BSVisitControl::kContinue;
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto* layout = StaticsInputLayoutFor(descKey, desc);
-			if (!layout)
-				return RE::BSVisit::BSVisitControl::kContinue;
-			const UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0)
-				return RE::BSVisit::BSVisitControl::kContinue;
-			UINT offset = 0;
-			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->IASetInputLayout(layout);
-			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-
-			StaticsCB scb{};
-			const auto& world = a_geometry->world;
-			const auto& rot = world.rotate;
-			const float scale = world.scale;
-			scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, world.translate.x };
-			scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, world.translate.y };
-			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, world.translate.z };
-			scb.HeightWindowCenter = contactCenter;
-			scb.HeightHalfExtent = kContactHalfExtent;
-			staticsCB->Update(scb);
-
-			context->DrawIndexed(indexCount, 0, 0);
-			contactDrawsLast++;
+			if (drawRigid(a_geometry))
+				contactDrawsLast++;
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
 	}
@@ -3395,6 +3402,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	// edited-skeleton family, handled by construction.
 	contactSkinDrawsLast = 0;
 	contactSkinMissingLast = 0;
+	contactCarriedLast = 0;
 	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::ContactSkin");
 		context->VSSetShader(contactSkinVS, nullptr, 0);
@@ -3408,31 +3416,49 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				continue;
 			contactYawTraceAngle = ref->GetAngleZ();
 			int geometryIndex = -1;
+			bool skinnedVSBound = true;
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
-				if (!skin)
-					return RE::BSVisit::BSVisitControl::kContinue;
 				// Draw only what the game draws: a geometry hidden by itself or by
 				// any ancestor (dismembered parts, physics helper meshes, alternate
-				// variants) never reaches the screen and must not reach the snow.
+				// variants), or one with no shader to render it, never reaches the
+				// screen and must not reach the snow.
 				{
 					bool hidden = false;
 					for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
 						hidden = n->GetAppCulled();
-					if (hidden) {
-						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(skin).second)
-							logger::info("[SNOW DEFORMATION] contact skin '{}' on '{}' is hidden by the game (bound radius {:.0f}); not drawn",
-								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), a_geometry->worldBound.radius);
+					if (hidden || !runtime.shaderProperty) {
+						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(a_geometry).second)
+							logger::info("[SNOW DEFORMATION] contact geometry '{}' on '{}' is {} (bound radius {:.0f}); not drawn",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(),
+								hidden ? "hidden by the game" : "without a shader", a_geometry->worldBound.radius);
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
 				// A part whose whole bound floats above the layer's reach carves
-				// nothing: hair, face and raised hands cost draws for no print.
+				// nothing: hair, face, raised hands and a sheathed sword cost draws
+				// for no print.
 				{
 					const auto& gb = a_geometry->worldBound;
 					if (gb.radius > 0.0f && gb.center.z - gb.radius > ref->GetPositionZ() + kContactSkipAbove)
 						return RE::BSVisit::BSVisitControl::kContinue;
+				}
+				// Carried gear - weapons, shields, torches - is rigid, hung off a
+				// bone. It prints by its own world transform when it dips into the
+				// snow: a low sword swing cuts a slash.
+				if (!skin) {
+					if (skinnedVSBound) {
+						context->VSSetShader(contactVS, nullptr, 0);
+						skinnedVSBound = false;
+					}
+					if (drawRigid(a_geometry))
+						contactCarriedLast++;
+					return RE::BSVisit::BSVisitControl::kContinue;
+				}
+				if (!skinnedVSBound) {
+					context->VSSetShader(contactSkinVS, nullptr, 0);
+					skinnedVSBound = true;
 				}
 				// Solo: draw one skinned geometry only, so the field shows whose
 				// silhouette is which. -1 draws them all.

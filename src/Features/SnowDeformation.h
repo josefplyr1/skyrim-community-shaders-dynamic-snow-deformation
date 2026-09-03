@@ -2161,6 +2161,8 @@ public:
 	uint contactSkinDrawsLast = 0;
 	/** @brief Bone slots the actor contact pass had to stand in for this frame (skeleton lacks the bone), and the skins already reported. */
 	uint contactSkinMissingLast = 0;
+	/** @brief Rigid meshes carried by rasterized actors (weapons, shields) drawn into the field this frame. */
+	uint contactCarriedLast = 0;
 	std::unordered_set<const void*> contactSkinMissingLogged;
 	/** @brief Skinned geometries the contact pass refused because the game itself hides them, reported once each. */
 	std::unordered_set<const void*> contactSkinHiddenLogged;

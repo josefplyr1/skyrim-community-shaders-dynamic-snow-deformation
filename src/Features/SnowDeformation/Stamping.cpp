@@ -326,6 +326,40 @@ static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
 			DumpSkeletonToLog(child.get(), a_depth + 1);
 }
 
+// Geometry census for the same dump: every mesh under the actor with what the
+// contact pass will make of it. A part the game draws but nobody sees, or a
+// bound nowhere near the body, names itself here.
+static void DumpGeometryToLog(RE::NiAVObject* a_root)
+{
+	if (!a_root)
+		return;
+	const RE::NiPoint3 rootPos = a_root->world.translate;
+	RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+		auto& runtime = a_geometry->GetGeometryRuntimeData();
+		bool hidden = false;
+		for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
+			hidden = n->GetAppCulled();
+		std::string skin = "rigid";
+		if (auto* si = runtime.skinInstance.get()) {
+			uint32_t parts = si->skinPartition ? si->skinPartition->numPartitions : 0;
+			uint32_t bones = si->skinData ? si->skinData->GetBoneCount() : 0;
+			skin = std::format("skinned {} partitions / {} bones", parts, bones);
+		}
+		const char* shader = "NO SHADER";
+		if (auto* sp = runtime.shaderProperty.get())
+			shader = sp->GetRTTI() && sp->GetRTTI()->GetName() ? sp->GetRTTI()->GetName() : "shader";
+		const auto& b = a_geometry->worldBound;
+		uint32_t tris = 0;
+		if (auto* ts = a_geometry->AsTriShape())
+			tris = ts->GetTrishapeRuntimeData().triangleCount;
+		logger::info("[SNOW DEFORMATION] geom '{}': {} | {} tris | {} | {} | bound rel root ({:.0f}, {:.0f}, {:.0f}) r {:.0f} | parent '{}'",
+			a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skin, tris, shader, hidden ? "HIDDEN" : "visible",
+			b.center.x - rootPos.x, b.center.y - rootPos.y, b.center.z - rootPos.z, b.radius,
+			(a_geometry->parent && a_geometry->parent->name.c_str()) ? a_geometry->parent->name.c_str() : "");
+		return RE::BSVisit::BSVisitControl::kContinue;
+	});
+}
+
 // Weight a shape puts through a crust, from its size. Crust bears a boot and
 // gives under a mammoth, and the shapes a heavy skeleton carries are simply
 // bigger - there is no mass to read off a collision shape, but this tracks it
@@ -798,6 +832,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				logger::info("[SNOW DEFORMATION] Skeleton dump: {} ({:08X}), {} feet / {} limbs matched",
 					skeletonProbe.actorName, formID, cache.feet.size(), cache.limbs.size());
 				DumpSkeletonToLog(root, 0);
+				DumpGeometryToLog(root);
 			}
 		}
 
