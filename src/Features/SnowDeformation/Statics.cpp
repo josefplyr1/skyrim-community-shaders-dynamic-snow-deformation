@@ -3481,6 +3481,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				continue;
 			if (actor.still)
 				contactStillLast++;
+			const uint drawsBeforeActor = contactSkinDrawsLast;
 			contactYawTraceAngle = ref->GetAngleZ();
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
@@ -4110,6 +4111,22 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
+			// The stillness reference: where the body stood when its skin last
+			// went into the field. Recorded only on a real draw, so a spawned
+			// body whose buffers arrive late is not marked still before it
+			// has ever printed.
+			if (!actor.still && !actor.corpse && contactSkinDrawsLast > drawsBeforeActor) {
+				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
+					auto& cache = it->second;
+					cache.contactPrev = ref->GetPosition();
+					cache.hasContactPrev = true;
+					for (auto& foot : cache.feet)
+						if (auto* n = foot.node.get()) {
+							foot.prev = n->world.translate;
+							foot.hasPrev = true;
+						}
+				}
+			}
 		}
 		globals::profiler->EndPass();
 	}

@@ -652,6 +652,22 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		bool anyShapeMoved = false;
 		bool anyShapeWoken = false;
 
+		// S4: an actor the contact pass will draw needs no height gate. The
+		// raster measures penetration - a body in the air, on a roof, on a
+		// bridge, or hovering by animation reaches no snow and prints
+		// nothing, by construction. The airborne, elevated and floating gates
+		// below were the bone path's substitutes for that measurement; they
+		// stay for the far field, and a raster candidate walks past them. The
+		// incorporeal gate is different: a ghost is solid geometry, and only
+		// its alpha says so, so it still refuses before the enqueue.
+		const bool rasterCandidate = debugActorContact && !contactShadersFailed &&
+		                             (isDead ? contactCorpseCount < kContactMaxCorpses : contactLivingCount < kContactMaxActors) &&
+		                             root->worldBound.radius > 0.0f &&
+		                             std::abs(root->worldBound.center.x - contactCenter.x) + root->worldBound.radius < kContactHalfExtent &&
+		                             std::abs(root->worldBound.center.y - contactCenter.y) + root->worldBound.radius < kContactHalfExtent;
+		if (probing)
+			skeletonProbe.rasterCandidate = rasterCandidate;
+
 		// Airborne living actors do not carve. Dead ragdolls are exempt:
 		// their controllers freeze in stale states (often kInAir).
 		//
@@ -661,7 +677,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// atronach races are all authored Walks and hover by animation instead,
 		// which is what ActorIsFloating below is for.
 		auto* charController = actor->GetCharController();
-		if (!isDead && charController &&
+		if (!isDead && !rasterCandidate && charController &&
 			(charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
 				charController->context.currentState == RE::hkpCharacterStateType::kFlying)) {
 			if (probing)
@@ -682,7 +698,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				tesLand->GetLandHeight(position, landZ);
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
-			if (position.z - landZ > kElevatedStampCutoff) {
+			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
 				if (probing)
 					skeletonProbe.verdict = "gated: elevated surface (above land cutoff)";
 				return;
@@ -945,7 +961,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// answers the wrong question: the two gates measure different things
 		// and are tuned by different settings, so a reading that cannot say
 		// which one fired sends you to the wrong slider.
-		if (floating && settings.NoCarveFloatingActors) {
+		if (floating && settings.NoCarveFloatingActors && !rasterCandidate) {
 			stampStats.floating++;
 			// A hover verdict cast by feet alone is the frozen-foot signature
 			// (foot z stuck, actor gone): dry travel accrues so the watchdog
@@ -1028,16 +1044,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					// go empty and the update pass sleep beside an idling NPC.
 					const bool bodyStill = cache.hasContactPrev && position.GetDistance(cache.contactPrev) < kContactStillStep &&
 					                       position.GetDistance(cache.contactPrev) < kFootDryTeleport;
-					const bool still = debugContactStillGate && !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
-					if (!still) {
-						cache.contactPrev = position;
-						cache.hasContactPrev = true;
-						for (auto& foot : cache.feet)
-							if (auto* n = foot.node.get()) {
-								foot.prev = n->world.translate;
-								foot.hasPrev = true;
-							}
-					}
+					const bool still = debugActorContact && debugContactStillGate && !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
+					// The reference pose is recorded by the DRAW (DrawContactCapture),
+					// once a partition has actually gone into the field: a freshly
+					// spawned body's first frames have no buffers yet, and a reference
+					// taken then would leave it "still" forever, unprinted.
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
 						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,

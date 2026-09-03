@@ -3427,6 +3427,8 @@ protected:
 		std::string actorName;
 		/** @brief What happened to the actor this frame: which path carved, or which gate returned first. */
 		const char* verdict = "";
+		/** @brief The gather would hand this actor to the contact pass, so the airborne, elevated and floating gates were bypassed. */
+		bool rasterCandidate = false;
 		struct FootRow
 		{
 			std::string name;

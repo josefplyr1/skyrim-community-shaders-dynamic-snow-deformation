@@ -1472,6 +1472,8 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("probe: %s (%08X) - %s",
 					skeletonProbe.actorName.empty() ? "<unnamed>" : skeletonProbe.actorName.c_str(),
 					skeletonProbe.formID, skeletonProbe.verdict);
+				if (skeletonProbe.rasterCandidate)
+					ImGui::Text("  contact pass candidate: airborne/elevated/floating gates bypassed, penetration decides");
 				ImGui::Text("  feet %zu (usable %u) | limbs %u (stamped %u) | shapes stamped %u | dry travel %.0f%s",
 					skeletonProbe.feet.size(), skeletonProbe.usableFeet,
 					skeletonProbe.limbs, skeletonProbe.limbsStamped, skeletonProbe.shapes,
