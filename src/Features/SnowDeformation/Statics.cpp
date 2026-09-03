@@ -3709,6 +3709,33 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 								domMin[0] - bc.x, domMax[0] - bc.x, domMin[1] - bc.y, domMax[1] - bc.y,
 								blendMin[0] - bc.x, blendMax[0] - bc.x, blendMin[1] - bc.y, blendMax[1] - bc.y, longDesc);
 						}
+						// Bone table: name, world XY relative to the bound centre, Z above
+						// the actor, the skin-space point skinToBone maps to this bone's
+						// origin (its bind position), and the topmost ancestor. A bone
+						// posed from a different root, or stuck at its bind position,
+						// reads straight off this list.
+						{
+							std::string table;
+							for (uint16_t j = 0; j < part.numBones && j < kContactMaxBones; ++j) {
+								const uint16_t gb = part.bones[j];
+								if (gb >= boneCount || !skin->bones[gb]) {
+									table += std::format("[{}: null] ", j);
+									continue;
+								}
+								auto* node = skin->bones[gb];
+								const RE::NiAVObject* top = node;
+								while (top->parent)
+									top = top->parent;
+								const RE::NiTransform s2b = skinData->GetBoneDataSkinToBone(gb);
+								const RE::NiPoint3 bind = s2b.Invert() * RE::NiPoint3{ 0.0f, 0.0f, 0.0f };
+								table += std::format("[{}: '{}' rel ({:.0f}, {:.0f}) z+{:.0f} bind ({:.0f}, {:.0f}, {:.0f}) top '{}'] ",
+									j, node->name.c_str() ? node->name.c_str() : "", node->world.translate.x - bc.x, node->world.translate.y - bc.y,
+									node->world.translate.z - ref->GetPositionZ(), bind.x, bind.y, bind.z, top->name.c_str() ? top->name.c_str() : "");
+							}
+							logger::info("[SNOW DEFORMATION] solo bones '{}': skin root parent '{}' | {}",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "",
+								(skin->rootParent && skin->rootParent->name.c_str()) ? skin->rootParent->name.c_str() : "(none)", table);
+						}
 						std::string score;
 						for (const auto& hyp : hyps)
 							score += std::format("{}: mean {:.1f} worst {:.1f} | ", hyp.name, dominated ? hyp.sum / dominated : 0.0, hyp.worst);
