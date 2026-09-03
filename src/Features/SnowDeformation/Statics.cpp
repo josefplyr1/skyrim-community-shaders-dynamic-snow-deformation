@@ -2421,6 +2421,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// keeps the plain contour (same as the lift-band cut it already ignores).
 	a_scb.EdgeBreakupReach = std::clamp(settings.SkinEdgeBreakup, 0.0f, 32.0f);
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.25f, 3.0f);
+	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.05f, 1.0f);
+	a_scb.EdgeCoat = settings.ProjSnowCoat ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;

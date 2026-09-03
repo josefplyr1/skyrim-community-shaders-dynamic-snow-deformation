@@ -207,6 +207,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow: the projection's texture and material are swapped for the snow shell's set inside the object's own shader, so it works from every angle, overhangs included. The Snow Fill slider below pushes the pattern to full coverage, most up-facing parts first. Only draws whose projected material really is snow are touched — sand and moss projections keep their look."));
 
+		ImGui::Checkbox(T(TKEY("proj_snow_coat"), "Shell Coat on Projected Snow"), &settings.ProjSnowCoat);
+		if (auto _ttCoat = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("proj_snow_coat_tooltip"), "Draws the object snow shell's own material over every spot where the game paints its projected snow, so the painted snow and the raised 3D layer are one and the same white instead of a recolored approximation. Recolor Projected Snow stays on underneath and takes over in the distance. The edge lumps hang off this coat's edge. Costs some shading time on snowy rock faces."));
+
 		ImGui::SliderFloat(T(TKEY("proj_snow_fill"), "Snow Fill"), &settings.ProjSnowFillPct, 0.0f, 100.0f, "%.0f%%");
 		if (auto _ttFill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, 50%% covers everything facing upward, and 100%% covers every angle of the pattern - undersides included. At 0%% the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
@@ -253,6 +257,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("edge_lump_size"), "Edge Lump Size"), &settings.SkinEdgeLumpSize, 0.25f, 3.0f, "%.2fx");
 		if (auto _ttEdgeL = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_size_tooltip"), "Size of the lumps along the snow's edge. 0.25 is a few centimetres across; higher gives broader, softer lobes, lower a finer crumble."));
+		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.05f, 1.0f, "%.2f");
+		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the snow's edge the lumps hang on. On objects carrying the game's projected snow (with the shell coat on) it follows the paint's own fade, so it works on every face whatever its angle; on other objects it is a band of slope below the shell's cut. Higher = lumps reach further down the rock."));
 		ImGui::SliderFloat(T(TKEY("cornice_lip"), "Cornice Lip"), &settings.ObjCorniceLipAmt, 0.0f, 1.5f, "%.2f");
 		if (auto _ttLip = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cornice_lip_tooltip"), "How far the snow hangs out past the edge of the thing it is sitting on. Real snow builds a lip that overhangs a rim; snow that stops exactly where the object stops reads as paint instead. 0 keeps the old edge, which follows the object outline precisely."));

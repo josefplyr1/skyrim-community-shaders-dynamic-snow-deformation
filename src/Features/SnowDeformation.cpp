@@ -107,6 +107,8 @@
 	X(SkinWeldAmt) \
 	X(SkinEdgeBreakup) \
 	X(SkinEdgeLumpSize) \
+	X(SkinEdgeFlankWidth) \
+	X(ProjSnowCoat) \
 	X(EnableBlobShell) \
 	X(BlobSpacing) \
 	X(BlobSize) \

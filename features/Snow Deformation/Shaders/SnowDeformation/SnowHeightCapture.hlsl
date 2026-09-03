@@ -81,8 +81,8 @@ cbuffer StaticCB : register(b1)
 
 	float EdgeBreakupReach;  // layout sync with SnowStaticsShell; unused here
 	float EdgeBreakupScale;  // layout sync with SnowStaticsShell; unused here
-	float padEdge0;
-	float padEdge1;
+	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
+	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
 }
 
 // Fresh-top channel of the blob mask target: THIS frame's fragment height,

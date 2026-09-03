@@ -500,6 +500,10 @@ public:
 		float SkinEdgeBreakup = 12.0f;
 		/** @brief "Edge Lump Size": multiplier on the edge lump cell sizes (kEdgeLumpBig / kEdgeLumpSmall in SnowStaticsShell.hlsl). Feeds StaticsCB::EdgeBreakupScale. */
 		float SkinEdgeLumpSize = 0.25f;
+		/** @brief "Edge Lump Reach": how far past the snow's edge the lumps reach. On coated projected-snow draws a fraction of the paint weight's own fade (works at every angle); elsewhere a normal-z band below the shell's slope cut. Feeds StaticsCB::EdgeFlankWidth. */
+		float SkinEdgeFlankWidth = 0.3f;
+		/** @brief "Shell Coat on Projected Snow": the object shell's own material is drawn over every pixel the game's projected snow paints, at zero lift, so painted snow and the raised shell are one material. The Lighting-side recolor stays underneath for the distance. Feeds StaticsCB::EdgeCoat. */
+		bool ProjSnowCoat = true;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
@@ -1697,8 +1701,10 @@ public:
 		float EdgeBreakupReach;
 		/** @brief Settings::SkinEdgeLumpSize - lump cell-size multiplier. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeBreakupScale;
-		float padEdge0;
-		float padEdge1;
+		/** @brief Settings::SkinEdgeFlankWidth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float EdgeFlankWidth;
+		/** @brief Settings::ProjSnowCoat as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float EdgeCoat;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
