@@ -3680,6 +3680,26 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						}
 						cb.SkinBoneCount = float(part.numBones);
 						contactSkinCB->Update(cb);
+						// Palette trace: the game's own uploaded bone matrices beside ours,
+						// raw, so the layout and the pivot read off the log. Once a second
+						// while the field view is up, first partition only.
+						if (debugContactView && contactYawTraceFrames == 0 && p == 0 && skin->boneMatrices && skin->numMatrices >= 2) {
+							const float* gm = reinterpret_cast<const float*>(skin->boneMatrices);
+							std::string raw;
+							for (uint32_t i = 0; i < 32; ++i)
+								raw += std::format("{:.1f} ", gm[i]);
+							auto* playerCamera = RE::PlayerCamera::GetSingleton();
+							const RE::NiPoint3 cam = (playerCamera && playerCamera->cameraRoot) ? playerCamera->cameraRoot->world.translate : RE::NiPoint3{};
+							const RE::NiTransform& b0 = composedFor(part.bones[0], p, 0);
+							const RE::NiTransform& b1 = part.numBones > 1 ? composedFor(part.bones[1], p, 1) : b0;
+							logger::info("[SNOW DEFORMATION] palette trace '{}' on '{}': {} matrices, frame {} | game raw[0..31]: {}| ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) row1 ({:.2f} {:.2f} {:.2f} | {:.1f}) row2 ({:.2f} {:.2f} {:.2f} | {:.1f}) | ours bone {} row0 ({:.2f} {:.2f} {:.2f} | {:.1f}) | root ({:.1f} {:.1f} {:.1f}) camera ({:.1f} {:.1f} {:.1f})",
+								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), skin->numMatrices, skin->frameID, raw,
+								part.bones[0], b0.rotate.entry[0][0] * b0.scale, b0.rotate.entry[0][1] * b0.scale, b0.rotate.entry[0][2] * b0.scale, b0.translate.x,
+								b0.rotate.entry[1][0] * b0.scale, b0.rotate.entry[1][1] * b0.scale, b0.rotate.entry[1][2] * b0.scale, b0.translate.y,
+								b0.rotate.entry[2][0] * b0.scale, b0.rotate.entry[2][1] * b0.scale, b0.rotate.entry[2][2] * b0.scale, b0.translate.z,
+								part.numBones > 1 ? part.bones[1] : part.bones[0], b1.rotate.entry[0][0] * b1.scale, b1.rotate.entry[0][1] * b1.scale, b1.rotate.entry[0][2] * b1.scale, b1.translate.x,
+								root->world.translate.x, root->world.translate.y, root->world.translate.z, cam.x, cam.y, cam.z);
+						}
 						paletteBones = part.bones;
 						paletteCount = part.numBones;
 					}
