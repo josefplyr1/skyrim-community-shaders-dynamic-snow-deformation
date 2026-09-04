@@ -3880,7 +3880,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float2 masksDim;
 			PreSkinMasks.GetDimensions(masksDim.x, masksDim.y);
 			float2 masksUV = input.Position.xy / masksDim;
-			float realEnc = HasSkinMasksCopy > 0.5 ? PreSkinMasks.SampleLevel(ShellLinearSampler, masksUV, 0).y : 0.0;
+			// This pixel's OWN texel: the copy and the shell share the screen
+			// position and the jitter. Bilinear here blended a plank's 2 + w
+			// with the 0 of the gap beside it into an "unpainted" 1.4, and
+			// thin planks at an oblique distance lost their coat to the
+			// rim-lit projected snow behind them (Josef's shack roofs,
+			// 2026-09-04). Where the shell overhangs an unclassified pixel
+			// the nearest classified neighbour stands in.
+			float realEnc = 0.0;
+			[branch] if (HasSkinMasksCopy > 0.5)
+			{
+				int2 mp = int2(input.Position.xy);
+				realEnc = PreSkinMasks.Load(int3(mp, 0)).y;
+				[flatten] if (realEnc < 1.5)
+				{
+					int2 mmax = int2(masksDim) - 1;
+					realEnc = max(max(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y,
+									  PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y),
+						max(PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y,
+							PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y));
+				}
+			}
 			bool realKnown = realEnc >= 1.5;
 			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
