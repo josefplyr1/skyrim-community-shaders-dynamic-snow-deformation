@@ -3861,6 +3861,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// never touched. Without the read-back the reconstruction stands in
 	// for the coat and no lumps are drawn.
 	float edgeFlankLift = 0.0;
+	// Solid coat pixels export a depth pushed toward the camera like the
+	// lumps do, kept apart from edgeFlankLift so the near-occluder shadow
+	// rejection stays with the lumps. A coat a tenth of a unit above its
+	// plank separates from it by that times the cosine of the view angle:
+	// nothing at a grazing view, and the plank won by interpolation noise -
+	// Josef's shack roofs, bright with vanilla's snow rim light from one
+	// angle, correct straight down or close (2026-09-04).
+	float coatPush = 0.0;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
 	[branch] if (LegacySkin < 0.5 && (coatOn || fadeAlpha < 0.5))
@@ -3957,6 +3965,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		[flatten] if (inside && keep < 0.0)
 			coverageAlpha = 0.0;
+		[flatten] if (inside && keep >= 0.0)
+			coatPush = kEdgeFlankLift;
 		[flatten] if (!inside && keep >= 0.0)
 		{
 			coverageAlpha = 1.0;
@@ -4210,9 +4220,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
 		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
 	}
-	else [branch] if (edgeFlankLift > 0.0)
+	else [branch] if (max(edgeFlankLift, coatPush) > 0.0)
 	{
-		float4 lumpClip = mul(CameraViewProj, float4(input.WorldPos - viewDirWS * edgeFlankLift, 1.0));
+		float4 lumpClip = mul(CameraViewProj, float4(input.WorldPos - viewDirWS * max(edgeFlankLift, coatPush), 1.0));
 		psout.Depth = lumpClip.z / max(lumpClip.w, 1e-4);
 	}
 #	endif
