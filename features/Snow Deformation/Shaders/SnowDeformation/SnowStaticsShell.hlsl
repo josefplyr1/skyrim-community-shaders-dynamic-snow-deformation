@@ -898,6 +898,33 @@ float2 PatchSkinDepth(float2 worldXY)
 		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 }
 
+// The top the patch stands on at this column: the road's own top where
+// something taller stands over a road (the patch VS's rule for its centre),
+// else the object top. Sentinel where neither is real.
+float PatchSurfaceTop(float2 worldXY)
+{
+	float top = PatchTop(worldXY);
+	float roadTop = PatchSkinDepth(worldXY).y;
+	[flatten] if (roadTop > kNoRoadTop * 0.5 && (top - roadTop) >= kRoadOwnsTop)
+		top = roadTop;
+	return top;
+}
+
+// One-sided at a sentinel neighbour, zero with none: the edge ring keeps
+// the slope it can see rather than rolling over toward the verge.
+float PatchTopSlope(float p, float n, float c, float step)
+{
+	bool vp = p > -50000.0;
+	bool vn = n > -50000.0;
+	[flatten] if (vp && vn)
+		return (p - n) / (2.0 * step);
+	[flatten] if (vp)
+		return (p - c) / step;
+	[flatten] if (vn)
+		return (c - n) / step;
+	return 0.0;
+}
+
 // How far this column's supporting top stands below the highest of its four
 // texels. The patch dissolves on this (its silhouette clip): the max-of-4
 // placement extends object tops up to a texel past the real silhouette, and
@@ -1374,9 +1401,27 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 				BermShape(BermField(gridLocal + float2(0.0, bStep))) - BermShape(BermField(gridLocal - float2(0.0, bStep)))) / (2.0 * bStep) *
 			          saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 		}
-		// Surface z = top + profile, so normal.xy = -d(profile); the other
-		// fields RAISE the surface and subtract for the same reason.
-		v.NormalWS = normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
+		// The top's own slope. Without it a road climbing a hill shaded as
+		// flat while the landscape shell beside it carried the hill: ~16
+		// degrees apart at the verge, and the patch read grey (RenderDoc
+		// edge-pair diff, 2026-09-04). 16-unit step like the terrain normal's
+		// smoothing; clamped to 45 degrees so the verge drop cannot roll
+		// the edge ring over.
+		float2 topGrad = float2(0.0, 0.0);
+#ifndef SNOW_SHADOW_CAST
+		{
+			const float tStep = 16.0;
+			float tXP = PatchSurfaceTop(worldXY + float2(tStep, 0.0));
+			float tXN = PatchSurfaceTop(worldXY - float2(tStep, 0.0));
+			float tYP = PatchSurfaceTop(worldXY + float2(0.0, tStep));
+			float tYN = PatchSurfaceTop(worldXY - float2(0.0, tStep));
+			topGrad = float2(PatchTopSlope(tXP, tXN, top, tStep), PatchTopSlope(tYP, tYN, top, tStep));
+			topGrad /= max(1.0, length(topGrad));
+		}
+#endif
+		// Surface z = top + profile, so normal.xy = -d(top) - d(profile); the
+		// other fields RAISE the surface and subtract for the same reason.
+		v.NormalWS = normalize(float3(-topGrad - profGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
