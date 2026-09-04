@@ -36,7 +36,7 @@ cbuffer StaticCB : register(b1)
 	// texels dead for it, which is how a class is switched off.
 	float ObjectTrenches;
 
-	float SkinDistantBareness;  // layout sync with SnowStaticsShell; unused here
+	float padDistantBareness;
 	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
 	// >0.5: this draw is a road-heightfield object; RT2.g carries the bit so
 	// the patch can own the column outright.
@@ -64,9 +64,9 @@ cbuffer StaticCB : register(b1)
 
 	float PileHeightRatio;  // layout sync with SnowStaticsShell; unused here
 	float SkyExposureSk;    // layout sync with SnowStaticsShell; unused here
-	float ObjCorniceLip;    // layout sync with SnowStaticsShell; unused here
-	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
-	float SkinWeld;         // layout sync with SnowStaticsShell; unused here
+	float padCorniceLip;
+	float padBreakup;
+	float padWeld;
 
 	float HasSkinMasksCopy;  // layout sync with SnowStaticsShell; unused here
 	float EdgeBreakupScale;  // layout sync with SnowStaticsShell; unused here

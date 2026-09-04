@@ -124,10 +124,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRkg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before the skins' own distance dissolve starts, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
 
-		ImGui::SliderFloat(T(TKEY("skin_distant_bareness"), "Distant Bare Rock"), &settings.SkinDistantBareness, 0.0f, 1.0f, "%.2f");
-		if (auto _ttSdb = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_distant_bareness_tooltip"), "How much bare rock distant cliffs and boulders keep. Close up, snow coverage follows the smoothed mesh normal, which on low-poly rocks reports steep flanks as up-facing; near the camera the edge taper hides that, but at range it turns a rock into a white blob. This hands the coverage test over to each face's true orientation as the object shrinks, so steep faces shed their snow again. Raise it for more exposed rock; too high and the mesh's own triangles start to read as jagged facets and seams. 0 keeps the old behaviour."));
-
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
 
@@ -258,15 +254,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
-		ImGui::SliderFloat(T(TKEY("cornice_lip"), "Cornice Lip"), &settings.ObjCorniceLipAmt, 0.0f, 1.5f, "%.2f");
-		if (auto _ttLip = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cornice_lip_tooltip"), "How far the snow hangs out past the edge of the thing it is sitting on. Real snow builds a lip that overhangs a rim; snow that stops exactly where the object stops reads as paint instead. 0 keeps the old edge, which follows the object outline precisely."));
-		ImGui::SliderFloat(T(TKEY("weld_seams"), "Weld Snow Seams"), &settings.SkinWeldAmt, 0.0f, 1.0f, "%.2f");
-		if (auto _ttWeld = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("weld_seams_tooltip"), "Fixes the torn slivers of snow that stick out of sharp edges - plank ends, log caps, roof boards. They happen because two corners of the mesh sitting in the exact same place can currently disagree about how deep the snow is there, and the sliver is the shell trying to span that gap. Raising this makes them agree. The trade: snow starts to take hold on the vertical sides of boards, which reads as the snow having a real thickness at the edge rather than stopping dead. 0 is the old behaviour. Rocks and cliffs are already smooth and will barely change."));
-		ImGui::SliderFloat(T(TKEY("snow_breakup"), "Snow Breakup"), &settings.SkinBreakupAmt, 0.0f, 1.0f, "%.2f");
-		if (auto _ttBreakup = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_breakup_tooltip"), "How ragged the snow layer's own coverage is. At 0 every surface that qualifies wears the full depth evenly, which reads like a coat of paint. Raising it eats into the layer with a soft world-scale noise, so patches thin out and the thinnest ones go bare and let the object show through - the way real cover breaks up rather than stopping at a clean line. Roads are unaffected."));
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
@@ -299,10 +286,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("proj_depth_density"), "Snow Depth Follows Density"), &settings.ProjDepthDensity);
 		if (auto _ttPdd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_depth_density_tooltip"), "Object snow depth scales with how densely the artists painted the game's own snow onto each surface - full depth where the paint is solid, thinning to a dusting where it fades toward edges and slopes. A graded version of Authored Snow Placement that replaces its hard cutoff while on. Only affects meshes carrying the game's projected-snow data."));
-
-		ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
-		if (auto _ttOt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
 
 		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
@@ -515,6 +498,10 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
+			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
+			if (auto _ttOt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
+
 			ImGui::SliderFloat(T(TKEY("compact_matte"), "Compaction Matte"), &settings.CompactMatte, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("compact_matte_tooltip"), "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off."));

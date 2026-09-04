@@ -733,7 +733,6 @@ void SnowDeformation::DrawShell()
 
 	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
-	cbData.TrenchFloorFade = std::clamp(settings.TrenchFloorFade, 0.0f, 1.0f);
 	// The bake is only usable once its texture exists AND Prepass has filled it
 	// this frame; the A/B toggle suppresses both together.
 	cbData.BermBakeActive = (!shellBermBakeDisabled && bermFieldTexture) ? 1.0f : 0.0f;

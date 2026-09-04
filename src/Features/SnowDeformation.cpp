@@ -103,8 +103,6 @@
 	X(OverheadClearance) \
 	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
-	X(SkinBreakupAmt) \
-	X(SkinWeldAmt) \
 	X(SkinEdgeLumpSize) \
 	X(SkinEdgeFlankWidth) \
 	X(SkyExposurePct) \
@@ -124,7 +122,6 @@
 	X(Tessellation) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
-	X(TrenchFloorFade) \
 	X(BermHeight) \
 	X(RimLip) \
 	X(RimTeeth) \
@@ -147,7 +144,6 @@
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
 	X(RangeSkinsGeometryM) \
-	X(SkinDistantBareness) \
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
 	X(ProjDepthDensity) \

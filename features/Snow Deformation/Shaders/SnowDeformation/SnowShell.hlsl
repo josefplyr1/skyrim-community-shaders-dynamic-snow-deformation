@@ -111,9 +111,7 @@ cbuffer ShellCB : register(b0)
 
 	// Multiplier on the dune field's wavelengths (>1 = broader, calmer waves).
 	float UndulationScale;
-	// Statics skin: how much heavily trampled trench floors dissolve to the
-	// object's own texture (0 = solid snow floors).
-	float TrenchFloorFade;
+	float padTrenchFloorFade;
 	// LLF cluster buffers bound at t35-t37, point-shadow table at t38.
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.

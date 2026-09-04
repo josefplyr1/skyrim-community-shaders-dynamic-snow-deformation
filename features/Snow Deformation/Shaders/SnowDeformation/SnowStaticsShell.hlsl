@@ -114,9 +114,7 @@ cbuffer ShellCB : register(b0)
 
 	// Multiplier on the dune field's wavelengths (landscape shell only).
 	float UndulationScale;
-	// How much heavily trampled trench floors dissolve to the object's own
-	// texture (0 = solid snow floors).
-	float TrenchFloorFade;
+	float padTrenchFloorFade;
 	// LLF cluster buffers bound at t35-t37, point-shadow table at t38.
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
@@ -216,9 +214,7 @@ cbuffer StaticCB : register(b1)
 	// objects are gated by the setting until the object trench work lands.
 	float ObjectTrenches;
 
-	// Strength of the coverage LOD terms (facing handover, rim contour push).
-	// 0 reproduces the pre-LOD gates exactly.
-	float SkinDistantBareness;
+	float padDistantBareness;
 	// >0.5: skip the SkinFade distance dissolve (glacier/iceberg captures,
 	// whose own baked snow never matches the shell). Mirror in
 	// SnowDeformation.h StaticsCB.
@@ -296,15 +292,9 @@ cbuffer StaticCB : register(b1)
 	// SkyExposurePct / 100). Took a padPile slot; layout unchanged. Mirror
 	// in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float SkyExposureSk;
-	// P5's cornice lip: how far the rim overhangs the object's silhouette,
-	// as a fraction of the class depth.
-	float ObjCorniceLip;
-	// Snow Breakup: fraction of the class depth taken off as a negative base
-	// and handed back through world noise. 0 = the uniform coat.
-	float SkinBreakup;
-	// Tier 1 seam weld: how far the FLAT class's up-facing gate slides from
-	// the per-vertex raw normal to the position-welded one. 0 = today.
-	float SkinWeld;
+	float padCorniceLip;
+	float padBreakup;
+	float padWeld;
 
 	// Edge breakup: reach of the rim erosion in world units (0 = off) and
 	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
@@ -474,15 +464,6 @@ static const float kSkinShadeSmooth = 0.0;
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
 static const float kCorniceRoll = 4.0;
-// Snow Breakup's feature size, world units. Larger than the churn grain (16/7)
-// so it reads as patches of bare rather than as texture, and comparable to the
-// class depth so a bare spot is about as wide as the layer is thick.
-static const float kSkinBreakupScale = 24.0;
-// Snow Breakup's ramp width in NOISE units, and the share of the surface the
-// slider's top end takes to bare. Wide ramp on purpose - see the note at the
-// use site; the caster shares this lift and a hard mask makes it cast slivers.
-static const float kBreakupSoft = 0.35;
-static const float kBreakupMaxBare = 0.18;
 // Edge breakup: lump cell size in world units (one blob per cell) and the
 // mound tilt (dimensionless: blob gradient x cell size x this).
 static const float kEdgeLumpBig = 12.0;
@@ -520,14 +501,6 @@ static const float kShelterFar = 32.0;
 // object's own projected snow being exposed where the skin steps aside.
 static const float kShelterDust = 1.0;
 
-// Coverage LOD (see the facing-LOD block in the PS). Blend ceiling toward the
-// geometric face normal, target screen width of the rim contour in pixels, and
-// the hard cap on how far that contour may travel inboard, as a fraction of
-// class depth.
-// Ceiling set from the in-game tuning pass: past ~0.21 effective blend the
-// per-triangle quantization reads as jagged rock and visible facet seams, so
-// the slider spans 0-0.34 and its default sits just above the measured best.
-static const float kFacingLODMax = 0.34;
 static const float kRimBandPx = 1.2;
 static const float kRimBandMax = 0.25;
 
@@ -1664,35 +1637,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// taper, no distance collapse. Exported as o.Target for the PS rim band.
 	float depthTarget = depthBase;
 
-	// Snow Breakup: a NEGATIVE base plus positive noise, the shape the DefoQ
-	// reference ships (its thickness is -0.016 against noise strength +0.099).
-	// A uniform positive depth reads as paint; taking a constant fraction off
-	// and handing it back through world noise lets cover thin to BARE at the
-	// mesh's own scale, so the break-up belongs to the layer instead of needing
-	// a mask of its own. Renormalised so full noise still reaches 1, and 0 is
-	// exactly the uniform coat. World-anchored on purpose: the shadow caster
-	// evaluates the same function at the same worldBase, so shadow and shell
-	// cannot disagree. Roads are exempt - their height stays in step with the
-	// landscape shell at the verge, which does not break up. Consumed by BOTH
-	// the classic upFacing and the S4 mask; see the note at each site.
-	// The cut walks up from BELOW the noise's range, so at slider 0 the factor
-	// is 1 for every value of the noise and there is no step off zero. The
-	// first version was saturate((1+b)*n - b), which at b=0.01 is ~n - i.e. it
-	// jumped straight from "uniform" to "the whole surface varies 0..1", which
-	// is what blotched a cliff at one hundredth of the slider.
-	//
-	// kBreakupSoft is deliberately WIDE. A hard mask in a DEPTH field builds
-	// vertical walls, the shadow caster shares this lift, and those walls are
-	// what cast the sliver self-shadows the first version showed. The visible
-	// EDGE stays crisp anyway: the shape gates binarize coverage at 0.5
-	// downstream, so a smooth depth ramp still ends in a hard contour.
-	float breakupFactor = 1.0;
-	[branch] if (SkinBreakup > 0.001 && LegacySkin < 0.5)
-	{
-		float breakNoise = ShapeNoise(worldBase.xy / kSkinBreakupScale);
-		float cut = lerp(-kBreakupSoft, kBreakupMaxBare, saturate(SkinBreakup));
-		breakupFactor = smoothstep(cut, cut + kBreakupSoft, breakNoise);
-	}
 
 	// Snow accumulates on up-facing surfaces (steep shingles and walls stay
 	// bare, matching the vanilla projection's extent). flat meshes gate hard
@@ -1700,28 +1644,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// almost the whole up-facing range of the SMOOTHED normal.
 	// The layer stays geometrically uncarved: trench relief is traced per
 	// pixel in the PS instead.
-	// TIER 1 SEAM WELD (SkinWeld, 0 = the behaviour above, unchanged).
-	//
-	// The lift is single-valued per POSITION in every term except this one:
-	// depthBase is per-mesh, and the taper, shelter, sky and cone terms are all
-	// functions of worldBase.xy. Only upFacing reads a per-VERTEX quantity, and
-	// only on the flat class - so at a plank's top edge the top twin gates ~1
-	// and lifts a full class depth while the side twin gates ~0 and lifts
-	// nothing, FROM THE SAME POSITION. Zero base travel, a class depth of
-	// disagreement: the triangle spanning them is drawn as a wall, and that is
-	// the fence family the lift-gradient view lights up.
-	//
-	// smoothWS is the position-hash weld SmoothNormalsCS already builds, so it
-	// is IDENTICAL for every vertex sharing a position by construction. Sliding
-	// the gate toward it makes the twins agree exactly at 1.0 - which is the
-	// whole mechanism, not a tuning curve. Unresolved vertices fall back to the
-	// raw normal in BuildSkinVertex, so the lerp is a no-op there.
-	//
-	// The raw normal is here ON PURPOSE ("plank sides stay clean") and welding
-	// trades that away: a side face's twin now sees a partly up-facing normal
-	// and can take cover. That trade IS the vertical snow wall a thick layer
-	// should have at a plank's edge - but it is a taste call, hence the dial.
-	float weldNz = lerp(nrmWS.z, smoothWS.z, saturate(SkinWeld));
+	float weldNz = nrmWS.z;
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, weldNz) : smoothstep(0.05, 0.85, smoothWS.z);
 	// The NIF's authored projected-snow term as a SUPPRESSOR (S2/S2b,
 	// SKIN-PLACEMENT-PLAN): it multiplies, never adds, so agreement zones
@@ -1765,16 +1688,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			projFactor = saturate(5.0 * projWeight);
 		upFacing *= projFactor;
 	}
-	// Snow Breakup applies to the COVERAGE MASK, not to the depth, and that is
-	// not a detail: the S4 block below REBUILDS depth from depthBase (see
-	// "depth = depthBase * heightScale * ..."), so anything written into depth
-	// up here is discarded on exactly the draws the feature exists for. The
-	// masks are what both paths carry through to the end - classic multiplies
-	// depthBase by upFacing, S4 multiplies by mask and then exports mask AS
-	// upFacing - so scaling them takes depth and coverage together and the
-	// shell cannot end up thinned but still claiming to cover (the film-round
-	// failure, paid for four times).
-	upFacing *= breakupFactor;
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
@@ -1830,12 +1743,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	// The shape is settled here; everything past this point is distance LOD.
 	float coverDepth = depth;
-	// THE CORNICE'S PROPORTIONAL CAP. hEff is the height this feature's own
-	// width can support - the crest freeze already computes it - so scaling the
-	// throw by it makes a narrow post get a narrow lip instead of the same
-	// absolute throw a boulder gets, which is what turned fence posts into
-	// mushroom discs. Falls back to the class depth where no dome ran.
-	float lipHeight = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 
 	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
 	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
@@ -1884,13 +1791,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// underneath everywhere else.
 	[branch] if (ProjPixelEnable > 1.5)
 	{
-		// TIER 1: all three of this block's normal gates read weldNz, not
-		// nrmWS.z. mask becomes BOTH the depth and (via upFacing = mask) the
-		// coverage, so welding only the classic upFacing above left S4 draws -
-		// every walkway, deck and roof board - completely untouched. Same trap
-		// as Snow Breakup's first build: this block rebuilds what the code
-		// above it computed. Vertex ALPHA stays raw per S1.3 and is a second,
-		// separate source of twin disagreement if seams survive this.
 		float wLin = weldNz * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
 		// maskBase = the PD footprint and fill gates alone; the up-facing
 		// gate multiplies in below, and the meld wall bypasses ONLY it.
@@ -1922,15 +1822,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		float rollT = 1.0;
 		float meldWall = 0.0;
 		float heightScale = 1.0;
-		// TIER 1: the shading normal must be welded WITH the geometry or the
-		// two disagree. A welded side-face twin is now lifted into a snow wall,
-		// but seeded from the raw normal it still shades as the vertical wooden
-		// face it used to be - Josef's "the cover-up wall doesn't have the right
-		// shading". Blended by the SAME dial, so 0 is byte-for-byte today and
-		// the up-hemisphere risk that killed the wholesale domeNormal swap
-		// (grey-smeared steep rock shells at distance) can only appear in
-		// proportion to the walls the dial is creating.
-		float3 domeNormal = SkinWeld > 0.001 ? normalize(lerp(nrmWS, smoothWS, saturate(SkinWeld))) : nrmWS;
+		float3 domeNormal = nrmWS;
 		// Kept for P5's lip: the cone gradient points INWARD (the cone rises
 		// away from a rim), so its negation is the outward direction the rim
 		// has to bulge along.
@@ -2036,7 +1928,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, -tapD)));
 			}
 			float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
-			lipHeight = hEff;
 			heightScale = hEff / coneSeed;
 			rollT = saturate(cone / hEff);
 			// DOME SHADING (Josef: lee flanks must go dark like the
@@ -2071,11 +1962,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				meldWall = smoothstep(0.85, 0.95, rollT) * heightScale;
 		}
 		mask = max(mask, maskBase * meldWall);
-		// Snow Breakup, S4's site. AFTER the meld max, so a melded wall cannot
-		// smuggle full cover back into a broken-up column, and BEFORE depth is
-		// rebuilt, so depth, coverDepth and upFacing all inherit it from the
-		// one multiply and stay consistent.
-		mask *= breakupFactor;
 		float rimIn = 1.0 - rollT;
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
@@ -2140,70 +2026,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	SkinLift o;
 	o.WorldAbs = worldBase + liftWS * depth;
-
-	// P5 (edge study), the cheap form that fits the skin we actually ship:
-	// THE CORNICE LIP. A displaced skin can never overhang, because its
-	// vertices ARE the object's vertices - the snow's outline is forced to be
-	// the object's outline, and the roll has nowhere to go but inward. That is
-	// why the edge reads as paint rather than as snow however well the fillet
-	// is tuned. Pushing the rim band OUTWARD along the cone gradient as well as
-	// up bulges the outermost ring past the silhouette, which is the whole
-	// shape a cornice is.
-	//
-	// The weight vanishes at BOTH ends deliberately. In the interior there is
-	// no edge to overhang. At the exact rim the depth is zero, and a flange
-	// pushed out at ground level would z-fight the terrain. What is left is the
-	// steep mid-fillet - exactly where a real cornice's lip sits.
-	//
-	// The study's own warning is triangle inversion at concave rims, so the
-	// throw is a fraction of the depth and dies with it: a rim that grew no
-	// snow cannot move at all.
-	// BOTH THE DIRECTION AND THE PARAMETER COME FROM THE SMOOTHED NORMAL.
-	// Everything raster-derived shattered here, and for one reason: near a rim
-	// the cone goes to zero and its gradient is dominated by 4-unit
-	// quantization, so NORMALIZING it amplified noise into wildly varying
-	// directions and adjacent triangles splayed - Josef's bush of shards. The
-	// magnitude had the same disease, a bump over a quantized raster top,
-	// which flipped ordering between neighbours and folded the surface.
-	//
-	// The smoothed normal is smooth BY CONSTRUCTION - it is the shading normal
-	// the shell already trusts - and on a rounded object its horizontal part
-	// points outward exactly where the surface turns over the edge. That IS
-	// the cornice band, so the same quantity gives both where to push and
-	// which way, with no raster in the loop at all.
-	//
-	// Tilt is |horizontal part|: 0 on a flat top, about 0.7 where the surface
-	// rolls over a rim, 1 on a vertical face. Push the turnover band only -
-	// nothing on the top, which keeps its rounded approach, and nothing on the
-	// face below, which is what hung the striped curtain down the rock last
-	// round. The surface returns inward on its own beneath the widest point.
-	[branch] if (ObjCorniceLip > 0.001 && depth > 0.01)
-	{
-		float2 outXY = smoothWS.xy;
-		float tilt = length(outXY);
-		[flatten] if (tilt > 0.05)
-		{
-			// ONE SMOOTH PEAK, no plateau. The previous band rose fast, held flat
-			// between 0.55 and 0.75, then fell fast - and a plateau in the throw
-			// is a flat disc in the geometry, which is the mushroom cap. A single
-			// peak with no flat section gives a profile that curves the whole way
-			// over instead of jutting out and hooking.
-			float u = saturate((tilt - 0.05) / 0.90);
-			float band = 4.0 * u * (1.0 - u);
-			float2 outDir = outXY / tilt;
-			o.WorldAbs.xy += outDir * (ObjCorniceLip * lipHeight * band);
-
-			// THE SIDE PROJECTION, by the same lever the roll walls use. The
-			// overhang is real geometry turning past vertical, but the shading
-			// normal still points up there, so the two-plane pick stays on the
-			// top plane and the texture smears down the face. Leaning the shade
-			// normal outward across the band engages the side plane exactly where
-			// the surface is steep - a perturbation confined to the band, never a
-			// replacement, since the plane pick rides this normal.
-			shadeNormal = normalize(lerp(shadeNormal, float3(outDir, 0.0),
-				saturate(band * 0.65)));
-		}
-	}
 
 	o.Depth = depth;
 	o.CoverDepth = coverDepth;
@@ -3482,24 +3304,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// is the class depth and this saturates at kProjCoatLift.
 	float coatRef = min(kProjCoatLift, liftBase);
 
-	// Facing LOD: the interpolated normal over-reports up-ness on low-poly
-	// meshes, so every flank passes the gate below and a distant rock reads as
-	// solid white. geoFacing is the true face orientation - unusable near,
-	// where it is constant per triangle and quantises rims into sawtooth, but
-	// once a pixel spans the taper those facets are sub-pixel and it is the
-	// only slope signal left. Handover scales with the taper's world length, so
-	// it follows the depth and repose sliders. Capped short of 1 so
-	// interpolation always contributes and facet contours stay soft.
-	float coneRamp = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) / clamp(MoundSteepness, 0.5, 3.0);
-	float faceLOD = kFacingLODMax * SkinDistantBareness * smoothstep(0.5, 2.0, footprint / max(coneRamp, 1.0));
-	[branch] if (faceLOD > 0.001)
-	{
-		// cross() handedness is not reliable here (the trench gate below takes
-		// abs for the same reason); align to the shading normal before reading z.
-		float geoUp = geoFacing.z * (dot(geoFacing, normalWS) < 0.0 ? -1.0 : 1.0);
-		pixelCoverage = smoothstep(0.4, 0.7, lerp(input.Coverage, geoUp, faceLOD));
-	}
-
 	// Density mode, PD-carrying draws: the authored factor MULTIPLIES the
 	// facing gates - suppressor only, the same principle as the lift. It
 	// kills the mountain-flank film (that ring is SPARSE paint, factor 0)
@@ -3671,7 +3475,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// it thins below a pixel and averages into the blanket while the taper
 	// still has run left. Push the contour inboard to hold roughly a pixel and
 	// keep the partial-alpha width FIXED. Capped, since the taper is all the
-	// range this field has. NOT scaled by SkinDistantBareness - that tunes the
+	// range this field has. NOT scaled by any dial - the facing LOD that once did the
 	// far-field facing handover, and sharing it drops the contour below a pixel.
 	float liftBand = 0.45 * liftEdge;
 	float liftEdgeLOD = min(max(liftEdge, kRimBandPx * fwidth(input.Lift)), kRimBandMax * liftBase);
@@ -3959,17 +3763,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// must never dissolve to the object's own texture, whatever the seam
 	// blends above decided.
 	coverageAlpha = max(coverageAlpha, smoothstep(0.15, 0.5, pixelDeform) * smoothstep(0.35, 0.6, pixelCoverage));
-
-	// Floor wear: TrenchFloorFade dissolves heavily trampled floors back to
-	// the object's own surface (rock, log, planks). Applied multiplicatively
-	// after the floor guarantee; the coverage gates hold alpha at 1 on
-	// floors, so relaxing the guarantee alone changes nothing. Up-facing
-	// pixels only: the top-down map column carries the trail on flanks too,
-	// and wearing those punches see-through holes in trench walls.
-	[branch] if (carveObject && TrenchFloorFade > 0.001)
-	{
-		coverageAlpha *= 1.0 - TrenchFloorFade * smoothstep(0.45, 0.95, pixelDeform) * smoothstep(0.35, 0.65, normalWS.z);
-	}
 
 #	ifndef PATCH
 	// Vertical cull, middle strength: with the drape ramp the connective

@@ -492,16 +492,10 @@ public:
 		bool MeldCoPlanar = false;
 		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
 		float PileHeightRatio = 1.0f;
-		/** @brief "Cornice Lip": how far the snow's rim overhangs the object's own edge, as a fraction of the shell depth. 0 disables it and restores the pre-P5 silhouette exactly. */
-		float ObjCorniceLipAmt = 0.0f;
-		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
-		float SkinBreakupAmt = 0.0f;
 		/** @brief "Edge Lump Size", 0-3: the solid contour of the shell and the coat wanders through a blob field of this cell size (x kEdgeLumpBig), so the edge breaks into round lumps; 0 = the plain ragged edge. Also the cell size of the Edge Lump Reach islands. Feeds StaticsCB::EdgeBreakupScale. */
 		float SkinEdgeLumpSize = 0.0f;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.01f;
-		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
-		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
@@ -551,8 +545,6 @@ public:
 		/** @brief Skin DynDOLOD's merged LOD atlas batches too. Those batches wear a generic atlas whose path says nothing about snowiness, so they are otherwise dropped and the objects inside them keep no distant snow. Measured +53 captures for +0.05 ms; a merged batch is one mesh, so this is all-or-nothing per batch. Turn off if any batch turns out to carry non-snow objects that gain snow. */
 		/** @brief Parallax occlusion depth on the landscape shell, as a multiplier on the PBR config's displacementScale. 1 = exactly the slab depth PBR ground gets, since kSnowUVTile matches the landscape tiling. 0 skips the march. */
 		float ParallaxDepth = 1.0f;
-		/** @brief How much a heavily trampled object-trench floor dissolves to the object's own surface (rock, log, planks) instead of holding solid snow. No menu control; inert at its default and read from JSON only. */
-		float TrenchFloorFade = 0.0f;
 		/** @brief Edge berm crest height as a fraction of the local snow depth. */
 		float BermHeight = 0.20f;
 		/** @brief Stage 3 P5: rolled rim lip height as a fraction of local depth (cornice look). 0 = off. */
@@ -596,8 +588,6 @@ public:
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
-		/** @brief Strength of the far-field facing handover: as a pixel grows past the edge taper's own width the coverage test hands over to the true face normal, so distant objects keep bare rock on steep faces instead of collapsing to white. Scales against kFacingLODMax; 0 disables it. The near-field rim-contour push is deliberately NOT on this dial (see the PS). */
-		float SkinDistantBareness = 0.6f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
@@ -990,8 +980,7 @@ public:
 
 		/** @brief Multiplier on the dune field's wavelengths (>1 = broader, calmer waves). */
 		float UndulationScale;
-		/** @brief How much heavily trampled object-trench floors dissolve to the object's own texture (0 = solid snow floors). */
-		float TrenchFloorFade;
+		float padTrenchFloorFade;
 		/** @brief LLF cluster buffers bound at t35-t37, point-shadow table at t38 (point lights on the shells). */
 		float PointLightsActive;
 		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */
@@ -1595,8 +1584,7 @@ public:
 		float MoundSteepness;
 		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
 		float ObjectTrenches;
-		/** @brief Strength of the skin's coverage LOD terms (facing handover to the geometric face normal, rim-contour push); 0 reproduces the pre-LOD gates exactly. */
-		float SkinDistantBareness;
+		float padDistantBareness;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
 		float FadeExempt;
 		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
@@ -1632,12 +1620,9 @@ public:
 		float PileHeightRatio;
 		/** @brief Settings::SkyExposurePct / 100 - strength of the P3 sky-exposure depth weighting (took a padPile slot; layout unchanged). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkyExposureSk;
-		/** @brief Settings::ObjCorniceLipAmt - P5's cheap form (edge study): the rim band is pushed OUTWARD along the cone gradient as well as up, so the outermost ring bulges past the object's silhouette. A displaced skin cannot otherwise overhang at all - its vertices are the object's vertices - and the overhang is what makes a cornice read as snow rather than as paint. Fraction of the class depth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ObjCorniceLip;
-		/** @brief Settings::SkinBreakupAmt - the DefoQ reference's negative-base-plus-noise shape (its thickness ships at -0.016 against noise +0.099). This fraction of the class depth is subtracted and handed back through a world-anchored noise, so coverage thins to BARE patches at the mesh's own scale instead of reading as an even coat; renormalised so full noise still reaches the class depth. 0 = the uniform coat exactly. Roads are exempt in the shader. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float SkinBreakup;
-		/** @brief Settings::SkinWeldAmt - Tier 1 seam weld. Slides the FLAT class's up-facing gate from the per-vertex RAW normal to the position-welded one (smoothWS, which SmoothNormalsCS makes identical for every vertex sharing a position). upFacing is the only term in the lift that is not already single-valued per position, so welding it removes the coincident-twin disagreement that draws sliver fences at hard edges. 0 = the raw-normal gate exactly, i.e. current behaviour. Trades away the deliberate "plank sides stay clean" property. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float SkinWeld;
+		float padCorniceLip;
+		float padBreakup;
+		float padWeld;
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinMasksCopy;

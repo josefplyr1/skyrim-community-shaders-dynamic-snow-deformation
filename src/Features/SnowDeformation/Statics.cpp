@@ -1957,7 +1957,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
-	a_scb.SkinDistantBareness = settings.SkinDistantBareness;
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
 	a_scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
@@ -1976,17 +1975,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	a_scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
-	// P5's cornice lip. Rides FillSkinDrawCB so the shadow caster overhangs by
-	// exactly the same amount the visible shell does - a caster that kept the
-	// old silhouette would shadow an edge that is no longer there.
-	a_scb.ObjCorniceLip = std::clamp(settings.ObjCorniceLipAmt, 0.0f, 1.5f);
-	// Snow Breakup rides FillSkinDrawCB for the same reason the lip does: the
-	// caster must break up exactly where the visible shell does, or a shadow
-	// falls from snow that is no longer there.
-	a_scb.SkinBreakup = std::clamp(settings.SkinBreakupAmt, 0.0f, 1.0f);
-	// Tier 1 seam weld. Rides FillSkinDrawCB with the rest: the caster must weld
-	// identically or its silhouette parts company with the shell's.
-	a_scb.SkinWeld = std::clamp(settings.SkinWeldAmt, 0.0f, 1.0f);
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
