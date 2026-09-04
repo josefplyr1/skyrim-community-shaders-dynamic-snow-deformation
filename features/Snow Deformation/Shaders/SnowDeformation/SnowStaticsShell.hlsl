@@ -2228,6 +2228,19 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = lift.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
+#ifndef SNOW_SHADOW_CAST
+	// S4 coat: the whole shell kEdgeFlankLift toward the eye, IN GEOMETRY,
+	// so it wins the depth test against its own object at grazing views.
+	// The PS push (edgeFlankLift / coatPush) reaches the depth buffer only
+	// on the depth-exporting variant, which trench-less skins never bind -
+	// Josef's roof planks stayed bright through that fix (2026-09-04).
+	[flatten] if (ProjPixelEnable > 1.5)
+	{
+		float3 toEye = normalize(rel);
+		rel -= toEye * kEdgeFlankLift;
+		prevRel -= toEye * kEdgeFlankLift;
+	}
+#endif
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
@@ -2423,6 +2436,19 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
+#ifndef SNOW_SHADOW_CAST
+	// S4 coat: the whole shell kEdgeFlankLift toward the eye, IN GEOMETRY,
+	// so it wins the depth test against its own object at grazing views.
+	// The PS push (edgeFlankLift / coatPush) reaches the depth buffer only
+	// on the depth-exporting variant, which trench-less skins never bind -
+	// Josef's roof planks stayed bright through that fix (2026-09-04).
+	[flatten] if (ProjPixelEnable > 1.5)
+	{
+		float3 toEye = normalize(rel);
+		rel -= toEye * kEdgeFlankLift;
+		prevRel -= toEye * kEdgeFlankLift;
+	}
+#endif
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
