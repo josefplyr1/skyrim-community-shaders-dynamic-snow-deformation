@@ -503,6 +503,11 @@ static const float kEdgeFlankLift = 0.4;
 static const float kCoatSolidW = 0.15;
 // Edge Lump Reach 1 in world units past the solid contour.
 static const float kEdgeReachUnits = 32.0;
+// Edge Lump Size: how far (in weight) the solid contour wanders through the
+// blob field; and the largest shortfall below the contour the lumps may
+// hang from (the game's own fade is 0.2 wide).
+static const float kEdgeLobeAmp = 0.1;
+static const float kEdgeMaxDrop = 0.12;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -2346,9 +2351,12 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// The footprint is the game's SOLID paint (kCoatSolidW, the coat's
 		// own contour), not its first trace: the lifted shell used to run
 		// down into faint paint the coat would never cover.
-		float maskBase = smoothstep(kCoatSolidW - 0.05, kCoatSolidW, wLin);
+		// Snow Fill pushes the footprint to solid exactly as the recolor
+		// does (a boost, most up-facing first), not an angular gate: at 0
+		// the shell stands on the game's own solid paint at every depth.
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		maskBase *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, weldNz);
+		float wLinEff = wLin > 0.003 ? max(wLin, 0.2 * smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, weldNz)) : wLin;
+		float maskBase = smoothstep(kCoatSolidW - 0.05, kCoatSolidW, wLinEff);
 		float mask = maskBase;
 		// Vertical growth is only meaningful on up-facing surfaces - a wall
 		// lifted along +Z slides along itself, and at fill 100% the +0.1
@@ -4166,8 +4174,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// noise, no normal map) and of the vertex normal z: the edge lumps turn
 	// "how far below the solid weight" into world units past the solid
 	// contour with these. Uniform flow; the users sit inside branches.
-	float edgeWVert = input.Coverage * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-	float2 edgeWGrad = float2(ddx(edgeWVert), ddy(edgeWVert));
+	// Slope only: a painted-alpha gradient on a flat wall is not an edge.
+	float2 edgeWGrad = float2(ddx(input.Coverage), ddy(input.Coverage)) * input.ProjFactor;
 	// The column's OWN post-shelter depth target, NOT the class slider.
 	// Under a roof the target drops to kShelterDust while the slider does
 	// not, so a class-scaled rim band came out WIDER than the sheltered
@@ -4233,6 +4241,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
 	float edgeFill = 0.0;
+	float edgeThr = kCoatSolidW;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -4276,9 +4285,26 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// excluded), descending monotonically across the border, while
 		// the noisy cut stays narrow and only keeps the edge ragged.
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		pdCoverage = smoothstep(kCoatSolidW - 0.03, kCoatSolidW, wpix) * smoothstep(kCoatSolidW - 0.18, kCoatSolidW + 0.08, wSmooth) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
-		edgeW = wpix;
+		// Snow Fill as the recolor applies it: a boost to solid, not a gate.
 		edgeFill = smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
+		float wFill = wpix > 0.003 ? max(wpix, 0.2 * edgeFill) : wpix;
+		float wSmoothFill = wSmooth > 0.003 ? max(wSmooth, 0.2 * edgeFill) : wSmooth;
+		// The contour lobes: Edge Lump Size wanders the solid threshold
+		// through the blob field near the cut, so the shell's and the
+		// coat's edge breaks into round lumps of that size rather than the
+		// normal map's speckle alone. Retires under a few px.
+		float lobeAmp = kEdgeLobeAmp * saturate(EdgeBreakupScale * 2.0);
+		[branch] if (lobeAmp > 0.001 && abs(wFill - kCoatSolidW) < lobeAmp + 0.03)
+		{
+			float lobeCell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
+			float lobeLod = smoothstep(2.0, 5.0, lobeCell / max(footprint, 1e-3));
+			float3 lobePos = float3(worldXY, input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift);
+			float3 lobeW = pow(abs(normalWS), 4.0);
+			lobeW /= max(lobeW.x + lobeW.y + lobeW.z, 1e-4);
+			edgeThr += lobeLod * lobeAmp * (0.5 - EdgeLumpField(lobePos, lobeW, lobeCell));
+		}
+		pdCoverage = smoothstep(edgeThr - 0.03, edgeThr, wFill) * smoothstep(edgeThr - 0.18, edgeThr + 0.08, wSmoothFill);
+		edgeW = wFill;
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
@@ -4721,25 +4747,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float s = 0.0;
 		[branch] if (!inside && coatOn)
 		{
-			float wEff = edgeW;
-			[flatten] if (edgeW > 0.003)
-				wEff = max(wEff, 0.2 * edgeFill);
-			solid = wEff >= kCoatSolidW;
+			solid = edgeW >= edgeThr;
 			// The contour the lumps hang from: the footprint's own edge
-			// where the fill has pushed the coat out to it, the solid
-			// weight otherwise.
-			float w0 = lerp(kCoatSolidW, 0.003, edgeFill);
+			// where the fill has pushed the coat out to it, the (lobed)
+			// solid threshold otherwise.
+			float w0 = lerp(edgeThr, 0.003, edgeFill);
 			float gradW = length(float2(edgeWGrad.x / max(length(dPosX), 1e-4), edgeWGrad.y / max(length(dPosY), 1e-4)));
 			float dist = (w0 - edgeW) / max(gradW, 1e-3);
 			float reach = kEdgeReachUnits * EdgeFlankWidth;
 			s = -dist / max(reach, 1e-3);
-			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && input.Coverage > -0.05);
+			// Only a shortfall the game's own fade could span; past that
+			// there is no solid snow to hang from, whatever the
+			// extrapolation says (a beam's ring stays a hair wide).
+			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > -0.05);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
 		[branch] if (needField)
 		{
-			float cell = kEdgeLumpBig * max(EdgeBreakupScale, 0.25);
+			float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 			float lod = smoothstep(2.0, 5.0, cell / max(footprint, 1e-3));
 			float3 lumpPos = float3(worldXY, pixelAbsZ - input.Lift);
 			float3 lumpW = pow(abs(normalWS), 4.0);

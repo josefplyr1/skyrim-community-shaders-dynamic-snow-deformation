@@ -2421,7 +2421,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.SkinWeld = std::clamp(settings.SkinWeldAmt, 0.0f, 1.0f);
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).
-	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.25f, 3.0f);
+	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:

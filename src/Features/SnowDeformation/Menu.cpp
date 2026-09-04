@@ -247,9 +247,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttOverhead = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
 
-		ImGui::SliderFloat(T(TKEY("edge_lump_size"), "Edge Lump Size"), &settings.SkinEdgeLumpSize, 0.25f, 3.0f, "%.2fx");
+		ImGui::SliderFloat(T(TKEY("edge_lump_size"), "Edge Lump Size"), &settings.SkinEdgeLumpSize, 0.0f, 3.0f, "%.2fx");
 		if (auto _ttEdgeL = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("edge_lump_size_tooltip"), "Size of the lumps along the snow's edge. 0.25 is a few centimetres across; higher gives broader, softer lobes, lower a finer crumble."));
+			ImGui::Text("%s", T(TKEY("edge_lump_size_tooltip"), "Size of the round lumps the snow's edge breaks into, on the raised layer and the painted snow alike. 0 keeps the plain edge; 0.25 is a few centimetres across; higher gives broader lobes."));
 		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));

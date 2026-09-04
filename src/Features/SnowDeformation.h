@@ -496,10 +496,10 @@ public:
 		float ObjCorniceLipAmt = 0.0f;
 		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
 		float SkinBreakupAmt = 0.0f;
-		/** @brief "Edge Lump Size": multiplier on the edge lump cell sizes (kEdgeLumpBig / kEdgeLumpSmall in SnowStaticsShell.hlsl). Feeds StaticsCB::EdgeBreakupScale. */
+		/** @brief "Edge Lump Size", 0-3: the solid contour of the shell and the coat wanders through a blob field of this cell size (x kEdgeLumpBig), so the edge breaks into round lumps; 0 = the plain ragged edge. Also the cell size of the Edge Lump Reach islands. Feeds StaticsCB::EdgeBreakupScale. */
 		float SkinEdgeLumpSize = 0.25f;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
-		float SkinEdgeFlankWidth = 0.5f;
+		float SkinEdgeFlankWidth = 0.0f;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
