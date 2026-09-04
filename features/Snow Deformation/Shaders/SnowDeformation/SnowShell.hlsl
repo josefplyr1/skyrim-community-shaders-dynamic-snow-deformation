@@ -2158,7 +2158,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// sunTan == horizonTan, so the shadow always over-reached its
 		// geometric edge - worse the lower the sun. Kept identical to the
 		// statics march; the two shells must agree across the seam.
-		sunShadow *= lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		// Fades out toward the horizon: a 4-unit raster and a 32-unit terrain
+		// texel cannot resolve contact shadows at a grazing sun, every bump
+		// and draped stone became a blotch at sunset, and the cascades own
+		// the long shadows there anyway. Same gate on the statics march.
+		float lowSun = smoothstep(0.1, 0.3, sunTan);
+		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
 	}
 
 	// SSS gate diagnostics for ShellDebugData 4: x = mask darkness (what

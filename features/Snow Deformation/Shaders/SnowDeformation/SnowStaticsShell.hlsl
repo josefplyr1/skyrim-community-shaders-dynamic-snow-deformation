@@ -3666,11 +3666,28 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						// object); the cone is the same angle-of-repose field the dome's
 						// own taper reads.
 						float2 tapWorld = GridOrigin + sampleLocal;
+						// The four texels around the tap, bilinear-ready for the road
+						// rebuild below; first they say how steep the top is here.
+						float2 bt = PatchTexel(tapWorld, topDims);
+						int2 bt0 = (int2)bt;
+						float2 btf = bt - bt0;
+						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
+						float4 tapTops = float4(
+							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
+							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
 						// Clamped to the deepest class in play: the cone raster returns
 						// a huge sentinel outside its window, and an unclamped occluder
-						// would put the whole scene in shadow.
+						// would put the whole scene in shadow. And gated by the raster's
+						// own slope: the cone is the depth the shell MAY grow, and on a
+						// flank too steep to hold a shell it grew nothing - the cap
+						// shadowed rock faces from snow that was never drawn.
 						float tapConeRaw = ObjectConeDepth(tapWorld);
 						float tapSnow = clamp(tapConeRaw, kMinSkinLift, max(max(RoundedDepth, ObjectsDepth), kMinSkinLift));
+						[flatten] if (all(tapTops > -50000.0))
+						{
+							float tapSlope = max(abs(tapTops.y - tapTops.x), abs(tapTops.z - tapTops.x)) * 0.25;
+							tapSnow = lerp(tapSnow, kMinSkinLift, smoothstep(1.5, 2.5, tapSlope));
+						}
 						sh = topH + tapSnow;
 						dbgMarch.z += 0.2;
 
@@ -3688,13 +3705,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						// interpolation) and the road must own the column;
 						// everywhere else - rocks, cairns, walls - the
 						// dusting above stands, so skins cannot regress.
-						float2 bt = PatchTexel(tapWorld, topDims);
-						int2 bt0 = (int2)bt;
-						float2 btf = bt - bt0;
-						int2 bt1 = min(bt0 + 1, int2(topDims) - 1);
-						float4 tapTops = float4(
-							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
-							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
 						[branch] if (all(tapTops > -50000.0))
 						{
 							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
@@ -3768,6 +3778,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// ground. That grows fast as the sun drops - the low-sun bleed past
 		// drift crests. Width preserved exactly; the bias is gone.
 		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
+		// Fades out toward the horizon, as the terrain march does.
+		marchFactor = lerp(1.0, marchFactor, smoothstep(0.1, 0.3, sunTan));
 		sunShadow *= marchFactor;
 		dbgMarch.x = 1.0 - marchFactor;
 		dbgMarchRan = 1.0;
