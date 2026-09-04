@@ -433,6 +433,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (!globals::state->inWorld)
 		return;
 
+	// The main pass's depth range, from the frame's first non-reflection
+	// lighting draw: DrawShell runs after the blended decals and would
+	// otherwise inherit their viewport (see mainViewportMaxDepth).
+	if (mainViewportFrame != globals::state->frameCount &&
+		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
+		UINT count = 1;
+		D3D11_VIEWPORT vp{};
+		globals::d3d::context->RSGetViewports(&count, &vp);
+		if (count) {
+			mainViewportMinDepth = vp.MinDepth;
+			mainViewportMaxDepth = vp.MaxDepth;
+			mainViewportFrame = globals::state->frameCount;
+		}
+	}
+
 	// The clean gate: projected-UV + snow flags together; covers rocks,
 	// roofs, logs, stumps and never flora, because foliage is not
 	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture

@@ -4214,16 +4214,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Depth: unchanged pixels echo the rasterized depth; carved pixels
 	// project the parallax hit point through the same (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
+	// Exported as a DELTA on the rasterised depth, never as an absolute
+	// re-projection: SV_Depth is written raw while the rasteriser's depth is
+	// viewport-mapped, and the re-projection also carries its own precision,
+	// so an absolute export sat a constant ~3e-5 NDC nearer than the surface
+	// it stood on - a third of a unit at 4 m, two thousand units at 450 m,
+	// where it put a mountain's shell in front of the mist meant to wrap it
+	// (RenderDoc pixel history vs re-rasterised triangles, 2026-09-04). The
+	// difference of two re-projections cancels both.
 	psout.Depth = input.Position.z;
-	[branch] if (trenchHitS > 0.0)
+	float pushS = trenchHitS > 0.0 ? trenchHitS : -max(edgeFlankLift, coatPush);
+	[branch] if (pushS != 0.0)
 	{
-		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
-		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
-	}
-	else [branch] if (max(edgeFlankLift, coatPush) > 0.0)
-	{
-		float4 lumpClip = mul(CameraViewProj, float4(input.WorldPos - viewDirWS * max(edgeFlankLift, coatPush), 1.0));
-		psout.Depth = lumpClip.z / max(lumpClip.w, 1e-4);
+		float4 rawClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
+		float4 pushClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * pushS, 1.0));
+		psout.Depth = input.Position.z + (pushClip.z / max(pushClip.w, 1e-4) - rawClip.z / max(rawClip.w, 1e-4));
 	}
 #	endif
 	psout.Diffuse = float4(preLit, coverageAlpha);

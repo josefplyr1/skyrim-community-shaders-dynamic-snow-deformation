@@ -797,6 +797,20 @@ void SnowDeformation::DrawShell()
 		RenderObjectHeightMap();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
+	// The main pass's depth range, not the decal viewport the deferred span
+	// ended on: through the decal cap every shell sat a constant ~3e-5 NDC
+	// nearer than its object - a third of a unit on a rock, two thousand on
+	// a mountain at 450 m, in front of the mist meant to wrap it (RenderDoc
+	// pixel history against re-rasterised triangles, 2026-09-04).
+	if (prevViewportCount && mainViewportFrame == globals::state->frameCount) {
+		D3D11_VIEWPORT shellViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+		for (UINT i = 0; i < prevViewportCount; i++) {
+			shellViewports[i] = prevViewports[i];
+			shellViewports[i].MinDepth = mainViewportMinDepth;
+			shellViewports[i].MaxDepth = mainViewportMaxDepth;
+		}
+		context->RSSetViewports(prevViewportCount, shellViewports);
+	}
 
 	// The height pass recentered its window after the shell CB was filled;
 	// sampling the freshly scrolled maps with last frame's center makes the
@@ -1162,6 +1176,8 @@ void SnowDeformation::DrawShell()
 	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
 	context->OMSetBlendState(prevBlend.get(), prevBlendFactor, prevSampleMask);
 	context->IASetPrimitiveTopology(prevTopology);
+	if (prevViewportCount)
+		context->RSSetViewports(prevViewportCount, prevViewports);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
 	RunLODProbePass();

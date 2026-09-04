@@ -1726,6 +1726,10 @@ public:
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
 	float2 heightWindowCenter = { 0, 0 };
+	/** @brief Depth range of the game's main-pass viewport, sampled once per frame by the capture hook. The deferred span ends on the blended-decal viewport (max depth 0.999968 against the pass's 0.999998), and a shell drawn through that cap sits ~3e-5 NDC nearer than its own object. */
+	float mainViewportMinDepth = 0.0f;
+	float mainViewportMaxDepth = 1.0f;
+	uint32_t mainViewportFrame = UINT32_MAX;
 
 	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
