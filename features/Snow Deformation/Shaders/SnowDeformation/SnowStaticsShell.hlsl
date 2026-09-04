@@ -296,18 +296,6 @@ cbuffer StaticCB : register(b1)
 	// SkyExposurePct / 100). Took a padPile slot; layout unchanged. Mirror
 	// in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float SkyExposureSk;
-	// C0 spike (CONTAINER-SHELL-PLAN): >0.5 = draw the S4 shell as a
-	// CONSTANT-height container and find the surface per pixel. Mirror in
-	// SnowHeightCapture.hlsl / SnowDeformation.h.
-	float ContainerSpike;
-	// Which peeled layer THIS patch pass draws (0 = the top surface, 1/2 =
-	// the peeled layers under cover). Mirror in SnowHeightCapture.hlsl /
-	// SnowDeformation.h.
-	float PatchLayer;
-
-	// THE DRAPE PIVOT's A/B: object columns take the full lattice surface the
-	// way road columns already do, and the S4 skins do not draw at all.
-	float ObjectDrape;
 	// P5's cornice lip: how far the rim overhangs the object's silhouette,
 	// as a fraction of the class depth.
 	float ObjCorniceLip;
@@ -317,12 +305,6 @@ cbuffer StaticCB : register(b1)
 	// Tier 1 seam weld: how far the FLAT class's up-facing gate slides from
 	// the per-vertex raw normal to the position-welded one. 0 = today.
 	float SkinWeld;
-	// B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the blob field
-	// instead of the dome profile. Debug spike, off by default.
-	float BlobDrape;
-	float BlobExclude;  // Blob Snow Shell, capture only; layout sync
-	float BlobRefZ;     // Blob Snow Shell, capture only; layout sync
-	float BlobRockClass;  // Blob Snow Shell, capture only; layout sync
 
 	// Edge breakup: reach of the rim erosion in world units (0 = off) and
 	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
@@ -337,6 +319,9 @@ cbuffer StaticCB : register(b1)
 	// >0.5 (Recolor Projected Snow): the shell's material coats every
 	// pixel the projected snow paints solidly, at zero lift.
 	float EdgeCoat;
+	float PadStatics0;
+	float PadStatics1;
+	float PadStatics2;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -691,40 +676,6 @@ struct VS_OUTPUT
 	float LiftTarget : TEXCOORD9;
 };
 
-#if defined(MELD)
-// SCREEN-SPACE SNOW SHELL, the composite: a full-screen pass over the field
-// BlobSeedCS + BlobMeldCS built (x = |view z|, y = sheet), reconstructing
-// position and normal and shading once per pixel through the skin material,
-// z-tested as real geometry. No memory: it follows this frame's scene.
-struct MELD_VS_OUTPUT
-{
-	float4 Position : SV_POSITION;
-};
-// Mirror of SnowDeformation.h MeldCB and BlobMeldCS.hlsl MeldCB.
-cbuffer MeldCB : register(b2)
-{
-	row_major float4x4 MeldProj;
-	row_major float4x4 MeldProjInverse;
-	row_major float4x4 MeldViewInverse;
-	float2 MeldDims;
-	float2 MeldDir;
-	float MeldDepthRange;
-	float MeldSmoothRange;
-	float MeldMaxRadiusPx;
-	float MeldDebug;
-	float MeldSmoothing;
-	float MeldAnchor;
-	float MeldFootBias;
-	float MeldSeed;
-	float MeldVerticalRange;
-	float padMeld1;
-	float padMeld2;
-	float padMeld3;
-}
-// x = closed |view z| (1e30 empty), y = 1 where the sheet floats in front of the scene.
-Texture2D<float2> MeldDepth : register(t33);
-#endif
-
 // HULLSHADER included bare (P1, edge-research study): the skin HS reads the
 // cone field to size tessellation against rim proximity.
 #if defined(PATCH) || defined(PSHADER) || defined(VSHADER) || defined(DOMAINSHADER) || defined(HULLSHADER)
@@ -749,10 +700,6 @@ Texture2D<float> ObjectSnowCone2 : register(t26);
 // K=3: the third peeled layer for roof-over-beam-over-floor columns.
 Texture2D<float> ObjectTop3Raw : register(t27);
 Texture2D<float> ObjectSnowCone3 : register(t28);
-// THE AIR TEST: per peeled layer, the lowest surface standing ABOVE that
-// layer's top. Sentinel (kHeightMapEmptyBottom) means nothing above at all.
-Texture2D<float> ObjectCoverBottom2 : register(t30);
-Texture2D<float> ObjectCoverBottom3 : register(t31);
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -917,41 +864,6 @@ float ObjectConeDepth3(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// ---- C0 container spike (CONTAINER-SHELL-PLAN) --------------------------
-// Vertical extent of the container: the tallest the snow can stand for this
-// draw, plus a margin so the ray always starts in clear air above it.
-float ContainerHeight()
-{
-	// The margin (last term) is what the lid keeps between itself and the
-	// tallest possible snow. It has to survive INTERPOLATION as well as the
-	// field: the lid's height is computed per vertex and interpolated
-	// linearly across a triangle, while the field between those vertices is
-	// not linear, so a thin margin lets the lid dip under the surface
-	// mid-triangle. 8 units is two raster texels.
-	return max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) * max(PileHeightRatio, 1.0) + 8.0;
-}
-
-// The snow surface as a PURE FUNCTION OF WORLD XY - the object top plus the
-// rolling-ball fillet over the repose cone. This is what makes marching
-// possible at all: the surface has a closed form the ray can be tested
-// against, independent of any mesh.
-//
-// SPIKE SIMPLIFICATIONS, deliberate: no peeled-layer select, no crest
-// freeze, no sky exposure. C0 only has to answer whether the fences die and
-// whether the roll reads as a curve; moving the whole field per pixel is
-// C1, and doing it here first would confuse a shape difference with an
-// architecture difference.
-float ContainerSnowZ(float2 worldXY)
-{
-	float top = PatchTop(worldXY);
-	[flatten] if (top < -50000.0)
-		return -1000000.0;
-	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-	float rollT = saturate(ObjectConeDepth(worldXY) / coneSeed);
-	float toRim = 1.0 - rollT;
-	return top + coneSeed * sqrt(saturate(1.0 - toRim * toRim));
-}
-
 // NEAREST-texel layer tops, for the lift's layer select only. The
 // MAX-of-4 twins above spread a higher neighbour one texel outward,
 // which flipped every vertex within a texel of a stair riser onto the
@@ -1020,17 +932,6 @@ float2 PatchSkinDepth(float2 worldXY)
 //
 // Shared with RoadOwnsColumn because it is the SECOND reason the patch may
 // not draw, and the skin has to know about both.
-// Point load from whichever peeled top raster this pass is drawing. Layer 1
-// keeps the plain texture, so roads and skins are byte-identical.
-float LayerTopLoad(int2 c)
-{
-	float r = ObjectTopRaw.Load(int3(c.x, c.y, 0));
-	[branch] if (PatchLayer > 0.5)
-		r = (PatchLayer < 1.5) ? ObjectTop2Raw.Load(int3(c.x, c.y, 0)) :
-		                         ObjectTop3Raw.Load(int3(c.x, c.y, 0));
-	return r;
-}
-
 float PatchSilhouetteDrop(float2 worldXY)
 {
 	// Domain-warp WHERE the silhouette falls, on the landscape shell's own
@@ -1053,14 +954,10 @@ float PatchSilhouetteDrop(float2 worldXY)
 	int2 c0 = (int2)t;
 	float2 cf = t - c0;
 	int2 c1 = min(c0 + 1, int2(dims) - 1);
-	// The drop must be measured on the layer being DRAWN. Read on layer 1 it
-	// describes the roof's silhouette while a layer-2 pass drapes the walkway
-	// beneath, so the dissolve fires at the roof's edge and spares the real
-	// one. Same law as the neighbour tests and the depth authority.
-	float top00 = LayerTopLoad(int2(c0.x, c0.y));
-	float top10 = LayerTopLoad(int2(c1.x, c0.y));
-	float top01 = LayerTopLoad(int2(c0.x, c1.y));
-	float top11 = LayerTopLoad(int2(c1.x, c1.y));
+	float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
+	float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
+	float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
+	float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
 	float maxTop = max(max(top00, top10), max(top01, top11));
 	float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
 	return lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
@@ -1093,279 +990,6 @@ bool RoadOwnsColumn(float2 worldXY)
 #endif
 
 #if (defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
-
-// ---- PER-LAYER DRAPE (CONTAINER-SHELL-PLAN pivot) -----------------------
-// A drape is ONE SURFACE PER COLUMN. Roads have exactly one, which is why
-// they were the easy case; a walkway under a roof has two, and the lower
-// one has to keep its snow. The answer is to draw the lattice ONCE PER
-// PEELED LAYER, each pass reading that layer's own top and cone, so the
-// walkway gets its own drape instead of being hidden under the roof's.
-//
-// EVERY raster read in the vertex builder must follow the same layer.
-// A partial redirect would compare layer 2's surface against layer 1's
-// neighbours: the roof towers 100+ units over the walkway, the tall-ray
-// test would fire on every vertex, and the entire under-cover drape would
-// be culled before it drew anything.
-// SINGLE RETURN, INITIALIZED. These three accessors first shipped with early
-// returns inside [branch], which is the one form this file's own patch gate
-// documents as unsafe: fxc raised X4000 "potentially uninitialized" on all
-// three, and the drape they feed drew nothing for three rounds. fxc exits 0
-// with warnings, so a sweep that checks only the exit code passes it.
-float PatchTopL(float2 worldXY)
-{
-	float r = -1e9;
-	[branch] if (PatchLayer < 0.5)
-		r = PatchTop(worldXY);
-	else [branch] if (PatchLayer < 1.5)
-		r = PatchTop2(worldXY);
-	else
-		r = PatchTop3(worldXY);
-	return r;
-}
-
-float ObjectConeDepthL(float2 worldXY)
-{
-	float r = 0.0;
-	[branch] if (PatchLayer < 0.5)
-		r = ObjectConeDepth(worldXY);
-	else [branch] if (PatchLayer < 1.5)
-		r = ObjectConeDepth2(worldXY);
-	else
-		r = ObjectConeDepth3(worldXY);
-	return r;
-}
-
-// Lowest surface standing above this layer's top, nearest texel. Layer 1 has
-// nothing above it by definition, so it reports open sky and never gates.
-float CoverBottomL(float2 worldXY)
-{
-	float r = 100000.0;
-	[branch] if (PatchLayer > 0.5)
-	{
-		float2 dims;
-		ObjectCoverBottom2.GetDimensions(dims.x, dims.y);
-		float2 tc = PatchTexel(worldXY, dims);
-		int2 c = int2(clamp(tc, 0.0, dims.x - 1.001));
-		// MIN over a 3x3, which DILATES cover exactly as PatchTop's max-of-4
-		// dilates tops - lower cover means more covered, so min is the
-		// conservative direction. The raster is 4 units while the lattice is
-		// finer, so a vertex at a rock's edge can land on a texel the rock's
-		// geometry just missed, read nothing-above, and draw: the sliver under
-		// the cairn, the line down a post, the patch under a fallen boat. One
-		// texel of dilation costs the drape a texel at the edge of genuinely
-		// covered ground, which is the cheap direction to be wrong in.
-		[unroll] for (int dy = -1; dy <= 1; dy++)
-		{
-			[unroll] for (int dx = -1; dx <= 1; dx++)
-			{
-				int2 sc = int2(clamp(c.x + dx, 0, int(dims.x) - 1),
-					clamp(c.y + dy, 0, int(dims.y) - 1));
-				float cv = (PatchLayer < 1.5) ? ObjectCoverBottom2.Load(int3(sc.x, sc.y, 0)) :
-				                                ObjectCoverBottom3.Load(int3(sc.x, sc.y, 0));
-				r = min(r, cv);
-			}
-		}
-	}
-	return r;
-}
-
-// THE PEEL INDEX IS A STACKING ORDINAL, NOT A HEIGHT STRATUM. One column's
-// layer 3 is a walkway while its neighbour's layer 3 is a roof beam, purely
-// because the neighbour carries more surfaces above it. Every neighbour test
-// in the vertex builder asks whether the surface next door stands far above
-// or below this one, and reading the neighbour at the SAME INDEX answers a
-// different question entirely on a peeled layer: the rim clamp, the facade
-// slope kill, the de-jut and the tall-ray scan then all fire on nearly every
-// vertex, and the drape is culled before it draws anything (round 35, the
-// first prototype's null result). Match by HEIGHT instead - whichever of the
-// neighbour's three layers lies nearest this vertex - and report a sentinel
-// when none lies within the band, so an unrelated stack reads as "no
-// neighbour here" rather than as a cliff. Layer 1 keeps the plain lookup:
-// there the highest surface IS coherent across columns, which is why the
-// existing kills work, and roads must not shift by a texel.
-static const float kPeelNeighborBand = 256.0;
-// Clearance a peeled layer needs above it to count as open. A roof over a
-// walkway clears by hundreds; a wall's own side faces sit within a couple of
-// units of the surface they stand on.
-static const float kCoverAirGap = 32.0;
-float PatchTopNeighbor(float2 worldXY, float refZ)
-{
-	float r = PatchTop(worldXY);
-	[branch] if (PatchLayer > 0.5)
-	{
-		float cand[3] = { r, PatchTop2(worldXY), PatchTop3(worldXY) };
-		float best = -1e9;
-		float bestDist = 1e9;
-		[unroll] for (uint peelI = 0; peelI < 3; peelI++)
-		{
-			[flatten] if (cand[peelI] > -50000.0 && abs(cand[peelI] - refZ) < bestDist)
-			{
-				bestDist = abs(cand[peelI] - refZ);
-				best = cand[peelI];
-			}
-		}
-		r = bestDist <= kPeelNeighborBand ? best : -1e9;
-	}
-	return r;
-}
-
-// THE DOME (Josef's 0/10/20/30 sketch), and the same recipe the skin already
-// runs rather than a second copy of it: a rolling-ball fillet over the repose
-// cone, whose RADIUS freezes at the feature's own crest. The moment the rolls
-// from both edges meet in the middle, growth stops whatever the depth slider
-// says - at ratio 1 the frozen shape is the half-dome exactly filling the
-// width. Without the freeze a narrow feature grows a fin instead of saturating.
-//
-// The cone reads through the layer accessor, so a peeled drape under a roof
-// gets its own layer's cone rather than the top surface's.
-float ObjectDomeDepth(float2 worldXY, float depthBase, out float3 domeNrm)
-{
-	domeNrm = float3(0.0, 0.0, 1.0);
-	float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-	float cone = ObjectConeDepthL(worldXY);
-
-	// Crest freeze: the largest cone within half a roll radius. A feature
-	// narrow enough to saturate has its crest in reach; a wide one reads large
-	// and passes unclamped, keeping the plain fillet.
-	float tapR = 0.5 * coneSeed;
-	float tapD = tapR * 0.7071;
-	float crest = cone;
-	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapR, 0.0)));
-	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapR, 0.0)));
-	crest = max(crest, ObjectConeDepthL(worldXY + float2(0.0, tapR)));
-	crest = max(crest, ObjectConeDepthL(worldXY - float2(0.0, tapR)));
-	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapD, tapD)));
-	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapD, tapD)));
-	crest = max(crest, ObjectConeDepthL(worldXY + float2(tapD, -tapD)));
-	crest = max(crest, ObjectConeDepthL(worldXY - float2(tapD, -tapD)));
-
-	float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
-	float heightScale = hEff / coneSeed;
-	float rollT = saturate(cone / hEff);
-	float rimIn = 1.0 - rollT;
-
-	// The dome's shape lives in the CONE field, so a finite difference of the
-	// depth cannot see it - the shell shaded flat before the skin took its
-	// normal from here instead. Analytic surface normal: the cone gradient
-	// through the fillet's slope, clamped near the vertical rim so the rim
-	// does not blow the derivative up.
-	const float gs = 4.0;
-	float cXP = min(ObjectConeDepthL(worldXY + float2(gs, 0.0)), coneSeed);
-	float cXN = min(ObjectConeDepthL(worldXY - float2(gs, 0.0)), coneSeed);
-	float cYP = min(ObjectConeDepthL(worldXY + float2(0.0, gs)), coneSeed);
-	float cYN = min(ObjectConeDepthL(worldXY - float2(0.0, gs)), coneSeed);
-	float2 coneGrad = float2(cXP - cXN, cYP - cYN) / (2.0 * gs);
-	float dhdc = rimIn / max(sqrt(saturate(1.0 - rimIn * rimIn)), 0.2);
-	domeNrm = normalize(float3(-coneGrad * dhdc, 1.0));
-
-	return depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn));
-}
-
-// B0 - BLOB SNOW (BLOB-SNOW-PLAN route R1). Josef's KH3 observation and his
-// own sketch: a row of overlapping balls that merge into one soft sheet whose
-// outline is the SNOW's, not the object's.
-//
-// No ball is ever placed. The union of spheres over a surface IS a function of
-// XY, so the whole thing is one height field evaluated on the lattice the
-// roads already use - which is why it cannot fold, tear or pleat. Conceptually
-// there is a hemisphere sitting on the object top at every raster texel; here
-// we take a disc of taps around the query point, lift each by its own spherical
-// cap, and smooth-max the results. The smooth max IS the blend: frames 1-4 of
-// the sketch never exist separately, only the merged result.
-//
-// The number that decides whether this works, from the jSnow reference:
-// RADIUS / SPACING must stay above ~4, and 6-13 is the working band. Our raster
-// texel is 4 units, so a 24-52 unit radius is the target - and the module's
-// ~20-30 unit snow depth sits inside it. Below ~4 the union stops bridging and
-// the result reads as beads on a string.
-static const float kBlobTapRings = 2.0;
-// Softness of the union, as a fraction of the radius. Larger = rounder joins
-// and more bridging; 0 would be a plain max (visible creases where caps meet).
-static const float kBlobSoftFrac = 0.45;
-// 16 taps on two staggered rings plus the centre - the berm field's own
-// arrangement, for the same reason: tap COUNT is what keeps a ring from
-// printing a contour line.
-static const float2 kBlobTaps[16] = {
-	float2(0.38, 0.0), float2(0.27, 0.27), float2(0.0, 0.38), float2(-0.27, 0.27),
-	float2(-0.38, 0.0), float2(-0.27, -0.27), float2(0.0, -0.38), float2(0.27, -0.27),
-	float2(0.86, 0.36), float2(0.36, 0.86), float2(-0.36, 0.86), float2(-0.86, 0.36),
-	float2(-0.86, -0.36), float2(-0.36, -0.86), float2(0.36, -0.86), float2(0.86, -0.36)
-};
-
-// Smooth maximum (polynomial). The union of two blobs rounds off instead of
-// creasing, which is the entire visual difference between "one snow form" and
-// "two balls touching".
-float BlobSmoothMax(float a, float b, float k)
-{
-	float h = saturate(0.5 + 0.5 * (a - b) / max(k, 1e-4));
-	return lerp(b, a, h) + k * h * (1.0 - h);
-}
-
-// Per-blob radius jitter, hashed from the blob's own world position so it is
-// deterministic and cannot crawl as the camera moves (the plan's hard
-// requirement against ghosting and turn-around pop). jSnow randomises radius
-// over [H/2, H]; same range here.
-float BlobRadiusAt(float2 centreXY, float radius)
-{
-	float h = ShapeNoise(centreXY * 0.37);
-	return radius * lerp(0.5, 1.0, h);
-}
-
-float ObjectBlobDepth(float2 worldXY, float depthBase, out float3 blobNrm)
-{
-	blobNrm = float3(0.0, 0.0, 1.0);
-	// Radius from the class depth: a blob as wide as the snow is deep puts
-	// radius/spacing at ~5-7 against the 4-unit raster, inside the band.
-	float radius = max(depthBase, kMinSkinLift) * 1.25;
-	float soft = radius * kBlobSoftFrac;
-	float here = PatchTopL(worldXY);
-
-	// The centre blob, and the surface height it alone would give.
-	float best = (here > -50000.0) ? here + BlobRadiusAt(worldXY, radius) : -1e9;
-
-	[unroll] for (uint bi = 0; bi < 16; bi++)
-	{
-		float2 o = kBlobTaps[bi] * radius * kBlobTapRings;
-		float2 c = worldXY + o;
-		float t = PatchTopL(c);
-		[flatten] if (t > -50000.0)
-		{
-			// Spherical cap: this blob's contribution directly above the query
-			// point. Outside its radius it contributes nothing.
-			float r = BlobRadiusAt(c, radius);
-			float d2 = dot(o, o);
-			float cap = sqrt(max(r * r - d2, 0.0));
-			best = BlobSmoothMax(best, t + cap, soft);
-		}
-	}
-
-	[flatten] if (best < -1e8)
-		return 0.0;
-
-	// Height ABOVE this column's own surface, which is what the caller adds.
-	// Clamped so a blob centred on a neighbour's tall top cannot tower here -
-	// the union is a shape, not a licence to grow without limit.
-	float lift = best - max(here, -50000.0);
-	lift = clamp(lift, 0.0, depthBase * 2.0);
-
-	// Analytic normal from the field's own gradient, for the same reason the
-	// dome needs one: the shape lives in the field, so a finite difference of
-	// the mesh cannot see it. Four extra evaluations of the cheap centre term
-	// only - the full union per tap would be 5x the cost for a normal.
-	const float gs = 4.0;
-	float hXP = PatchTopL(worldXY + float2(gs, 0.0));
-	float hXN = PatchTopL(worldXY - float2(gs, 0.0));
-	float hYP = PatchTopL(worldXY + float2(0.0, gs));
-	float hYN = PatchTopL(worldXY - float2(0.0, gs));
-	[flatten] if (hXP > -50000.0 && hXN > -50000.0 && hYP > -50000.0 && hYN > -50000.0)
-	{
-		float2 g = float2(hXP - hXN, hYP - hYN) / (2.0 * gs);
-		// Damped: the blob top is much flatter than the surface under it, which
-		// is the whole point of a rolling ball.
-		blobNrm = normalize(float3(-g * 0.35, 1.0));
-	}
-	return lift;
-}
 
 // Patch surface evaluation, shared by the legacy VS and the tessellated
 // domain shader. dense = tessellated call sites: generated vertices sit a
@@ -1411,10 +1035,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// legacy grid sampled reproduces its exact floor geometry.
 		float2 base = floor(worldXY / kHeightTexel) * kHeightTexel;
 		float2 f = saturate((worldXY - base) / kHeightTexel);
-		float t00 = PatchTopL(base);
-		float t10 = PatchTopL(base + float2(kHeightTexel, 0.0));
-		float t01 = PatchTopL(base + float2(0.0, kHeightTexel));
-		float t11 = PatchTopL(base + float2(kHeightTexel, kHeightTexel));
+		float t00 = PatchTop(base);
+		float t10 = PatchTop(base + float2(kHeightTexel, 0.0));
+		float t01 = PatchTop(base + float2(0.0, kHeightTexel));
+		float t11 = PatchTop(base + float2(kHeightTexel, kHeightTexel));
 		top = lerp(lerp(t00, t10, f.x), lerp(t01, t11, f.x), f.y);
 		// A sentinel lattice corner poisons the bilinear, and a large drop
 		// across the cell (roof or wall edge) would interpolate vertices
@@ -1425,7 +1049,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float tMin = min(min(t00, t10), min(t01, t11));
 		float tMax = max(max(t00, t10), max(t01, t11));
 		[flatten] if (tMin < -50000.0 || (tMax - tMin) > 100.0)
-			top = PatchTopL(worldXY);
+			top = PatchTop(worldXY);
 		float2 s00 = PatchSkinDepth(base);
 		float2 s10 = PatchSkinDepth(base + float2(kHeightTexel, 0.0));
 		float2 s01 = PatchSkinDepth(base + float2(0.0, kHeightTexel));
@@ -1440,25 +1064,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	else
 	{
 		float2 skin = PatchSkinDepth(worldXY);
-		top = PatchTopL(worldXY);
+		top = PatchTop(worldXY);
 		skinDepth = skin.x;
 		skinEdgeMin = skinDepth;
 		roadTop = skin.y;
-	}
-	// A PEELED LAYER CANNOT BE ARBITRATED BY A LAYER-1 QUANTITY. The skin-depth
-	// raster holds ONE value per column - the class depth of whatever the
-	// capture saw on TOP - so under a roof it describes the roof. Gating a
-	// layer-2 or layer-3 vertex on `skinDepth >= 1` and then carving it to that
-	// depth asks the roof how much snow the walkway gets, and where the roof's
-	// own draw wrote nothing the gate kills the whole column on every layer.
-	// The per-layer cone is the same quantity that DOES exist per layer: Josef's
-	// probe reads 4.9 on all three layers under a roof where this single raster
-	// cannot speak for the lower two.
-	[branch] if (PatchLayer > 0.5)
-	{
-		float layerCone = ObjectConeDepthL(worldXY);
-		skinDepth = max(skinDepth, layerCone);
-		skinEdgeMin = max(skinEdgeMin, layerCone);
 	}
 	float2 gridLocal = v.GridLocal;
 
@@ -1470,7 +1079,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	float aliveDeform = 0.0;
 	bool roadField = false;
 	bool owns = false;
-	bool objectField = false;
 	[branch] if (top > -50000.0 && skinDepth >= 1.0)
 	{
 		// OWNERSHIP FIRST, because the facade kills below must not fire on
@@ -1478,36 +1086,17 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// already-sampled top/roadTop. Evaluated before the de-jut can
 		// lower `top`, which only makes it more conservative: a real road
 		// column reads top == roadTop either way.
-		// Roads live on layer 1 only: the skin-depth raster's road channel is
-		// per COLUMN, so a peeled layer under a bridge would inherit the
-		// bridge's road ownership and take the road path's rim exemptions.
-		owns = PatchLayer < 0.5 && roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
-
-		// OBJECT OWNERSHIP, resolved here for the same reason road ownership
-		// is: the facade kills below must know about it BEFORE they run.
-		objectField = ObjectDrape > 0.5 && !owns;
-
-		// THE DEPTH AUTHORITY, and the fifth time the wrong one was asked. The
-		// skin-depth raster MAX-blends class depth across every column a
-		// footprint overlaps, so a rock standing on a road inherits the ROAD's
-		// depth - Josef's tell: the Road Meshes slider lifted a boulder's
-		// shell. Harmless while such a column could never draw; object
-		// ownership opened that gate, at the wrong class. A column the road
-		// does not own takes the object class from the CB, the only depth that
-		// is its own. The raster still arbitrates road columns, where its
-		// value IS the road's.
-		[flatten] if (objectField)
-			skinDepth = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
+		owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
 
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
 	// sheets. VALID neighbours only - a sentinel neighbour must not count as a
 	// rim, or the patch's edge ring is culled along every road chunk. Facade
 	// sheets still die by their own sentinel top.
-	float topXP = PatchTopNeighbor(worldXY + float2(kHeightTexel, 0.0), top);
-	float topXN = PatchTopNeighbor(worldXY - float2(kHeightTexel, 0.0), top);
-	float topYP = PatchTopNeighbor(worldXY + float2(0.0, kHeightTexel), top);
-	float topYN = PatchTopNeighbor(worldXY - float2(0.0, kHeightTexel), top);
+	float topXP = PatchTop(worldXY + float2(kHeightTexel, 0.0));
+	float topXN = PatchTop(worldXY - float2(kHeightTexel, 0.0));
+	float topYP = PatchTop(worldXY + float2(0.0, kHeightTexel));
+	float topYN = PatchTop(worldXY - float2(0.0, kHeightTexel));
 	float minNeighborTop = 1e9;
 	if (topXP > -50000.0)
 		minNeighborTop = min(minNeighborTop, topXP);
@@ -1533,14 +1122,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// Trench-bearing surfaces (roads, walkable boulder tops) sit well
 		// under this; steep flanks belong to the skin.
 		float2 topGrad = float2(topXP - topXN, topYP - topYN) / (2.0 * kHeightTexel);
-		// OBJECTS ARE EXEMPT FROM THIS ONE KILL, AND ONLY THIS ONE. A gradient
-		// of 0.5 across eight units is a four-unit drop, which ANY rock edge
-		// clears by construction - this is the kill that ate the boulder's rim
-		// and left Josef's sawtooth. The 100-unit neighbour clamp above and the
-		// tall-ray scan below still apply to objects, and they are what keep
-		// the lattice off a building facade: exempting objects from those too
-		// drowned every wall in Dawnstar in green curtains.
-		rim = rim || (length(topGrad) > 0.5 && !objectField);
+		rim = rim || length(topGrad) > 0.5;
 	}
 	// Wall-base de-jut: the last LIVE ring at the foot of a culled facade
 	// still samples tops partway up the smeared ramp and rises as a jagged
@@ -1549,7 +1131,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// NOT on a road: at a road's own edge the lowest valid neighbour is the
 	// terrain beside it, and clamping to it drags the road's snow down by
 	// the whole kerb height - the mismatched/floating road edges.
-	[flatten] if (minNeighborTop < 1e8 && !owns && !objectField)
+	[flatten] if (minNeighborTop < 1e8 && !owns)
 		top = min(top, minNeighborTop + 2.0 * kHeightTexel);
 
 	// Untrenchable band around much-taller structures: the raster smear
@@ -1566,7 +1148,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	bool nearTall = false;
 	[unroll] for (uint tallI = 0; tallI < 8; tallI++)
 	{
-		float tallTop = PatchTopNeighbor(worldXY + kTallRays[tallI], top);
+		float tallTop = PatchTop(worldXY + kTallRays[tallI]);
 		[flatten] if (tallTop > -50000.0 && (tallTop - top) > 100.0)
 			nearTall = true;
 	}
@@ -1583,31 +1165,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// IS the top), so nothing is left: the hexagonal holes photographed
 	// from underneath. The patch's silhouette dissolve still clips a real
 	// overhang in the PS, so dropping the vertex kill costs no protection.
-	//
-	// AND NEITHER DOES AN OBJECT, for the identical reason (Josef: the rock
-	// wears the RoadChunk bug). A boulder's own edge trips the facade slope
-	// test by construction - it stands proud of the ground and drops far more
-	// than four units across the eight the gradient measures - so the kills
-	// ate the vertices around its rim and left the sawtooth holes with the
-	// rock showing through. The killed vertex takes six triangles with it.
-	//
-	// It is also what makes each object its OWN shell rather than one sheet
-	// welded to the road's: cutting in the PS by silhouette drop ends the
-	// rock's snow at the rock's edge and lets the ground's continue
-	// underneath, exactly as a road chunk stops being welded to the terrain.
-	//
-	// The exemption is NARROW for objects - the slope kill only, applied
-	// above. Roads keep the blanket exemption because a road is low; objects
-	// include three-hundred-unit facades, and exempting them from the
-	// neighbour clamp and the tall-ray scan drowned every wall in Dawnstar.
 	rim = rim && !owns;
-
-	// The bisection is over - the drape draws, and these kills are exactly what
-	// it needs. With them off, a peeled layer sheeted straight down every wall
-	// and rock standing on a road (Josef's yellow curtains): the facade slope
-	// kill and the rim clamp are the rules that keep a lattice off vertical
-	// faces. They are height-matched now rather than index-matched, so they
-	// finally mean on a peeled layer what they always meant on layer 1.
 
 	// Neighborhood trample test: the patch lives only around trails. The
 	// coarse 8-unit grid samples a 1.5-cell margin as a 16-ray star (at
@@ -1645,15 +1203,6 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// have to know about it before they run.
 	roadField = RoadField > 0.5 && owns;
 
-	// OBJECT OWNERSHIP - the drape pivot itself. A captured column whose top
-	// is not a road takes the WHOLE surface, exactly as a road-owned column
-	// does, instead of only the trench around a footprint. That single line is
-	// what turns the lattice from "roads plus trails" into "roads plus trails
-	// plus every object it can stand on".
-	//
-	// Ownership decides COVERAGE, not whether the lattice may stand on a
-	// facade: the rim clamp and the facade slope kill above still delete the
-	// vertices that would sheet down a wall, and they run before this.
 	}  // end cheap gate
 
 	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
@@ -1668,30 +1217,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// Objects re-opens the old path deliberately - it is the experimental
 	// toggle this whole plan is the rework of - and turning the heightfield OFF
 	// restores the pre-heightfield behaviour exactly, so the A/B stays honest.
-	// THE AIR TEST (Josef's Option-B question): a peeled layer draws only where
-	// the thing standing above it actually CLEARS the surface. A roof over a
-	// walkway leaves open space and the walkway keeps its snow; a wall standing
-	// on a road is solid to the ground, and draping that column paints road
-	// snow INSIDE the stone - his "any object above you also gets the shell".
-	// The two are identical in the tops-only rasters, so no height threshold
-	// can separate them; this reads the cover raster built for the question.
-	bool airOK = true;
-	[branch] if (PatchLayer > 0.5)
-		airOK = (CoverBottomL(worldXY) - top) > kCoverAirGap;
-
 	bool mayTrample = (RoadField < 0.5) || ObjectTrenches > 0.5 || owns;
-	// A PEELED LAYER DRAWS ITS WHOLE SURFACE, not just its trails. The
-	// trample gate exists because the layer-1 patch is the TRENCH layer -
-	// it lives around footprints and the skin owns everything else. A
-	// layer-2 drape has no skin behind it: it exists precisely to put snow
-	// on a surface the roof above has been hiding, so gating it on
-	// deformation would leave the walkway bare, which is the whole point.
-	bool trampled = roadField || objectField || (aliveDeform >= 0.005 && mayTrample) || PatchLayer > 0.5;
+	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample);
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
 	// Single-return structure: an early return inside a [branch] trips
 	// fxc's X4000 and CI enforces zero warnings.
-	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled && airOK)
+	[branch] if (top > -50000.0 && skinDepth >= 1.0 && !rim && trampled)
 	{
 		// Road verge: ride the repose cone down to the landscape class depth.
 		// A trench crossing the road edge then keeps ONE cross-section - the
@@ -1706,7 +1238,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		[branch] if (roadField)
 		{
 			float landDepth = max(SampleTerrainStatics(gridLocal).y, 0.0);
-			float cone = ObjectConeDepthL(worldXY);
+			float cone = ObjectConeDepth(worldXY);
 			skinDepth = max(min(cone, skinDepth), min(landDepth, skinDepth));
 		}
 
@@ -1734,26 +1266,8 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float bermD = 0.0;
 		[branch] if (ObjBermHeightAmp > 0.005)
 			bermD = BermField(gridLocal);
-		// An object column takes the DOME; the carve profile is the trench
-		// layer's shape and reads as a flat-topped slab on a boulder. The berm
-		// is a trail feature and has no business on an object either.
-		float3 domeNrm = float3(0.0, 0.0, 1.0);
-		float depth;
-		[branch] if (objectField)
-		{
-			// B0: the blob field replaces the dome on object columns only.
-			// Roads and trench columns keep CarveProfile untouched, so the
-			// A/B is confined to exactly the surfaces the spike is about.
-			[branch] if (BlobDrape > 0.5)
-				depth = ObjectBlobDepth(worldXY, skinDepth, domeNrm);
-			else
-				depth = ObjectDomeDepth(worldXY, skinDepth, domeNrm);
-		}
-		else
-		{
-			depth = CarveProfile(deform, skinDepth, worldXY) +
-			        BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
-		}
+		float depth = CarveProfile(deform, skinDepth, worldXY) +
+		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
 		// a fully worn floor has to clear the object under it or the two z-fight,
@@ -1865,10 +1379,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		}
 		// Surface z = top + profile, so normal.xy = -d(profile); the other
 		// fields RAISE the surface and subtract for the same reason.
-		// The dome carries its own analytic normal; the profile gradient is
-		// blind to a shape that lives in the cone field.
-		v.NormalWS = objectField ? domeNrm :
-		                           normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
+		v.NormalWS = normalize(float3(-profGrad - undGrad - bermGrad, 1.0));
 		v.SkinDepth = skinDepth;
 		v.Deform = deform;
 		v.Killed = 0.0;
@@ -1895,13 +1406,11 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.Flat = StaticsDebugView != 0.0 ?
 	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
 	                 0.0;
-	// Mode 6 covers the PATCH too now: which draw layer put this pixel here,
-	// in the skin's own green/yellow/red convention so one screenshot compares
-	// the two paths. The mode used to paint the patch dim gray, which is why a
-	// null drape result was indistinguishable from a culled one.
+	// Mode 6 covers the PATCH too: layer 1 in the skin's green/yellow/red
+	// convention, so one screenshot compares the two paths.
 	[flatten] if (StaticsDebugView > 5.5)
 	{
-		vsout.Coverage = (PatchLayer + 0.5) / 8.0;
+		vsout.Coverage = 0.5 / 8.0;
 		vsout.Flat = 1.0;
 	}
 	// The patch is exempt from the lift gates; its walls are real geometry.
@@ -2672,40 +2181,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		}
 	}
 
-#if !defined(SHADOWCAST)
-	// C0 CONTAINER SPIKE (CONTAINER-SHELL-PLAN). Every vertex of the draw
-	// rises by the SAME constant - no field is sampled to place it, so no
-	// two vertices can disagree about height and the pleat is structurally
-	// impossible. What we draw is no longer the snow surface, it is a box
-	// that CONTAINS it; the pixel shader marches the real surface inside.
-	// Deliberately outside every mask: a container with holes in it lets
-	// the ray miss snow that is really there. The caster is excluded, so
-	// shadows keep the old shape rather than becoming a solid block.
-	[flatten] if (ContainerSpike > 0.5 && ProjPixelEnable > 1.5)
-	{
-		// THE LID MUST CLEAR THE FIELD, NOT THE MESH. v2 raised each vertex
-		// a constant above ITS OWN position, so the container was the
-		// object's FACETED MESH translated upward - while the snow surface
-		// it is supposed to enclose comes from the 4-unit raster, max-of-4
-		// dilated. Two different surfaces, disagreeing by several units.
-		// Wherever a facet sagged more than the margin below the raster's
-		// top, the ray STARTED BELOW the snow and the pixel missed, and
-		// that sign flips facet by facet - the triangles in the
-		// coverage-alpha view, which in container mode IS the hit/miss
-		// mask. It also explains triangles at depth 0, where there is no
-		// dome to pleat and only a mesh-versus-raster mismatch is left.
-		//
-		// Anchoring the lid to PatchTop - the same source ContainerSnowZ
-		// reads - makes the clearance exact everywhere and takes the mesh's
-		// faceting out of the decision entirely. The vertex's own height is
-		// kept as a floor so nothing sinks into the object it covers.
-		float containerH = ContainerHeight();
-		float lidBase = max(worldBase.z, PatchTop(worldBase.xy));
-		o.WorldAbs = float3(worldBase.xy, lidBase + containerH);
-		o.Depth = containerH;
-		o.CoverDepth = containerH;
-	}
-#endif
 	o.Depth = depth;
 	o.CoverDepth = coverDepth;
 	o.Target = max(depthTarget, kMinSkinLift);
@@ -2834,16 +2309,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	return v;
 }
 
-#if defined(MELD)
-MELD_VS_OUTPUT main(uint id
-					: SV_VertexID)
-{
-	MELD_VS_OUTPUT o;
-	const float2 uv = float2((id << 1) & 2, id & 2);
-	o.Position = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
-	return o;
-}
-#elif defined(SHADOWCAST)
+#if defined(SHADOWCAST)
 // Depth-only shadow caster VS (sun cascade injection): the FULL lift
 // math - the caster must be the exact surface the visible shell renders
 // or the shadow offsets from its own snow - but none of the shading
@@ -3232,12 +2698,10 @@ float SkinRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool t
 	return 1.0 - occl;
 }
 
-// THE skin material and lighting, factored out so the Blob Snow Shell (direct
-// spheres and the melded composite) shades through the same code as the
-// skin: taps, two-plane projection, parallax, normal map, frost/crust,
-// RMAOS, cascades + heightfield march + screen-space shadows, sun PBR,
-// point lights, skylighting. One recipe. The skin's own main calls this
-// verbatim; a change here changes both.
+// THE skin material and lighting, factored out of the skin's main: taps,
+// two-plane projection, parallax, normal map, frost/crust, RMAOS, cascades +
+// heightfield march + screen-space shadows, sun PBR, point lights,
+// skylighting.
 struct SkinShadeInput
 {
 	float3 WorldPos;
@@ -3932,213 +3396,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	return r;
 }
 
-#if defined(MELD)
-// Sheet shading for the MELD composite:
-// the shell's own material, sun, point lights and skylighting, once per
-// pixel of whichever surface the caller hands in.
-PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 motionVector, float depth, float4 curClip)
-{
-	// The skin's own material and lighting, on the sphere or melded surface.
-	// Flat class, no trench, grid-local from the world position.
-	SkinShadeInput si;
-	si.WorldPos = worldPos;
-	si.Position = float4(pixelPos, depth, 1.0);
-	si.CurrentClip = curClip;
-	si.Flat = 1.0;
-	si.worldXY = worldPos.xy + ShellCameraPosAdjust.xy;
-	si.GridLocal = si.worldXY - GridOrigin;
-	si.trenchGridLocal = si.GridLocal;
-	si.pixelDist = length(worldPos);
-	si.pixelDeform = 0.0;
-	si.screenNoise = Random::InterleavedGradientNoise(pixelPos, SharedData::FrameCount);
-	si.selfShadowReject = 0.0;
-	SkinShadeResult r = SkinShadeSurface(si, normalWS);
-
-	PS_OUTPUT psout;
-	psout.Diffuse = float4(r.preLit, 1.0);
-	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 1.0);
-	psout.Albedo = float4(r.diffuseLobe, 1.0);
-	psout.Specular = float4(r.directSpecular, 1.0);
-	psout.Reflectance = float4(r.specularLobe, 1.0);
-	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(r.ambientPart).x, 1.0);
-	psout.Masks2 = float4(1.0 - r.landVertexAO, 0.0, 0.0, 1.0);
-#	if defined(MELD)
-	psout.Depth = depth;
-#	endif
-	return psout;
-}
-#endif
-
-#if defined(MELD)
-// View-space point at a pixel centre for a stored |view z|. Sign-agnostic:
-// the ray from the inverse projection carries the convention, |z| the scale.
-float3 MeldViewPos(float2 pixel, float z)
-{
-	const float2 ndc = float2(pixel.x / MeldDims.x * 2.0 - 1.0, 1.0 - pixel.y / MeldDims.y * 2.0);
-	float4 v = mul(MeldProjInverse, float4(ndc, 1.0, 1.0));
-	v.xyz /= v.w;
-	return v.xyz * (z / max(abs(v.z), 1e-5));
-}
-
-PS_OUTPUT main(MELD_VS_OUTPUT input)
-{
-	const float2 pixel = input.Position.xy;
-	const int2 px = int2(pixel);
-	const float2 md = MeldDepth.Load(int3(px, 0));
-	const float z = md.x;
-	[branch] if (z > 1e29 || md.y < 0.5)
-		discard;
-	const int2 last = int2(MeldDims) - 1;
-	// Neighbours off the sheet fall back to the centre so the normal there
-	// is taken from the surviving side only.
-	float2 ml = MeldDepth.Load(int3(max(px.x - 1, 0), px.y, 0));
-	float2 mr = MeldDepth.Load(int3(min(px.x + 1, last.x), px.y, 0));
-	float2 mu = MeldDepth.Load(int3(px.x, max(px.y - 1, 0), 0));
-	float2 mdn = MeldDepth.Load(int3(px.x, min(px.y + 1, last.y), 0));
-	const float zl = (ml.x > 1e29 || ml.y < 0.5) ? z : ml.x;
-	const float zr = (mr.x > 1e29 || mr.y < 0.5) ? z : mr.x;
-	const float zu = (mu.x > 1e29 || mu.y < 0.5) ? z : mu.x;
-	const float zd = (mdn.x > 1e29 || mdn.y < 0.5) ? z : mdn.x;
-	const float3 viewPos = MeldViewPos(pixel, z);
-	const float3 pl = MeldViewPos(pixel + float2(-1.0, 0.0), zl);
-	const float3 pr = MeldViewPos(pixel + float2(1.0, 0.0), zr);
-	const float3 pu = MeldViewPos(pixel + float2(0.0, -1.0), zu);
-	const float3 pd = MeldViewPos(pixel + float2(0.0, 1.0), zd);
-	// The smaller difference on each axis, so a silhouette against the far
-	// side does not tilt the normal.
-	const float3 dx = (abs(zr - z) < abs(zl - z)) ? (pr - viewPos) : (viewPos - pl);
-	const float3 dy = (abs(zd - z) < abs(zu - z)) ? (pd - viewPos) : (viewPos - pu);
-	float3 nView = normalize(cross(dx, dy));
-	[flatten] if (dot(nView, -viewPos) < 0.0)
-		nView = -nView;
-	const float3 rel = mul(MeldViewInverse, float4(viewPos, 1.0)).xyz;
-	const float3 normalWS = normalize(mul((float3x3)MeldViewInverse, nView));
-	const float4 clipPos = mul(CameraViewProj, float4(rel, 1.0));
-	const float depth = clipPos.z / max(clipPos.w, 1e-5);
-	const float4 cur = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	const float3 prevRel = rel + (ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz);
-	const float4 prev = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	const float2 motionVector = float2(-0.5, 0.5) * (cur.xy / cur.w - prev.xy / prev.w);
-	PS_OUTPUT psout = BlobShade(rel, normalWS, pixel, motionVector, depth, cur);
-	[branch] if (MeldDebug > 0.5)
-	{
-		const float3 dbg = MeldDebug > 1.5 ? normalWS * 0.5 + 0.5 : saturate(z / 4096.0).xxx;
-		psout.Diffuse = float4(dbg, 1.0);
-		psout.Albedo = float4(dbg, 1.0);
-	}
-	return psout;
-}
-#else
 PS_OUTPUT main(VS_OUTPUT input)
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float3 normalWS = normalize(input.NormalWS);
-
-	// C0 CONTAINER SPIKE: find the snow surface INSIDE the container, per
-	// pixel. The rasterised position is the container's lid, not a surface
-	// - march the view ray down from it until it crosses ContainerSnowZ,
-	// then move this pixel's whole shading context to the crossing point.
-	// Everything downstream reads WorldPos and GridLocal, so relocating
-	// those two re-points the entire shader at the true surface, and the
-	// normal comes from the field's own gradient rather than a mesh.
-	//
-	// A miss does NOT discard here: killing pixels before the gradient
-	// operators further down would leave the quad's derivatives undefined.
-	// It records the miss and zeroes coverage at the gate instead.
-	bool containerHit = false;
-	bool containerMode = false;
-#if !defined(PATCH)
-	[branch] if (ContainerSpike > 0.5 && ProjPixelEnable > 1.5)
-	{
-		containerMode = true;
-		float3 rayDir = normalize(input.WorldPos);
-		float3 originAbs = input.WorldPos + ShellCameraPosAdjust.xyz;
-		float containerH = ContainerHeight();
-		// Span: enough to traverse the container vertically at this ray's
-		// pitch, bounded by a fixed WORLD reach rather than a multiple of
-		// the height. The v1 cap of 8x height was Josef's view-dependent
-		// hole: at low camera angles the true crossing lies further along
-		// the ray than the cap reached, so lowering the camera GREW the
-		// miss region over the dome's top.
-		float span = min(containerH / max(abs(rayDir.z), 0.02), 320.0);
-		const int kContainerSteps = 48;
-		float stepLen = span / (float)kContainerSteps;
-		float prevT = 0.0;
-		float prevGap = originAbs.z - ContainerSnowZ(originAbs.xy);
-		float hitT = -1.0;
-		// Entry below the field. With the lid anchored to PatchTop this is
-		// no longer a side skirt over a flank (v2's meaning, which had to
-		// miss) - the lid has no skirts. It can now only mean the lid dipped
-		// under the surface between two vertices, where the interpolation is
-		// linear and the field is not. Degrade to the field directly beneath
-		// the entry: a continuous surface, off by at most the dip, instead
-		// of a hole or a painted lid. Rare by construction, and never a
-		// facet-following pattern.
-		[branch] if (prevGap <= 0.0)
-		{
-			float3 fallbackAbs = float3(originAbs.xy, ContainerSnowZ(originAbs.xy));
-			input.WorldPos = fallbackAbs - ShellCameraPosAdjust.xyz;
-			input.GridLocal = fallbackAbs.xy - GridOrigin;
-			const float gsf = 4.0;
-			float2 gradF = float2(
-				ContainerSnowZ(fallbackAbs.xy + float2(gsf, 0.0)) - ContainerSnowZ(fallbackAbs.xy - float2(gsf, 0.0)),
-				ContainerSnowZ(fallbackAbs.xy + float2(0.0, gsf)) - ContainerSnowZ(fallbackAbs.xy - float2(0.0, gsf))) / (2.0 * gsf);
-			normalWS = normalize(float3(-gradF, 1.0));
-			containerHit = true;
-		}
-		else
-		{
-			[loop] for (int ci = 1; ci <= kContainerSteps; ci++)
-			{
-				float t = stepLen * (float)ci;
-				float3 p = originAbs + rayDir * t;
-				float gap = p.z - ContainerSnowZ(p.xy);
-				[branch] if (gap <= 0.0)
-				{
-					// Bisect the bracket. The v1 single linear guess left
-					// the hit quantized to the step length, which banded
-					// the texture into blocks at grazing views (smooth
-					// from above, blocky from the side). Five halvings
-					// take a ~7-unit step down to ~0.2 units.
-					float lo = prevT;
-					float hi = t;
-					[unroll] for (int bi = 0; bi < 5; bi++)
-					{
-						float mid = 0.5 * (lo + hi);
-						float3 pm = originAbs + rayDir * mid;
-						[flatten] if (pm.z - ContainerSnowZ(pm.xy) > 0.0)
-							lo = mid;
-						else
-							hi = mid;
-					}
-					hitT = 0.5 * (lo + hi);
-					break;
-				}
-				prevT = t;
-				prevGap = gap;
-			}
-		}
-		[branch] if (hitT >= 0.0)
-		{
-			float3 hitAbs = originAbs + rayDir * hitT;
-			input.WorldPos = hitAbs - ShellCameraPosAdjust.xyz;
-			input.GridLocal = hitAbs.xy - GridOrigin;
-			// Analytic normal from the field gradient - the surface knows
-			// its own orientation, so the two-plane texture selection and
-			// the lighting both get the truth with no special case. Step =
-			// one raster texel: shorter steps read the bilinear facets
-			// inside a texel instead of the field's slope.
-			const float gs = 4.0;
-			float2 grad = float2(
-				ContainerSnowZ(hitAbs.xy + float2(gs, 0.0)) - ContainerSnowZ(hitAbs.xy - float2(gs, 0.0)),
-				ContainerSnowZ(hitAbs.xy + float2(0.0, gs)) - ContainerSnowZ(hitAbs.xy - float2(0.0, gs))) / (2.0 * gs);
-			normalWS = normalize(float3(-grad, 1.0));
-			containerHit = true;
-		}
-	}
-#endif
 
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);
@@ -4434,16 +3696,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// (The shred rule lived here and was REMOVED: dissolving pleated
 	// pixels only inverted the artifact - white slivers became dark
 	// triangular holes - which is the proof that a per-pixel rule cannot
-	// repair torn geometry. The tear is a vertex-rate disagreement; the
-	// fix is the container/march architecture, see CONTAINER-SHELL-PLAN.md.)
+	// repair torn geometry. The tear is a vertex-rate disagreement.)
 
-	// C0: in container mode the march IS the coverage decision. Every gate
-	// above reconstructs where snow belongs from vertex data and the
-	// pre-shell G-buffer; the ray either found the surface or it did not,
-	// and that answer is exact. Binary on purpose - the silhouette is
-	// whatever the field's own outline says, which is the point of C0.
-	[flatten] if (containerMode)
-		pixelCoverage = containerHit ? 1.0 : 0.0;
 	// Coverage debug: the facing gates' product, and the two seam blends,
 	// captured separately so the rim band's owner is readable at a glance.
 	float dbgFacing = pixelCoverage;
@@ -4771,7 +4025,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeFlankLift = 0.0;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
-	[branch] if (LegacySkin < 0.5 && !containerMode && (coatOn || fadeAlpha < 0.5))
+	[branch] if (LegacySkin < 0.5 && (coatOn || fadeAlpha < 0.5))
 	{
 		const float fadeIn = fadeAlpha;
 		// Coverage 0.5 is the old cut's own median, so this is the edge.
@@ -4884,7 +4138,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (ditherRef >= fadeAlpha)
 		discard;
 
-	// The material and lighting, shared with the Blob Snow Shell.
 	SkinShadeInput ssi;
 	ssi.WorldPos = input.WorldPos;
 	ssi.Position = input.Position;
@@ -5094,16 +4347,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// project the parallax hit point through the same (jittered) matrix
 	// the VS used, so the trench floor is real to the z-buffer.
 	psout.Depth = input.Position.z;
-	// C0: the container's lid was rasterised, but this pixel shades the
-	// surface found inside it - WorldPos already IS that point, so project
-	// it directly. Without this the snow would z-test as though it stood at
-	// the top of the container.
-	[branch] if (containerHit)
-	{
-		float4 boxClip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
-		psout.Depth = boxClip.z / max(boxClip.w, 1e-4);
-	}
-	else [branch] if (trenchHitS > 0.0)
+	[branch] if (trenchHitS > 0.0)
 	{
 		float4 hitClip = mul(CameraViewProj, float4(input.WorldPos + viewDirWS * trenchHitS, 1.0));
 		psout.Depth = hitClip.z / max(hitClip.w, 1e-4);
@@ -5127,5 +4371,4 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
 }
-#endif  // MELD
 #endif

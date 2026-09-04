@@ -64,43 +64,23 @@ cbuffer StaticCB : register(b1)
 
 	float PileHeightRatio;  // layout sync with SnowStaticsShell; unused here
 	float SkyExposureSk;    // layout sync with SnowStaticsShell; unused here
-	float ContainerSpike;   // layout sync with SnowStaticsShell; unused here
-	float PatchLayer;       // layout sync with SnowStaticsShell; unused here
-	float ObjectDrape;      // drape owns objects: they write their own class depth
 	float ObjCorniceLip;    // layout sync with SnowStaticsShell; unused here
 	float SkinBreakup;      // layout sync with SnowStaticsShell; unused here
 	float SkinWeld;         // layout sync with SnowStaticsShell; unused here
-	float BlobDrape;        // layout sync with SnowStaticsShell; unused here
-	// Blob Snow Shell: 1 = this draw takes no spheres (road, bridge, drift).
-	float BlobExclude;
-	// Blob Snow Shell: camera Z the mask target's fresh-top channel is
-	// encoded against (R16 UNORM over +/-2048 around it).
-	float BlobRefZ;
-	// Blob Snow Shell: 1 = mountain/cliff family (rock slope limit applies).
-	float BlobRockClass;
 
 	float HasSkinMasksCopy;  // layout sync with SnowStaticsShell; unused here
 	float EdgeBreakupScale;  // layout sync with SnowStaticsShell; unused here
 	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
-}
-
-// Fresh-top channel of the blob mask target: THIS frame's fragment height,
-// so a sphere never sits on a decayed ghost of a surface the game culled.
-// 0 is reserved for "no fragment".
-// Packed R16: bits 1..15 = height (0.125-unit steps over +/-2048), bit 0 =
-// the rock class. MAX blending still orders by height; the class rides along.
-float BlobFreshEnc(float worldZ)
-{
-	const float k = floor(clamp((worldZ - BlobRefZ + 2048.0) / 4096.0, 1.0 / 32767.0, 1.0) * 32767.0);
-	return (k * 2.0 + (BlobRockClass > 0.5 ? 1.0 : 0.0)) / 65535.0;
+	float PadStatics0;
+	float PadStatics1;
+	float PadStatics2;
 }
 
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
 	float4 Normal : NORMAL0;
-	uint VertexID : SV_VertexID;
 };
 
 struct VS_OUTPUT
@@ -114,10 +94,6 @@ struct VS_OUTPUT
 	// World-space normal z: the peel passes reject surfaces that cannot
 	// carry snow (undersides, walls) from owning a layer.
 	float NormalZ : TEXCOORD3;
-	// Blob Snow Shell: vanilla's projected-snow weight at this vertex, 0..1,
-	// reconstructed the way the skin's S2 gate does it and cut to the Snow
-	// Fill slice. Rasterised MAX into a per-layer mask the placement reads.
-	float PdMask : TEXCOORD4;
 };
 
 #ifdef VSHADER
@@ -150,20 +126,7 @@ VS_OUTPUT main(VS_INPUT input)
 	[flatten] if (ClassOverride > 1.5)
 		skinDepth = ObjectsDepth;
 	// Parked: only roads carve until object trenching is done properly.
-	//
-	// THE DRAPE LIFTS THE PARK, and this line is why the road's shell and an
-	// object's were ONE shell. A non-road object wrote ZERO here, so a rock
-	// had no depth field of its own at all - everything it wore reached it
-	// from the road beneath through the raster's MAX blend. Hence Josef's two
-	// tells: the two shells are welded at every edge, and zeroing the Road
-	// Meshes slider deletes BOTH, because the object's only depth source was
-	// the road's. No amount of edge-cutting downstream could separate them
-	// while the object had nothing of its own to draw with.
-	//
-	// Gated on the drape so the A/B stays honest: with it off this is byte
-	// for byte the parked behaviour. Trenching stays parked either way - the
-	// patch's own mayTrample still refuses to carve an object column.
-	[flatten] if (ObjectTrenches < 0.5 && LegacySkin < 0.5 && ObjectDrape < 0.5)
+	[flatten] if (ObjectTrenches < 0.5 && LegacySkin < 0.5)
 		skinDepth = 0.0;
 
 	VS_OUTPUT vsout;
@@ -177,36 +140,11 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS));
 	vsout.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
-	// Blob placement mask. Same three terms as the skin's authored gate so the
-	// blob shell follows the same sliders the recolour follows: nz x authored
-	// vertex alpha minus the draw's threshold (S2), cut to the Snow Fill's
-	// angular slice. Alpha is SmoothedNormals.w = 1 + alpha (0 = unresolved,
-	// which reads as full, as in BuildSkinVertex). A draw with no projected-UV
-	// data (ProjThreshold < 0) writes nothing, so nothing is placed on it.
-	float pdAlpha = 1.0;
-	[branch] if (HasSmoothedNormals > 0.5)
-	{
-		float4 smoothEntry = SmoothedNormals[input.VertexID];
-		[flatten] if (smoothEntry.w > 0.5)
-			pdAlpha = saturate(smoothEntry.w - 1.0);
-	}
-	float pdMask = 0.0;
-	[branch] if (ProjThreshold > -0.5 && BlobExclude < 0.5)
-	{
-		// GRADED by slope, not saturated: the mask is nz x alpha minus the
-		// draw's threshold, so Placement Threshold reads as a slope cutoff
-		// (0.5 = about 60 degrees on fully painted architecture) and is the
-		// only slope control the blob shell answers to. No repose gate.
-		pdMask = saturate(vsout.NormalZ * pdAlpha - max(ProjThreshold, 0.0));
-		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		pdMask *= smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, vsout.NormalZ);
-	}
-	vsout.PdMask = pdMask;
 	return vsout;
 }
 #endif
 
-#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2) || defined(COVERBOT))
+#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2))
 // S4 phase 2 - layer peels (SKIN-PLACEMENT-PLAN): re-rasterize the
 // captures keeping only fragments a peel tolerance BELOW this frame's
 // accumulated layer-1 top (PEEL2: below layer 2 as well); MAX blending
@@ -218,58 +156,9 @@ Texture2D<float> Layer1Top : register(t3);
 Texture2D<float> Layer2Top : register(t4);
 #	endif
 
-#	if defined(COVERBOT)
-// THE AIR TEST's data: for a peeled layer, the lowest surface standing ABOVE
-// it. Josef's distinction - a roof over a walkway leaves open space, a wall
-// standing on a road is solid to the ground - and the tops-only rasters
-// cannot tell those apart, since both read as "something above, a surface
-// below". No height threshold ever could: a roof and a tall wall's top sit at
-// the same height.
-//
-// This cannot ride the existing bottoms map, which MINs over the WHOLE
-// column: an elevated deck records its own underside and buries the signal,
-// rejecting exactly the walkway the peeled layers exist for. Restricting to
-// fragments above the layer's own finished top is the whole trick, and it is
-// why the pass has to run after that layer's peel.
-//
-// EVERY facing counts, unlike the peel: a wall's side faces are what make it
-// solid, and they are precisely what the peel's up-facing filter throws away.
-// Support posts standing on a deck therefore veto their OWN columns and no
-// others, which is correct - snow does not fall inside a post.
-//
-// Written to SV_Target1 so the capture's existing blend state supplies the
-// MIN op; RT0 is bound null for this pass.
-struct COVER_OUTPUT
-{
-	float Bottom : SV_Target1;
-};
-
-COVER_OUTPUT main(VS_OUTPUT input)
-{
-	COVER_OUTPUT psout;
-	// Sentinel is a no-op under MIN: nothing above means open sky, which the
-	// drape reads as free to draw.
-	psout.Bottom = 100000.0;
-	float2 dims;
-	Layer1Top.GetDimensions(dims.x, dims.y);
-	float2 local = (input.WorldXY - HeightWindowCenter) / HeightHalfExtent;
-	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-	int2 t = int2(clamp(uv * dims - 0.5, 0.0, dims.x - 1.001));
-	float layerTop = Layer1Top.Load(int3(t, 0));
-	// 2 units of skin so the surface's own coplanar geometry does not read as
-	// its own cover.
-	[flatten] if (layerTop > -50000.0 && input.WorldZ > layerTop + 2.0)
-		psout.Bottom = input.WorldZ;
-	return psout;
-}
-#	else
-// Blob Snow Shell: the peel writes its layer's placement mask beside the
-// top, into RT3 (MAX, the blend state's fourth slot); the C++ binds the
-// layer's own mask texture there.
 struct PEEL_OUTPUT
 {
 	float Top : SV_Target0;
-	float2 PdMask : SV_Target3;
 };
 
 PEEL_OUTPUT main(VS_OUTPUT input)
@@ -297,10 +186,8 @@ PEEL_OUTPUT main(VS_OUTPUT input)
 #	endif
 	PEEL_OUTPUT o;
 	o.Top = input.WorldZ;
-	o.PdMask = float2(input.PdMask, BlobFreshEnc(input.WorldZ));
 	return o;
 }
-#	endif
 #elif defined(PSHADER)
 // Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
 // window addressing is read here; names carry an H so they cannot clash
@@ -344,8 +231,6 @@ struct PS_OUTPUT
 	float Top : SV_Target0;
 	float Bottom : SV_Target1;
 	float2 SkinDepth : SV_Target2;
-	// Blob Snow Shell: layer-1 placement mask (RT3, MAX).
-	float2 PdMask : SV_Target3;
 };
 
 // Mirror of SnowDeformation.h kNoRoadTop.
@@ -362,7 +247,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// the bottom-empty sentinel, a no-op under MIN blending.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
 	psout.Bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
-	psout.PdMask = float2(input.PdMask, BlobFreshEnc(input.WorldZ));
 	psout.SkinDepth = float2(input.SkinDepth.x,
 		input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
 	return psout;

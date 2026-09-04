@@ -107,22 +107,6 @@
 	X(SkinWeldAmt) \
 	X(SkinEdgeLumpSize) \
 	X(SkinEdgeFlankWidth) \
-	X(EnableBlobShell) \
-	X(BlobSpacing) \
-	X(BlobSize) \
-	X(BlobSizeNoise) \
-	X(BlobMaskThreshold) \
-	X(BlobMaxSlopeDeg) \
-	X(BlobRockMaxSlopeDeg) \
-	X(BlobBorderNoise) \
-	X(BlobLayers) \
-	X(BlobRadius) \
-	X(BlobMeldDepthRange) \
-	X(BlobMeldSmoothRange) \
-	X(BlobMeldIterations) \
-	X(BlobMeldMaxRadiusPx) \
-	X(BlobMeldSmoothing) \
-	X(BlobMeldVerticalRange) \
 	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
@@ -503,9 +487,6 @@ void SnowDeformation::SetupResources()
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
-	blobCB = new ConstantBuffer(ConstantBufferDesc<BlobCB>(), "SnowDeformation::BlobCB");
-	meldCB = new ConstantBuffer(ConstantBufferDesc<MeldCB>(), "SnowDeformation::MeldCB");
-	meldSeedCB = new ConstantBuffer(ConstantBufferDesc<MeldSeedCB>(), "SnowDeformation::MeldSeedCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 
 	CreateHeightFieldResources();
@@ -515,8 +496,7 @@ void SnowDeformation::SetupResources()
 		// extreme surfaces win per texel in any draw order; no depth buffer.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
-		// RT3 (Blob Snow Shell): the per-layer placement mask, MAX like the tops.
-		for (int i = 0; i < 4; i++) {
+		for (int i = 0; i < 3; i++) {
 			minmaxBlendDesc.RenderTarget[i].BlendEnable = TRUE;
 			minmaxBlendDesc.RenderTarget[i].SrcBlend = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlend = D3D11_BLEND_ONE;
@@ -525,9 +505,8 @@ void SnowDeformation::SetupResources()
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
 			// RT2 carries a second channel (G = road-heightfield bit); MAX on
-			// it means "any road wrote this texel". RT3 too: G = the blob
-			// mask's fresh-top channel.
-			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = (i == 2 || i == 3) ?
+			// it means "any road wrote this texel".
+			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = (i == 2) ?
 			                                                            (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN) :
 			                                                            D3D11_COLOR_WRITE_ENABLE_RED;
 		}

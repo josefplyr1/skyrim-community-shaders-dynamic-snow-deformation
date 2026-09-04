@@ -742,7 +742,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// positive forces rounded on something already rounded, a no-op.
 	bool forceRounded = false;
 	bool plankFamily = false;
-	bool driftFamily = false;
 	{
 		std::string loweredName(a_pass->geometry->name.c_str());
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
@@ -762,31 +761,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		plankFamily = loweredName.find("plank") != std::string::npos ||
 		              loweredName.find("walkway") != std::string::npos ||
 		              loweredName.find("catwalk") != std::string::npos;
-		// Blob Snow Shell: a drift or snow pile has no bare edge to round.
-		driftFamily = loweredName.find("drift") != std::string::npos ||
-		              loweredName.find("snowpile") != std::string::npos ||
-		              loweredName.find("roadchunk") != std::string::npos;
-		// A mesh that already IS snow (drifts, the snow overlays and decals
-		// Bethesda lays over roads and drifts) takes no sheet, whatever it is
-		// named: the material classifier's landscape-snow match, plus decals.
-		if (!driftFamily && captureMaterial && ClassifySnowPath(captureMaterial).base)
-			driftFamily = true;
-		if (!driftFamily) {
-			const auto& exFlags = a_pass->shaderProperty->flags;
-			using ExFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-			if (exFlags.any(ExFlag::kDecal) || exFlags.any(ExFlag::kDynamicDecal))
-				driftFamily = true;
-		}
-		if (!driftFamily)
-			if (auto* driftMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
-				if (auto driftTextures = driftMaterial->textureSet.get())
-					if (auto driftPath = driftTextures->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-						std::string loweredPath(driftPath);
-						std::transform(loweredPath.begin(), loweredPath.end(), loweredPath.begin(),
-							[](unsigned char c) { return (char)std::tolower(c); });
-						driftFamily = loweredPath.find("drift") != std::string::npos ||
-						              loweredPath.find("snowpile") != std::string::npos;
-					}
 		// (Drift-family special-casing removed: drifts ride the general
 		// fully-painted default above, like every technique-classified
 		// draw without property-level projection data.)
@@ -799,7 +773,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, driftFamily, projReal });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -927,15 +901,6 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// Global gate here, not a per-draw class: the patch is one draw and
 	// reads the road bit per texel from the raster's G channel.
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
-	// Layer 0 unless a per-layer pass overrides it after the fill. The
-	// shadow caster shares this recipe and draws the top surface only.
-	a_scb.PatchLayer = 0.0f;
-	// THE DRAPE PIVOT's A/B. Object columns take the whole lattice surface
-	// rather than only the trench around footprints; the skins step aside in
-	// the same breath, so the two can never fight for the depth buffer.
-	a_scb.ObjectDrape = settings.ObjectDrapeShell ? 1.0f : 0.0f;
-	// B0: rides the patch recipe so the caster evaluates the same field.
-	a_scb.BlobDrape = settings.BlobObjectSnow ? 1.0f : 0.0f;
 }
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
@@ -1048,31 +1013,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
 		}
 	}
-	if (!meldVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "MELD"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &meldVS)))
-				Util::SetResourceName(meldVS, "SnowDeformation::BlobMeldVS");
-		}
-	}
-	if (!meldPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "MELD", ehfDefine, iblDefine));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &meldPS)))
-				Util::SetResourceName(meldPS, "SnowDeformation::BlobMeldPS");
-		}
-	}
-	{
-		constexpr auto meldPath = L"Data\\Shaders\\SnowDeformation\\BlobMeldCS.hlsl";
-		if (!meldDilateCS)
-			meldDilateCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldDilateCS"));
-		if (!meldSmoothCS)
-			meldSmoothCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSmoothCS"));
-		if (!meldSheetCS)
-			meldSheetCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(meldPath, {}, "cs_5_0", "MeldSheetCS"));
-	}
 	if (!patchTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_TESS"));
@@ -1123,14 +1063,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
 		}
 	}
-	if (!heightCoverPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "COVERBOT"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightCoverPS)))
-				Util::SetResourceName(heightCoverPS, "SnowDeformation::HeightCoverPS");
-		}
-	}
 	if (!heightPeel2PS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "PEEL2"));
@@ -1162,8 +1094,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectSkyOpenCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectSkyOpenCS"));
 	if (!objectConeDiffuseCS)
 		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
-	if (!blobSeedCS)
-		blobSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "BlobSeedCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightScrollCS || !heightCombineCS || !heightConeCS) {
 		staticsShadersFailed = true;
@@ -1239,8 +1169,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
-	objectCoverBottom2 = makeHeightTexture("SnowDeformation::ObjectCoverBottom2");
-	objectCoverBottom3 = makeHeightTexture("SnowDeformation::ObjectCoverBottom3");
 	// P3: the sky-openness field at half the raster's resolution - a soft
 	// field, and half res quarters the bake cost. No RTV: compute-written.
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
@@ -1280,244 +1208,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth = new Texture2D(skinDepthDesc, "SnowDeformation::HeightSkinDepth");
 	heightSkinDepth->CreateSRV(skinDepthSrvDesc);
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
-
-	// ---- Blob Snow Shell (Spike 1) ----
-	{
-		// Per-layer placement masks, R = mask, G = this frame's fragment height
-		// (camera-relative, so a sphere never sits on a decayed ghost). Cleared
-		// each frame like the skin depth.
-		D3D11_TEXTURE2D_DESC blobMaskDesc = heightDesc;
-		blobMaskDesc.Format = DXGI_FORMAT_R16G16_UNORM;
-		blobMaskDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_SHADER_RESOURCE_VIEW_DESC blobMaskSrvDesc = heightSrvDesc;
-		blobMaskSrvDesc.Format = blobMaskDesc.Format;
-		D3D11_RENDER_TARGET_VIEW_DESC blobMaskRtvDesc = heightRtvDesc;
-		blobMaskRtvDesc.Format = blobMaskDesc.Format;
-		const char* blobMaskNames[6] = { "SnowDeformation::BlobMask1", "SnowDeformation::BlobMask2", "SnowDeformation::BlobMask3",
-			"SnowDeformation::BlobMask4", "SnowDeformation::BlobMask5", "SnowDeformation::BlobMask6" };
-		for (int i = 0; i < 6; i++) {
-			blobMask[i] = new Texture2D(blobMaskDesc, blobMaskNames[i]);
-			blobMask[i]->CreateSRV(blobMaskSrvDesc);
-			blobMask[i]->CreateRTV(blobMaskRtvDesc);
-		}
-		// Layers 4-6: same shape as the peeled tops, rebuilt per frame.
-		blobTop[0] = makeHeightTexture("SnowDeformation::BlobTop4");
-		blobTop[1] = makeHeightTexture("SnowDeformation::BlobTop5");
-		blobTop[2] = makeHeightTexture("SnowDeformation::BlobTop6");
-	}
-}
-
-
-
-void SnowDeformation::EnsureMeldResources(uint32_t a_width, uint32_t a_height)
-{
-	if (blobMeldDepth[0] && blobMeldDepth[1] && blobMeldW == a_width && blobMeldH == a_height)
-		return;
-	for (auto& t : blobMeldDepth) {
-		delete t;
-		t = nullptr;
-	}
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = a_width;
-	desc.Height = a_height;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R32G32_FLOAT;
-	desc.SampleDesc = { 1, 0 };
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-	srvDesc.Format = desc.Format;
-	srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-	srvDesc.Texture2D.MipLevels = 1;
-	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc{};
-	rtvDesc.Format = desc.Format;
-	rtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-	uavDesc.Format = desc.Format;
-	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-	const char* names[2] = { "SnowDeformation::BlobMeldDepth0", "SnowDeformation::BlobMeldDepth1" };
-	for (int i = 0; i < 2; i++) {
-		blobMeldDepth[i] = new Texture2D(desc, names[i]);
-		blobMeldDepth[i]->CreateSRV(srvDesc);
-		blobMeldDepth[i]->CreateRTV(rtvDesc);
-		blobMeldDepth[i]->CreateUAV(uavDesc);
-	}
-	blobMeldW = a_width;
-	blobMeldH = a_height;
-}
-
-
-void SnowDeformation::DrawBlobShell()
-{
-	if (!settings.EnableBlobShell || !blobSeedCS || !meldVS || !meldPS || !meldDilateCS || !meldSmoothCS || !meldSheetCS || !blobCB || !meldCB || !meldSeedCB)
-		return;
-	if (!heightTopRaw[heightCurrent] || !heightTop2Raw[heightCurrent] || !heightTop3Raw[heightCurrent] || !heightProcessCB)
-		return;
-	for (int i = 0; i < 6; i++)
-		if (!blobMask[i] || (i < 3 && !blobTop[i]))
-			return;
-	auto context = globals::d3d::context;
-	auto renderer = globals::game::renderer;
-	const auto& fb = globals::game::frameBufferCached;
-	auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-	if (!mainRT.texture)
-		return;
-	D3D11_TEXTURE2D_DESC mainDesc{};
-	mainRT.texture->GetDesc(&mainDesc);
-	EnsureMeldResources(mainDesc.Width, mainDesc.Height);
-	if (!blobMeldDepth[0] || !blobMeldDepth[1])
-		return;
-	const float4 dynRes = fb.GetDynamicResolutionParams1();
-	const uint32_t dw = std::max(1u, uint32_t(float(mainDesc.Width) * std::clamp(dynRes.x, 0.05f, 1.0f)));
-	const uint32_t dh = std::max(1u, uint32_t(float(mainDesc.Height) * std::clamp(dynRes.y, 0.05f, 1.0f)));
-
-	// The game's output state, restored for the composite and afterwards.
-	ID3D11RenderTargetView* prevRTVs[8] = {};
-	ID3D11DepthStencilView* prevDSV = nullptr;
-	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-	auto& sceneDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	ID3D11ShaderResourceView* sceneDepthSRV = sceneDepth.depthSRV;
-
-	globals::profiler->BeginPass("SnowDeformation::ScreenSpaceSnow");
-	// Pass 1: seed from the scene depth through the layer masks.
-	{
-		BlobCB cb{};
-		cb.NoiseScale = std::clamp(settings.BlobSpacing, 1.0f, 512.0f);
-		cb.Thickness = std::clamp(settings.BlobSize, 0.25f, 64.0f);
-		cb.ThicknessNoise = std::clamp(settings.BlobSizeNoise, 0.0f, 1.0f);
-		cb.MaskThreshold = std::clamp(settings.BlobMaskThreshold, 0.0f, 1.0f);
-		cb.Layers = float(std::clamp(settings.BlobLayers, 1, 6));
-		cb.Radius = std::clamp(settings.BlobRadius, 64.0f, kHeightMapHalfExtent - 8.0f);
-		cb.RefZ = blobRefZ;
-		// The fitted shell's pixels sit up to the class depth above the raster
-		// top; letting them match folds the shell into the field, so sheet and
-		// shell roll into one surface.
-		// Soft match (half weight at half this gap), wide enough for the shell's
-		// lift on top of the raster top plus a margin the jitter cannot cross.
-		cb.LayerTol = 16.0f + std::max(0.0f, std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth));
-		cb.MaxSlopeNz = std::cos(std::clamp(settings.BlobMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-		cb.RockMaxSlopeNz = std::cos(std::clamp(settings.BlobRockMaxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-		cb.BorderNoise = std::clamp(settings.BlobBorderNoise, 0.0f, 1.0f);
-		blobCB->Update(cb);
-		MeldSeedCB sc{};
-		sc.ProjInverse = fb.GetCameraProjInverse();
-		sc.ViewInverse = fb.GetCameraViewInverse();
-		sc.CamPosAdjust = fb.GetCameraPosAdjust();
-		sc.Dims = { float(dw), float(dh) };
-		meldSeedCB->Update(sc);
-		ID3D11Buffer* cbs[3] = { heightProcessCB->CB(), blobCB->CB(), meldSeedCB->CB() };
-		context->CSSetConstantBuffers(0, 3, cbs);
-		ID3D11ShaderResourceView* srvs[14] = {
-			heightTopRaw[heightCurrent]->srv.get(),
-			heightTop2Raw[heightCurrent]->srv.get(),
-			nullptr,
-			heightTop3Raw[heightCurrent]->srv.get(),
-			blobMask[0]->srv.get(),
-			blobMask[1]->srv.get(),
-			blobMask[2]->srv.get(),
-			blobTop[0]->srv.get(),
-			blobTop[1]->srv.get(),
-			blobTop[2]->srv.get(),
-			blobMask[3]->srv.get(),
-			blobMask[4]->srv.get(),
-			blobMask[5]->srv.get(),
-			sceneDepthSRV
-		};
-		context->CSSetShaderResources(0, 14, srvs);
-		ID3D11UnorderedAccessView* seedUAV = blobMeldDepth[0]->uav.get();
-		context->CSSetUnorderedAccessViews(3, 1, &seedUAV, nullptr);
-		context->CSSetShader(blobSeedCS, nullptr, 0);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-		ID3D11UnorderedAccessView* nullUAV = nullptr;
-		context->CSSetUnorderedAccessViews(3, 1, &nullUAV, nullptr);
-		ID3D11ShaderResourceView* nullSRVs[14] = {};
-		context->CSSetShaderResources(0, 14, nullSRVs);
-		ID3D11Buffer* nullCBs[3] = {};
-		context->CSSetConstantBuffers(0, 3, nullCBs);
-	}
-
-	// Passes 2-4: dilate by each seed's thickness (H, V), smooth, sheet test.
-	MeldCB m{};
-	m.Proj = fb.GetCameraProj();
-	m.ProjInverse = fb.GetCameraProjInverse();
-	m.ViewInverse = fb.GetCameraViewInverse();
-	m.Dims = { float(dw), float(dh) };
-	m.DepthRange = std::clamp(settings.BlobMeldDepthRange, 0.5f, 256.0f);
-	m.SmoothRange = std::clamp(settings.BlobMeldSmoothRange, 0.5f, 256.0f);
-	m.MaxRadiusPx = float(std::clamp(settings.BlobMeldMaxRadiusPx, 1, 64));
-	m.Debug = float(std::clamp(settings.BlobMeldDebug, 0, 2));
-	m.Smoothing = std::clamp(settings.BlobMeldSmoothing, 0.0f, 32.0f);
-	m.Anchor = 0.0f;
-	m.FootBias = 0.1f;
-	m.VerticalRange = std::clamp(settings.BlobMeldVerticalRange, 0.0f, 256.0f);
-	int src = 0;
-	auto fieldPass = [&](ID3D11ComputeShader* a_cs, float a_dirX, float a_dirY, float a_seed) {
-		m.Dir = { a_dirX, a_dirY };
-		m.Seed = a_seed;
-		meldCB->Update(m);
-		ID3D11Buffer* mcb = meldCB->CB();
-		context->CSSetConstantBuffers(0, 1, &mcb);
-		ID3D11ShaderResourceView* ins[2] = { blobMeldDepth[src]->srv.get(), sceneDepthSRV };
-		ID3D11UnorderedAccessView* out = blobMeldDepth[1 - src]->uav.get();
-		context->CSSetShaderResources(0, 2, ins);
-		context->CSSetUnorderedAccessViews(0, 1, &out, nullptr);
-		context->CSSetShader(a_cs, nullptr, 0);
-		context->Dispatch((dw + 7) / 8, (dh + 7) / 8, 1);
-		ID3D11ShaderResourceView* nullIns[2] = { nullptr, nullptr };
-		ID3D11UnorderedAccessView* nullOut = nullptr;
-		context->CSSetShaderResources(0, 2, nullIns);
-		context->CSSetUnorderedAccessViews(0, 1, &nullOut, nullptr);
-		src = 1 - src;
-	};
-	fieldPass(meldDilateCS, 1.0f, 0.0f, 1.0f);
-	fieldPass(meldDilateCS, 0.0f, 1.0f, 0.0f);
-	if (m.Smoothing > 0.0f) {
-		const int iterations = std::clamp(settings.BlobMeldIterations, 1, 4);
-		for (int it = 0; it < iterations; it++) {
-			fieldPass(meldSmoothCS, 1.0f, 0.0f, 0.0f);
-			fieldPass(meldSmoothCS, 0.0f, 1.0f, 0.0f);
-		}
-	}
-	fieldPass(meldSheetCS, 1.0f, 0.0f, 0.0f);
-	ID3D11Buffer* nullCsCB = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullCsCB);
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	// Composite as one surface into the game's targets, depth written.
-	context->OMSetRenderTargets(8, prevRTVs, prevDSV);
-	context->VSSetShader(meldVS, nullptr, 0);
-	context->HSSetShader(nullptr, nullptr, 0);
-	context->DSSetShader(nullptr, nullptr, 0);
-	context->PSSetShader(meldPS, nullptr, 0);
-	ID3D11Buffer* cb0 = shellCB->CB();
-	context->VSSetConstantBuffers(0, 1, &cb0);
-	context->PSSetConstantBuffers(0, 1, &cb0);
-	m.Dir = { 0.0f, 0.0f };
-	meldCB->Update(m);
-	ID3D11Buffer* mcb2 = meldCB->CB();
-	context->PSSetConstantBuffers(2, 1, &mcb2);
-	ID3D11ShaderResourceView* meldSRV = blobMeldDepth[src]->srv.get();
-	context->PSSetShaderResources(33, 1, &meldSRV);
-	context->IASetInputLayout(nullptr);
-	ID3D11Buffer* nullVB = nullptr;
-	const UINT zero = 0;
-	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
-	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->Draw(3, 0);
-	ID3D11ShaderResourceView* nullSRV = nullptr;
-	context->PSSetShaderResources(33, 1, &nullSRV);
-	ID3D11Buffer* nullCB2 = nullptr;
-	context->PSSetConstantBuffers(2, 1, &nullCB2);
-	globals::profiler->EndPass();
-
-	for (auto* rtv : prevRTVs)
-		if (rtv)
-			rtv->Release();
-	if (prevDSV)
-		prevDSV->Release();
 }
 
 void SnowDeformation::RenderObjectHeightMap()
@@ -1556,7 +1246,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.DiffuseLambda = std::clamp(settings.SnowSettlingPct, 0.0f, 100.0f) * 0.005f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
-	blobRefZ = eye.z;
 	heightMapValid = true;
 
 	// Exclusion zones. Static sources (doors, campfires, heat sources,
@@ -1873,16 +1562,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	// a legal world Z and would read as a road at sea level.
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
 	context->ClearRenderTargetView(heightSkinDepth->rtv.get(), skinDepthClear);
-	// Blob Snow Shell: the per-layer placement masks are per-frame, like the
-	// skin depth. Layer 1 rides the base capture as RT3; the peels below
-	// bind their own layer's mask in the same slot.
-	const float maskClear[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	for (int i = 0; i < 6; i++)
-		if (blobMask[i])
-			context->ClearRenderTargetView(blobMask[i]->rtv.get(), maskClear);
-	ID3D11RenderTargetView* heightRTVs[4] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get(),
-		blobMask[0] ? blobMask[0]->rtv.get() : nullptr };
-	context->OMSetRenderTargets(4, heightRTVs, nullptr);
+	ID3D11RenderTargetView* heightRTVs[3] = { heightTopRaw[heightCurrent]->rtv.get(), heightBottomRaw[heightCurrent]->rtv.get(), heightSkinDepth->rtv.get() };
+	context->OMSetRenderTargets(3, heightRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
@@ -1892,9 +1573,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
-	// The PS reads BlobRefZ (fresh-top channel of the blob mask) from b1 too;
-	// unbound here it read 0 and every layer-1 height clamped out of range.
-	context->PSSetConstantBuffers(1, 1, &cb1);
 	// The capture PS rejects grounded fragments from the bottoms raster
 	// (elevated undersides only); it reads terrain via the process CB.
 	ID3D11Buffer* captureCB0 = heightProcessCB->CB();
@@ -1952,28 +1630,16 @@ void SnowDeformation::RenderObjectHeightMap()
 		// both gates have to reach this pass; without them every object reads
 		// as non-carving and the trench patch dies everywhere, roads included.
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
-		// Lifts the depth park for non-road objects, so a rock carries its own
-		// class depth instead of borrowing the road's through the MAX blend.
-		scb.ObjectDrape = settings.ObjectDrapeShell ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
-		// Blob Snow Shell mask inputs: no spheres on roads, bridges or drifts;
-		// the skin's own repose gate; the fresh-top reference.
-		scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
-		scb.BlobRefZ = blobRefZ;
-		scb.BlobRockClass = cap.forceRounded ? 1.0f : 0.0f;
-		{
-			const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
-			scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-		}
 		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		// Same class pick as the skin: S4 shell draws are all ROUNDED.
 		{
-			const bool s4Shell = settings.ObjectSnow3D && !settings.ObjectDrapeShell && !cap.road &&
+			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
 			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		}
@@ -1988,8 +1654,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 	globals::profiler->EndPass();
 
-	ID3D11RenderTargetView* nullRTVs[4] = { nullptr, nullptr, nullptr, nullptr };
-	context->OMSetRenderTargets(4, nullRTVs, nullptr);
+	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
+	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 
 	// S4 phase 2 - the layer PEELS (K=3): re-rasterize the captures
 	// against the completed layers above (now readable), keeping only
@@ -1997,77 +1663,28 @@ void SnowDeformation::RenderObjectHeightMap()
 	// yields the next-highest snow-bearing surface per column. Each pass
 	// needs the previous one finished, so they run sequentially. Only the
 	// transform and the window fields matter here.
-	//
-	// THE AIR TEST's passes ride the same loop (Josef's distinction, 2026-08-31):
-	// after each peeled top exists, a COVERBOT pass MIN-blends the height of
-	// everything standing above it, which is what separates a roof over a
-	// walkway (open space beneath) from a wall standing on a road (solid to the
-	// ground). They must come after their own layer's peel, and they cost a
-	// full re-rasterization each, so they run ONLY while the drape is on.
-	const int coverPasses = (settings.LayeredObjectDrape && heightCoverPS &&
-								objectCoverBottom2 && objectCoverBottom3) ?
-	                            2 :
-	                            0;
-	// Blob Snow Shell layers 4-6: three more peels of the same shape (PEEL2
-	// against the previous layer), rebuilt per frame, only while asked for.
-	Texture2D* layerTops[6] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
-		blobTop[0], blobTop[1], blobTop[2] };
-	const int extraPeels = (settings.EnableBlobShell && heightPeel2PS && blobTop[0] && blobTop[1] && blobTop[2]) ?
-	                           std::max(0, std::clamp(settings.BlobLayers, 1, 6) - 3) :
-	                           0;
-	const int peelPasses = 2 + extraPeels;
-	static const char* const peelPassNames[5] = { "SnowDeformation::ObjectHeightPeel", "SnowDeformation::ObjectHeightPeel2",
-		"SnowDeformation::ObjectHeightPeel4", "SnowDeformation::ObjectHeightPeel5", "SnowDeformation::ObjectHeightPeel6" };
-	for (int pass = 0; pass < peelPasses + coverPasses; pass++) {
-		const bool coverPass = pass >= peelPasses;
-		const int peelLayer = coverPass ? pass - peelPasses : pass;
-		ID3D11PixelShader* peelPS = coverPass ? heightCoverPS :
-		                                        (peelLayer == 0 ? heightPeelPS : heightPeel2PS);
-		Texture2D* peelTarget = coverPass ?
-		                            (peelLayer == 0 ? objectCoverBottom2 : objectCoverBottom3) :
-		                            layerTops[peelLayer + 1];
+	Texture2D* layerTops[3] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent] };
+	static const char* const peelPassNames[2] = { "SnowDeformation::ObjectHeightPeel", "SnowDeformation::ObjectHeightPeel2" };
+	for (int peelLayer = 0; peelLayer < 2; peelLayer++) {
+		ID3D11PixelShader* peelPS = peelLayer == 0 ? heightPeelPS : heightPeel2PS;
+		Texture2D* peelTarget = layerTops[peelLayer + 1];
 		if (!peelPS || !peelTarget)
 			break;
-		if (!coverPass && peelLayer >= 2) {
-			// Not scrolled like layers 2 and 3: starts empty every frame.
-			const float emptyTop[4] = { -100000.0f, -100000.0f, -100000.0f, -100000.0f };
-			context->ClearRenderTargetView(peelTarget->rtv.get(), emptyTop);
-		}
-		if (coverPass) {
-			// The MIN op lives on RT1 in the capture's blend state, so bind the
-			// target THERE with RT0 null and let the existing state supply it
-			// rather than authoring a second blend state that could drift.
-			// Cleared to the empty sentinel: no cover at all reads as open sky.
-			const float openSky[4] = { kHeightMapEmptyBottom, kHeightMapEmptyBottom,
-				kHeightMapEmptyBottom, kHeightMapEmptyBottom };
-			context->ClearRenderTargetView(peelTarget->rtv.get(), openSky);
-			ID3D11RenderTargetView* coverRTVs[2] = { nullptr, peelTarget->rtv.get() };
-			context->OMSetRenderTargets(2, coverRTVs, nullptr);
-		} else {
-			// RT3 = this layer's blob placement mask (layer 2 for the first
-			// peel, layer 3 for the second); the cover passes leave it alone.
-			ID3D11RenderTargetView* peelRTVs[4] = { peelTarget->rtv.get(), nullptr, nullptr,
-				blobMask[peelLayer + 1] ? blobMask[peelLayer + 1]->rtv.get() : nullptr };
-			context->OMSetRenderTargets(4, peelRTVs, nullptr);
-		}
+		ID3D11RenderTargetView* peelRTVs[1] = { peelTarget->rtv.get() };
+		context->OMSetRenderTargets(1, peelRTVs, nullptr);
 		context->PSSetShader(peelPS, nullptr, 0);
-		// Peel: t3 = layer 1, and the layer-3 pass adds t4 = the finished layer
-		// 2 (never bound while it is still the pass's own render target).
-		// Cover: t3 = the layer this pass measures cover FOR.
+		// t3 = layer 1, and the layer-3 pass adds t4 = the finished layer 2
+		// (never bound while it is still the pass's own render target).
 		ID3D11ShaderResourceView* peelSRVs[2] = {
-			coverPass ?
-				(peelLayer == 0 ? heightTop2Raw[heightCurrent]->srv.get() : heightTop3Raw[heightCurrent]->srv.get()) :
-				heightTopRaw[heightCurrent]->srv.get(),
-			(!coverPass && peelLayer >= 1) ? layerTops[peelLayer]->srv.get() : nullptr
+			heightTopRaw[heightCurrent]->srv.get(),
+			peelLayer >= 1 ? layerTops[peelLayer]->srv.get() : nullptr
 		};
 		context->PSSetShaderResources(3, 2, peelSRVs);
 		// The peel PS addresses the layer maps through StaticCB's window
 		// fields; the capture pass binds b1 to the VS only.
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
-		globals::profiler->BeginPass(coverPass ?
-				(peelLayer == 0 ? "SnowDeformation::ObjectCoverBottom2" : "SnowDeformation::ObjectCoverBottom3") :
-				peelPassNames[peelLayer]);
+		globals::profiler->BeginPass(peelPassNames[peelLayer]);
 		for (const auto& cap : capturedStatics) {
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
@@ -2108,16 +1725,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			scb.HeightWindowCenter = heightWindowCenter;
 			scb.HeightHalfExtent = kHeightMapHalfExtent;
 			scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
-			// Blob placement mask inputs (the base pass sets the same three).
-			scb.ProjThreshold = cap.projThreshold;
-			scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
-			scb.BlobExclude = (cap.road || cap.bridge || cap.driftFamily) ? 1.0f : 0.0f;
-			scb.BlobRefZ = blobRefZ;
-			scb.BlobRockClass = cap.forceRounded ? 1.0f : 0.0f;
-			{
-				const float blobSlopeDeg = cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
-				scb.ShellMinNz = std::cos(std::clamp(blobSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-			}
 			scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 			ID3D11ShaderResourceView* peelSmoothSRV = EnsureSmoothedNormals(geometry);
 			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
@@ -2127,7 +1734,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		globals::profiler->EndPass();
 
-		context->OMSetRenderTargets(4, nullRTVs, nullptr);
+		context->OMSetRenderTargets(3, nullRTVs, nullptr);
 		ID3D11ShaderResourceView* nullPeelSRVs[2] = { nullptr, nullptr };
 		context->PSSetShaderResources(3, 2, nullPeelSRVs);
 	}
@@ -2430,7 +2037,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.projReal && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
-	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 }
 
@@ -2817,7 +2423,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// Lighting recolor still covers the technique-classified ones
 		// (fence family) flat. The classic shader path survives only
 		// because roads run through it.
-		const bool s4Shell = settings.ObjectSnow3D && !settings.ObjectDrapeShell && !cap.road &&
+		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
 		                     cap.projThreshold > -0.5f && projNoiseSRV;
 		if (!cap.road && !s4Shell)
 			continue;
@@ -3006,70 +2612,20 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
 		}
-		// PER-LAYER DRAPE prototype: the peeled layers' tops and cones, so a
-		// pass can drape a surface the layer-1 raster hides under a roof.
-		// t24/t26 = layer 2 top/cone, t27/t28 = layer 3, matching the skin's
-		// slots so one set of shader accessors serves both paths.
-		if (settings.LayeredObjectDrape) {
-			ID3D11ShaderResourceView* peelSRVs[2] = {
-				(heightTop2Raw[heightCurrent] && heightTop2Raw[heightCurrent]->srv) ? heightTop2Raw[heightCurrent]->srv.get() : nullptr,
-				(objectSnowCone2 && objectSnowCone2->srv) ? objectSnowCone2->srv.get() : nullptr
-			};
-			ID3D11ShaderResourceView* peel3SRVs[2] = {
-				(heightTop3Raw[heightCurrent] && heightTop3Raw[heightCurrent]->srv) ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
-				(objectSnowCone3 && objectSnowCone3->srv) ? objectSnowCone3->srv.get() : nullptr
-			};
-			context->VSSetShaderResources(24, 1, &peelSRVs[0]);
-			context->VSSetShaderResources(26, 1, &peelSRVs[1]);
-			context->VSSetShaderResources(27, 2, peel3SRVs);
-			// t30/t31 = the air test: the lowest surface standing above each
-			// peeled layer, so a peeled pass can tell a roof from a wall.
-			ID3D11ShaderResourceView* coverSRVs[2] = {
-				(objectCoverBottom2 && objectCoverBottom2->srv) ? objectCoverBottom2->srv.get() : nullptr,
-				(objectCoverBottom3 && objectCoverBottom3->srv) ? objectCoverBottom3->srv.get() : nullptr
-			};
-			context->VSSetShaderResources(30, 2, coverSRVs);
-			if (tessellatePatch) {
-				context->DSSetShaderResources(24, 1, &peelSRVs[0]);
-				context->DSSetShaderResources(26, 1, &peelSRVs[1]);
-				context->DSSetShaderResources(27, 2, peel3SRVs);
-				context->DSSetShaderResources(30, 2, coverSRVs);
-			}
-		}
-		// One pass per peeled layer. Layer 0 is the surface the patch has
-		// always drawn; 1 and 2 exist only under cover, so their lattices
-		// kill almost every vertex on an open scene - the cost is real but
-		// concentrated where architecture is.
-		const uint32_t layerPasses = settings.LayeredObjectDrape ? 3u : 1u;
-		for (uint32_t layer = 0; layer < layerPasses; layer++) {
-			scb.PatchLayer = float(layer);
-			staticsCB->Update(scb);
-			if (tessellatePatch)
-				context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
-			else
-				context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
-		}
+		if (tessellatePatch)
+			context->Draw(kPatchGridDim * kPatchGridDim * 4, 0);
+		else
+			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
 		if (tessellatePatch) {
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		}
-		if (settings.LayeredObjectDrape) {
-			ID3D11ShaderResourceView* nullPeel[2] = { nullptr, nullptr };
-			context->VSSetShaderResources(24, 1, &nullPeel[0]);
-			context->VSSetShaderResources(26, 1, &nullPeel[0]);
-			context->VSSetShaderResources(27, 2, nullPeel);
-			context->DSSetShaderResources(24, 1, &nullPeel[0]);
-			context->DSSetShaderResources(26, 1, &nullPeel[0]);
-			context->DSSetShaderResources(27, 2, nullPeel);
 		}
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);
 		globals::profiler->EndPass();
 	}
-
-	DrawBlobShell();
 
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);

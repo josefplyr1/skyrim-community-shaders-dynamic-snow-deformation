@@ -309,63 +309,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Experimental. Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
 
-		if (ImGui::TreeNodeEx(T(TKEY("blob_shell"), "Screen Space Snow Shell"))) {
-			if (auto _ttBlobCat = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_shell_tooltip"), "Experimental. A snow sheet built in screen space: every pixel whose surface the object capture knows and whose projected snow is painted above the threshold seeds a field, a ball of the pixel's Thickness is rolled from each seed so the interior lifts and edges grow a rounded lip, the field is smoothed, and the result is shaded once per pixel through the fitted shell's own material. No spheres, no instance budget. It follows what the camera sees: an eave seen from below has no top to inflate."));
-			ImGui::Checkbox(T(TKEY("blob_shell_enable"), "Enable Screen Space Snow"), &settings.EnableBlobShell);
-			ImGui::SliderFloat(T(TKEY("blob_size"), "Thickness"), &settings.BlobSize, 0.5f, 32.0f, "%.1f units");
-			if (auto _ttBlobSz = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_size_tooltip"), "How far the sheet floats in front of the surface, and the radius of the rounded lip at its edges."));
-			ImGui::SliderFloat(T(TKEY("blob_size_noise"), "Thickness Noise"), &settings.BlobSizeNoise, 0.0f, 1.0f, "%.2f");
-			if (auto _ttBlobSn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_size_noise_tooltip"), "Broad undulation of the thickness, as a fraction of Thickness, one wave per Noise Scale. World-anchored, so it does not swim with the camera."));
-			ImGui::SliderFloat(T(TKEY("blob_border_noise"), "Border Noise"), &settings.BlobBorderNoise, 0.0f, 1.0f, "%.2f");
-			if (auto _ttBlobBn = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_border_noise_tooltip"), "Fine thickness noise at a quarter of Noise Scale, applied only within one raster texel of the surface's footprint, so the lip's outline breaks into an irregular line while the plane itself keeps only the broad noise."));
-			ImGui::SliderFloat(T(TKEY("blob_spacing"), "Noise Scale"), &settings.BlobSpacing, 2.0f, 128.0f, "%.0f units");
-			if (auto _ttBlobSp = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_spacing_tooltip"), "Size of one undulation of the thickness noise, world units."));
-			ImGui::SliderFloat(T(TKEY("blob_mask_threshold"), "Placement Threshold"), &settings.BlobMaskThreshold, 0.0f, 1.0f, "%.2f");
-			if (auto _ttBlobMt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_mask_threshold_tooltip"), "The only slope control: the mask is the surface's up-facing weight times the game's painted snow, so on architecture 0.5 is about a 60 degree cutoff, lower reaches steeper faces, higher keeps only flatter ones. 3D Shell Max Slope does not apply here."));
-			ImGui::SliderFloat(T(TKEY("blob_max_slope"), "Max Slope"), &settings.BlobMaxSlopeDeg, 0.0f, 90.0f, "%.0f deg");
-			if (auto _ttBlobMs = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_max_slope_tooltip"), "Steepest OBJECT surface that takes the sheet, measured from the pixel's own normal. Independent of 3D Shell Max Slope and Placement Threshold; the sheet thins out over the last few degrees."));
-			ImGui::SliderFloat(T(TKEY("blob_rock_max_slope"), "Rock Max Slope"), &settings.BlobRockMaxSlopeDeg, 0.0f, 90.0f, "%.0f deg");
-			if (auto _ttBlobRms = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_rock_max_slope_tooltip"), "The same limit for the mountain/cliff family, the very meshes the fitted shell's Rock Max Slope classifies. Independent of that setting."));
-			ImGui::SliderInt(T(TKEY("blob_layers"), "Layers"), &settings.BlobLayers, 1, 6);
-			if (auto _ttBlobLy = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_layers_tooltip"), "How many stacked surfaces a pixel may belong to: 1 = only what is seen from above, 3 = also the walkway under the roof and the beam under the walkway. 4 to 6 each add one more full re-rasterization of every captured object per frame."));
-			ImGui::SliderFloat(T(TKEY("blob_radius"), "Placement Radius"), &settings.BlobRadius, 256.0f, 4096.0f, "%.0f units");
-			if (auto _ttBlobRd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_radius_tooltip"), "Surfaces further than this from the player take no sheet."));
-
-			ImGui::SeparatorText(T(TKEY("blob_meld_header"), "Melding"));
-			ImGui::SliderFloat(T(TKEY("blob_meld_depth_range"), "Meld Depth Range"), &settings.BlobMeldDepthRange, 1.0f, 64.0f, "%.0f units");
-			if (auto _ttMeldD = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_depth_range_tooltip"), "A surface further BEHIND along the view than this is a different surface and never pushes into this one; a nearer surface always occludes. Also how far behind a lip the landscape shell or a plank may be for the lip to run down onto it. Smoothing has its own range below."));
-			ImGui::SliderFloat(T(TKEY("blob_meld_vertical"), "Meld Vertical Range"), &settings.BlobMeldVerticalRange, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttMeldV = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_vertical_tooltip"), "Two surfaces further apart in world height than this never meld, so a rail's sheet stays off the plank below. 0 removes the limit."));
-			ImGui::SliderFloat(T(TKEY("blob_meld_smoothing"), "Meld Smoothing"), &settings.BlobMeldSmoothing, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttMeldS = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_smoothing_tooltip"), "A light blur after the roll, world units, to take the pixel steps off the sheet. Keep it well below Thickness; large values flatten the shape and the lighting goes wrong."));
-			ImGui::SliderFloat(T(TKEY("blob_meld_smooth_range"), "Smoothing Depth Range"), &settings.BlobMeldSmoothRange, 1.0f, 128.0f, "%.0f units");
-			if (auto _ttMeldSr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_smooth_range_tooltip"), "Smoothing only: two pixels further apart in depth than this do not average."));
-			ImGui::SliderInt(T(TKEY("blob_meld_iterations"), "Meld Passes"), &settings.BlobMeldIterations, 1, 4);
-			if (auto _ttMeldI = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_iterations_tooltip"), "Smoothing passes. More is smoother and costs a full-screen pass pair each."));
-			ImGui::SliderInt(T(TKEY("blob_meld_max_px"), "Meld Pixel Cap"), &settings.BlobMeldMaxRadiusPx, 4, 64);
-			if (auto _ttMeldP = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_max_px_tooltip"), "Upper limit on every kernel in pixels, which is what Thickness becomes up close. Keeps the cost bounded when a surface fills the screen."));
-			ImGui::SliderInt(T(TKEY("blob_meld_debug"), "Meld Debug View"), &settings.BlobMeldDebug, 0, 2);
-			if (auto _ttMeldDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blob_meld_debug_tooltip"), "1 paints the sheet with its field depth, 2 with its reconstructed normals."));
-			ImGui::TreePop();
-		}
-
 #if !SNOW_ALPHA_BUILD
 		ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Debug Projected Snow Match"), &debugProjSnowView);
 		if (auto _ttProjDbg = Util::HoverTooltipWrapper())
@@ -1262,17 +1205,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::TextUnformatted(probeLine1);
 				ImGui::TextUnformatted(probeLine2);
 			}
-			ImGui::Checkbox(T(TKEY("object_drape"), "Drape Objects (experimental)"), &settings.ObjectDrapeShell);
-			if (auto _ttObjDrape = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_drape_tooltip"), "Covers objects with the same snow sheet the roads use, instead of the shell that is fitted to each object's own shape. While this is on the fitted shell is not drawn at all, so the two cannot overlap - which makes it a straight A/B: turn it off to compare against the shell you know. Rocks, walkways and steps should keep their snow; anything the sheet cannot stand on will lose it, and that is the finding."));
-			ImGui::Checkbox(T(TKEY("layered_drape"), "Layered Object Drape (experimental)"), &settings.LayeredObjectDrape);
-			if (auto _ttDrape = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("layered_drape_tooltip"), "Draws the snow sheet that roads already use a second and third time, for surfaces hidden under something else - a walkway beneath a roof, a step under an eave. Without it those surfaces are covered by whatever stands above them and get no snow of their own. Being trialled to find out whether this way of drawing snow can serve buildings as well as it serves roads."));
-
-			ImGui::Checkbox(T(TKEY("container_spike"), "Container Shell (experimental)"), &settings.ContainerShellSpike);
-			if (auto _ttContainer = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("container_spike_tooltip"), "A different way of drawing object snow, being trialled. Instead of pushing the object's own corners upward to form the snow - which tears into triangles wherever neighbouring corners disagree about height - the shell is raised as a plain box and the snow surface inside it is found for every pixel on screen. Rims should read as smooth curves and the torn triangles should be impossible. Rougher than the normal path in other ways for now: no shadows from the new shape, and the dome ignores stacked planes and the pile-height limit."));
-
 			if (auto _ttSdv = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));
 		}

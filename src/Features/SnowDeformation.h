@@ -506,48 +506,6 @@ public:
 		float SkyExposurePct = 50.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
 		float SnowSettlingPct = 50.0f;
-		/** @brief C0 spike (CONTAINER-SHELL-PLAN), debug A/B: draw the S4 shell as a CONSTANT-height container and find the snow surface per PIXEL by marching, instead of displacing vertices by the height field. Not serialised - a spike, off every launch. */
-		bool ContainerShellSpike = false;
-		/** @brief "Drape Objects": the drape pivot's A/B. Object columns get the same full-coverage lattice roads have, and the S4 skins step aside entirely so the two cannot fight. OFF is byte-identical to the skin-based shell. Not serialised - debug only. */
-		bool ObjectDrapeShell = false;
-		/** @brief Per-layer drape prototype (CONTAINER-SHELL-PLAN pivot), debug A/B: draw the trench patch once per PEELED LAYER so a surface under cover (a walkway beneath a roof) gets its own drape instead of being hidden by the roof's. Answers whether the drape architecture can serve architecture at all. Not serialised. */
-		bool LayeredObjectDrape = false;
-		/** @brief B0 spike (BLOB-SNOW-PLAN R1): with the drape on, object columns take the smooth-union BLOB field - one hemisphere per raster texel, hashed radius, soft-max union - instead of the dome. The snow's silhouette stops being the object's. Debug toggle, not serialised. */
-		bool BlobObjectSnow = false;
-		/** @brief SCREEN-SPACE SNOW SHELL: every screen pixel whose surface matches a peeled layer with the projected-snow mask above Placement Threshold seeds a field; a ball of the pixel's Thickness is rolled from every seed toward the camera (offset surface with rounded lips), smoothed, and composited once per pixel through the skin material. No spheres. Off by default. */
-		bool EnableBlobShell = false;
-		/** @brief World units per cell of the thickness noise. */
-		float BlobSpacing = 25.0f;
-		/** @brief How far the sheet floats in front of the surface, world units. */
-		float BlobSize = 5.0f;
-		/** @brief +/- fraction of Thickness from world-anchored value noise. */
-		float BlobSizeNoise = 0.25f;
-		/** @brief The mask (up-facing weight x painted snow) a pixel's layer must reach; on architecture 0.5 is about a 60 degree cutoff. Between this and 1 the thickness thins toward 60%. */
-		float BlobMaskThreshold = 0.01f;
-		/** @brief How many peeled layers a pixel may match (4-6 = three more peels, each a full re-rasterization). */
-		int BlobLayers = 6;
-		/** @brief Steepest surface (degrees from horizontal) that takes the sheet, from the pixel's own depth-reconstructed normal. Independent of every other slope setting. */
-		float BlobMaxSlopeDeg = 62.0f;
-		/** @brief Fine thickness noise (a quarter of Noise Scale) applied only within one raster texel of the surface's footprint, +/- fraction of Thickness: breaks up the lip outline. */
-		float BlobBorderNoise = 0.25f;
-		/** @brief Max Slope for the mountain/cliff family (the same name match the fitted shell's Rock Max Slope uses). */
-		float BlobRockMaxSlopeDeg = 80.0f;
-		/** @brief Seeding radius around the player, world units. */
-		float BlobRadius = 4096.0f;
-		/** @brief Dilation gate: two pixels further apart along the view than this are different surfaces and never roll into each other. */
-		float BlobMeldDepthRange = 64.0f;
-		/** @brief Smoothing gate: depth difference beyond which two pixels do not average. */
-		float BlobMeldSmoothRange = 128.0f;
-		/** @brief Bilateral smoothing radius after the dilation, world units; 0 = off. */
-		float BlobMeldSmoothing = 3.0f;
-		/** @brief Two surfaces further apart in world height than this do not meld. 0 = no limit. */
-		float BlobMeldVerticalRange = 0.0f;
-		/** @brief Smoothing passes (each is one horizontal + one vertical). */
-		int BlobMeldIterations = 1;
-		/** @brief Pixel cap on the projected kernels, for cost up close. */
-		int BlobMeldMaxRadiusPx = 64;
-		/** @brief Composite debug: 0 off, 1 field depth, 2 reconstructed normals. Not serialised. */
-		int BlobMeldDebug = 0;
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1497,8 +1455,6 @@ public:
 		bool forceRounded;
 		/** @brief Plank family by geometry name (plank/walkway/catwalk). Currently DECIDES NOTHING - Josef's round-5 call classifies ALL PD draws rounded; the match is kept (and logged once per name) for the future cornice treatment when the 3D shell returns. */
 		bool plankFamily;
-		/** @brief Mesh name says drift or snow pile: no blob spheres (a drift has no bare edge to round). */
-		bool driftFamily;
 		/** @brief The property really carries kProjectedUV (projThreshold read from it). False for the mesh-replacer default (threshold 0, no noise), whose reconstructed weight is a guess the coat and the edge lumps must not trust. */
 		bool projReal;
 	};
@@ -1675,27 +1631,12 @@ public:
 		float PileHeightRatio;
 		/** @brief Settings::SkyExposurePct / 100 - strength of the P3 sky-exposure depth weighting (took a padPile slot; layout unchanged). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkyExposureSk;
-		/** @brief C0 container spike (CONTAINER-SHELL-PLAN): >0.5 lifts every S4 vertex by a CONSTANT and lets the PS march the real surface per pixel. Debug A/B only. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ContainerSpike;
-		/** @brief Which peeled layer the current trench-patch pass draws (0 = top surface, 1/2 = the layers under cover). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float PatchLayer;
-
-		/** @brief Settings::ObjectDrapeShell - THE DRAPE PIVOT's A/B: object-owned columns get the full lattice surface the way road-owned ones already do, instead of only the trench around footprints. Paired with the S4 skins not drawing at all, so the two never fight for the depth buffer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ObjectDrape;
 		/** @brief Settings::ObjCorniceLipAmt - P5's cheap form (edge study): the rim band is pushed OUTWARD along the cone gradient as well as up, so the outermost ring bulges past the object's silhouette. A displaced skin cannot otherwise overhang at all - its vertices are the object's vertices - and the overhang is what makes a cornice read as snow rather than as paint. Fraction of the class depth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ObjCorniceLip;
 		/** @brief Settings::SkinBreakupAmt - the DefoQ reference's negative-base-plus-noise shape (its thickness ships at -0.016 against noise +0.099). This fraction of the class depth is subtracted and handed back through a world-anchored noise, so coverage thins to BARE patches at the mesh's own scale instead of reading as an even coat; renormalised so full noise still reaches the class depth. 0 = the uniform coat exactly. Roads are exempt in the shader. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkinBreakup;
 		/** @brief Settings::SkinWeldAmt - Tier 1 seam weld. Slides the FLAT class's up-facing gate from the per-vertex RAW normal to the position-welded one (smoothWS, which SmoothNormalsCS makes identical for every vertex sharing a position). upFacing is the only term in the lift that is not already single-valued per position, so welding it removes the coincident-twin disagreement that draws sliver fences at hard edges. 0 = the raw-normal gate exactly, i.e. current behaviour. Trades away the deliberate "plank sides stay clean" property. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float SkinWeld;
-		/** @brief Settings::BlobObjectSnow - B0 (BLOB-SNOW-PLAN R1): object drape columns evaluate the smooth-union blob field instead of the dome profile. Debug spike. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float BlobDrape;
-		/** @brief Blob Snow Shell: 1 = this draw takes no spheres (road, bridge, drift). Mirror in SnowHeightCapture.hlsl / SnowStaticsShell.hlsl. */
-		float BlobExclude;
-		/** @brief Blob Snow Shell: camera Z the capture's fresh-top channel is encoded against (R16 UNORM over +/-2048). */
-		float BlobRefZ;
-		/** @brief Blob Snow Shell: 1 = mountain/cliff family, so the seed applies the rock slope limit. Rides the fresh channel's low bit. */
-		float BlobRockClass;
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinMasksCopy;
@@ -1705,6 +1646,9 @@ public:
 		float EdgeFlankWidth;
 		/** @brief Settings::ProjSnowMatch as 0/1: the skin coats the solidly painted projected snow with its own material near the camera. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeCoat;
+		float PadStatics0;
+		float PadStatics1;
+		float PadStatics2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 
@@ -1776,9 +1720,6 @@ public:
 	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
 	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
 	Texture2D* objectSnowCone3 = nullptr;
-	/** @brief THE AIR TEST (Josef, 2026-08-31): per peeled layer, the lowest surface standing ABOVE that layer's top. A roof over a walkway leaves open space; a wall standing on a road is solid to the ground, and the tops-only rasters read both as "something above, a surface below". Cannot come from heightBottomRaw, which MINs over the whole column so an elevated deck buries the signal under its own underside. Regenerated per frame, only while Layered Object Drape is on; sentinel kHeightMapEmptyBottom means open sky. Patch VS/DS t30 and t31. */
-	Texture2D* objectCoverBottom2 = nullptr;
-	Texture2D* objectCoverBottom3 = nullptr;
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
 	// ---- Height-field probe (Debugging Options): the six object maps read
@@ -1804,8 +1745,6 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
 	ID3D11PixelShader* heightPeel2PS = nullptr;
-	/** @brief COVERBOT variant of SnowHeightCapture: MIN-blends the height of every fragment standing above a peeled layer's top, into SV_Target1 so the capture's blend state supplies the MIN op. Feeds objectCoverBottom2/3. */
-	ID3D11PixelShader* heightCoverPS = nullptr;
 	/** @brief Depth-only skin caster VS (SHADOWCAST define): the full lift, clip position through the light matrix ShellCB carries during the cascade injection. Drawn by InjectShellShadowCasters so the object shells cast real sun shadows. */
 	ID3D11VertexShader* skinShadowVS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
@@ -1817,31 +1756,6 @@ public:
 	ID3D11ComputeShader* objectSkyOpenCS = nullptr;
 	/** @brief P4: one Jacobi settling iteration over a cone depth field (ObjectConeDiffuseCS). */
 	ID3D11ComputeShader* objectConeDiffuseCS = nullptr;
-
-	// ---- Screen-space snow shell ----
-	/** @brief Per-layer placement masks (R16G16: mask, fresh top; cleared each frame, MAX-blended as RT3 of the capture and each peel). */
-	Texture2D* blobMask[6] = {};
-	/** @brief Layers 4-6 tops: three more PEEL2 passes, rebuilt from scratch each frame (not scrolled), only while BlobLayers > 3. */
-	Texture2D* blobTop[3] = {};
-	/** @brief Camera Z at this frame's capture; the mask target's fresh-top channel and BlobSeedCS decode against it. */
-	float blobRefZ = 0.0f;
-	/** @brief The field (x = |view z|, y = thickness / sheet), ping-pong for the separable passes; screen-sized, rebuilt on resize. */
-	Texture2D* blobMeldDepth[2] = {};
-	uint32_t blobMeldW = 0;
-	uint32_t blobMeldH = 0;
-	ID3D11VertexShader* meldVS = nullptr;
-	ID3D11PixelShader* meldPS = nullptr;
-	ID3D11ComputeShader* blobSeedCS = nullptr;
-	ID3D11ComputeShader* meldDilateCS = nullptr;
-	ID3D11ComputeShader* meldSmoothCS = nullptr;
-	ID3D11ComputeShader* meldSheetCS = nullptr;
-	ConstantBuffer* blobCB = nullptr;
-	ConstantBuffer* meldCB = nullptr;
-	ConstantBuffer* meldSeedCB = nullptr;
-	/** @brief (Re)creates the two field targets at the main render target's size. */
-	void EnsureMeldResources(uint32_t a_width, uint32_t a_height);
-	/** @brief Seed from the scene depth, dilate, smooth, sheet test, composite; end of DrawCapturedStatics. */
-	void DrawBlobShell();
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
@@ -1878,55 +1792,6 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
 
-	/** @brief Screen-space snow seed constants (BlobSeedCS, b1). Layout must match BlobCB in HeightMapProcessCS.hlsl. */
-	struct alignas(16) BlobCB
-	{
-		float NoiseScale;
-		float Thickness;
-		float ThicknessNoise;
-		float MaskThreshold;
-		float Layers;
-		float Radius;
-		float RefZ;
-		float LayerTol;
-		float MaxSlopeNz;
-		float BorderNoise;
-		float RockMaxSlopeNz;
-		float padS2;
-	};
-	STATIC_ASSERT_ALIGNAS_16(BlobCB);
-	/** @brief Field-pass constants (BlobMeldCS b0, MELD composite b2). Layout must match MeldCB in BlobMeldCS.hlsl and SnowStaticsShell.hlsl. */
-	struct alignas(16) MeldCB
-	{
-		Matrix Proj;
-		Matrix ProjInverse;
-		Matrix ViewInverse;
-		float2 Dims;
-		float2 Dir;
-		float DepthRange;
-		float SmoothRange;
-		float MaxRadiusPx;
-		float Debug;
-		float Smoothing;
-		float Anchor;
-		float FootBias;
-		float Seed;
-		float VerticalRange;
-		float padM1;
-		float padM2;
-		float padM3;
-	};
-	STATIC_ASSERT_ALIGNAS_16(MeldCB);
-	/** @brief Seed-pass constants (BlobSeedCS b2). Layout must match MeldSeedCB in HeightMapProcessCS.hlsl. */
-	struct alignas(16) MeldSeedCB
-	{
-		Matrix ProjInverse;
-		Matrix ViewInverse;
-		float4 CamPosAdjust;
-		float2 Dims;
-		float2 pad;
-	};
-	STATIC_ASSERT_ALIGNAS_16(MeldSeedCB);
 	ConstantBuffer* heightProcessCB = nullptr;
 
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
