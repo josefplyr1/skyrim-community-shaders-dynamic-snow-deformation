@@ -2121,18 +2121,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 				depth0 = CarveProfile(deform0, depth0, GridOrigin + gridLocal) +
 				         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
 				marchRef = st0.x + depth0 + Undulation(GridOrigin + gridLocal) * saturate(depth0 / 8.0);
-				[branch] if (ObjectLiftCap > 0.0)
-				{
-					float sf0 = SampleObjectHeight(GridOrigin + gridLocal);
-					[flatten] if (sf0 > -50000.0)
-					{
-						float ground0 = smoothstep(0.1, 0.45, saturate(st0.z)) * (1.0 - saturate(mask0.x));
-						sf0 = lerp(min(sf0, st0.x), sf0, ground0);
-						marchRef = max(marchRef, sf0 + depth0);
-					}
-				}
 			}
 		}
+		marchRef = max(marchRef, surfZ - 2.0);
 		float horizonTan = -10.0;
 		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
 		{
@@ -2163,19 +2154,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// Live undulation ON PURPOSE: in the march, ALU is free and loads
 			// are the bottleneck, so the bake's 4 loads per tap were a
 			// regression here (2026-08-30). Geometry and shading keep the bake.
+			// No object term: every object under the shell is geometry the
+			// cascades already shadow with its real silhouette, and the shell
+			// draped over it casts through its own caster.
 			float sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
-			[branch] if (ObjectLiftCap > 0.0)
-			{
-				float sf = SampleObjectHeight(GridOrigin + sampleLocal);
-				[flatten] if (sf > -50000.0)
-				{
-					// Boundary gate mirroring ShellSurfaceZ: banks the geometry
-					// no longer raises must not occlude the march either.
-					float sampleGround = smoothstep(0.1, 0.45, saturate(st.z)) * (1.0 - saturate(sampleMask.x));
-					sf = lerp(min(sf, st.x), sf, sampleGround);
-					sh = max(sh, sf + sampleDepth);
-				}
-			}
 			horizonTan = max(horizonTan, (sh - marchRef - 1.0) / d);
 		}
 		// Near: a crisp penumbra band. Far: a much wider penumbra plus

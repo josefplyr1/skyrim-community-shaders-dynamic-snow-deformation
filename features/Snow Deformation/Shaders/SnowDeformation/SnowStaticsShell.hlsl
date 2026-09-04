@@ -958,6 +958,23 @@ float PatchSilhouetteDrop(float2 worldXY)
 	float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
 	float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
 	float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+	// On a road column the silhouette is the ROAD's, not that of whatever
+	// stands over it: a wall's top would clip the patch running under it.
+	float2 sdims;
+	ObjectSkinDepth.GetDimensions(sdims.x, sdims.y);
+	float2 st = PatchTexel(worldXY, sdims);
+	int2 s0 = (int2)st;
+	int2 s1 = min(s0 + 1, int2(sdims) - 1);
+	float4 roadTops = float4(ObjectSkinDepth.Load(int3(s0.x, s0.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s0.y, 0)).y,
+		ObjectSkinDepth.Load(int3(s0.x, s1.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s1.y, 0)).y);
+	bool4 onRoad = roadTops > kNoRoadTop * 0.5;
+	[flatten] if (any(onRoad))
+	{
+		top00 = onRoad.x ? roadTops.x : top00;
+		top10 = onRoad.y ? roadTops.y : top10;
+		top01 = onRoad.z ? roadTops.z : top01;
+		top11 = onRoad.w ? roadTops.w : top11;
+	}
 	float maxTop = max(max(top00, top10), max(top01, top11));
 	float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
 	return lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
@@ -975,8 +992,11 @@ bool RoadOwnsColumn(float2 worldXY)
 	float top = PatchTop(worldXY);
 	if (top < -50000.0)
 		return false;
+	// A road owns every column it overlaps, whatever stands on or over it:
+	// the road's snow runs on under walls, houses and rocks (Josef, 2026-09-04)
+	// rather than stopping in a hard edge at their footprint.
 	float roadTop = PatchSkinDepth(worldXY).y;
-	if (roadTop <= kNoRoadTop * 0.5 || (top - roadTop) >= kRoadOwnsTop)
+	if (roadTop <= kNoRoadTop * 0.5)
 		return false;
 	// The silhouette clip is the other way the patch declines a column it
 	// otherwise owns, and it fires on the road's own edge texels - where the
@@ -1086,7 +1106,11 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		// already-sampled top/roadTop. Evaluated before the de-jut can
 		// lower `top`, which only makes it more conservative: a real road
 		// column reads top == roadTop either way.
-		owns = roadTop > kNoRoadTop * 0.5 && (top - roadTop) < kRoadOwnsTop;
+		owns = roadTop > kNoRoadTop * 0.5;
+		// Under a wall or a house the column's top is the building; the road
+		// patch keeps going on the road's own top instead (clipping through).
+		[flatten] if (owns && (top - roadTop) >= kRoadOwnsTop)
+			top = roadTop;
 
 	// Rim test: a vertex whose column towers over a neighbour is the top edge
 	// of a tall structure, whose triangles stretch down the facade as white
@@ -3074,7 +3098,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				refTer = st0.x + depth0 + Undulation(GridOrigin + input.GridLocal) * saturate(depth0 / 8.0);
 			}
 		}
-		float refObj = surfZ;
+		// Never below the drawn surface by more than the reconstruction's own
+		// slack: a skin standing on a rock or a glacier is far above the
+		// terrain the taps read, and terrain relief must not shadow it.
+		refTer = max(refTer, surfZ - 2.0);
 		float horizonTan = -10.0;
 		// The top raster stores only the HIGHEST surface per texel, so under
 		// a multi-level object's overhang it records the deck ABOVE the
@@ -3112,19 +3139,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				// a finer raster.
 				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
 					objectTopUsable = false;
-				else [flatten] if (selfTop > -50000.0)
-				{
-					// The same bilinear top the object taps read.
-					float2 bs = PatchTexel(GridOrigin + input.GridLocal, topDims);
-					int2 bs0 = (int2)bs;
-					float2 bsf = bs - bs0;
-					int2 bs1 = min(bs0 + 1, int2(topDims) - 1);
-					float4 selfTops = float4(
-						ObjectTopRaw.Load(int3(bs0.x, bs0.y, 0)), ObjectTopRaw.Load(int3(bs1.x, bs0.y, 0)),
-						ObjectTopRaw.Load(int3(bs0.x, bs1.y, 0)), ObjectTopRaw.Load(int3(bs1.x, bs1.y, 0)));
-					[flatten] if (all(selfTops > -50000.0))
-						refObj = lerp(lerp(selfTops.x, selfTops.y, bsf.x), lerp(selfTops.z, selfTops.w, bsf.x), bsf.y);
-				}
 			}
 		}
 		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
@@ -3160,8 +3174,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						// object); the cone is the same angle-of-repose field the dome's
 						// own taper reads.
 						float2 tapWorld = GridOrigin + sampleLocal;
-						// The four texels around the tap, bilinear-ready for the road
-						// rebuild below; first they say how steep the top is here.
+						// Object taps exist for ROAD columns only: the road's carved
+						// surface is a snow shape the cascades cannot see. Any other
+						// object's top is geometry the cascades already shadow with
+						// its real silhouette, and a 4-unit raster copy of that shadow
+						// never lined up with it (the statue, the distant glaciers).
 						float2 bt = PatchTexel(tapWorld, topDims);
 						int2 bt0 = (int2)bt;
 						float2 btf = bt - bt0;
@@ -3169,29 +3186,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						float4 tapTops = float4(
 							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
 							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
-						// The object's top alone. The cone field is the depth a shell
-						// MAY grow, not what it drew, and a guessed cap shadowed rock
-						// faces from snow that was never there; the raised shell's own
-						// shadow is the caster's job.
-						float tapConeRaw = ObjectConeDepth(tapWorld);
-						float tapSnow = kMinSkinLift;
-						sh = topH + tapSnow;
-						dbgMarch.z += 0.2;
-
-						// Except on ROAD-OWNED columns, which carry a full
-						// carved layer: a dusting occluder leaves the trench
-						// floor unshadowed by its own walls - the bright
-						// streak down every road trail. Rebuild the surface
-						// the patch draws, from BILINEAR reads: attempt one
-						// (reverted) fed the point-Load top and the max-of-4
-						// depth into the carve and the occluder stepped in
-						// 4-unit texels, which read as blocky shadows.
-						// Bilinear over the same lattice is the smoothness
-						// class of the patch's own drawn geometry. All four
-						// top texels must be valid (a sentinel poisons the
-						// interpolation) and the road must own the column;
-						// everywhere else - rocks, cairns, walls - the
-						// dusting above stands, so skins cannot regress.
 						[branch] if (all(tapTops > -50000.0))
 						{
 							float2 sd00 = ObjectSkinDepth.Load(int3(bt0.x, bt0.y, 0));
@@ -3201,39 +3195,22 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 							float topSmooth = lerp(lerp(tapTops.x, tapTops.y, btf.x), lerp(tapTops.z, tapTops.w, btf.x), btf.y);
 							float depthSmooth = lerp(lerp(sd00.x, sd10.x, btf.x), lerp(sd01.x, sd11.x, btf.x), btf.y);
 							float tapRoadTop = max(max(sd00.y, sd10.y), max(sd01.y, sd11.y));
-							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && (topSmooth - tapRoadTop) < kRoadOwnsTop && depthSmooth >= 1.0)
+							[branch] if (tapRoadTop > kNoRoadTop * 0.5 && depthSmooth >= 1.0)
 							{
-								// Same assembly as the off-object branch below:
-								// carve + berm, undulation riding on the result;
-								// churn and clods skipped, as both marches skip
-								// them. Baked berm only, the march's own
-								// convention - the 17-tap live field is not
-								// worth 5 taps of it per pixel.
-								// Same verge blend as BuildPatchVertex, or the
-								// occluder regrows the walls the geometry
-								// tapered - the recurring shape/shadow split.
+								// The road's own top where something taller stands over it.
+								float topRoad = (topSmooth - tapRoadTop) >= kRoadOwnsTop ? tapRoadTop : topSmooth;
 								float tapLand = max(SampleTerrainStatics(sampleLocal).y, 0.0);
-								float tapCone = tapConeRaw;
+								float tapCone = ObjectConeDepth(tapWorld);
 								depthSmooth = max(min(tapCone, depthSmooth), min(tapLand, depthSmooth));
 								float tapDeform = SampleDeformation(sampleLocal);
 								float tapBerm = BermBakeActive > 0.5 ? BermFieldBaked(sampleLocal) : 0.0;
 								float tapDepth = CarveProfile(tapDeform, depthSmooth, tapWorld) +
 								                 BermShape(tapBerm) * saturate(1.0 - tapDeform) * depthSmooth * ObjBermHeightAmp * BermDepthGate(depthSmooth);
-								// Live undulation on purpose - see SnowShell's march note.
-								sh = topSmooth + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
+								sh = topRoad + tapDepth + Undulation(tapWorld) * saturate(tapDepth / 8.0);
 								dbgMarch.y += 0.2;
-								dbgMarch.z -= 0.2;
-							}
-							else
-							{
-								// Non-road object column: the SAME bilinear top the road path
-								// uses, so the occluder is as smooth as the drawn dome instead
-								// of stepping in 4-unit texels. The blockiness that got the
-								// object taps disabled on S4 was the POINT load, not the taps.
-								sh = topSmooth + tapSnow;
+								tapOnObject = true;
 							}
 						}
-						tapOnObject = true;
 					}
 				}
 			}
@@ -3253,7 +3230,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				// no-op through the max below, same as the landscape's edge.
 				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			}
-			horizonTan = max(horizonTan, (sh - (tapOnObject ? refObj : refTer) - 1.0) / d);
+			horizonTan = max(horizonTan, (sh - (tapOnObject ? surfZ : refTer) - 1.0) / d);
 		}
 		// Near softness halved: it existed to hide the tap quantisation the
 		// finer first taps now resolve. Far end untouched.
