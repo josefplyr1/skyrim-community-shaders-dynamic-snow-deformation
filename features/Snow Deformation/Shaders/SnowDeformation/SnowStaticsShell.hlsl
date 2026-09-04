@@ -4165,7 +4165,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// contour with these. Uniform flow; the users sit inside branches.
 	float edgeWVert = input.Coverage * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
 	float2 edgeWGrad = float2(ddx(edgeWVert), ddy(edgeWVert));
-	float2 edgeNzGrad = float2(ddx(input.Coverage), ddy(input.Coverage));
 	// The column's OWN post-shelter depth target, NOT the class slider.
 	// Under a roof the target drops to kShelterDust while the slider does
 	// not, so a class-scaled rim band came out WIDER than the sheltered
@@ -4230,6 +4229,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// values the gates do, so their edge is the shell's.
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
+	float edgeFill = 0.0;
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -4275,6 +4275,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
 		pdCoverage = smoothstep(-0.03, 0.0, wpix) * smoothstep(-0.18, 0.08, wSmooth) * smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		edgeW = wpix;
+		edgeFill = smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
 		// EXCEPT the meld wall: the lift raises side faces at melded
@@ -4690,24 +4691,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
 
 #	ifndef PATCH
-	// THE COAT AND THE EDGE LUMPS. The game blends its projected snow by
-	// smoothstep(0,1,5w) over the reconstructed weight w (edgeW, per pixel:
-	// normal map and noise texture included, so it is ragged the way the
-	// game's own edge is). The coat draws the shell's material where that
-	// blend is solid (w >= kCoatSolidW), lifted off the object along the
-	// view ray for the z-test. Below it the lumps hang on for a DISTANCE:
-	// the smooth weight's gradient turns the shortfall into world units past
-	// the solid contour, and the band ends at Edge Lump Reach. A wall's
-	// faint uniform frosting has no gradient, so it is infinitely far from
-	// any edge and gets neither coat nor lumps, while a rock's flank fades
-	// over a few units and does. The far part of the band breaks into round
-	// blobs (Edge Lump Size). Pixels the 3D shell covers are never touched.
-	// Draws without projection data hang lumps below the shell's slope cut
-	// the same way, from the vertex normal. The distance dissolve erodes
-	// solid pixels through the blob field, no dither.
+	// THE COAT AND THE EDGE LUMPS (projected-snow draws whose property
+	// really carries projection data, Recolor Projected Snow on). The coat
+	// draws the shell's material over exactly the footprint the recolor
+	// turns solid - the reconstructed weight w (edgeW, normal map and noise
+	// included, so its edge is as ragged as the game's own) with Snow Fill
+	// applied as the recolor applies it - lifted off the object along the
+	// view ray for the z-test. Past that footprint's contour the lumps hang
+	// onto bare rock for a DISTANCE: the smooth weight's gradient turns the
+	// shortfall into world units, and the band ends at Edge Lump Reach. A
+	// face frosted faintly all over has no gradient, is infinitely far from
+	// any edge, and gets nothing. The band keeps the footprint's own ragged
+	// cut next to the contour and breaks into round blobs (Edge Lump Size)
+	// toward the reach. Pixels the 3D shell covers are never touched. The
+	// distance dissolve erodes solid pixels through the blob field.
 	float edgeFlankLift = 0.0;
-	bool lumpsOn = EdgeFlankWidth > 0.001;
-	[branch] if (LegacySkin < 0.5 && !containerMode && (EdgeCoat > 0.5 || lumpsOn || fadeAlpha < 0.5))
+	bool coatOn = pdMode && EdgeCoat > 0.5;
+	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
+	[branch] if (LegacySkin < 0.5 && !containerMode && (coatOn || fadeAlpha < 0.5))
 	{
 		const float fadeIn = fadeAlpha;
 		// Coverage 0.5 is the old cut's own median, so this is the edge.
@@ -4715,16 +4716,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 		bool solid = inside;
 		bool needField = inside && fadeIn < 0.5;
 		float s = 0.0;
-		[branch] if (!inside)
+		[branch] if (!inside && coatOn)
 		{
-			bool coat = pdMode && EdgeCoat > 0.5;
-			float wPix = pdMode ? edgeW : edgeNz;
-			float2 wG = pdMode ? edgeWGrad : edgeNzGrad;
-			float w0 = pdMode ? (coat ? kCoatSolidW : 0.0) : 0.55;
-			float gradW = length(float2(wG.x / max(length(dPosX), 1e-4), wG.y / max(length(dPosY), 1e-4)));
-			float dist = (w0 - wPix) / max(gradW, 1e-3);
+			float wEff = edgeW;
+			[flatten] if (edgeW > 0.003)
+				wEff = max(wEff, 0.2 * edgeFill);
+			solid = wEff >= kCoatSolidW;
+			// The contour the lumps hang from: the footprint's own edge
+			// where the fill has pushed the coat out to it, the solid
+			// weight otherwise.
+			float w0 = lerp(kCoatSolidW, 0.003, edgeFill);
+			float gradW = length(float2(edgeWGrad.x / max(length(dPosX), 1e-4), edgeWGrad.y / max(length(dPosY), 1e-4)));
+			float dist = (w0 - edgeW) / max(gradW, 1e-3);
 			float reach = kEdgeReachUnits * EdgeFlankWidth;
-			solid = coat && wPix >= w0;
 			s = -dist / max(reach, 1e-3);
 			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && input.Coverage > -0.05);
 		}

@@ -710,6 +710,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	float projThreshold = -1.0f;
 	float projNoiseScale = 0.0f;
 	float projNoiseTiling = 0.0f;
+	bool projReal = false;
 	{
 		const auto& capFlags = a_pass->shaderProperty->flags;
 		using CapFlag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -718,6 +719,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			projThreshold = projParams.alpha;
 			projNoiseScale = projParams.red;
 			projNoiseTiling = projParams.blue;
+			projReal = true;
 		} else if (!capFlags.any(CapFlag::kTreeAnim) && !fadeExempt) {
 			// The classification-key mismatch closed (Josef's fence,
 			// 2026-08-29): capture is technique-classified, so everything
@@ -797,7 +799,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, driftFamily });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, driftFamily, projReal });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -2421,9 +2423,10 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// silhouette keeps the plain contour (as the lift-band cut always did).
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.25f, 3.0f);
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
-	// Same veto as the Lighting-side recolor: sand and moss projections
-	// keep their look.
-	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.geometry &&
+	// Same veto as the Lighting-side recolor (sand and moss keep their
+	// look), and only where the property really carries projection data:
+	// the mesh-replacer default reconstructs a weight the game never paints.
+	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.projReal && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.ContainerSpike = settings.ContainerShellSpike ? 1.0f : 0.0f;

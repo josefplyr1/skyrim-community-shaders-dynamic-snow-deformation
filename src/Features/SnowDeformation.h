@@ -1497,6 +1497,8 @@ public:
 		bool plankFamily;
 		/** @brief Mesh name says drift or snow pile: no blob spheres (a drift has no bare edge to round). */
 		bool driftFamily;
+		/** @brief The property really carries kProjectedUV (projThreshold read from it). False for the mesh-replacer default (threshold 0, no noise), whose reconstructed weight is a guess the coat and the edge lumps must not trust. */
+		bool projReal;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
