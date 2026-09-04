@@ -899,6 +899,14 @@ void SnowDeformation::DrawShell()
 	// roads, rocks).
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
+	// The game's texture tracker rebinds a slot only when it believes the
+	// binding changed. t3 is the effect shaders' soft-particle depth, set
+	// once per frame, so the null the skin pass left there faded every mist
+	// and cloud to nothing wherever a soft effect drew (Josef's peaks,
+	// 2026-09-04). Save the slots this pass overwrites and put them back.
+	winrt::com_ptr<ID3D11ShaderResourceView> prevShellSRVs[9];
+	for (uint i = 0; i < 9; i++)
+		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
@@ -1141,6 +1149,10 @@ void SnowDeformation::DrawShell()
 	// t21 are cleared alongside.
 	ID3D11ShaderResourceView* nullShadowSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(20, 4, nullShadowSRVs);
+	ID3D11ShaderResourceView* restoreShellSRVs[9];
+	for (uint i = 0; i < 9; i++)
+		restoreShellSRVs[i] = prevShellSRVs[i].get();
+	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;
