@@ -327,7 +327,9 @@ cbuffer StaticCB : register(b1)
 	// Edge breakup: reach of the rim erosion in world units (0 = off) and
 	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
-	float padEdge0;
+	// >0.5: PreSkinMasks is bound. Mirror in SnowHeightCapture.hlsl /
+	// SnowDeformation.h.
+	float HasSkinMasksCopy;
 	float EdgeBreakupScale;
 	// How far past the edge the lumps reach: a fraction of the projected
 	// weight's own fade on coated draws, a normal-z band elsewhere.
@@ -366,6 +368,11 @@ Texture2D<float4> ProjNoiseMap : register(t21);
 // encode this PS writes): the scene's per-pixel shaded normal under each
 // shell pixel, before any shell overwrote it. Skin PS only.
 Texture2D<float4> PreSkinNormals : register(t23);
+// Pre-shell MASKS copy (the terrain shell's LandMasksCopy): y carries the
+// landscape grain height in (0,1] and, on classified projected-snow statics,
+// the recolor's real blend weight as 2 + w. The coat and the edge lumps key
+// off the paint the game really applied, not a reconstruction of it.
+Texture2D<float3> PreSkinMasks : register(t32);
 
 // The terrain window also reaches the patch VS: the road-verge depth blend
 // needs the landscape class depth per vertex.
@@ -511,6 +518,9 @@ static const float kEdgeMaxDrop = 0.12;
 // The coat's slope gate on the SMOOTH normal (~81 degrees): steep enough to
 // follow the paint down a rock's flank, still above any wall.
 static const float kCoatMinNz = 0.15;
+// The game's blend at which the read-back paint counts as solid (= the
+// kCoatSolidW point of the reconstruction).
+static const float kCoatSolidReal = 0.84;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -3798,6 +3808,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// fraction * 1000 = the caster height cap in units.
 		float remarchCap = frac(CompactLook.y) * 1000.0;
 		float remarch = SkinRemarchSSS(input.WorldPos, L, screenNoise, CompactLook.zw, CompactLook.y > 1.5, remarchCap);
+		// Off past the caster band: at range the flank coat is most of a
+		// rock's screen area and the re-march darkened whole objects.
+		remarch = lerp(remarch, 1.0, smoothstep(2800.0, 4900.0, input.pixelDist));
 		sunShadow *= lerp(remarch, 1.0, SnowShadow::GetSssHandoff(input.CurrentClip.w));
 	}
 	// Parallax self-shadow on the snow grain, same term and constants as the
@@ -4250,19 +4263,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// Fallback for pixels the copy cannot answer (copy missing, or the
 		// shell's silhouette overhangs past its object onto sky/ground):
 		// the interpolated shading normal.
+		// The SMOOTH normal, at every depth. The pre-shell normal copy used
+		// to stand in here above depth 0.05 only, so the footprint changed
+		// with the depth slider; and that copy holds the projected snow's
+		// own flatter normal on painted pixels, which widened the
+		// reconstruction past the game's edge. The real paint now comes
+		// from the Masks read-back below.
 		float nzPix = normalWS.z;
-		[branch] if (HasSkinNormalCopy > 0.5)
-		{
-			// A cleared texel (sky, or anything that never wrote normals)
-			// reads (0,0); keep the interpolated fallback there rather than
-			// decoding garbage - the silhouette-overhang miss suspect.
-			float2 rawN = PreSkinNormals.Load(int3(input.Position.xy, 0)).xy;
-			[flatten] if (abs(rawN.x) + abs(rawN.y) > 1e-4)
-			{
-				// Inverse of this PS's own encode: viewN = mul(CameraView, worldN).
-				nzPix = mul(GBuffer::DecodeNormal(rawN), (float3x3)CameraView).z;
-			}
-		}
 		edgeNz = nzPix;
 		// The footprint: vanilla's weight in FULL, noise always included -
 		// the coat's pattern IS the purple, at every fill level. Superset
@@ -4331,6 +4338,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// let the recolored PD carry on underneath (the two systems agree
 		// by construction, so the hand-off is a seam of height only).
 		pdCoverage *= smoothstep(0.3 * coatRef, coatRef, input.Lift);
+		// The game's own paint, read back: where this pixel's own surface is
+		// what stands behind it - low lift - the real weight cuts the
+		// footprint, the same at every depth.
+		[branch] if (HasSkinMasksCopy > 0.5 && input.Lift < 2.0 * coatRef)
+		{
+			float realEnc = PreSkinMasks.Load(int3(input.Position.xy, 0)).y;
+			[flatten] if (realEnc >= 1.5)
+				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
+		}
 		// THE LIFT FLOOR, over ALL the screen-space gates (Josef's
 		// occlusion find, decoded by his coverage-alpha shot): every gate
 		// above reads nzPix / wpix from the PRE-SHELL G-buffer - the
@@ -4725,18 +4741,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	ifndef PATCH
 	// THE COAT AND THE EDGE LUMPS (projected-snow draws whose property
 	// really carries projection data, Recolor Projected Snow on). The coat
-	// draws the shell's material over exactly the footprint the recolor
-	// turns solid - the reconstructed weight w (edgeW, normal map and noise
-	// included, so its edge is as ragged as the game's own) with Snow Fill
-	// applied as the recolor applies it - lifted off the object along the
-	// view ray for the z-test. Past that footprint's contour the lumps hang
-	// onto bare rock for a DISTANCE: the smooth weight's gradient turns the
-	// shortfall into world units, and the band ends at Edge Lump Reach. A
-	// face frosted faintly all over has no gradient, is infinitely far from
-	// any edge, and gets nothing. The band is round blobs (Edge Lump Size)
-	// from the contour outward, melded next to it and thinning to cores
-	// toward the reach; the solid part is never touched. The distance
-	// dissolve erodes solid pixels through the blob field.
+	// draws the shell's material over the paint the game REALLY applied,
+	// read back from the pre-shell Masks copy (Lighting writes 2 + weight
+	// on classified statics), lifted off the object along the view ray for
+	// the z-test. The edge lumps hang past that paint's edge: an unpainted
+	// pixel marches the copy up the smooth weight's gradient until it
+	// meets paint, which gives its true screen-space distance to the edge;
+	// within Edge Lump Reach the blob field keeps round islands, and the
+	// contour itself bulges outward by up to half a cell (Edge Lump Size).
+	// The solid part is never touched. A face frosted faintly all over has
+	// no gradient to march along and gets nothing. Without the read-back
+	// (copy missing, draw not classified) the reconstruction stands in.
 	float edgeFlankLift = 0.0;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
@@ -4748,55 +4763,75 @@ PS_OUTPUT main(VS_OUTPUT input)
 		bool solid = inside;
 		bool needField = inside && fadeIn < 0.5;
 		float s = 0.0;
+		float reach = kEdgeReachUnits * EdgeFlankWidth;
+		float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 		[branch] if (!inside && coatOn)
 		{
+			float realEnc = HasSkinMasksCopy > 0.5 ? PreSkinMasks.Load(int3(input.Position.xy, 0)).y : 0.0;
+			bool realKnown = realEnc >= 1.5;
+			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
-			// faces up per pixel, but the wall does not. Fixed and near
-			// vertical - the class slope (65 degrees for any rock not named
-			// mountain or cliff) cut the coat off well above the paint.
-			solid = edgeW >= edgeThr && input.Coverage >= kCoatMinNz;
-			// The contour the lumps hang from: the footprint's own edge
-			// where the fill has pushed the coat out to it, the (lobed)
-			// solid threshold otherwise.
-			float w0 = lerp(edgeThr, 0.003, edgeFill);
-			float gradW = length(float2(edgeWGrad.x / max(length(dPosX), 1e-4), edgeWGrad.y / max(length(dPosY), 1e-4)));
-			float dist = (w0 - edgeW) / max(gradW, 1e-3);
-			float reach = kEdgeReachUnits * EdgeFlankWidth;
-			s = -dist / max(reach, 1e-3);
-			// Only a shortfall the game's own fade could span; past that
-			// there is no solid snow to hang from, whatever the
-			// extrapolation says (a beam's ring stays a hair wide).
-			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > kCoatMinNz - 0.1);
+			// faces up per pixel, but the wall does not.
+			solid = painted && input.Coverage >= kCoatMinNz;
+			// World distance to the paint's edge for an unpainted pixel.
+			float dWorld = 1e6;
+			float gl = length(edgeWGrad);
+			[branch] if (!painted && lumpsOn && realKnown && gl > 1e-6 && input.Coverage > kCoatMinNz - 0.1)
+			{
+				float2 dir = edgeWGrad / gl;
+				float reachPx = clamp(reach / max(footprint, 1e-3), 2.0, 64.0);
+				float stepPx = reachPx / 8.0;
+				float found = -1.0;
+				[unroll] for (int m = 1; m <= 8; m++)
+				{
+					float2 sp = input.Position.xy + dir * (stepPx * float(m));
+					float e = PreSkinMasks.Load(int3(sp, 0)).y;
+					[flatten] if (found < 0.0 && e >= 1.5 && saturate(e - 2.0) >= kCoatSolidReal)
+						found = stepPx * float(m);
+				}
+				[flatten] if (found > 0.0)
+					dWorld = found * footprint;
+			}
+			else [flatten] if (!painted && lumpsOn && !realKnown && gl > 1e-6)
+			{
+				// Reconstruction fallback: the shortfall over the gradient.
+				float gradW = length(float2(edgeWGrad.x / max(length(dPosX), 1e-4), edgeWGrad.y / max(length(dPosY), 1e-4)));
+				dWorld = (edgeThr - edgeW) / max(gradW, 1e-3);
+			}
+			s = -dWorld / max(reach, 1e-3);
+			needField = solid ? (fadeIn < 0.5) : (dWorld < max(reach, 0.5 * cell) && input.Coverage > kCoatMinNz - 0.1);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
 		[branch] if (needField)
 		{
-			float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 			float lod = smoothstep(2.0, 5.0, cell / max(footprint, 1e-3));
 			float3 lumpPos = float3(worldXY, pixelAbsZ - input.Lift);
 			float3 lumpW = pow(abs(normalWS), 4.0);
 			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
 			float blob = EdgeLumpField(lumpPos, lumpW, cell);
-			// Solid: only the distance fade. Band: blobs above 0.35 at the
-			// contour, cores only half-way out, nothing past two thirds.
 			[flatten] if (solid)
 				keep = lerp(0.5, blob, lod) + 2.4 * fadeIn - 1.2;
 			else
-				keep = lod * blob - 0.35 + s - 1.5 * (1.0 - fadeIn);
+			{
+				// Islands thinning to the reach, and the contour bulging
+				// outward by up to half a cell where a blob sits on it.
+				float dWorld = -s * max(reach, 1e-3);
+				float island = lod * blob - 0.35 + s;
+				float lobe = (lod * (blob - 0.5) * cell - dWorld) / max(reach, 0.5 * cell);
+				keep = max(island, lobe) - 1.5 * (1.0 - fadeIn);
+			}
 			// Each blob shades as a mound: tilt the normal down its own
 			// slope, along the pixel's world tangents so it stays in the
-			// surface on tops and flanks alike; strongest where the band
-			// has broken into islands.
-			float tiltW = lod;
-			[branch] if (!solid && keep >= 0.0 && tiltW > 0.001)
+			// surface on tops and flanks alike.
+			[branch] if (!solid && keep >= 0.0 && lod > 0.001)
 			{
 				const float ns = 0.5;
 				float3 tX = normalize(dPosX);
 				float3 tY = normalize(dPosY);
 				float gU = (EdgeLumpField(lumpPos + tX * ns, lumpW, cell) - blob) / ns;
 				float gV = (EdgeLumpField(lumpPos + tY * ns, lumpW, cell) - blob) / ns;
-				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * tiltW);
+				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * lod);
 			}
 		}
 		[flatten] if (inside && keep < 0.0)

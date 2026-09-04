@@ -829,12 +829,11 @@ void SnowDeformation::DrawShell()
 		// Pre-shell normals for the S4 shell's per-pixel footprint cut
 		// (per-pixel nz, normal maps included). Gated on the 3D toggle so
 		// the off-cost is zero; the null SRV keeps HasSkinNormalCopy off.
+		// The pre-shell normals copy is retired: it only existed above depth
+		// 0.05, so the S4 footprint changed with the depth slider, and it
+		// held the projected snow's own normal on painted pixels. The skin
+		// reads the recolor's real weight from LandMasksCopy instead.
 		preSkinNormalsCopySRV = nullptr;
-		auto& normalsRT = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS];
-		if (settings.ObjectSnow3D && settings.ObjectsSnowDepth > 0.05f && normalsRT.SRV) {
-			context->OMSetRenderTargets(0, nullptr, nullptr);
-			CopySRVResource(normalsRT.SRV, "SnowDeformation::PreSkinNormalsCopy", preSkinNormalsCopyTex, preSkinNormalsCopySRV);
-		}
 	}
 
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,

@@ -1695,7 +1695,8 @@ public:
 		/** @brief Blob Snow Shell: 1 = mountain/cliff family, so the seed applies the rock slope limit. Rides the fresh channel's low bit. */
 		float BlobRockClass;
 
-		float padEdge0;
+		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float HasSkinMasksCopy;
 		/** @brief Settings::SkinEdgeLumpSize - lump cell-size multiplier. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeBreakupScale;
 		/** @brief Settings::SkinEdgeFlankWidth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

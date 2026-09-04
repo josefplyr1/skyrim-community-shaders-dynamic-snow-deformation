@@ -2422,6 +2422,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
+	a_scb.HasSkinMasksCopy = (settings.ObjectSnow3D && landMasksCopySRV) ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:
@@ -2799,6 +2800,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
 	ID3D11ShaderResourceView* skinNormalsSRV = settings.ObjectSnow3D ? preSkinNormalsCopySRV.get() : nullptr;
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
+	// The pre-shell Masks copy: the recolor's real projected weight.
+	ID3D11ShaderResourceView* skinMasksSRV = settings.ObjectSnow3D ? landMasksCopySRV.get() : nullptr;
+	context->PSSetShaderResources(32, 1, &skinMasksSRV);
 
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
@@ -2916,6 +2920,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->HSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(24, 1, &nullSmoothSRV);
 	ID3D11ShaderResourceView* nullLayerSRVs[4] = { nullptr, nullptr, nullptr, nullptr };

@@ -3242,6 +3242,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, pixelOffset > 0.0 ? 0.004 + pixelOffset * 0.996 : 0.0, masksZ, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
+#			if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV)
+	// Masks.y is dead for statics too (SSS reads it only where Masks.x >
+	// 0): carry the recolor's real blend weight as 2 + w for the object snow
+	// shell's coat and edge lumps. Landscape keeps (0, 1] for its grain.
+	[flatten] if (snowProjMatch)
+		psout.Masks.y = 2.0 + saturate(projectedMaterialWeight);
+#			endif
 #		endif
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion

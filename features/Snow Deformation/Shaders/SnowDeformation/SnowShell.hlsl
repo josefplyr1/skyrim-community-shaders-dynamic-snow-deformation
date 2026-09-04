@@ -1703,6 +1703,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && coverageAlpha > 0.001 && coverageAlpha < 0.999)
 	{
 		float edgeSnowH = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
+		// Statics behind the shell carry the recolor's weight here as
+		// 2 + w (Lighting.hlsl); only (0, 1] is a land grain height.
 		float hLandRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
 		// Fixed amplitudes (band-scaled grain magnified the
 		// contest with the slider). The land's grain is the POM hit -
@@ -1711,7 +1713,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// grain is world-anchored and stays full.
 		const float kEdgeGrainAmp = 2.0;
 		const float kEdgeDirtAmp = 2.0;
-		float hLand01 = hLandRaw > 0.002 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
+		float hLand01 = hLandRaw > 0.002 && hLandRaw < 1.5 ? saturate((hLandRaw - 0.004) * (1.0 / 0.996)) : 0.5;
 		float dirtSurf = (0.5 + (hLand01 - 0.5) * 0.5) * kEdgeDirtAmp;
 		float snowSurf = pixelEffDepth + (edgeSnowH - 0.5) * kEdgeGrainAmp;
 		float win = smoothstep(-0.25, 0.25, snowSurf - dirtSurf);
@@ -1733,7 +1735,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		{
 			float floorGrain = SampleSnowHeight(ComputeSnowTapsNoGrad(edgeSnowUV, GridOrigin + gridLocal), 0.0.xx, edgeSnowMip);
 			float hLandFloorRaw = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-			float hLandFloor01 = hLandFloorRaw > 0.002 ? saturate((hLandFloorRaw - 0.004) * (1.0 / 0.996)) : 0.5;
+			float hLandFloor01 = hLandFloorRaw > 0.002 && hLandFloorRaw < 1.5 ? saturate((hLandFloorRaw - 0.004) * (1.0 / 0.996)) : 0.5;
 			float dirtSurfFloor = (0.5 + (hLandFloor01 - 0.5) * 0.5) * 2.0;
 			float snowSurfFloor = remaining + (floorGrain - 0.5) * 2.0;
 			float winFloor = smoothstep(-0.25, 0.25, snowSurfFloor - dirtSurfFloor);
