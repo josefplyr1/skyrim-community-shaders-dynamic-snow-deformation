@@ -68,6 +68,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
+			ImGui::Checkbox(T(TKEY("object_snow_shadows"), "Object Snow Casts Shadows"), &settings.ObjectSnowShadows);
+			if (auto _ttOss = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_snow_shadows_tooltip"), "Raised object snow throws its own shadow onto the object and the ground. Turn it off to check whether a dark patch on a rock comes from the snow above it: if the patch vanishes, it was the snow's shadow, thrown from the raised layer's full footprint even where the surface itself is not drawn."));
 			ImGui::Checkbox(T(TKEY("sss_remarch"), "Re-march Shadows on the Shell"), &settings.ShellSSSRemarch);
 			if (auto _ttRemarch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("sss_remarch_tooltip"), "Screen-Space Shadows are normally marched on the ground BENEATH the snow, so the shell can only use them at distance or they print buried objects through the snow. This re-marches them from the snow surface and accepts only casters standing above the snow line - which brings back near-field grass and contact shadows, including from actors, without the prints. Costs 8 depth taps per lit shell pixel. A/B this against it being off."));

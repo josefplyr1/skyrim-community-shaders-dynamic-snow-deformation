@@ -1580,6 +1580,8 @@
     "feature.snow_deformation.object_drape_tooltip": "Covers objects with the same snow sheet the roads use, instead of the shell that is fitted to each object's own shape. While this is on the fitted shell is not drawn at all, so the two cannot overlap - which makes it a straight A/B: turn it off to compare against the shell you know. Rocks, walkways and steps should keep their snow; anything the sheet cannot stand on will lose it, and that is the finding.",
     "feature.snow_deformation.object_snow_3d": "3D Snow on Objects",
     "feature.snow_deformation.object_snow_3d_tooltip": "The raised 3D snow layer on objects: a rounded blanket grown over the Snow Fill area where the game paints projected snow - its edge rolls over like a real snow lip, and the rounding lengthens as the depth rises. Objects without projected-snow data carry no raised layer. Roads and their trenches are separate machinery and stay on.",
+    "feature.snow_deformation.object_snow_shadows": "Object Snow Casts Shadows",
+    "feature.snow_deformation.object_snow_shadows_tooltip": "Raised object snow throws its own shadow onto the object and the ground. Turn it off to check whether a dark patch on a rock comes from the snow above it: if the patch vanishes, it was the snow's shadow, thrown from the raised layer's full footprint even where the surface itself is not drawn.",
     "feature.snow_deformation.object_trenches": "Trenches on Objects",
     "feature.snow_deformation.object_trenches_tooltip": "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way.",
     "feature.snow_deformation.objects_snow_depth": "3D Snow Shell Depth",

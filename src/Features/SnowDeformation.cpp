@@ -154,6 +154,7 @@
 	X(ChurnSize) \
 	X(CompactMatte) \
 	X(ShellSSSRemarch) \
+	X(ObjectSnowShadows) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
 	X(ShellBareGroundCull) \
