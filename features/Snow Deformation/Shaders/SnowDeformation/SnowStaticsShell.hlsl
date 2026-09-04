@@ -508,6 +508,9 @@ static const float kEdgeReachUnits = 32.0;
 // hang from (the game's own fade is 0.2 wide).
 static const float kEdgeLobeAmp = 0.1;
 static const float kEdgeMaxDrop = 0.12;
+// The coat's slope gate on the SMOOTH normal (~81 degrees): steep enough to
+// follow the paint down a rock's flank, still above any wall.
+static const float kCoatMinNz = 0.15;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -4748,9 +4751,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (!inside && coatOn)
 		{
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
-			// faces up per pixel, but the wall does not. Same cut the shell's
-			// vertex mask applies; the band may hang a little below it.
-			solid = edgeW >= edgeThr && input.Coverage >= ShellMinNz;
+			// faces up per pixel, but the wall does not. Fixed and near
+			// vertical - the class slope (65 degrees for any rock not named
+			// mountain or cliff) cut the coat off well above the paint.
+			solid = edgeW >= edgeThr && input.Coverage >= kCoatMinNz;
 			// The contour the lumps hang from: the footprint's own edge
 			// where the fill has pushed the coat out to it, the (lobed)
 			// solid threshold otherwise.
@@ -4762,7 +4766,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// Only a shortfall the game's own fade could span; past that
 			// there is no solid snow to hang from, whatever the
 			// extrapolation says (a beam's ring stays a hair wide).
-			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > ShellMinNz - 0.1);
+			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > kCoatMinNz - 0.1);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
