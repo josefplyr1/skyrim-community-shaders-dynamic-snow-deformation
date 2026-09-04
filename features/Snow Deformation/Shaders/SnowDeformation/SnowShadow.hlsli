@@ -114,6 +114,62 @@ namespace SnowShadow
 		return result;
 	}
 
+	// GetCascadeShadow with a near-occluder rejection: on the object shell's
+	// coat and edge lumps (zero lift, on the object's own surface) the
+	// raised shell's rim right above them is the caster, its silhouette the
+	// vertex footprint the pixel cut has already trimmed. An occluder closer
+	// than a_rejectDist along the light (the shell's own thickness) is that
+	// rim and does not shadow. Primary cascade only; the receiver's own
+	// texel decides.
+	float GetCascadeShadowReject(float3 positionRel, float3 normalWS, float a_spread, uint2 a_atlasSlices, float3 a_lightDir, float a_rejectDist)
+	{
+		DirectionalShadowLightData sd = DirectionalShadowLights[0];
+
+		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionRel));
+
+		float result = 1.0;
+		[branch] if (shadowMapDepth < sd.EndSplitDistances.y)
+		{
+			float3 positionWS = positionRel + FrameBuffer::CameraPosAdjust.xyz + normalWS * 3.0;
+
+			float atlasW, atlasH, atlasSlices;
+			SnowShadowAtlas.GetDimensions(atlasW, atlasH, atlasSlices);
+			float2 texel = 1.0 / float2(atlasW, atlasH);
+
+			float cascadeSelect = saturate((shadowMapDepth - sd.StartSplitDistances.y) / (sd.EndSplitDistances.x - sd.StartSplitDistances.y));
+			uint primaryCascade = uint(cascadeSelect);
+			uint primarySlice = primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y;
+
+			float3 posLS = mul(sd.ShadowProj[primaryCascade], float4(positionWS, 1)).xyz;
+			posLS.xy = saturate(posLS.xy);
+			posLS.z -= 0.0008 * (primaryCascade + 1.0);
+			float shadow = SampleCascadePCF(posLS, primarySlice, texel, a_spread);
+			[branch] if (a_rejectDist > 0.0 && shadow < 0.999)
+			{
+				float occ = SnowShadowAtlas.Load(int4(int2(posLS.xy * float2(atlasW, atlasH)), primarySlice, 0));
+				float3 posLS2 = mul(sd.ShadowProj[primaryCascade], float4(positionWS + a_lightDir * 16.0, 1)).xyz;
+				float depthPerUnit = abs(posLS2.z - posLS.z) / 16.0;
+				float gap = abs(posLS.z - occ) / max(depthPerUnit, 1e-7);
+				[flatten] if (gap < a_rejectDist)
+					shadow = 1.0;
+			}
+
+			[branch] if (cascadeSelect > 0.0 && cascadeSelect < 1.0)
+			{
+				uint secondaryCascade = 1 - primaryCascade;
+				posLS = mul(sd.ShadowProj[secondaryCascade], float4(positionWS, 1)).xyz;
+				posLS.xy = saturate(posLS.xy);
+				posLS.z -= 0.0008 * (secondaryCascade + 1.0);
+				float shadowBlend = SampleCascadePCF(posLS, secondaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
+				shadow = lerp(shadow, shadowBlend, smoothstep(0, 1, cascadeSelect));
+			}
+
+			float fade = saturate(shadowMapDepth / sd.EndSplitDistances.y);
+			result = lerp(1.0, shadow, 1.0 - pow(fade * fade, 8));
+		}
+		return result;
+	}
+
 	// SSS handoff, shared by both shells and the re-march crossfade. The
 	// exact complement of GetCascadeShadow's distance fade above
 	// (1 - pow(fade^2, 8) at :117), so the mask reaches full strength

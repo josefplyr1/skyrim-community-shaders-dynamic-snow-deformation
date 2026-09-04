@@ -3250,6 +3250,9 @@ struct SkinShadeInput
 	float pixelDist;
 	float pixelDeform;
 	float screenNoise;
+	// >0 on coat/lump pixels: cascade occluders nearer than this along the
+	// light are the raised shell's own rim over its object and are ignored.
+	float selfShadowReject;
 };
 struct SkinShadeResult
 {
@@ -3558,7 +3561,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// (the round-31 seamShadowLift receiver raise is REVERTED -
 		// the RenderDoc replay proved no cascade shadow was missing at the
 		// seam, so the lift only risked boundary drift.)
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadowReject(input.WorldPos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w), L, input.selfShadowReject);
 	}
 	else
 	{
@@ -3936,6 +3939,7 @@ PS_OUTPUT BlobShade(float3 worldPos, float3 normalWS, float2 pixelPos, float2 mo
 	si.pixelDist = length(worldPos);
 	si.pixelDeform = 0.0;
 	si.screenNoise = Random::InterleavedGradientNoise(pixelPos, SharedData::FrameCount);
+	si.selfShadowReject = 0.0;
 	SkinShadeResult r = SkinShadeSurface(si, normalWS);
 
 	PS_OUTPUT psout;
@@ -4766,7 +4770,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 		[branch] if (!inside && coatOn)
 		{
-			float realEnc = HasSkinMasksCopy > 0.5 ? PreSkinMasks.Load(int3(input.Position.xy, 0)).y : 0.0;
+			// Bilinear reads of the copy: under TAA the frame jitters by a
+			// fraction of a pixel every frame, and point loads flipped the
+			// decisions below while the camera stood still.
+			float2 masksDim;
+			PreSkinMasks.GetDimensions(masksDim.x, masksDim.y);
+			float2 masksUV = input.Position.xy / masksDim;
+			float realEnc = HasSkinMasksCopy > 0.5 ? PreSkinMasks.SampleLevel(ShellLinearSampler, masksUV, 0).y : 0.0;
 			bool realKnown = realEnc >= 1.5;
 			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
@@ -4783,8 +4793,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 					{
 						float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
 						float2 sp = input.Position.xy + float2(cos(a), sin(a)) * r;
-						float ee = PreSkinMasks.Load(int3(sp, 0)).y;
-						hits += (ee >= 1.5 && saturate(ee - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
+						float ee = PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y;
+						// Soft: a tap on the paint's edge counts by how far it is in.
+						hits += saturate((ee - (2.0 + kCoatSolidReal)) * 8.0 + 0.5);
 					}
 				}
 				nearPaint = hits / 24.0;
@@ -4873,6 +4884,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.pixelDist = pixelDist;
 	ssi.pixelDeform = pixelDeform;
 	ssi.screenNoise = screenNoise;
+#	ifndef PATCH
+	ssi.selfShadowReject = edgeFlankLift > 0.0 ? max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) + 8.0 : 0.0;
+#	else
+	ssi.selfShadowReject = 0.0;
+#	endif
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
 	float3 viewNormal = ssr.viewNormal;
