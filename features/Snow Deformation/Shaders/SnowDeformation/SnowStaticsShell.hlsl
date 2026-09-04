@@ -179,7 +179,7 @@ cbuffer ShellCB : register(b0)
 
 	// Toroidal deformation-map addressing (see SnowShell.hlsl).
 	int2 DeformMapOrigin;
-	int2 DeformTorusPad;
+	int2 ShellFlags;  // x bit 0: horizon march on (see SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)
@@ -3047,7 +3047,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// skipped" cannot be misread as "march found nothing").
 	float3 dbgMarch = float3(0.0, 0.0, 0.0);
 	float dbgMarchRan = 0.0;
-	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
 		// boundary the horizon can resolve, so at 28 units every shadow edge

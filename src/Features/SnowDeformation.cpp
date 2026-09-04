@@ -138,6 +138,7 @@
 	X(ChurnSize) \
 	X(CompactMatte) \
 	X(ShellSSSRemarch) \
+	X(ShellHorizonMarch) \
 	X(ObjectSnowShadows) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \

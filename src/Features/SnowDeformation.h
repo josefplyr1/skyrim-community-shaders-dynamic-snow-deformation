@@ -577,6 +577,8 @@ public:
 		float ChurnSize = 0.25f;
 		/** @brief Re-march the SSS mask against the SHELL surface in the near field, instead of trusting the ground-marched mask. Restores grass shadows on the snow without the buried-caster prints; costs 8 depth taps per lit shell pixel. BOTH SHELLS run it (SkinRemarchSSS in SnowStaticsShell.hlsl is the same function on the same gate), so turning it on no longer makes the two shade differently across their seam. */
 		bool ShellSSSRemarch = true;
+		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades, the SSS mask and the re-march shade the snow. A/B for dark blotches on open snow at a low sun. */
+		bool ShellHorizonMarch = true;
 		/** @brief Object snow casts shadows: the S4 skins' depth-only caster pass. Off = the raised object snow throws no shadow of its own (its object still does). A/B for shadows that seem to come from snow nothing can see. */
 		bool ObjectSnowShadows = true;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
@@ -1056,7 +1058,8 @@ public:
 
 		/** @brief Toroidal deformation-map addressing: physical position of logical texel (0,0). Every DeformationMap Load adds this and masks by dim-1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 DeformMapOrigin;
-		DirectX::XMINT2 DeformTorusPad;
+		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch). Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		DirectX::XMINT2 ShellFlags;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

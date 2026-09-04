@@ -511,7 +511,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// scrolled after it was taken. One b0 serves both shells and the
 	// shadow/probe passes.
 	a_cb.DeformMapOrigin = mapOrigin;
-	a_cb.DeformTorusPad = { 0, 0 };
+	a_cb.ShellFlags = { settings.ShellHorizonMarch ? 1 : 0, 0 };
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
 	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;

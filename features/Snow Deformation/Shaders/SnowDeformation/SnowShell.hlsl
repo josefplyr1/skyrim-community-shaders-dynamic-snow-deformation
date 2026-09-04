@@ -198,7 +198,8 @@ cbuffer ShellCB : register(b0)
 	// Toroidal deformation-map addressing: physical position of logical
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
-	int2 DeformTorusPad;
+	// x bit 0: heightfield horizon march on. Mirror in SnowDeformation.h.
+	int2 ShellFlags;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -2091,7 +2092,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// onto the snow behind them; contact detail the game's cascades cannot
 	// hold. Geometric growth in the tap distances gives sharp close shadows
 	// and long soft ones at low sun angles.
-	[branch] if (sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
 		// boundary the horizon can resolve, so at 28 units every shadow edge
