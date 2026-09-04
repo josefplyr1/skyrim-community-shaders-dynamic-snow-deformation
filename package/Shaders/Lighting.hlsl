@@ -1871,51 +1871,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
 
-#	if defined(SNOW_DEFORMATION) && defined(TRUE_PBR) && !defined(WORLD_MAP)
-	// SNOW-MATCH glaciers: the CPU classified this draw as ice family
-	// (glacier/iceberg node name or diffuse path). Their snow is BAKED into
-	// mesh and texture — no projection exists for the projected match to
-	// swap, and the geometry skin cannot wrap meshes this size (its raster
-	// window is 4096 units). Recolor the baked snow instead: up-facing,
-	// bright texels take the shell's snow set; steep dark ice walls keep
-	// their authored look. PBR pixels only — this modlist's glaciers are
-	// TruePBR; a vanilla-material ice mesh passes through untouched.
-	[branch] if (SharedData::snowDeformationSettings.BakedSnowEnable > 0.5 &&
-				 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowBakedIsSnow) != 0)
-	{
-		float3 bakedWorldPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-		float3 bakedFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		float3 bakedTriWeights = Triplanar::GetWeights(worldNormal.xyz, bakedFaceNormal);
-		float3 bakedSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, bakedWorldPos, bakedTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-		// t102 is authored sRGB unless the set is a linear PBR one; baseColor
-		// here is linear albedo.
-		float3 bakedAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? bakedSample : Color::ColorToLinear(bakedSample);
-		// Snow = white AND up-ish; both terms are needed (two debug rounds):
-		// whiteness alone went cyan on the PALE ice walls (bright and
-		// desaturated too), while the original steep up-gate (0.35-0.7)
-		// never saturated on bumpy sastrugi normal maps and left every top
-		// blue. The honest up-window is wide and low — walls die below
-		// 0.15, bumpy tops pass from ~0.45 — and whiteness separates snow
-		// deposits from teal crevices within the tops.
-		float bakedLuma = Color::RGBToLuminance(baseColor.xyz);
-		float bakedMax = max(baseColor.r, max(baseColor.g, baseColor.b));
-		float bakedSat = (bakedMax - min(baseColor.r, min(baseColor.g, baseColor.b))) / max(bakedMax, 1e-4);
-		float bakedMask = smoothstep(0.15, 0.45, saturate(worldNormal.z)) *
-		                  smoothstep(0.18, 0.38, bakedLuma) * smoothstep(0.4, 0.18, bakedSat);
-		// Classification debug, unconditional on the mask so one screenshot
-		// separates the failure modes: any tint = the draw is classified and
-		// this block runs; the GREEN channel is the snow mask (blue = mask 0
-		// [kept as ice], cyan = mask 1 [recolored as snow]); no tint at all
-		// = the draw never got here.
-		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 8) != 0) {
-			baseColor.xyz = float3(0.0, bakedMask, 1.0);
-		} else {
-			baseColor.xyz = lerp(baseColor.xyz, bakedAlbedo, bakedMask);
-		}
-		// The shell's response stand-ins (rawRMAOS.w IS F0; 0.028 = kSnowF0).
-		rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), bakedMask);
-	}
-#	endif
 
 #	if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;

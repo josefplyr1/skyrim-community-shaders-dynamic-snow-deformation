@@ -106,10 +106,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttHs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
 
-		ImGui::Checkbox(T(TKEY("glacier_snow_match"), "Match Glacier Snow"), &settings.GlacierSnowMatch);
-		if (auto _ttGsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("glacier_snow_match_tooltip"), "Glaciers and icebergs carry snow baked into their meshes, which never matches the shell's material. This recolors their up-facing snow to the shell's own set at every distance, and stops the object snow shell from trying to wrap these huge meshes — its conforming window can't cover them, which produced square patches, doubled layers and rim gaps."));
-
 		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttLss = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. The same setting drives the Horizon Snow recolor, so it decides where snow sits on the far terrain as well as how the shell reads it."));
@@ -1175,10 +1171,6 @@ void SnowDeformation::DrawSettings()
 		// stay with the rest of the diagnostics.
 		ImGui::Text("Projected match, last frame: %u classified / %u no projection / %u vetoed",
 			statProjMatchedPrev, statProjNoProjectionPrev, statProjVetoedPrev);
-
-		ImGui::Checkbox(T(TKEY("debug_glacier_snow"), "Debug Glacier Snow Match"), &debugGlacierView);
-		if (auto _ttGlac = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_glacier_snow_tooltip"), "Paints every ice-family pixel the recolor reaches: BLUE = classified but kept as ice (snow mask 0), CYAN = recolored as snow (mask 1). A glacier with no tint at all means its draw never reached the recolor. The object snow shell draws on top and hides the tint where it covers."));
 
 		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
 

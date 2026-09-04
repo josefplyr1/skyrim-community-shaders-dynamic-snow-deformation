@@ -382,22 +382,13 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// game's SetupGeometry (the ExtendedTranslucency pattern): the
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) |
-						 uint32_t(State::ExtraFeatureDescriptors::SnowBakedIsSnow));
+	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	bool bindSnowSet = false;
-	// Baked-snow (glacier) match: classified by the ice-family signal alone,
-	// independent of technique — glacier snow is baked into the mesh and its
-	// draws carry no projected pass (the journey log's proj=0 snow=0 rows).
-	if (settings.GlacierSnowMatch &&
-		IceFamilySignal(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))) {
-		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowBakedIsSnow);
-		bindSnowSet = true;
-	}
 	if (settings.ProjSnowMatch) {
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 		if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
@@ -549,36 +540,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		}
 	}
 
-	// One skin per family mesh. Every trishape of an ice pile otherwise
-	// captures - slab, ice wall and snow cap - so the tops wear stacked skins,
-	// read brighter than the shell, and move independently under the sliders.
-	// Loaded family trishapes skin only where their own diffuse is snow (the
-	// sculpted caps); slab and ice trishapes go skinless and the baked-snow
-	// recolor owns their embedded snow patches. LOD family batches keep their
-	// skins.
-	if (settings.GlacierSnowMatch && !flags.any(Flag::kLODObjects, Flag::kHDLODObjects)) {
-		auto* familyMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-		if (IceFamilySignal(a_pass->geometry, familyMaterial)) {
-			static std::unordered_map<const void*, bool> snowDiffuseCache;
-			if (snowDiffuseCache.size() > 4096)
-				snowDiffuseCache.clear();
-			auto [sdIt, sdInserted] = snowDiffuseCache.try_emplace(familyMaterial, false);
-			if (sdInserted && familyMaterial) {
-				if (auto textureSet = familyMaterial->textureSet.get()) {
-					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path) {
-						std::string lowered(path);
-						std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-							[](unsigned char c) { return (char)std::tolower(c); });
-						sdIt->second = lowered.find("snow") != std::string::npos;
-					}
-				}
-			}
-			if (!sdIt->second) {
-				LogIceJourney(a_pass, "skipped: family slab/ice trishape (recolor route; snow caps keep the skin)");
-				return;
-			}
-		}
-	}
 
 	// Twig-card shape class (branch piles, shore driftwood): vanilla flags
 	// them snow-projected so they pass the flag gate, but the capture sees

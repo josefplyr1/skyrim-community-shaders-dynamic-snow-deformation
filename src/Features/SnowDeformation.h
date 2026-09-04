@@ -604,8 +604,6 @@ public:
 		bool HorizonSnow = true;
 		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (ProjSnowFillPct -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
-		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
-		bool GlacierSnowMatch = false;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -632,7 +630,7 @@ public:
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
-		float BakedSnowEnable;
+		float padBaked;
 		/** @brief Snow Fill, 0..1: fraction of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 1 = every angle solid. Mirror in SharedData.hlsli. */
 		float ProjSnowFill;
 
@@ -2144,7 +2142,6 @@ public:
 	/** @brief DebugTerrainOverlay bit 32: the Lighting recolor paints its real blend weight as a grey ramp and projected draws it does not classify in red. Hold against the object snow debug view's Projected mask mode (R = the skin's reconstruction). */
 	bool debugProjWeightView = false;
 	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
-	bool debugGlacierView = false;
 
 protected:
 	/** @brief Fills perFrameData.Stamps from the player and nearby loaded actors. Implemented in SnowDeformation/Stamping.cpp. */

@@ -373,9 +373,8 @@ namespace SharedData
 		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
 		// snow set is bound at t102.
 		float ProjSnowEnable;
-		// Baked-snow material match (glacier/iceberg recolor) enabled and the
-		// snow set is bound at t102.
-		float BakedSnowEnable;
+		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
+		float padBaked;
 		// Snow Fill, 0..1: fraction of the projected-snow footprint the
 		// recolor pushes to FULL shell-snow weight, most up-facing pixels
 		// first; 1 = every angle solid. Mirror in SnowDeformation.h.
