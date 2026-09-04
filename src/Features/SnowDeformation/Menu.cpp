@@ -214,6 +214,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Debug Snow Fill Coverage"), &debugProjFillView);
 		if (auto _ttFillDbg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
+		ImGui::Checkbox(T(TKEY("debug_proj_weight"), "Debug Recolor Weight"), &debugProjWeightView);
+		if (auto _ttWeightDbg = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid, Snow Fill included; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));
 #endif
 
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);

@@ -1838,6 +1838,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// both views are on.
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 16) != 0 && projFillBoost > 0.5)
 				snowProjAlbedo = float3(0.0, 1.0, 1.0);
+			// Recolor weight view (bit 32): the weight the recolor really
+			// blends by, as a grey ramp, fill included.
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
+				snowProjAlbedo = projectedMaterialWeight.xxx;
 #			if defined(TRUE_PBR)
 			// PBR pixels are convention-correct already: albedo + the shell's
 			// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).
@@ -1850,6 +1854,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			endif
 		}
 	}
+	// Recolor weight view (bit 32): projected draws the recolor does not
+	// classify as snow go red, so an unpainted wall reads as "not ours".
+	[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !snowProjMatch)
+		baseColor.xyz = float3(1.0, 0.0, 0.0);
 #		endif
 
 #			if defined(SPECULAR)

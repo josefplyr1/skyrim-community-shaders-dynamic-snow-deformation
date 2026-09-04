@@ -497,9 +497,9 @@ public:
 		/** @brief "Snow Breakup", 0-1: fraction of the class depth taken off as a negative base and handed back through world-anchored noise, so the layer thins to bare patches at the mesh's own scale rather than covering evenly. The DefoQ reference's shape. 0 = the uniform coat exactly, i.e. current behaviour. Feeds StaticsCB::SkinBreakup. */
 		float SkinBreakupAmt = 0.0f;
 		/** @brief "Edge Lump Size", 0-3: the solid contour of the shell and the coat wanders through a blob field of this cell size (x kEdgeLumpBig), so the edge breaks into round lumps; 0 = the plain ragged edge. Also the cell size of the Edge Lump Reach islands. Feeds StaticsCB::EdgeBreakupScale. */
-		float SkinEdgeLumpSize = 0.25f;
+		float SkinEdgeLumpSize = 1.0f;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
-		float SkinEdgeFlankWidth = 0.0f;
+		float SkinEdgeFlankWidth = 0.25f;
 		/** @brief "Weld Snow Seams", 0-1 (Tier 1): how far the flat class's up-facing gate slides from each vertex's own normal to the position-welded normal. At 1 two corners sitting in the same place cannot disagree about snow depth, which is what draws the sliver fences at plank ends, log caps and roof edges. 0 = current behaviour exactly. Feeds StaticsCB::SkinWeld. */
 		float SkinWeldAmt = 0.0f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
@@ -551,7 +551,7 @@ public:
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
-		float ProjSnowFillPct = 0.0f;
+		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
@@ -2270,6 +2270,8 @@ public:
 	bool debugProjSnowView = false;
 	/** @brief Fill instrument (DebugTerrainOverlay bit 16): the slice Snow Fill covers renders cyan inside the projected-snow recolor, so raising the slider visibly converts the debug purple. Not serialized, like every debug view. */
 	bool debugProjFillView = false;
+	/** @brief DebugTerrainOverlay bit 32: the Lighting recolor paints its real blend weight as a grey ramp and projected draws it does not classify in red. Hold against the object snow debug view's Projected mask mode (R = the skin's reconstruction). */
+	bool debugProjWeightView = false;
 	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
 	bool debugGlacierView = false;
 

@@ -4747,7 +4747,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float s = 0.0;
 		[branch] if (!inside && coatOn)
 		{
-			solid = edgeW >= edgeThr;
+			// The slope gate on the SMOOTH normal: a bump on a vertical wall
+			// faces up per pixel, but the wall does not. Same cut the shell's
+			// vertex mask applies; the band may hang a little below it.
+			solid = edgeW >= edgeThr && input.Coverage >= ShellMinNz;
 			// The contour the lumps hang from: the footprint's own edge
 			// where the fill has pushed the coat out to it, the (lobed)
 			// solid threshold otherwise.
@@ -4759,7 +4762,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// Only a shortfall the game's own fade could span; past that
 			// there is no solid snow to hang from, whatever the
 			// extrapolation says (a beam's ring stays a hair wide).
-			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > -0.05);
+			needField = solid ? (fadeIn < 0.5) : (lumpsOn && dist > 0.0 && dist < reach && (w0 - edgeW) < kEdgeMaxDrop && input.Coverage > ShellMinNz - 0.1);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
@@ -4990,8 +4993,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// agree; red-only = we place where vanilla says bare; dim green
 			// = vanilla wants a dusting; bright green = vanilla wants full
 			// snow we do not place.
+			// R since round 10 = the RECONSTRUCTED game blend at this pixel
+			// (smoothstep(0,1,5w), fill boost included) - hold it against
+			// the Lighting recolor's own weight view (Debug Recolor Weight,
+			// object snow off) to find where the two disagree.
 			bool noProjData = ProjThreshold < -0.5;
-			preLit = float3(saturate(input.Coverage), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);
+			preLit = float3(noProjData ? 0.0 : smoothstep(0.0, 1.0, 5.0 * edgeW), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);
 		}
 		else [branch] if (StaticsDebugView > 3.5)
 		{
