@@ -4190,8 +4190,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// noise, no normal map) and of the vertex normal z: the edge lumps turn
 	// "how far below the solid weight" into world units past the solid
 	// contour with these. Uniform flow; the users sit inside branches.
-	// Slope only: a painted-alpha gradient on a flat wall is not an edge.
-	float2 edgeWGrad = float2(ddx(input.Coverage), ddy(input.Coverage)) * input.ProjFactor;
 	// The column's OWN post-shelter depth target, NOT the class slider.
 	// Under a roof the target drops to kShelterDust while the slider does
 	// not, so a class-scaled rim band came out WIDER than the sheltered
@@ -4744,14 +4742,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// draws the shell's material over the paint the game REALLY applied,
 	// read back from the pre-shell Masks copy (Lighting writes 2 + weight
 	// on classified statics), lifted off the object along the view ray for
-	// the z-test. The edge lumps hang past that paint's edge: an unpainted
-	// pixel marches the copy up the smooth weight's gradient until it
-	// meets paint, which gives its true screen-space distance to the edge;
-	// within Edge Lump Reach the blob field keeps round islands, and the
-	// contour itself bulges outward by up to half a cell (Edge Lump Size).
-	// The solid part is never touched. A face frosted faintly all over has
-	// no gradient to march along and gets nothing. Without the read-back
-	// (copy missing, draw not classified) the reconstruction stands in.
+	// the z-test. The edge lumps hang past that paint's edge. An unpainted
+	// pixel samples a disc of the copy around it (three rings of eight,
+	// Edge Lump Reach wide) and takes the fraction that is solidly painted:
+	// about half beside a real edge, near nothing deep in a bare patch, and
+	// a lone speck of the game's noise moves it by 1/24 - a one-direction
+	// march counted every speck as an edge and hatched whole faces. The
+	// blob field (Edge Lump Size) turns that fraction into melded lobes on
+	// the contour, thinning to cores, nothing beyond. The solid part is
+	// never touched. Without the read-back the reconstruction stands in
+	// for the coat and no lumps are drawn.
 	float edgeFlankLift = 0.0;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
@@ -4762,8 +4762,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		bool inside = coverageAlpha >= 0.5;
 		bool solid = inside;
 		bool needField = inside && fadeIn < 0.5;
-		float s = 0.0;
-		float reach = kEdgeReachUnits * EdgeFlankWidth;
+		float nearPaint = 0.0;
 		float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 		[branch] if (!inside && coatOn)
 		{
@@ -4773,33 +4772,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
-			// World distance to the paint's edge for an unpainted pixel.
-			float dWorld = 1e6;
-			float gl = length(edgeWGrad);
-			[branch] if (!painted && lumpsOn && realKnown && gl > 1e-6 && input.Coverage > kCoatMinNz - 0.1)
+			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
-				float2 dir = edgeWGrad / gl;
-				float reachPx = clamp(reach / max(footprint, 1e-3), 2.0, 64.0);
-				float stepPx = reachPx / 8.0;
-				float found = -1.0;
-				[unroll] for (int m = 1; m <= 8; m++)
+				float reachPx = clamp(kEdgeReachUnits * EdgeFlankWidth / max(footprint, 1e-3), 3.0, 96.0);
+				float hits = 0.0;
+				[unroll] for (int ring = 1; ring <= 3; ring++)
 				{
-					float2 sp = input.Position.xy + dir * (stepPx * float(m));
-					float e = PreSkinMasks.Load(int3(sp, 0)).y;
-					[flatten] if (found < 0.0 && e >= 1.5 && saturate(e - 2.0) >= kCoatSolidReal)
-						found = stepPx * float(m);
+					float r = reachPx * float(ring) / 3.0;
+					[unroll] for (int k = 0; k < 8; k++)
+					{
+						float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
+						float2 sp = input.Position.xy + float2(cos(a), sin(a)) * r;
+						float ee = PreSkinMasks.Load(int3(sp, 0)).y;
+						hits += (ee >= 1.5 && saturate(ee - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
+					}
 				}
-				[flatten] if (found > 0.0)
-					dWorld = found * footprint;
+				nearPaint = hits / 24.0;
 			}
-			else [flatten] if (!painted && lumpsOn && !realKnown && gl > 1e-6)
-			{
-				// Reconstruction fallback: the shortfall over the gradient.
-				float gradW = length(float2(edgeWGrad.x / max(length(dPosX), 1e-4), edgeWGrad.y / max(length(dPosY), 1e-4)));
-				dWorld = (edgeThr - edgeW) / max(gradW, 1e-3);
-			}
-			s = -dWorld / max(reach, 1e-3);
-			needField = solid ? (fadeIn < 0.5) : (dWorld < max(reach, 0.5 * cell) && input.Coverage > kCoatMinNz - 0.1);
+			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
@@ -4810,17 +4800,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float3 lumpW = pow(abs(normalWS), 4.0);
 			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
 			float blob = EdgeLumpField(lumpPos, lumpW, cell);
+			// Solid: only the distance fade. Band: on the contour (half the
+			// disc painted) most blobs hold and the bays open; a third of
+			// the disc keeps cores only; a fifth keeps nothing.
 			[flatten] if (solid)
 				keep = lerp(0.5, blob, lod) + 2.4 * fadeIn - 1.2;
 			else
-			{
-				// Islands thinning to the reach, and the contour bulging
-				// outward by up to half a cell where a blob sits on it.
-				float dWorld = -s * max(reach, 1e-3);
-				float island = lod * blob - 0.35 + s;
-				float lobe = (lod * (blob - 0.5) * cell - dWorld) / max(reach, 0.5 * cell);
-				keep = max(island, lobe) - 1.5 * (1.0 - fadeIn);
-			}
+				keep = lod * (blob - 0.5) + (nearPaint - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
 			// Each blob shades as a mound: tilt the normal down its own
 			// slope, along the pixel's world tangents so it stays in the
 			// surface on tops and flanks alike.
