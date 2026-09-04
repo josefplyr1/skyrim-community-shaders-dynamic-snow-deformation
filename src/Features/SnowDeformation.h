@@ -551,7 +551,7 @@ public:
 		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
 		float PlaneMergeHeight = 8.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
-		float ProjSnowFillPct = 100.0f;
+		float ProjSnowFillPct = 0.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
