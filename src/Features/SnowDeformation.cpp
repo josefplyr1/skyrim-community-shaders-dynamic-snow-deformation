@@ -1030,6 +1030,11 @@ void SnowDeformation::Prepass()
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
 	// No draw, no field: a still crowd leaves the pass free to sleep.
 	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0 || contactCarriedLast > 0) ? float(kContactDim) : 0.0f;
+	// Road columns measure the contact against the road's own top (t9).
+	const bool roadRaster = heightMapValid && heightSkinDepth && heightSkinDepth->srv;
+	perFrameData.HeightWindowCenter = heightWindowCenter;
+	perFrameData.HeightHalfExtent = kHeightMapHalfExtent;
+	perFrameData.HasRoadRaster = roadRaster ? 1.0f : 0.0f;
 	{
 		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 		perFrameData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
@@ -1332,11 +1337,12 @@ void SnowDeformation::Prepass()
 			// force-all-dirty cross-check - never a truncated list, which
 			// would be a silently frozen stamp.
 			{
-				ID3D11ShaderResourceView* contactSRVs[2] = {
+				ID3D11ShaderResourceView* contactSRVs[3] = {
 					(contactHeight && perFrameData.ContactDim > 0.5f) ? contactHeight->srv.get() : nullptr,
-					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr
+					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
+					perFrameData.HasRoadRaster > 0.5f ? heightSkinDepth->srv.get() : nullptr
 				};
-				context->CSSetShaderResources(7, 2, contactSRVs);
+				context->CSSetShaderResources(7, 3, contactSRVs);
 			}
 			if (stampRan) {
 				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
@@ -1386,8 +1392,8 @@ void SnowDeformation::Prepass()
 				}
 			}
 			{
-				ID3D11ShaderResourceView* nullContact[2] = { nullptr, nullptr };
-				context->CSSetShaderResources(7, 2, nullContact);
+				ID3D11ShaderResourceView* nullContact[3] = { nullptr, nullptr, nullptr };
+				context->CSSetShaderResources(7, 3, nullContact);
 			}
 		}
 

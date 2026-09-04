@@ -711,6 +711,10 @@ public:
 		/** @brief Debug view crop half-extent, world units. */
 		float ViewHalf;
 		float ViewPad;
+		/** @brief Object height window (RenderObjectHeightMap) the road raster at t9 was captured in; HasRoadRaster = 0 when it is not bound. */
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
+		float HasRoadRaster;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 

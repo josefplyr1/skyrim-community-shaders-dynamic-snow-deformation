@@ -267,6 +267,10 @@ cbuffer PerFrame : register(b0)
 	// Debug view crop half-extent, world units.
 	float ViewHalf;
 	float ViewPad;
+	// Object height window the road raster (t9) was captured in.
+	float2 HeightWindowCenter;
+	float HeightHalfExtent;
+	float HasRoadRaster;
 }
 
 // EvolveCS's snapshot of the map, copied on the CPU just before the pass so
@@ -308,7 +312,11 @@ StructuredBuffer<uint> TileListIn : register(t5);
 // measured into. Stamp pass only.
 Texture2D<float> ContactHeight : register(t7);
 Texture2D<float4> TerrainWindow : register(t8);
+// Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
+// y = highest road top in the column, kNoRoadTop where no road drew.
+Texture2D<float2> ObjectSkinDepth : register(t9);
 #define CONTACT_NONE 1.0e30
+static const float kNoRoadTop = -1000000.0;
 RWByteAddressBuffer TileArgs : register(u5);
 
 // Per-tile "the map changed here this frame" - the berm bake's dirty set,
@@ -778,6 +786,30 @@ float2 TerrainGroundLayer(float2 worldPos)
 	return float2(terrain.x, max(terrain.y, 1.0));
 }
 
+// Ground and layer a contact is measured into. A road column measures
+// against the road's own top and class depth (the same max-of-4 read as the
+// patch's PatchSkinDepth): the terrain window sits below a road standing
+// proud of the land, and a boot on the road read as hanging in the air.
+float2 ContactGroundLayer(float2 worldPos)
+{
+	float2 groundLayer = TerrainGroundLayer(worldPos);
+	[branch] if (HasRoadRaster > 0.5 && all(abs(worldPos - HeightWindowCenter) < HeightHalfExtent))
+	{
+		float2 dims;
+		ObjectSkinDepth.GetDimensions(dims.x, dims.y);
+		float2 local = (worldPos - HeightWindowCenter) / HeightHalfExtent;
+		float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+		float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+		int2 t0 = (int2)t;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		float2 s = max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
+			max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
+		[flatten] if (s.y > kNoRoadTop * 0.5 && s.x >= 1.0)
+			groundLayer = float2(s.y, s.x);
+	}
+	return groundLayer;
+}
+
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -1010,7 +1042,7 @@ bool StampTexel(uint2 phys)
 					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float2 groundLayer = TerrainGroundLayer(worldPos);
+				float2 groundLayer = ContactGroundLayer(worldPos);
 				float ground = groundLayer.x;
 				float layer = groundLayer.y;
 				float printed = saturate(1.0 - (contact - ground) / layer);
@@ -1217,7 +1249,7 @@ bool StampTexel(uint2 phys)
 			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float2 groundLayer = TerrainGroundLayer(worldPos);
+				float2 groundLayer = ContactGroundLayer(worldPos);
 				float above = (contact - groundLayer.x) / groundLayer.y;
 				color = float4(saturate(1.0 - above), saturate(above), 0.0, 1.0);
 			}
