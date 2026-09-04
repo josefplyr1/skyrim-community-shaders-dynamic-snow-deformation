@@ -113,7 +113,11 @@ static void SampleMaterialReject(RE::BSGeometry* a_geometry, RE::BSLightingShade
 
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
 {
-	static std::atomic<uint32_t> logged{ 0 };
+	// Own budget per outcome: eight "kept" lines used to spend the whole
+	// budget before the first rejection could be read.
+	static std::atomic<uint32_t> loggedKept{ 0 };
+	static std::atomic<uint32_t> loggedRejected{ 0 };
+	auto& logged = a_rejected ? loggedRejected : loggedKept;
 	if (logged.load(std::memory_order_relaxed) >= 8)
 		return;
 	if (logged.fetch_add(1, std::memory_order_relaxed) >= 8)
@@ -207,6 +211,9 @@ namespace
 		// distant snowy mountainsides are Horizon Snow's job. The merged-
 		// DynDOLOD-atlas experiment was retired the same day.
 		bool naturalFeature = false;
+		// Mountain/cliff diffuse. Not a capture family on its own (see above);
+		// read only for large-reference LOD, which has no other snow signal.
+		bool mountain = false;
 	};
 
 	// Pointer-identity ownership: does any loaded reference's 3D subtree
@@ -361,6 +368,8 @@ namespace
 					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
 					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
 					                            lowered.find("iceberg") != std::string::npos;
+					it->second.mountain = lowered.find("mountain") != std::string::npos ||
+					                      lowered.find("cliff") != std::string::npos;
 				}
 			}
 		}
@@ -458,6 +467,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
+	// DynDOLOD's large-reference LOD ("<shape>-LargeRef"): the mesh the game
+	// shows across the large-ref band in place of the real model. LOD-flagged,
+	// full textures, no owning reference, no projected snow - so it is not a
+	// merged sheet for the containment test, and the material gate is its
+	// only way in.
+	bool largeRefLOD = false;
+	{
+		std::string loweredName(a_pass->geometry->name.c_str());
+		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
+		              loweredName.find("largeref") != std::string::npos;
+	}
+	bool largeRefMountain = false;
+
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
 	// Distant objects and Windhelm's sheets are the same asset class at the
@@ -494,7 +518,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			bool iceSheet = false;
 			if (auto* sheetMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
 				iceSheet = ClassifySnowPath(sheetMaterial).naturalFeature;
-			if (!referenced && !iceSheet) {
+			if (!referenced && !iceSheet && !largeRefLOD) {
 				LogIceJourney(a_pass, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -529,7 +553,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// vanilla projected-snow setup, while their LOD counterparts capture
 		// normally. LOD-only acceptance was the whole
 		// bare-glacier bug). The MATO veto stands.
-		if (!(pathMatch.base || naturalFeature)) {
+		// The real model behind a large-ref LOD arrives with the projected-snow
+		// flags when its cell loads; until then the ground under it says
+		// whether this is a snowy mountain. Josef's 2026-09-04 report: shell
+		// at LOD range (baked atlas snow), gone across the large-ref band,
+		// back inside the loaded grid.
+		[[maybe_unused]] const auto& wbCenter = a_pass->geometry->worldBound.center;
+		largeRefMountain = largeRefLOD && pathMatch.mountain &&
+		                   GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
+		if (!(pathMatch.base || naturalFeature || largeRefMountain)) {
 			if (matoVetoed)
 				LogIceJourney(a_pass, "rejected: family matched but MATO vetoed (kNotSnow)");
 			else
@@ -708,7 +740,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
 		forceRounded = loweredName.find("mountain") != std::string::npos ||
-		               loweredName.find("cliff") != std::string::npos;
+		               loweredName.find("cliff") != std::string::npos ||
+		               largeRefMountain;
 		if (forceRounded) {
 			static std::unordered_set<std::string> loggedRoundedNames;
 			if (loggedRoundedNames.size() > 4096)
