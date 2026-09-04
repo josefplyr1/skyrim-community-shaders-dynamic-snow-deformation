@@ -2103,6 +2103,36 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
 		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		// The receiver REBUILT the way the taps are, so what the reconstruction
+		// gets wrong - bilinear terrain against the triangulated mesh, the
+		// max-of-four object raster - cancels instead of standing as a false
+		// rise over the nearest tap: flat snow shadowed itself in texel-sized
+		// blotches at a low sun. One unit of bias absorbs the residue.
+		float marchRef = surfZ;
+		{
+			float3 st0 = SampleTerrain(gridLocal);
+			[branch] if (st0.x > -50000.0)
+			{
+				float depth0 = max(st0.y, 0.0);
+				float2 mask0 = SampleExclusionMask(GridOrigin + gridLocal);
+				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(mask0.y));
+				float deform0 = SampleDeformationMarch(gridLocal);
+				float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
+				depth0 = CarveProfile(deform0, depth0, GridOrigin + gridLocal) +
+				         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				marchRef = st0.x + depth0 + Undulation(GridOrigin + gridLocal) * saturate(depth0 / 8.0);
+				[branch] if (ObjectLiftCap > 0.0)
+				{
+					float sf0 = SampleObjectHeight(GridOrigin + gridLocal);
+					[flatten] if (sf0 > -50000.0)
+					{
+						float ground0 = smoothstep(0.1, 0.45, saturate(st0.z)) * (1.0 - saturate(mask0.x));
+						sf0 = lerp(min(sf0, st0.x), sf0, ground0);
+						marchRef = max(marchRef, sf0 + depth0);
+					}
+				}
+			}
+		}
 		float horizonTan = -10.0;
 		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
 		{
@@ -2146,7 +2176,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 					sh = max(sh, sf + sampleDepth);
 				}
 			}
-			horizonTan = max(horizonTan, (sh - surfZ) / d);
+			horizonTan = max(horizonTan, (sh - marchRef - 1.0) / d);
 		}
 		// Near: a crisp penumbra band. Far: a much wider penumbra plus
 		// attenuated strength; the march's per-texel horizon steps stop
@@ -2163,7 +2193,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// texel cannot resolve contact shadows at a grazing sun, every bump
 		// and draped stone became a blotch at sunset, and the cascades own
 		// the long shadows there anyway. Same gate on the statics march.
-		float lowSun = smoothstep(0.1, 0.3, sunTan);
+		float lowSun = smoothstep(0.04, 0.12, sunTan);
 		sunShadow *= lerp(1.0, lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT), lowSun);
 	}
 

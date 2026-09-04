@@ -3058,6 +3058,23 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float sunTan = L.z / sunLen2D;
 		float2 stepDir = L.xy / sunLen2D;
 		float surfZ = input.WorldPos.z + ShellCameraPosAdjust.z;
+		// Receivers rebuilt the way the taps are (see SnowShell.hlsl): one
+		// reference for terrain taps, one for object taps.
+		float refTer = surfZ;
+		{
+			float3 st0 = SampleTerrainStatics(input.GridLocal);
+			[branch] if (st0.x > -50000.0)
+			{
+				float depth0 = max(st0.y, 0.0);
+				depth0 = lerp(depth0, min(depth0, kFireMeltFloor), saturate(SampleExclusionField(GridOrigin + input.GridLocal).y));
+				float deform0 = SampleDeformation(input.GridLocal);
+				float berm0 = BermBakeActive > 0.5 ? BermFieldBaked(input.GridLocal) : 0.0;
+				depth0 = CarveProfile(deform0, depth0, GridOrigin + input.GridLocal) +
+				         BermShape(berm0) * saturate(1.0 - deform0) * depth0 * BermHeightAmp * BermDepthGate(depth0);
+				refTer = st0.x + depth0 + Undulation(GridOrigin + input.GridLocal) * saturate(depth0 / 8.0);
+			}
+		}
+		float refObj = surfZ;
 		float horizonTan = -10.0;
 		// The top raster stores only the HIGHEST surface per texel, so under
 		// a multi-level object's overhang it records the deck ABOVE the
@@ -3095,6 +3112,19 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				// a finer raster.
 				if (selfTop > -50000.0 && selfTop > surfZ + 6.0)
 					objectTopUsable = false;
+				else [flatten] if (selfTop > -50000.0)
+				{
+					// The same bilinear top the object taps read.
+					float2 bs = PatchTexel(GridOrigin + input.GridLocal, topDims);
+					int2 bs0 = (int2)bs;
+					float2 bsf = bs - bs0;
+					int2 bs1 = min(bs0 + 1, int2(topDims) - 1);
+					float4 selfTops = float4(
+						ObjectTopRaw.Load(int3(bs0.x, bs0.y, 0)), ObjectTopRaw.Load(int3(bs1.x, bs0.y, 0)),
+						ObjectTopRaw.Load(int3(bs0.x, bs1.y, 0)), ObjectTopRaw.Load(int3(bs1.x, bs1.y, 0)));
+					[flatten] if (all(selfTops > -50000.0))
+						refObj = lerp(lerp(selfTops.x, selfTops.y, bsf.x), lerp(selfTops.z, selfTops.w, bsf.x), bsf.y);
+				}
 			}
 		}
 		[unroll] for (uint marchI = 0; marchI < 5; marchI++)
@@ -3139,19 +3169,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						float4 tapTops = float4(
 							ObjectTopRaw.Load(int3(bt0.x, bt0.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt0.y, 0)),
 							ObjectTopRaw.Load(int3(bt0.x, bt1.y, 0)), ObjectTopRaw.Load(int3(bt1.x, bt1.y, 0)));
-						// Clamped to the deepest class in play: the cone raster returns
-						// a huge sentinel outside its window, and an unclamped occluder
-						// would put the whole scene in shadow. And gated by the raster's
-						// own slope: the cone is the depth the shell MAY grow, and on a
-						// flank too steep to hold a shell it grew nothing - the cap
-						// shadowed rock faces from snow that was never drawn.
+						// The object's top alone. The cone field is the depth a shell
+						// MAY grow, not what it drew, and a guessed cap shadowed rock
+						// faces from snow that was never there; the raised shell's own
+						// shadow is the caster's job.
 						float tapConeRaw = ObjectConeDepth(tapWorld);
-						float tapSnow = clamp(tapConeRaw, kMinSkinLift, max(max(RoundedDepth, ObjectsDepth), kMinSkinLift));
-						[flatten] if (all(tapTops > -50000.0))
-						{
-							float tapSlope = max(abs(tapTops.y - tapTops.x), abs(tapTops.z - tapTops.x)) * 0.25;
-							tapSnow = lerp(tapSnow, kMinSkinLift, smoothstep(1.5, 2.5, tapSlope));
-						}
+						float tapSnow = kMinSkinLift;
 						sh = topH + tapSnow;
 						dbgMarch.z += 0.2;
 
@@ -3230,7 +3253,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 				// no-op through the max below, same as the landscape's edge.
 				sh = st.x + sampleDepth + Undulation(GridOrigin + sampleLocal) * saturate(sampleDepth / 8.0);
 			}
-			horizonTan = max(horizonTan, (sh - surfZ) / d);
+			horizonTan = max(horizonTan, (sh - (tapOnObject ? refObj : refTer) - 1.0) / d);
 		}
 		// Near softness halved: it existed to hide the tap quantisation the
 		// finer first taps now resolve. Far end untouched.
@@ -3243,7 +3266,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// drift crests. Width preserved exactly; the bias is gone.
 		float marchFactor = lerp(smoothstep(-1.5 * soft, 1.5 * soft, sunTan - horizonTan), 1.0, 0.7 * farShadowT);
 		// Fades out toward the horizon, as the terrain march does.
-		marchFactor = lerp(1.0, marchFactor, smoothstep(0.1, 0.3, sunTan));
+		marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
 		sunShadow *= marchFactor;
 		dbgMarch.x = 1.0 - marchFactor;
 		dbgMarchRan = 1.0;
