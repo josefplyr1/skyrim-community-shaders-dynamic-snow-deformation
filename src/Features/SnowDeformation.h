@@ -605,7 +605,7 @@ public:
 		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (ProjSnowFillPct -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
 		/** @brief Glacier/iceberg baked snow is recolored to the shell's snow set in Lighting (up-facing bright texels), and the ice family is excluded from the geometry skin: the skin conforms through the object raster, whose 4096-unit window cannot cover a glacier, and its mesh-facet lift produced square patches, dual class layers and rim gaps. */
-		bool GlacierSnowMatch = true;
+		bool GlacierSnowMatch = false;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
