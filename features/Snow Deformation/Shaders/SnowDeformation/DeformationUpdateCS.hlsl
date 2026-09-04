@@ -786,13 +786,16 @@ float2 TerrainGroundLayer(float2 worldPos)
 	return float2(terrain.x, max(terrain.y, 1.0));
 }
 
-// Ground and layer a contact is measured into. A road column measures
-// against the road's own top and class depth (the same max-of-4 read as the
-// patch's PatchSkinDepth): the terrain window sits below a road standing
-// proud of the land, and a boot on the road read as hanging in the air.
-float2 ContactGroundLayer(float2 worldPos)
+// How far above its snow layer a contact stands, in layers: 0 = on the
+// surface, 1 = clear of it. Two candidate surfaces, the terrain window and
+// the road raster (same max-of-4 read as the patch's PatchSkinDepth), and
+// the boot is on whichever it is closest to: the terrain window sits below
+// a road standing proud of the land, and a road's buried skirt sits below
+// the land beside it. Either alone misreads the other's columns.
+float ContactAbove(float2 worldPos, float contact)
 {
 	float2 groundLayer = TerrainGroundLayer(worldPos);
+	float above = (contact - groundLayer.x) / groundLayer.y;
 	[branch] if (HasRoadRaster > 0.5 && all(abs(worldPos - HeightWindowCenter) < HeightHalfExtent))
 	{
 		float2 dims;
@@ -805,9 +808,9 @@ float2 ContactGroundLayer(float2 worldPos)
 		float2 s = max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
 			max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
 		[flatten] if (s.y > kNoRoadTop * 0.5 && s.x >= 1.0)
-			groundLayer = float2(s.y, s.x);
+			above = min(above, (contact - s.y) / s.x);
 	}
-	return groundLayer;
+	return above;
 }
 
 bool StampTexel(uint2 phys)
@@ -1042,10 +1045,7 @@ bool StampTexel(uint2 phys)
 					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float2 groundLayer = ContactGroundLayer(worldPos);
-				float ground = groundLayer.x;
-				float layer = groundLayer.y;
-				float printed = saturate(1.0 - (contact - ground) / layer);
+				float printed = saturate(1.0 - ContactAbove(worldPos, contact));
 				// Crust bears it like any carve of unknown weight: no force.
 				printed *= lerp(1.0, CrustPrintDepth, standingCrust);
 				carve = max(carve, printed);
@@ -1249,8 +1249,7 @@ bool StampTexel(uint2 phys)
 			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
-				float2 groundLayer = ContactGroundLayer(worldPos);
-				float above = (contact - groundLayer.x) / groundLayer.y;
+				float above = ContactAbove(worldPos, contact);
 				color = float4(saturate(1.0 - above), saturate(above), 0.0, 1.0);
 			}
 		}
