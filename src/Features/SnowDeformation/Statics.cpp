@@ -4045,8 +4045,16 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 void SnowDeformation::CaptureLandTriProbe(RE::BSRenderPass* a_pass)
 {
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+	// Both the vanilla landscape material and TruePBR's answer
+	// kMultiTexLandLODBlend from GetFeature (not kMultiTexLand); 33 is the
+	// PBR landscape's own FEATURE id, which TerrainData accepts too.
 	auto* material = a_pass->shaderProperty->material;
-	if (!material || material->GetFeature() != RE::BSShaderMaterial::Feature::kMultiTexLand)
+	if (!material)
+		return;
+	const auto feature = material->GetFeature();
+	if (feature != RE::BSShaderMaterial::Feature::kMultiTexLand &&
+		feature != RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend &&
+		feature != static_cast<RE::BSShaderMaterial::Feature>(33))
 		return;
 	if (a_pass->shaderProperty->flags.any(Flag::kLODLandscape))
 		return;
