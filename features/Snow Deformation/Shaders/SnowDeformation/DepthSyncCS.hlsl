@@ -65,11 +65,27 @@ cbuffer SkinCullCB : register(b0)
 	float4 CullViewport;  // x, y, width, height in pixels
 	float4 CullDepth;     // viewport min, max, depth margin, HiZ level count
 	uint CullSkinCount;
-	float3 cullPad;
+	float CullLevel;  // HiZBuildCS: 0 = reading the raw depth (viewport-masked)
+	float2 cullPad;
 }
 
 Texture2D<float> HiZSource : register(t1);
 RWTexture2D<float> HiZDest : register(u2);
+
+// Level 0 reads the raw depth, whose texture can be larger than the area
+// the frame rendered into (dynamic resolution): outside the viewport the
+// clear value 1.0 would pass as an occluder-free far plane. Masked to 0.
+float HiZTap(uint2 p)
+{
+	float d = HiZSource[p];
+	[branch] if (CullLevel < 0.5)
+	{
+		float2 pf = float2(p);
+		if (any(pf < CullViewport.xy) || any(pf >= CullViewport.xy + CullViewport.zw))
+			d = 0.0;
+	}
+	return d;
+}
 
 [numthreads(8, 8, 1)] void HiZBuildCS(uint3 id : SV_DispatchThreadID)
 {
@@ -83,26 +99,32 @@ RWTexture2D<float> HiZDest : register(u2);
 	uint2 p1 = min(p0 + 1, srcDims - 1);
 	uint2 p2 = min(p0 + 2, srcDims - 1);
 	bool2 tail = (id.xy == dstDims - 1) & ((srcDims & 1) != 0);
-	float d = max(max(HiZSource[uint2(p0.x, p0.y)], HiZSource[uint2(p1.x, p0.y)]),
-		max(HiZSource[uint2(p0.x, p1.y)], HiZSource[uint2(p1.x, p1.y)]));
+	float d = max(max(HiZTap(uint2(p0.x, p0.y)), HiZTap(uint2(p1.x, p0.y))),
+		max(HiZTap(uint2(p0.x, p1.y)), HiZTap(uint2(p1.x, p1.y))));
 	if (tail.x)
-		d = max(d, max(HiZSource[uint2(p2.x, p0.y)], HiZSource[uint2(p2.x, p1.y)]));
+		d = max(d, max(HiZTap(uint2(p2.x, p0.y)), HiZTap(uint2(p2.x, p1.y))));
 	if (tail.y)
-		d = max(d, max(HiZSource[uint2(p0.x, p2.y)], HiZSource[uint2(p1.x, p2.y)]));
+		d = max(d, max(HiZTap(uint2(p0.x, p2.y)), HiZTap(uint2(p1.x, p2.y))));
 	if (tail.x && tail.y)
-		d = max(d, HiZSource[uint2(p2.x, p2.y)]);
+		d = max(d, HiZTap(uint2(p2.x, p2.y)));
 	HiZDest[id.xy] = d;
 }
 
 struct SkinBound
 {
 	float3 Center;
-	float Radius;
+	float Radius;  // worldBound radius + lift margin
 	uint IndexCount;
-	uint3 pad;
+	uint BoundsSlot;  // MeshBounds slot when HasBounds
+	uint HasBounds;
+	float LiftMargin;  // world units the skin can stand off the mesh
+	float4 WorldRow0;
+	float4 WorldRow1;
+	float4 WorldRow2;
 };
 StructuredBuffer<SkinBound> SkinBounds : register(t2);
 Texture2D<float> HiZ : register(t3);
+StructuredBuffer<float4> MeshBounds : register(t4);
 RWByteAddressBuffer SkinArgs : register(u3);
 
 // Reason codes, stored in the argument block's StartInstanceLocation (no
@@ -115,89 +137,133 @@ RWByteAddressBuffer SkinArgs : register(u3);
 	if (id.x >= CullSkinCount)
 		return;
 	SkinBound b = SkinBounds[id.x];
-	float3 rel = b.Center - CullCameraPosAdjust.xyz;
-	float r = b.Radius;
 	uint draw = 1;
 	uint reason = 0;
+	float2 lo = 1e9;
+	float2 hi = -1e9;
+	float zn = 0.0;
+	bool bounded = false;
 
-	// Row 3 of the matrix is the eye plane: w = dot(row3, p) is view depth
-	// times |row3.xyz|. Everything below works in that normalised depth.
-	float4 rowW = CullViewProj[3];
-	float fLen = max(length(rowW.xyz), 1e-6);
-	float3 fh = rowW.xyz / fLen;
-	float wC = dot(rowW.xyz, rel) + rowW.w;
-	float wNear = wC - r * fLen;
-	[branch] if (wNear <= 1e-3)
+	[branch] if (b.HasBounds != 0)
 	{
-		reason = 1;
+		// Tight path: the mesh's local box, grown by the lift margin, placed
+		// by the same rows the skin VS uses; eight corners projected. The
+		// nearest depth of a convex box is at a corner.
+		float3 bmin = MeshBounds[b.BoundsSlot * 2].xyz;
+		float3 bmax = MeshBounds[b.BoundsSlot * 2 + 1].xyz;
+		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
+		bmin -= grow;
+		bmax += grow;
+		bool behind = false;
+		float zMin = 1e9;
+		[unroll] for (uint i = 0; i < 8; i++)
+		{
+			float3 l = float3((i & 1) ? bmax.x : bmin.x, (i & 2) ? bmax.y : bmin.y, (i & 4) ? bmax.z : bmin.z);
+			float3 wp = float3(dot(b.WorldRow0.xyz, l) + b.WorldRow0.w,
+				dot(b.WorldRow1.xyz, l) + b.WorldRow1.w,
+				dot(b.WorldRow2.xyz, l) + b.WorldRow2.w);
+			float4 clip = mul(CullViewProj, float4(wp - CullCameraPosAdjust.xyz, 1.0));
+			if (clip.w <= 1e-3)
+				behind = true;
+			else
+			{
+				float2 n = clip.xy / clip.w;
+				lo = min(lo, n);
+				hi = max(hi, n);
+				zMin = min(zMin, clip.z / clip.w);
+			}
+		}
+		if (behind)
+			reason = 1;
+		else
+		{
+			bounded = true;
+			zn = zMin;
+		}
 	}
 	else
 	{
-		// Exact screen bounds of the sphere: per axis, the tangents from the
-		// eye to the sphere's cross-section in the plane spanned by the
-		// axis' lateral direction and the depth direction (Mara & McGuire).
-		// The axis row is split into its part across the depth axis (which
-		// scales with 1/w) and its part along it (a constant offset), so a
-		// jittered or skewed projection is handled exactly.
-		float z = wC / fLen;
-		float2 lo, hi;
-		[unroll] for (uint axis = 0; axis < 2; axis++)
+		// Sphere path (no box yet): exact screen bounds of the sphere from
+		// the view-projection rows. Row 3 is the eye plane: w = dot(row3, p)
+		// is view depth times |row3.xyz|. Per axis, the tangents from the eye
+		// to the sphere's cross-section in the plane spanned by the axis'
+		// lateral direction and the depth direction (Mara & McGuire); the
+		// axis row is split into its part across the depth axis (scales with
+		// 1/w) and its part along it (a constant offset), so a jittered or
+		// skewed projection is handled exactly.
+		float3 rel = b.Center - CullCameraPosAdjust.xyz;
+		float r = b.Radius;
+		float4 rowW = CullViewProj[3];
+		float fLen = max(length(rowW.xyz), 1e-6);
+		float3 fh = rowW.xyz / fLen;
+		float wC = dot(rowW.xyz, rel) + rowW.w;
+		float wNear = wC - r * fLen;
+		[branch] if (wNear <= 1e-3)
 		{
-			float4 row = CullViewProj[axis];
-			float uf = dot(row.xyz, fh);
-			float3 up = row.xyz - uf * fh;
-			float upLen = max(length(up), 1e-6);
-			float a = (dot(up, rel) + row.w - uf * rowW.w / fLen) / upLen;
-			float t = sqrt(max(a * a + z * z - r * r, 0.0));
-			float k = upLen / fLen;
-			float c = uf / fLen;
-			float b0 = k * (a * t - z * r) / max(z * t + a * r, 1e-6) + c;
-			float b1 = k * (a * t + z * r) / max(z * t - a * r, 1e-6) + c;
-			lo[axis] = min(b0, b1);
-			hi[axis] = max(b0, b1);
+			reason = 1;
 		}
+		else
+		{
+			float z = wC / fLen;
+			[unroll] for (uint axis = 0; axis < 2; axis++)
+			{
+				float4 row = CullViewProj[axis];
+				float uf = dot(row.xyz, fh);
+				float3 up = row.xyz - uf * fh;
+				float upLen = max(length(up), 1e-6);
+				float a = (dot(up, rel) + row.w - uf * rowW.w / fLen) / upLen;
+				float t = sqrt(max(a * a + z * z - r * r, 0.0));
+				float k = upLen / fLen;
+				float c = uf / fLen;
+				float b0 = k * (a * t - z * r) / max(z * t + a * r, 1e-6) + c;
+				float b1 = k * (a * t + z * r) / max(z * t - a * r, 1e-6) + c;
+				lo[axis] = min(b0, b1);
+				hi[axis] = max(b0, b1);
+			}
+			float4 rowZ = CullViewProj[2];
+			zn = (dot(rowZ.xyz, rel - r * fh) + rowZ.w) / wNear;
+			bounded = true;
+		}
+	}
+
+	[branch] if (bounded)
+	{
 		if (hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0)
 		{
 			draw = 0;
 			reason = 3;
 		}
+		else if (zn > 1.0)
+		{
+			draw = 0;
+			reason = 4;
+		}
 		else
 		{
-			// Nearest point of the sphere to the eye plane.
-			float4 rowZ = CullViewProj[2];
-			float zn = (dot(rowZ.xyz, rel - r * fh) + rowZ.w) / wNear;
-			if (zn > 1.0)
+			float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
+			float2 vpMin = CullViewport.xy;
+			float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
+			// One pixel of slack each way covers rasterisation rounding.
+			float2 pxMin = clamp(float2(lo.x * 0.5 + 0.5, 0.5 - hi.y * 0.5) * CullViewport.zw + CullViewport.xy - 1.0, vpMin, vpMax);
+			float2 pxMax = clamp(float2(hi.x * 0.5 + 0.5, 0.5 - lo.y * 0.5) * CullViewport.zw + CullViewport.xy + 1.0, vpMin, vpMax);
+			float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
+			// Level where the footprint spans at most two texels per axis.
+			uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
+			uint shift = level + 1;
+			uint w, h, levels;
+			HiZ.GetDimensions(level, w, h, levels);
+			uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
+			uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
+			float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
+				max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
+			// Scene depth is never exactly 0 (near-plane clip); a zero here
+			// is an unbound or unwritten read, and the skin must draw.
+			if (occluder <= 0.0)
+				reason = 2;
+			else if (depthNear > occluder)
 			{
 				draw = 0;
-				reason = 4;
-			}
-			else
-			{
-				float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
-				float2 vpMin = CullViewport.xy;
-				float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
-				// One pixel of slack each way covers rasterisation rounding.
-				float2 pxMin = clamp(float2(lo.x * 0.5 + 0.5, 0.5 - hi.y * 0.5) * CullViewport.zw + CullViewport.xy - 1.0, vpMin, vpMax);
-				float2 pxMax = clamp(float2(hi.x * 0.5 + 0.5, 0.5 - lo.y * 0.5) * CullViewport.zw + CullViewport.xy + 1.0, vpMin, vpMax);
-				float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
-				// Level where the footprint spans at most two texels per axis.
-				uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
-				uint shift = level + 1;
-				uint w, h, levels;
-				HiZ.GetDimensions(level, w, h, levels);
-				uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
-				uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
-				float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
-					max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
-				// Scene depth is never exactly 0 (near-plane clip); a zero here
-				// is an unbound or unwritten read, and the skin must draw.
-				if (occluder <= 0.0)
-					reason = 2;
-				else if (depthNear > occluder)
-				{
-					draw = 0;
-					reason = 5;
-				}
+				reason = 5;
 			}
 		}
 	}

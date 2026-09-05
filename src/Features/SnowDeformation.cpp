@@ -1991,6 +1991,12 @@ void SnowDeformation::ClearShaderCache()
 	if (smoothAccumulateCS)
 		smoothAccumulateCS->Release();
 	smoothAccumulateCS = nullptr;
+	if (smoothBoundsCS)
+		smoothBoundsCS->Release();
+	smoothBoundsCS = nullptr;
+	delete meshBounds;
+	meshBounds = nullptr;
+	meshBoundsNext = 0;
 	if (smoothResolveCS)
 		smoothResolveCS->Release();
 	smoothResolveCS = nullptr;

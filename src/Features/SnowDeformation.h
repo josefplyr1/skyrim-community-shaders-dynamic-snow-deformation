@@ -1752,7 +1752,7 @@ public:
 		uint32_t TableMask;
 		uint32_t ColorOffsetBytes;
 		uint32_t HasColor;
-		uint32_t padSm;
+		uint32_t BoundsSlot;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
 
@@ -1762,7 +1762,15 @@ public:
 		winrt::com_ptr<ID3D11Buffer> buffer;
 		winrt::com_ptr<ID3D11ShaderResourceView> srv;
 		bool ready = false;
+		/** @brief Slot in meshBounds holding this mesh's local box (MESHBOUNDS pass), UINT32_MAX when none. */
+		uint32_t boundsSlot = UINT32_MAX;
 	};
+	/** @brief Local boxes of the unique meshes, two float4 per slot (min, max), built beside the smoothed normals; the skin cull projects them. */
+	static constexpr uint32_t kMeshBoundsSlots = 1024;
+	Buffer* meshBounds = nullptr;
+	uint32_t meshBoundsNext = 0;
+	ID3D11ComputeShader* smoothBoundsCS = nullptr;
+	uint32_t SmoothedBoundsSlot(void* a_vertexBuffer) const;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
 	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
 	ID3D11ComputeShader* smoothResolveCS = nullptr;
@@ -2064,7 +2072,12 @@ public:
 		float Center[3];
 		float Radius;
 		uint32_t IndexCount;
-		uint32_t pad[3];
+		uint32_t BoundsSlot;
+		uint32_t HasBounds;
+		float LiftMargin;
+		float4 WorldRow0;
+		float4 WorldRow1;
+		float4 WorldRow2;
 	};
 	struct alignas(16) SkinCullCB
 	{
@@ -2073,7 +2086,8 @@ public:
 		float4 Viewport;
 		float4 Depth;
 		uint32_t SkinCount;
-		float pad[3];
+		float Level;
+		float pad[2];
 	};
 	static constexpr uint32_t kSkinCullArgStride = 20;
 	static constexpr int kSkinCullRing = 3;

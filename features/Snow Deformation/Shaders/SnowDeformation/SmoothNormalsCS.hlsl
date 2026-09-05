@@ -39,7 +39,7 @@ cbuffer SmoothCB : register(b0)
 	uint TableMask;  // slots - 1 (power of two)
 	uint ColorOffsetBytes;
 	uint HasColor;  // 1 = the vertex stream carries VA_COLOR
-	uint padSm;
+	uint BoundsSlot;  // MESHBOUNDS: slot in MeshBounds (2 float4 per slot)
 }
 
 static const uint kMaxProbe = 16;
@@ -202,5 +202,38 @@ groupshared float3 gsNormalSum[64];
 			result = float4(n / len, 1.0 + LoadColorAlpha(v));
 	}
 	OutNormals[v] = result;
+}
+#endif
+
+#ifdef MESHBOUNDS
+// Local-space box of the mesh for the skin cull: one group strides the
+// vertex stream and reduces; slot layout is min.xyz, max.xyz.
+RWStructuredBuffer<float4> MeshBounds : register(u2);
+groupshared float3 gBoundsMin[256];
+groupshared float3 gBoundsMax[256];
+
+[numthreads(256, 1, 1)] void main(uint3 gtid : SV_GroupThreadID)
+{
+	float3 mn = 1e30;
+	float3 mx = -1e30;
+	for (uint v = gtid.x; v < VertexCount; v += 256) {
+		float3 p = LoadPosition(v);
+		mn = min(mn, p);
+		mx = max(mx, p);
+	}
+	gBoundsMin[gtid.x] = mn;
+	gBoundsMax[gtid.x] = mx;
+	GroupMemoryBarrierWithGroupSync();
+	[unroll] for (uint s = 128; s > 0; s >>= 1) {
+		if (gtid.x < s) {
+			gBoundsMin[gtid.x] = min(gBoundsMin[gtid.x], gBoundsMin[gtid.x + s]);
+			gBoundsMax[gtid.x] = max(gBoundsMax[gtid.x], gBoundsMax[gtid.x + s]);
+		}
+		GroupMemoryBarrierWithGroupSync();
+	}
+	if (gtid.x == 0) {
+		MeshBounds[BoundsSlot * 2] = float4(gBoundsMin[0], 0.0);
+		MeshBounds[BoundsSlot * 2 + 1] = float4(gBoundsMax[0], 0.0);
+	}
 }
 #endif

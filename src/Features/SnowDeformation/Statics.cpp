@@ -2062,7 +2062,34 @@ bool SnowDeformation::EnsureSmoothNormalsCS()
 		smoothResolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
 	if (!smoothFlatStatsCS)
 		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+	if (!smoothBoundsCS)
+		smoothBoundsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0"));
+	if (!meshBounds && smoothBoundsCS) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = kMeshBoundsSlots * 2 * 16;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = 16;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.NumElements = kMeshBoundsSlots * 2;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = kMeshBoundsSlots * 2;
+		meshBounds = new Buffer(desc, nullptr, "SnowDeformation::MeshBounds");
+		meshBounds->CreateSRV(srvDesc);
+		meshBounds->CreateUAV(uavDesc);
+	}
 	return smoothAccumulateCS && smoothResolveCS && smoothFlatStatsCS;
+}
+
+uint32_t SnowDeformation::SmoothedBoundsSlot(void* a_vertexBuffer) const
+{
+	auto it = smoothedNormalsCache.find(a_vertexBuffer);
+	return (it != smoothedNormalsCache.end() && it->second.ready) ? it->second.boundsSlot : UINT32_MAX;
 }
 
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
@@ -2077,8 +2104,10 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 
 	// Pointer reuse after cell unloads could serve stale normals to a new
 	// mesh; the cap flushes the cache before that becomes likely.
-	if (smoothedNormalsCache.size() > 1024)
+	if (smoothedNormalsCache.size() > 1024) {
 		smoothedNormalsCache.clear();
+		meshBoundsNext = 0;
+	}
 
 	auto [it, inserted] = smoothedNormalsCache.try_emplace(rendererData->vertexBuffer);
 	auto& entry = it->second;
@@ -2218,6 +2247,8 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	cb.TableMask = tableSlots - 1;
 	cb.ColorOffsetBytes = colorOffset;
 	cb.HasColor = hasColor ? 1u : 0u;
+	const bool wantBounds = smoothBoundsCS && meshBounds && meshBounds->uav && meshBoundsNext < kMeshBoundsSlots;
+	cb.BoundsSlot = wantBounds ? meshBoundsNext : 0u;
 	smoothCB->Update(cb);
 
 	// Compute-only state: does not disturb the surrounding draw pipeline.
@@ -2235,6 +2266,15 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	// Flatness stats: one group strided over the resolved normals.
 	context->CSSetShader(smoothFlatStatsCS, nullptr, 0);
 	context->Dispatch(1, 1, 1);
+	if (wantBounds) {
+		ID3D11UnorderedAccessView* boundsUAV = meshBounds->uav.get();
+		context->CSSetUnorderedAccessViews(2, 1, &boundsUAV, nullptr);
+		context->CSSetShader(smoothBoundsCS, nullptr, 0);
+		context->Dispatch(1, 1, 1);
+		ID3D11UnorderedAccessView* nullBoundsUAV = nullptr;
+		context->CSSetUnorderedAccessViews(2, 1, &nullBoundsUAV, nullptr);
+		entry.boundsSlot = meshBoundsNext++;
+	}
 
 	ID3D11ShaderResourceView* nullCsSRV = nullptr;
 	context->CSSetShaderResources(0, 1, &nullCsSRV);
@@ -2486,6 +2526,7 @@ void SnowDeformation::DrawCapturedStatics()
 		float vertexCount;
 		bool s4Shell;
 		uint32_t slot;
+		uint32_t boundsSlot;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
@@ -2546,12 +2587,15 @@ void SnowDeformation::DrawCapturedStatics()
 			logSkip(geometry, "implausible stride/offset");
 			continue;
 		}
+		// Smoothed normals (and the mesh box beside them) are built on first
+		// sight; the draw loop's own call then hits the cache.
+		EnsureSmoothedNormals(geometry);
 		skinDraws.push_back({ &cap, geometry,
 			reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
 			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer),
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
-			uint32_t(skinDraws.size()) });
+			uint32_t(skinDraws.size()), SmoothedBoundsSlot(rendererData->vertexBuffer) });
 	}
 
 	// Whole-skin occlusion cull: bounding spheres against a max-depth
@@ -2568,7 +2612,14 @@ void SnowDeformation::DrawCapturedStatics()
 			auto* out = static_cast<SkinCullBound*>(mapped.pData);
 			for (const auto& d : skinDraws) {
 				const auto& wb = d.geometry->worldBound;
-				out[d.slot] = { { wb.center.x, wb.center.y, wb.center.z }, wb.radius + liftMargin, d.indexCount, {} };
+				const auto& rot = d.cap->world.rotate;
+				const float scale = d.cap->world.scale;
+				const bool hasBounds = d.boundsSlot != UINT32_MAX && meshBounds && meshBounds->srv;
+				out[d.slot] = { { wb.center.x, wb.center.y, wb.center.z }, wb.radius + liftMargin, d.indexCount,
+					hasBounds ? d.boundsSlot : 0u, hasBounds ? 1u : 0u, liftMargin,
+					{ rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, d.cap->world.translate.x },
+					{ rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, d.cap->world.translate.y },
+					{ rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, d.cap->world.translate.z } };
 			}
 			context->Unmap(skinCullBounds->resource.get(), 0);
 		}
@@ -2579,15 +2630,16 @@ void SnowDeformation::DrawCapturedStatics()
 		ccb.Viewport = { vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height };
 		ccb.Depth = { vps[0].MinDepth, vps[0].MaxDepth, kSkinCullDepthEps, float(skinCullLevels) };
 		ccb.SkinCount = uint32_t(skinDraws.size());
-		skinCullCB->Update(ccb);
 
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 		ID3D11Buffer* cullCB = skinCullCB->CB();
 		context->CSSetConstantBuffers(0, 1, &cullCB);
 		context->CSSetShader(hiZBuild, nullptr, 0);
-		ID3D11ShaderResourceView* nullCullSRVs[3] = {};
+		ID3D11ShaderResourceView* nullCullSRVs[4] = {};
 		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
 		for (uint32_t level = 0; level < skinCullLevels; level++) {
+			ccb.Level = float(level);
+			skinCullCB->Update(ccb);
 			// Read level-1 of the chain, write the level's scratch, copy it in:
 			// the chain is never bound as input and output of one dispatch.
 			ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
@@ -2602,12 +2654,13 @@ void SnowDeformation::DrawCapturedStatics()
 		}
 
 		context->CSSetShader(skinCull, nullptr, 0);
-		ID3D11ShaderResourceView* cullSRVs[2] = { skinCullBounds->srv.get(), skinCullHiZ->srv.get() };
-		context->CSSetShaderResources(2, 2, cullSRVs);
+		ID3D11ShaderResourceView* cullSRVs[3] = { skinCullBounds->srv.get(), skinCullHiZ->srv.get(),
+			meshBounds ? meshBounds->srv.get() : nullptr };
+		context->CSSetShaderResources(2, 3, cullSRVs);
 		ID3D11UnorderedAccessView* argsUAV = skinCullArgs->uav.get();
 		context->CSSetUnorderedAccessViews(3, 1, &argsUAV, nullptr);
 		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
-		context->CSSetShaderResources(1, 3, nullCullSRVs);
+		context->CSSetShaderResources(1, 4, nullCullSRVs);
 		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
