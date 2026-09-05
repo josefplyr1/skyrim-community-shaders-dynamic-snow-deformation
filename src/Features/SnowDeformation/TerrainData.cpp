@@ -580,6 +580,15 @@ ID3D11ComputeShader* SnowDeformation::GetTerrainFineCS()
 	return terrainFineCS;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetTerrainFineMaxCS()
+{
+	if (!terrainFineMaxCS) {
+		logger::debug("Compiling DepthSyncCS TerrainFineMaxCS");
+		terrainFineMaxCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "TerrainFineMaxCS"));
+	}
+	return terrainFineMaxCS;
+}
+
 void SnowDeformation::BuildTerrainFineWindow()
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
@@ -611,6 +620,17 @@ void SnowDeformation::BuildTerrainFineWindow()
 			.Texture2D = { .MipSlice = 0 }
 		};
 		shellTerrainFine->CreateUAV(uavDesc);
+		// The two maxima, one texture per level: a level is read while the next
+		// is written, and a texture cannot be both in one dispatch.
+		Texture2D** maxes[2] = { &shellTerrainFineMax1, &shellTerrainFineMax2 };
+		for (int level = 0; level < 2; level++) {
+			D3D11_TEXTURE2D_DESC md = desc;
+			md.Width = kShellFineDim >> (level + 1);
+			md.Height = kShellFineDim >> (level + 1);
+			*maxes[level] = new Texture2D(md, level ? "SnowDeformation::ShellTerrainFineMax2" : "SnowDeformation::ShellTerrainFineMax1");
+			(*maxes[level])->CreateSRV(srvDesc);
+			(*maxes[level])->CreateUAV(uavDesc);
+		}
 	}
 	if (!terrainFineCB)
 		terrainFineCB = new ConstantBuffer(ConstantBufferDesc<TerrainFineCB>(), "SnowDeformation::TerrainFineCB");
@@ -651,6 +671,23 @@ void SnowDeformation::BuildTerrainFineWindow()
 	context->CSSetConstantBuffers(1, 1, &nullCB);
 	context->CSSetShaderResources(8, 1, &nullSRV);
 	context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
+
+	// Far-band maxima: fine -> 64-unit -> 128-unit.
+	auto* maxCS = GetTerrainFineMaxCS();
+	if (maxCS && shellTerrainFineMax1 && shellTerrainFineMax2 && shellTerrainFineMax1->uav && shellTerrainFineMax2->uav) {
+		context->CSSetShader(maxCS, nullptr, 0);
+		Texture2D* chain[3] = { shellTerrainFine, shellTerrainFineMax1, shellTerrainFineMax2 };
+		for (int level = 1; level < 3; level++) {
+			ID3D11ShaderResourceView* msrc = chain[level - 1]->srv.get();
+			ID3D11UnorderedAccessView* mdst = chain[level]->uav.get();
+			context->CSSetShaderResources(9, 1, &msrc);
+			context->CSSetUnorderedAccessViews(6, 1, &mdst, nullptr);
+			const uint32_t dim = kShellFineDim >> level;
+			context->Dispatch((dim + 7) / 8, (dim + 7) / 8, 1);
+			context->CSSetShaderResources(9, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
+		}
+	}
 	context->CSSetShader(nullptr, nullptr, 0);
 	shellFineValid = true;
 }

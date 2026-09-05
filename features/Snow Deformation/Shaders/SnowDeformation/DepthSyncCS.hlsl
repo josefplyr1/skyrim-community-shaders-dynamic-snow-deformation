@@ -351,6 +351,27 @@ float FineCatmull(float p0, float p1, float p2, float p3, float t)
 	FineDest[id.xy] = outH;
 }
 
+// Far-band ground maximum: 2x2 max of the level below, so a shell vertex at
+// a 64- or 128-unit band can take the highest ground over the quads it
+// touches with four loads. The sentinel wins any max it appears in.
+Texture2D<float> FineMaxSrc : register(t9);
+RWTexture2D<float> FineMaxDest : register(u6);
+
+[numthreads(8, 8, 1)] void TerrainFineMaxCS(uint3 id : SV_DispatchThreadID)
+{
+	uint2 dims;
+	FineMaxDest.GetDimensions(dims.x, dims.y);
+	if (any(id.xy >= dims))
+		return;
+	uint2 p0 = id.xy * 2;
+	float a = FineMaxSrc[p0];
+	float b = FineMaxSrc[p0 + uint2(1, 0)];
+	float c = FineMaxSrc[p0 + uint2(0, 1)];
+	float d = FineMaxSrc[p0 + uint2(1, 1)];
+	float lo = min(min(a, b), min(c, d));
+	FineMaxDest[id.xy] = lo < -50000.0 ? -100000.0 : max(max(a, b), max(c, d));
+}
+
 #ifdef SNOW_CLUSTER_CULL
 // ---------------------------------------------------------------------------
 // Cluster cull. Skyrim precombines exterior meshes, so a single "object" is

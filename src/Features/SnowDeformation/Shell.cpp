@@ -879,7 +879,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// Bit 0 horizon march, bit 1 hull frustum cull, bit 2 land-exact height
 	// off, bit 3 flip the tessellated diagonal sense.
 	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
-							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalFlip ? 8 : 0),
+							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalFlip ? 8 : 0) | (shellFarMaxDisabled ? 16 : 0),
 		0 };
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
@@ -1302,7 +1302,12 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+	ID3D11ShaderResourceView* fineMaxSRVs[2] = {
+		(shellFineValid && shellTerrainFineMax1) ? shellTerrainFineMax1->srv.get() : nullptr,
+		(shellFineValid && shellTerrainFineMax2) ? shellTerrainFineMax2->srv.get() : nullptr };
 	context->VSSetShaderResources(13, 1, &fineSRV);
+	context->VSSetShaderResources(24, 1, &fineMaxSRVs[0]);
+	context->VSSetShaderResources(26, 1, &fineMaxSRVs[1]);
 	// The game's texture tracker rebinds a slot only when it believes the
 	// binding changed. t3 is the effect shaders' soft-particle depth, set
 	// once per frame, so the null the skin pass left there faded every mist
@@ -1313,6 +1318,8 @@ void SnowDeformation::DrawShell()
 		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	context->PSSetShaderResources(13, 1, &fineSRV);
+	context->PSSetShaderResources(24, 1, &fineMaxSRVs[0]);
+	context->PSSetShaderResources(26, 1, &fineMaxSRVs[1]);
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
@@ -1480,6 +1487,8 @@ void SnowDeformation::DrawShell()
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
 		context->CSSetShaderResources(13, 1, &fineSRV);
+		context->CSSetShaderResources(24, 1, &fineMaxSRVs[0]);
+		context->CSSetShaderResources(26, 1, &fineMaxSRVs[1]);
 		ID3D11ShaderResourceView* csHeightSRV = shellSnowHeightSRV.get();
 		context->CSSetShaderResources(8, 1, &csHeightSRV);
 		context->CSSetShaderResources(11, 2, objectCapSRVs);
@@ -1503,6 +1512,8 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(8, 1, nullCSSRVs);
 		context->CSSetShaderResources(11, 2, nullCSSRVs);
 		context->CSSetShaderResources(13, 3, nullCSSRVs);
+		context->CSSetShaderResources(24, 1, &nullCSSRVs[0]);
+		context->CSSetShaderResources(26, 1, &nullCSSRVs[1]);
 		context->CSSetShaderResources(29, 1, nullCSSRVs);
 		globals::profiler->EndPass();
 	}
@@ -1531,6 +1542,10 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(0, 6, shellSRVs);
 		context->HSSetShaderResources(13, 1, &fineSRV);
 		context->DSSetShaderResources(13, 1, &fineSRV);
+		context->HSSetShaderResources(24, 1, &fineMaxSRVs[0]);
+		context->HSSetShaderResources(26, 1, &fineMaxSRVs[1]);
+		context->DSSetShaderResources(24, 1, &fineMaxSRVs[0]);
+		context->DSSetShaderResources(26, 1, &fineMaxSRVs[1]);
 		ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
 		context->HSSetShaderResources(9, 1, &hsBakeSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
@@ -1677,9 +1692,9 @@ void SnowDeformation::DrawShell()
 	// tessellation is unavailable, and the deformation map is UAV-written
 	// next Prepass so it must not linger on a DS slot.
 	{
-		ID3D11ShaderResourceView* nullDSSRVs[16] = {};
-		context->DSSetShaderResources(0, 16, nullDSSRVs);
-		context->HSSetShaderResources(0, 16, nullDSSRVs);
+		ID3D11ShaderResourceView* nullDSSRVs[27] = {};
+		context->DSSetShaderResources(0, 27, nullDSSRVs);
+		context->HSSetShaderResources(0, 27, nullDSSRVs);
 		ID3D11Buffer* nullStageCB = nullptr;
 		context->DSSetConstantBuffers(0, 1, &nullStageCB);
 		context->HSSetConstantBuffers(0, 1, &nullStageCB);
@@ -1695,6 +1710,9 @@ void SnowDeformation::DrawShell()
 	context->PSSetConstantBuffers(0, 1, &nullCB);
 	ID3D11ShaderResourceView* nullSRVs[16] = {};
 	context->VSSetShaderResources(0, 16, nullSRVs);
+	ID3D11ShaderResourceView* nullFarSRVs[2] = {};
+	context->VSSetShaderResources(24, 1, &nullFarSRVs[0]);
+	context->VSSetShaderResources(26, 1, &nullFarSRVs[1]);
 	context->PSSetShaderResources(0, 16, nullSRVs);
 	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
 	// unbound before the next shadow render binds those targets as DSVs, or
@@ -1706,8 +1724,10 @@ void SnowDeformation::DrawShell()
 	for (uint i = 0; i < 9; i++)
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
-	ID3D11ShaderResourceView* nullFinePS = nullptr;
-	context->PSSetShaderResources(13, 1, &nullFinePS);
+	ID3D11ShaderResourceView* nullFinePS[2] = {};
+	context->PSSetShaderResources(13, 1, nullFinePS);
+	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
+	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;
@@ -1835,6 +1855,11 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(0, 6, csSRVs);
 			ID3D11ShaderResourceView* probeFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 			context->CSSetShaderResources(13, 1, &probeFineSRV);
+			ID3D11ShaderResourceView* probeMaxSRVs[2] = {
+				(shellFineValid && shellTerrainFineMax1) ? shellTerrainFineMax1->srv.get() : nullptr,
+				(shellFineValid && shellTerrainFineMax2) ? shellTerrainFineMax2->srv.get() : nullptr };
+			context->CSSetShaderResources(24, 1, &probeMaxSRVs[0]);
+			context->CSSetShaderResources(26, 1, &probeMaxSRVs[1]);
 			ID3D11ShaderResourceView* csCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 			context->CSSetShaderResources(11, 2, csCapSRVs);
 			// ShellSurfaceZ's berm term reads the bake at t14.
@@ -1857,6 +1882,8 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(14, 1, nullSRVs);
 			context->CSSetShaderResources(15, 1, nullSRVs);
 			context->CSSetShaderResources(13, 1, nullSRVs);
+			context->CSSetShaderResources(24, 1, &nullSRVs[0]);
+			context->CSSetShaderResources(26, 1, &nullSRVs[1]);
 			ID3D11Buffer* nullCB = nullptr;
 			context->CSSetConstantBuffers(0, 1, &nullCB);
 			context->CSSetShader(nullptr, nullptr, 0);

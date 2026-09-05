@@ -197,7 +197,8 @@ cbuffer ShellCB : register(b0)
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
 	// x bit 0 horizon march, bit 1 frustum cull, bit 2 land-exact height OFF,
-	// bit 3 flip tess diagonal sense. Mirror in SnowDeformation.h.
+	// bit 3 flip tess diagonal sense, bit 4 far-band ground max OFF. Mirror in
+	// SnowDeformation.h.
 	int2 ShellFlags;
 
 	// Land-exact height layer: xy = GridOrigin - fine window origin (world),
@@ -228,6 +229,10 @@ Texture2D<float4> TerrainWindow : register(t0);
 // The land mesh is then flat between these points with a checkerboard
 // diagonal, which SampleTerrain reproduces.
 Texture2D<float> TerrainFine : register(t13);
+// 2x2 and 4x4 maxima of TerrainFine (64- and 128-unit texels): the far bands'
+// conservative ground, see SampleTerrain.
+Texture2D<float> TerrainFineMax1 : register(t24);
+Texture2D<float> TerrainFineMax2 : register(t26);
 Texture2D<float4> DeformationMap : register(t1);
 
 // Toroidal map fetch: logical texel (already clamped by the caller) to
@@ -446,6 +451,39 @@ float3 SampleTerrain(float2 gridLocal)
 				float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
 				float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
 				result.x = slash ? hA : hB;
+			}
+
+			// Far bands: a 64- or 128-unit shell quad spans two to four land
+			// quads, and a chord across a convex stretch cuts below the ground
+			// however exactly its corners sit. A vertex there takes the highest
+			// ground over [p - S, p + S] at its own band step S, so every quad's
+			// four corners are at or above the ground anywhere inside it and the
+			// chord clears it by construction. Band vertices sit on the level's
+			// texel corners, so the footprint is 2x2 texels; the general 3x3
+			// covers the offset taps. The exact height above is never lowered.
+			float2 uAxis = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
+			float bandStep = GridSpacing * max(WarpBand(abs(uAxis.x)).x, WarpBand(abs(uAxis.y)).x);
+			[branch] if (bandStep >= 64.0 && (ShellFlags.x & 16) == 0)
+			{
+				bool coarse = bandStep >= 128.0;
+				float texel = coarse ? 128.0 : 64.0;
+				float dim = FineWindow.z * FineWindow.w / texel;
+				float2 fp = FineWindow.xy + gridLocal;
+				int2 c0 = (int2)floor((fp - bandStep) / texel);
+				int2 c1 = (int2)floor((fp + bandStep - 0.5) / texel);
+				c0 = clamp(c0, 0, (int)dim - 1);
+				c1 = clamp(c1, 0, (int)dim - 1);
+				float hi = -1e30;
+				float lo = 1e30;
+				for (int y = c0.y; y <= c1.y; y++)
+					for (int x = c0.x; x <= c1.x; x++)
+					{
+						float v = coarse ? TerrainFineMax2.Load(int3(x, y, 0)) : TerrainFineMax1.Load(int3(x, y, 0));
+						hi = max(hi, v);
+						lo = min(lo, v);
+					}
+				[flatten] if (lo > -50000.0)
+					result.x = max(result.x, hi);
 			}
 		}
 	}
