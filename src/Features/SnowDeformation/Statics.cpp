@@ -4175,16 +4175,43 @@ void SnowDeformation::ServiceLandTriProbe()
 		return static_cast<const uint16_t*>(ib.pData)[i];
 	};
 
+	// The mesh's own lattice step: the shortest non-zero axis run among the
+	// first triangles' edges (the render mesh is finer than the LAND record).
+	const uint32_t triCountAll = p.indexCount / 3;
+	float step = 128.0f;
+	for (uint32_t t = 0; t < std::min(triCountAll, 64u); t++) {
+		DirectX::XMFLOAT2 c[3];
+		bool ok = true;
+		for (uint32_t k = 0; k < 3; k++) {
+			uint32_t vi = index(t * 3 + k);
+			if (vi >= p.vertexCount) {
+				ok = false;
+				break;
+			}
+			c[k] = worldXY(localPos(vi));
+		}
+		if (!ok)
+			continue;
+		for (int e = 0; e < 3; e++) {
+			float dx = std::fabs(c[(e + 1) % 3].x - c[e].x), dy = std::fabs(c[(e + 1) % 3].y - c[e].y);
+			if (dx > 0.5f)
+				step = std::min(step, dx);
+			if (dy > 0.5f)
+				step = std::min(step, dy);
+		}
+	}
+	step = std::max(1.0f, std::round(step));
+
 	// Per triangle: the longest edge is the quad diagonal; its slope sign says
-	// which diagonal. The quad is placed on the world 128-unit lattice from its
-	// lowest corner, so the pattern is read in world terms, not mesh terms.
-	constexpr float kLand = 128.0f;
+	// which diagonal. The quad is placed on the world lattice (at the detected
+	// step) from its lowest corner, so the pattern is read in world terms.
+	const float kLand = step;
 	uint32_t slash = 0, backslash = 0, offLattice = 0, degenerate = 0, on64 = 0;
 	uint32_t slashEven = 0, slashOdd = 0, backEven = 0, backOdd = 0;
 	std::string sample = std::format("  transform: t=({:.1f},{:.1f},{:.1f}) s={:.3f} rot diag=({:.3f},{:.3f},{:.3f}) verts={} stride={}\n",
 		p.world.translate.x, p.world.translate.y, p.world.translate.z, scale,
 		rot.entry[0][0], rot.entry[1][1], rot.entry[2][2], p.vertexCount, p.stride);
-	const uint32_t triCount = p.indexCount / 3;
+	const uint32_t triCount = triCountAll;
 	auto onGrid = [](const DirectX::XMFLOAT2& c, float step) {
 		return std::fabs(c.x / step - std::round(c.x / step)) <= 2.0f / step &&
 		       std::fabs(c.y / step - std::round(c.y / step)) <= 2.0f / step;
@@ -4211,7 +4238,7 @@ void SnowDeformation::ServiceLandTriProbe()
 			sample += std::format("  tri {}: local ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) world ({:.1f},{:.1f}) ({:.1f},{:.1f}) ({:.1f},{:.1f})\n",
 				t, l[0].x, l[0].y, l[0].z, l[1].x, l[1].y, l[1].z, l[2].x, l[2].y, l[2].z,
 				w[0].x, w[0].y, w[1].x, w[1].y, w[2].x, w[2].y);
-		if (onGrid(w[0], 64.0f) && onGrid(w[1], 64.0f) && onGrid(w[2], 64.0f))
+		if (onGrid(w[0], 128.0f) && onGrid(w[1], 128.0f) && onGrid(w[2], 128.0f))
 			on64++;
 		// Lattice check: every corner within 2 units of a 128 multiple.
 		bool onLattice = onGrid(w[0], kLand) && onGrid(w[1], kLand) && onGrid(w[2], kLand);
@@ -4253,6 +4280,96 @@ void SnowDeformation::ServiceLandTriProbe()
 		if (t < 8)
 			sample += std::format("  tri {} -> {} quad ({},{})\n", t, bestDx * bestDy > 0.0f ? "/" : "\\", qx, qy);
 	}
+	// Mesh heights against the LAND heightmap the shell bakes from: at heightmap
+	// vertices the two must agree; between them the mesh follows whatever
+	// interpolation the engine uses, tested here against bilinear, the two
+	// triangulations and bicubic Catmull-Rom over the 128 grid.
+	std::string fit;
+	{
+		const std::shared_lock cellLock(shellCellMutex);
+		auto landHeight = [&](long gx, long gy, bool& a_ok) -> float {
+			const long cellX = static_cast<long>(std::floor(gx / 32.0));
+			const long cellY = static_cast<long>(std::floor(gy / 32.0));
+			const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+			auto it = shellCells.find(key);
+			if (it == shellCells.end()) {
+				a_ok = false;
+				return 0.0f;
+			}
+			const long lx = gx - cellX * 32, ly = gy - cellY * 32;
+			const float h = it->second.height[size_t(ly) * 33 + size_t(lx)];
+			if (h < -50000.0f)
+				a_ok = false;
+			return h;
+		};
+		auto catmull = [](float p0, float p1, float p2, float p3, float t) {
+			return 0.5f * (2.0f * p1 + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t * t + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t * t * t);
+		};
+		double sumSq[4] = {}, maxAbs[4] = {};
+		double gridMax = 0.0;
+		uint32_t between = 0, onGridN = 0, missing = 0;
+		for (uint32_t v = 0; v < p.vertexCount; v++) {
+			const auto l = localPos(v);
+			const auto wxy = worldXY(l);
+			const float wz = (rot.entry[2][0] * l.x + rot.entry[2][1] * l.y + rot.entry[2][2] * l.z) * scale + p.world.translate.z;
+			const double gxf = wxy.x / 128.0, gyf = wxy.y / 128.0;
+			const long gx = static_cast<long>(std::floor(gxf)), gy = static_cast<long>(std::floor(gyf));
+			const float fx = float(gxf - gx), fy = float(gyf - gy);
+			bool ok = true;
+			float h[4][4];
+			for (int j = 0; j < 4; j++)
+				for (int i = 0; i < 4; i++)
+					h[j][i] = landHeight(gx - 1 + i, gy - 1 + j, ok);
+			if (!ok) {
+				missing++;
+				continue;
+			}
+			const float h00 = h[1][1], h10 = h[1][2], h01 = h[2][1], h11 = h[2][2];
+			if (fx < 0.01f && fy < 0.01f) {
+				onGridN++;
+				gridMax = std::max(gridMax, double(std::fabs(wz - h00)));
+				continue;
+			}
+			between++;
+			const float bil = h00 + (h10 - h00) * fx + (h01 - h00) * fy + (h00 - h10 - h01 + h11) * fx * fy;
+			const float triA = fy <= fx ? h00 + (h10 - h00) * fx + (h11 - h10) * fy : h00 + (h01 - h00) * fy + (h11 - h01) * fx;
+			const float triB = (fx + fy) <= 1.0f ? h00 + (h10 - h00) * fx + (h01 - h00) * fy : h11 + (h10 - h11) * (1.0f - fy) + (h01 - h11) * (1.0f - fx);
+			float rows[4];
+			for (int j = 0; j < 4; j++)
+				rows[j] = catmull(h[j][0], h[j][1], h[j][2], h[j][3], fx);
+			const float cr = catmull(rows[0], rows[1], rows[2], rows[3], fy);
+			const float pred[4] = { bil, triA, triB, cr };
+			for (int m = 0; m < 4; m++) {
+				const double d = double(wz) - pred[m];
+				sumSq[m] += d * d;
+				maxAbs[m] = std::max(maxAbs[m], std::fabs(d));
+			}
+		}
+		auto rms = [&](int m) { return between ? std::sqrt(sumSq[m] / between) : 0.0; };
+		fit = std::format(" | vs LAND: {} on-grid verts max dz {:.2f}; {} between: bilinear max {:.2f} rms {:.2f}, triA max {:.2f} rms {:.2f}, triB max {:.2f} rms {:.2f}, catmull-rom max {:.2f} rms {:.2f}; {} missing",
+			onGridN, gridMax, between, maxAbs[0], rms(0), maxAbs[1], rms(1), maxAbs[2], rms(2), maxAbs[3], rms(3), missing);
+
+		// One row for offline fitting: mesh heights along the first vertex row
+		// and the LAND heights bracketing it.
+		if (p.vertexCount >= 17) {
+			const auto l0 = localPos(0);
+			const auto w0 = worldXY(l0);
+			std::string meshRow, landRow;
+			for (uint32_t v = 0; v < p.vertexCount; v++) {
+				const auto l = localPos(v);
+				if (std::fabs(l.y - l0.y) < 0.5f && l.x >= l0.x - 0.5f && l.x < l0.x + 16.5f * step)
+					meshRow += std::format("({:.0f}:{:.2f}) ", l.x - l0.x, (rot.entry[2][0] * l.x + rot.entry[2][1] * l.y + rot.entry[2][2] * l.z) * scale + p.world.translate.z);
+			}
+			const long gx0 = static_cast<long>(std::floor(w0.x / 128.0)), gy0 = static_cast<long>(std::floor(w0.y / 128.0));
+			for (long i = -1; i <= 6; i++) {
+				bool ok = true;
+				const float lh = landHeight(gx0 + i, gy0, ok);
+				landRow += ok ? std::format("({:.0f}:{:.2f}) ", float(i) * 128.0f, lh) : std::format("({:.0f}:?) ", float(i) * 128.0f);
+			}
+			sample += "  row y=" + std::format("{:.0f}", w0.y) + " mesh (dx:z): " + meshRow + "\n  row LAND (dx:z, 128 grid): " + landRow + "\n";
+		}
+	}
+
 	context->Unmap(landTriProbe.ibStaging.get(), 0);
 	context->Unmap(landTriProbe.vbStaging.get(), 0);
 
@@ -4275,9 +4392,9 @@ void SnowDeformation::ServiceLandTriProbe()
 		else
 			verdict = std::format("MIXED: neither uniform nor a 128-checkerboard (checker fits {:.0f}% / {:.0f}%)", fa * 100.0f, fb * 100.0f);
 	}
-	landTriProbeResult = std::format("{} | {} tris: {} '/', {} '\\', {} off-128-lattice ({} on a 64 lattice), {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx",
-		verdict, triCount, slash, backslash, offLattice, on64, degenerate, p.name,
-		p.world.translate.x, p.world.translate.y, p.posFloat32 ? "f32" : "f16", p.indexBytes * 8);
+	landTriProbeResult = std::format("lattice step {:.0f} | {} | {} tris: {} '/', {} '\\', {} off-lattice ({} whole tris on the 128 grid), {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx{}",
+		step, verdict, triCount, slash, backslash, offLattice, on64, degenerate, p.name,
+		p.world.translate.x, p.world.translate.y, p.posFloat32 ? "f32" : "f16", p.indexBytes * 8, fit);
 	logger::info("[SNOW DEFORMATION] landscape triangulation probe: {}\n{}", landTriProbeResult, sample);
 	landTriProbe.pending = false;
 	landTriProbe.vbStaging = nullptr;
