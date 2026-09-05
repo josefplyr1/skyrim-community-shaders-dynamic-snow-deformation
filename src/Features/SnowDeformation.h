@@ -572,7 +572,7 @@ public:
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades, the SSS mask and the re-march shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
 		/** @brief Object snow casts shadows: the S4 skins' depth-only caster pass. Off = the raised object snow throws no shadow of its own (its object still does). A/B for shadows that seem to come from snow nothing can see. */
-		bool ObjectSnowShadows = true;
+		bool ObjectSnowShadows = false;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
 		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
