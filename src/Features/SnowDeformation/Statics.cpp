@@ -2677,7 +2677,7 @@ void SnowDeformation::DrawCapturedStatics()
 			if (SUCCEEDED(context->Map(skinCullArgsStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &rd))) {
 				const auto* args = static_cast<const uint32_t*>(rd.pData);
 				uint32_t drawn = 0, culled = 0, trisCulled = 0, trisTotal = 0;
-				uint32_t reasons[6] = {};
+				uint32_t reasons[8] = {};
 				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
 					const uint32_t tris = args[i * 5] / 3;
 					trisTotal += tris;
@@ -2687,7 +2687,7 @@ void SnowDeformation::DrawCapturedStatics()
 						culled++;
 						trisCulled += tris;
 					}
-					reasons[std::min(args[i * 5 + 4], 5u)]++;
+					reasons[std::min(args[i * 5 + 4], 7u)]++;
 				}
 				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
 				skinCullStagingIssued[readRing] = false;

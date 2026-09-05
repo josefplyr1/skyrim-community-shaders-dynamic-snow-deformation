@@ -2113,7 +2113,7 @@ public:
 	uint32_t skinCullTrisCulledLast = 0;
 	uint32_t skinCullTrisTotalLast = 0;
 	/** @brief Per-reason census (SkinCullCS reason codes 0-5) and the pyramid's 1x1 top level, read back through 1x1 staging textures: 0 there means the pyramid is dead. */
-	uint32_t skinCullReasonLast[6] = {};
+	uint32_t skinCullReasonLast[8] = {};
 	float skinCullHiZTopLast = -1.0f;
 	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
 	ID3D11ComputeShader* GetHiZBuildCS();

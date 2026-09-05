@@ -129,9 +129,11 @@ RWByteAddressBuffer SkinArgs : register(u3);
 
 // Reason codes, stored in the argument block's StartInstanceLocation (no
 // instance streams, so the draw ignores it) and read back for the census:
-// 0 drawn after the test, 1 kept - sphere reaches the eye plane, 2 kept -
+// 0 drawn after the test, 1 kept - a box corner is behind the eye, 2 kept -
 // occluder read as zero (dead read), 3 culled - outside the view, 4 culled -
-// beyond the far plane, 5 culled - behind the scene.
+// beyond the far plane, 5 culled - behind the scene, 6 kept - sphere path,
+// sphere reaches the eye plane, 7 kept - as 1 but the box spans over 2,000
+// units (a precombined cell chunk, not an object).
 [numthreads(64, 1, 1)] void SkinCullCS(uint3 id : SV_DispatchThreadID)
 {
 	if (id.x >= CullSkinCount)
@@ -174,7 +176,7 @@ RWByteAddressBuffer SkinArgs : register(u3);
 			}
 		}
 		if (behind)
-			reason = 1;
+			reason = length((bmax - bmin) * length(b.WorldRow0.xyz)) > 2000.0 ? 7 : 1;
 		else
 		{
 			bounded = true;
@@ -200,7 +202,7 @@ RWByteAddressBuffer SkinArgs : register(u3);
 		float wNear = wC - r * fLen;
 		[branch] if (wNear <= 1e-3)
 		{
-			reason = 1;
+			reason = 6;
 		}
 		else
 		{
