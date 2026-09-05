@@ -1867,6 +1867,9 @@ void SnowDeformation::ClearShaderCache()
 	if (shellDS)
 		shellDS->Release();
 	shellDS = nullptr;
+	if (shellDSFlat)
+		shellDSFlat->Release();
+	shellDSFlat = nullptr;
 	if (shellShadowVS)
 		shellShadowVS->Release();
 	shellShadowVS = nullptr;

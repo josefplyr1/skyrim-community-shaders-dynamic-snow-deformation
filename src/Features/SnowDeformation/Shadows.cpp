@@ -513,7 +513,16 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	context->VSSetConstantBuffers(0, 1, &cb0);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-	globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
+	// Split-row instrument: one honest per-frame row per cascade and stage
+	// in place of the single ShellShadowCast row. The profiler has no
+	// nesting and folds repeated names into per-call samples, hence the
+	// per-cascade names.
+	static const char* const kCasterGridRow[4] = { "SnowDeformation::CasterGrid0", "SnowDeformation::CasterGrid1", "SnowDeformation::CasterGrid2", "SnowDeformation::CasterGrid3" };
+	static const char* const kCasterSkinsRow[4] = { "SnowDeformation::CasterSkins0", "SnowDeformation::CasterSkins1", "SnowDeformation::CasterSkins2", "SnowDeformation::CasterSkins3" };
+	static const char* const kCasterPatchRow[4] = { "SnowDeformation::CasterPatch0", "SnowDeformation::CasterPatch1", "SnowDeformation::CasterPatch2", "SnowDeformation::CasterPatch3" };
+	const bool splitRow = shellCasterSplitDebug;
+	if (!splitRow)
+		globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
 	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
 		if (!shadowAtlasDSV[cascade])
 			continue;
@@ -566,7 +575,11 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
+		if (splitRow)
+			globals::profiler->BeginPass(kCasterGridRow[cascade]);
 		DrawShellGrid(context, shadowCB);
+		if (splitRow)
+			globals::profiler->EndPass();
 
 		// The OBJECT shells cast too (Josef's cliff report: the shadow
 		// line came from the bare rock beneath the shell). Same captured
@@ -576,6 +589,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		// space untouched. The list and the height maps are one frame
 		// stale - static geometry, invisible.
 		if (!SnowShadersPending(2) && skinShadowVS && !capturedStatics.empty()) {
+			if (splitRow)
+				globals::profiler->BeginPass(kCasterSkinsRow[cascade]);
 			context->VSSetShader(skinShadowVS, nullptr, 0);
 			ID3D11Buffer* skinCB1 = staticsCB->CB();
 			context->VSSetConstantBuffers(1, 1, &skinCB1);
@@ -659,6 +674,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				staticsCB->Update(scb);
 				context->DrawIndexed(indexCount, 0, 0);
 			}
+			if (splitRow)
+				globals::profiler->EndPass();
+		} else if (splitRow) {
+			globals::profiler->MarkPassSkipped(kCasterSkinsRow[cascade]);
 		}
 
 		// The TRENCH PATCH casts too - attempt two of "road snow casts
@@ -679,6 +698,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
 			heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
 			(settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
+			if (splitRow)
+				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
 			context->VSSetShader(patchCastVS, nullptr, 0);
 			ID3D11Buffer* patchCB1 = staticsCB->CB();
 			context->VSSetConstantBuffers(1, 1, &patchCB1);
@@ -696,9 +717,14 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			FillPatchDrawCB(pscb);
 			staticsCB->Update(pscb);
 			context->Draw(kPatchGridDim * kPatchGridDim * 6, 0);
+			if (splitRow)
+				globals::profiler->EndPass();
+		} else if (splitRow) {
+			globals::profiler->MarkPassSkipped(kCasterPatchRow[cascade]);
 		}
 	}
-	globals::profiler->EndPass();
+	if (!splitRow)
+		globals::profiler->EndPass();
 
 	// ---- Restore everything.
 	// Including the CONSTANT BUFFER, not just pipeline state. The caster pass

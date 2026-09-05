@@ -1145,6 +1145,34 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttGridIdx = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
 
+		ImGui::Checkbox(T(TKEY("shell_caster_split"), "Shell: Split Caster Row"), &shellCasterSplitDebug);
+		if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));
+
+		ImGui::Checkbox(T(TKEY("shell_flat_ds_debug"), "Shell: Flat Domain Shader"), &shellFlatDSDebug);
+		if (auto _ttFlatDS = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));
+
+		ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Shell: Pipeline Statistics"), &shellPipelineStatsEnabled);
+		if (auto _ttStats = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic."));
+		if (shellPipelineStatsEnabled) {
+			auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
+				if (!a_r.valid) {
+					ImGui::Text("%s: waiting for query results", a_label);
+					return;
+				}
+				const double perVisible = a_r.samplesPassed ? static_cast<double>(a_r.psInvocations) / static_cast<double>(a_r.samplesPassed) : 0.0;
+				ImGui::Text("%s: PS %.2f M inv / %.2f M px visible = %.2f per px; prims %.2f M; VS %.2f M, HS %.2f M, DS %.2f M",
+					a_label,
+					a_r.psInvocations / 1e6, a_r.samplesPassed / 1e6, perVisible,
+					a_r.rasterizedPrimitives / 1e6,
+					a_r.vsInvocations / 1e6, a_r.hsInvocations / 1e6, a_r.dsInvocations / 1e6);
+			};
+			statsLine("Shell grid", shellStatsLast);
+			statsLine("Object snow", staticsStatsLast);
+		}
+
 		ImGui::Checkbox(T(TKEY("shell_main_viewport_range_disabled"), "Shell: Decal Viewport Depth Range"), &shellMainViewportRangeDisabled);
 		if (auto _ttVpRange = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_main_viewport_range_disabled_tooltip"), "Measurement aid: draws every shell through the viewport bound when the deferred span ends (the blended decals' cap, max depth ~3e-5 under the main pass's) instead of the main pass's own depth range. That cap used to put every shell slightly nearer than its object - a third of a unit on a rock at 4 m, thousands of units on a mountain at 450 m. Off, shells write the same depth the game wrote for the same mesh. Flip it with the camera held still to read what the range fix changed about distant object snow."));

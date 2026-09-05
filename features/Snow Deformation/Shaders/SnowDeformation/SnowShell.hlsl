@@ -1403,6 +1403,21 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
 		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
 
+#ifdef SNOW_DS_FLAT
+	// A/B measurement path: terrain plus class depth, no field work, so the
+	// Shell row's drop bounds what the geometry stages cost.
+	{
+		float3 flatTerrain = SampleTerrain(gridLocal);
+		[branch] if (flatTerrain.x < -50000.0)
+		{
+			VS_OUTPUT culled = (VS_OUTPUT)0;
+			culled.Position = asfloat(0x7FC00000).xxxx;
+			return culled;
+		}
+		return FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x);
+	}
+#endif
+
 	float coverage;
 	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);

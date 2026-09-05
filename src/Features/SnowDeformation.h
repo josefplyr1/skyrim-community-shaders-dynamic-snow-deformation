@@ -1111,6 +1111,34 @@ public:
 	ID3D11VertexShader* shellTessVS = nullptr;
 	ID3D11HullShader* shellHS = nullptr;
 	ID3D11DomainShader* shellDS = nullptr;
+	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
+	bool shellCasterSplitDebug = false;
+
+	/** @brief A/B measurement: SNOW_DS_FLAT domain shader (terrain + class depth, no field work) bounds the geometry stages' share of the Shell row. Runtime-only. */
+	bool shellFlatDSDebug = false;
+	ID3D11DomainShader* shellDSFlat = nullptr;
+
+	/** @brief Measurement: D3D11 pipeline-statistics + occlusion queries around the shell grid draws and the statics pass. PS invocations over samples passed is overdraw x overshade; DS/HS/VS invocations check the geometry-stage arithmetic. Ring of three, read back without flushing. Runtime-only. */
+	bool shellPipelineStatsEnabled = false;
+	struct ShellStatsResult
+	{
+		uint64_t vsInvocations = 0;
+		uint64_t hsInvocations = 0;
+		uint64_t dsInvocations = 0;
+		uint64_t psInvocations = 0;
+		uint64_t rasterizedPrimitives = 0;
+		uint64_t samplesPassed = 0;
+		bool valid = false;
+	};
+	static constexpr int kShellStatsRing = 3;
+	winrt::com_ptr<ID3D11Query> shellStatsQuery[kShellStatsRing][2];
+	winrt::com_ptr<ID3D11Query> staticsStatsQuery[kShellStatsRing][2];
+	bool shellStatsIssued[kShellStatsRing] = {};
+	int shellStatsRing = 0;
+	ShellStatsResult shellStatsLast;
+	ShellStatsResult staticsStatsLast;
+	bool EnsureShellStatsQueries();
+	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
 	/** @brief Hull variants for the split draw: NEAR keeps patches inside the PS's far-clamp distance, FAR keeps the rest. A straddling patch lands in exactly one of them. */
 	ID3D11HullShader* shellHSNear = nullptr;
 	ID3D11HullShader* shellHSFar = nullptr;

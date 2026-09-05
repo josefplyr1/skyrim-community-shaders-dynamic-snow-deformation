@@ -292,6 +292,57 @@ void SnowDeformation::RefreshSnowPBRParams()
 	}
 }
 
+bool SnowDeformation::EnsureShellStatsQueries()
+{
+	if (shellStatsQuery[kShellStatsRing - 1][1])
+		return true;
+	auto device = globals::d3d::device;
+	for (int ring = 0; ring < kShellStatsRing; ++ring) {
+		for (int kind = 0; kind < 2; ++kind) {
+			D3D11_QUERY_DESC desc{};
+			desc.Query = kind == 0 ? D3D11_QUERY_PIPELINE_STATISTICS : D3D11_QUERY_OCCLUSION;
+			if (FAILED(device->CreateQuery(&desc, shellStatsQuery[ring][kind].put())) ||
+				FAILED(device->CreateQuery(&desc, staticsStatsQuery[ring][kind].put()))) {
+				logger::error("SnowDeformation: pipeline statistics query creation failed");
+				for (auto& r : shellStatsQuery)
+					for (auto& q : r)
+						q = nullptr;
+				for (auto& r : staticsStatsQuery)
+					for (auto& q : r)
+						q = nullptr;
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+void SnowDeformation::ReadShellStatsQueries(ID3D11DeviceContext* a_context)
+{
+	// Oldest slot, two frames behind the one about to be issued; a slot that
+	// is not ready yet is simply tried again next frame.
+	const int ring = (shellStatsRing + 1) % kShellStatsRing;
+	if (!shellStatsIssued[ring])
+		return;
+	auto read = [&](winrt::com_ptr<ID3D11Query> (&queries)[2], ShellStatsResult& out) {
+		D3D11_QUERY_DATA_PIPELINE_STATISTICS stats{};
+		UINT64 samples = 0;
+		if (a_context->GetData(queries[0].get(), &stats, sizeof(stats), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+			a_context->GetData(queries[1].get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
+			return false;
+		out.vsInvocations = stats.VSInvocations;
+		out.hsInvocations = stats.HSInvocations;
+		out.dsInvocations = stats.DSInvocations;
+		out.psInvocations = stats.PSInvocations;
+		out.rasterizedPrimitives = stats.CInvocations;
+		out.samplesPassed = samples;
+		out.valid = true;
+		return true;
+	};
+	if (read(shellStatsQuery[ring], shellStatsLast) && read(staticsStatsQuery[ring], staticsStatsLast))
+		shellStatsIssued[ring] = false;
+}
+
 ID3D11RasterizerState* SnowDeformation::GetSkinRasterState()
 {
 	const float bias = settings.SkinDepthBias;
@@ -523,6 +574,13 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 
 ID3D11DomainShader* SnowDeformation::GetShellDS()
 {
+	if (shellFlatDSDebug) {
+		if (!shellDSFlat) {
+			logger::debug("Compiling SnowShell DS (flat A/B)");
+			shellDSFlat = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_DS_FLAT", "" } }, "ds_5_0"));
+		}
+		return shellDSFlat;
+	}
 	if (!shellDS) {
 		logger::debug("Compiling SnowShell DS");
 		shellDS = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "ds_5_0"));
@@ -1172,6 +1230,12 @@ void SnowDeformation::DrawShell()
 	auto* tessHS = settings.Tessellation ? GetShellHS() : nullptr;
 	auto* tessDS = settings.Tessellation ? GetShellDS() : nullptr;
 	const bool tessellate = tessVS && tessHS && tessDS;
+	const bool shellStats = shellPipelineStatsEnabled && EnsureShellStatsQueries();
+	if (shellStats) {
+		ReadShellStatsQueries(context);
+		context->Begin(shellStatsQuery[shellStatsRing][0].get());
+		context->Begin(shellStatsQuery[shellStatsRing][1].get());
+	}
 	globals::profiler->BeginPass("SnowDeformation::Shell");
 	if (tessellate) {
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
@@ -1227,6 +1291,10 @@ void SnowDeformation::DrawShell()
 		DrawShellGrid(context, cbData);
 	}
 	globals::profiler->EndPass();
+	if (shellStats) {
+		context->End(shellStatsQuery[shellStatsRing][1].get());
+		context->End(shellStatsQuery[shellStatsRing][0].get());
+	}
 
 	if (lodHeatmap) {
 		// Statics + the depth copy below expect the full G-buffer and the
@@ -1249,7 +1317,17 @@ void SnowDeformation::DrawShell()
 	// z-fight.
 	if (auto* skinRaster = GetSkinRasterState())
 		context->RSSetState(skinRaster);
+	if (shellStats) {
+		context->Begin(staticsStatsQuery[shellStatsRing][0].get());
+		context->Begin(staticsStatsQuery[shellStatsRing][1].get());
+	}
 	DrawCapturedStatics();
+	if (shellStats) {
+		context->End(staticsStatsQuery[shellStatsRing][1].get());
+		context->End(staticsStatsQuery[shellStatsRing][0].get());
+		shellStatsIssued[shellStatsRing] = true;
+		shellStatsRing = (shellStatsRing + 1) % kShellStatsRing;
+	}
 	context->RSSetState(shellRasterState.get());
 
 	// Restore everything we changed. DS/HS state is cleared unconditionally:
