@@ -1002,7 +1002,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// makes the hand-off seamless when the origin re-snaps and a patch
 			// of ground changes bands.
 			float morphT = max(bandX.y, bandY.y);
-			[branch] if (max(ringStepM.x, ringStepM.y) > GridSpacing && morphT > 0.001 && DebugNoDataMorph < 0.5)
+			// Stands down while the land-exact layer is live: every lattice
+			// vertex is then on the land in both bands, so a band change has
+			// no vertex pop to hide, and the blend toward the coarse bilinear
+			// only pulls the far relief tessellation's vertices off the land.
+			bool fineLive = FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0;
+			[branch] if (!fineLive && max(ringStepM.x, ringStepM.y) > GridSpacing && morphT > 0.001 && DebugNoDataMorph < 0.5)
 			{
 				float2 coarseStepM = ringStepM * 2.0;
 				float2 absXYM = GridOrigin + WarpedHalfSpan + centeredM;
