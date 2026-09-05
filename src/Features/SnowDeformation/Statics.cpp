@@ -4179,12 +4179,19 @@ void SnowDeformation::ServiceLandTriProbe()
 	// which diagonal. The quad is placed on the world 128-unit lattice from its
 	// lowest corner, so the pattern is read in world terms, not mesh terms.
 	constexpr float kLand = 128.0f;
-	uint32_t slash = 0, backslash = 0, offLattice = 0, degenerate = 0;
+	uint32_t slash = 0, backslash = 0, offLattice = 0, degenerate = 0, on64 = 0;
 	uint32_t slashEven = 0, slashOdd = 0, backEven = 0, backOdd = 0;
-	std::string sample;
+	std::string sample = std::format("  transform: t=({:.1f},{:.1f},{:.1f}) s={:.3f} rot diag=({:.3f},{:.3f},{:.3f}) verts={} stride={}\n",
+		p.world.translate.x, p.world.translate.y, p.world.translate.z, scale,
+		rot.entry[0][0], rot.entry[1][1], rot.entry[2][2], p.vertexCount, p.stride);
 	const uint32_t triCount = p.indexCount / 3;
+	auto onGrid = [](const DirectX::XMFLOAT2& c, float step) {
+		return std::fabs(c.x / step - std::round(c.x / step)) <= 2.0f / step &&
+		       std::fabs(c.y / step - std::round(c.y / step)) <= 2.0f / step;
+	};
 	for (uint32_t t = 0; t < triCount; t++) {
 		DirectX::XMFLOAT2 w[3];
+		DirectX::XMFLOAT3 l[3];
 		bool ok = true;
 		for (uint32_t k = 0; k < 3; k++) {
 			uint32_t vi = index(t * 3 + k);
@@ -4192,20 +4199,22 @@ void SnowDeformation::ServiceLandTriProbe()
 				ok = false;
 				break;
 			}
-			w[k] = worldXY(localPos(vi));
+			l[k] = localPos(vi);
+			w[k] = worldXY(l[k]);
 		}
 		if (!ok) {
 			degenerate++;
 			continue;
 		}
+		// Raw dump of the first triangles, before any test can drop them.
+		if (t < 8)
+			sample += std::format("  tri {}: local ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) ({:.1f},{:.1f},{:.1f}) world ({:.1f},{:.1f}) ({:.1f},{:.1f}) ({:.1f},{:.1f})\n",
+				t, l[0].x, l[0].y, l[0].z, l[1].x, l[1].y, l[1].z, l[2].x, l[2].y, l[2].z,
+				w[0].x, w[0].y, w[1].x, w[1].y, w[2].x, w[2].y);
+		if (onGrid(w[0], 64.0f) && onGrid(w[1], 64.0f) && onGrid(w[2], 64.0f))
+			on64++;
 		// Lattice check: every corner within 2 units of a 128 multiple.
-		bool onLattice = true;
-		for (auto& c : w) {
-			float rx = std::fabs(c.x / kLand - std::round(c.x / kLand));
-			float ry = std::fabs(c.y / kLand - std::round(c.y / kLand));
-			if (rx > 2.0f / kLand || ry > 2.0f / kLand)
-				onLattice = false;
-		}
+		bool onLattice = onGrid(w[0], kLand) && onGrid(w[1], kLand) && onGrid(w[2], kLand);
 		if (!onLattice) {
 			offLattice++;
 			continue;
@@ -4242,8 +4251,7 @@ void SnowDeformation::ServiceLandTriProbe()
 			(even ? backEven : backOdd)++;
 		}
 		if (t < 8)
-			sample += std::format("  tri {}: ({:.0f},{:.0f}) ({:.0f},{:.0f}) ({:.0f},{:.0f}) -> {} quad ({},{})\n",
-				t, w[0].x, w[0].y, w[1].x, w[1].y, w[2].x, w[2].y, bestDx * bestDy > 0.0f ? "/" : "\\", qx, qy);
+			sample += std::format("  tri {} -> {} quad ({},{})\n", t, bestDx * bestDy > 0.0f ? "/" : "\\", qx, qy);
 	}
 	context->Unmap(landTriProbe.ibStaging.get(), 0);
 	context->Unmap(landTriProbe.vbStaging.get(), 0);
@@ -4267,8 +4275,8 @@ void SnowDeformation::ServiceLandTriProbe()
 		else
 			verdict = std::format("MIXED: neither uniform nor a 128-checkerboard (checker fits {:.0f}% / {:.0f}%)", fa * 100.0f, fb * 100.0f);
 	}
-	landTriProbeResult = std::format("{} | {} tris: {} '/', {} '\\', {} off-lattice, {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx",
-		verdict, triCount, slash, backslash, offLattice, degenerate, p.name,
+	landTriProbeResult = std::format("{} | {} tris: {} '/', {} '\\', {} off-128-lattice ({} on a 64 lattice), {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx",
+		verdict, triCount, slash, backslash, offLattice, on64, degenerate, p.name,
 		p.world.translate.x, p.world.translate.y, p.posFloat32 ? "f32" : "f16", p.indexBytes * 8);
 	logger::info("[SNOW DEFORMATION] landscape triangulation probe: {}\n{}", landTriProbeResult, sample);
 	landTriProbe.pending = false;
