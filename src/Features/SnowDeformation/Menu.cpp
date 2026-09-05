@@ -1149,6 +1149,14 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));
 
+		ImGui::Checkbox(T(TKEY("shell_vertex_bake_disabled"), "Shell: Disable Vertex Bake"), &shellVertexBakeDisabled);
+		if (auto _ttBake = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_vertex_bake_disabled_tooltip"), "Measurement aid: returns the tessellated shell to evaluating its surface live at every vertex. With the bake on, a compute pass evaluates each base-grid vertex once per frame and the domain shader reads the result by index - the same function at full float precision, so the surface is bit-identical - while vertices that tessellation adds inside a patch stay live. Hold the camera still and read the Shell row plus the ShellVertexBake row against the Shell row alone."));
+
+		ImGui::Checkbox(T(TKEY("shell_vertex_bake_check"), "Shell: Vertex Bake Mismatch View"), &shellVertexBakeCheck);
+		if (auto _ttBakeChk = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_vertex_bake_check_tooltip"), "Proof view for the vertex bake: the domain shader evaluates every baked corner live as well and lifts any vertex whose bits differ by 50 units, so a mismatch shows as an unmissable spike. A clean shell everywhere is the bit-identity guarantee, verified rather than assumed. Costs the live evaluation on top of the bake while on."));
+
 		ImGui::Checkbox(T(TKEY("shell_flat_ds_debug"), "Shell: Flat Domain Shader"), &shellFlatDSDebug);
 		if (auto _ttFlatDS = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));

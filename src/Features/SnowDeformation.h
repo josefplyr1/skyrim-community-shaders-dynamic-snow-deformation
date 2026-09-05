@@ -1118,6 +1118,19 @@ public:
 	bool shellFlatDSDebug = false;
 	ID3D11DomainShader* shellDSFlat = nullptr;
 
+	/** @brief Per-vertex surface bake: BakeCS runs ShellVertexZ once per base-grid vertex into shellVertexBake (RGBA32F, (GridDim+1)^2) each frame; the SNOW_DS_BAKE domain shader reads patch corners from it by grid index and keeps interior (tess factor > 1) vertices live. Same function, full float, index lookup: bit-identical to the live path. SNOW_DS_BAKE_CHECK evaluates both and spikes any corner whose bits differ. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11ComputeShader* GetShellBakeCS();
+	ID3D11DomainShader* GetShellDSBake(bool a_check);
+	bool EnsureShellVertexBake();
+	ID3D11ComputeShader* shellBakeCS = nullptr;
+	ID3D11DomainShader* shellDSBake = nullptr;
+	ID3D11DomainShader* shellDSBakeCheck = nullptr;
+	Texture2D* shellVertexBake = nullptr;
+	/** @brief A/B measurement: returns the domain shader to evaluating every vertex live. Runtime-only. */
+	bool shellVertexBakeDisabled = false;
+	/** @brief Measurement: the domain shader evaluates baked corners live as well and lifts any mismatching vertex by 50 units. Runtime-only. */
+	bool shellVertexBakeCheck = false;
+
 	/** @brief Measurement: D3D11 pipeline-statistics + occlusion queries around the shell grid draws and the statics pass. PS invocations over samples passed is overdraw x overshade; DS/HS/VS invocations check the geometry-stage arithmetic. Ring of three, read back without flushing. Runtime-only. */
 	bool shellPipelineStatsEnabled = false;
 	struct ShellStatsResult

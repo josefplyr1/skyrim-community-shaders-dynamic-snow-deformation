@@ -233,6 +233,9 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
+// Per-vertex surface bake (BakeCS → SNOW_DS_BAKE domain shader): one texel per
+// base-grid vertex, (z, coverage, terrainHeight), full float.
+Texture2D<float4> ShellVertexBake : register(t9);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -1240,26 +1243,33 @@ VS_OUTPUT main(uint vertexID : SV_VertexID)
 // as real geometry. The control-point VS does grid placement only; the
 // domain shader runs the full surface evaluation per generated vertex.
 
+// Base-grid vertex placement from the integer grid coordinate alone: the same
+// warped placement + world-anchored ring snapping as the legacy VS, keyed so
+// that adjacent patches share edge vertices exactly and so the tessellation
+// VS and BakeCS put vertex (x, y) on the same bits.
+float2 ShellGridVertexLocal(uint2 gridXY)
+{
+	float2 u = float2(gridXY) - (float)GridDim * 0.5;
+	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
+	return GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
+}
+
 struct TessControlPoint
 {
 	float2 GridLocal : TEXCOORD0;
+	uint2 GridXY : TEXCOORD1;
 };
 
 #if defined(VSHADER) && defined(SNOW_TESS)
 TessControlPoint main(uint vertexID : SV_VertexID)
 {
-	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	static const uint2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	uint quadIndex = vertexID / 4;
 	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
-	float2 gridPos = float2(quadXY) + kPatchCorners[vertexID % 4];
-	// Same warped placement + world-anchored ring snapping as the legacy VS;
-	// corners depend only on grid coordinates, so adjacent patches share
-	// their edge vertices exactly.
-	float2 u = gridPos - (float)GridDim * 0.5;
-	float2 gridLocal = float2(WarpAxis(u.x), WarpAxis(u.y)) + WarpedHalfSpan;
 
 	TessControlPoint cp;
-	cp.GridLocal = GeomorphVertexXY(gridLocal - WarpedHalfSpan, u) + WarpedHalfSpan;
+	cp.GridXY = quadXY + kPatchCorners[vertexID % 4];
+	cp.GridLocal = ShellGridVertexLocal(cp.GridXY);
 	return cp;
 }
 #endif
@@ -1395,31 +1405,12 @@ TessControlPoint main(InputPatch<TessControlPoint, 4> patch, uint i : SV_OutputC
 
 #include "SnowDeformation/SnowParallax.hlsli"
 
-#ifdef DOMAINSHADER
-[domain("quad")]
-VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
+#if defined(DOMAINSHADER) || defined(COMPUTESHADER)
+// The vertex surface: ShellSurfaceZ plus the skirt descent and the
+// displacement relief. One function for the domain shader's live path and
+// for BakeCS, so a baked corner and a live vertex are the same bits.
+float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight)
 {
-	float2 gridLocal = lerp(
-		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
-		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
-
-#ifdef SNOW_DS_FLAT
-	// A/B measurement path: terrain plus class depth, no field work, so the
-	// Shell row's drop bounds what the geometry stages cost.
-	{
-		float3 flatTerrain = SampleTerrain(gridLocal);
-		[branch] if (flatTerrain.x < -50000.0)
-		{
-			VS_OUTPUT culled = (VS_OUTPUT)0;
-			culled.Position = asfloat(0x7FC00000).xxxx;
-			return culled;
-		}
-		return FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x);
-	}
-#endif
-
-	float coverage;
-	float terrainHeight;
 	float z = ShellSurfaceZ(gridLocal, coverage, terrainHeight);
 
 	float camDist = length(GridOrigin + gridLocal - ShellCameraPosAdjust.xy);
@@ -1481,6 +1472,65 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 			float carve = saturate(SampleDeformation(gridLocal));
 			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
 		}
+	}
+
+	return z;
+}
+#endif  // DOMAINSHADER || COMPUTESHADER
+
+#ifdef DOMAINSHADER
+[domain("quad")]
+VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const OutputPatch<TessControlPoint, 4> patch)
+{
+	float2 gridLocal = lerp(
+		lerp(patch[0].GridLocal, patch[1].GridLocal, domainUV.x),
+		lerp(patch[3].GridLocal, patch[2].GridLocal, domainUV.x), domainUV.y);
+
+#ifdef SNOW_DS_FLAT
+	// A/B measurement path: terrain plus class depth, no field work, so the
+	// Shell row's drop bounds what the geometry stages cost.
+	{
+		float3 flatTerrain = SampleTerrain(gridLocal);
+		[branch] if (flatTerrain.x < -50000.0)
+		{
+			VS_OUTPUT culled = (VS_OUTPUT)0;
+			culled.Position = asfloat(0x7FC00000).xxxx;
+			return culled;
+		}
+		return FinishShellVertex(gridLocal, flatTerrain.x + max(flatTerrain.y, 0.0), saturate(flatTerrain.z), flatTerrain.x);
+	}
+#endif
+
+	float coverage;
+	float terrainHeight;
+	float z;
+#if defined(SNOW_DS_BAKE) || defined(SNOW_DS_BAKE_CHECK)
+	// Patch corners are base-grid vertices the bake evaluated this frame;
+	// read them by grid index. Points tessellation adds inside the patch are
+	// not grid vertices and stay live. At a corner the lerp above is exact
+	// (grid coordinates are multiples of the step, far below 2^24), so the
+	// live and baked paths see the same gridLocal - the check variant
+	// verifies exactly that.
+	bool isCorner = (domainUV.x == 0.0 || domainUV.x == 1.0) && (domainUV.y == 0.0 || domainUV.y == 1.0);
+	[branch] if (isCorner)
+	{
+		uint corner = domainUV.x > 0.5 ? (domainUV.y > 0.5 ? 2u : 1u) : (domainUV.y > 0.5 ? 3u : 0u);
+		float4 baked = ShellVertexBake.Load(int3(patch[corner].GridXY, 0));
+		z = baked.x;
+		coverage = baked.y;
+		terrainHeight = baked.z;
+#	ifdef SNOW_DS_BAKE_CHECK
+		float liveCoverage;
+		float liveTerrain;
+		float liveZ = ShellVertexZ(gridLocal, liveCoverage, liveTerrain);
+		if (asuint(liveZ) != asuint(z) || asuint(liveCoverage) != asuint(coverage) || asuint(liveTerrain) != asuint(terrainHeight))
+			z += 50.0;
+#	endif
+	}
+	else
+#endif
+	{
+		z = ShellVertexZ(gridLocal, coverage, terrainHeight);
 	}
 
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);
@@ -2620,6 +2670,24 @@ PS_OUTPUT main(VS_OUTPUT input)
 // exactly as the VS builds them. Anchored to a 512-unit-quantised camera XY,
 // which the CPU mirrors.
 RWStructuredBuffer<float> ProbeHeights : register(u0);
+
+// Per-vertex surface bake: one ShellVertexZ per base-grid vertex, placed
+// exactly as the tessellation VS places it, read back by the domain shader
+// at patch corners (SNOW_DS_BAKE). Rebuilt every frame - the surface depends
+// on the camera (descent and relief fade with distance) and on the bow
+// waves, so nothing here is worth tracking dirty.
+RWTexture2D<float4> ShellVertexBakeOut : register(u1);
+
+[numthreads(8, 8, 1)] void BakeCS(uint3 id : SV_DispatchThreadID)
+{
+	if (any(id.xy > GridDim))
+		return;
+	float2 gridLocal = ShellGridVertexLocal(id.xy);
+	float coverage;
+	float terrainHeight;
+	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
+	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, 0.0);
+}
 
 static const uint kProbeAzimuths = 24;
 static const uint kProbeRadii = 12;

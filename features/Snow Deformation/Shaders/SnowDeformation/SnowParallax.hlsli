@@ -17,7 +17,9 @@
 #ifndef SNOW_DEFORMATION_SNOWPARALLAX_HLSLI
 #define SNOW_DEFORMATION_SNOWPARALLAX_HLSLI
 
-#if defined(DOMAINSHADER) || defined(PSHADER)
+// COMPUTESHADER: the shell's per-vertex bake runs the domain shader's
+// surface evaluation (descent + relief taps) in compute.
+#if defined(DOMAINSHADER) || defined(PSHADER) || defined(COMPUTESHADER)
 // Cheap 2D cell hash for stochastic tiling offsets.
 float2 StochasticHash(float2 cell)
 {

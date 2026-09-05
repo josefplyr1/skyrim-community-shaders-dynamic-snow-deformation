@@ -678,6 +678,55 @@ ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
 	return shellPSNoDepth;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetShellBakeCS()
+{
+	if (!shellBakeCS) {
+		logger::debug("Compiling SnowShell BakeCS");
+		shellBakeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "cs_5_0", "BakeCS"));
+	}
+	return shellBakeCS;
+}
+
+ID3D11DomainShader* SnowDeformation::GetShellDSBake(bool a_check)
+{
+	auto*& slot = a_check ? shellDSBakeCheck : shellDSBake;
+	if (!slot) {
+		logger::debug("Compiling SnowShell DS ({})", a_check ? "bake check" : "bake");
+		slot = static_cast<ID3D11DomainShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { a_check ? "SNOW_DS_BAKE_CHECK" : "SNOW_DS_BAKE", "" } }, "ds_5_0"));
+	}
+	return slot;
+}
+
+bool SnowDeformation::EnsureShellVertexBake()
+{
+	if (shellVertexBake)
+		return shellVertexBake->srv && shellVertexBake->uav;
+	constexpr UINT dim = kShellGridDim + 1;
+	D3D11_TEXTURE2D_DESC desc{};
+	desc.Width = dim;
+	desc.Height = dim;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+		.Format = desc.Format,
+		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+	};
+	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		.Format = desc.Format,
+		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+		.Texture2D = { .MipSlice = 0 }
+	};
+	shellVertexBake = new Texture2D(desc, "SnowDeformation::ShellVertexBake");
+	shellVertexBake->CreateSRV(srvDesc);
+	shellVertexBake->CreateUAV(uavDesc);
+	return shellVertexBake->srv && shellVertexBake->uav;
+}
+
 ID3D11DomainShader* SnowDeformation::GetShellDS()
 {
 	if (shellFlatDSDebug) {
@@ -1334,8 +1383,55 @@ void SnowDeformation::DrawShell()
 	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
 	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
 	auto* tessHS = settings.Tessellation ? GetShellHS() : nullptr;
-	auto* tessDS = settings.Tessellation ? GetShellDS() : nullptr;
+	// Vertex bake: the base-grid corners' surface is evaluated once per
+	// frame by a compute pass and read back by index; the bake DS is chosen
+	// only once the pass and its texture are known good, so a failure falls
+	// to the live DS rather than to an unbound read.
+	ID3D11ComputeShader* bakeCS = (settings.Tessellation && !shellVertexBakeDisabled && !shellFlatDSDebug) ? GetShellBakeCS() : nullptr;
+	bool bake = bakeCS && EnsureShellVertexBake();
+	ID3D11DomainShader* tessDS = nullptr;
+	if (settings.Tessellation) {
+		if (bake)
+			tessDS = GetShellDSBake(shellVertexBakeCheck);
+		if (!tessDS) {
+			bake = false;
+			tessDS = GetShellDS();
+		}
+	}
 	const bool tessellate = tessVS && tessHS && tessDS;
+	if (tessellate && bake) {
+		globals::profiler->BeginPass("SnowDeformation::ShellVertexBake");
+		context->CSSetConstantBuffers(0, 1, cbs);
+		ID3D11Buffer* bakeWaveCB[1] = { bowWaveCB ? bowWaveCB->CB() : nullptr };
+		context->CSSetConstantBuffers(1, 1, bakeWaveCB);
+		context->CSSetConstantBuffers(4, 3, sharedBuffers);
+		context->CSSetShaderResources(0, 6, shellSRVs);
+		ID3D11ShaderResourceView* csHeightSRV = shellSnowHeightSRV.get();
+		context->CSSetShaderResources(8, 1, &csHeightSRV);
+		context->CSSetShaderResources(11, 2, objectCapSRVs);
+		context->CSSetShaderResources(14, 1, &bermSRV);
+		context->CSSetShaderResources(15, 1, &exclusionSRV);
+		context->CSSetShaderResources(29, 1, &undulationSRV);
+		ID3D11SamplerState* csSampler = shellSnowSampler.get();
+		context->CSSetSamplers(0, 1, &csSampler);
+		ID3D11UnorderedAccessView* bakeUAV = shellVertexBake->uav.get();
+		context->CSSetUnorderedAccessViews(1, 1, &bakeUAV, nullptr);
+		context->CSSetShader(bakeCS, nullptr, 0);
+		constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
+		context->Dispatch(bakeGroups, bakeGroups, 1);
+		ID3D11UnorderedAccessView* nullBakeUAV = nullptr;
+		context->CSSetUnorderedAccessViews(1, 1, &nullBakeUAV, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		// The field textures are written by compute passes next Prepass;
+		// leave none of them bound as CS inputs.
+		ID3D11ShaderResourceView* nullCSSRVs[6] = {};
+		context->CSSetShaderResources(0, 6, nullCSSRVs);
+		context->CSSetShaderResources(8, 1, nullCSSRVs);
+		context->CSSetShaderResources(11, 2, nullCSSRVs);
+		context->CSSetShaderResources(14, 2, nullCSSRVs);
+		context->CSSetShaderResources(29, 1, nullCSSRVs);
+		globals::profiler->EndPass();
+	}
 	const bool shellStats = shellPipelineStatsEnabled && EnsureShellStatsQueries();
 	if (shellStats) {
 		ReadShellStatsQueries(context);
@@ -1365,6 +1461,8 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(14, 1, &bermSRV);
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		context->DSSetShaderResources(29, 1, &undulationSRV);
+		ID3D11ShaderResourceView* dsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
+		context->DSSetShaderResources(9, 1, &dsBakeSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
 
