@@ -1163,7 +1163,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Shell: Pipeline Statistics"), &shellPipelineStatsEnabled);
 		if (auto _ttStats = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With the depth prepass on, the shell line counts all three of its draws: the prepass's own cheap invocations and the fullscreen fill's samples are in there, so read the Shell profiler row as the verdict and this line as the explanation."));
+			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With a depth prepass on, a line counts all of that pass's draws - the prepass's own cheap invocations and the fullscreen fills' samples are in there - so read the Shell and StaticsShell profiler rows as the verdict and these lines as the explanation."));
 		if (shellPipelineStatsEnabled) {
 			auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
 				if (!a_r.valid) {
@@ -1188,6 +1188,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("shell_depth_prepass_disabled"), "Shell: Disable Depth Prepass"), &shellDepthPrepassDisabled);
 		if (auto _ttPrepass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_depth_prepass_disabled_tooltip"), "Measurement aid: returns the tessellated shell to its earlier near/far split draws. With the prepass on, a cheap depth-only draw decides which pixels the shell owns and the full shader then runs once per owned pixel instead of once per rasterised fragment - fragments hidden by the scene, by the shell's own slopes, or cut by the alpha test never shade. Same depth, same alpha decision, same look; hold the camera still and read the Shell row and the pipeline statistics."));
+
+		ImGui::Checkbox(T(TKEY("statics_depth_prepass_disabled"), "Object Snow: Disable Depth Prepass"), &staticsDepthPrepassDisabled);
+		if (auto _ttStaticsPrepass = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
 
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())

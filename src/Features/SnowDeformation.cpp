@@ -1930,6 +1930,9 @@ void SnowDeformation::ClearShaderCache()
 	if (staticsPSNoDepth)
 		staticsPSNoDepth->Release();
 	staticsPSNoDepth = nullptr;
+	if (staticsPSPrepassNoDepth)
+		staticsPSPrepassNoDepth->Release();
+	staticsPSPrepassNoDepth = nullptr;
 	if (patchVS)
 		patchVS->Release();
 	patchVS = nullptr;

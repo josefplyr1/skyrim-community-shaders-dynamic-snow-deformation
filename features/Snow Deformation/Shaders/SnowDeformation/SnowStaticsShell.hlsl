@@ -3289,7 +3289,18 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	return r;
 }
 
+// Depth prepass (SNOW_STATICS_DEPTH_PREPASS): the alpha cut and nothing else,
+// no colour, no export - the hardware writes the raster depth exactly as the
+// shipping no-export twin does. Only non-carving draws take it; a carving
+// draw's exported depth is a shader-computed value, and two compiles of one
+// expression are not promised the same bits, so those draws keep their own
+// export and late-Z in the shading loop rather than be matched against a
+// prepass copy of themselves.
+#ifdef SNOW_STATICS_DEPTH_PREPASS
+void main(VS_OUTPUT input)
+#else
 PS_OUTPUT main(VS_OUTPUT input)
+#endif
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
@@ -4032,6 +4043,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (ditherRef >= fadeAlpha)
 		discard;
 
+#ifdef SNOW_STATICS_DEPTH_PREPASS
+	return;
+#endif
+#ifndef SNOW_STATICS_DEPTH_PREPASS
 	SkinShadeInput ssi;
 	ssi.WorldPos = input.WorldPos;
 	ssi.Position = input.Position;
@@ -4269,5 +4284,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// divides SSGI's AO by it).
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
 	return psout;
+#endif  // !SNOW_STATICS_DEPTH_PREPASS
 }
 #endif

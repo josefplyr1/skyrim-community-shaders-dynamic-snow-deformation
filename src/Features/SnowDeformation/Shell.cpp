@@ -599,6 +599,7 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 	if (shellRasterDepth && (shellRasterDepth->desc.Width != depthDesc.Width || shellRasterDepth->desc.Height != depthDesc.Height)) {
 		delete shellRasterDepth;
 		shellRasterDepth = nullptr;
+		shellTestDepthSRV = nullptr;
 		shellTestDepthDSV = nullptr;
 		shellTestDepth = nullptr;
 	}
@@ -626,9 +627,11 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		shellRasterDepth->CreateSRV(srvDesc);
 		shellRasterDepth->CreateRTV(rtvDesc);
 
+		// Typeless so the object-snow prepass can read it back through an
+		// R32 view for its write-back into the main depth.
 		D3D11_TEXTURE2D_DESC testDesc = desc;
-		testDesc.Format = DXGI_FORMAT_D32_FLOAT;
-		testDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+		testDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		testDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 		if (FAILED(device->CreateTexture2D(&testDesc, nullptr, shellTestDepth.put())))
 			return false;
 		Util::SetResourceName(shellTestDepth.get(), "SnowDeformation::ShellTestDepth");
@@ -638,6 +641,14 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		if (FAILED(device->CreateDepthStencilView(shellTestDepth.get(), &dsvDesc, shellTestDepthDSV.put())))
 			return false;
 		Util::SetResourceName(shellTestDepthDSV.get(), "SnowDeformation::ShellTestDepth DSV");
+		D3D11_SHADER_RESOURCE_VIEW_DESC testSrvDesc = {
+			.Format = DXGI_FORMAT_R32_FLOAT,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		if (FAILED(device->CreateShaderResourceView(shellTestDepth.get(), &testSrvDesc, shellTestDepthSRV.put())))
+			return false;
+		Util::SetResourceName(shellTestDepthSRV.get(), "SnowDeformation::ShellTestDepth SRV");
 	}
 	if (!shellPrepassMainDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
@@ -657,7 +668,7 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 			return false;
 		Util::SetResourceName(shellFillDepthState.get(), "SnowDeformation::ShellFillDepthState");
 	}
-	return shellRasterDepth->srv && shellRasterDepth->rtv && shellTestDepthDSV;
+	return shellRasterDepth->srv && shellRasterDepth->rtv && shellTestDepthDSV && shellTestDepthSRV;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()

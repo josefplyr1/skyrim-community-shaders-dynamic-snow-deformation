@@ -811,14 +811,18 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr)
+static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr)
 {
 	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
 	// of the "sdblob" env token, and the full key round-trips through the
 	// stored file so a fingerprint or define change reads as a miss.
 	auto& snow = globals::features::snowDeformation;
-	const auto defs = std::format("{};{};{};{}", a_stageDefine,
+	// The fourth define is appended only when present so every existing
+	// cache key keeps its text.
+	auto defs = std::format("{};{};{};{}", a_stageDefine,
 		a_extraDefine ? a_extraDefine : "", a_extraDefine2 ? a_extraDefine2 : "", a_extraDefine3 ? a_extraDefine3 : "");
+	if (a_extraDefine4)
+		defs += std::format(";{}", a_extraDefine4);
 	const auto pathUtf8 = Util::WStringToString(a_path);
 	const auto cacheFile = std::format("{}_{}_blob_{:016x}.bin",
 		std::filesystem::path(a_path).stem().string(), a_target,
@@ -861,6 +865,7 @@ static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_targe
 		{ a_extraDefine ? a_extraDefine : "DX11", "" },
 		{ a_extraDefine2 ? a_extraDefine2 : "DX11", "" },
 		{ a_extraDefine3 ? a_extraDefine3 : "DX11", "" },
+		{ a_extraDefine4 ? a_extraDefine4 : "DX11", "" },
 		{ "WINPC", "" },
 		{ "DX11", "" },
 		{ nullptr, nullptr }
@@ -1001,6 +1006,18 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (blob) {
 			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSNoDepth)))
 				Util::SetResourceName(staticsPSNoDepth, "SnowDeformation::StaticsShellPS NoDepth");
+		}
+	}
+
+	// Depth-prepass twin of the no-export shader: the alpha cut with the
+	// shading compiled out. Carving draws have no twin on purpose (see the
+	// shader). A compile failure just leaves the pass on its single loop.
+	if (!staticsPSPrepassNoDepth) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSPrepassNoDepth)))
+				Util::SetResourceName(staticsPSPrepassNoDepth, "SnowDeformation::StaticsShellPS Prepass NoDepth");
 		}
 	}
 
@@ -2295,33 +2312,38 @@ void SnowDeformation::DrawCapturedStatics()
 	// rim over whatever vertices the source mesh happens to carry there, and
 	// low-poly meshes have far too few. Relief stays gated inside the DS.
 	const bool tessellateSkins = staticsTessVS && staticsHS && staticsDS;
-	if (tessellateSkins) {
-		context->VSSetShader(staticsTessVS, nullptr, 0);
-		context->HSSetShader(staticsHS, nullptr, 0);
-		context->DSSetShader(staticsDS, nullptr, 0);
-		ID3D11Buffer* cb0 = shellCB->CB();
-		context->HSSetConstantBuffers(0, 1, &cb0);
-		context->DSSetConstantBuffers(0, 1, &cb0);
-		// The DS evaluates the lift per generated vertex and the HS sizes
-		// tessellation against the class collapse range, so both need the
-		// per-object block.
-		ID3D11Buffer* dsCB1 = staticsCB->CB();
-		context->HSSetConstantBuffers(1, 1, &dsCB1);
-		context->DSSetConstantBuffers(1, 1, &dsCB1);
-		// P1: EdgeTessFactor's rim term reads the cone field, so the HS
-		// needs t13 like the VS/DS do (bound below for those stages).
-		ID3D11ShaderResourceView* hsConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
-		context->HSSetShaderResources(13, 1, &hsConeSRV);
-		ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
-		context->DSSetShaderResources(1, 1, &dsDeformSRV);
-		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
-		context->DSSetShaderResources(8, 1, &dsHeightSRV);
-		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
-		context->DSSetSamplers(0, 1, &dsSampler);
-		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
-	} else {
-		context->VSSetShader(staticsVS, nullptr, 0);
-	}
+	// A lambda because the depth prepass's fullscreen fills replace these
+	// stages mid-pass and have to put them back.
+	auto bindSkinStages = [&]() {
+		if (tessellateSkins) {
+			context->VSSetShader(staticsTessVS, nullptr, 0);
+			context->HSSetShader(staticsHS, nullptr, 0);
+			context->DSSetShader(staticsDS, nullptr, 0);
+			ID3D11Buffer* cb0 = shellCB->CB();
+			context->HSSetConstantBuffers(0, 1, &cb0);
+			context->DSSetConstantBuffers(0, 1, &cb0);
+			// The DS evaluates the lift per generated vertex and the HS sizes
+			// tessellation against the class collapse range, so both need the
+			// per-object block.
+			ID3D11Buffer* dsCB1 = staticsCB->CB();
+			context->HSSetConstantBuffers(1, 1, &dsCB1);
+			context->DSSetConstantBuffers(1, 1, &dsCB1);
+			// P1: EdgeTessFactor's rim term reads the cone field, so the HS
+			// needs t13 like the VS/DS do (bound below for those stages).
+			ID3D11ShaderResourceView* hsConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
+			context->HSSetShaderResources(13, 1, &hsConeSRV);
+			ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
+			context->DSSetShaderResources(1, 1, &dsDeformSRV);
+			ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
+			context->DSSetShaderResources(8, 1, &dsHeightSRV);
+			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
+			context->DSSetSamplers(0, 1, &dsSampler);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+		} else {
+			context->VSSetShader(staticsVS, nullptr, 0);
+		}
+	};
+	bindSkinStages();
 
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
@@ -2407,93 +2429,196 @@ void SnowDeformation::DrawCapturedStatics()
 	ID3D11ShaderResourceView* skinMasksSRV = settings.ObjectSnow3D ? landMasksCopySRV.get() : nullptr;
 	context->PSSetShaderResources(32, 1, &skinMasksSRV);
 
-	for (const auto& cap : capturedStatics) {
-		auto* geometry = cap.geometry.get();
-		if (!geometry)
-			continue;
-		// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
-		// its no-PD pillows stood alone on the steps, and at fill 100 the
-		// S4 shell stacked on top of them). Only two things draw now:
-		// roads (their own tuned machinery, always) and the S4 shell
-		// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
-		// PROPERTY carries no projection data get no skin at all - the
-		// Lighting recolor still covers the technique-classified ones
-		// (fence family) flat. The classic shader path survives only
-		// because roads run through it.
-		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
-		                     cap.projThreshold > -0.5f && projNoiseSRV;
-		if (!cap.road && !s4Shell)
-			continue;
-		auto triShape = geometry->AsTriShape();
-		if (!triShape) {
-			logSkip(geometry, "not a BSTriShape");
-			continue;
-		}
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
-			logSkip(geometry, "no renderer buffers");
-			continue;
-		}
-		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0) {
-			logSkip(geometry, "zero triangles");
-			continue;
-		}
+	// Depth prepass for the skins. Unlike the shell's, the private test
+	// depth is written BY the prepass draws themselves rather than through a
+	// colour target: the skins draw with a rasterizer depth bias, and whether
+	// that bias reaches the depth a pixel shader sees is a spec detail the
+	// EQUAL test must not depend on. Starting the private buffer as a copy
+	// of the scene depth and running the identical raster path twice makes
+	// the tested value the written value by construction. Carving draws
+	// (roads at default settings) take no part in the prepass: their depth is
+	// shader-computed, so they draw once in the shading loop under their own
+	// LESS_EQUAL + export as they always did, into the same private buffer.
+	// The write-back then hands every skin's depth to the main buffer exactly
+	// as the single loop would have left it; nothing else writes depth in
+	// between.
+	auto* fillVS = GetShellFillVS();
+	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+	const bool prepass = !staticsDepthPrepassDisabled && lodDebugView != 1 && staticsPSPrepassNoDepth &&
+	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
+	ID3D11DepthStencilState* boundDepthState = nullptr;
 
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
-			logSkip(geometry, "vertex format lacks POSITION/NORMAL");
-			continue;
+	// The skin loop runs once (no prepass) or twice: non-carving skins
+	// depth-only into the private copy, then every skin shading against it -
+	// non-carving under EQUAL with writes off, carving under the shipping
+	// LESS_EQUAL + write.
+	auto drawSkins = [&](bool a_prepass) {
+		boundStaticsPS = nullptr;
+		for (const auto& cap : capturedStatics) {
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
+			// its no-PD pillows stood alone on the steps, and at fill 100 the
+			// S4 shell stacked on top of them). Only two things draw now:
+			// roads (their own tuned machinery, always) and the S4 shell
+			// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
+			// PROPERTY carries no projection data get no skin at all - the
+			// Lighting recolor still covers the technique-classified ones
+			// (fence family) flat. The classic shader path survives only
+			// because roads run through it.
+			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+			                     cap.projThreshold > -0.5f && projNoiseSRV;
+			if (!cap.road && !s4Shell)
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape) {
+				logSkip(geometry, "not a BSTriShape");
+				continue;
+			}
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
+				logSkip(geometry, "no renderer buffers");
+				continue;
+			}
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0) {
+				logSkip(geometry, "zero triangles");
+				continue;
+			}
+
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
+				logSkip(geometry, "vertex format lacks POSITION/NORMAL");
+				continue;
+			}
+
+			// One input layout per distinct vertex descriptor; layouts may carry
+			// more elements than the VS consumes, so POSITION+NORMAL suffices.
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto* layout = StaticsInputLayoutFor(descKey, desc);
+			if (!layout)
+				continue;
+			context->IASetInputLayout(layout);
+
+			// Stride comes from the descriptor's low nibble (in dwords); the
+			// same field the game's renderer uses. VertexDesc::GetSize() is NOT
+			// equivalent: it reconstructs from flags assuming 16-byte float
+			// positions, but most SSE meshes store 8-byte half positions, and
+			// the overshot stride shreds vertices into giant garbage triangles.
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
+				logSkip(geometry, "implausible stride/offset");
+				continue;
+			}
+			UINT offset = 0;
+			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+
+			// Smoothed normals (built once per unique mesh): pillow inflation
+			// for flat split-normal surfaces; planks, roofs, pole caps.
+			ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
+			context->VSSetShaderResources(10, 1, &smoothSRV);
+			StaticsCB scb{};
+			FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
+				smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
+			staticsCB->Update(scb);
+
+			// Depth export only where the carve can fire: SnowStaticsShell's
+			// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
+			// cap.road. Everything else writes back the rasterised depth, so
+			// dropping the export leaves the same number in the buffer and hands
+			// early-Z rejection back to the whole pass. The debug spike forces the
+			// no-depth path on every draw, roads included. The prepass twins
+			// mirror the same split so the private depth holds exactly what the
+			// shipping shaders would have written.
+			const bool needsDepth = !staticsEarlyZSpike && (settings.ObjectTrenches || cap.road);
+			if (a_prepass && needsDepth)
+				continue;
+			ID3D11PixelShader* wantPS = a_prepass ? staticsPSPrepassNoDepth :
+			                                        ((!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS);
+			if (wantPS != boundStaticsPS) {
+				context->PSSetShader(wantPS, nullptr, 0);
+				boundStaticsPS = wantPS;
+			}
+			if (prepass && !a_prepass) {
+				ID3D11DepthStencilState* wantDepth = needsDepth ? shellDepthState.get() : shellPrepassMainDepthState.get();
+				if (wantDepth != boundDepthState) {
+					context->OMSetDepthStencilState(wantDepth, 0);
+					boundDepthState = wantDepth;
+				}
+			}
+
+			context->DrawIndexed(indexCount, 0, 0);
 		}
+	};
 
-		// One input layout per distinct vertex descriptor; layouts may carry
-		// more elements than the VS consumes, so POSITION+NORMAL suffices.
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto* layout = StaticsInputLayoutFor(descKey, desc);
-		if (!layout)
-			continue;
-		context->IASetInputLayout(layout);
-
-		// Stride comes from the descriptor's low nibble (in dwords); the
-		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
-		// equivalent: it reconstructs from flags assuming 16-byte float
-		// positions, but most SSE meshes store 8-byte half positions, and
-		// the overshot stride shreds vertices into giant garbage triangles.
-		UINT stride = uint32_t(descKey & 0xF) * 4;
-		if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
-			logSkip(geometry, "implausible stride/offset");
-			continue;
+	if (prepass) {
+		ID3D11RenderTargetView* rawRTVs[8] = {};
+		ID3D11DepthStencilView* rawDSV = nullptr;
+		context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
+		winrt::com_ptr<ID3D11RenderTargetView> rtvs[8];
+		ID3D11RenderTargetView* rtvPtrs[8] = {};
+		for (uint32_t i = 0; i < 8; i++) {
+			rtvs[i].attach(rawRTVs[i]);
+			rtvPtrs[i] = rtvs[i].get();
 		}
-		UINT offset = 0;
-		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+		winrt::com_ptr<ID3D11DepthStencilView> dsv;
+		dsv.attach(rawDSV);
 
-		// Smoothed normals (built once per unique mesh): pillow inflation
-		// for flat split-normal surfaces; planks, roofs, pole caps.
-		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
-		context->VSSetShaderResources(10, 1, &smoothSRV);
-		StaticsCB scb{};
-		FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
-			smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
-		staticsCB->Update(scb);
-
-		// Depth export only where the carve can fire: SnowStaticsShell's
-		// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
-		// cap.road. Everything else writes back the rasterised depth, so
-		// dropping the export leaves the same number in the buffer and hands
-		// early-Z rejection back to the whole pass. The debug spike forces the
-		// no-depth path on every draw, roads included.
-		const bool needsDepth = !staticsEarlyZSpike && (settings.ObjectTrenches || cap.road);
-		ID3D11PixelShader* wantPS = (!needsDepth && staticsPSNoDepth) ? staticsPSNoDepth : staticsPS;
-		if (wantPS != boundStaticsPS) {
-			context->PSSetShader(wantPS, nullptr, 0);
-			boundStaticsPS = wantPS;
+		// The fills export depth, which the viewport clamps to its range; the
+		// main pass's range tops out just under 1.0 and would pull the sky's
+		// cleared depth down with it. Full range for the fills only.
+		D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+		UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+		context->RSGetViewports(&vpCount, vps);
+		D3D11_VIEWPORT fillVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+		for (UINT i = 0; i < vpCount; i++) {
+			fillVps[i] = vps[i];
+			fillVps[i].MinDepth = 0.0f;
+			fillVps[i].MaxDepth = 1.0f;
 		}
+		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source) {
+			context->OMSetRenderTargets(0, nullptr, a_target);
+			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+			context->RSSetState(shellRasterState.get());
+			if (vpCount)
+				context->RSSetViewports(vpCount, fillVps);
+			context->IASetInputLayout(nullptr);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			context->VSSetShader(fillVS, nullptr, 0);
+			context->HSSetShader(nullptr, nullptr, 0);
+			context->DSSetShader(nullptr, nullptr, 0);
+			context->PSSetShaderResources(9, 1, &a_source);
+			context->PSSetShader(fillPS, nullptr, 0);
+			context->Draw(3, 0);
+			ID3D11ShaderResourceView* nullFillSRV = nullptr;
+			context->PSSetShaderResources(9, 1, &nullFillSRV);
+			if (vpCount)
+				context->RSSetViewports(vpCount, vps);
+			if (auto* skinRaster = GetSkinRasterState())
+				context->RSSetState(skinRaster);
+			bindSkinStages();
+		};
 
-		context->DrawIndexed(indexCount, 0, 0);
+		fill(shellTestDepthDSV.get(), mainDepthSRV);
+		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+		context->OMSetDepthStencilState(shellDepthState.get(), 0);
+		drawSkins(true);
+
+		context->OMSetRenderTargets(8, rtvPtrs, shellTestDepthDSV.get());
+		boundDepthState = nullptr;
+		drawSkins(false);
+
+		fill(dsv.get(), shellTestDepthSRV.get());
+		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
+		context->OMSetDepthStencilState(shellDepthState.get(), 0);
+	} else {
+		drawSkins(false);
 	}
 	globals::profiler->EndPass();
 

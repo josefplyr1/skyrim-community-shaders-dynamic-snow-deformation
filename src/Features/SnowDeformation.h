@@ -1172,6 +1172,8 @@ public:
 	Texture2D* shellRasterDepth = nullptr;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
+	/** @brief Read view of shellTestDepth for the object-snow prepass's write-back into the main depth. */
+	winrt::com_ptr<ID3D11ShaderResourceView> shellTestDepthSRV;
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
 	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */
@@ -2034,6 +2036,10 @@ public:
 	ID3D11PixelShader* staticsPS = nullptr;
 	/** @brief Statics PS with the SV_Depth export compiled out, chosen per draw for captures that cannot carve. Only the parallax carve pushes depth, and it is gated on ObjectTrenches or the draw being a road. */
 	ID3D11PixelShader* staticsPSNoDepth = nullptr;
+	/** @brief Depth-prepass twin of the no-export shader (SNOW_STATICS_DEPTH_PREPASS): the alpha cut with no colour and no export. Non-carving skins draw once with it into a private copy of the scene depth, then once with the shipping shader under EQUAL against it, so hardware early-Z admits exactly the pixels the prepass wrote; carving draws keep their own export and LESS_EQUAL in the shading loop, since a shader-computed depth cannot be matched against a second compile of itself; the private depth is then written back. Bit-identical by construction: both passes run the same raster path. */
+	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
+	/** @brief A/B measurement: returns the object skins to their single draw loop. Runtime-only. */
+	bool staticsDepthPrepassDisabled = false;
 	/** @brief Tessellated skin stages (optional; legacy path is the fallback): control-point VS, hull (edge-length/distance factors) and domain (displacement-map relief along the inflate normal). */
 	ID3D11VertexShader* staticsTessVS = nullptr;
 	ID3D11HullShader* staticsHS = nullptr;
