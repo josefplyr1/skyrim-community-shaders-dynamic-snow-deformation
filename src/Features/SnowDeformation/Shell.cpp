@@ -1011,6 +1011,14 @@ void SnowDeformation::DrawShell()
 	// The retired crisp-grain pair: the landscape half now carries the A/B
 	// flags, the Obj half is a layout keeper.
 	cbData.DebugNoFarPad = lodDebugNoFarPad ? 1.0f : 0.0f;
+	{
+		// Pixels per world unit at distance d = focalPx / d, with
+		// focalPx = half the screen height times the projection's y scale.
+		const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
+		const float focalPx = 0.5f * static_cast<float>(globals::game::graphicsState->screenHeight) * eye.projMat(1, 1);
+		const float capPx = std::clamp(settings.SkinTessCapPx, 0.0f, 64.0f);
+		cbData.SkinTessCapSlope = (focalPx > 1.0f && capPx > 0.0f) ? capPx / focalPx : 0.0f;
+	}
 	cbData.DebugNoDataMorph = lodDebugNoDataMorph ? 1.0f : 0.0f;
 	// Object trench detail follows the landscape set. The CB rows stay because
 	// both shells read them.

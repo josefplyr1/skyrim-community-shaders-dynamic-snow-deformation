@@ -592,6 +592,8 @@ public:
 		float SkinDepthBias = 64.0f;
 		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
 		float SkinSlopeDepthBias = 0.0f;
+		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. */
+		float SkinTessCapPx = 4.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
@@ -988,7 +990,8 @@ public:
 
 		/** @brief Multiplier on the dune field's wavelengths (>1 = broader, calmer waves). */
 		float UndulationScale;
-		float padTrenchFloorFade;
+		/** @brief Object-skin tessellation cap as world units per unit of camera distance: SkinTessCapPx / focal length in pixels. 0 = off. */
+		float SkinTessCapSlope;
 		/** @brief LLF cluster buffers bound at t35-t37, point-shadow table at t38 (point lights on the shells). */
 		float PointLightsActive;
 		/** @brief Skylighting probe volume bound at t50 (ambient parity with terrain). */

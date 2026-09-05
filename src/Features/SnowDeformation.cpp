@@ -146,6 +146,7 @@
 	X(RangeSkinsGeometryM) \
 	X(SkinDepthBias) \
 	X(SkinSlopeDepthBias) \
+	X(SkinTessCapPx) \
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
 	X(ProjDepthDensity) \

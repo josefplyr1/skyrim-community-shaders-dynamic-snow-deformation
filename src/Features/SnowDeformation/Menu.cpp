@@ -285,6 +285,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSsb = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_slope_depth_bias_tooltip"), "The part of the depth bias that grows with how steeply a face is seen. Faces at a grazing angle cover a large depth range per pixel and fight hardest; this scales the nudge with that slope. Capped internally so no angle can push the layer far in front of its object."));
 
+		ImGui::SliderFloat(T(TKEY("skin_tess_cap_px"), "Object Snow Tessellation Cap"), &settings.SkinTessCapPx, 0.0f, 32.0f, "%.0f px");
+		if (auto _ttStc = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "The object snow layer is subdivided so that its rounded rims get enough vertices; at a distance those vertices end up smaller than a pixel and cost GPU time for nothing visible. This is the smallest on-screen size a subdivision segment may have, in pixels. 0 turns the cap off. Up to about 20 it only trims the rims at range; above that it coarsens the whole layer. Read the Object snow line under Pipeline Statistics to see the DS count fall."));
+
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
 		ImGui::Checkbox(T(TKEY("proj_mask_placement"), "Authored Snow Placement"), &settings.ProjMaskPlacement);

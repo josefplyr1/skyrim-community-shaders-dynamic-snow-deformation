@@ -114,7 +114,7 @@ cbuffer ShellCB : register(b0)
 
 	// Multiplier on the dune field's wavelengths (landscape shell only).
 	float UndulationScale;
-	float padTrenchFloorFade;
+	float SkinTessCapSlope;  // skin tess: min segment length per unit of camera distance (0 = off)
 	// LLF cluster buffers bound at t35-t37, point-shadow table at t38.
 	float PointLightsActive;
 	// Skylighting probe volume bound at t50.
@@ -2357,6 +2357,9 @@ float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 		                 (1.0 - smoothstep(1200.0, 2400.0, dist));
 		targetLen = lerp(targetLen, 1.0, rimBoost);
 	}
+	// Pixel floor: a segment is never shorter on screen than the cap. Zero
+	// off; below the base rule's ~20 px it only trims the rim term at range.
+	targetLen = max(targetLen, dist * SkinTessCapSlope);
 	// Retire subdivision over the geometry range, reaching no subdivision at
 	// the distance where the layer itself has collapsed.
 	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, dist);
