@@ -885,7 +885,7 @@ void SnowDeformation::DrawShell()
 	// nearer than its object - a third of a unit on a rock, two thousand on
 	// a mountain at 450 m, in front of the mist meant to wrap it (RenderDoc
 	// pixel history against re-rasterised triangles, 2026-09-04).
-	if (prevViewportCount && mainViewportFrame == globals::state->frameCount) {
+	if (prevViewportCount && mainViewportFrame == globals::state->frameCount && !shellMainViewportRangeDisabled) {
 		D3D11_VIEWPORT shellViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 		for (UINT i = 0; i < prevViewportCount; i++) {
 			shellViewports[i] = prevViewports[i];

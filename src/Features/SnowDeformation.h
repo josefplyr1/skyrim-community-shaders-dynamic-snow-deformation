@@ -1240,6 +1240,9 @@ public:
 	/** @brief A/B measurement: forces the shell back to one draw with the depth export, so the split's win can be read against it. Runtime-only. */
 	bool shellSplitDisabled = false;
 
+	/** @brief A/B measurement: draws the shells through the viewport bound at DrawShell time (the deferred span's decal cap) instead of the main pass's depth range, so the range fix can be read against the ~3e-5 NDC bias it removed. Runtime-only. */
+	bool shellMainViewportRangeDisabled = false;
+
 	/** @brief A/B measurement: drops the shell's SV_DepthLessEqual export outright (single no-export draw, no far-field clamp). Demoted from a setting 2026-08-27: with the split draw on by default there is no configuration where turning the clamp off is a good trade, so it is an instrument, not a choice. Runtime-only; forces a PS recompile. */
 	bool shellDepthClampDisabled = false;
 

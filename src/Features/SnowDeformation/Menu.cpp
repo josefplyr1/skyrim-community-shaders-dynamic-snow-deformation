@@ -1137,6 +1137,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttGridIdx = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
 
+		ImGui::Checkbox(T(TKEY("shell_main_viewport_range_disabled"), "Shell: Decal Viewport Depth Range"), &shellMainViewportRangeDisabled);
+		if (auto _ttVpRange = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_main_viewport_range_disabled_tooltip"), "Measurement aid: draws every shell through the viewport bound when the deferred span ends (the blended decals' cap, max depth ~3e-5 under the main pass's) instead of the main pass's own depth range. That cap used to put every shell slightly nearer than its object - a third of a unit on a rock at 4 m, thousands of units on a mountain at 450 m. Off, shells write the same depth the game wrote for the same mesh. Flip it with the camera held still to read what the range fix changed about distant object snow."));
+
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
