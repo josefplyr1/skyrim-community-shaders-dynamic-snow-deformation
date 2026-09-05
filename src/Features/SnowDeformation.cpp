@@ -1923,13 +1923,6 @@ void SnowDeformation::ClearShaderCache()
 	terrainFineCB = nullptr;
 	delete shellTerrainFine;
 	shellTerrainFine = nullptr;
-	delete shellTerrainFineMax1;
-	shellTerrainFineMax1 = nullptr;
-	delete shellTerrainFineMax2;
-	shellTerrainFineMax2 = nullptr;
-	if (terrainFineMaxCS)
-		terrainFineMaxCS->Release();
-	terrainFineMaxCS = nullptr;
 	shellFineValid = false;
 	if (hiZBuildCS)
 		hiZBuildCS->Release();

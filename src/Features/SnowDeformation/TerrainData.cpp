@@ -580,15 +580,6 @@ ID3D11ComputeShader* SnowDeformation::GetTerrainFineCS()
 	return terrainFineCS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetTerrainFineMaxCS()
-{
-	if (!terrainFineMaxCS) {
-		logger::debug("Compiling DepthSyncCS TerrainFineMaxCS");
-		terrainFineMaxCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "TerrainFineMaxCS"));
-	}
-	return terrainFineMaxCS;
-}
-
 void SnowDeformation::BuildTerrainFineWindow()
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
@@ -620,17 +611,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 			.Texture2D = { .MipSlice = 0 }
 		};
 		shellTerrainFine->CreateUAV(uavDesc);
-		// The two maxima, one texture per level: a level is read while the next
-		// is written, and a texture cannot be both in one dispatch.
-		Texture2D** maxes[2] = { &shellTerrainFineMax1, &shellTerrainFineMax2 };
-		for (int level = 0; level < 2; level++) {
-			D3D11_TEXTURE2D_DESC md = desc;
-			md.Width = kShellFineDim >> (level + 1);
-			md.Height = kShellFineDim >> (level + 1);
-			*maxes[level] = new Texture2D(md, level ? "SnowDeformation::ShellTerrainFineMax2" : "SnowDeformation::ShellTerrainFineMax1");
-			(*maxes[level])->CreateSRV(srvDesc);
-			(*maxes[level])->CreateUAV(uavDesc);
-		}
 	}
 	if (!terrainFineCB)
 		terrainFineCB = new ConstantBuffer(ConstantBufferDesc<TerrainFineCB>(), "SnowDeformation::TerrainFineCB");
@@ -672,22 +652,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 	context->CSSetShaderResources(8, 1, &nullSRV);
 	context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
 
-	// Far-band maxima: fine -> 64-unit -> 128-unit.
-	auto* maxCS = GetTerrainFineMaxCS();
-	if (maxCS && shellTerrainFineMax1 && shellTerrainFineMax2 && shellTerrainFineMax1->uav && shellTerrainFineMax2->uav) {
-		context->CSSetShader(maxCS, nullptr, 0);
-		Texture2D* chain[3] = { shellTerrainFine, shellTerrainFineMax1, shellTerrainFineMax2 };
-		for (int level = 1; level < 3; level++) {
-			ID3D11ShaderResourceView* msrc = chain[level - 1]->srv.get();
-			ID3D11UnorderedAccessView* mdst = chain[level]->uav.get();
-			context->CSSetShaderResources(9, 1, &msrc);
-			context->CSSetUnorderedAccessViews(6, 1, &mdst, nullptr);
-			const uint32_t dim = kShellFineDim >> level;
-			context->Dispatch((dim + 7) / 8, (dim + 7) / 8, 1);
-			context->CSSetShaderResources(9, 1, &nullSRV);
-			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
-		}
-	}
 	context->CSSetShader(nullptr, nullptr, 0);
 	shellFineValid = true;
 }
@@ -1005,8 +969,8 @@ void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
 	const int fineCellY0 = int(std::lround(shellFineOriginY / cellSize));
 	const float windowOriginX = shellWindowCellX * cellSize;
 	const float windowOriginY = shellWindowCellY * cellSize;
-	std::string out = std::format("fine probe: GridOrigin ({:.0f},{:.0f}) FineWindow ({:.0f},{:.0f},{:.0f},{:.0f}) fineOrigin ({:.0f},{:.0f}) windowOrigin ({:.0f},{:.0f}) GridToTerrainOffset ({:.0f},{:.0f})\n",
-		a_cb.GridOrigin.x, a_cb.GridOrigin.y, a_cb.FineWindow.x, a_cb.FineWindow.y, a_cb.FineWindow.z, a_cb.FineWindow.w,
+	std::string out = std::format("fine probe: ShellFlags {} morphOff {:.0f} GridOrigin ({:.0f},{:.0f}) FineWindow ({:.0f},{:.0f},{:.0f},{:.0f}) fineOrigin ({:.0f},{:.0f}) windowOrigin ({:.0f},{:.0f}) GridToTerrainOffset ({:.0f},{:.0f})\n",
+		a_cb.ShellFlags.x, a_cb.DebugNoDataMorph, a_cb.GridOrigin.x, a_cb.GridOrigin.y, a_cb.FineWindow.x, a_cb.FineWindow.y, a_cb.FineWindow.z, a_cb.FineWindow.w,
 		shellFineOriginX, shellFineOriginY, windowOriginX, windowOriginY, a_cb.GridToTerrainOffset.x, a_cb.GridToTerrainOffset.y);
 
 	// A: window texels against the baked cells, over the fine window's cells.

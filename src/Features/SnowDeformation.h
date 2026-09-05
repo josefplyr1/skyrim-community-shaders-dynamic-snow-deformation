@@ -928,13 +928,6 @@ public:
 	static constexpr float kShellFineTexel = 32.0f;
 	static constexpr int kShellFineDim = kShellFineCells * 128;
 	Texture2D* shellTerrainFine = nullptr;
-	/** @brief 2x2 and 4x4 maxima of shellTerrainFine (64- and 128-unit texels, TerrainFineMaxCS): the far bands' conservative ground, so a chord across several land quads clears the surface by construction. */
-	Texture2D* shellTerrainFineMax1 = nullptr;
-	Texture2D* shellTerrainFineMax2 = nullptr;
-	ID3D11ComputeShader* terrainFineMaxCS = nullptr;
-	ID3D11ComputeShader* GetTerrainFineMaxCS();
-	/** @brief The rejected far-band fix, opt-in for comparison (ShellFlags.x bit 4): far vertices take the highest ground within their span. A box maximum is piecewise constant, so it terraces on slopes and buries rocks and NPCs on rough ground (Josef, 2026-09-05). Runtime-only. */
-	bool shellFarMaxLift = false;
 	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
 	bool shellFarTessDisabled = false;
 	float shellFineOriginX = 0.0f;

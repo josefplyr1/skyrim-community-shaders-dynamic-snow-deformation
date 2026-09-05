@@ -1215,10 +1215,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFarTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_far_tess_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground - the distant holes. With this off, the shell checks each far square against the real ground and subdivides the ones where the ground bulges above the span, so every added vertex sits exactly on the ground; flat ground costs nothing. On restores the plain squares."));
 
-		ImGui::Checkbox(T(TKEY("shell_far_max_lift"), "Shell: Far-Band Ground Max (lift, rejected)"), &shellFarMaxLift);
-		if (auto _ttFarMax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_far_max_lift_tooltip"), "The first attempt at the distant holes, kept for comparison: each far vertex stands on the highest ground within its own span. It terraces on slopes and lifts the snow over rocks and people on rough ground, which is why it is off; the relief tessellation above replaced it."));
-
 		ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Shell: Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
 		if (auto _ttDiag = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell now matches that split. The hardware's own choice of diagonal is assumed; if a checkerboard of sag shows on the 32-unit band around 1,600-1,900 units in the height-delta view, this toggle is the other guess."));

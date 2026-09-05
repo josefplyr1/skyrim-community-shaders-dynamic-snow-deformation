@@ -232,8 +232,6 @@ Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float> TerrainFine : register(t13);
 // 2x2 and 4x4 maxima of TerrainFine (64- and 128-unit texels): the far bands'
 // conservative ground, see SampleTerrain.
-Texture2D<float> TerrainFineMax1 : register(t24);
-Texture2D<float> TerrainFineMax2 : register(t26);
 Texture2D<float4> DeformationMap : register(t1);
 
 // Toroidal map fetch: logical texel (already clamped by the caller) to
@@ -475,36 +473,6 @@ float3 SampleTerrain(float2 gridLocal)
 		[flatten] if (fine > -50000.0)
 			result.x = fine;
 
-		// Far-band ground maximum - OPT-IN (bit 4), rejected by Josef 2026-09-05
-		// as shipped default: a box maximum is piecewise constant, so on any
-		// slope it terraces, and on rough ground it lifts by whatever falls in
-		// the box (hid rocks and NPCs, moved the snow line). Kept as an A/B
-		// against the tessellation route that replaced it (see the hull).
-		{
-			float bandStep = ShellBandStep(gridLocal);
-			[branch] if (bandStep >= 64.0 && (ShellFlags.x & 16) != 0)
-			{
-				bool coarse = bandStep >= 128.0;
-				float texel = coarse ? 128.0 : 64.0;
-				float dim = FineWindow.z * FineWindow.w / texel;
-				float2 fp = FineWindow.xy + gridLocal;
-				int2 c0 = (int2)floor((fp - bandStep) / texel);
-				int2 c1 = (int2)floor((fp + bandStep - 0.5) / texel);
-				c0 = clamp(c0, 0, (int)dim - 1);
-				c1 = clamp(c1, 0, (int)dim - 1);
-				float hi = -1e30;
-				float lo = 1e30;
-				for (int y = c0.y; y <= c1.y; y++)
-					for (int x = c0.x; x <= c1.x; x++)
-					{
-						float v = coarse ? TerrainFineMax2.Load(int3(x, y, 0)) : TerrainFineMax1.Load(int3(x, y, 0));
-						hi = max(hi, v);
-						lo = min(lo, v);
-					}
-				[flatten] if (lo > -50000.0)
-					result.x = max(result.x, hi);
-			}
-		}
 	}
 	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
