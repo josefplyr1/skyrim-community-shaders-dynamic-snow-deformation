@@ -594,6 +594,8 @@ public:
 		float SkinSlopeDepthBias = 0.0f;
 		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. 16 measured -0.32 ms on StaticsShell with no visible change (PERF-RESEARCH 9.6); 32 is the tier value. */
 		float SkinTessCapPx = 16.0f;
+		/** @brief Landscape shell slope drape, 0-1: how far the layer's stand-off turns from straight up toward the ground normal as the slope steepens (30 to 60 degrees). A vertical-only offset thins to depth*cos(slope) and steep faces show through. */
+		float SlopeDrape = 1.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
@@ -1089,6 +1091,8 @@ public:
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
+		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30). */
+		float4 SlopeDrape;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

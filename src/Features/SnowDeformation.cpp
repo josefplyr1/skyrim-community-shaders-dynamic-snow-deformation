@@ -147,6 +147,7 @@
 	X(SkinDepthBias) \
 	X(SkinSlopeDepthBias) \
 	X(SkinTessCapPx) \
+	X(SlopeDrape) \
 	X(ObjectTrenches) \
 	X(ProjMaskPlacement) \
 	X(ProjDepthDensity) \

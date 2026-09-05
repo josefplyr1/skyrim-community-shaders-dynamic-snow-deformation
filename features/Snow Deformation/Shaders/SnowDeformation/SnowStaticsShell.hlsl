@@ -180,6 +180,7 @@ cbuffer ShellCB : register(b0)
 	int2 ShellFlags;  // x bit 0: horizon march on (see SnowShell.hlsl)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
+	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)

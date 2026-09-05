@@ -285,6 +285,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSsb = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_slope_depth_bias_tooltip"), "The part of the depth bias that grows with how steeply a face is seen. Faces at a grazing angle cover a large depth range per pixel and fight hardest; this scales the nudge with that slope. Capped internally so no angle can push the layer far in front of its object."));
 
+		ImGui::SliderFloat(T(TKEY("slope_drape"), "Slope Drape"), &settings.SlopeDrape, 0.0f, 1.0f, "%.2f");
+		if (auto _ttDrape = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("slope_drape_tooltip"), "How the snow layer stands off steep ground. At 0 it is always lifted straight up, so on a near-vertical face the cover thins to almost nothing and the rock shows through in diagonal gaps. At 1 the lift turns toward the surface as the ground steepens (from 30 degrees, fully by 60), so the layer keeps its full depth in front of the face - the way snow plasters a mountainside rather than only sitting on top of it. Landscape shell only."));
+
 		ImGui::SliderFloat(T(TKEY("skin_tess_cap_px"), "Object Snow Tessellation Cap"), &settings.SkinTessCapPx, 0.0f, 32.0f, "%.0f px");
 		if (auto _ttStc = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "The object snow layer is subdivided so that its rounded rims get enough vertices; at a distance those vertices end up smaller than a pixel and cost GPU time for nothing visible. This is the smallest on-screen size a subdivision segment may have, in pixels. 0 turns the cap off. Up to about 20 it only trims the rims at range; above that it coarsens the whole layer. Read the Object snow line under Pipeline Statistics to see the DS count fall."));

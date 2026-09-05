@@ -205,6 +205,7 @@ cbuffer ShellCB : register(b0)
 	// Land-exact height layer: xy = GridOrigin - fine window origin (world),
 	// z = fine dim in texels (0 = none), w = fine texel size (32).
 	float4 FineWindow;
+	float4 SlopeDrape;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -1217,6 +1218,19 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 		z = ShellCameraPosAdjust.z;
 
 	float3 absolutePos = float3(GridOrigin + gridLocal, z);
+	// Slope drape (Josef's sketch, 2026-09-05): on steep ground the layer
+	// stands off along the surface normal instead of straight up, so a
+	// near-vertical face keeps the full depth of cover in front of it. A
+	// vertical-only offset thins to depth*cos(slope) and the face shows
+	// through. The foot (gridLocal) stays on the lattice; only the output
+	// position moves, so every sample still reads the vertex's own ground.
+	[branch] if (SlopeDrape.x > 0.001 && z > terrainHeight)
+	{
+		float above = z - terrainHeight;
+		float tilt = SlopeDrape.x * (1.0 - smoothstep(SlopeDrape.y, SlopeDrape.z, terrainNormal.z));
+		float3 dir = normalize(lerp(float3(0.0, 0.0, 1.0), terrainNormal, tilt));
+		absolutePos = float3(GridOrigin + gridLocal, terrainHeight) + dir * above;
+	}
 
 	// Shader world space is camera-relative; previous frame uses its own adjust.
 	float3 rel = absolutePos - ShellCameraPosAdjust.xyz;
