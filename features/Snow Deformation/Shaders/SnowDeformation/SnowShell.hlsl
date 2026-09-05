@@ -515,6 +515,23 @@ float3 SampleTerrain(float2 gridLocal)
 	return result;
 }
 
+// Height as the terrain window's plain bilinear reads it: the object field's
+// own base (HeightMapProcessCS SampleTerrainHeight), so a lift measured
+// against it is the field's excess and nothing else.
+float SampleTerrainBilinearHeight(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
 // Bilinear helper at fractional texel coordinates (Load-based).
 float SampleDeformationBilinear(float2 t, float2 dims)
 {
@@ -744,14 +761,10 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 // the lift actually starts, so a few taps carry it.
 bool ShellObjectLiftsAt(float2 gridLocal)
 {
-	float2 dims;
-	bool valid;
-	float2 t = ObjectMapTexel(GridOrigin + gridLocal, dims, valid);
-	[branch] if (!valid)
+	float field = SampleObjectHeight(GridOrigin + gridLocal);
+	[branch] if (field < -50000.0)
 		return false;
-	float field = ObjectHeights.Load(int3((int2)t, 0));
-	float ground = TerrainWindow.Load(int3((int2)clamp((GridToTerrainOffset + gridLocal) / TerrainTexelSize, 0.0, (float)(TerrainDim - 1)), 0)).x;
-	return field - ground > kBareLiftMargin;
+	return field - SampleTerrainBilinearHeight(gridLocal) > kBareLiftMargin;
 }
 
 bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
@@ -1109,17 +1122,21 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				// misses bare landscape classes and raises a rim where the
 				// shell meets dirt.
 				float groundSnow = smoothstep(0.1, 0.45, coverage) * (1.0 - saturate(shelterMask.x));
-				field = lerp(min(field, terrainHeight), field, groundSnow);
+				// The lift is the field's excess over its OWN base, the window's
+				// bilinear height - not over the height the shell stands on.
+				// With the land-exact layer those differ by the whole chord
+				// error, and max(exact, bilinear) is an envelope creased along
+				// the 128-unit lattice (stripes, lifted hollows, forced snow).
+				float lift = max(field - SampleTerrainBilinearHeight(gridLocal), 0.0) * groundSnow;
 				// Where a captured object defines the surface, the layer wears
 				// the object's own skin depth instead of the landscape class
 				// depth (a thin-skinned rock must not carry a deep landscape
 				// layer). Blend by how far the object stands proud of the
 				// un-lifted base, so buried objects and the aprons around them
 				// keep landscape depth.
-				float lift = field - terrainHeight;
 				float capT = smoothstep(0.25, 1.0, lift / max(rampDepth, 1.0));
 				rampDepth = lerp(rampDepth, min(rampDepth, SampleObjectDepthCap(worldXY)), capT);
-				terrainHeight = max(terrainHeight, field);
+				terrainHeight += lift;
 				// Drift failsafe: a field standing well proud IS snow. Force
 				// coverage and a minimum depth so banks raised over bare or
 				// low-coverage ground (dirt patches at walls) never dither into
