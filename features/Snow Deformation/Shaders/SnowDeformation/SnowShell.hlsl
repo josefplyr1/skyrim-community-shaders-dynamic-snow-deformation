@@ -196,8 +196,13 @@ cbuffer ShellCB : register(b0)
 	// Toroidal deformation-map addressing: physical position of logical
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
-	// x bit 0: heightfield horizon march on. Mirror in SnowDeformation.h.
+	// x bit 0 horizon march, bit 1 frustum cull, bit 2 land-exact height OFF,
+	// bit 3 flip tess diagonal sense. Mirror in SnowDeformation.h.
 	int2 ShellFlags;
+
+	// Land-exact height layer: xy = GridOrigin - fine window origin (world),
+	// z = fine dim in texels (0 = none), w = fine texel size (32).
+	float4 FineWindow;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -218,6 +223,11 @@ cbuffer BowWaveCB : register(b1)
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
+// The ground as the engine renders it: bicubic Catmull-Rom of the LAND
+// heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
+// The land mesh is then flat between these points with a checkerboard
+// diagonal, which SampleTerrain reproduces.
+Texture2D<float> TerrainFine : register(t13);
 Texture2D<float4> DeformationMap : register(t1);
 
 // Toroidal map fetch: logical texel (already clamped by the caller) to
@@ -413,6 +423,32 @@ float3 SampleTerrain(float2 gridLocal)
 	// gap instead.
 	[flatten] if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
 		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
+
+	// Land-exact height: the rendered ground is piecewise-linear between the
+	// 32-unit vertices of the fine layer, split '/' (h00-h11) where the world
+	// 32-quad index sum is even and '\' otherwise; the fine origin is a cell
+	// corner, so the texel index sum carries the same parity. Outside the fine
+	// window, or over missing data, the 128-texel height above stands.
+	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
+	{
+		float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
+		[branch] if (all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
+		{
+			int2 f0 = (int2)tf;
+			float2 ff = tf - f0;
+			float g00 = TerrainFine.Load(int3(f0, 0));
+			float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
+			float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
+			float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
+			[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
+			{
+				bool slash = ((f0.x + f0.y) & 1) == 0;
+				float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
+				float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
+				result.x = slash ? hA : hB;
+			}
+		}
+	}
 	// the accumulated layer scales depth HERE, at the one point
 	// every reader funnels through, so geometry, shading, the berm gate and the
 	// self-shadow march cannot disagree about how deep the snow is. Positive
@@ -1289,8 +1325,18 @@ TessControlPoint main(uint vertexID : SV_VertexID)
 	uint quadIndex = vertexID / 4;
 	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
 
+	// The tessellator splits a factor-1 quad along its domain (0,0)-(1,1)
+	// diagonal. Rotating the corner order by one puts that diagonal on the
+	// other world diagonal, so each patch can take its land quad's split:
+	// '/' where the world 32-quad index sum is even. Bit 3 flips the sense
+	// (the tessellator's own diagonal is assumed, not documented).
+	float2 gl0 = ShellGridVertexLocal(quadXY);
+	int2 q = (int2)floor((gl0 + 0.5) / 32.0);
+	bool slash = ((q.x + q.y) & 1) == 0;
+	bool flip = (ShellFlags.x & 8) != 0;
+	uint rot = (slash != flip) ? 0u : 1u;
 	TessControlPoint cp;
-	cp.GridXY = quadXY + kPatchCorners[vertexID % 4];
+	cp.GridXY = quadXY + kPatchCorners[(vertexID + rot) % 4];
 	cp.GridLocal = ShellGridVertexLocal(cp.GridXY);
 	return cp;
 }

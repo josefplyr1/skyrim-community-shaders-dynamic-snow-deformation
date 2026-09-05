@@ -237,6 +237,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetHiZBuildCS(); },
 		[&] { GetSkinCullCS(); },
 		[&] { GetClusterCullCS(); },
+		[&] { GetTerrainFineCS(); },
 		[&] { GetExclusionFieldCS(); },
 		[&] { GetBermFieldCS(); },
 		[&] { GetBermFieldTiledCS(); },

@@ -568,6 +568,91 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		shellUploadScratch.data(), kShellWindowDim * 4 * sizeof(float), 0);
 
 	FillShellWindowFromHeightmap();
+	BuildTerrainFineWindow();
+}
+
+ID3D11ComputeShader* SnowDeformation::GetTerrainFineCS()
+{
+	if (!terrainFineCS) {
+		logger::debug("Compiling DepthSyncCS TerrainFineCS");
+		terrainFineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "TerrainFineCS"));
+	}
+	return terrainFineCS;
+}
+
+void SnowDeformation::BuildTerrainFineWindow()
+{
+	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
+	shellFineValid = false;
+	auto* cs = GetTerrainFineCS();
+	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv)
+		return;
+	auto context = globals::d3d::context;
+	if (!shellTerrainFine) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = kShellFineDim;
+		desc.Height = kShellFineDim;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R32_FLOAT;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		shellTerrainFine = new Texture2D(desc, "SnowDeformation::ShellTerrainFine");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		shellTerrainFine->CreateSRV(srvDesc);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		shellTerrainFine->CreateUAV(uavDesc);
+	}
+	if (!terrainFineCB)
+		terrainFineCB = new ConstantBuffer(ConstantBufferDesc<TerrainFineCB>(), "SnowDeformation::TerrainFineCB");
+	if (!shellTerrainFine->srv || !shellTerrainFine->uav)
+		return;
+
+	// Nine cells centred on the camera's: the shell's seam is at most 14,336
+	// units out, and four whole cells either side is at least 16,384.
+	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+	const int camCellX = (int)std::floor(eye.x / cellSize);
+	const int camCellY = (int)std::floor(eye.y / cellSize);
+	shellFineOriginX = float(camCellX - kShellFineCells / 2) * cellSize;
+	shellFineOriginY = float(camCellY - kShellFineCells / 2) * cellSize;
+
+	TerrainFineCB cb{};
+	cb.FineOriginWorld = { shellFineOriginX, shellFineOriginY };
+	cb.WindowOriginWorld = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
+	cb.FineDim = kShellFineDim;
+	cb.WindowDim = kShellWindowDim;
+	cb.TexelSize = kShellVertexSpacing;
+	cb.FineTexel = kShellFineTexel;
+	terrainFineCB->Update(cb);
+
+	ID3D11Buffer* cbuf = terrainFineCB->CB();
+	ID3D11ShaderResourceView* src = shellTerrainTexture->srv.get();
+	ID3D11UnorderedAccessView* dst = shellTerrainFine->uav.get();
+	context->CSSetConstantBuffers(1, 1, &cbuf);
+	context->CSSetShaderResources(8, 1, &src);
+	context->CSSetUnorderedAccessViews(5, 1, &dst, nullptr);
+	context->CSSetShader(cs, nullptr, 0);
+	globals::profiler->BeginPass("SnowDeformation::TerrainFine");
+	context->Dispatch((kShellFineDim + 7) / 8, (kShellFineDim + 7) / 8, 1);
+	globals::profiler->EndPass();
+	ID3D11Buffer* nullCB = nullptr;
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetConstantBuffers(1, 1, &nullCB);
+	context->CSSetShaderResources(8, 1, &nullSRV);
+	context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+	shellFineValid = true;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()

@@ -496,6 +496,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		heightTopFiltered ? heightTopFiltered->srv.get() : nullptr,
 		heightBottomFiltered ? heightBottomFiltered->srv.get() : nullptr };
 	context->VSSetShaderResources(0, 6, vsSRVs);
+	// The land-exact height layer (t13): the caster must stand on the same
+	// ground as the visible shell or it shadows its own snow.
+	ID3D11ShaderResourceView* casterFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+	context->VSSetShaderResources(13, 1, &casterFineSRV);
 	// ShellSurfaceZ's berm term reads the bake at t14; without it the caster
 	// geometry would lose its berms and undercut the shadows of the shell it
 	// is meant to match.
@@ -811,6 +815,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		ID3D11ShaderResourceView* nullBermSRV = nullptr;
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
+		context->VSSetShaderResources(13, 1, &nullBermSRV);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
 		// The skin casters' map set.
 		ID3D11ShaderResourceView* skinSrvs[4];

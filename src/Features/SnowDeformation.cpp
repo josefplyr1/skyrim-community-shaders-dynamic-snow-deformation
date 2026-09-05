@@ -1916,6 +1916,14 @@ void SnowDeformation::ClearShaderCache()
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (terrainFineCS)
+		terrainFineCS->Release();
+	terrainFineCS = nullptr;
+	delete terrainFineCB;
+	terrainFineCB = nullptr;
+	delete shellTerrainFine;
+	shellTerrainFine = nullptr;
+	shellFineValid = false;
 	if (hiZBuildCS)
 		hiZBuildCS->Release();
 	hiZBuildCS = nullptr;

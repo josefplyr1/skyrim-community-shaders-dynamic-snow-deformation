@@ -285,6 +285,72 @@ uint TestProjectedBox(float2 lo, float2 hi, float zn)
 	SkinArgs.Store(base + 16, reason);
 }
 
+// ---------------------------------------------------------------------------
+// Land-exact height layer. Skyrim renders each cell's ground as a 129x129
+// mesh built from the 33x33 LAND heightmap by uniform bicubic Catmull-Rom at
+// quarter steps, extrapolating linearly across the cell edge instead of
+// reading the neighbour (measured to 0.00 in-cell and 0.08 at the edges by
+// the landscape probe). This pass evaluates exactly that rule from the
+// 128-texel terrain window into a 32-texel window, so the shell can stand
+// on the ground the player sees rather than on a chord through its samples.
+cbuffer TerrainFineCB : register(b1)
+{
+	float2 FineOriginWorld;
+	float2 WindowOriginWorld;
+	uint FineDim;
+	uint WindowDim;
+	float TexelSize;  // 128
+	float FineTexel;  // 32
+}
+Texture2D<float4> FineSrcWindow : register(t8);
+RWTexture2D<float> FineDest : register(u5);
+
+float FineCatmull(float p0, float p1, float p2, float p3, float t)
+{
+	return 0.5 * (2.0 * p1 + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t * t + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t * t * t);
+}
+
+[numthreads(8, 8, 1)] void TerrainFineCS(uint3 id : SV_DispatchThreadID)
+{
+	if (any(id.xy >= FineDim))
+		return;
+	float2 world = FineOriginWorld + float2(id.xy) * FineTexel;
+	// Both origins are multiples of the texel, so this is exact.
+	float2 uf = (world - WindowOriginWorld) / TexelSize;
+	int2 i = (int2)floor(uf);
+	float2 f = uf - float2(i);
+	// The quad's cell, 32 texels per cell with the window origin on a corner
+	// (shifts, not a divide: fxc flags integer division as slow).
+	int2 lo = (i >> 5) << 5;
+	int2 hi = lo + 32;
+	float h[4][4];
+	bool missing = false;
+	[unroll] for (int j = 0; j < 4; j++)
+	{
+		[unroll] for (int k = 0; k < 4; k++)
+		{
+			int2 sIdx = i + int2(k - 1, j - 1);
+			int2 c = clamp(sIdx, lo, hi);  // edge vertex when outside the cell
+			int2 m = 2 * c - sIdx;         // its reflection back inside
+			int2 wm = int2(WindowDim - 1, WindowDim - 1);
+			float he = FineSrcWindow.Load(int3(clamp(c, int2(0, 0), wm), 0)).x;
+			float hm = FineSrcWindow.Load(int3(clamp(m, int2(0, 0), wm), 0)).x;
+			if (he < -50000.0 || hm < -50000.0)
+				missing = true;
+			h[j][k] = any(sIdx != c) ? 2.0 * he - hm : he;
+		}
+	}
+	float outH = -100000.0;
+	[branch] if (!missing)
+	{
+		float rows[4];
+		[unroll] for (int r = 0; r < 4; r++)
+			rows[r] = FineCatmull(h[r][0], h[r][1], h[r][2], h[r][3], f.x);
+		outH = FineCatmull(rows[0], rows[1], rows[2], rows[3], f.y);
+	}
+	FineDest[id.xy] = outH;
+}
+
 #ifdef SNOW_CLUSTER_CULL
 // ---------------------------------------------------------------------------
 // Cluster cull. Skyrim precombines exterior meshes, so a single "object" is

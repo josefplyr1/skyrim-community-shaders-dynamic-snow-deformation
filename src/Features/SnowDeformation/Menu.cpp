@@ -1207,6 +1207,18 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFrustum = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_frustum_cull_disabled_tooltip"), "Measurement aid: builds the whole snow grid every frame, including the three quarters of it that lie outside the view. Snow you cannot see draws no pixels either way - the card throws those triangles away - so skipping them earlier changes nothing on screen, and it saves the subdivision and the map sampling they would have cost. Shadows are unaffected: snow behind the camera is drawn separately from the sun's point of view and is never skipped. Hold the camera still and read the Shell row and the pipeline statistics."));
 
+		ImGui::Checkbox(T(TKEY("shell_land_height_disabled"), "Shell: Disable Land-Exact Height"), &shellLandHeightDisabled);
+		if (auto _ttLand = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
+
+		ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Shell: Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
+		if (auto _ttDiag = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell now matches that split. The hardware's own choice of diagonal is assumed; if a checkerboard of sag shows on the 32-unit band around 1,600-1,900 units in the height-delta view, this toggle is the other guess."));
+
+		ImGui::Checkbox(T(TKEY("shell_old_union_jack"), "Shell: Old Union-Jack Grid"), &shellOldUnionJack);
+		if (auto _ttUJ = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_old_union_jack_tooltip"), "A/B for the non-tessellated grid: draws with the previous alternating diagonals, which did not follow the ground's own split, instead of the land-matched index buffer."));
+
 		ImGui::Checkbox(T(TKEY("statics_depth_prepass_disabled"), "Object Snow: Disable Depth Prepass"), &staticsDepthPrepassDisabled);
 		if (auto _ttStaticsPrepass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));

@@ -178,6 +178,8 @@ cbuffer ShellCB : register(b0)
 	// Toroidal deformation-map addressing (see SnowShell.hlsl).
 	int2 DeformMapOrigin;
 	int2 ShellFlags;  // x bit 0: horizon march on (see SnowShell.hlsl)
+
+	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)

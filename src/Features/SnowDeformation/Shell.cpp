@@ -387,12 +387,33 @@ bool SnowDeformation::EnsureShellGridIndexBuffers()
 	// Absolute 32-bit lattice indices, one draw: BaseVertexLocation is NOT
 	// folded into SV_VertexID when no vertex buffer is bound, so 16-bit row
 	// bands with a base vertex draw the first band seven times over.
+	// Warp mirror for the quad's world placement (SnowGrid.hlsli WarpAxis):
+	// every band step is a multiple of 8 and the origin snaps by 256, so the
+	// world 32-quad a grid quad falls in is fixed per grid index, and its
+	// parity - the land's diagonal - can be baked here.
+	auto warpAxis = [](int u) {
+		float a = float(std::abs(u));
+		float off = 0.0f;
+		for (int band = 0; band < kShellWarpBands; ++band) {
+			const float take = std::min(a, kShellWarpBandVerts[band]);
+			off += take * kShellWarpBandMul[band];
+			a -= take;
+		}
+		off += a * kShellWarpBandMul[kShellWarpBands - 1];
+		return (u < 0 ? -1.0f : (u > 0 ? 1.0f : 0.0f)) * off * kShellGridSpacing;
+	};
+	const float halfSpan = ShellWarpedHalfSpan();
+	auto landQuad = [&](uint i) { return static_cast<int>(std::floor((warpAxis(int(i) - int(N / 2)) + halfSpan + 0.5f) / 32.0f)); };
+
+	// [0]: each quad split the way the land splits the 32-unit quad it lies
+	// in - '/' (kCornersFlipped, h00-h11) where the world 32-quad index sum is
+	// even. [1]: the old camera-phased union-jack, kept for the A/B.
 	std::vector<uint32_t> indices(static_cast<size_t>(N) * N * 6);
 	for (uint parity = 0; parity < 2; ++parity) {
 		size_t w = 0;
 		for (uint y = 0; y < N; ++y) {
 			for (uint x = 0; x < N; ++x) {
-				const bool flipped = (((x ^ y) ^ parity) & 1u) != 0;
+				const bool flipped = parity == 0 ? (((landQuad(x) + landQuad(y)) & 1) == 0) : (((x ^ y) ^ 0u) & 1u) != 0;
 				const auto& corners = flipped ? kCornersFlipped : kCorners;
 				for (uint c = 0; c < 6; ++c)
 					indices[w++] = (y + corners[c][1]) * stride + x + corners[c][0];
@@ -415,14 +436,10 @@ bool SnowDeformation::EnsureShellGridIndexBuffers()
 	return true;
 }
 
-void SnowDeformation::DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb)
+void SnowDeformation::DrawShellGridIndexed(ID3D11DeviceContext* a_context, [[maybe_unused]] const ShellCB& a_cb)
 {
-	// Union-jack diagonal parity, anchored to world position so walls do not
-	// re-phase on every camera step (was the VS's parityBase).
-	const int px = static_cast<int>(std::floor(a_cb.GridOrigin.x / a_cb.GridSpacing));
-	const int py = static_cast<int>(std::floor(a_cb.GridOrigin.y / a_cb.GridSpacing));
-	const uint parity = static_cast<uint>(px ^ py) & 1u;
-	a_context->IASetIndexBuffer(shellGridIB[parity].get(), DXGI_FORMAT_R32_UINT, 0);
+	// [0] is land-matched; [1] the old union-jack for the A/B.
+	a_context->IASetIndexBuffer(shellGridIB[shellOldUnionJack ? 1 : 0].get(), DXGI_FORMAT_R32_UINT, 0);
 	a_context->DrawIndexed(kShellGridDim * kShellGridDim * 6, 0, 0);
 }
 
@@ -859,8 +876,14 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// scrolled after it was taken. One b0 serves both shells and the
 	// shadow/probe passes.
 	a_cb.DeformMapOrigin = mapOrigin;
-	// Bit 0 horizon march, bit 1 hull frustum cull.
-	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2), 0 };
+	// Bit 0 horizon march, bit 1 hull frustum cull, bit 2 land-exact height
+	// off, bit 3 flip the tessellated diagonal sense.
+	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
+							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalFlip ? 8 : 0),
+		0 };
+	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
+	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
+		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
 	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;
@@ -1278,6 +1301,8 @@ void SnowDeformation::DrawShell()
 	// roads, rocks).
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), heightTopFiltered->srv.get(), heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(0, 6, shellSRVs);
+	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+	context->VSSetShaderResources(13, 1, &fineSRV);
 	// The game's texture tracker rebinds a slot only when it believes the
 	// binding changed. t3 is the effect shaders' soft-particle depth, set
 	// once per frame, so the null the skin pass left there faded every mist
@@ -1287,6 +1312,7 @@ void SnowDeformation::DrawShell()
 	for (uint i = 0; i < 9; i++)
 		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
+	context->PSSetShaderResources(13, 1, &fineSRV);
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
@@ -1453,6 +1479,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetConstantBuffers(1, 1, bakeWaveCB);
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
+		context->CSSetShaderResources(13, 1, &fineSRV);
 		ID3D11ShaderResourceView* csHeightSRV = shellSnowHeightSRV.get();
 		context->CSSetShaderResources(8, 1, &csHeightSRV);
 		context->CSSetShaderResources(11, 2, objectCapSRVs);
@@ -1475,7 +1502,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(0, 6, nullCSSRVs);
 		context->CSSetShaderResources(8, 1, nullCSSRVs);
 		context->CSSetShaderResources(11, 2, nullCSSRVs);
-		context->CSSetShaderResources(14, 2, nullCSSRVs);
+		context->CSSetShaderResources(13, 3, nullCSSRVs);
 		context->CSSetShaderResources(29, 1, nullCSSRVs);
 		globals::profiler->EndPass();
 	}
@@ -1502,6 +1529,8 @@ void SnowDeformation::DrawShell()
 		// cull the entire shell.
 		context->HSSetShaderResources(0, 6, shellSRVs);
 		context->DSSetShaderResources(0, 6, shellSRVs);
+		context->HSSetShaderResources(13, 1, &fineSRV);
+		context->DSSetShaderResources(13, 1, &fineSRV);
 		ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
 		context->HSSetShaderResources(9, 1, &hsBakeSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
@@ -1677,6 +1706,8 @@ void SnowDeformation::DrawShell()
 	for (uint i = 0; i < 9; i++)
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
+	ID3D11ShaderResourceView* nullFinePS = nullptr;
+	context->PSSetShaderResources(13, 1, &nullFinePS);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
 	context->PSSetSamplers(0, 2, restoreSamplers);
 	ID3D11SamplerState* nullCmpSampler = nullptr;
@@ -1802,6 +1833,8 @@ void SnowDeformation::RunLODProbePass()
 			// depth) are unused by the surface math.
 			ID3D11ShaderResourceView* csSRVs[6] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), nullptr, nullptr, heightTopFiltered->srv.get(), heightBottomFiltered->srv.get() };
 			context->CSSetShaderResources(0, 6, csSRVs);
+			ID3D11ShaderResourceView* probeFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+			context->CSSetShaderResources(13, 1, &probeFineSRV);
 			ID3D11ShaderResourceView* csCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 			context->CSSetShaderResources(11, 2, csCapSRVs);
 			// ShellSurfaceZ's berm term reads the bake at t14.
@@ -1823,6 +1856,7 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(11, 2, nullSRVs);
 			context->CSSetShaderResources(14, 1, nullSRVs);
 			context->CSSetShaderResources(15, 1, nullSRVs);
+			context->CSSetShaderResources(13, 1, nullSRVs);
 			ID3D11Buffer* nullCB = nullptr;
 			context->CSSetConstantBuffers(0, 1, &nullCB);
 			context->CSSetShader(nullptr, nullptr, 0);

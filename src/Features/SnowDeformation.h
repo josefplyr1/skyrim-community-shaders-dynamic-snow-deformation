@@ -923,6 +923,33 @@ public:
 
 	/** @brief The terrain data window texture (absolute height, ramp depth in world units, coverage, spare). Ramp depth is resolved from the class weights and the class depth sliders at rebuild time. */
 	Texture2D* shellTerrainTexture = nullptr;
+	/** @brief The ground as the engine renders it, at the land mesh's own 32-unit spacing: bicubic Catmull-Rom of the 128-texel window with cell edges extrapolated (TerrainFineCS), 9 cells centred on the camera's cell, rebuilt with the window. SampleTerrain's height reads it with the land's own checkerboard triangulation, so every shell vertex lies on the visible surface. */
+	static constexpr int kShellFineCells = 9;
+	static constexpr float kShellFineTexel = 32.0f;
+	static constexpr int kShellFineDim = kShellFineCells * 128;
+	Texture2D* shellTerrainFine = nullptr;
+	float shellFineOriginX = 0.0f;
+	float shellFineOriginY = 0.0f;
+	bool shellFineValid = false;
+	struct alignas(16) TerrainFineCB
+	{
+		float2 FineOriginWorld;
+		float2 WindowOriginWorld;
+		uint32_t FineDim;
+		uint32_t WindowDim;
+		float TexelSize;
+		float FineTexel;
+	};
+	ConstantBuffer* terrainFineCB = nullptr;
+	ID3D11ComputeShader* terrainFineCS = nullptr;
+	ID3D11ComputeShader* GetTerrainFineCS();
+	void BuildTerrainFineWindow();
+	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. */
+	bool shellLandHeightDisabled = false;
+	/** @brief A/B: flips which corner rotation the tessellated patches use for a '/' land quad (bit 3). The tessellator's factor-1 diagonal is assumed to be domain (0,0)-(1,1); if the height-delta view shows a checkerboard of sag on the 32-unit band, this is the other guess. Runtime-only. */
+	bool shellTessDiagonalFlip = false;
+	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
+	bool shellOldUnionJack = false;
 
 	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
 	struct alignas(16) ShellCB
@@ -1058,6 +1085,8 @@ public:
 		DirectX::XMINT2 DeformMapOrigin;
 		/** @brief x: bit 0 = heightfield horizon self-shadow march on (Settings::ShellHorizonMarch). Took the torus pad; layout unchanged. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		DirectX::XMINT2 ShellFlags;
+		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
+		float4 FineWindow;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
