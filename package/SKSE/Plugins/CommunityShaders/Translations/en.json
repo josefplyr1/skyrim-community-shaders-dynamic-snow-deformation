@@ -1380,6 +1380,8 @@
     "feature.snow_deformation.bow_wave_reach_tooltip": "How far AHEAD of the feet the pushed snow piles, and how far the hill stretches along the direction of travel. It does not make the mound bigger - it moves it out in front and draws it out longer, which is what a body ploughing a furrow leaves. Width is set by Forward Bias.",
     "feature.snow_deformation.bow_wave_speed": "Bow Wave Full Speed",
     "feature.snow_deformation.bow_wave_speed_tooltip": "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop.",
+    "feature.snow_deformation.caster_cull_disabled": "Shell: Disable Caster Culling",
+    "feature.snow_deformation.caster_cull_disabled_tooltip": "Measurement aid: draws every snow-covered object into every shadow cascade, as it worked before. With culling on, an object whose bounding sphere lies entirely outside a cascade's box is skipped for that cascade only - it could not have darkened a single texel of it, so the shadow maps come out identical. The census below counts what was skipped.",
     "feature.snow_deformation.churn_height": "Churn Height",
     "feature.snow_deformation.churn_height_tooltip": "How tall the broken snow lumps are in trenches and on berms. 0 leaves disturbed snow smooth.",
     "feature.snow_deformation.churn_size": "Churn Size",

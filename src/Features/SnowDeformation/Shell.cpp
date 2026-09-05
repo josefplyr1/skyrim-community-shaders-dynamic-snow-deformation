@@ -710,32 +710,39 @@ ID3D11DomainShader* SnowDeformation::GetShellDSBake(bool a_check)
 
 bool SnowDeformation::EnsureShellVertexBake()
 {
-	if (shellVertexBake)
-		return shellVertexBake->srv && shellVertexBake->uav;
+	if (shellVertexBake && shellVertexBakeSlope)
+		return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav;
 	constexpr UINT dim = kShellGridDim + 1;
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = dim;
-	desc.Height = dim;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-		.Format = desc.Format,
-		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+	auto make = [&](DXGI_FORMAT a_format, const char* a_name) {
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = dim;
+		desc.Height = dim;
+		desc.MipLevels = 1;
+		desc.ArraySize = 1;
+		desc.Format = a_format;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = a_format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+			.Format = a_format,
+			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		auto* tex = new Texture2D(desc, a_name);
+		tex->CreateSRV(srvDesc);
+		tex->CreateUAV(uavDesc);
+		return tex;
 	};
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-		.Format = desc.Format,
-		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MipSlice = 0 }
-	};
-	shellVertexBake = new Texture2D(desc, "SnowDeformation::ShellVertexBake");
-	shellVertexBake->CreateSRV(srvDesc);
-	shellVertexBake->CreateUAV(uavDesc);
-	return shellVertexBake->srv && shellVertexBake->uav;
+	if (!shellVertexBake)
+		shellVertexBake = make(DXGI_FORMAT_R32G32B32A32_FLOAT, "SnowDeformation::ShellVertexBake");
+	if (!shellVertexBakeSlope)
+		shellVertexBakeSlope = make(DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::ShellVertexBakeSlope");
+	return shellVertexBake->srv && shellVertexBake->uav && shellVertexBakeSlope->srv && shellVertexBakeSlope->uav;
 }
 
 ID3D11DomainShader* SnowDeformation::GetShellDS()
@@ -1425,13 +1432,13 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11SamplerState* csSampler = shellSnowSampler.get();
 		context->CSSetSamplers(0, 1, &csSampler);
-		ID3D11UnorderedAccessView* bakeUAV = shellVertexBake->uav.get();
-		context->CSSetUnorderedAccessViews(1, 1, &bakeUAV, nullptr);
+		ID3D11UnorderedAccessView* bakeUAVs[2] = { shellVertexBake->uav.get(), shellVertexBakeSlope->uav.get() };
+		context->CSSetUnorderedAccessViews(1, 2, bakeUAVs, nullptr);
 		context->CSSetShader(bakeCS, nullptr, 0);
 		constexpr UINT bakeGroups = (kShellGridDim + 1 + 7) / 8;
 		context->Dispatch(bakeGroups, bakeGroups, 1);
-		ID3D11UnorderedAccessView* nullBakeUAV = nullptr;
-		context->CSSetUnorderedAccessViews(1, 1, &nullBakeUAV, nullptr);
+		ID3D11UnorderedAccessView* nullBakeUAVs[2] = {};
+		context->CSSetUnorderedAccessViews(1, 2, nullBakeUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 		// The field textures are written by compute passes next Prepass;
 		// leave none of them bound as CS inputs.
@@ -1474,6 +1481,8 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(29, 1, &undulationSRV);
 		ID3D11ShaderResourceView* dsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
 		context->DSSetShaderResources(9, 1, &dsBakeSRV);
+		ID3D11ShaderResourceView* dsBakeSlopeSRV = bake ? shellVertexBakeSlope->srv.get() : nullptr;
+		context->DSSetShaderResources(23, 1, &dsBakeSlopeSRV);
 		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 		context->DSSetSamplers(0, 1, &dsSampler);
 

@@ -1145,6 +1145,16 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttGridIdx = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
 
+		ImGui::Checkbox(T(TKEY("caster_cull_disabled"), "Shell: Disable Caster Culling"), &casterCullDisabled);
+		if (auto _ttCasterCull = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("caster_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object into every shadow cascade, as it worked before. With culling on, an object whose bounding sphere lies entirely outside a cascade's box is skipped for that cascade only - it could not have darkened a single texel of it, so the shadow maps come out identical. The census below counts what was skipped."));
+		if (!casterCullDisabled) {
+			const uint32_t total = casterSkinsCulledLast + casterSkinsDrawnLast;
+			ImGui::Text("Caster skins: %u drawn, %u culled of %u across cascades (%.0f%% skipped)",
+				casterSkinsDrawnLast, casterSkinsCulledLast, total,
+				total ? 100.0 * double(casterSkinsCulledLast) / double(total) : 0.0);
+		}
+
 		ImGui::Checkbox(T(TKEY("shell_caster_split"), "Shell: Split Caster Row"), &shellCasterSplitDebug);
 		if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));

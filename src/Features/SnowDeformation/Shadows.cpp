@@ -521,6 +521,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	static const char* const kCasterSkinsRow[4] = { "SnowDeformation::CasterSkins0", "SnowDeformation::CasterSkins1", "SnowDeformation::CasterSkins2", "SnowDeformation::CasterSkins3" };
 	static const char* const kCasterPatchRow[4] = { "SnowDeformation::CasterPatch0", "SnowDeformation::CasterPatch1", "SnowDeformation::CasterPatch2", "SnowDeformation::CasterPatch3" };
 	const bool splitRow = shellCasterSplitDebug;
+	casterSkinsCulled = 0;
+	casterSkinsDrawn = 0;
 	if (!splitRow)
 		globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
 	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
@@ -612,6 +614,30 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			ID3D11ShaderResourceView* castSkyOpenSRV = objectSkyOpen && objectSkyOpen->srv ? objectSkyOpen->srv.get() : nullptr;
 			context->VSSetShaderResources(25, 1, &castSkyOpenSRV);
 
+			// Per-cascade caster cull. The clip matrix above maps absolute
+			// world into this cascade's [-1,1] x [-1,1] x [0,1] box, and the
+			// mesh carries a world bounding sphere, so a sphere-vs-box
+			// rejection skips draws that provably write no texel of THIS
+			// cascade. Conservative on both sides: the sphere is grown by
+			// kCasterCullMargin to cover the snow lift the caster VS adds
+			// above the mesh, and the extent per clip axis uses the matrix
+			// column length, which is exact for the affine transform a
+			// directional cascade uses. Output is therefore bit-identical -
+			// the skipped draws could not have changed a depth value.
+			constexpr float kCasterCullMargin = 128.0f;
+			const float clipExtentX = std::sqrt(
+				DirectX::XMVectorGetX(clip.r[0]) * DirectX::XMVectorGetX(clip.r[0]) +
+				DirectX::XMVectorGetX(clip.r[1]) * DirectX::XMVectorGetX(clip.r[1]) +
+				DirectX::XMVectorGetX(clip.r[2]) * DirectX::XMVectorGetX(clip.r[2]));
+			const float clipExtentY = std::sqrt(
+				DirectX::XMVectorGetY(clip.r[0]) * DirectX::XMVectorGetY(clip.r[0]) +
+				DirectX::XMVectorGetY(clip.r[1]) * DirectX::XMVectorGetY(clip.r[1]) +
+				DirectX::XMVectorGetY(clip.r[2]) * DirectX::XMVectorGetY(clip.r[2]));
+			const float clipExtentZ = std::sqrt(
+				DirectX::XMVectorGetZ(clip.r[0]) * DirectX::XMVectorGetZ(clip.r[0]) +
+				DirectX::XMVectorGetZ(clip.r[1]) * DirectX::XMVectorGetZ(clip.r[1]) +
+				DirectX::XMVectorGetZ(clip.r[2]) * DirectX::XMVectorGetZ(clip.r[2]));
+
 			for (const auto& cap : capturedStatics) {
 				auto* geometry = cap.geometry.get();
 				if (!geometry)
@@ -628,6 +654,25 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				const bool s4Shell = settings.ObjectSnow3D && !cap.road && cap.projThreshold > -0.5f;
 				if (!s4Shell || !settings.ObjectSnowShadows)
 					continue;
+				if (!casterCullDisabled) {
+					const auto& bound = geometry->worldBound;
+					if (bound.radius > 0.0f) {
+						const float r = bound.radius + kCasterCullMargin;
+						auto centerClip = DirectX::XMVector3Transform(
+							DirectX::XMVectorSet(bound.center.x, bound.center.y, bound.center.z, 1.0f), clip);
+						const float cx = DirectX::XMVectorGetX(centerClip);
+						const float cy = DirectX::XMVectorGetY(centerClip);
+						const float cz = DirectX::XMVectorGetZ(centerClip);
+						const float ex = r * clipExtentX, ey = r * clipExtentY, ez = r * clipExtentZ;
+						if (cx + ex < -1.0f || cx - ex > 1.0f ||
+							cy + ey < -1.0f || cy - ey > 1.0f ||
+							cz + ez < 0.0f || cz - ez > 1.0f) {
+							casterSkinsCulled++;
+							continue;
+						}
+					}
+				}
+				casterSkinsDrawn++;
 				auto triShape = geometry->AsTriShape();
 				if (!triShape)
 					continue;
@@ -725,6 +770,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	}
 	if (!splitRow)
 		globals::profiler->EndPass();
+	casterSkinsCulledLast = casterSkinsCulled;
+	casterSkinsDrawnLast = casterSkinsDrawn;
 
 	// ---- Restore everything.
 	// Including the CONSTANT BUFFER, not just pipeline state. The caster pass

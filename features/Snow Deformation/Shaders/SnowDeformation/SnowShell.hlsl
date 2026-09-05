@@ -234,8 +234,10 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
 // Per-vertex surface bake (BakeCS → SNOW_DS_BAKE domain shader): one texel per
-// base-grid vertex, (z, coverage, terrainHeight), full float.
+// base-grid vertex, (z, coverage, terrainHeight), full float, and a second
+// map holding the vertex normal's two height differences.
 Texture2D<float4> ShellVertexBake : register(t9);
+Texture2D<float2> ShellVertexBakeSlope : register(t23);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -1093,16 +1095,26 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 // Shared vertex tail for the legacy VS and the tessellated domain shader:
 // smooth per-vertex terrain normal, coverage alpha, debug plane, camera-
 // relative transform and output packing.
-VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float terrainHeight)
+// The vertex normal's two height differences: wide 32-unit differences bridge
+// the 128-unit data texels, and interpolation removes the faceting of the
+// per-pixel piecewise-constant gradient. Four terrain taps, so the bake
+// stores the pair rather than making every vertex re-take them.
+float2 ShellVertexSlope(float2 gridLocal)
 {
-	// Smooth terrain normal per-vertex: wide 32-unit differences bridge the
-	// 128-unit data texels, and interpolation removes the faceting of the
-	// per-pixel piecewise-constant gradient.
 	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
 	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
 	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
 	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
-	float3 terrainNormal = normalize(float3(-(hxp - hxn) / 64.0, -(hyp - hyn) / 64.0, 1.0));
+	return float2(hxp - hxn, hyp - hyn);
+}
+
+// The two height differences arrive as separate scalars, exactly as the four
+// taps used to leave them: as a float2 the compiler vectorises the normalize
+// below, which is the same arithmetic but not the same bytecode, and the
+// untouched paths have to stay provably identical.
+VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, float terrainHeight, float slopeX, float slopeY)
+{
+	float3 terrainNormal = normalize(float3(-slopeX / 64.0, -slopeY / 64.0, 1.0));
 
 	// Coverage alpha drives both geometry taper and edge dithering in the PS.
 	float taper = smoothstep(0.0, 0.6, coverage);
@@ -1136,6 +1148,15 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 	vsout.DebugHeight = terrainHeight;
 	vsout.TerrainNormalAlpha = float4(terrainNormal, coverageAlpha);
 	return vsout;
+}
+
+VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float terrainHeight)
+{
+	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
+	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
+	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
+	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
+	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, hxp - hxn, hyp - hyn);
 }
 
 #if defined(VSHADER) && !defined(SNOW_TESS)
@@ -1515,17 +1536,22 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 	[branch] if (isCorner)
 	{
 		uint corner = domainUV.x > 0.5 ? (domainUV.y > 0.5 ? 2u : 1u) : (domainUV.y > 0.5 ? 3u : 0u);
-		float4 baked = ShellVertexBake.Load(int3(patch[corner].GridXY, 0));
+		int3 bakeTexel = int3(patch[corner].GridXY, 0);
+		float4 baked = ShellVertexBake.Load(bakeTexel);
 		z = baked.x;
 		coverage = baked.y;
 		terrainHeight = baked.z;
+		float2 slope = ShellVertexBakeSlope.Load(bakeTexel);
 #	ifdef SNOW_DS_BAKE_CHECK
 		float liveCoverage;
 		float liveTerrain;
 		float liveZ = ShellVertexZ(gridLocal, liveCoverage, liveTerrain);
-		if (asuint(liveZ) != asuint(z) || asuint(liveCoverage) != asuint(coverage) || asuint(liveTerrain) != asuint(terrainHeight))
+		float2 liveSlope = ShellVertexSlope(gridLocal);
+		if (asuint(liveZ) != asuint(z) || asuint(liveCoverage) != asuint(coverage) || asuint(liveTerrain) != asuint(terrainHeight) ||
+			asuint(liveSlope.x) != asuint(slope.x) || asuint(liveSlope.y) != asuint(slope.y))
 			z += 50.0;
 #	endif
+		return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y);
 	}
 	else
 #endif
@@ -1978,7 +2004,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// reads as a SHEET, so smoothing the surface says "frozen over" far louder
 	// than any change to reflectance or colour can. Roughness and specular
 	// alone were nearly invisible without it.
-	float crustAmount = saturate(SampleCrust(gridLocal) * SpellShading.y);
+	// One quad fetch for both: the scorch read further down wants the same
+	// four texels of the same map at the same place, and both sites are
+	// unconditional, so sharing costs nothing and skips four loads.
+	float scorchRaw, crustRaw;
+	SampleScorchCrust(gridLocal, scorchRaw, crustRaw);
+	float crustAmount = saturate(crustRaw * SpellShading.y);
 	bumpFade *= lerp(1.0, 1.0 - saturate(SpellShading.w), crustAmount);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTaps(snowUV, worldXYPS);
@@ -2108,7 +2139,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// rather than recoloured, and biased slightly warm, so it reads as fouled
 	// snow instead of a grey decal painted over it.
 	{
-		float scorch = SampleScorch(gridLocal) * SpellShading.x;
+		float scorch = scorchRaw * SpellShading.x;
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
@@ -2677,6 +2708,7 @@ RWStructuredBuffer<float> ProbeHeights : register(u0);
 // on the camera (descent and relief fade with distance) and on the bow
 // waves, so nothing here is worth tracking dirty.
 RWTexture2D<float4> ShellVertexBakeOut : register(u1);
+RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
 
 [numthreads(8, 8, 1)] void BakeCS(uint3 id : SV_DispatchThreadID)
 {
@@ -2687,6 +2719,7 @@ RWTexture2D<float4> ShellVertexBakeOut : register(u1);
 	float terrainHeight;
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
 	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, 0.0);
+	ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
 }
 
 static const uint kProbeAzimuths = 24;

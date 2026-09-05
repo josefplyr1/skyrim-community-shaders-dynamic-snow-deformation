@@ -171,6 +171,39 @@ float SampleScorch(float2 gridLocal)
 }
 
 // Crust at a point: refrozen snow, the map's third channel.
+// Scorch and crust read the SAME quad of the SAME texture at the same place -
+// one reads the negative part of .y, the other .z - so the shells fetch once
+// and split. Same texels, same weights, same order of operations as the two
+// helpers below, which are kept for any caller that needs only one.
+void SampleScorchCrust(float2 gridLocal, out float scorch, out float crust)
+{
+	scorch = 0.0;
+	crust = 0.0;
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return;
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+
+	// Interpolate the quad ONCE, then split. Both originals interpolate
+	// before their saturate, and scorch negates after interpolating - doing
+	// it the other way round changes the answer wherever the quad straddles
+	// zero, which is exactly the rim of a scorch mark.
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	scorch = saturate(-v.y);
+	crust = saturate(v.z);
+}
+
 float SampleCrust(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;

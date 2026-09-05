@@ -1114,6 +1114,14 @@ public:
 	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
 	bool shellCasterSplitDebug = false;
 
+	/** @brief A/B measurement: draws every captured skin into every cascade, as before the per-cascade sphere cull. Runtime-only. */
+	bool casterCullDisabled = false;
+	/** @brief Last frame's caster cull census (summed over cascades), for the debug readout. */
+	uint32_t casterSkinsCulled = 0;
+	uint32_t casterSkinsDrawn = 0;
+	uint32_t casterSkinsCulledLast = 0;
+	uint32_t casterSkinsDrawnLast = 0;
+
 	/** @brief A/B measurement: SNOW_DS_FLAT domain shader (terrain + class depth, no field work) bounds the geometry stages' share of the Shell row. Runtime-only. */
 	bool shellFlatDSDebug = false;
 	ID3D11DomainShader* shellDSFlat = nullptr;
@@ -1126,6 +1134,8 @@ public:
 	ID3D11DomainShader* shellDSBake = nullptr;
 	ID3D11DomainShader* shellDSBakeCheck = nullptr;
 	Texture2D* shellVertexBake = nullptr;
+	/** @brief Companion to shellVertexBake: the vertex normal's two height differences, so a baked corner skips FinishShellVertex's four terrain taps as well. */
+	Texture2D* shellVertexBakeSlope = nullptr;
 	/** @brief A/B measurement: returns the domain shader to evaluating every vertex live. Runtime-only. */
 	bool shellVertexBakeDisabled = false;
 	/** @brief Measurement: the domain shader evaluates baked corners live as well and lifts any mismatching vertex by 50 units. Runtime-only. */
