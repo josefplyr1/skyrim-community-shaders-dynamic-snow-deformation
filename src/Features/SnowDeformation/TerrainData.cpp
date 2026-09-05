@@ -1193,6 +1193,82 @@ void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
 			out += std::format("  {:5.0f}: {:9.1f} | {:9.1f} | {:9.1f}{}\n", d, sf, cf, wt,
 				(sf > -50000.0f && cf > -50000.0f && std::fabs(sf - cf) > 0.5f) ? "  <-- shader != cells" : "");
 		}
+
+		// D: the vertex bake along the view axis - the height the vertex stage
+		// stood on LAST frame (the bake runs after this fill) - against the
+		// cells and against the data morph's coarse bilinear, with the band.
+		if (shellVertexBake && shellVertexBake->resource) {
+			const uint32_t bakeDim = shellVertexBake->desc.Width;
+			auto bakeStage = stage(shellVertexBake, DXGI_FORMAT_R32G32B32A32_FLOAT, bakeDim);
+			D3D11_MAPPED_SUBRESOURCE bm{};
+			if (bakeStage && SUCCEEDED(context->Map(bakeStage.get(), 0, D3D11_MAP_READ, 0, &bm))) {
+				auto bakeAt = [&](int x, int y) {
+					return reinterpret_cast<const float*>(static_cast<const uint8_t*>(bm.pData) + size_t(y) * bm.RowPitch + size_t(x) * 16);
+				};
+				auto warpAxis = [](int u) {
+					float a = float(std::abs(u));
+					float off = 0.0f;
+					for (int band = 0; band < kShellWarpBands; ++band) {
+						const float take = std::min(a, kShellWarpBandVerts[band]);
+						off += take * kShellWarpBandMul[band];
+						a -= take;
+					}
+					off += a * kShellWarpBandMul[kShellWarpBands - 1];
+					return (u < 0 ? -1.0f : (u > 0 ? 1.0f : 0.0f)) * off * kShellGridSpacing;
+				};
+				auto bandOf = [](int u, float& a_t) {
+					const float a = float(std::abs(u));
+					float prev = 0.0f;
+					for (int band = 0; band < kShellWarpBands; ++band) {
+						const float acc = prev + kShellWarpBandVerts[band];
+						if (a < acc) {
+							a_t = std::clamp((a - prev) / std::max(kShellWarpBandVerts[band], 1.0f), 0.0f, 1.0f);
+							return kShellWarpBandMul[band] * kShellGridSpacing;
+						}
+						prev = acc;
+					}
+					a_t = 1.0f;
+					return kShellWarpBandMul[kShellWarpBands - 1] * kShellGridSpacing;
+				};
+				const bool alongX = std::fabs(fwdX) >= std::fabs(fwdY);
+				const int sgn = (alongX ? fwdX : fwdY) < 0.0f ? -1 : 1;
+				const int c = int(kShellGridDim / 2);
+				const float halfSpan = ShellWarpedHalfSpan();
+				out += std::format("D bake (last frame, {}{} axis): dist step morphT | bake terrain | cells | coarse bilinear | bake z\n", sgn < 0 ? "-" : "+", alongX ? "x" : "y");
+				float nextPrint = 128.0f;
+				for (int u = 1; u <= c; u++) {
+					const float off = warpAxis(u * sgn);
+					const float dist = std::fabs(off);
+					if (dist < nextPrint)
+						continue;
+					if (dist > 4200.0f)
+						break;
+					nextPrint = dist + 128.0f;
+					float t = 0.0f;
+					const float step = bandOf(u, t);
+					const int gx = alongX ? c + u * sgn : c;
+					const int gy = alongX ? c : c + u * sgn;
+					if (gx < 0 || gy < 0 || gx >= int(bakeDim) || gy >= int(bakeDim))
+						break;
+					const float wx = a_cb.GridOrigin.x + halfSpan + (alongX ? off : 0.0f);
+					const float wy = a_cb.GridOrigin.y + halfSpan + (alongX ? 0.0f : off);
+					const float* b = bakeAt(gx, gy);
+					const float cr = cellsCR(wx, wy);
+					float coarse = -100000.0f;
+					if (step > kShellGridSpacing) {
+						const float cs = step * 2.0f;
+						const float bx = std::floor(wx / cs) * cs, by = std::floor(wy / cs) * cs;
+						const float fx = (wx - bx) / cs, fy = (wy - by) / cs;
+						const float h00 = cellsCR(bx, by), h10 = cellsCR(bx + cs, by), h01 = cellsCR(bx, by + cs), h11 = cellsCR(bx + cs, by + cs);
+						if (std::min({ h00, h10, h01, h11 }) > -50000.0f)
+							coarse = std::lerp(std::lerp(h00, h10, fx), std::lerp(h01, h11, fx), fy);
+					}
+					out += std::format("  {:5.0f} {:4.0f} {:.2f} | {:9.1f} | {:9.1f} | {:9.1f} | {:9.1f}{}\n", dist, step, t, b[2], cr, coarse, b[0],
+						(cr > -50000.0f && std::fabs(b[2] - cr) > 2.0f) ? "  <-- bake != cells" : "");
+				}
+				context->Unmap(bakeStage.get(), 0);
+			}
+		}
 	}
 	context->Unmap(winStage.get(), 0);
 	context->Unmap(fineStage.get(), 0);
