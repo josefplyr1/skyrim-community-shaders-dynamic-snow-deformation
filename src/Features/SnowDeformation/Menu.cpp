@@ -277,6 +277,14 @@ void SnowDeformation::DrawSettings()
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -
 		// no scrolling between Snow Trenches and the model depths).
+		ImGui::SliderFloat(T(TKEY("skin_depth_bias"), "Object Snow Depth Bias"), &settings.SkinDepthBias, 0.0f, 128.0f, "%.0f");
+		if (auto _ttSdb = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_depth_bias_tooltip"), "How far the object snow layer is nudged toward the camera in the depth buffer, in the buffer's own smallest steps. The layer is rasterised from the same vertices as the object under it, so at a distance the two land on the same depth value and fight - snow that flickers, or shows from one angle and not another. A few steps settle the fight; more than needed makes the layer stand in front of things that should hide it. Constant with distance in depth terms, which is what the contest needs."));
+
+		ImGui::SliderFloat(T(TKEY("skin_slope_depth_bias"), "Object Snow Slope Bias"), &settings.SkinSlopeDepthBias, 0.0f, 4.0f, "%.2f");
+		if (auto _ttSsb = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_slope_depth_bias_tooltip"), "The part of the depth bias that grows with how steeply a face is seen. Faces at a grazing angle cover a large depth range per pixel and fight hardest; this scales the nudge with that slope. Capped internally so no angle can push the layer far in front of its object."));
+
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
 		ImGui::Checkbox(T(TKEY("proj_mask_placement"), "Authored Snow Placement"), &settings.ProjMaskPlacement);

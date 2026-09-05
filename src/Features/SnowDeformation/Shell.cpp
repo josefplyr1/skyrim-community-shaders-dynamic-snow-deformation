@@ -292,6 +292,36 @@ void SnowDeformation::RefreshSnowPBRParams()
 	}
 }
 
+ID3D11RasterizerState* SnowDeformation::GetSkinRasterState()
+{
+	const float bias = settings.SkinDepthBias;
+	const float slope = settings.SkinSlopeDepthBias;
+	if (skinRasterState && bias == skinRasterBiasBuilt && slope == skinRasterSlopeBuilt)
+		return skinRasterState.get();
+
+	// Sliders read "toward the camera"; D3D's bias is added to depth and the
+	// shells test LESS_EQUAL, so nearer is negative. The clamp bounds the
+	// slope term at a third of the old decal cap (-3e-5 NDC), the push that
+	// stood a 450 m peak 2000 units in front of its mist.
+	D3D11_RASTERIZER_DESC rasterDesc{};
+	rasterDesc.FillMode = D3D11_FILL_SOLID;
+	rasterDesc.CullMode = D3D11_CULL_NONE;
+	rasterDesc.DepthClipEnable = TRUE;
+	rasterDesc.DepthBias = -static_cast<INT>(std::lround(bias));
+	rasterDesc.SlopeScaledDepthBias = -slope;
+	rasterDesc.DepthBiasClamp = -1e-5f;
+	winrt::com_ptr<ID3D11RasterizerState> state;
+	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put()))) {
+		logger::error("SnowDeformation: skin raster state creation failed (bias {} slope {})", bias, slope);
+		return skinRasterState.get();
+	}
+	Util::SetResourceName(state.get(), "SnowDeformation::SkinRasterState");
+	skinRasterState = state;
+	skinRasterBiasBuilt = bias;
+	skinRasterSlopeBuilt = slope;
+	return skinRasterState.get();
+}
+
 bool SnowDeformation::EnsureShellGridIndexBuffers()
 {
 	if (shellGridIB[0] && shellGridIB[1])
@@ -1214,7 +1244,13 @@ void SnowDeformation::DrawShell()
 
 	// Captured projected-snow statics, inflated with the same material.
 	// Inherits this pass's bindings (b0, t0-t8, s0, b4-b6, RTs, depth).
+	// Their own raster state carries the skin depth bias: a skin and its
+	// mesh rasterise the same vertices, so without a bias the far ones
+	// z-fight.
+	if (auto* skinRaster = GetSkinRasterState())
+		context->RSSetState(skinRaster);
 	DrawCapturedStatics();
+	context->RSSetState(shellRasterState.get());
 
 	// Restore everything we changed. DS/HS state is cleared unconditionally:
 	// the statics pass binds its own DS resources even when the landscape
