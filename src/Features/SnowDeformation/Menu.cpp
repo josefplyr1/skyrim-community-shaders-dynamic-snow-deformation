@@ -1133,6 +1133,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBilin = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
 
+		ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Shell: Non-indexed Grid Draws"), &shellGridNonIndexed);
+		if (auto _ttGridIdx = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
+
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));

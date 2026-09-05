@@ -299,26 +299,26 @@ bool SnowDeformation::EnsureShellGridIndexBuffers()
 
 	constexpr uint N = kShellGridDim;
 	constexpr uint stride = N + 1;
-	constexpr uint R = kShellIndexBandRows;
-	static_assert((R + 1) * stride <= 65536, "index band must fit 16-bit indices");
-	// Same corner order the vertex shader used to expand per quad.
+	// Same corner order the vertex shader expands per quad on the A/B path.
 	static constexpr uint8_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	static constexpr uint8_t kCornersFlipped[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
 
-	std::vector<uint16_t> indices(static_cast<size_t>(N) * N * 6);
+	// Absolute 32-bit lattice indices, one draw: BaseVertexLocation is NOT
+	// folded into SV_VertexID when no vertex buffer is bound, so 16-bit row
+	// bands with a base vertex draw the first band seven times over.
+	std::vector<uint32_t> indices(static_cast<size_t>(N) * N * 6);
 	for (uint parity = 0; parity < 2; ++parity) {
 		size_t w = 0;
 		for (uint y = 0; y < N; ++y) {
-			const uint localY = y % R;
 			for (uint x = 0; x < N; ++x) {
 				const bool flipped = (((x ^ y) ^ parity) & 1u) != 0;
 				const auto& corners = flipped ? kCornersFlipped : kCorners;
 				for (uint c = 0; c < 6; ++c)
-					indices[w++] = static_cast<uint16_t>((localY + corners[c][1]) * stride + x + corners[c][0]);
+					indices[w++] = (y + corners[c][1]) * stride + x + corners[c][0];
 			}
 		}
 		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint16_t));
+		desc.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint32_t));
 		desc.Usage = D3D11_USAGE_IMMUTABLE;
 		desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 		D3D11_SUBRESOURCE_DATA init{};
@@ -341,19 +341,27 @@ void SnowDeformation::DrawShellGridIndexed(ID3D11DeviceContext* a_context, const
 	const int px = static_cast<int>(std::floor(a_cb.GridOrigin.x / a_cb.GridSpacing));
 	const int py = static_cast<int>(std::floor(a_cb.GridOrigin.y / a_cb.GridSpacing));
 	const uint parity = static_cast<uint>(px ^ py) & 1u;
-	a_context->IASetIndexBuffer(shellGridIB[parity].get(), DXGI_FORMAT_R16_UINT, 0);
+	a_context->IASetIndexBuffer(shellGridIB[parity].get(), DXGI_FORMAT_R32_UINT, 0);
+	a_context->DrawIndexed(kShellGridDim * kShellGridDim * 6, 0, 0);
+}
 
-	constexpr uint N = kShellGridDim;
-	constexpr uint stride = N + 1;
-	constexpr uint R = kShellIndexBandRows;
-	for (uint row = 0; row < N; row += R) {
-		const uint rows = std::min(R, N - row);
-		a_context->DrawIndexed(rows * N * 6, row * N * 6, static_cast<INT>(row * stride));
-	}
+void SnowDeformation::DrawShellGrid(ID3D11DeviceContext* a_context, const ShellCB& a_cb)
+{
+	if (shellGridNonIndexed)
+		a_context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+	else if (EnsureShellGridIndexBuffers())
+		DrawShellGridIndexed(a_context, a_cb);
 }
 
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
+	if (shellGridNonIndexed) {
+		if (!shellVSNonIndexed) {
+			logger::debug("Compiling SnowShell VS (non-indexed A/B)");
+			shellVSNonIndexed = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_GRID_NONINDEXED", "" } }, "vs_5_0"));
+		}
+		return shellVSNonIndexed;
+	}
 	if (!shellVS) {
 		logger::debug("Compiling SnowShell VS");
 		shellVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" } }, "vs_5_0"));
@@ -363,6 +371,13 @@ ID3D11VertexShader* SnowDeformation::GetShellVS()
 
 ID3D11VertexShader* SnowDeformation::GetShellShadowVS()
 {
+	if (shellGridNonIndexed) {
+		if (!shellShadowVSNonIndexed) {
+			logger::debug("Compiling SnowShell shadow-cast VS (non-indexed A/B)");
+			shellShadowVSNonIndexed = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" }, { "SNOW_GRID_NONINDEXED", "" } }, "vs_5_0"));
+		}
+		return shellShadowVSNonIndexed;
+	}
 	if (!shellShadowVS) {
 		logger::debug("Compiling SnowShell shadow-cast VS");
 		shellShadowVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "VSHADER", "" }, { "SNOW_SHADOW_CAST", "" } }, "vs_5_0"));
@@ -1179,8 +1194,7 @@ void SnowDeformation::DrawShell()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	} else {
 		context->VSSetShader(vs, nullptr, 0);
-		if (EnsureShellGridIndexBuffers())
-			DrawShellGridIndexed(context, cbData);
+		DrawShellGrid(context, cbData);
 	}
 	globals::profiler->EndPass();
 

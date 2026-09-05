@@ -1138,11 +1138,27 @@ VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float ter
 #if defined(VSHADER) && !defined(SNOW_TESS)
 VS_OUTPUT main(uint vertexID : SV_VertexID)
 {
-	// Indexed draw over the (GridDim+1)^2 lattice; vertexID is the lattice
-	// index. The union-jack triangulation and its world-anchored parity live
-	// in the index buffers (DrawShellGridIndexed).
+#ifdef SNOW_GRID_NONINDEXED
+	// A/B measurement path: the pre-index-buffer expansion, six vertices per
+	// quad from SV_VertexID.
+	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	static const float2 kCornersFlipped[6] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
+
+	uint quadIndex = vertexID / 6;
+	uint2 quadXY = uint2(quadIndex % GridDim, quadIndex / GridDim);
+	int2 parityBase = int2(floor(GridOrigin / GridSpacing));
+	uint parity = uint(parityBase.x + int(quadXY.x)) ^ uint(parityBase.y + int(quadXY.y));
+	float2 corner = ((parity & 1) != 0) ? kCornersFlipped[vertexID % 6] : kCorners[vertexID % 6];
+	float2 gridPos = float2(quadXY) + corner;
+#else
+	// Indexed draw over the (GridDim+1)^2 lattice; vertexID is the absolute
+	// lattice index (no BaseVertexLocation: with no vertex buffer bound the
+	// hardware does not add it to SV_VertexID). The union-jack triangulation
+	// and its world-anchored parity live in the index buffers
+	// (DrawShellGridIndexed).
 	uint stride = GridDim + 1;
 	float2 gridPos = float2(vertexID % stride, vertexID / stride);
+#endif
 	// Warped placement: gridLocal stays a world-unit offset from GridOrigin
 	// (the warped grid's min corner), so all field sampling is unchanged.
 	float2 u = gridPos - (float)GridDim * 0.5;
