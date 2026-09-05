@@ -105,68 +105,98 @@ StructuredBuffer<SkinBound> SkinBounds : register(t2);
 Texture2D<float> HiZ : register(t3);
 RWByteAddressBuffer SkinArgs : register(u3);
 
+// Reason codes, stored in the argument block's StartInstanceLocation (no
+// instance streams, so the draw ignores it) and read back for the census:
+// 0 drawn after the test, 1 kept - sphere reaches the eye plane, 2 kept -
+// occluder read as zero (dead read), 3 culled - outside the view, 4 culled -
+// beyond the far plane, 5 culled - behind the scene.
 [numthreads(64, 1, 1)] void SkinCullCS(uint3 id : SV_DispatchThreadID)
 {
 	if (id.x >= CullSkinCount)
 		return;
 	SkinBound b = SkinBounds[id.x];
 	float3 rel = b.Center - CullCameraPosAdjust.xyz;
+	float r = b.Radius;
 	uint draw = 1;
+	uint reason = 0;
 
-	float2 ndcMin = 1e9;
-	float2 ndcMax = -1e9;
-	bool behind = false;
-	[unroll] for (uint i = 0; i < 8; i++)
+	// Row 3 of the matrix is the eye plane: w = dot(row3, p) is view depth
+	// times |row3.xyz|. Everything below works in that normalised depth.
+	float4 rowW = CullViewProj[3];
+	float fLen = max(length(rowW.xyz), 1e-6);
+	float3 fh = rowW.xyz / fLen;
+	float wC = dot(rowW.xyz, rel) + rowW.w;
+	float wNear = wC - r * fLen;
+	[branch] if (wNear <= 1e-3)
 	{
-		float3 corner = rel + b.Radius * float3((i & 1) ? 1.0 : -1.0, (i & 2) ? 1.0 : -1.0, (i & 4) ? 1.0 : -1.0);
-		float4 clip = mul(CullViewProj, float4(corner, 1.0));
-		if (clip.w <= 1e-3)
-			behind = true;
-		else
-		{
-			float2 n = clip.xy / clip.w;
-			ndcMin = min(ndcMin, n);
-			ndcMax = max(ndcMax, n);
-		}
+		reason = 1;
 	}
-	// Any corner at or behind the eye plane: keep, the footprint is unbounded.
-	[branch] if (!behind)
+	else
 	{
-		if (ndcMax.x < -1.0 || ndcMin.x > 1.0 || ndcMax.y < -1.0 || ndcMin.y > 1.0)
+		// Exact screen bounds of the sphere: per axis, the tangents from the
+		// eye to the sphere's cross-section in the plane spanned by the
+		// axis' lateral direction and the depth direction (Mara & McGuire).
+		// The axis row is split into its part across the depth axis (which
+		// scales with 1/w) and its part along it (a constant offset), so a
+		// jittered or skewed projection is handled exactly.
+		float z = wC / fLen;
+		float2 lo, hi;
+		[unroll] for (uint axis = 0; axis < 2; axis++)
+		{
+			float4 row = CullViewProj[axis];
+			float uf = dot(row.xyz, fh);
+			float3 up = row.xyz - uf * fh;
+			float upLen = max(length(up), 1e-6);
+			float a = (dot(up, rel) + row.w - uf * rowW.w / fLen) / upLen;
+			float t = sqrt(max(a * a + z * z - r * r, 0.0));
+			float k = upLen / fLen;
+			float c = uf / fLen;
+			float b0 = k * (a * t - z * r) / max(z * t + a * r, 1e-6) + c;
+			float b1 = k * (a * t + z * r) / max(z * t - a * r, 1e-6) + c;
+			lo[axis] = min(b0, b1);
+			hi[axis] = max(b0, b1);
+		}
+		if (hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0)
+		{
 			draw = 0;
+			reason = 3;
+		}
 		else
 		{
-			// Nearest point of the sphere in view depth: the centre pulled
-			// toward the eye plane by the radius (row 3 of the matrix is that
-			// plane's normal for any perspective whose w is view depth).
-			float3 fwd = normalize(CullViewProj[3].xyz);
-			float4 cn = mul(CullViewProj, float4(rel - fwd * b.Radius, 1.0));
-			if (cn.w > 1e-3)
+			// Nearest point of the sphere to the eye plane.
+			float4 rowZ = CullViewProj[2];
+			float zn = (dot(rowZ.xyz, rel - r * fh) + rowZ.w) / wNear;
+			if (zn > 1.0)
 			{
-				float zn = cn.z / cn.w;
-				if (zn > 1.0)
-					draw = 0;  // whole sphere beyond the far plane
-				else
+				draw = 0;
+				reason = 4;
+			}
+			else
+			{
+				float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
+				float2 vpMin = CullViewport.xy;
+				float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
+				// One pixel of slack each way covers rasterisation rounding.
+				float2 pxMin = clamp(float2(lo.x * 0.5 + 0.5, 0.5 - hi.y * 0.5) * CullViewport.zw + CullViewport.xy - 1.0, vpMin, vpMax);
+				float2 pxMax = clamp(float2(hi.x * 0.5 + 0.5, 0.5 - lo.y * 0.5) * CullViewport.zw + CullViewport.xy + 1.0, vpMin, vpMax);
+				float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
+				// Level where the footprint spans at most two texels per axis.
+				uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
+				uint shift = level + 1;
+				uint w, h, levels;
+				HiZ.GetDimensions(level, w, h, levels);
+				uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
+				uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
+				float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
+					max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
+				// Scene depth is never exactly 0 (near-plane clip); a zero here
+				// is an unbound or unwritten read, and the skin must draw.
+				if (occluder <= 0.0)
+					reason = 2;
+				else if (depthNear > occluder)
 				{
-					float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
-					float2 vpMin = CullViewport.xy;
-					float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
-					float2 pxMin = clamp(float2(ndcMin.x * 0.5 + 0.5, 0.5 - ndcMax.y * 0.5) * CullViewport.zw + CullViewport.xy, vpMin, vpMax);
-					float2 pxMax = clamp(float2(ndcMax.x * 0.5 + 0.5, 0.5 - ndcMin.y * 0.5) * CullViewport.zw + CullViewport.xy, vpMin, vpMax);
-					float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
-					// Level where the footprint spans at most two texels per axis.
-					uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
-					uint shift = level + 1;
-					uint w, h, levels;
-					HiZ.GetDimensions(level, w, h, levels);
-					uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
-					uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
-					float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
-						max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
-					// Scene depth is never exactly 0 (near-plane clip); a zero here
-					// is an unbound or unwritten read, and the skin must draw.
-					if (occluder > 0.0 && depthNear > occluder)
-						draw = 0;
+					draw = 0;
+					reason = 5;
 				}
 			}
 		}
@@ -176,5 +206,5 @@ RWByteAddressBuffer SkinArgs : register(u3);
 	SkinArgs.Store(base + 4, draw);
 	SkinArgs.Store(base + 8, 0);
 	SkinArgs.Store(base + 12, 0);
-	SkinArgs.Store(base + 16, 0);
+	SkinArgs.Store(base + 16, reason);
 }

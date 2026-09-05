@@ -2611,8 +2611,11 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
-		// Census: the arguments two frames back, read without waiting.
+		// Census: the arguments and the pyramid's top texel two frames back,
+		// read without waiting.
 		context->CopyResource(skinCullArgsStaging[skinCullRing].get(), skinCullArgs->resource.get());
+		if (skinCullHiZTopStaging[skinCullRing])
+			context->CopySubresourceRegion(skinCullHiZTopStaging[skinCullRing].get(), 0, 0, 0, 0, skinCullHiZ->resource.get(), skinCullLevels - 1, nullptr);
 		skinCullStagingIssued[skinCullRing] = true;
 		skinCullStagingCount[skinCullRing] = uint32_t(skinDraws.size());
 		const int readRing = (skinCullRing + 1) % kSkinCullRing;
@@ -2621,6 +2624,7 @@ void SnowDeformation::DrawCapturedStatics()
 			if (SUCCEEDED(context->Map(skinCullArgsStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &rd))) {
 				const auto* args = static_cast<const uint32_t*>(rd.pData);
 				uint32_t drawn = 0, culled = 0, trisCulled = 0, trisTotal = 0;
+				uint32_t reasons[6] = {};
 				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
 					const uint32_t tris = args[i * 5] / 3;
 					trisTotal += tris;
@@ -2630,6 +2634,7 @@ void SnowDeformation::DrawCapturedStatics()
 						culled++;
 						trisCulled += tris;
 					}
+					reasons[std::min(args[i * 5 + 4], 5u)]++;
 				}
 				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
 				skinCullStagingIssued[readRing] = false;
@@ -2637,6 +2642,12 @@ void SnowDeformation::DrawCapturedStatics()
 				skinCullCulledLast = culled;
 				skinCullTrisCulledLast = trisCulled;
 				skinCullTrisTotalLast = trisTotal;
+				memcpy(skinCullReasonLast, reasons, sizeof(reasons));
+			}
+			D3D11_MAPPED_SUBRESOURCE top{};
+			if (skinCullHiZTopStaging[readRing] && SUCCEEDED(context->Map(skinCullHiZTopStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &top))) {
+				skinCullHiZTopLast = *static_cast<const float*>(top.pData);
+				context->Unmap(skinCullHiZTopStaging[readRing].get(), 0);
 			}
 		}
 		skinCullRing = (skinCullRing + 1) % kSkinCullRing;
@@ -3719,6 +3730,21 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 			skinCullHiZSRVs.push_back(srv);
 		}
 		skinCullLevels = levels;
+		D3D11_TEXTURE2D_DESC topDesc{};
+		topDesc.Width = 1;
+		topDesc.Height = 1;
+		topDesc.MipLevels = 1;
+		topDesc.ArraySize = 1;
+		topDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		topDesc.SampleDesc.Count = 1;
+		topDesc.Usage = D3D11_USAGE_STAGING;
+		topDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (int i = 0; i < kSkinCullRing; i++) {
+			skinCullHiZTopStaging[i] = nullptr;
+			if (FAILED(device->CreateTexture2D(&topDesc, nullptr, skinCullHiZTopStaging[i].put())))
+				return false;
+			Util::SetResourceName(skinCullHiZTopStaging[i].get(), "SnowDeformation::SkinCullHiZ top staging");
+		}
 	}
 
 	// Bounds in, indirect arguments out; grown in steps of 256 skins.

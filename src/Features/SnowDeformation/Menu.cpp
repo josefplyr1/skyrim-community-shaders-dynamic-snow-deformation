@@ -1216,6 +1216,10 @@ void SnowDeformation::DrawSettings()
 				skinCullDrawnLast, skinCullCulledLast, total,
 				total ? 100.0 * skinCullCulledLast / total : 0.0,
 				skinCullTrisCulledLast / 1e6, skinCullTrisTotalLast / 1e6);
+			ImGui::Text("  kept: %u tested, %u at eye plane, %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
+				skinCullReasonLast[0], skinCullReasonLast[1], skinCullReasonLast[2],
+				skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
+				skinCullHiZTopLast);
 		}
 
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);

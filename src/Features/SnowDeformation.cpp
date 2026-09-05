@@ -1936,6 +1936,8 @@ void SnowDeformation::ClearShaderCache()
 	skinCullHiZSRVs.clear();
 	for (auto& st : skinCullArgsStaging)
 		st = nullptr;
+	for (auto& st : skinCullHiZTopStaging)
+		st = nullptr;
 	skinCullCapacity = 0;
 	skinCullLevels = 0;
 	if (lodProbeCS)
