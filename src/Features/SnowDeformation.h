@@ -1148,17 +1148,19 @@ public:
 	ID3D11PixelShader* shellPSNoDepth = nullptr;
 	ID3D11PixelShader* GetShellPSNoDepth();
 
-	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's depth (alpha cut + export clamp) with no colour targets; SNOW_SHELL_PREPASS_MAIN shades only the pixels the prepass wrote, under GREATER_EQUAL with writes off, so occluded, self-hidden and alpha-cut fragments never run the shader. Implemented in SnowDeformation/Shell.cpp. */
+	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's clamped depth into the main buffer (alpha cut + export clamp) and its raster depth into shellRasterDepth; the fill pass copies that into shellTestDepth, a private depth buffer the shading pass tests EQUAL against with writes off, so occluded, self-hidden and alpha-cut fragments are rejected by hardware early-Z. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11PixelShader* GetShellPSPrepass();
-	ID3D11PixelShader* GetShellPSPrepassMain();
 	ID3D11PixelShader* shellPSPrepass = nullptr;
-	ID3D11PixelShader* shellPSPrepassMain = nullptr;
-	bool shellMarchBicubicCompiledPSPrepassMain = false;
-	ID3D11ComputeShader* GetDepthCopyCS();
-	ID3D11ComputeShader* depthCopyCS = nullptr;
+	ID3D11VertexShader* GetShellFillVS();
+	ID3D11PixelShader* GetShellFillPS();
+	ID3D11VertexShader* shellFillVS = nullptr;
+	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
-	Texture2D* shellPrepassDepth = nullptr;
+	Texture2D* shellRasterDepth = nullptr;
+	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
+	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
+	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
 	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */
 	bool shellDepthPrepassDisabled = false;
 

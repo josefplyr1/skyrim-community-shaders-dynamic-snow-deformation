@@ -31,15 +31,20 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	BlendedDepth16[dtid.xy] = blended;
 }
 
-// Plain copy of the main depth into u0, taken between the shell's depth
-// prepass and its shading pass (the shading pass keys on what the prepass
-// wrote). CopyResource cannot bridge the depth format to R32.
-[numthreads(8, 8, 1)]
-void CopyCS(uint3 dtid : SV_DispatchThreadID)
+// Shell prepass fill: turns the prepass's raster-depth colour target into
+// the shading pass's private depth buffer (fullscreen triangle, depth
+// ALWAYS + write). Pixels the prepass did not win hold the clear value 0,
+// which no shell fragment can equal, so the shading pass's EQUAL test is a
+// hardware early-Z that admits exactly the pixels the prepass wrote.
+Texture2D<float> FillSource : register(t9);
+
+float4 FillVS(uint vertexID : SV_VertexID) : SV_Position
 {
-	uint2 dims;
-	MainDepth.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-	BlendedDepth[dtid.xy] = MainDepth[dtid.xy];
+	float2 uv = float2((vertexID << 1) & 2, vertexID & 2);
+	return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+
+float FillPS(float4 pos : SV_Position) : SV_Depth
+{
+	return FillSource.Load(int3(pos.xy, 0));
 }

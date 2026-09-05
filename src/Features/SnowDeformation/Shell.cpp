@@ -565,32 +565,22 @@ ID3D11PixelShader* SnowDeformation::GetShellPSPrepass()
 	return shellPSPrepass;
 }
 
-ID3D11PixelShader* SnowDeformation::GetShellPSPrepassMain()
+ID3D11VertexShader* SnowDeformation::GetShellFillVS()
 {
-	if (shellPSPrepassMain && shellMarchBicubicCompiledPSPrepassMain != shellMarchBicubicRestored) {
-		shellPSPrepassMain->Release();
-		shellPSPrepassMain = nullptr;
+	if (!shellFillVS) {
+		logger::debug("Compiling DepthSyncCS FillVS");
+		shellFillVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillVS"));
 	}
-	if (!shellPSPrepassMain) {
-		logger::debug("Compiling SnowShell PS (prepass main)");
-		auto defines = ShellPSDefines();
-		defines.emplace_back("SNOW_SHELL_NO_DEPTH_EXPORT", "");
-		defines.emplace_back("SNOW_SHELL_PREPASS_MAIN", "");
-		if (shellMarchBicubicRestored)
-			defines.emplace_back("SNOW_MARCH_BICUBIC", "");
-		shellMarchBicubicCompiledPSPrepassMain = shellMarchBicubicRestored;
-		shellPSPrepassMain = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
-	}
-	return shellPSPrepassMain;
+	return shellFillVS;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetDepthCopyCS()
+ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 {
-	if (!depthCopyCS) {
-		logger::debug("Compiling DepthSyncCS CopyCS");
-		depthCopyCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "CopyCS"));
+	if (!shellFillPS) {
+		logger::debug("Compiling DepthSyncCS FillPS");
+		shellFillPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "ps_5_0", "FillPS"));
 	}
-	return depthCopyCS;
+	return shellFillPS;
 }
 
 bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV)
@@ -605,11 +595,14 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 	D3D11_TEXTURE2D_DESC depthDesc{};
 	depthTex->GetDesc(&depthDesc);
 
-	if (shellPrepassDepth && (shellPrepassDepth->desc.Width != depthDesc.Width || shellPrepassDepth->desc.Height != depthDesc.Height)) {
-		delete shellPrepassDepth;
-		shellPrepassDepth = nullptr;
+	auto device = globals::d3d::device;
+	if (shellRasterDepth && (shellRasterDepth->desc.Width != depthDesc.Width || shellRasterDepth->desc.Height != depthDesc.Height)) {
+		delete shellRasterDepth;
+		shellRasterDepth = nullptr;
+		shellTestDepthDSV = nullptr;
+		shellTestDepth = nullptr;
 	}
-	if (!shellPrepassDepth) {
+	if (!shellRasterDepth) {
 		D3D11_TEXTURE2D_DESC desc{};
 		desc.Width = depthDesc.Width;
 		desc.Height = depthDesc.Height;
@@ -618,31 +611,53 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		desc.Format = DXGI_FORMAT_R32_FLOAT;
 		desc.SampleDesc.Count = 1;
 		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
 			.Format = desc.Format,
 			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
 			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
-		shellPrepassDepth = new Texture2D(desc, "SnowDeformation::ShellPrepassDepth");
-		shellPrepassDepth->CreateSRV(srvDesc);
-		shellPrepassDepth->CreateUAV(uavDesc);
+		shellRasterDepth = new Texture2D(desc, "SnowDeformation::ShellRasterDepth");
+		shellRasterDepth->CreateSRV(srvDesc);
+		shellRasterDepth->CreateRTV(rtvDesc);
+
+		D3D11_TEXTURE2D_DESC testDesc = desc;
+		testDesc.Format = DXGI_FORMAT_D32_FLOAT;
+		testDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+		if (FAILED(device->CreateTexture2D(&testDesc, nullptr, shellTestDepth.put())))
+			return false;
+		Util::SetResourceName(shellTestDepth.get(), "SnowDeformation::ShellTestDepth");
+		D3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc{};
+		dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+		dsvDesc.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+		if (FAILED(device->CreateDepthStencilView(shellTestDepth.get(), &dsvDesc, shellTestDepthDSV.put())))
+			return false;
+		Util::SetResourceName(shellTestDepthDSV.get(), "SnowDeformation::ShellTestDepth DSV");
 	}
 	if (!shellPrepassMainDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
 		dsDesc.DepthEnable = TRUE;
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		dsDesc.DepthFunc = D3D11_COMPARISON_GREATER_EQUAL;
-		if (FAILED(globals::d3d::device->CreateDepthStencilState(&dsDesc, shellPrepassMainDepthState.put())))
+		dsDesc.DepthFunc = D3D11_COMPARISON_EQUAL;
+		if (FAILED(device->CreateDepthStencilState(&dsDesc, shellPrepassMainDepthState.put())))
 			return false;
 		Util::SetResourceName(shellPrepassMainDepthState.get(), "SnowDeformation::ShellPrepassMainDepthState");
 	}
-	return shellPrepassDepth->srv && shellPrepassDepth->uav;
+	if (!shellFillDepthState) {
+		D3D11_DEPTH_STENCIL_DESC dsDesc{};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
+		dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
+		if (FAILED(device->CreateDepthStencilState(&dsDesc, shellFillDepthState.put())))
+			return false;
+		Util::SetResourceName(shellFillDepthState.get(), "SnowDeformation::ShellFillDepthState");
+	}
+	return shellRasterDepth->srv && shellRasterDepth->rtv && shellTestDepthDSV;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSNoDepth()
@@ -1359,46 +1374,61 @@ void SnowDeformation::DrawShell()
 		// Skipped when the clamp is already off (one pass, nothing to keep) or
 		// when the LOD heatmap owns the PS, and it falls back to the single
 		// draw if either variant failed to compile.
-		// Depth prepass: one depth-only draw over the whole grid (alpha cut
-		// + export clamp, cheap shader), a copy of the resulting depth, then
-		// the shading draw under GREATER_EQUAL with writes off, whose shader
-		// leaves at the top unless the prepass wrote the pixel. The split
-		// draws below only ever restored early-Z for the near field; this
-		// restores it for occlusion, self-occlusion and the alpha cut alike.
+		// Depth prepass, three draws: (1) the whole grid with a cheap PS that
+		// runs the alpha cut and writes the clamped depth into the main
+		// buffer as before, plus every winning fragment's RASTER depth into
+		// shellRasterDepth (cleared to 0); (2) a fullscreen fill that turns
+		// that into shellTestDepth, a private depth buffer; (3) the shading
+		// draw against shellTestDepth under EQUAL with writes off. Raster
+		// depth is bit-identical between draws of the same geometry, and 0
+		// matches no fragment, so the EQUAL test is a hardware early-Z that
+		// admits exactly the pixels the prepass wrote - occluded, self-hidden
+		// and alpha-cut fragments never launch the shader. A test against the
+		// main buffer cannot do this: the clamps write a depth that is not
+		// the rasterised one, and a GREATER_EQUAL variant that let a software
+		// test decide launched the full shader on every occluded fragment and
+		// measured slower than no prepass at all.
 		auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 		const bool prepassWanted = !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
 		auto* psPrepass = prepassWanted ? GetShellPSPrepass() : nullptr;
-		auto* psPrepassMain = psPrepass ? GetShellPSPrepassMain() : nullptr;
-		auto* depthCopy = psPrepassMain ? GetDepthCopyCS() : nullptr;
-		const bool prepass = depthCopy && EnsurePrepassResources(mainDepthSRV);
+		auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
+		auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
+		auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+		const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
 		auto* hsNear = (!prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled) ? GetShellHSNear() : nullptr;
 		auto* hsFar = hsNear ? GetShellHSFar() : nullptr;
 		auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
 		if (prepass) {
-			context->OMSetRenderTargets(0, nullptr, dsv);
+			const float rasterClear[4] = {};
+			context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
+			ID3D11RenderTargetView* prepassRTV = shellRasterDepth->rtv.get();
+			context->OMSetRenderTargets(1, &prepassRTV, dsv);
 			context->PSSetShader(psPrepass, nullptr, 0);
 			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 
-			context->OMSetRenderTargets(0, nullptr, nullptr);
-			ID3D11UnorderedAccessView* copyUAV = shellPrepassDepth->uav.get();
-			context->CSSetShaderResources(0, 1, &mainDepthSRV);
-			context->CSSetUnorderedAccessViews(0, 1, &copyUAV, nullptr);
-			context->CSSetShader(depthCopy, nullptr, 0);
-			context->Dispatch((shellPrepassDepth->desc.Width + 7) / 8, (shellPrepassDepth->desc.Height + 7) / 8, 1);
-			ID3D11ShaderResourceView* nullCopySRV = nullptr;
-			ID3D11UnorderedAccessView* nullCopyUAV = nullptr;
-			context->CSSetShaderResources(0, 1, &nullCopySRV);
-			context->CSSetUnorderedAccessViews(0, 1, &nullCopyUAV, nullptr);
-			context->CSSetShader(nullptr, nullptr, 0);
+			context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			context->VSSetShader(fillVS, nullptr, 0);
+			context->HSSetShader(nullptr, nullptr, 0);
+			context->DSSetShader(nullptr, nullptr, 0);
+			ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
+			context->PSSetShaderResources(9, 1, &rasterSRV);
+			context->PSSetShader(fillPS, nullptr, 0);
+			context->Draw(3, 0);
+			ID3D11ShaderResourceView* nullRasterSRV = nullptr;
+			context->PSSetShaderResources(9, 1, &nullRasterSRV);
 
-			context->OMSetRenderTargets(8, rtvs, dsv);
+			context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 			context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
-			ID3D11ShaderResourceView* prepassSRV = shellPrepassDepth->srv.get();
-			context->PSSetShaderResources(9, 1, &prepassSRV);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+			context->VSSetShader(tessVS, nullptr, 0);
+			context->HSSetShader(tessHS, nullptr, 0);
+			context->DSSetShader(tessDS, nullptr, 0);
 			context->PSSetShader(psPrepassMain, nullptr, 0);
 			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
-			ID3D11ShaderResourceView* nullPrepassSRV = nullptr;
-			context->PSSetShaderResources(9, 1, &nullPrepassSRV);
+
+			context->OMSetRenderTargets(8, rtvs, dsv);
 			context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		} else if (hsNear && hsFar && psNear) {
 			context->HSSetShader(hsNear, nullptr, 0);

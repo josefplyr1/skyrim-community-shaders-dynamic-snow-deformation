@@ -233,9 +233,6 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
-// Main depth after the shell's depth-only prepass (SNOW_SHELL_PREPASS_MAIN):
-// the pixels the prepass wrote are the only ones the shading pass may run.
-Texture2D<float> ShellPrepassDepth : register(t9);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -1523,10 +1520,14 @@ struct PS_OUTPUT
 #	endif
 };
 
-// Depth-only prepass (SNOW_SHELL_DEPTH_PREPASS): the alpha cut and the
-// export clamp, nothing else, with no colour targets bound.
+// Depth prepass (SNOW_SHELL_DEPTH_PREPASS): the alpha cut and the export
+// clamp, nothing else. DepthLE is the shell's real depth (clamped); the
+// colour target receives the RASTER depth of every fragment that wins, which
+// the fill pass turns into the shading pass's EQUAL test buffer - a hardware
+// EQUAL against the clamped depth would drop every clamped pixel.
 struct PS_PREPASS_OUTPUT
 {
+	float RasterDepth : SV_Target0;
 	float DepthLE : SV_DepthLessEqual;
 };
 
@@ -1549,12 +1550,6 @@ float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float s
 	return depth;
 }
 
-// Shading pass after the prepass: a pixel is the shell's only if the depth
-// buffer holds what the prepass could have written there - the raster depth
-// itself, or the clamped form. Four depth quanta of slack covers D24
-// storage and compiler reordering; a different surface within that is
-// already in the z-fight band the clamps resolve in the shell's favour.
-static const float kPrepassDepthTolerance = 2.4e-7;
 
 // SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
 //
@@ -1674,18 +1669,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
-#ifdef SNOW_SHELL_PREPASS_MAIN
-	// Fragments the prepass did not write - occluded, hidden behind the
-	// shell's own slopes, or cut by the alpha test - leave here, before any
-	// of the shading below. The depth state is GREATER_EQUAL with writes
-	// off, so fragments in front of what the buffer holds never launch.
-	{
-		float written = ShellPrepassDepth.Load(int3(input.Position.xy, 0));
-		if (abs(written - input.Position.z) > kPrepassDepthTolerance &&
-			abs(written - (rawSceneDepth - 1e-5)) > kPrepassDepthTolerance)
-			discard;
-	}
-#endif
 
 	// User-tunable contest fringe (units): how far around the contact point
 	// the height contest operates.
@@ -1845,6 +1828,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
+	prepassOut.RasterDepth = input.Position.z;
 	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve);
 	return prepassOut;
 #endif

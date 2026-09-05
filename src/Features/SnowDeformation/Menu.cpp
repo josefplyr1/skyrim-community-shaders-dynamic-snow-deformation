@@ -1155,7 +1155,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Shell: Pipeline Statistics"), &shellPipelineStatsEnabled);
 		if (auto _ttStats = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic."));
+			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With the depth prepass on, the shell line counts all three of its draws: the prepass's own cheap invocations and the fullscreen fill's samples are in there, so read the Shell profiler row as the verdict and this line as the explanation."));
 		if (shellPipelineStatsEnabled) {
 			auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
 				if (!a_r.valid) {
