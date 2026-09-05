@@ -566,7 +566,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		UINT zero = 0;
 		context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
 		context->VSSetShader(vs, nullptr, 0);
-		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+		if (EnsureShellGridIndexBuffers())
+			DrawShellGridIndexed(context, shadowCB);
 
 		// The OBJECT shells cast too (Josef's cliff report: the shadow
 		// line came from the bare rock beneath the shell). Same captured

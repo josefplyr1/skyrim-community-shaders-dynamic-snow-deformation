@@ -1085,6 +1085,12 @@ public:
 	ID3D11VertexShader* shellVS = nullptr;
 	ID3D11PixelShader* shellPS = nullptr;
 
+	/** @brief Index buffers for the non-tessellated grid draws (legacy main path, shadow caster): one per union-jack parity, 16-bit indices in row bands drawn with a base vertex each. Implemented in SnowDeformation/Shell.cpp. */
+	bool EnsureShellGridIndexBuffers();
+	void DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
+	winrt::com_ptr<ID3D11Buffer> shellGridIB[2];
+	static constexpr uint kShellIndexBandRows = 101;
+
 	/** @brief Heatmap-mode PS permutation (SNOW_LOD_HISTOGRAM): single SV_Target + histogram UAV at u1. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11PixelShader* GetShellLODPS();
 	ID3D11PixelShader* shellLODPS = nullptr;

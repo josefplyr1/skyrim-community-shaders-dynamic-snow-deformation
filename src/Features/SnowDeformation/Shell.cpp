@@ -292,6 +292,66 @@ void SnowDeformation::RefreshSnowPBRParams()
 	}
 }
 
+bool SnowDeformation::EnsureShellGridIndexBuffers()
+{
+	if (shellGridIB[0] && shellGridIB[1])
+		return true;
+
+	constexpr uint N = kShellGridDim;
+	constexpr uint stride = N + 1;
+	constexpr uint R = kShellIndexBandRows;
+	static_assert((R + 1) * stride <= 65536, "index band must fit 16-bit indices");
+	// Same corner order the vertex shader used to expand per quad.
+	static constexpr uint8_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	static constexpr uint8_t kCornersFlipped[6][2] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 0 }, { 1, 1 }, { 0, 1 } };
+
+	std::vector<uint16_t> indices(static_cast<size_t>(N) * N * 6);
+	for (uint parity = 0; parity < 2; ++parity) {
+		size_t w = 0;
+		for (uint y = 0; y < N; ++y) {
+			const uint localY = y % R;
+			for (uint x = 0; x < N; ++x) {
+				const bool flipped = (((x ^ y) ^ parity) & 1u) != 0;
+				const auto& corners = flipped ? kCornersFlipped : kCorners;
+				for (uint c = 0; c < 6; ++c)
+					indices[w++] = static_cast<uint16_t>((localY + corners[c][1]) * stride + x + corners[c][0]);
+			}
+		}
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = static_cast<UINT>(indices.size() * sizeof(uint16_t));
+		desc.Usage = D3D11_USAGE_IMMUTABLE;
+		desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+		D3D11_SUBRESOURCE_DATA init{};
+		init.pSysMem = indices.data();
+		if (FAILED(globals::d3d::device->CreateBuffer(&desc, &init, shellGridIB[parity].put()))) {
+			logger::error("SnowDeformation: shell grid index buffer {} creation failed", parity);
+			shellGridIB[0] = nullptr;
+			shellGridIB[1] = nullptr;
+			return false;
+		}
+		Util::SetResourceName(shellGridIB[parity].get(), parity ? "SnowDeformation::ShellGridIB1" : "SnowDeformation::ShellGridIB0");
+	}
+	return true;
+}
+
+void SnowDeformation::DrawShellGridIndexed(ID3D11DeviceContext* a_context, const ShellCB& a_cb)
+{
+	// Union-jack diagonal parity, anchored to world position so walls do not
+	// re-phase on every camera step (was the VS's parityBase).
+	const int px = static_cast<int>(std::floor(a_cb.GridOrigin.x / a_cb.GridSpacing));
+	const int py = static_cast<int>(std::floor(a_cb.GridOrigin.y / a_cb.GridSpacing));
+	const uint parity = static_cast<uint>(px ^ py) & 1u;
+	a_context->IASetIndexBuffer(shellGridIB[parity].get(), DXGI_FORMAT_R16_UINT, 0);
+
+	constexpr uint N = kShellGridDim;
+	constexpr uint stride = N + 1;
+	constexpr uint R = kShellIndexBandRows;
+	for (uint row = 0; row < N; row += R) {
+		const uint rows = std::min(R, N - row);
+		a_context->DrawIndexed(rows * N * 6, row * N * 6, static_cast<INT>(row * stride));
+	}
+}
+
 ID3D11VertexShader* SnowDeformation::GetShellVS()
 {
 	if (!shellVS) {
@@ -785,6 +845,14 @@ void SnowDeformation::DrawShell()
 	context->OMGetDepthStencilState(prevDepth.put(), &prevStencilRef);
 	context->OMGetBlendState(prevBlend.put(), prevBlendFactor, &prevSampleMask);
 	context->IAGetPrimitiveTopology(&prevTopology);
+	winrt::com_ptr<ID3D11Buffer> prevIB;
+	DXGI_FORMAT prevIBFormat = DXGI_FORMAT_UNKNOWN;
+	UINT prevIBOffset = 0;
+	{
+		ID3D11Buffer* ib = nullptr;
+		context->IAGetIndexBuffer(&ib, &prevIBFormat, &prevIBOffset);
+		prevIB.attach(ib);
+	}
 	D3D11_VIEWPORT prevViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	UINT prevViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	context->RSGetViewports(&prevViewportCount, prevViewports);
@@ -1111,7 +1179,8 @@ void SnowDeformation::DrawShell()
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	} else {
 		context->VSSetShader(vs, nullptr, 0);
-		context->Draw(kShellGridDim * kShellGridDim * 6, 0);
+		if (EnsureShellGridIndexBuffers())
+			DrawShellGridIndexed(context, cbData);
 	}
 	globals::profiler->EndPass();
 
@@ -1176,6 +1245,7 @@ void SnowDeformation::DrawShell()
 	context->OMSetDepthStencilState(prevDepth.get(), prevStencilRef);
 	context->OMSetBlendState(prevBlend.get(), prevBlendFactor, prevSampleMask);
 	context->IASetPrimitiveTopology(prevTopology);
+	context->IASetIndexBuffer(prevIB.get(), prevIBFormat, prevIBOffset);
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
