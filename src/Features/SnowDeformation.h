@@ -592,8 +592,8 @@ public:
 		float SkinDepthBias = 64.0f;
 		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
 		float SkinSlopeDepthBias = 0.0f;
-		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. */
-		float SkinTessCapPx = 4.0f;
+		/** @brief Object-skin tessellation cap: no generated edge segment shorter than this many screen pixels. 0 = off. The hull's base rule already targets ~20 px, so values below that trim only the rim-roll term (1-unit segments, sub-pixel past ~500 units); larger values coarsen the whole skin. Not bit-identical: it changes the surface. 16 measured -0.32 ms on StaticsShell with no visible change (PERF-RESEARCH 9.6); 32 is the tier value. */
+		float SkinTessCapPx = 16.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
