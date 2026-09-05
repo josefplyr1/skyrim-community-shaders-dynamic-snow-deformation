@@ -1930,7 +1930,9 @@ void SnowDeformation::ClearShaderCache()
 	skinCullArgs = nullptr;
 	delete skinCullHiZ;
 	skinCullHiZ = nullptr;
-	skinCullHiZUAVs.clear();
+	for (auto* scratch : skinCullHiZScratch)
+		delete scratch;
+	skinCullHiZScratch.clear();
 	skinCullHiZSRVs.clear();
 	for (auto& st : skinCullArgsStaging)
 		st = nullptr;

@@ -163,7 +163,9 @@ RWByteAddressBuffer SkinArgs : register(u3);
 					uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
 					float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
 						max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
-					if (depthNear > occluder)
+					// Scene depth is never exactly 0 (near-plane clip); a zero here
+					// is an unbound or unwritten read, and the skin must draw.
+					if (occluder > 0.0 && depthNear > occluder)
 						draw = 0;
 				}
 			}

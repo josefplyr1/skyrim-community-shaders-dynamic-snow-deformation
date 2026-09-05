@@ -2090,7 +2090,8 @@ public:
 	uint32_t skinCullStagingCount[kSkinCullRing] = {};
 	int skinCullRing = 0;
 	Texture2D* skinCullHiZ = nullptr;
-	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
+	/** @brief One single-mip scratch per level: the build reads level k-1 of the chain and writes scratch k, then copies it into the chain. A texture cannot be an input and an output of the same dispatch, mips included. */
+	std::vector<Texture2D*> skinCullHiZScratch;
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
 	uint32_t skinCullLevels = 0;
 	uint32_t skinCullDrawnLast = 0;
