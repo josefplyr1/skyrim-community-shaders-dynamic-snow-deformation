@@ -2929,6 +2929,23 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(0.1, 0.7, 0.7) * (0.4 + 0.6 * pixelCoverage);
 		else preLit = float3(0.05, 0.25 + 0.75 * pixelCoverage, 0.1);
 	}
+	else if (ShellLODDebug == 4)
+	{
+		// Land-exact delta: the vertex-interpolated terrain height against the
+		// fine layer at this pixel. Green within 2 units, amber -> red = shell
+		// terrain above the land (red at 64+), teal -> blue = below, gray = no
+		// fine data here.
+		float land = LandHeightFine(gridLocal);
+		float d = input.DebugHeight - land;
+		[flatten] if (land < -50000.0)
+			preLit = float3(0.3, 0.3, 0.3);
+		else if (abs(d) < 2.0)
+			preLit = float3(0.1, 0.8, 0.1);
+		else if (d > 0.0)
+			preLit = lerp(float3(0.7, 0.55, 0.0), float3(1.0, 0.0, 0.0), saturate((d - 2.0) / 62.0));
+		else
+			preLit = lerp(float3(0.0, 0.55, 0.6), float3(0.0, 0.0, 1.0), saturate((-d - 2.0) / 62.0));
+	}
 
 	// Terrain Blending-style output: alpha rides every .w and the stochastic
 	// blend mask goes to NormalGlossiness.w, exactly as Lighting.hlsl's

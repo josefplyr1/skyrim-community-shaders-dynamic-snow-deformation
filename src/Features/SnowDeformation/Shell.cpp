@@ -884,6 +884,10 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
+	if (fineProbeArmed) {
+		fineProbeArmed = false;
+		ProbeFineLayer(a_cb);
+	}
 	// Snow uv offset folded to the tile period, so shader-side uv math stays
 	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;
@@ -944,7 +948,7 @@ void SnowDeformation::DrawShell()
 
 	RefreshShellGridPlacement(cbData);
 	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : 0u))));
-	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 3);
+	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
 
 	// Loaded-cell boundary square around the PLAYER's cell (cell attachment

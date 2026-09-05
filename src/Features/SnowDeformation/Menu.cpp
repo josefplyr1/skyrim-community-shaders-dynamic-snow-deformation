@@ -1247,6 +1247,14 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextUnformatted("probe: armed, waiting for a landscape draw");
 		else if (!landTriProbeResult.empty())
 			ImGui::TextWrapped("%s", landTriProbeResult.c_str());
+		if (ImGui::Button(T(TKEY("fine_probe"), "Probe Land-Exact Layer")))
+			fineProbeArmed = true;
+		if (auto _ttFineProbe = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("fine_probe_tooltip"), "Diagnostic: reads the land-exact height layer back from the GPU and checks it three ways - the terrain window against the baked cell data, the fine texture against a CPU copy of the pass that builds it, and the shader's own lookup along your line of sight against the same rule evaluated from the cells. Stand facing the ground you are asking about; the result appears here and in the log."));
+		if (fineProbeArmed)
+			ImGui::TextUnformatted("fine probe: armed");
+		else if (!fineProbeResult.empty())
+			ImGui::TextWrapped("%s", fineProbeResult.c_str());
 		if (!skinCullDisabled) {
 			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
 			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",
@@ -1330,6 +1338,8 @@ void SnowDeformation::DrawSettings()
 			lodModes += T(TKEY("lod_debug_rings"), "Vertex Spacing Bands");
 			lodModes += '\0';
 			lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
+			lodModes += '\0';
+			lodModes += T(TKEY("lod_debug_fine_delta"), "Land-Exact Delta");
 			lodModes += '\0';
 			ImGui::Combo(T(TKEY("lod_debug_view"), "Distant Debug View"), &lodDebugView, lodModes.c_str());
 			if (auto _ttLod = Util::HoverTooltipWrapper())

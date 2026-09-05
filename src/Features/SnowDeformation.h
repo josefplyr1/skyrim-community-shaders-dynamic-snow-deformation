@@ -1383,7 +1383,7 @@ public:
 
 	// ---- Distant-snow / LOD diagnostics (runtime-only) ----
 
-	/** @brief 0 off, 1 depth-delta heatmap, 2 warp-ring view, 3 data-provenance view. Mirrors ShellCB::ShellLODDebug. */
+	/** @brief 0 off, 1 depth-delta heatmap, 2 warp-ring view, 3 data-provenance view, 4 land-exact delta. Mirrors ShellCB::ShellLODDebug. */
 	int lodDebugView = 0;
 	/** @brief Shimmer meter: a probe CS evaluates the shell mesh surface at world-anchored points each frame; the CPU tracks frame-to-frame height deltas per distance band. */
 	bool lodShimmerMeter = false;
@@ -1862,6 +1862,10 @@ public:
 	std::string landTriProbeResult;
 	void CaptureLandTriProbe(RE::BSRenderPass* a_pass);
 	void ServiceLandTriProbe();
+	/** @brief One-shot diagnostic for the land-exact height layer: reads the fine texture and the terrain window back and checks the window against the baked cells, the fine texture against a CPU replica of TerrainFineCS, and the shader's fine lookup along the camera's forward line against the same rule evaluated straight from the cells. Implemented in SnowDeformation/TerrainData.cpp. */
+	bool fineProbeArmed = false;
+	std::string fineProbeResult;
+	void ProbeFineLayer(const ShellCB& a_cb);
 	uint32_t clusterSkinsLast = 0;
 	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;

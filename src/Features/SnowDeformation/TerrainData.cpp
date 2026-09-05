@@ -950,3 +950,252 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 	}
 	return false;
 }
+
+// Fine-layer readback probe (see the header). Blocking maps: one shot, on
+// request, from the debug menu.
+void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
+{
+	fineProbeResult.clear();
+	if (!shellFineValid || !shellTerrainFine || !shellTerrainTexture) {
+		fineProbeResult = "fine probe: no fine window";
+		return;
+	}
+	auto context = globals::d3d::context;
+	auto device = globals::d3d::device;
+	auto stage = [&](Texture2D* tex, DXGI_FORMAT fmt, uint32_t dim) {
+		D3D11_TEXTURE2D_DESC d{};
+		d.Width = dim;
+		d.Height = dim;
+		d.MipLevels = 1;
+		d.ArraySize = 1;
+		d.Format = fmt;
+		d.SampleDesc.Count = 1;
+		d.Usage = D3D11_USAGE_STAGING;
+		d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		winrt::com_ptr<ID3D11Texture2D> s;
+		if (FAILED(device->CreateTexture2D(&d, nullptr, s.put())))
+			return winrt::com_ptr<ID3D11Texture2D>{};
+		context->CopyResource(s.get(), tex->resource.get());
+		return s;
+	};
+	auto fineStage = stage(shellTerrainFine, DXGI_FORMAT_R32_FLOAT, kShellFineDim);
+	auto winStage = stage(shellTerrainTexture, DXGI_FORMAT_R32G32B32A32_FLOAT, kShellWindowDim);
+	if (!fineStage || !winStage) {
+		fineProbeResult = "fine probe: staging alloc failed";
+		return;
+	}
+	D3D11_MAPPED_SUBRESOURCE fm{}, wm{};
+	if (FAILED(context->Map(fineStage.get(), 0, D3D11_MAP_READ, 0, &fm))) {
+		fineProbeResult = "fine probe: map failed";
+		return;
+	}
+	if (FAILED(context->Map(winStage.get(), 0, D3D11_MAP_READ, 0, &wm))) {
+		context->Unmap(fineStage.get(), 0);
+		fineProbeResult = "fine probe: map failed";
+		return;
+	}
+	auto fineAt = [&](int x, int y) {
+		return *reinterpret_cast<const float*>(static_cast<const uint8_t*>(fm.pData) + size_t(y) * fm.RowPitch + size_t(x) * 4);
+	};
+	auto winAt = [&](int x, int y) {
+		return reinterpret_cast<const float*>(static_cast<const uint8_t*>(wm.pData) + size_t(y) * wm.RowPitch + size_t(x) * 16);
+	};
+	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	const int fineCellX0 = int(std::lround(shellFineOriginX / cellSize));
+	const int fineCellY0 = int(std::lround(shellFineOriginY / cellSize));
+	const float windowOriginX = shellWindowCellX * cellSize;
+	const float windowOriginY = shellWindowCellY * cellSize;
+	std::string out = std::format("fine probe: GridOrigin ({:.0f},{:.0f}) FineWindow ({:.0f},{:.0f},{:.0f},{:.0f}) fineOrigin ({:.0f},{:.0f}) windowOrigin ({:.0f},{:.0f}) GridToTerrainOffset ({:.0f},{:.0f})\n",
+		a_cb.GridOrigin.x, a_cb.GridOrigin.y, a_cb.FineWindow.x, a_cb.FineWindow.y, a_cb.FineWindow.z, a_cb.FineWindow.w,
+		shellFineOriginX, shellFineOriginY, windowOriginX, windowOriginY, a_cb.GridToTerrainOffset.x, a_cb.GridToTerrainOffset.y);
+
+	// A: window texels against the baked cells, over the fine window's cells.
+	uint32_t cellsBaked = 0, cellsMissing = 0, fillMismatch = 0, lodTexels = 0, sentinelBaked = 0;
+	double fillMax = 0.0;
+	{
+		const std::shared_lock lock(shellCellMutex);
+		for (int cy = 0; cy < kShellFineCells; cy++) {
+			for (int cx = 0; cx < kShellFineCells; cx++) {
+				const int cellX = fineCellX0 + cx, cellY = fineCellY0 + cy;
+				const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+				auto it = shellCells.find(key);
+				const bool baked = it != shellCells.end() && it->second.worldspaceID == shellWindowWorldspace;
+				(baked ? cellsBaked : cellsMissing)++;
+				for (int vy = 0; vy < 32; vy++) {
+					for (int vx = 0; vx < 32; vx++) {
+						const int tx = (cellX - shellWindowCellX) * 32 + vx, ty = (cellY - shellWindowCellY) * 32 + vy;
+						if (tx < 0 || ty < 0 || tx >= kShellWindowDim || ty >= kShellWindowDim)
+							continue;
+						const float* t = winAt(tx, ty);
+						if (t[3] >= 0.5f)
+							lodTexels++;
+						if (!baked)
+							continue;
+						const float h = it->second.height[size_t(vy) * 33 + size_t(vx)];
+						if (t[0] < -50000.0f) {
+							sentinelBaked++;
+							continue;
+						}
+						const double d = std::fabs(double(t[0]) - h);
+						fillMax = std::max(fillMax, d);
+						if (d > 0.01)
+							fillMismatch++;
+					}
+				}
+			}
+		}
+	}
+	out += std::format("A fill: {} cells baked, {} missing; window vs cells max {:.3f}, {} texels off by >0.01, {} sentinel where baked, {} LOD/heightmap texels in the fine footprint\n",
+		cellsBaked, cellsMissing, fillMax, fillMismatch, sentinelBaked, lodTexels);
+
+	// B: fine texture against a CPU copy of TerrainFineCS over the window.
+	auto catmull = [](float p0, float p1, float p2, float p3, float t) {
+		return 0.5f * (2.0f * p1 + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t * t + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t * t * t);
+	};
+	auto csReplica = [&](float worldX, float worldY) -> float {
+		const float ufx = (worldX - windowOriginX) / kShellVertexSpacing, ufy = (worldY - windowOriginY) / kShellVertexSpacing;
+		const int ix = int(std::floor(ufx)), iy = int(std::floor(ufy));
+		const float fx = ufx - ix, fy = ufy - iy;
+		const int lox = (ix >> 5) << 5, loy = (iy >> 5) << 5;
+		float h[4][4];
+		for (int j = 0; j < 4; j++) {
+			for (int k = 0; k < 4; k++) {
+				const int sx = ix + k - 1, sy = iy + j - 1;
+				const int cx = std::clamp(sx, lox, lox + 32), cy = std::clamp(sy, loy, loy + 32);
+				const int mx = 2 * cx - sx, my = 2 * cy - sy;
+				const int wmax = kShellWindowDim - 1;
+				const float he = winAt(std::clamp(cx, 0, wmax), std::clamp(cy, 0, wmax))[0];
+				const float hm = winAt(std::clamp(mx, 0, wmax), std::clamp(my, 0, wmax))[0];
+				if (he < -50000.0f || hm < -50000.0f)
+					return -100000.0f;
+				h[j][k] = (sx != cx || sy != cy) ? 2.0f * he - hm : he;
+			}
+		}
+		float rows[4];
+		for (int r = 0; r < 4; r++)
+			rows[r] = catmull(h[r][0], h[r][1], h[r][2], h[r][3], fx);
+		return catmull(rows[0], rows[1], rows[2], rows[3], fy);
+	};
+	uint32_t csMismatch = 0, fineSentinels = 0, csChecked = 0;
+	double csMax = 0.0, csSq = 0.0;
+	std::string firstBad;
+	for (int y = 0; y < (int)kShellFineDim; y++) {
+		for (int x = 0; x < (int)kShellFineDim; x++) {
+			const float g = fineAt(x, y);
+			const float ref = csReplica(shellFineOriginX + x * kShellFineTexel, shellFineOriginY + y * kShellFineTexel);
+			if (g < -50000.0f)
+				fineSentinels++;
+			if (g < -50000.0f || ref < -50000.0f) {
+				if ((g < -50000.0f) != (ref < -50000.0f) && csMismatch++ < 3)
+					firstBad += std::format("  sentinel disagreement at fine ({},{}): gpu {:.1f} cpu {:.1f}\n", x, y, g, ref);
+				continue;
+			}
+			csChecked++;
+			const double d = std::fabs(double(g) - ref);
+			csMax = std::max(csMax, d);
+			csSq += d * d;
+			if (d > 0.05 && csMismatch++ < 3)
+				firstBad += std::format("  fine ({},{}) world ({:.0f},{:.0f}): gpu {:.2f} cpu {:.2f}\n", x, y, shellFineOriginX + x * kShellFineTexel, shellFineOriginY + y * kShellFineTexel, g, ref);
+		}
+	}
+	out += std::format("B pass: {} fine texels checked, {} sentinel; gpu vs cpu max {:.3f} rms {:.4f}, {} off by >0.05\n{}",
+		csChecked, fineSentinels, csMax, csChecked ? std::sqrt(csSq / csChecked) : 0.0, csMismatch, firstBad);
+
+	// C: the shader's lookup along the camera's forward line, against the
+	// cells directly (the rule the landscape probe measured) and against the
+	// 128-texel window's triangulated height.
+	auto shaderFine = [&](float gridLocalX, float gridLocalY) -> float {
+		const float tfx = (a_cb.FineWindow.x + gridLocalX) / a_cb.FineWindow.w, tfy = (a_cb.FineWindow.y + gridLocalY) / a_cb.FineWindow.w;
+		if (a_cb.FineWindow.z < 0.5f || tfx < 0.0f || tfy < 0.0f || tfx >= a_cb.FineWindow.z - 1.0f || tfy >= a_cb.FineWindow.z - 1.0f)
+			return -100000.0f;
+		const int f0x = int(tfx), f0y = int(tfy);
+		const float ffx = tfx - f0x, ffy = tfy - f0y;
+		const float g00 = fineAt(f0x, f0y), g10 = fineAt(f0x + 1, f0y), g01 = fineAt(f0x, f0y + 1), g11 = fineAt(f0x + 1, f0y + 1);
+		if (std::min({ g00, g10, g01, g11 }) <= -50000.0f)
+			return -100000.0f;
+		const bool slash = ((f0x + f0y) & 1) == 0;
+		const float hA = ffy <= ffx ? g00 + (g10 - g00) * ffx + (g11 - g10) * ffy : g00 + (g01 - g00) * ffy + (g11 - g01) * ffx;
+		const float hB = (ffx + ffy) <= 1.0f ? g00 + (g10 - g00) * ffx + (g01 - g00) * ffy : g11 + (g10 - g11) * (1.0f - ffy) + (g01 - g11) * (1.0f - ffx);
+		return slash ? hA : hB;
+	};
+	auto windowTri = [&](float worldX, float worldY) -> float {
+		const float tx = (worldX - windowOriginX) / kShellVertexSpacing, ty = (worldY - windowOriginY) / kShellVertexSpacing;
+		const int t0x = int(std::floor(tx)), t0y = int(std::floor(ty));
+		if (t0x < 0 || t0y < 0 || t0x + 1 >= kShellWindowDim || t0y + 1 >= kShellWindowDim)
+			return -100000.0f;
+		const float fx = tx - t0x, fy = ty - t0y;
+		const float h00 = winAt(t0x, t0y)[0], h10 = winAt(t0x + 1, t0y)[0], h01 = winAt(t0x, t0y + 1)[0], h11 = winAt(t0x + 1, t0y + 1)[0];
+		if (std::min({ h00, h10, h01, h11 }) <= -50000.0f)
+			return -100000.0f;
+		// Same parity rule as the shell's quad diagonals.
+		const long qx = std::lround(std::floor(worldX / kShellVertexSpacing)), qy = std::lround(std::floor(worldY / kShellVertexSpacing));
+		const bool slash = ((qx + qy) & 1) == 0;
+		const float hA = fy <= fx ? h00 + (h10 - h00) * fx + (h11 - h10) * fy : h00 + (h01 - h00) * fy + (h11 - h01) * fx;
+		const float hB = (fx + fy) <= 1.0f ? h00 + (h10 - h00) * fx + (h01 - h00) * fy : h11 + (h10 - h11) * (1.0f - fy) + (h01 - h11) * (1.0f - fx);
+		return slash ? hA : hB;
+	};
+	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+	float fwdX = 1.0f, fwdY = 0.0f;
+	if (auto* cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
+		const auto& r = cam->cameraRoot->world.rotate;
+		const float fx = r.entry[0][1], fy = r.entry[1][1];
+		const float len = std::sqrt(fx * fx + fy * fy);
+		if (len > 1e-3f) {
+			fwdX = fx / len;
+			fwdY = fy / len;
+		}
+	}
+	out += std::format("C line: eye ({:.0f},{:.0f}) fwd ({:.2f},{:.2f}); dist: shader-fine | cpu-fine(cells) | window-tri\n", eye.x, eye.y, fwdX, fwdY);
+	{
+		const std::shared_lock lock(shellCellMutex);
+		auto cellHeight = [&](long gx, long gy, bool& a_ok) -> float {
+			const long cellX = static_cast<long>(std::floor(gx / 32.0)), cellY = static_cast<long>(std::floor(gy / 32.0));
+			const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+			auto it = shellCells.find(key);
+			if (it == shellCells.end() || it->second.worldspaceID != shellWindowWorldspace) {
+				a_ok = false;
+				return 0.0f;
+			}
+			const float h = it->second.height[size_t(gy - cellY * 32) * 33 + size_t(gx - cellX * 32)];
+			if (h < -50000.0f)
+				a_ok = false;
+			return h;
+		};
+		auto cellsCR = [&](float worldX, float worldY) -> float {
+			const double gxf = worldX / 128.0, gyf = worldY / 128.0;
+			const long ix = static_cast<long>(std::floor(gxf)), iy = static_cast<long>(std::floor(gyf));
+			const float fx = float(gxf - ix), fy = float(gyf - iy);
+			const long lox = static_cast<long>(std::floor(ix / 32.0)) * 32, loy = static_cast<long>(std::floor(iy / 32.0)) * 32;
+			float h[4][4];
+			bool ok = true;
+			for (int j = 0; j < 4; j++) {
+				for (int k = 0; k < 4; k++) {
+					const long sx = ix + k - 1, sy = iy + j - 1;
+					const long cx = std::clamp(sx, lox, lox + 32), cy = std::clamp(sy, loy, loy + 32);
+					const float he = cellHeight(cx, cy, ok);
+					const float hm = cellHeight(2 * cx - sx, 2 * cy - sy, ok);
+					h[j][k] = (sx != cx || sy != cy) ? 2.0f * he - hm : he;
+				}
+			}
+			if (!ok)
+				return -100000.0f;
+			float rows[4];
+			for (int r = 0; r < 4; r++)
+				rows[r] = catmull(h[r][0], h[r][1], h[r][2], h[r][3], fx);
+			return catmull(rows[0], rows[1], rows[2], rows[3], fy);
+		};
+		for (int k = 1; k <= 16; k++) {
+			const float d = 256.0f * k;
+			const float wx = eye.x + fwdX * d, wy = eye.y + fwdY * d;
+			const float sf = shaderFine(wx - a_cb.GridOrigin.x, wy - a_cb.GridOrigin.y);
+			const float cf = cellsCR(wx, wy);
+			const float wt = windowTri(wx, wy);
+			out += std::format("  {:5.0f}: {:9.1f} | {:9.1f} | {:9.1f}{}\n", d, sf, cf, wt,
+				(sf > -50000.0f && cf > -50000.0f && std::fabs(sf - cf) > 0.5f) ? "  <-- shader != cells" : "");
+		}
+	}
+	context->Unmap(winStage.get(), 0);
+	context->Unmap(fineStage.get(), 0);
+	fineProbeResult = out;
+	logger::info("[SNOW DEFORMATION] {}", out);
+}
