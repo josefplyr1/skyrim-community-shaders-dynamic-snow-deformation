@@ -1490,6 +1490,8 @@
     "feature.snow_deformation.key_feature_2": "Trails carved by the player, NPCs and creatures",
     "feature.snow_deformation.key_feature_3": "Snowfall-driven snow refill",
     "feature.snow_deformation.key_feature_4": "Compute-shader based, low performance impact",
+    "feature.snow_deformation.land_tri_probe": "Probe Landscape Triangulation",
+    "feature.snow_deformation.land_tri_probe_tooltip": "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log.",
     "feature.snow_deformation.lift_frost": "Raise Buried Frost Effects",
     "feature.snow_deformation.lift_frost_tooltip": "Lifts a wall of frost, and the small ice effects like it, up onto the snow standing over them instead of leaving them buried underneath it. Frost is the only school this happens to: fire melts its own hole and lightning pits one, so those sit in snow they have already taken away, while frost only hardens what is there and leaves the full layer on top of itself. This is the one thing in the whole feature that MOVES something belonging to the game, so it has its own switch.",
     "feature.snow_deformation.lightning_arcs": "Draw Lightning Arcs",

@@ -1803,6 +1803,27 @@ public:
 	uint32_t clusterIndexPoolNext = 0;
 	/** @brief A/B measurement: stops the per-cluster pass, so every skin the whole-skin test kept draws its mesh entire. Runtime-only. */
 	bool clusterCullDisabled = false;
+
+	/** @brief One-shot debug probe: snapshots the next full-detail landscape draw's index and vertex buffers and reports how the land mesh splits its quads - which diagonal, and whether it alternates - on the world 128-unit lattice. The shell's own triangulation has to match it or the shell sags inside a quad (DISTANT-SHELL-STABILITY-PLAN, Stage 1's live caveat). Implemented in SnowDeformation/Statics.cpp. */
+	bool landTriProbeArmed = false;
+	struct LandTriProbe
+	{
+		winrt::com_ptr<ID3D11Buffer> vbStaging;
+		winrt::com_ptr<ID3D11Buffer> ibStaging;
+		uint32_t vertexCount = 0;
+		uint32_t indexCount = 0;
+		uint32_t stride = 0;
+		uint32_t indexBytes = 2;
+		bool posFloat32 = false;
+		RE::NiTransform world{};
+		std::string name;
+		uint32_t frame = 0;
+		bool pending = false;
+	};
+	LandTriProbe landTriProbe;
+	std::string landTriProbeResult;
+	void CaptureLandTriProbe(RE::BSRenderPass* a_pass);
+	void ServiceLandTriProbe();
 	uint32_t clusterSkinsLast = 0;
 	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;

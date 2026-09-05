@@ -1218,6 +1218,15 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("cluster_cull_disabled"), "Object Snow: Disable Cluster Culling"), &clusterCullDisabled);
 		if (auto _ttCluster = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("cluster_cull_disabled_tooltip"), "Measurement aid: draws every visible object's snow layer whole. The game merges whole neighbourhoods into single objects, so an object that is mostly hidden behind a hill is still drawn entire - and because you are standing inside its bounds, the per-object test above cannot reject it. With this on, each object is cut into small pieces of surface, each piece is checked against the same far-depth map, and only the pieces that could show are drawn. Hidden pieces produce no pixels either way, so nothing changes on screen. The line below counts the triangles that survived."));
+
+		if (ImGui::Button(T(TKEY("land_tri_probe"), "Probe Landscape Triangulation")))
+			landTriProbeArmed = true;
+		if (auto _ttLandProbe = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("land_tri_probe_tooltip"), "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log."));
+		if (landTriProbeArmed)
+			ImGui::TextUnformatted("probe: armed, waiting for a landscape draw");
+		else if (!landTriProbeResult.empty())
+			ImGui::TextWrapped("%s", landTriProbeResult.c_str());
 		if (!skinCullDisabled) {
 			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
 			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",

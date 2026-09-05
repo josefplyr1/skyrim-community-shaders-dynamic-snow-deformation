@@ -2,6 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include <DirectXPackedVector.h>
 #include "Features/SnowDeformation.h"
 
 #include <d3dcompiler.h>
@@ -447,6 +448,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			mainViewportFrame = globals::state->frameCount;
 		}
 	}
+
+	if (landTriProbeArmed && !landTriProbe.pending)
+		CaptureLandTriProbe(a_pass);
 
 	// The clean gate: projected-UV + snow flags together; covers rocks,
 	// roofs, logs, stumps and never flora, because foliage is not
@@ -2419,6 +2423,7 @@ void SnowDeformation::DrawCapturedStatics()
 {
 	if (SnowShadersPending(2))
 		return;
+	ServiceLandTriProbe();
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty())
@@ -4035,4 +4040,230 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		skinCullCapacity = capacity;
 	}
 	return skinCullHiZ->srv && skinCullHiZScratch.size() == skinCullLevels && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav;
+}
+
+void SnowDeformation::CaptureLandTriProbe(RE::BSRenderPass* a_pass)
+{
+	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+	auto* material = a_pass->shaderProperty->material;
+	if (!material || material->GetFeature() != RE::BSShaderMaterial::Feature::kMultiTexLand)
+		return;
+	if (a_pass->shaderProperty->flags.any(Flag::kLODLandscape))
+		return;
+	auto* geometry = a_pass->geometry;
+	auto triShape = geometry->AsTriShape();
+	if (!triShape)
+		return;
+	auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+	if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+		return;
+	auto desc = rendererData->vertexDesc;
+	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
+		return;
+	uint64_t descKey;
+	memcpy(&descKey, &desc, sizeof(descKey));
+	const uint32_t stride = uint32_t(descKey & 0xF) * 4;
+	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
+	const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+	if (stride == 0 || vertexCount == 0 || indexCount == 0)
+		return;
+
+	// Position width: the first attribute after it starts where it ends (the
+	// same rule EnsureSmoothedNormals uses).
+	uint32_t positionBytes = stride;
+	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {
+		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
+		{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
+		{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
+		{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
+		{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
+		{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
+		{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
+		{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
+	};
+	for (auto [flag, attr] : kAttrs) {
+		if (desc.HasFlag(flag)) {
+			uint32_t attrOffset = desc.GetAttributeOffset(attr);
+			if (attrOffset > 0 && attrOffset < positionBytes)
+				positionBytes = attrOffset;
+		}
+	}
+
+	auto device = globals::d3d::device;
+	auto context = globals::d3d::context;
+	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+	D3D11_BUFFER_DESC vbDesc{};
+	gameVB->GetDesc(&vbDesc);
+	D3D11_BUFFER_DESC ibDesc{};
+	gameIB->GetDesc(&ibDesc);
+	auto makeStaging = [&](const D3D11_BUFFER_DESC& a_src, winrt::com_ptr<ID3D11Buffer>& a_out) {
+		D3D11_BUFFER_DESC st{};
+		st.ByteWidth = a_src.ByteWidth;
+		st.Usage = D3D11_USAGE_STAGING;
+		st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		a_out = nullptr;
+		return SUCCEEDED(device->CreateBuffer(&st, nullptr, a_out.put()));
+	};
+	if (!makeStaging(vbDesc, landTriProbe.vbStaging) || !makeStaging(ibDesc, landTriProbe.ibStaging)) {
+		landTriProbeResult = "probe: staging allocation failed";
+		landTriProbeArmed = false;
+		return;
+	}
+	context->CopyResource(landTriProbe.vbStaging.get(), gameVB);
+	context->CopyResource(landTriProbe.ibStaging.get(), gameIB);
+	landTriProbe.vertexCount = vertexCount;
+	landTriProbe.indexCount = indexCount;
+	landTriProbe.stride = stride;
+	landTriProbe.indexBytes = (ibDesc.ByteWidth >= indexCount * 4) ? 4u : 2u;
+	landTriProbe.posFloat32 = positionBytes >= 16;
+	landTriProbe.world = geometry->world;
+	landTriProbe.name = geometry->name.empty() ? "<unnamed>" : geometry->name.c_str();
+	landTriProbe.frame = globals::state->frameCount;
+	landTriProbe.pending = true;
+	landTriProbeArmed = false;
+	landTriProbeResult = "probe: captured, waiting for readback";
+}
+
+void SnowDeformation::ServiceLandTriProbe()
+{
+	if (!landTriProbe.pending || globals::state->frameCount < landTriProbe.frame + 2)
+		return;
+	auto context = globals::d3d::context;
+	D3D11_MAPPED_SUBRESOURCE vb{};
+	if (FAILED(context->Map(landTriProbe.vbStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &vb)))
+		return;
+	D3D11_MAPPED_SUBRESOURCE ib{};
+	if (FAILED(context->Map(landTriProbe.ibStaging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &ib))) {
+		context->Unmap(landTriProbe.vbStaging.get(), 0);
+		return;
+	}
+
+	const auto& p = landTriProbe;
+	const auto* vbytes = static_cast<const uint8_t*>(vb.pData);
+	auto localPos = [&](uint32_t v) {
+		const uint8_t* base = vbytes + size_t(v) * p.stride;
+		if (p.posFloat32) {
+			float xyz[3];
+			memcpy(xyz, base, sizeof(xyz));
+			return DirectX::XMFLOAT3(xyz[0], xyz[1], xyz[2]);
+		}
+		uint16_t h[3];
+		memcpy(h, base, sizeof(h));
+		return DirectX::XMFLOAT3(DirectX::PackedVector::XMConvertHalfToFloat(h[0]),
+			DirectX::PackedVector::XMConvertHalfToFloat(h[1]),
+			DirectX::PackedVector::XMConvertHalfToFloat(h[2]));
+	};
+	const auto& rot = p.world.rotate;
+	const float scale = p.world.scale;
+	auto worldXY = [&](const DirectX::XMFLOAT3& l) {
+		return DirectX::XMFLOAT2(
+			(rot.entry[0][0] * l.x + rot.entry[0][1] * l.y + rot.entry[0][2] * l.z) * scale + p.world.translate.x,
+			(rot.entry[1][0] * l.x + rot.entry[1][1] * l.y + rot.entry[1][2] * l.z) * scale + p.world.translate.y);
+	};
+	auto index = [&](uint32_t i) -> uint32_t {
+		if (p.indexBytes == 4)
+			return static_cast<const uint32_t*>(ib.pData)[i];
+		return static_cast<const uint16_t*>(ib.pData)[i];
+	};
+
+	// Per triangle: the longest edge is the quad diagonal; its slope sign says
+	// which diagonal. The quad is placed on the world 128-unit lattice from its
+	// lowest corner, so the pattern is read in world terms, not mesh terms.
+	constexpr float kLand = 128.0f;
+	uint32_t slash = 0, backslash = 0, offLattice = 0, degenerate = 0;
+	uint32_t slashEven = 0, slashOdd = 0, backEven = 0, backOdd = 0;
+	std::string sample;
+	const uint32_t triCount = p.indexCount / 3;
+	for (uint32_t t = 0; t < triCount; t++) {
+		DirectX::XMFLOAT2 w[3];
+		bool ok = true;
+		for (uint32_t k = 0; k < 3; k++) {
+			uint32_t vi = index(t * 3 + k);
+			if (vi >= p.vertexCount) {
+				ok = false;
+				break;
+			}
+			w[k] = worldXY(localPos(vi));
+		}
+		if (!ok) {
+			degenerate++;
+			continue;
+		}
+		// Lattice check: every corner within 2 units of a 128 multiple.
+		bool onLattice = true;
+		for (auto& c : w) {
+			float rx = std::fabs(c.x / kLand - std::round(c.x / kLand));
+			float ry = std::fabs(c.y / kLand - std::round(c.y / kLand));
+			if (rx > 2.0f / kLand || ry > 2.0f / kLand)
+				onLattice = false;
+		}
+		if (!onLattice) {
+			offLattice++;
+			continue;
+		}
+		int best = -1;
+		float bestLen = 0.0f;
+		float bestDx = 0.0f, bestDy = 0.0f;
+		for (int e = 0; e < 3; e++) {
+			const auto& a = w[e];
+			const auto& b = w[(e + 1) % 3];
+			float dx = b.x - a.x, dy = b.y - a.y;
+			float len = dx * dx + dy * dy;
+			if (len > bestLen) {
+				bestLen = len;
+				best = e;
+				bestDx = dx;
+				bestDy = dy;
+			}
+		}
+		if (best < 0 || std::fabs(bestDx) < kLand * 0.5f || std::fabs(bestDy) < kLand * 0.5f) {
+			degenerate++;
+			continue;
+		}
+		float minX = std::min({ w[0].x, w[1].x, w[2].x });
+		float minY = std::min({ w[0].y, w[1].y, w[2].y });
+		const long qx = std::lround(minX / kLand);
+		const long qy = std::lround(minY / kLand);
+		const bool even = ((qx + qy) & 1) == 0;
+		if (bestDx * bestDy > 0.0f) {
+			slash++;
+			(even ? slashEven : slashOdd)++;
+		} else {
+			backslash++;
+			(even ? backEven : backOdd)++;
+		}
+		if (t < 8)
+			sample += std::format("  tri {}: ({:.0f},{:.0f}) ({:.0f},{:.0f}) ({:.0f},{:.0f}) -> {} quad ({},{})\n",
+				t, w[0].x, w[0].y, w[1].x, w[1].y, w[2].x, w[2].y, bestDx * bestDy > 0.0f ? "/" : "\\", qx, qy);
+	}
+	context->Unmap(landTriProbe.ibStaging.get(), 0);
+	context->Unmap(landTriProbe.vbStaging.get(), 0);
+
+	const uint32_t classified = slash + backslash;
+	std::string verdict;
+	if (classified == 0)
+		verdict = "no lattice triangles found (LOD or non-land geometry?)";
+	else if (backslash == 0)
+		verdict = "UNIFORM '/': every quad splits SW-NE (h00-h11)";
+	else if (slash == 0)
+		verdict = "UNIFORM '\\': every quad splits NW-SE (h10-h01)";
+	else {
+		const uint32_t checkerA = slashEven + backOdd;   // '/' on even (qx+qy), '\' on odd
+		const uint32_t checkerB = slashOdd + backEven;
+		const float fa = float(checkerA) / classified, fb = float(checkerB) / classified;
+		if (fa > 0.98f)
+			verdict = std::format("CHECKERBOARD: '/' where (qx+qy) even, '\\' where odd ({:.1f}% consistent)", fa * 100.0f);
+		else if (fb > 0.98f)
+			verdict = std::format("CHECKERBOARD: '\\' where (qx+qy) even, '/' where odd ({:.1f}% consistent)", fb * 100.0f);
+		else
+			verdict = std::format("MIXED: neither uniform nor a 128-checkerboard (checker fits {:.0f}% / {:.0f}%)", fa * 100.0f, fb * 100.0f);
+	}
+	landTriProbeResult = std::format("{} | {} tris: {} '/', {} '\\', {} off-lattice, {} degenerate | '{}' at ({:.0f},{:.0f}) {} pos {}-bit idx",
+		verdict, triCount, slash, backslash, offLattice, degenerate, p.name,
+		p.world.translate.x, p.world.translate.y, p.posFloat32 ? "f32" : "f16", p.indexBytes * 8);
+	logger::info("[SNOW DEFORMATION] landscape triangulation probe: {}\n{}", landTriProbeResult, sample);
+	landTriProbe.pending = false;
+	landTriProbe.vbStaging = nullptr;
+	landTriProbe.ibStaging = nullptr;
 }
