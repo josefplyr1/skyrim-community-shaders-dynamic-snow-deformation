@@ -1657,6 +1657,8 @@
     "feature.snow_deformation.shout_spread": "Shout Cone Spread",
     "feature.snow_deformation.shout_spread_tooltip": "How wide the wedge opens. The records author a shout's REACH but never its width, so this is the one thing about a shout's shape that has to be taste rather than a reading.",
     "feature.snow_deformation.show_debug": "Show Deformation Map",
+    "feature.snow_deformation.skin_cull_disabled": "Object Snow: Disable Skin Culling",
+    "feature.snow_deformation.skin_cull_disabled_tooltip": "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped.",
     "feature.snow_deformation.skin_depth_bias": "Object Snow Depth Bias",
     "feature.snow_deformation.skin_depth_bias_tooltip": "How far the object snow layer is nudged toward the camera in the depth buffer, in the buffer's own smallest steps. The layer is rasterised from the same vertices as the object under it, so at a distance the two land on the same depth value and fight - snow that flickers, or shows from one angle and not another. A few steps settle the fight; more than needed makes the layer stand in front of things that should hide it. Constant with distance in depth terms, which is what the contest needs.",
     "feature.snow_deformation.skin_slope_depth_bias": "Object Snow Slope Bias",

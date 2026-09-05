@@ -1916,6 +1916,26 @@ void SnowDeformation::ClearShaderCache()
 	if (depthSyncCS)
 		depthSyncCS->Release();
 	depthSyncCS = nullptr;
+	if (hiZBuildCS)
+		hiZBuildCS->Release();
+	hiZBuildCS = nullptr;
+	if (skinCullCS)
+		skinCullCS->Release();
+	skinCullCS = nullptr;
+	delete skinCullCB;
+	skinCullCB = nullptr;
+	delete skinCullBounds;
+	skinCullBounds = nullptr;
+	delete skinCullArgs;
+	skinCullArgs = nullptr;
+	delete skinCullHiZ;
+	skinCullHiZ = nullptr;
+	skinCullHiZUAVs.clear();
+	skinCullHiZSRVs.clear();
+	for (auto& st : skinCullArgsStaging)
+		st = nullptr;
+	skinCullCapacity = 0;
+	skinCullLevels = 0;
 	if (lodProbeCS)
 		lodProbeCS->Release();
 	lodProbeCS = nullptr;

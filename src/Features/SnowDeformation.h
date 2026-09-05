@@ -2057,6 +2057,51 @@ public:
 	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
 	/** @brief A/B measurement: returns the object skins to their single draw loop. Runtime-only. */
 	bool staticsDepthPrepassDisabled = false;
+	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
+	bool skinCullDisabled = false;
+	struct alignas(16) SkinCullBound
+	{
+		float Center[3];
+		float Radius;
+		uint32_t IndexCount;
+		uint32_t pad[3];
+	};
+	struct alignas(16) SkinCullCB
+	{
+		Matrix ViewProj;
+		float4 CameraPosAdjust;
+		float4 Viewport;
+		float4 Depth;
+		uint32_t SkinCount;
+		float pad[3];
+	};
+	static constexpr uint32_t kSkinCullArgStride = 20;
+	static constexpr int kSkinCullRing = 3;
+	/** @brief World-unit growth of the bound beyond the class depth: cornice roll, relief, the toward-eye flank push. */
+	static constexpr float kSkinCullMargin = 24.0f;
+	/** @brief Depth-space margin: the skin rasterizer bias is clamped at 1e-5 (DepthBiasClamp), plus projection rounding. */
+	static constexpr float kSkinCullDepthEps = 1.5e-5f;
+	ConstantBuffer* skinCullCB = nullptr;
+	Buffer* skinCullBounds = nullptr;
+	Buffer* skinCullArgs = nullptr;
+	uint32_t skinCullCapacity = 0;
+	winrt::com_ptr<ID3D11Buffer> skinCullArgsStaging[kSkinCullRing];
+	bool skinCullStagingIssued[kSkinCullRing] = {};
+	uint32_t skinCullStagingCount[kSkinCullRing] = {};
+	int skinCullRing = 0;
+	Texture2D* skinCullHiZ = nullptr;
+	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
+	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
+	uint32_t skinCullLevels = 0;
+	uint32_t skinCullDrawnLast = 0;
+	uint32_t skinCullCulledLast = 0;
+	uint32_t skinCullTrisCulledLast = 0;
+	uint32_t skinCullTrisTotalLast = 0;
+	ID3D11ComputeShader* GetHiZBuildCS();
+	ID3D11ComputeShader* GetSkinCullCS();
+	ID3D11ComputeShader* hiZBuildCS = nullptr;
+	ID3D11ComputeShader* skinCullCS = nullptr;
+	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV);
 	/** @brief Tessellated skin stages (optional; legacy path is the fallback): control-point VS, hull (edge-length/distance factors) and domain (displacement-map relief along the inflate normal). */
 	ID3D11VertexShader* staticsTessVS = nullptr;
 	ID3D11HullShader* staticsHS = nullptr;

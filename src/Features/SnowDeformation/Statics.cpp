@@ -2449,82 +2449,221 @@ void SnowDeformation::DrawCapturedStatics()
 	                     fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
 	ID3D11DepthStencilState* boundDepthState = nullptr;
 
+	// Render-target and viewport snapshot. The cull's compute reads the scene
+	// depth, so the targets come off first; the prepass fills need a
+	// full-range viewport; both restore from here.
+	ID3D11RenderTargetView* rawRTVs[8] = {};
+	ID3D11DepthStencilView* rawDSV = nullptr;
+	context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
+	winrt::com_ptr<ID3D11RenderTargetView> rtvs[8];
+	ID3D11RenderTargetView* rtvPtrs[8] = {};
+	for (uint32_t i = 0; i < 8; i++) {
+		rtvs[i].attach(rawRTVs[i]);
+		rtvPtrs[i] = rtvs[i].get();
+	}
+	winrt::com_ptr<ID3D11DepthStencilView> dsv;
+	dsv.attach(rawDSV);
+	D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+	context->RSGetViewports(&vpCount, vps);
+	D3D11_VIEWPORT fillVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	for (UINT i = 0; i < vpCount; i++) {
+		fillVps[i] = vps[i];
+		fillVps[i].MinDepth = 0.0f;
+		fillVps[i].MaxDepth = 1.0f;
+	}
+
+	// One filtered list of skin draws, walked by the cull and by both loops.
+	struct SkinDraw
+	{
+		const CapturedSnowStatic* cap;
+		RE::BSGeometry* geometry;
+		ID3D11Buffer* vb;
+		ID3D11Buffer* ib;
+		ID3D11InputLayout* layout;
+		UINT stride;
+		uint32_t indexCount;
+		float vertexCount;
+		bool s4Shell;
+		uint32_t slot;
+	};
+	std::vector<SkinDraw> skinDraws;
+	skinDraws.reserve(capturedStatics.size());
+	for (const auto& cap : capturedStatics) {
+		auto* geometry = cap.geometry.get();
+		if (!geometry)
+			continue;
+		// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
+		// its no-PD pillows stood alone on the steps, and at fill 100 the
+		// S4 shell stacked on top of them). Only two things draw now:
+		// roads (their own tuned machinery, always) and the S4 shell
+		// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
+		// PROPERTY carries no projection data get no skin at all - the
+		// Lighting recolor still covers the technique-classified ones
+		// (fence family) flat. The classic shader path survives only
+		// because roads run through it.
+		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+		                     cap.projThreshold > -0.5f && projNoiseSRV;
+		if (!cap.road && !s4Shell)
+			continue;
+		auto triShape = geometry->AsTriShape();
+		if (!triShape) {
+			logSkip(geometry, "not a BSTriShape");
+			continue;
+		}
+		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
+			logSkip(geometry, "no renderer buffers");
+			continue;
+		}
+		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0) {
+			logSkip(geometry, "zero triangles");
+			continue;
+		}
+
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
+			logSkip(geometry, "vertex format lacks POSITION/NORMAL");
+			continue;
+		}
+
+		// One input layout per distinct vertex descriptor; layouts may carry
+		// more elements than the VS consumes, so POSITION+NORMAL suffices.
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto* layout = StaticsInputLayoutFor(descKey, desc);
+		if (!layout)
+			continue;
+
+		// Stride comes from the descriptor's low nibble (in dwords); the
+		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
+		// equivalent: it reconstructs from flags assuming 16-byte float
+		// positions, but most SSE meshes store 8-byte half positions, and
+		// the overshot stride shreds vertices into giant garbage triangles.
+		UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
+			logSkip(geometry, "implausible stride/offset");
+			continue;
+		}
+		skinDraws.push_back({ &cap, geometry,
+			reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
+			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer),
+			layout, stride, indexCount,
+			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
+			uint32_t(skinDraws.size()) });
+	}
+
+	// Whole-skin occlusion cull: bounding spheres against a max-depth
+	// pyramid of the scene, on the GPU, same frame. Writes each skin's
+	// indirect draw arguments; the loops below draw through them.
+	auto* hiZBuild = skinCullDisabled ? nullptr : GetHiZBuildCS();
+	auto* skinCull = hiZBuild ? GetSkinCullCS() : nullptr;
+	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
+	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV);
+	if (cullActive) {
+		const float liftMargin = std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth) + kSkinCullMargin;
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(context->Map(skinCullBounds->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+			auto* out = static_cast<SkinCullBound*>(mapped.pData);
+			for (const auto& d : skinDraws) {
+				const auto& wb = d.geometry->worldBound;
+				out[d.slot] = { { wb.center.x, wb.center.y, wb.center.z }, wb.radius + liftMargin, d.indexCount, {} };
+			}
+			context->Unmap(skinCullBounds->resource.get(), 0);
+		}
+		SkinCullCB ccb{};
+		const auto& fb = globals::game::frameBufferCached;
+		ccb.ViewProj = fb.GetCameraViewProj();
+		ccb.CameraPosAdjust = fb.GetCameraPosAdjust();
+		ccb.Viewport = { vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height };
+		ccb.Depth = { vps[0].MinDepth, vps[0].MaxDepth, kSkinCullDepthEps, float(skinCullLevels) };
+		ccb.SkinCount = uint32_t(skinDraws.size());
+		skinCullCB->Update(ccb);
+
+		context->OMSetRenderTargets(0, nullptr, nullptr);
+		ID3D11Buffer* cullCB = skinCullCB->CB();
+		context->CSSetConstantBuffers(0, 1, &cullCB);
+		context->CSSetShader(hiZBuild, nullptr, 0);
+		for (uint32_t level = 0; level < skinCullLevels; level++) {
+			ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
+			ID3D11UnorderedAccessView* dst = skinCullHiZUAVs[level].get();
+			context->CSSetShaderResources(1, 1, &src);
+			context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
+			const uint32_t w = std::max(1u, skinCullHiZ->desc.Width >> level);
+			const uint32_t h = std::max(1u, skinCullHiZ->desc.Height >> level);
+			context->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
+		}
+		ID3D11ShaderResourceView* nullCullSRVs[3] = {};
+		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
+		context->CSSetShaderResources(1, 1, nullCullSRVs);
+		context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
+
+		context->CSSetShader(skinCull, nullptr, 0);
+		ID3D11ShaderResourceView* cullSRVs[2] = { skinCullBounds->srv.get(), skinCullHiZ->srv.get() };
+		context->CSSetShaderResources(2, 2, cullSRVs);
+		ID3D11UnorderedAccessView* argsUAV = skinCullArgs->uav.get();
+		context->CSSetUnorderedAccessViews(3, 1, &argsUAV, nullptr);
+		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
+		context->CSSetShaderResources(1, 3, nullCullSRVs);
+		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		// Census: the arguments two frames back, read without waiting.
+		context->CopyResource(skinCullArgsStaging[skinCullRing].get(), skinCullArgs->resource.get());
+		skinCullStagingIssued[skinCullRing] = true;
+		skinCullStagingCount[skinCullRing] = uint32_t(skinDraws.size());
+		const int readRing = (skinCullRing + 1) % kSkinCullRing;
+		if (skinCullStagingIssued[readRing]) {
+			D3D11_MAPPED_SUBRESOURCE rd{};
+			if (SUCCEEDED(context->Map(skinCullArgsStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &rd))) {
+				const auto* args = static_cast<const uint32_t*>(rd.pData);
+				uint32_t drawn = 0, culled = 0, trisCulled = 0, trisTotal = 0;
+				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
+					const uint32_t tris = args[i * 5] / 3;
+					trisTotal += tris;
+					if (args[i * 5 + 1])
+						drawn++;
+					else {
+						culled++;
+						trisCulled += tris;
+					}
+				}
+				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
+				skinCullStagingIssued[readRing] = false;
+				skinCullDrawnLast = drawn;
+				skinCullCulledLast = culled;
+				skinCullTrisCulledLast = trisCulled;
+				skinCullTrisTotalLast = trisTotal;
+			}
+		}
+		skinCullRing = (skinCullRing + 1) % kSkinCullRing;
+
+		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
+	}
+
 	// The skin loop runs once (no prepass) or twice: non-carving skins
 	// depth-only into the private copy, then every skin shading against it -
 	// non-carving under EQUAL with writes off, carving under the shipping
 	// LESS_EQUAL + write.
 	auto drawSkins = [&](bool a_prepass) {
 		boundStaticsPS = nullptr;
-		for (const auto& cap : capturedStatics) {
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
-				continue;
-			// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
-			// its no-PD pillows stood alone on the steps, and at fill 100 the
-			// S4 shell stacked on top of them). Only two things draw now:
-			// roads (their own tuned machinery, always) and the S4 shell
-			// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
-			// PROPERTY carries no projection data get no skin at all - the
-			// Lighting recolor still covers the technique-classified ones
-			// (fence family) flat. The classic shader path survives only
-			// because roads run through it.
-			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
-			                     cap.projThreshold > -0.5f && projNoiseSRV;
-			if (!cap.road && !s4Shell)
-				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape) {
-				logSkip(geometry, "not a BSTriShape");
-				continue;
-			}
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
-				logSkip(geometry, "no renderer buffers");
-				continue;
-			}
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0) {
-				logSkip(geometry, "zero triangles");
-				continue;
-			}
-
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
-				logSkip(geometry, "vertex format lacks POSITION/NORMAL");
-				continue;
-			}
-
-			// One input layout per distinct vertex descriptor; layouts may carry
-			// more elements than the VS consumes, so POSITION+NORMAL suffices.
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto* layout = StaticsInputLayoutFor(descKey, desc);
-			if (!layout)
-				continue;
-			context->IASetInputLayout(layout);
-
-			// Stride comes from the descriptor's low nibble (in dwords); the
-			// same field the game's renderer uses. VertexDesc::GetSize() is NOT
-			// equivalent: it reconstructs from flags assuming 16-byte float
-			// positions, but most SSE meshes store 8-byte half positions, and
-			// the overshot stride shreds vertices into giant garbage triangles.
-			UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
-				logSkip(geometry, "implausible stride/offset");
-				continue;
-			}
+		for (const auto& d : skinDraws) {
+			const auto& cap = *d.cap;
+			auto* geometry = d.geometry;
+			context->IASetInputLayout(d.layout);
+			UINT stride = d.stride;
 			UINT offset = 0;
-			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			ID3D11Buffer* vb = d.vb;
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+			context->IASetIndexBuffer(d.ib, DXGI_FORMAT_R16_UINT, 0);
 
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.
 			ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
 			context->VSSetShaderResources(10, 1, &smoothSRV);
 			StaticsCB scb{};
-			FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
+			FillSkinDrawCB(cap, d.s4Shell, d.vertexCount,
 				smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
 			staticsCB->Update(scb);
 
@@ -2553,35 +2692,14 @@ void SnowDeformation::DrawCapturedStatics()
 				}
 			}
 
-			context->DrawIndexed(indexCount, 0, 0);
+			if (cullActive)
+				context->DrawIndexedInstancedIndirect(skinCullArgs->resource.get(), d.slot * kSkinCullArgStride);
+			else
+				context->DrawIndexed(d.indexCount, 0, 0);
 		}
 	};
 
 	if (prepass) {
-		ID3D11RenderTargetView* rawRTVs[8] = {};
-		ID3D11DepthStencilView* rawDSV = nullptr;
-		context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
-		winrt::com_ptr<ID3D11RenderTargetView> rtvs[8];
-		ID3D11RenderTargetView* rtvPtrs[8] = {};
-		for (uint32_t i = 0; i < 8; i++) {
-			rtvs[i].attach(rawRTVs[i]);
-			rtvPtrs[i] = rtvs[i].get();
-		}
-		winrt::com_ptr<ID3D11DepthStencilView> dsv;
-		dsv.attach(rawDSV);
-
-		// The fills export depth, which the viewport clamps to its range; the
-		// main pass's range tops out just under 1.0 and would pull the sky's
-		// cleared depth down with it. Full range for the fills only.
-		D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-		UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-		context->RSGetViewports(&vpCount, vps);
-		D3D11_VIEWPORT fillVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-		for (UINT i = 0; i < vpCount; i++) {
-			fillVps[i] = vps[i];
-			fillVps[i].MinDepth = 0.0f;
-			fillVps[i].MaxDepth = 1.0f;
-		}
 		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source) {
 			context->OMSetRenderTargets(0, nullptr, a_target);
 			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
@@ -3508,4 +3626,145 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	ID3D11RenderTargetView* nullRTV = nullptr;
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);
 	context->RSSetState(savedRaster.get());
+}
+
+ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS()
+{
+	if (!hiZBuildCS) {
+		logger::debug("Compiling DepthSyncCS HiZBuildCS");
+		hiZBuildCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "HiZBuildCS"));
+	}
+	return hiZBuildCS;
+}
+
+ID3D11ComputeShader* SnowDeformation::GetSkinCullCS()
+{
+	if (!skinCullCS) {
+		logger::debug("Compiling DepthSyncCS SkinCullCS");
+		skinCullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "SkinCullCS"));
+	}
+	return skinCullCS;
+}
+
+bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV)
+{
+	auto device = globals::d3d::device;
+	if (!skinCullCB)
+		skinCullCB = new ConstantBuffer(ConstantBufferDesc<SkinCullCB>(), "SnowDeformation::SkinCullCB");
+
+	// Max-depth pyramid sized from the scene depth: level 0 is half res,
+	// the chain runs to 1x1 so a footprint of any size finds its level.
+	winrt::com_ptr<ID3D11Resource> depthRes;
+	a_mainDepthSRV->GetResource(depthRes.put());
+	auto depthTex = depthRes.try_as<ID3D11Texture2D>();
+	if (!depthTex)
+		return false;
+	D3D11_TEXTURE2D_DESC depthDesc{};
+	depthTex->GetDesc(&depthDesc);
+	const uint32_t w0 = std::max(1u, depthDesc.Width / 2);
+	const uint32_t h0 = std::max(1u, depthDesc.Height / 2);
+	if (skinCullHiZ && (skinCullHiZ->desc.Width != w0 || skinCullHiZ->desc.Height != h0)) {
+		delete skinCullHiZ;
+		skinCullHiZ = nullptr;
+		skinCullHiZUAVs.clear();
+		skinCullHiZSRVs.clear();
+	}
+	if (!skinCullHiZ) {
+		uint32_t levels = 1;
+		while ((std::max(w0, h0) >> levels) >= 1)
+			levels++;
+		D3D11_TEXTURE2D_DESC desc{};
+		desc.Width = w0;
+		desc.Height = h0;
+		desc.MipLevels = levels;
+		desc.ArraySize = 1;
+		desc.Format = DXGI_FORMAT_R32_FLOAT;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		skinCullHiZ = new Texture2D(desc, "SnowDeformation::SkinCullHiZ");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = levels }
+		};
+		skinCullHiZ->CreateSRV(srvDesc);
+		for (uint32_t level = 0; level < levels; level++) {
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = level }
+			};
+			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
+			if (FAILED(device->CreateUnorderedAccessView(skinCullHiZ->resource.get(), &uavDesc, uav.put())))
+				return false;
+			Util::SetResourceName(uav.get(), "SnowDeformation::SkinCullHiZ level UAV");
+			skinCullHiZUAVs.push_back(uav);
+			D3D11_SHADER_RESOURCE_VIEW_DESC levelSrvDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = level, .MipLevels = 1 }
+			};
+			winrt::com_ptr<ID3D11ShaderResourceView> srv;
+			if (FAILED(device->CreateShaderResourceView(skinCullHiZ->resource.get(), &levelSrvDesc, srv.put())))
+				return false;
+			Util::SetResourceName(srv.get(), "SnowDeformation::SkinCullHiZ level SRV");
+			skinCullHiZSRVs.push_back(srv);
+		}
+		skinCullLevels = levels;
+	}
+
+	// Bounds in, indirect arguments out; grown in steps of 256 skins.
+	if (a_count > skinCullCapacity) {
+		const uint32_t capacity = (a_count + 255) & ~255u;
+		delete skinCullBounds;
+		skinCullBounds = nullptr;
+		delete skinCullArgs;
+		skinCullArgs = nullptr;
+		for (int i = 0; i < kSkinCullRing; i++) {
+			skinCullArgsStaging[i] = nullptr;
+			skinCullStagingIssued[i] = false;
+		}
+
+		D3D11_BUFFER_DESC boundsDesc{};
+		boundsDesc.Usage = D3D11_USAGE_DYNAMIC;
+		boundsDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		boundsDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		boundsDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		boundsDesc.StructureByteStride = sizeof(SkinCullBound);
+		boundsDesc.ByteWidth = sizeof(SkinCullBound) * capacity;
+		D3D11_SHADER_RESOURCE_VIEW_DESC boundsSRV{};
+		boundsSRV.Format = DXGI_FORMAT_UNKNOWN;
+		boundsSRV.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		boundsSRV.Buffer.FirstElement = 0;
+		boundsSRV.Buffer.NumElements = capacity;
+		skinCullBounds = new Buffer(boundsDesc, nullptr, "SnowDeformation::SkinCullBounds");
+		skinCullBounds->CreateSRV(boundsSRV);
+
+		D3D11_BUFFER_DESC argsDesc{};
+		argsDesc.Usage = D3D11_USAGE_DEFAULT;
+		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		argsDesc.ByteWidth = kSkinCullArgStride * capacity;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUAV{};
+		argsUAV.Format = DXGI_FORMAT_R32_TYPELESS;
+		argsUAV.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		argsUAV.Buffer.FirstElement = 0;
+		argsUAV.Buffer.NumElements = capacity * (kSkinCullArgStride / 4);
+		argsUAV.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		skinCullArgs = new Buffer(argsDesc, nullptr, "SnowDeformation::SkinCullArgs");
+		skinCullArgs->CreateUAV(argsUAV);
+
+		D3D11_BUFFER_DESC stagingDesc{};
+		stagingDesc.ByteWidth = argsDesc.ByteWidth;
+		stagingDesc.Usage = D3D11_USAGE_STAGING;
+		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		for (int i = 0; i < kSkinCullRing; i++) {
+			if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, skinCullArgsStaging[i].put())))
+				return false;
+			Util::SetResourceName(skinCullArgsStaging[i].get(), "SnowDeformation::SkinCullArgs staging");
+		}
+		skinCullCapacity = capacity;
+	}
+	return skinCullHiZ->srv && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav;
 }

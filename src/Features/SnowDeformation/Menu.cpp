@@ -1207,6 +1207,17 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttStaticsPrepass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
 
+		ImGui::Checkbox(T(TKEY("skin_cull_disabled"), "Object Snow: Disable Skin Culling"), &skinCullDisabled);
+		if (auto _ttSkinCull = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("skin_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped."));
+		if (!skinCullDisabled) {
+			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
+			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped); %.2f M of %.2f M triangles culled",
+				skinCullDrawnLast, skinCullCulledLast, total,
+				total ? 100.0 * skinCullCulledLast / total : 0.0,
+				skinCullTrisCulledLast / 1e6, skinCullTrisTotalLast / 1e6);
+		}
+
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
