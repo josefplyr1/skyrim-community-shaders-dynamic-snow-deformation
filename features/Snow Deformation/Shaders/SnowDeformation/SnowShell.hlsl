@@ -1383,13 +1383,88 @@ bool ShellPatchSplitCulled(float2 a, float2 b, float2 c, float2 d)
 }
 #endif
 
+// View-frustum patch cull. A patch outside the camera frustum produces no
+// fragments - the rasteriser discards its triangles before any shading - so
+// dropping it here changes nothing on screen while skipping the domain
+// shader, the primitive setup and, because it runs first, every tap the
+// tests and edge factors below would have taken.
+//
+// Only the four side planes and the eye plane are tested. They are built
+// from w +/- x and w +/- y, so they hold whatever direction the depth range
+// runs in; the far field is already bounded by ShellBeyondSeam.
+//
+// NOT reachable from the shadow caster: that is a separate, non-tessellated
+// vertex shader drawn with the light's clip matrix, so snow behind the
+// camera goes on casting into the frame.
+static const float kFrustumZMargin = 512.0;
+static const float kFrustumXYMargin = 16.0;
+
+bool ShellOutsideFrustum(float2 a, float2 b, float2 c, float2 d, float zLo, float zHi)
+{
+	float2 lo = min(min(a, b), min(c, d)) - kFrustumXYMargin;
+	float2 hi = max(max(a, b), max(c, d)) + kFrustumXYMargin;
+	// Same space as the vertex chain: absolute world, less the camera adjust.
+	float3 bMin = float3(GridOrigin + lo, zLo - kFrustumZMargin) - ShellCameraPosAdjust.xyz;
+	float3 bMax = float3(GridOrigin + hi, zHi + kFrustumZMargin) - ShellCameraPosAdjust.xyz;
+
+	// Row-major storage with mul(M, v) makes clip.i = dot(M[i], v), so the
+	// side half-spaces are M[3] +/- M[0] and M[3] +/- M[1], and M[3] alone is
+	// the eye plane. A box is outside a plane when even its corner furthest
+	// along the plane normal still lies behind it.
+	float4 planes[5] = {
+		CameraViewProj[3] + CameraViewProj[0],
+		CameraViewProj[3] - CameraViewProj[0],
+		CameraViewProj[3] + CameraViewProj[1],
+		CameraViewProj[3] - CameraViewProj[1],
+		CameraViewProj[3]
+	};
+	bool outside = false;
+	[unroll] for (uint i = 0; i < 5; i++)
+	{
+		float3 n = planes[i].xyz;
+		float3 pv = float3(n.x > 0.0 ? bMax.x : bMin.x,
+			n.y > 0.0 ? bMax.y : bMin.y,
+			n.z > 0.0 ? bMax.z : bMin.z);
+		if (dot(n, pv) + planes[i].w < 0.0)
+			outside = true;
+	}
+	return outside;
+}
+
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 {
 	TessFactors f;
 
+	// The bake's corner records are hoisted above the culls: their z bounds
+	// the patch for the frustum test, and their deformation taps feed the
+	// edge factors below. Four loads either way.
+#ifdef SNOW_HS_BAKE
+	float4 v0 = ShellVertexBake.Load(int3(patch[0].GridXY, 0));
+	float4 v1 = ShellVertexBake.Load(int3(patch[1].GridXY, 0));
+	float4 v2 = ShellVertexBake.Load(int3(patch[2].GridXY, 0));
+	float4 v3 = ShellVertexBake.Load(int3(patch[3].GridXY, 0));
+	float zLo = min(min(v0.x, v1.x), min(v2.x, v3.x));
+	float zHi = max(max(v0.x, v1.x), max(v2.x, v3.x));
+#else
+	// No baked corner heights: an unbounded column. The side planes still
+	// cull everything left and right of the view; only up and down is given
+	// away.
+	float zLo = -65536.0;
+	float zHi = 65536.0;
+#endif
+
+	// Frustum first: pure arithmetic, and it gates every tap below - the
+	// seam and bare-ground tests sample the terrain window, and each edge
+	// factor can take three bicubic deformation taps. Off in the debug views
+	// that move a vertex's z away from the baked surface.
+	bool culled = false;
+	[branch] if ((ShellFlags.x & 2) != 0 && ShellDebugData == 0 && ShellLODDebug == 0)
+		culled = ShellOutsideFrustum(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal, zLo, zHi);
+
 	// Tested before the edge factors: a culled patch must not pay for the
 	// three bicubic deformation taps per edge that EdgeTessFactor can take.
-	bool culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
+	[branch] if (!culled)
+		culled = ShellBeyondSeam(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 	[branch] if (!culled && ShellCullBare > 0.5)
 		culled = ShellFullyBare(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal);
 #if defined(SNOW_SPLIT_NEAR) || defined(SNOW_SPLIT_FAR)
@@ -1409,15 +1484,11 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
 	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
 #ifdef SNOW_HS_BAKE
-	float d0 = ShellVertexBake.Load(int3(patch[0].GridXY, 0)).w;
-	float d1 = ShellVertexBake.Load(int3(patch[1].GridXY, 0)).w;
-	float d2 = ShellVertexBake.Load(int3(patch[2].GridXY, 0)).w;
-	float d3 = ShellVertexBake.Load(int3(patch[3].GridXY, 0)).w;
 	float4 edges = float4(
-		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, d0, d3),
-		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, d0, d1),
-		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, d1, d2),
-		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, d3, d2));
+		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, v0.w, v3.w),
+		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, v0.w, v1.w),
+		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, v1.w, v2.w),
+		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, v3.w, v2.w));
 #else
 	float4 edges = float4(
 		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal),

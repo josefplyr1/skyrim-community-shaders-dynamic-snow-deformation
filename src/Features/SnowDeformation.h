@@ -1143,6 +1143,8 @@ public:
 	Texture2D* shellVertexBakeSlope = nullptr;
 	/** @brief A/B measurement: returns the domain shader to evaluating every vertex live. Runtime-only. */
 	bool shellVertexBakeDisabled = false;
+	/** @brief A/B measurement: stops the hull's view-frustum patch cull (ShellFlags.x bit 1), so the whole grid is tessellated and rasterised as before. The cull is bit-identical - the rasteriser discards those triangles anyway - and it does NOT reach the shadow caster, which draws from the light's matrix through its own non-tessellated VS. Runtime-only. */
+	bool shellFrustumCullDisabled = false;
 	/** @brief Measurement: the domain shader evaluates baked corners live as well and lifts any mismatching vertex by 50 units. Runtime-only. */
 	bool shellVertexBakeCheck = false;
 
