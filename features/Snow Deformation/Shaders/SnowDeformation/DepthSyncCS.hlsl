@@ -30,3 +30,16 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	BlendedDepth[dtid.xy] = blended;
 	BlendedDepth16[dtid.xy] = blended;
 }
+
+// Plain copy of the main depth into u0, taken between the shell's depth
+// prepass and its shading pass (the shading pass keys on what the prepass
+// wrote). CopyResource cannot bridge the depth format to R32.
+[numthreads(8, 8, 1)]
+void CopyCS(uint3 dtid : SV_DispatchThreadID)
+{
+	uint2 dims;
+	MainDepth.GetDimensions(dims.x, dims.y);
+	if (any(dtid.xy >= dims))
+		return;
+	BlendedDepth[dtid.xy] = MainDepth[dtid.xy];
+}

@@ -233,6 +233,9 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // Full-scene depth copy (Terrain Blending's blended depth when available),
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
+// Main depth after the shell's depth-only prepass (SNOW_SHELL_PREPASS_MAIN):
+// the pixels the prepass wrote are the only ones the shading pass may run.
+Texture2D<float> ShellPrepassDepth : register(t9);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
 // Z, empty -100000) and the SUPPRESSION mask (1 under floating structures;
 // no snow beneath walkways, roofs and bridges).
@@ -1520,6 +1523,39 @@ struct PS_OUTPUT
 #	endif
 };
 
+// Depth-only prepass (SNOW_SHELL_DEPTH_PREPASS): the alpha cut and the
+// export clamp, nothing else, with no colour targets bound.
+struct PS_PREPASS_OUTPUT
+{
+	float DepthLE : SV_DepthLessEqual;
+};
+
+// The depth the shell writes: the raster depth, pulled to just in front of
+// the scene inside the two clamp windows. Shared by the prepass and the
+// export tail so both agree bit for bit. FAR clamp: the z-fight/pinhole
+// class loses at the source without moving geometry; far field only, since
+// it cannot tell a legitimate occluder from a coincident terrain surface.
+// NEAR micro-clamp: the edge zone and carved floors ride within window error
+// of the mesh; 0.75 units is too thin to overdraw feet or props.
+float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve)
+{
+	float depth = rasterZ;
+	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
+	bool clampMode = (ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0;
+	[branch] if (clampMode && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
+		depth = min(rasterZ, rawSceneDepth - 1e-5);
+	else if (clampMode && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
+		depth = min(rasterZ, rawSceneDepth - 1e-5);
+	return depth;
+}
+
+// Shading pass after the prepass: a pixel is the shell's only if the depth
+// buffer holds what the prepass could have written there - the raster depth
+// itself, or the clamped form. Four depth quanta of slack covers D24
+// storage and compiler reordering; a different surface within that is
+// already in the z-fight band the clamps resolve in the shell's favour.
+static const float kPrepassDepthTolerance = 2.4e-7;
+
 // SHELL-SURFACE SSS RE-MARCH (opt-in, CompactLook.y).
 //
 // The precomputed SSS mask describes only the BURIED ground - it is marched on
@@ -1585,7 +1621,11 @@ float ShellRemarchSSS(float3 relPos, float3 L, float noise, float2 dynRes, bool 
 }
 #endif
 
+#ifdef SNOW_SHELL_DEPTH_PREPASS
+PS_PREPASS_OUTPUT main(VS_OUTPUT input)
+#else
 PS_OUTPUT main(VS_OUTPUT input)
+#endif
 {
 	// Same convention as MotionBlur::GetSSMotionVector.
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
@@ -1634,6 +1674,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
 	float sceneZ = SharedData::GetScreenDepth(rawSceneDepth);
 	float shellZ = input.CurrentClip.w;
+#ifdef SNOW_SHELL_PREPASS_MAIN
+	// Fragments the prepass did not write - occluded, hidden behind the
+	// shell's own slopes, or cut by the alpha test - leave here, before any
+	// of the shading below. The depth state is GREATER_EQUAL with writes
+	// off, so fragments in front of what the buffer holds never launch.
+	{
+		float written = ShellPrepassDepth.Load(int3(input.Position.xy, 0));
+		if (abs(written - input.Position.z) > kPrepassDepthTolerance &&
+			abs(written - (rawSceneDepth - 1e-5)) > kPrepassDepthTolerance)
+			discard;
+	}
+#endif
 
 	// User-tunable contest fringe (units): how far around the contact point
 	// the height contest operates.
@@ -1790,6 +1842,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 			discard;
 		coverageAlpha = 1.0;
 	}
+
+#ifdef SNOW_SHELL_DEPTH_PREPASS
+	PS_PREPASS_OUTPUT prepassOut;
+	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve);
+	return prepassOut;
+#endif
+#ifndef SNOW_SHELL_DEPTH_PREPASS
 
 	// Normal = smooth interpolated terrain normal + per-pixel gradient of
 	// the shared carve profile (central differences at the deformation
@@ -2561,22 +2620,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = input.Position.z;
-	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
-	[branch] if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
-		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
-	// Near-field micro-clamp: the edge zone rides within window
-	// error of the mesh and z-fights as view-dependent holes. 0.75 units is
-	// too thin to overdraw feet or props, wide enough to settle coincident
-	// surfaces; edge zone only, so deep interiors keep the raw depth.
-	// Carved floors too: pixelEffDepth is the uncarved ramp, so low Trench
-	// Floor Height floors were excluded and their wear-through hole rims
-	// shimmered with the camera.
-	else if ((ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
-		psout.DepthLE = min(input.Position.z, rawSceneDepth - 1e-5);
+	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve);
 #	endif
 
 	return psout;
+#endif  // !SNOW_SHELL_DEPTH_PREPASS
 }
 #endif
 

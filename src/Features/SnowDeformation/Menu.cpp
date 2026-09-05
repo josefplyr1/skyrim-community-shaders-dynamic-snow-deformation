@@ -1177,6 +1177,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttVpRange = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_main_viewport_range_disabled_tooltip"), "Measurement aid: draws every shell through the viewport bound when the deferred span ends (the blended decals' cap, max depth ~3e-5 under the main pass's) instead of the main pass's own depth range. That cap used to put every shell slightly nearer than its object - a third of a unit on a rock at 4 m, thousands of units on a mountain at 450 m. Off, shells write the same depth the game wrote for the same mesh. Flip it with the camera held still to read what the range fix changed about distant object snow."));
 
+		ImGui::Checkbox(T(TKEY("shell_depth_prepass_disabled"), "Shell: Disable Depth Prepass"), &shellDepthPrepassDisabled);
+		if (auto _ttPrepass = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_depth_prepass_disabled_tooltip"), "Measurement aid: returns the tessellated shell to its earlier near/far split draws. With the prepass on, a cheap depth-only draw decides which pixels the shell owns and the full shader then runs once per owned pixel instead of once per rasterised fragment - fragments hidden by the scene, by the shell's own slopes, or cut by the alpha test never shade. Same depth, same alpha decision, same look; hold the camera still and read the Shell row and the pipeline statistics."));
+
 		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));

@@ -1148,6 +1148,20 @@ public:
 	ID3D11PixelShader* shellPSNoDepth = nullptr;
 	ID3D11PixelShader* GetShellPSNoDepth();
 
+	/** @brief Depth prepass: SNOW_SHELL_DEPTH_PREPASS writes the shell's depth (alpha cut + export clamp) with no colour targets; SNOW_SHELL_PREPASS_MAIN shades only the pixels the prepass wrote, under GREATER_EQUAL with writes off, so occluded, self-hidden and alpha-cut fragments never run the shader. Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11PixelShader* GetShellPSPrepass();
+	ID3D11PixelShader* GetShellPSPrepassMain();
+	ID3D11PixelShader* shellPSPrepass = nullptr;
+	ID3D11PixelShader* shellPSPrepassMain = nullptr;
+	bool shellMarchBicubicCompiledPSPrepassMain = false;
+	ID3D11ComputeShader* GetDepthCopyCS();
+	ID3D11ComputeShader* depthCopyCS = nullptr;
+	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
+	Texture2D* shellPrepassDepth = nullptr;
+	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
+	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */
+	bool shellDepthPrepassDisabled = false;
+
 	ConstantBuffer* shellCB = nullptr;
 
 	/** @brief SSGI seam shield: analytic contact-fringe mask handed to the deferred composite (t16/b7) so it can lift SSGI's AO on the ground ring just beyond the shell edge, where the discarded shell cannot shield via Masks2. Bound from Deferred's composite dispatch; implemented in SnowDeformation/Shell.cpp. */
