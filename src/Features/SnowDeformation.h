@@ -589,9 +589,9 @@ public:
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
-		float SkinDepthBias = 16.0f;
-		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces, where skin and mesh z-fight hardest. */
-		float SkinSlopeDepthBias = 1.5f;
+		float SkinDepthBias = 64.0f;
+		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
+		float SkinSlopeDepthBias = 0.0f;
 		/** @brief LOD-diffuse snow classification: 0 = only bright white counts, 1 = pale gray already counts. */
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
