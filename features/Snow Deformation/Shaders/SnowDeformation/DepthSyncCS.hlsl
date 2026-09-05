@@ -118,6 +118,10 @@ struct SkinBound
 	uint BoundsSlot;  // MeshBounds slot when HasBounds
 	uint HasBounds;
 	float LiftMargin;  // world units the skin can stand off the mesh
+	uint ClusterOffset;  // first cluster slot, when ClusterCount > 0
+	uint ClusterCount;
+	uint IndexPoolOffset;  // this mesh's first index in the pool
+	uint ScratchBase;  // where this skin's compacted indices start
 	float4 WorldRow0;
 	float4 WorldRow1;
 	float4 WorldRow2;
@@ -134,6 +138,66 @@ RWByteAddressBuffer SkinArgs : register(u3);
 // beyond the far plane, 5 culled - behind the scene, 6 kept - sphere path,
 // sphere reaches the eye plane, 7 kept - as 1 but the box spans over 2,000
 // units (a precombined cell chunk, not an object).
+// Projects a local-space box through a skin's world rows into the camera's
+// clip space. Returns false when a corner is at or behind the eye plane, so
+// the footprint is unbounded and the caller must keep the geometry.
+bool ProjectLocalBox(float3 bmin, float3 bmax, float4 r0, float4 r1, float4 r2,
+	out float2 lo, out float2 hi, out float zn)
+{
+	lo = 1e9;
+	hi = -1e9;
+	zn = 1e9;
+	bool behind = false;
+	[unroll] for (uint i = 0; i < 8; i++)
+	{
+		float3 l = float3((i & 1) ? bmax.x : bmin.x, (i & 2) ? bmax.y : bmin.y, (i & 4) ? bmax.z : bmin.z);
+		float3 wp = float3(dot(r0.xyz, l) + r0.w, dot(r1.xyz, l) + r1.w, dot(r2.xyz, l) + r2.w);
+		float4 clip = mul(CullViewProj, float4(wp - CullCameraPosAdjust.xyz, 1.0));
+		if (clip.w <= 1e-3)
+			behind = true;
+		else
+		{
+			float2 n = clip.xy / clip.w;
+			lo = min(lo, n);
+			hi = max(hi, n);
+			zn = min(zn, clip.z / clip.w);
+		}
+	}
+	return !behind;
+}
+
+// Verdict for a projected box: 0 draw, 2 keep (the pyramid read as zero, so
+// the read is dead and the geometry must not be trusted away), 3 outside the
+// view, 4 past the far plane, 5 behind the scene.
+uint TestProjectedBox(float2 lo, float2 hi, float zn)
+{
+	if (hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0)
+		return 3;
+	if (zn > 1.0)
+		return 4;
+	float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
+	float2 vpMin = CullViewport.xy;
+	float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
+	// One pixel of slack each way covers rasterisation rounding.
+	float2 pxMin = clamp(float2(lo.x * 0.5 + 0.5, 0.5 - hi.y * 0.5) * CullViewport.zw + CullViewport.xy - 1.0, vpMin, vpMax);
+	float2 pxMax = clamp(float2(hi.x * 0.5 + 0.5, 0.5 - lo.y * 0.5) * CullViewport.zw + CullViewport.xy + 1.0, vpMin, vpMax);
+	float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
+	// Level where the footprint spans at most two texels per axis.
+	uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
+	uint shift = level + 1;
+	uint w, h, levels;
+	HiZ.GetDimensions(level, w, h, levels);
+	uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
+	uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
+	float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
+		max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
+	// Scene depth is never exactly 0 (near-plane clip); a zero here is an
+	// unbound or unwritten read, and the geometry must draw.
+	if (occluder <= 0.0)
+		return 2;
+	return depthNear > occluder ? 5 : 0;
+}
+
 [numthreads(64, 1, 1)] void SkinCullCS(uint3 id : SV_DispatchThreadID)
 {
 	if (id.x >= CullSkinCount)
@@ -156,32 +220,10 @@ RWByteAddressBuffer SkinArgs : register(u3);
 		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
 		bmin -= grow;
 		bmax += grow;
-		bool behind = false;
-		float zMin = 1e9;
-		[unroll] for (uint i = 0; i < 8; i++)
-		{
-			float3 l = float3((i & 1) ? bmax.x : bmin.x, (i & 2) ? bmax.y : bmin.y, (i & 4) ? bmax.z : bmin.z);
-			float3 wp = float3(dot(b.WorldRow0.xyz, l) + b.WorldRow0.w,
-				dot(b.WorldRow1.xyz, l) + b.WorldRow1.w,
-				dot(b.WorldRow2.xyz, l) + b.WorldRow2.w);
-			float4 clip = mul(CullViewProj, float4(wp - CullCameraPosAdjust.xyz, 1.0));
-			if (clip.w <= 1e-3)
-				behind = true;
-			else
-			{
-				float2 n = clip.xy / clip.w;
-				lo = min(lo, n);
-				hi = max(hi, n);
-				zMin = min(zMin, clip.z / clip.w);
-			}
-		}
-		if (behind)
-			reason = length((bmax - bmin) * length(b.WorldRow0.xyz)) > 2000.0 ? 7 : 1;
-		else
-		{
+		if (ProjectLocalBox(bmin, bmax, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn))
 			bounded = true;
-			zn = zMin;
-		}
+		else
+			reason = length((bmax - bmin) * length(b.WorldRow0.xyz)) > 2000.0 ? 7 : 1;
 	}
 	else
 	{
@@ -230,44 +272,10 @@ RWByteAddressBuffer SkinArgs : register(u3);
 
 	[branch] if (bounded)
 	{
-		if (hi.x < -1.0 || lo.x > 1.0 || hi.y < -1.0 || lo.y > 1.0)
-		{
+		uint verdict = TestProjectedBox(lo, hi, zn);
+		reason = verdict;
+		if (verdict >= 3)
 			draw = 0;
-			reason = 3;
-		}
-		else if (zn > 1.0)
-		{
-			draw = 0;
-			reason = 4;
-		}
-		else
-		{
-			float depthNear = CullDepth.x + saturate(zn) * (CullDepth.y - CullDepth.x) - CullDepth.z;
-			float2 vpMin = CullViewport.xy;
-			float2 vpMax = CullViewport.xy + CullViewport.zw - 1.0;
-			// One pixel of slack each way covers rasterisation rounding.
-			float2 pxMin = clamp(float2(lo.x * 0.5 + 0.5, 0.5 - hi.y * 0.5) * CullViewport.zw + CullViewport.xy - 1.0, vpMin, vpMax);
-			float2 pxMax = clamp(float2(hi.x * 0.5 + 0.5, 0.5 - lo.y * 0.5) * CullViewport.zw + CullViewport.xy + 1.0, vpMin, vpMax);
-			float span = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0);
-			// Level where the footprint spans at most two texels per axis.
-			uint level = (uint)clamp(ceil(log2(span)) - 1.0, 0.0, CullDepth.w - 1.0);
-			uint shift = level + 1;
-			uint w, h, levels;
-			HiZ.GetDimensions(level, w, h, levels);
-			uint2 t0 = min(uint2(pxMin) >> shift, uint2(w, h) - 1);
-			uint2 t1 = min(uint2(pxMax) >> shift, uint2(w, h) - 1);
-			float occluder = max(max(HiZ.Load(int3(t0.x, t0.y, level)), HiZ.Load(int3(t1.x, t0.y, level))),
-				max(HiZ.Load(int3(t0.x, t1.y, level)), HiZ.Load(int3(t1.x, t1.y, level))));
-			// Scene depth is never exactly 0 (near-plane clip); a zero here
-			// is an unbound or unwritten read, and the skin must draw.
-			if (occluder <= 0.0)
-				reason = 2;
-			else if (depthNear > occluder)
-			{
-				draw = 0;
-				reason = 5;
-			}
-		}
 	}
 	uint base = id.x * 20;
 	SkinArgs.Store(base, b.IndexCount);
@@ -276,3 +284,95 @@ RWByteAddressBuffer SkinArgs : register(u3);
 	SkinArgs.Store(base + 12, 0);
 	SkinArgs.Store(base + 16, reason);
 }
+
+#ifdef SNOW_CLUSTER_CULL
+// ---------------------------------------------------------------------------
+// Cluster cull. Skyrim precombines exterior meshes, so a single "object" is
+// often a merged chunk of a cell whose box contains the camera - untestable
+// as a whole, however tight the box is. This reaches inside it: one thread
+// group per skin, one thread per cluster, testing each cluster's own box
+// against the same pyramid and compacting the survivors' indices into a
+// scratch index buffer that BOTH the prepass and the shading loop draw.
+//
+// A mesh is cut into AT MOST one group's worth of clusters (256), 64
+// triangles each until that would overflow and proportionally larger after -
+// so the pass is a single chunk with no loop over chunks. That is not only
+// simpler: a barrier inside a loop whose trip count comes from a buffer is
+// non-uniform flow control and will not compile.
+//
+// Bit-identical on two counts: a cluster whose every fragment would fail the
+// depth test contributes nothing, and the compaction is ORDERED - an
+// exclusive prefix sum over ascending clusters - so surviving triangles keep
+// their original relative order. That matters because these draws are
+// two-sided and the shading pass tests EQUAL with depth writes off, where
+// draw order decides between coincident faces.
+StructuredBuffer<float4> ClusterBounds : register(t5);
+ByteAddressBuffer ClusterIndexPool : register(t6);
+RWByteAddressBuffer ClusterScratchIndices : register(u4);
+
+#define SNOW_CLUSTER_GROUP 256
+groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
+
+[numthreads(SNOW_CLUSTER_GROUP, 1, 1)] void ClusterCullCS(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID)
+{
+	uint skin = gid.x;
+	SkinBound b = SkinBounds[min(skin, max(CullSkinCount, 1u) - 1u)];
+	uint argBase = skin * 20;
+	// Inactive when the mesh has no clusters (the CPU then binds the mesh's
+	// own index buffer and SkinCullCS's arguments stand) or the whole skin is
+	// already culled. Uniform across the group, but nothing below branches a
+	// barrier on it.
+	bool active = skin < CullSkinCount && b.ClusterCount != 0 && SkinArgs.Load(argBase + 4) != 0;
+
+	uint idxStart = 0;
+	uint idxCount = 0;
+	uint keep = 0;
+	[branch] if (active && gtid.x < b.ClusterCount)
+	{
+		float4 cmin = ClusterBounds[(b.ClusterOffset + gtid.x) * 2];
+		float4 cmax = ClusterBounds[(b.ClusterOffset + gtid.x) * 2 + 1];
+		idxStart = asuint(cmin.w);
+		idxCount = asuint(cmax.w);
+		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
+		float2 lo, hi;
+		float zn;
+		if (!ProjectLocalBox(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn))
+			keep = idxCount;  // reaches the eye plane: unbounded, keep
+		else
+			keep = TestProjectedBox(lo, hi, zn) >= 3 ? 0 : idxCount;
+	}
+
+	// Ordered exclusive scan of the surviving index counts. The trip count is
+	// a compile-time constant, so every barrier is in uniform flow control.
+	gClusterScan[gtid.x] = keep;
+	GroupMemoryBarrierWithGroupSync();
+	[unroll] for (uint step = 1; step < SNOW_CLUSTER_GROUP; step <<= 1)
+	{
+		uint add = (gtid.x >= step) ? gClusterScan[gtid.x - step] : 0;
+		GroupMemoryBarrierWithGroupSync();
+		gClusterScan[gtid.x] += add;
+		GroupMemoryBarrierWithGroupSync();
+	}
+	uint exclusive = gClusterScan[gtid.x] - keep;
+	uint total = gClusterScan[SNOW_CLUSTER_GROUP - 1];
+
+	[branch] if (keep != 0)
+	{
+		uint dst = b.ScratchBase + exclusive;
+		for (uint k = 0; k < idxCount; k++)
+		{
+			uint si = b.IndexPoolOffset + idxStart + k;
+			uint word = ClusterIndexPool.Load((si >> 1) << 2);
+			uint v = (si & 1) ? (word >> 16) : (word & 0xFFFF);
+			ClusterScratchIndices.Store((dst + k) << 2, v);
+		}
+	}
+
+	if (gtid.x == 0 && active)
+	{
+		SkinArgs.Store(argBase, total);
+		SkinArgs.Store(argBase + 4, total > 0 ? 1 : 0);
+		SkinArgs.Store(argBase + 8, b.ScratchBase);
+	}
+}
+#endif

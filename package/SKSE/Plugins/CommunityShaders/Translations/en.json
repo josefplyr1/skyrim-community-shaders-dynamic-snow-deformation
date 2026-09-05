@@ -1391,6 +1391,8 @@
     "feature.snow_deformation.clear": "Clear Deformation Map",
     "feature.snow_deformation.cloak_radius": "Fire Cloak Radius",
     "feature.snow_deformation.cloak_radius_tooltip": "How far a cloak marks the ground its wearer walks over. A cloak wraps the body rather than resting on the snow, so it digs more slowly than a flame played straight onto the ground - but it still reaches the floor if worn long enough.",
+    "feature.snow_deformation.cluster_cull_disabled": "Object Snow: Disable Cluster Culling",
+    "feature.snow_deformation.cluster_cull_disabled_tooltip": "Measurement aid: draws every visible object's snow layer whole. The game merges whole neighbourhoods into single objects, so an object that is mostly hidden behind a hill is still drawn entire - and because you are standing inside its bounds, the per-object test above cannot reject it. With this on, each object is cut into small pieces of surface, each piece is checked against the same far-depth map, and only the pieces that could show are drawn. Hidden pieces produce no pixels either way, so nothing changes on screen. The line below counts the triangles that survived.",
     "feature.snow_deformation.compact_matte": "Compaction Matte",
     "feature.snow_deformation.compact_matte_tooltip": "How completely trampled snow loses its sparkle. Packing crushes the loose crystals that glint, so trench floors, walls and berms go matte while untouched snow keeps full glitter. Both shells; 0 = off.",
     "feature.snow_deformation.corpse_marks": "Bodies Keep Marking",

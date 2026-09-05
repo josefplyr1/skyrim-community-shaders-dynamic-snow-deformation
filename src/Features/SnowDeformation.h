@@ -1755,6 +1755,10 @@ public:
 		uint32_t ColorOffsetBytes;
 		uint32_t HasColor;
 		uint32_t BoundsSlot;
+		uint32_t IndexPoolOffset;
+		uint32_t IndexCount;
+		uint32_t ClusterOffset;
+		uint32_t ClusterStrideIndices;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
 
@@ -1766,6 +1770,11 @@ public:
 		bool ready = false;
 		/** @brief Slot in meshBounds holding this mesh's local box (MESHBOUNDS pass), UINT32_MAX when none. */
 		uint32_t boundsSlot = UINT32_MAX;
+		/** @brief Cluster range in clusterBounds and the mesh's slice of clusterIndexPool (CLUSTERBOUNDS pass); count 0 when the mesh got none and its skins draw their own index buffer. */
+		uint32_t clusterOffset = 0;
+		uint32_t clusterCount = 0;
+		uint32_t indexPoolOffset = 0;
+		uint32_t indexCount = 0;
 	};
 	/** @brief Local boxes of the unique meshes, two float4 per slot (min, max), built beside the smoothed normals; the skin cull projects them. */
 	static constexpr uint32_t kMeshBoundsSlots = 1024;
@@ -1773,6 +1782,29 @@ public:
 	uint32_t meshBoundsNext = 0;
 	ID3D11ComputeShader* smoothBoundsCS = nullptr;
 	uint32_t SmoothedBoundsSlot(void* a_vertexBuffer) const;
+
+	/** @brief Cluster cull: a precombined cell chunk's box contains the camera, so the whole-skin test can never reject it. Each unique mesh is cut into at most one thread group's worth of clusters (64 triangles each until that would exceed the cap, proportionally larger after), each with its own local box; ClusterCullCS tests them against the same depth pyramid and compacts the survivors' indices, in order, into clusterScratchIB, which both skin loops draw through the same indirect arguments. Implemented in SnowDeformation/Statics.cpp. */
+	static constexpr uint32_t kClusterGroup = 256;
+	static constexpr uint32_t kClusterTrisBase = 64;
+	static constexpr uint32_t kClusterSlots = 65536;
+	static constexpr uint32_t kClusterIndexPoolIndices = 4u * 1024u * 1024u;
+	/** @brief The compacted index stream is sized to what the scene actually asks for, grown a frame late and capped here; a skin that does not fit draws its own index buffer entire. */
+	static constexpr uint32_t kClusterScratchMaxIndices = 8u * 1024u * 1024u;
+	uint32_t clusterScratchCapacity = 0;
+	uint32_t clusterScratchNeeded = 0;
+	ID3D11ComputeShader* smoothClusterCS = nullptr;
+	ID3D11ComputeShader* clusterCullCS = nullptr;
+	ID3D11ComputeShader* GetClusterCullCS();
+	bool EnsureClusterResources(uint32_t a_scratchIndices);
+	Buffer* clusterBounds = nullptr;
+	Buffer* clusterIndexPool = nullptr;
+	Buffer* clusterScratchIB = nullptr;
+	uint32_t clusterNext = 0;
+	uint32_t clusterIndexPoolNext = 0;
+	/** @brief A/B measurement: stops the per-cluster pass, so every skin the whole-skin test kept draws its mesh entire. Runtime-only. */
+	bool clusterCullDisabled = false;
+	uint32_t clusterSkinsLast = 0;
+	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
 	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
 	ID3D11ComputeShader* smoothResolveCS = nullptr;
@@ -2077,6 +2109,10 @@ public:
 		uint32_t BoundsSlot;
 		uint32_t HasBounds;
 		float LiftMargin;
+		uint32_t ClusterOffset;
+		uint32_t ClusterCount;
+		uint32_t IndexPoolOffset;
+		uint32_t ScratchBase;
 		float4 WorldRow0;
 		float4 WorldRow1;
 		float4 WorldRow2;
@@ -2112,7 +2148,7 @@ public:
 	uint32_t skinCullLevels = 0;
 	uint32_t skinCullDrawnLast = 0;
 	uint32_t skinCullCulledLast = 0;
-	uint32_t skinCullTrisCulledLast = 0;
+	uint32_t skinCullTrisDrawnLast = 0;
 	uint32_t skinCullTrisTotalLast = 0;
 	/** @brief Per-reason census (SkinCullCS reason codes 0-5) and the pyramid's 1x1 top level, read back through 1x1 staging textures: 0 there means the pyramid is dead. */
 	uint32_t skinCullReasonLast[8] = {};

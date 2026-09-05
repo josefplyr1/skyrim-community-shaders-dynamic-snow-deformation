@@ -1994,6 +1994,20 @@ void SnowDeformation::ClearShaderCache()
 	if (smoothBoundsCS)
 		smoothBoundsCS->Release();
 	smoothBoundsCS = nullptr;
+	if (smoothClusterCS)
+		smoothClusterCS->Release();
+	smoothClusterCS = nullptr;
+	if (clusterCullCS)
+		clusterCullCS->Release();
+	clusterCullCS = nullptr;
+	delete clusterBounds;
+	clusterBounds = nullptr;
+	delete clusterIndexPool;
+	clusterIndexPool = nullptr;
+	delete clusterScratchIB;
+	clusterScratchIB = nullptr;
+	clusterNext = 0;
+	clusterIndexPoolNext = 0;
 	delete meshBounds;
 	meshBounds = nullptr;
 	meshBoundsNext = 0;

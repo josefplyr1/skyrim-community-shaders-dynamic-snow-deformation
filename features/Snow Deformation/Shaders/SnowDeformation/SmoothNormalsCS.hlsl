@@ -40,6 +40,11 @@ cbuffer SmoothCB : register(b0)
 	uint ColorOffsetBytes;
 	uint HasColor;  // 1 = the vertex stream carries VA_COLOR
 	uint BoundsSlot;  // MESHBOUNDS: slot in MeshBounds (2 float4 per slot)
+
+	uint IndexPoolOffset;  // CLUSTERBOUNDS: this mesh's first index in the pool
+	uint IndexCount;
+	uint ClusterOffset;  // first cluster slot for this mesh
+	uint ClusterStrideIndices;  // indices per cluster (64 triangles, or more on a mesh too big to cut that fine)
 }
 
 static const uint kMaxProbe = 16;
@@ -235,5 +240,39 @@ groupshared float3 gBoundsMax[256];
 		MeshBounds[BoundsSlot * 2] = float4(gBoundsMin[0], 0.0);
 		MeshBounds[BoundsSlot * 2 + 1] = float4(gBoundsMax[0], 0.0);
 	}
+}
+#endif
+
+#ifdef CLUSTERBOUNDS
+// Local-space box per 64-triangle cluster, for the object-snow cluster cull:
+// one thread per cluster, walking that cluster's slice of the pooled index
+// data and reducing the positions it names. Built once per unique mesh,
+// beside the mesh box and the smoothed normals. Slot layout mirrors
+// MeshBounds - min.xyz then max.xyz - with the cluster's own index range
+// carried in the two w channels, so the per-frame pass needs nothing else.
+ByteAddressBuffer ClusterSrcIndices : register(t1);
+RWStructuredBuffer<float4> ClusterBoundsOut : register(u3);
+
+[numthreads(64, 1, 1)] void main(uint3 dtid : SV_DispatchThreadID)
+{
+	uint stride = max(ClusterStrideIndices, 3u);
+	uint clusterCount = (IndexCount + stride - 1) / stride;
+	if (dtid.x >= clusterCount)
+		return;
+	uint start = dtid.x * stride;
+	uint count = min(stride, IndexCount - start);
+
+	float3 mn = 1e30;
+	float3 mx = -1e30;
+	for (uint k = 0; k < count; k++) {
+		uint si = IndexPoolOffset + start + k;
+		uint word = ClusterSrcIndices.Load((si >> 1) << 2);
+		uint vi = (si & 1) ? (word >> 16) : (word & 0xFFFF);
+		float3 p = LoadPosition(min(vi, VertexCount - 1));
+		mn = min(mn, p);
+		mx = max(mx, p);
+	}
+	ClusterBoundsOut[(ClusterOffset + dtid.x) * 2] = float4(mn, asfloat(start));
+	ClusterBoundsOut[(ClusterOffset + dtid.x) * 2 + 1] = float4(mx, asfloat(count));
 }
 #endif

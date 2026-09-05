@@ -2064,6 +2064,8 @@ bool SnowDeformation::EnsureSmoothNormalsCS()
 		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
 	if (!smoothBoundsCS)
 		smoothBoundsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0"));
+	if (!smoothClusterCS)
+		smoothClusterCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0"));
 	if (!meshBounds && smoothBoundsCS) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = kMeshBoundsSlots * 2 * 16;
@@ -2092,6 +2094,79 @@ uint32_t SnowDeformation::SmoothedBoundsSlot(void* a_vertexBuffer) const
 	return (it != smoothedNormalsCache.end() && it->second.ready) ? it->second.boundsSlot : UINT32_MAX;
 }
 
+ID3D11ComputeShader* SnowDeformation::GetClusterCullCS()
+{
+	if (!clusterCullCS) {
+		logger::debug("Compiling DepthSyncCS ClusterCullCS");
+		clusterCullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "SNOW_CLUSTER_CULL", "" } }, "cs_5_0", "ClusterCullCS"));
+	}
+	return clusterCullCS;
+}
+
+bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
+{
+	if (!clusterBounds) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = kClusterSlots * 2 * 16;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = 16;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.NumElements = kClusterSlots * 2;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = kClusterSlots * 2;
+		clusterBounds = new Buffer(desc, nullptr, "SnowDeformation::ClusterBounds");
+		clusterBounds->CreateSRV(srvDesc);
+		clusterBounds->CreateUAV(uavDesc);
+	}
+	if (!clusterIndexPool) {
+		// Every unique mesh's index data in one buffer: a single dispatch
+		// cannot bind one index buffer per skin, so the cull reads them all
+		// from here at the mesh's own offset. 16-bit, as the game stores them.
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = kClusterIndexPoolIndices * 2;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+		srvDesc.BufferEx.NumElements = kClusterIndexPoolIndices / 2;
+		srvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+		clusterIndexPool = new Buffer(desc, nullptr, "SnowDeformation::ClusterIndexPool");
+		clusterIndexPool->CreateSRV(srvDesc);
+	}
+	const uint32_t wantScratch = std::min(std::max(a_scratchIndices, 1u << 20), kClusterScratchMaxIndices);
+	if (clusterScratchIB && clusterScratchCapacity < wantScratch) {
+		delete clusterScratchIB;
+		clusterScratchIB = nullptr;
+	}
+	if (!clusterScratchIB) {
+		// 32-bit purely for alignment: a cluster's compacted destination is a
+		// running sum of surviving index counts, which 16-bit stores could
+		// land on an odd halfword.
+		clusterScratchCapacity = wantScratch;
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = clusterScratchCapacity * 4;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_INDEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.NumElements = clusterScratchCapacity;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		clusterScratchIB = new Buffer(desc, nullptr, "SnowDeformation::ClusterScratchIB");
+		clusterScratchIB->CreateUAV(uavDesc);
+	}
+	return clusterBounds->srv && clusterBounds->uav && clusterIndexPool->srv && clusterScratchIB->uav;
+}
+
 ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
 {
 	LoadTraceScope _loadTrace(this, "Statics: EnsureSmoothedNormals");
@@ -2107,6 +2182,8 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	if (smoothedNormalsCache.size() > 1024) {
 		smoothedNormalsCache.clear();
 		meshBoundsNext = 0;
+		clusterNext = 0;
+		clusterIndexPoolNext = 0;
 	}
 
 	auto [it, inserted] = smoothedNormalsCache.try_emplace(rendererData->vertexBuffer);
@@ -2163,6 +2240,7 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	auto device = globals::d3d::device;
 	auto context = globals::d3d::context;
 	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 
 	// SRV-capable copy of the game's vertex buffer (raw view); the game's
 	// own buffers carry no shader-resource bind flag.
@@ -2249,7 +2327,38 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 	cb.HasColor = hasColor ? 1u : 0u;
 	const bool wantBounds = smoothBoundsCS && meshBounds && meshBounds->uav && meshBoundsNext < kMeshBoundsSlots;
 	cb.BoundsSlot = wantBounds ? meshBoundsNext : 0u;
+
+	// Clusters: at most one thread group's worth per mesh, so the cull pass is
+	// a single chunk (a barrier under a buffer-driven trip count is
+	// non-uniform flow control and will not compile). 64 triangles each until
+	// that would exceed the cap, proportionally larger after.
+	const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+	const uint32_t poolOffset = (clusterIndexPoolNext + 7u) & ~7u;
+	uint32_t clusterTris = kClusterTrisBase;
+	uint32_t clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
+	if (clusterCount > kClusterGroup) {
+		clusterTris = (indexCount / 3 + kClusterGroup - 1) / kClusterGroup;
+		clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
+	}
+	const bool wantClusters = smoothClusterCS && gameIB && indexCount >= 3 &&
+	                          clusterNext + clusterCount <= kClusterSlots &&
+	                          poolOffset + indexCount <= kClusterIndexPoolIndices &&
+	                          EnsureClusterResources(clusterScratchNeeded);
+	cb.IndexPoolOffset = wantClusters ? poolOffset : 0u;
+	cb.IndexCount = wantClusters ? indexCount : 0u;
+	cb.ClusterOffset = wantClusters ? clusterNext : 0u;
+	cb.ClusterStrideIndices = clusterTris * 3;
 	smoothCB->Update(cb);
+
+	if (wantClusters) {
+		// The game's index data, copied once into the shared pool.
+		D3D11_BOX box{};
+		box.left = 0;
+		box.right = indexCount * 2;
+		box.bottom = 1;
+		box.back = 1;
+		context->CopySubresourceRegion(clusterIndexPool->resource.get(), 0, poolOffset * 2, 0, 0, gameIB, 0, &box);
+	}
 
 	// Compute-only state: does not disturb the surrounding draw pipeline.
 	ID3D11Buffer* cscb = smoothCB->CB();
@@ -2274,6 +2383,24 @@ ID3D11ShaderResourceView* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry*
 		ID3D11UnorderedAccessView* nullBoundsUAV = nullptr;
 		context->CSSetUnorderedAccessViews(2, 1, &nullBoundsUAV, nullptr);
 		entry.boundsSlot = meshBoundsNext++;
+	}
+	if (wantClusters) {
+		ID3D11ShaderResourceView* poolSRV = clusterIndexPool->srv.get();
+		context->CSSetShaderResources(1, 1, &poolSRV);
+		ID3D11UnorderedAccessView* clusterUAV = clusterBounds->uav.get();
+		context->CSSetUnorderedAccessViews(3, 1, &clusterUAV, nullptr);
+		context->CSSetShader(smoothClusterCS, nullptr, 0);
+		context->Dispatch((clusterCount + 63) / 64, 1, 1);
+		ID3D11ShaderResourceView* nullPoolSRV = nullptr;
+		context->CSSetShaderResources(1, 1, &nullPoolSRV);
+		ID3D11UnorderedAccessView* nullClusterUAV = nullptr;
+		context->CSSetUnorderedAccessViews(3, 1, &nullClusterUAV, nullptr);
+		entry.clusterOffset = clusterNext;
+		entry.clusterCount = clusterCount;
+		entry.indexPoolOffset = poolOffset;
+		entry.indexCount = indexCount;
+		clusterNext += clusterCount;
+		clusterIndexPoolNext = poolOffset + indexCount;
 	}
 
 	ID3D11ShaderResourceView* nullCsSRV = nullptr;
@@ -2527,9 +2654,18 @@ void SnowDeformation::DrawCapturedStatics()
 		bool s4Shell;
 		uint32_t slot;
 		uint32_t boundsSlot;
+		uint32_t clusterOffset;
+		uint32_t clusterCount;
+		uint32_t indexPoolOffset;
+		uint32_t scratchBase;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
+	// Grown a frame late from what the last frame asked for: the allocation
+	// below has to hand out ranges before the total is known.
+	EnsureClusterResources(clusterScratchNeeded);
+	uint32_t scratchNext = 0;
+	uint32_t scratchWanted = 0;
 	for (const auto& cap : capturedStatics) {
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
@@ -2590,12 +2726,29 @@ void SnowDeformation::DrawCapturedStatics()
 		// Smoothed normals (and the mesh box beside them) are built on first
 		// sight; the draw loop's own call then hits the cache.
 		EnsureSmoothedNormals(geometry);
+		auto cacheIt = smoothedNormalsCache.find(rendererData->vertexBuffer);
+		const bool cached = cacheIt != smoothedNormalsCache.end() && cacheIt->second.ready;
+		uint32_t cOffset = 0, cCount = 0, cPool = 0, cBase = 0;
+		// Clusters need a contiguous slice of the scratch buffer, handed out
+		// here so the pass writes to a known place; a mesh that does not fit
+		// simply draws its own index buffer entire.
+		if (cached && cacheIt->second.clusterCount != 0 && !clusterCullDisabled)
+			scratchWanted += cacheIt->second.indexCount;
+		if (cached && cacheIt->second.clusterCount != 0 && !clusterCullDisabled &&
+			scratchNext + cacheIt->second.indexCount <= clusterScratchCapacity) {
+			cOffset = cacheIt->second.clusterOffset;
+			cCount = cacheIt->second.clusterCount;
+			cPool = cacheIt->second.indexPoolOffset;
+			cBase = scratchNext;
+			scratchNext += cacheIt->second.indexCount;
+		}
 		skinDraws.push_back({ &cap, geometry,
 			reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
 			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer),
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
-			uint32_t(skinDraws.size()), SmoothedBoundsSlot(rendererData->vertexBuffer) });
+			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
+			cOffset, cCount, cPool, cBase });
 	}
 
 	// Whole-skin occlusion cull: bounding spheres against a max-depth
@@ -2607,6 +2760,16 @@ void SnowDeformation::DrawCapturedStatics()
 	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV);
 	if (cullActive) {
 		const float liftMargin = std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth) + kSkinCullMargin;
+		uint32_t clusterSkins = 0, trisTotal = 0;
+		for (const auto& d : skinDraws) {
+			trisTotal += d.indexCount / 3;
+			if (d.clusterCount != 0)
+				clusterSkins++;
+		}
+		skinCullTrisTotalLast = trisTotal;
+		clusterSkinsLast = clusterSkins;
+		clusterScratchUsedLast = scratchNext;
+		clusterScratchNeeded = scratchWanted;
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(skinCullBounds->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 			auto* out = static_cast<SkinCullBound*>(mapped.pData);
@@ -2617,6 +2780,7 @@ void SnowDeformation::DrawCapturedStatics()
 				const bool hasBounds = d.boundsSlot != UINT32_MAX && meshBounds && meshBounds->srv;
 				out[d.slot] = { { wb.center.x, wb.center.y, wb.center.z }, wb.radius + liftMargin, d.indexCount,
 					hasBounds ? d.boundsSlot : 0u, hasBounds ? 1u : 0u, liftMargin,
+					d.clusterOffset, d.clusterCount, d.indexPoolOffset, d.scratchBase,
 					{ rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, d.cap->world.translate.x },
 					{ rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, d.cap->world.translate.y },
 					{ rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, d.cap->world.translate.z } };
@@ -2660,6 +2824,22 @@ void SnowDeformation::DrawCapturedStatics()
 		ID3D11UnorderedAccessView* argsUAV = skinCullArgs->uav.get();
 		context->CSSetUnorderedAccessViews(3, 1, &argsUAV, nullptr);
 		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
+
+		// Cluster pass: refines the arguments of every skin the whole-skin
+		// test kept, and compacts what survives into the scratch buffer both
+		// draw loops read.
+		auto* clusterCull = (clusterSkins > 0 && !clusterCullDisabled) ? GetClusterCullCS() : nullptr;
+		if (clusterCull && clusterScratchIB && clusterScratchIB->uav) {
+			ID3D11ShaderResourceView* clusterSRVs[2] = { clusterBounds->srv.get(), clusterIndexPool->srv.get() };
+			context->CSSetShaderResources(5, 2, clusterSRVs);
+			ID3D11UnorderedAccessView* scratchUAV = clusterScratchIB->uav.get();
+			context->CSSetUnorderedAccessViews(4, 1, &scratchUAV, nullptr);
+			context->CSSetShader(clusterCull, nullptr, 0);
+			context->Dispatch(uint32_t(skinDraws.size()), 1, 1);
+			ID3D11UnorderedAccessView* nullScratchUAV = nullptr;
+			context->CSSetUnorderedAccessViews(4, 1, &nullScratchUAV, nullptr);
+			context->CSSetShaderResources(5, 2, nullCullSRVs);
+		}
 		context->CSSetShaderResources(1, 4, nullCullSRVs);
 		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
@@ -2676,25 +2856,22 @@ void SnowDeformation::DrawCapturedStatics()
 			D3D11_MAPPED_SUBRESOURCE rd{};
 			if (SUCCEEDED(context->Map(skinCullArgsStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &rd))) {
 				const auto* args = static_cast<const uint32_t*>(rd.pData);
-				uint32_t drawn = 0, culled = 0, trisCulled = 0, trisTotal = 0;
+				uint32_t drawn = 0, culled = 0, trisDrawn = 0;
 				uint32_t reasons[8] = {};
 				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
-					const uint32_t tris = args[i * 5] / 3;
-					trisTotal += tris;
-					if (args[i * 5 + 1])
+					if (args[i * 5 + 1]) {
 						drawn++;
-					else {
+						// The cluster pass rewrites this to what survived.
+						trisDrawn += args[i * 5] / 3;
+					} else
 						culled++;
-						trisCulled += tris;
-					}
 					reasons[std::min(args[i * 5 + 4], 7u)]++;
 				}
 				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
 				skinCullStagingIssued[readRing] = false;
 				skinCullDrawnLast = drawn;
 				skinCullCulledLast = culled;
-				skinCullTrisCulledLast = trisCulled;
-				skinCullTrisTotalLast = trisTotal;
+				skinCullTrisDrawnLast = trisDrawn;
 				memcpy(skinCullReasonLast, reasons, sizeof(reasons));
 			}
 			D3D11_MAPPED_SUBRESOURCE top{};
@@ -2722,7 +2899,12 @@ void SnowDeformation::DrawCapturedStatics()
 			UINT offset = 0;
 			ID3D11Buffer* vb = d.vb;
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(d.ib, DXGI_FORMAT_R16_UINT, 0);
+			// Cluster skins draw the compacted stream; everything else draws
+			// the mesh's own indices, as before.
+			if (cullActive && d.clusterCount != 0)
+				context->IASetIndexBuffer(clusterScratchIB->resource.get(), DXGI_FORMAT_R32_UINT, 0);
+			else
+				context->IASetIndexBuffer(d.ib, DXGI_FORMAT_R16_UINT, 0);
 
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.

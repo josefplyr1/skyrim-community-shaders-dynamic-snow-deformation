@@ -1214,12 +1214,17 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("skin_cull_disabled"), "Object Snow: Disable Skin Culling"), &skinCullDisabled);
 		if (auto _ttSkinCull = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped."));
+
+		ImGui::Checkbox(T(TKEY("cluster_cull_disabled"), "Object Snow: Disable Cluster Culling"), &clusterCullDisabled);
+		if (auto _ttCluster = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("cluster_cull_disabled_tooltip"), "Measurement aid: draws every visible object's snow layer whole. The game merges whole neighbourhoods into single objects, so an object that is mostly hidden behind a hill is still drawn entire - and because you are standing inside its bounds, the per-object test above cannot reject it. With this on, each object is cut into small pieces of surface, each piece is checked against the same far-depth map, and only the pieces that could show are drawn. Hidden pieces produce no pixels either way, so nothing changes on screen. The line below counts the triangles that survived."));
 		if (!skinCullDisabled) {
 			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
-			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped); %.2f M of %.2f M triangles culled",
+			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",
 				skinCullDrawnLast, skinCullCulledLast, total,
-				total ? 100.0 * skinCullCulledLast / total : 0.0,
-				skinCullTrisCulledLast / 1e6, skinCullTrisTotalLast / 1e6);
+				total ? 100.0 * skinCullCulledLast / total : 0.0);
+			ImGui::Text("  clusters: %u skins cut, %.2f M of %.2f M triangles drawn, scratch %.2f M indices",
+				clusterSkinsLast, skinCullTrisDrawnLast / 1e6, skinCullTrisTotalLast / 1e6, clusterScratchUsedLast / 1e6);
 			ImGui::Text("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
 				skinCullReasonLast[0], skinCullReasonLast[1] + skinCullReasonLast[6] + skinCullReasonLast[7],
 				skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
