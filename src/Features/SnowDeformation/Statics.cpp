@@ -4308,6 +4308,16 @@ void SnowDeformation::ServiceLandTriProbe()
 		double sumSq[4] = {}, maxAbs[4] = {};
 		double gridMax = 0.0;
 		uint32_t between = 0, onGridN = 0, missing = 0;
+		// Catmull-Rom residuals split by where the 4x4 neighbourhood lies: fully
+		// inside the vertex's own cell, or reaching a neighbour cell - where the
+		// engine may not have had the neighbour and used some edge rule instead.
+		// Two candidate edge rules are scored on the edge-reaching points only:
+		// clamp (missing neighbour = nearest in-cell height) and mirror (linear
+		// extrapolation, p0 = 2 p1 - p2).
+		double crInMax = 0.0, crInSq = 0.0, crEdgeMax = 0.0, crEdgeSq = 0.0, clampMax = 0.0, clampSq = 0.0, mirrorMax = 0.0, mirrorSq = 0.0;
+		uint32_t nIn = 0, nEdge = 0;
+		struct Worst { double d; float fx, fy; float wx, wy; float wz, cr; };
+		Worst worst[3] = {};
 		for (uint32_t v = 0; v < p.vertexCount; v++) {
 			const auto l = localPos(v);
 			const auto wxy = worldXY(l);
@@ -4344,10 +4354,62 @@ void SnowDeformation::ServiceLandTriProbe()
 				sumSq[m] += d * d;
 				maxAbs[m] = std::max(maxAbs[m], std::fabs(d));
 			}
+			// Cell-edge classification of the 4x4 footprint (gx-1..gx+2).
+			const long cellX = static_cast<long>(std::floor(gx / 32.0)), cellY = static_cast<long>(std::floor(gy / 32.0));
+			const bool reaches = (gx - 1) < cellX * 32 || (gx + 2) > cellX * 32 + 32 || (gy - 1) < cellY * 32 || (gy + 2) > cellY * 32 + 32;
+			const double dcr = double(wz) - cr;
+			if (!reaches) {
+				nIn++;
+				crInSq += dcr * dcr;
+				crInMax = std::max(crInMax, std::fabs(dcr));
+			} else {
+				nEdge++;
+				crEdgeSq += dcr * dcr;
+				crEdgeMax = std::max(crEdgeMax, std::fabs(dcr));
+				// Rebuild the neighbourhood under each edge rule.
+				float hc[4][4], hm[4][4];
+				for (int j = 0; j < 4; j++)
+					for (int i = 0; i < 4; i++) {
+						long sx = gx - 1 + i, sy = gy - 1 + j;
+						const long cx = std::clamp(sx, cellX * 32, cellX * 32 + 32), cy = std::clamp(sy, cellY * 32, cellY * 32 + 32);
+						bool ok2 = true;
+						hc[j][i] = landHeight(cx, cy, ok2);
+						// Mirror: reflect the out-of-cell sample about the edge vertex.
+						const long mx = sx < cellX * 32 ? 2 * cellX * 32 - sx : (sx > cellX * 32 + 32 ? 2 * (cellX * 32 + 32) - sx : sx);
+						const long my = sy < cellY * 32 ? 2 * cellY * 32 - sy : (sy > cellY * 32 + 32 ? 2 * (cellY * 32 + 32) - sy : sy);
+						const float hEdge = landHeight(cx, cy, ok2);
+						const float hIn = landHeight(mx, my, ok2);
+						hm[j][i] = (sx != mx || sy != my) ? 2.0f * hEdge - hIn : hIn;
+					}
+				float rc[4], rm[4];
+				for (int j = 0; j < 4; j++) {
+					rc[j] = catmull(hc[j][0], hc[j][1], hc[j][2], hc[j][3], fx);
+					rm[j] = catmull(hm[j][0], hm[j][1], hm[j][2], hm[j][3], fx);
+				}
+				const double dc = double(wz) - catmull(rc[0], rc[1], rc[2], rc[3], fy);
+				const double dm = double(wz) - catmull(rm[0], rm[1], rm[2], rm[3], fy);
+				clampSq += dc * dc;
+				clampMax = std::max(clampMax, std::fabs(dc));
+				mirrorSq += dm * dm;
+				mirrorMax = std::max(mirrorMax, std::fabs(dm));
+			}
+			for (auto& wr : worst) {
+				if (std::fabs(dcr) > std::fabs(wr.d)) {
+					wr = { dcr, fx, fy, wxy.x, wxy.y, wz, cr };
+					break;
+				}
+			}
 		}
 		auto rms = [&](int m) { return between ? std::sqrt(sumSq[m] / between) : 0.0; };
 		fit = std::format(" | vs LAND: {} on-grid verts max dz {:.2f}; {} between: bilinear max {:.2f} rms {:.2f}, triA max {:.2f} rms {:.2f}, triB max {:.2f} rms {:.2f}, catmull-rom max {:.2f} rms {:.2f}; {} missing",
 			onGridN, gridMax, between, maxAbs[0], rms(0), maxAbs[1], rms(1), maxAbs[2], rms(2), maxAbs[3], rms(3), missing);
+		fit += std::format(" | CR by footprint: {} in-cell max {:.2f} rms {:.3f}; {} reaching a neighbour cell max {:.2f} rms {:.3f} -> clamp rule max {:.2f} rms {:.3f}, mirror rule max {:.2f} rms {:.3f}",
+			nIn, crInMax, nIn ? std::sqrt(crInSq / nIn) : 0.0,
+			nEdge, crEdgeMax, nEdge ? std::sqrt(crEdgeSq / nEdge) : 0.0,
+			clampMax, nEdge ? std::sqrt(clampSq / nEdge) : 0.0,
+			mirrorMax, nEdge ? std::sqrt(mirrorSq / nEdge) : 0.0);
+		for (const auto& wr : worst)
+			sample += std::format("  worst CR residual {:+.2f} at world ({:.0f},{:.0f}) f=({:.2f},{:.2f}) mesh {:.2f} cr {:.2f}\n", wr.d, wr.wx, wr.wy, wr.fx, wr.fy, wr.wz, wr.cr);
 
 		// One row for offline fitting: mesh heights along the first vertex row
 		// and the LAND heights bracketing it.
