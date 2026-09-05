@@ -933,8 +933,10 @@ public:
 	Texture2D* shellTerrainFineMax2 = nullptr;
 	ID3D11ComputeShader* terrainFineMaxCS = nullptr;
 	ID3D11ComputeShader* GetTerrainFineMaxCS();
-	/** @brief A/B: far-band vertices stand on the exact ground under them instead of the footprint maximum (ShellFlags.x bit 4) - the chord holes come back. Runtime-only. */
-	bool shellFarMaxDisabled = false;
+	/** @brief The rejected far-band fix, opt-in for comparison (ShellFlags.x bit 4): far vertices take the highest ground within their span. A box maximum is piecewise constant, so it terraces on slopes and buries rocks and NPCs on rough ground (Josef, 2026-09-05). Runtime-only. */
+	bool shellFarMaxLift = false;
+	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
+	bool shellFarTessDisabled = false;
 	float shellFineOriginX = 0.0f;
 	float shellFineOriginY = 0.0f;
 	bool shellFineValid = false;

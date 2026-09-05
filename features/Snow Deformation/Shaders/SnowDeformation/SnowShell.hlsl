@@ -197,7 +197,8 @@ cbuffer ShellCB : register(b0)
 	// texel (0,0). Every DeformationMap Load routes through DeformTexel.
 	int2 DeformMapOrigin;
 	// x bit 0 horizon march, bit 1 frustum cull, bit 2 land-exact height OFF,
-	// bit 3 flip tess diagonal sense, bit 4 far-band ground max OFF. Mirror in
+	// bit 3 flip tess diagonal sense, bit 4 far-band ground max LIFT ON
+	// (rejected default), bit 5 far relief tessellation OFF. Mirror in
 	// SnowDeformation.h.
 	int2 ShellFlags;
 
@@ -407,6 +408,42 @@ float TriangulatedHeight(float h00, float h10, float h01, float h11, float2 f)
 	return max(triA, triB);
 }
 
+// The ground as the engine renders it, at any grid-local point: flat
+// triangles between the fine layer's 32-unit vertices, split '/' where the
+// world 32-quad index sum is even (the fine origin is a cell corner, so the
+// texel index sum carries the same parity). The missing sentinel outside the
+// fine window or over missing data.
+// Single exit on purpose: a return inside a [branch] is the X4000 shape, and
+// under the vertex stages' inlining depth it made fxc overflow its stack.
+float LandHeightFine(float2 gridLocal)
+{
+	float h = -100000.0;
+	float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
+	bool inside = FineWindow.z > 0.5 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0);
+	[branch] if (inside)
+	{
+		int2 f0 = (int2)tf;
+		float2 ff = tf - f0;
+		float g00 = TerrainFine.Load(int3(f0, 0));
+		float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
+		float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
+		float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
+		float lo = min(min(g00, g10), min(g01, g11));
+		bool slash = ((f0.x + f0.y) & 1) == 0;
+		float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
+		float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
+		h = lo > -50000.0 ? (slash ? hA : hB) : -100000.0;
+	}
+	return h;
+}
+
+// Band step (8..128 world units) of the shell quad a grid-local point lies in.
+float ShellBandStep(float2 gridLocal)
+{
+	float2 u = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
+	return GridSpacing * max(WarpBand(abs(u.x)).x, WarpBand(abs(u.y)).x);
+}
+
 float3 SampleTerrain(float2 gridLocal)
 {
 	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
@@ -429,41 +466,23 @@ float3 SampleTerrain(float2 gridLocal)
 	[flatten] if (ShellTriHeight > 0.5 && min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
 		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
 
-	// Land-exact height: the rendered ground is piecewise-linear between the
-	// 32-unit vertices of the fine layer, split '/' (h00-h11) where the world
-	// 32-quad index sum is even and '\' otherwise; the fine origin is a cell
-	// corner, so the texel index sum carries the same parity. Outside the fine
-	// window, or over missing data, the 128-texel height above stands.
+	// Land-exact height: the ground as the engine renders it (LandHeightFine).
+	// Outside the fine window, or over missing data, the 128-texel height
+	// above stands, so nothing changes at the seam.
 	[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0)
 	{
-		float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
-		[branch] if (all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
-		{
-			int2 f0 = (int2)tf;
-			float2 ff = tf - f0;
-			float g00 = TerrainFine.Load(int3(f0, 0));
-			float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
-			float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
-			float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
-			[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
-			{
-				bool slash = ((f0.x + f0.y) & 1) == 0;
-				float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
-				float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
-				result.x = slash ? hA : hB;
-			}
+		float fine = LandHeightFine(gridLocal);
+		[flatten] if (fine > -50000.0)
+			result.x = fine;
 
-			// Far bands: a 64- or 128-unit shell quad spans two to four land
-			// quads, and a chord across a convex stretch cuts below the ground
-			// however exactly its corners sit. A vertex there takes the highest
-			// ground over [p - S, p + S] at its own band step S, so every quad's
-			// four corners are at or above the ground anywhere inside it and the
-			// chord clears it by construction. Band vertices sit on the level's
-			// texel corners, so the footprint is 2x2 texels; the general 3x3
-			// covers the offset taps. The exact height above is never lowered.
-			float2 uAxis = float2(InverseWarpAxis(gridLocal.x - WarpedHalfSpan), InverseWarpAxis(gridLocal.y - WarpedHalfSpan));
-			float bandStep = GridSpacing * max(WarpBand(abs(uAxis.x)).x, WarpBand(abs(uAxis.y)).x);
-			[branch] if (bandStep >= 64.0 && (ShellFlags.x & 16) == 0)
+		// Far-band ground maximum - OPT-IN (bit 4), rejected by Josef 2026-09-05
+		// as shipped default: a box maximum is piecewise constant, so on any
+		// slope it terraces, and on rough ground it lifts by whatever falls in
+		// the box (hid rocks and NPCs, moved the snow line). Kept as an A/B
+		// against the tessellation route that replaced it (see the hull).
+		{
+			float bandStep = ShellBandStep(gridLocal);
+			[branch] if (bandStep >= 64.0 && (ShellFlags.x & 16) != 0)
 			{
 				bool coarse = bandStep >= 128.0;
 				float texel = coarse ? 128.0 : 64.0;
@@ -1515,6 +1534,77 @@ bool ShellOutsideFrustum(float2 a, float2 b, float2 c, float2 d, float zLo, floa
 	return outside;
 }
 
+// Far relief tessellation. Beyond ~1,920 units the shell's quads are 64 and
+// 128 units and span two to four of the land's own 32-unit quads; where the
+// ground bulges above the chord the shell would cut below it (the distant
+// holes). Rather than lift vertices (a box maximum terraces and buries
+// rocks), subdivide: an odd factor puts interior vertices at roughly the
+// land's own spacing, and every added vertex samples the exact surface. The
+// test compares the land against the chord at the land's own lattice points
+// along the edge - the edge lies on lattice lines, and the land is linear
+// between its vertices, so three samples see the exact maximum bulge. Edge
+// tests read only the edge's endpoints, so both patches on an edge agree
+// (crack-free); the inside test may raise the inside factor alone. World
+// data only: nothing here moves with the camera.
+static const float kFarReliefTolerance = 4.0;
+
+float FarReliefEdgeFactor(float2 a, float2 b)
+{
+	float factor = 1.0;
+	float step = ShellBandStep(0.5 * (a + b));
+	bool active = FineWindow.z > 0.5 && (ShellFlags.x & 32) == 0 && step >= 64.0;
+	[branch] if (active)
+	{
+		float ha = LandHeightFine(a);
+		float hb = LandHeightFine(b);
+		float excess = 0.0;
+		[unroll] for (int i = 1; i <= 3; i++)
+		{
+			float t = i * 0.25;
+			float land = LandHeightFine(lerp(a, b, t));
+			if (land > -50000.0)
+				excess = max(excess, land - lerp(ha, hb, t));
+		}
+		bool valid = min(ha, hb) > -50000.0;
+		factor = (valid && excess > kFarReliefTolerance) ? (step >= 128.0 ? 5.0 : 3.0) : 1.0;
+	}
+	return factor;
+}
+
+// Corner order 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1); the chord is the LOWER of
+// the two triangulations of the corners, the conservative surface.
+float FarReliefInsideFactor(float2 c0, float2 c1, float2 c2, float2 c3)
+{
+	float factor = 1.0;
+	float2 centre = 0.25 * (c0 + c1 + c2 + c3);
+	float step = ShellBandStep(centre);
+	bool active = FineWindow.z > 0.5 && (ShellFlags.x & 32) == 0 && step >= 64.0;
+	[branch] if (active)
+	{
+		float h0 = LandHeightFine(c0);
+		float h1 = LandHeightFine(c1);
+		float h2 = LandHeightFine(c2);
+		float h3 = LandHeightFine(c3);
+		float excess = 0.0;
+		[unroll] for (int j = 1; j <= 3; j++)
+		{
+			[unroll] for (int i = 1; i <= 3; i++)
+			{
+				float2 ff = float2(i, j) * 0.25;
+				float2 pos = lerp(lerp(c0, c1, ff.x), lerp(c3, c2, ff.x), ff.y);
+				float triA = ff.y <= ff.x ? h0 + (h1 - h0) * ff.x + (h2 - h1) * ff.y : h0 + (h3 - h0) * ff.y + (h2 - h3) * ff.x;
+				float triB = (ff.x + ff.y) <= 1.0 ? h0 + (h1 - h0) * ff.x + (h3 - h0) * ff.y : h2 + (h1 - h2) * (1.0 - ff.y) + (h3 - h2) * (1.0 - ff.x);
+				float land = LandHeightFine(pos);
+				if (land > -50000.0)
+					excess = max(excess, land - min(triA, triB));
+			}
+		}
+		bool valid = min(min(h0, h1), min(h2, h3)) > -50000.0;
+		factor = (valid && excess > kFarReliefTolerance) ? (step >= 128.0 ? 5.0 : 3.0) : 1.0;
+	}
+	return factor;
+}
+
 TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 {
 	TessFactors f;
@@ -1580,7 +1670,15 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal),
 		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal));
 #endif
-	float inner = max(max(edges.x, edges.y), max(edges.z, edges.w));
+	// Far relief: raise edges where the ground bulges above their chord, and
+	// the inside where it bulges inside the patch.
+	edges = max(edges, float4(
+		FarReliefEdgeFactor(patch[0].GridLocal, patch[3].GridLocal),
+		FarReliefEdgeFactor(patch[0].GridLocal, patch[1].GridLocal),
+		FarReliefEdgeFactor(patch[1].GridLocal, patch[2].GridLocal),
+		FarReliefEdgeFactor(patch[3].GridLocal, patch[2].GridLocal)));
+	float inner = max(max(max(edges.x, edges.y), max(edges.z, edges.w)),
+		FarReliefInsideFactor(patch[0].GridLocal, patch[1].GridLocal, patch[2].GridLocal, patch[3].GridLocal));
 
 	f.Edge[0] = edges.x;
 	f.Edge[1] = edges.y;

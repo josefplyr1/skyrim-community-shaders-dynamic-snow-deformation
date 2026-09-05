@@ -879,7 +879,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	// Bit 0 horizon march, bit 1 hull frustum cull, bit 2 land-exact height
 	// off, bit 3 flip the tessellated diagonal sense.
 	a_cb.ShellFlags = { (settings.ShellHorizonMarch ? 1 : 0) | (shellFrustumCullDisabled ? 0 : 2) |
-							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalFlip ? 8 : 0) | (shellFarMaxDisabled ? 16 : 0),
+							(shellLandHeightDisabled ? 4 : 0) | (shellTessDiagonalFlip ? 8 : 0) | (shellFarMaxLift ? 16 : 0) | (shellFarTessDisabled ? 32 : 0),
 		0 };
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,

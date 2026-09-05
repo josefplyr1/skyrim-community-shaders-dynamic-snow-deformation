@@ -1211,9 +1211,13 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttLand = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
 
-		ImGui::Checkbox(T(TKEY("shell_far_max_disabled"), "Shell: Disable Far-Band Ground Max"), &shellFarMaxDisabled);
+		ImGui::Checkbox(T(TKEY("shell_far_tess_disabled"), "Shell: Disable Far Relief Tessellation"), &shellFarTessDisabled);
+		if (auto _ttFarTess = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("shell_far_tess_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground - the distant holes. With this off, the shell checks each far square against the real ground and subdivides the ones where the ground bulges above the span, so every added vertex sits exactly on the ground; flat ground costs nothing. On restores the plain squares."));
+
+		ImGui::Checkbox(T(TKEY("shell_far_max_lift"), "Shell: Far-Band Ground Max (lift, rejected)"), &shellFarMaxLift);
 		if (auto _ttFarMax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_far_max_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground however exactly its corners sit - the distant holes. With this off, each far vertex stands on the highest ground within its own span, so every square clears the ground by construction; the cost is snow that fills hollows at distance rather than following them. On restores the exact height under each vertex."));
+			ImGui::Text("%s", T(TKEY("shell_far_max_lift_tooltip"), "The first attempt at the distant holes, kept for comparison: each far vertex stands on the highest ground within its own span. It terraces on slopes and lifts the snow over rocks and people on rough ground, which is why it is off; the relief tessellation above replaced it."));
 
 		ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Shell: Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
 		if (auto _ttDiag = Util::HoverTooltipWrapper())
