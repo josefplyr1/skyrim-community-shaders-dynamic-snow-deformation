@@ -1861,6 +1861,15 @@ void SnowDeformation::ClearShaderCache()
 	if (shellHSFar)
 		shellHSFar->Release();
 	shellHSFar = nullptr;
+	if (shellHSBake)
+		shellHSBake->Release();
+	shellHSBake = nullptr;
+	if (shellHSNearBake)
+		shellHSNearBake->Release();
+	shellHSNearBake = nullptr;
+	if (shellHSFarBake)
+		shellHSFarBake->Release();
+	shellHSFarBake = nullptr;
 	if (shellPSNoDepth)
 		shellPSNoDepth->Release();
 	shellPSNoDepth = nullptr;

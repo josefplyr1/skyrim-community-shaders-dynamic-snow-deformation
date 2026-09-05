@@ -527,31 +527,43 @@ ID3D11VertexShader* SnowDeformation::GetShellTessVS()
 	return shellTessVS;
 }
 
-ID3D11HullShader* SnowDeformation::GetShellHS()
+ID3D11HullShader* SnowDeformation::GetShellHS(bool a_bake)
 {
-	if (!shellHS) {
-		logger::debug("Compiling SnowShell HS");
-		shellHS = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", {}, "hs_5_0"));
+	auto*& slot = a_bake ? shellHSBake : shellHS;
+	if (!slot) {
+		logger::debug("Compiling SnowShell HS{}", a_bake ? " (bake)" : "");
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (a_bake)
+			defines.push_back({ "SNOW_HS_BAKE", "" });
+		slot = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "hs_5_0"));
 	}
-	return shellHS;
+	return slot;
 }
 
-ID3D11HullShader* SnowDeformation::GetShellHSNear()
+ID3D11HullShader* SnowDeformation::GetShellHSNear(bool a_bake)
 {
-	if (!shellHSNear) {
-		logger::debug("Compiling SnowShell HS (split near)");
-		shellHSNear = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_NEAR", "" } }, "hs_5_0"));
+	auto*& slot = a_bake ? shellHSNearBake : shellHSNear;
+	if (!slot) {
+		logger::debug("Compiling SnowShell HS (split near{})", a_bake ? ", bake" : "");
+		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_SPLIT_NEAR", "" } };
+		if (a_bake)
+			defines.push_back({ "SNOW_HS_BAKE", "" });
+		slot = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "hs_5_0"));
 	}
-	return shellHSNear;
+	return slot;
 }
 
-ID3D11HullShader* SnowDeformation::GetShellHSFar()
+ID3D11HullShader* SnowDeformation::GetShellHSFar(bool a_bake)
 {
-	if (!shellHSFar) {
-		logger::debug("Compiling SnowShell HS (split far)");
-		shellHSFar = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_SPLIT_FAR", "" } }, "hs_5_0"));
+	auto*& slot = a_bake ? shellHSFarBake : shellHSFar;
+	if (!slot) {
+		logger::debug("Compiling SnowShell HS (split far{})", a_bake ? ", bake" : "");
+		std::vector<std::pair<const char*, const char*>> defines = { { "SNOW_SPLIT_FAR", "" } };
+		if (a_bake)
+			defines.push_back({ "SNOW_HS_BAKE", "" });
+		slot = static_cast<ID3D11HullShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "hs_5_0"));
 	}
-	return shellHSFar;
+	return slot;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepass()
@@ -1400,7 +1412,6 @@ void SnowDeformation::DrawShell()
 	// map), and that must survive relief being turned off. With relief at 0
 	// the factors collapse to 1 on undeformed ground, so the path stays cheap.
 	auto* tessVS = settings.Tessellation ? GetShellTessVS() : nullptr;
-	auto* tessHS = settings.Tessellation ? GetShellHS() : nullptr;
 	// Vertex bake: the base-grid corners' surface is evaluated once per
 	// frame by a compute pass and read back by index; the bake DS is chosen
 	// only once the pass and its texture are known good, so a failure falls
@@ -1415,6 +1426,15 @@ void SnowDeformation::DrawShell()
 			bake = false;
 			tessDS = GetShellDS();
 		}
+	}
+	// Hull twins read the edge corners' deformation taps from the bake; a
+	// missing twin falls to the live hull, which is always valid.
+	ID3D11HullShader* tessHS = nullptr;
+	if (settings.Tessellation) {
+		if (bake)
+			tessHS = GetShellHS(true);
+		if (!tessHS)
+			tessHS = GetShellHS(false);
 	}
 	const bool tessellate = tessVS && tessHS && tessDS;
 	if (tessellate && bake) {
@@ -1473,6 +1493,8 @@ void SnowDeformation::DrawShell()
 		// cull the entire shell.
 		context->HSSetShaderResources(0, 6, shellSRVs);
 		context->DSSetShaderResources(0, 6, shellSRVs);
+		ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
+		context->HSSetShaderResources(9, 1, &hsBakeSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
 		context->DSSetShaderResources(8, 1, &dsHeightSRV);
 		context->DSSetShaderResources(11, 2, objectCapSRVs);
@@ -1513,8 +1535,13 @@ void SnowDeformation::DrawShell()
 		auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
 		auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 		const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
-		auto* hsNear = (!prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled) ? GetShellHSNear() : nullptr;
-		auto* hsFar = hsNear ? GetShellHSFar() : nullptr;
+		const bool splitWanted = !prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled;
+		auto* hsNear = splitWanted ? GetShellHSNear(bake) : nullptr;
+		auto* hsFar = hsNear ? GetShellHSFar(bake) : nullptr;
+		if (splitWanted && bake && !hsFar) {
+			hsNear = GetShellHSNear(false);
+			hsFar = hsNear ? GetShellHSFar(false) : nullptr;
+		}
 		auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
 		if (prepass) {
 			const float rasterClear[4] = {};

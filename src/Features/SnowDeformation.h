@@ -1106,10 +1106,12 @@ public:
 
 	/** @brief Tessellated-path stages (SNOW_TESS): control-point VS (grid placement only), hull shader (distance-based crack-free factors) and domain shader (full surface evaluation + displacement-map relief). Active when Relief Depth > 0. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11VertexShader* GetShellTessVS();
-	ID3D11HullShader* GetShellHS();
+	ID3D11HullShader* GetShellHS(bool a_bake);
 	ID3D11DomainShader* GetShellDS();
 	ID3D11VertexShader* shellTessVS = nullptr;
 	ID3D11HullShader* shellHS = nullptr;
+	/** @brief SNOW_HS_BAKE twin: the edge factors' two corner deformation taps come from shellVertexBake.w; the midpoint tap stays live. */
+	ID3D11HullShader* shellHSBake = nullptr;
 	ID3D11DomainShader* shellDS = nullptr;
 	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
 	bool shellCasterSplitDebug = false;
@@ -1165,8 +1167,10 @@ public:
 	/** @brief Hull variants for the split draw: NEAR keeps patches inside the PS's far-clamp distance, FAR keeps the rest. A straddling patch lands in exactly one of them. */
 	ID3D11HullShader* shellHSNear = nullptr;
 	ID3D11HullShader* shellHSFar = nullptr;
-	ID3D11HullShader* GetShellHSNear();
-	ID3D11HullShader* GetShellHSFar();
+	ID3D11HullShader* shellHSNearBake = nullptr;
+	ID3D11HullShader* shellHSFarBake = nullptr;
+	ID3D11HullShader* GetShellHSNear(bool a_bake);
+	ID3D11HullShader* GetShellHSFar(bool a_bake);
 	/** @brief Shell PS with the depth export compiled out, used for the split's NEAR pass while the clamp is on. Distinct from shellPS, which follows the clamp A/B flag. */
 	ID3D11PixelShader* shellPSNoDepth = nullptr;
 	ID3D11PixelShader* GetShellPSNoDepth();

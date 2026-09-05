@@ -234,8 +234,9 @@ Texture2D<float4> SnowDiffuse : register(t2);
 // never the bound DSV, so sampling during the shell draw is legal.
 Texture2D<float> SceneDepth : register(t3);
 // Per-vertex surface bake (BakeCS → SNOW_DS_BAKE domain shader): one texel per
-// base-grid vertex, (z, coverage, terrainHeight), full float, and a second
-// map holding the vertex normal's two height differences.
+// base-grid vertex, (z, coverage, terrainHeight, deformation tap), full
+// float, and a second map holding the vertex normal's two height differences.
+// The hull (SNOW_HS_BAKE) reads .w for its edge corners.
 Texture2D<float4> ShellVertexBake : register(t9);
 Texture2D<float2> ShellVertexBakeSlope : register(t23);
 // Processed top-down object maps: the slope-limited snow-height FIELD (world
@@ -1322,7 +1323,13 @@ static const float kTessCutoff = kTessNear * kTessReachBoost;
 // detail reach, so trench walls stay smooth well past the base band while
 // untouched snowfields keep the cheap factors; the boost reads only edge-
 // derived positions, preserving the crack-free property.
+// SNOW_HS_BAKE: the two corner taps come from BakeCS (ShellVertexBake.w,
+// same function, same vertex bits); only the midpoint stays live.
+#ifdef SNOW_HS_BAKE
+float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB, float deformA, float deformB)
+#else
 float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
+#endif
 {
 	float2 midLocal = 0.5 * (gridLocalA + gridLocalB);
 	float2 midAbs = GridOrigin + midLocal;
@@ -1340,7 +1347,11 @@ float EdgeTessFactor(float2 gridLocalA, float2 gridLocalB)
 	float reach = kTessNear * reliefBase;
 	[branch] if (dist < kTessCutoff)
 	{
+#ifdef SNOW_HS_BAKE
+		float deform = max(max(deformA, deformB), SampleDeformation(midLocal));
+#else
 		float deform = max(max(SampleDeformation(gridLocalA), SampleDeformation(gridLocalB)), SampleDeformation(midLocal));
+#endif
 		reach = kTessNear * lerp(reliefBase, kTessReachBoost, smoothstep(0.02, 0.25, deform));
 	}
 	return clamp(reach / max(dist, 32.0), 1.0, kTessMax);
@@ -1397,11 +1408,23 @@ TessFactors PatchConstants(InputPatch<TessControlPoint, 4> patch)
 
 	// Quad edge order: [0] u=0, [1] v=0, [2] u=1, [3] v=1, for the domain
 	// bilerp corner layout 0=(0,0) 1=(1,0) 2=(1,1) 3=(0,1).
+#ifdef SNOW_HS_BAKE
+	float d0 = ShellVertexBake.Load(int3(patch[0].GridXY, 0)).w;
+	float d1 = ShellVertexBake.Load(int3(patch[1].GridXY, 0)).w;
+	float d2 = ShellVertexBake.Load(int3(patch[2].GridXY, 0)).w;
+	float d3 = ShellVertexBake.Load(int3(patch[3].GridXY, 0)).w;
+	float4 edges = float4(
+		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal, d0, d3),
+		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal, d0, d1),
+		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal, d1, d2),
+		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal, d3, d2));
+#else
 	float4 edges = float4(
 		EdgeTessFactor(patch[0].GridLocal, patch[3].GridLocal),
 		EdgeTessFactor(patch[0].GridLocal, patch[1].GridLocal),
 		EdgeTessFactor(patch[1].GridLocal, patch[2].GridLocal),
 		EdgeTessFactor(patch[3].GridLocal, patch[2].GridLocal));
+#endif
 	float inner = max(max(edges.x, edges.y), max(edges.z, edges.w));
 
 	f.Edge[0] = edges.x;
@@ -1547,8 +1570,9 @@ VS_OUTPUT main(TessFactors factors, float2 domainUV : SV_DomainLocation, const O
 		float liveTerrain;
 		float liveZ = ShellVertexZ(gridLocal, liveCoverage, liveTerrain);
 		float2 liveSlope = ShellVertexSlope(gridLocal);
+		float liveDeform = SampleDeformation(gridLocal);
 		if (asuint(liveZ) != asuint(z) || asuint(liveCoverage) != asuint(coverage) || asuint(liveTerrain) != asuint(terrainHeight) ||
-			asuint(liveSlope.x) != asuint(slope.x) || asuint(liveSlope.y) != asuint(slope.y))
+			asuint(liveSlope.x) != asuint(slope.x) || asuint(liveSlope.y) != asuint(slope.y) || asuint(liveDeform) != asuint(baked.w))
 			z += 50.0;
 #	endif
 		return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y);
@@ -2718,7 +2742,7 @@ RWTexture2D<float2> ShellVertexBakeSlopeOut : register(u2);
 	float coverage;
 	float terrainHeight;
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
-	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, 0.0);
+	ShellVertexBakeOut[id.xy] = float4(z, coverage, terrainHeight, SampleDeformation(gridLocal));
 	ShellVertexBakeSlopeOut[id.xy] = ShellVertexSlope(gridLocal);
 }
 
