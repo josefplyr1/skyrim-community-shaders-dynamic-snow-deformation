@@ -1406,7 +1406,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.GhostDecay = 0.5f;
 	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
 	processData.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
-	processData.MeldPlanes = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	// P4: lambda 0..0.5 - the stability bound for the 4-neighbour Jacobi.
 	processData.DiffuseLambda = std::clamp(settings.SnowSettlingPct, 0.0f, 100.0f) * 0.005f;
 	heightProcessCB->Update(processData);
@@ -1805,8 +1804,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
-		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
-		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		{
 			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
@@ -1821,7 +1818,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		peel.WorldRow2 = scb.WorldRow2;
 		peel.HeightWindowCenter = heightWindowCenter;
 		peel.HeightHalfExtent = kHeightMapHalfExtent;
-		peel.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
+		peel.PeelTol = kPeelTol;
 		peel.VertexCountF = vertexCountF;
 		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
 	}
@@ -2213,8 +2210,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
-	a_scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
-	a_scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
@@ -2225,9 +2220,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// slope: rocks were the only sufferers of a low global slope.
 	const float maxSlopeDeg = a_cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
 	a_scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
-	a_scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
+	a_scb.PeelTol = kPeelTol;
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
-	a_scb.MeldPlanesSk = settings.MeldCoPlanar ? 1.0f : 0.0f;
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).

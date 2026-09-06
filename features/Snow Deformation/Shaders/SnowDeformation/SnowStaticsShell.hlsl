@@ -233,12 +233,8 @@ cbuffer StaticCB : register(b1)
 	// vertex alpha is wind weight). Feeds debug mode 5 and the S2
 	// suppressor. Mirror in SnowDeformation.h.
 	float ProjThreshold;
-	// >0.5: ApplySkinLift multiplies up-facing by the authored
-	// projected-snow term. Mirror in SnowDeformation.h.
-	float ProjMaskEnable;
-	// >0.5: depth scales with the authored density (graded factor replaces
-	// the sharp gate). Mirror in SnowDeformation.h.
-	float ProjDensityEnable;
+	float padProjMask;
+	float padProjDensity;
 	// Class override code: 0 = flat classifier decides, 1 = force ROUNDED
 	// (mountain/cliff family - a jagged cliff's split normals score "flat";
 	// and EVERY PD draw in authored-relief mode, per Josef's call to retire
@@ -272,9 +268,9 @@ cbuffer StaticCB : register(b1)
 	// cos(max shell slope): minimum normal Z that grows the S4 shell -
 	// the up-facing gate, user-tunable. Mirror in SnowDeformation.h.
 	float ShellMinNz;
-	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
-	// z-band of a layer's top belong to that layer's plane. Mirror in
-	// SnowHeightCapture.hlsl / SnowDeformation.h.
+	// Peel tolerance (kPeelTol; the slider was retired at its default):
+	// surfaces within this z-band of a layer's top belong to that layer's
+	// plane. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PeelTol;
 	// "Ignore Cover Above" (user knob): cover more than this far above a
 	// vertex is a separate world - the plane keeps its full uniform
@@ -282,11 +278,7 @@ cbuffer StaticCB : register(b1)
 	// layer's narrow footprint. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
 	float OverheadIgnore;
-	// "Meld Co-Planar Surfaces" for the skin: >0.5 lets side faces at
-	// MELDED boundaries lift, closing the slit between co-planar shells
-	// with vertical snow. Mirror in SnowHeightCapture.hlsl /
-	// SnowDeformation.h.
-	float MeldPlanesSk;
+	float padMeldSk;
 
 	// "Pile Height Ratio" (the width failsafe): a dome may stand at most
 	// this many times the repose height its footprint supports. Mirror in
@@ -1731,10 +1723,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	else [branch] if (ProjThreshold > -0.5)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
-		[flatten] if (ProjDensityEnable > 0.5)
-			projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
-		else [flatten] if (ProjMaskEnable > 0.5)
-			projFactor = saturate(5.0 * projWeight);
+		projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
 		upFacing *= projFactor;
 	}
 	// The whole drift mesh is snow: coated at every angle.
@@ -1848,8 +1837,8 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (ProjPixelEnable > 1.5)
 	{
 		float wLin = weldNz * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
-		// maskBase = the PD footprint and fill gates alone; the up-facing
-		// gate multiplies in below, and the meld wall bypasses ONLY it.
+		// mask = the PD footprint and fill gates alone; the up-facing
+		// gate multiplies in below.
 		// The footprint is the game's SOLID paint (kCoatSolidW, the coat's
 		// own contour), not its first trace: the lifted shell used to run
 		// down into faint paint the coat would never cover.
@@ -1858,8 +1847,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// the shell stands on the game's own solid paint at every depth.
 		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		float wLinEff = wLin > 0.003 ? max(wLin, 0.2 * smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, weldNz)) : wLin;
-		float maskBase = smoothstep(kCoatSolidW - 0.05, kCoatSolidW, wLinEff);
-		float mask = maskBase;
+		float mask = smoothstep(kCoatSolidW - 0.05, kCoatSolidW, wLinEff);
 		// Vertical growth is only meaningful on up-facing surfaces - a wall
 		// lifted along +Z slides along itself, and at fill 100% the +0.1
 		// bias floored whole walls into the mask (Josef's whitewashed
@@ -1876,7 +1864,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// up-displaced faces land inside their own geometry.
 		debugLayer = 1.0;
 		float rollT = 1.0;
-		float meldWall = 0.0;
 		float heightScale = 1.0;
 		float3 domeNormal = nrmWS;
 		// Kept for P5's lip: the cone gradient points INWARD (the cone rises
@@ -2004,20 +1991,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 				domeConeGrad = coneGrad;
 				domeHeightGrad = coneGrad * dhdc;
 			}
-			// MELD WALL (Josef's gap-close sketch): the shell is displaced
-			// mesh geometry, so nothing can span the physical void between
-			// two co-planar objects - but the meshes' own SIDE FACES can
-			// stand in. At a MELDED boundary the seed left no rim, so the
-			// cone is still full at the edge; there, the side face's top
-			// band (within the peel tolerance of its column top) lifts at
-			// full depth too, and the slit between the two shells closes
-			// behind a facing pair of vertical snow walls. A rolled
-			// (rimmed) edge keeps its bare sides, so cling mode and true
-			// silhouettes are untouched.
-			[flatten] if (MeldPlanesSk > 0.5 && top1 > -50000.0 && worldBase.z > top1 - PeelTol)
-				meldWall = smoothstep(0.85, 0.95, rollT) * heightScale;
 		}
-		mask = max(mask, maskBase * meldWall);
 		float rimIn = 1.0 - rollT;
 		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
 		coverDepth = depth;
@@ -3496,20 +3470,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		edgeW = wFill;
 		// Match the geometry's up-facing gate per pixel: the shell's
 		// material belongs to top surfaces; steep faces keep the recolor.
-		// EXCEPT the meld wall: the lift raises side faces at melded
-		// boundaries to close the slit between co-planar shells, and the
-		// pixel gate must let them through where the cone confirms a
-		// melded (unrimmed) column and the vertex actually lifted.
 		float upGateP = smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
-		[branch] if (MeldPlanesSk > 0.5 && upGateP < 0.99 && input.Lift > 0.3 * coatRef)
-		{
-			float2 pixXY = input.WorldPos.xy + ShellCameraPosAdjust.xy;
-			float coneP = ObjectConeDepth(pixXY);
-			float topP = PatchTopPoint(pixXY);
-			float seedP = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-			[flatten] if (topP > -50000.0 && coneP >= seedP * 0.85)
-				upGateP = 1.0;
-		}
 		pdCoverage *= upGateP;
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
 		// the last sliver would shade coincident with the surface below it
@@ -3560,7 +3521,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 										smoothstep(0.5, 0.85, liftFrac),
 										smoothstep(1.5 * coatRef, 4.0 * coatRef, input.Lift)));
 	}
-	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
+	else [flatten] if (ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
 	// Drifts: whole mesh coated, no projection weight or vertex alpha cut.
 	[flatten] if (FullCoat > 0.5)

@@ -99,9 +99,7 @@
 	X(ShellMaxSlopeDeg) \
 	X(RockMaxSlopeDeg) \
 	X(PlaneSplitStep) \
-	X(PlaneMergeHeight) \
 	X(OverheadClearance) \
-	X(MeldCoPlanar) \
 	X(PileHeightRatio) \
 	X(SkinEdgeLumpSize) \
 	X(SkinEdgeFlankWidth) \
@@ -149,14 +147,13 @@
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(ObjectTrenches) \
-	X(ProjMaskPlacement) \
-	X(ProjDepthDensity) \
 	X(ObjectSnow3D) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(ProjSnowMatch) \
 	X(LODObjectSnow) \
+	X(VolumeSnow) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)

@@ -47,9 +47,7 @@ cbuffer HeightProcessCB : register(b0)
 
 	// "Meld Co-Planar Surfaces" A/B: >0.5 = the drop-bridge reaches 3
 	// texels (same-height planes a sliver apart meld into one dome);
-	// 0 = no bridging - every shell clings to its own raster edge and
-	// nearby shells just clip into each other.
-	float MeldPlanes;
+	float padMeld;
 	// P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour
 	// average, applied to the finished cone depth fields (0 = off).
 	float DiffuseLambda;
@@ -267,18 +265,9 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		int2 p = int2(dtid.xy) + offs;
 		if (any(p < 0) || any(p >= int2(dims)))
 			continue;
-		float n1 = InA[uint2(p)];
-		float n2 = -100000.0;
-		float n3 = -100000.0;
-		int2 p2 = int2(dtid.xy) + offs * 2;
-		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
-			n2 = InA[uint2(p2)];
-		int2 p3 = int2(dtid.xy) + offs * 3;
-		[flatten] if (all(p3 >= 0) && all(p3 < int2(dims)))
-			n3 = InA[uint2(p3)];
-		// "Meld Co-Planar Surfaces" OFF = cling: no bridging at all, the
-		// shell rolls at its own raster edge whatever sits nearby.
-		float n = MeldPlanes > 0.5 ? max(max(n1, n2), n3) : n1;
+		// Cling: the shell rolls at its own raster edge whatever sits nearby
+		// (the meld-across-a-sliver option was retired 2026-09-06).
+		float n = InA[uint2(p)];
 		if (n < -50000.0) {
 			rim = true;
 			continue;

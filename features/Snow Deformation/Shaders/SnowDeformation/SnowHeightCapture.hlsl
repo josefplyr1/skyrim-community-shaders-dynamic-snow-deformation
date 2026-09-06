@@ -42,8 +42,8 @@ cbuffer StaticCB : register(b1)
 	// the patch can own the column outright.
 	float RoadField;
 	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
-	float ProjMaskEnable;    // layout sync with SnowStaticsShell; unused here
-	float ProjDensityEnable; // layout sync with SnowStaticsShell; unused here
+	float padProjMask;       // layout sync with SnowStaticsShell
+	float padProjDensity;    // layout sync with SnowStaticsShell
 	// Class override code, matching the skin VS: 0 = flat classifier,
 	// 1 = force ROUNDED (mountain/cliff family; every PD draw in
 	// authored-relief mode), 2 = force FLAT (plank family). Mirror in
@@ -60,7 +60,7 @@ cbuffer StaticCB : register(b1)
 	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
 	float OverheadIgnore;  // layout sync with SnowStaticsShell; unused here
-	float MeldPlanesSk;    // layout sync with SnowStaticsShell; unused here
+	float padMeldSk;       // layout sync with SnowStaticsShell
 
 	float PileHeightRatio;  // layout sync with SnowStaticsShell; unused here
 	float SkyExposureSk;    // layout sync with SnowStaticsShell; unused here

@@ -482,7 +482,7 @@ public:
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
-		float ObjectsSnowDepth = 0.0f;
+		float ObjectsSnowDepth = 10.0f;
 		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). Rocks/mountains/cliffs use RockMaxSlopeDeg instead. */
 		float ShellMaxSlopeDeg = 65.0f;
 		/** @brief The rock family's own max slope (Josef's call: rocks/mountains/cliffs were the only sufferers of a low global slope) - applies to draws the mountain/cliff name match flags (CapturedSnowStatic::forceRounded). */
@@ -491,8 +491,6 @@ public:
 		float PlaneSplitStep = 6.0f;
 		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
 		float OverheadClearance = 0.0f;
-		/** @brief A/B (Josef): ON = co-planar surfaces a small horizontal gap apart meld into one dome (drop-bridge reach 3 texels). OFF = "cling" - no bridging at all, every object's shell rolls at its own raster edge and nearby shells simply clip into each other. */
-		bool MeldCoPlanar = false;
 		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
 		float PileHeightRatio = 1.0f;
 		/** @brief "Edge Lump Size", 0-3: the solid contour of the shell and the coat wanders through a blob field of this cell size (x kEdgeLumpBig), so the edge breaks into round lumps; 0 = the plain ragged edge. Also the cell size of the Edge Lump Reach islands. Feeds StaticsCB::EdgeBreakupScale. */
@@ -500,21 +498,15 @@ public:
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.01f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
-		float SkyExposurePct = 50.0f;
+		float SkyExposurePct = 25.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
-		float SnowSettlingPct = 50.0f;
-		/** @brief S4 plane MERGE knob (world units): surfaces within this height below a plane's top merge into it instead of claiming one of the three peeled layers. Raise so thin trims/beams under a roof stop starving the floor of a layer. Feeds StaticsCB::PeelTol. */
-		float PlaneMergeHeight = 8.0f;
+		float SnowSettlingPct = 0.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
 		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
-		/** @brief SKIN-PLACEMENT-PLAN S2: the skin's up-facing mask is multiplied by the NIF's authored projected-snow term (vertex alpha x normal-Z minus the material threshold), so surfaces Bethesda painted bare (walkway undersides, posts, railings) shed their skin. Suppressor only - it never adds snow; draws without projected-UV data are unchanged. Default ON per Josef's A/B verdict 2026-08-28 (red-only zones deleted, nothing lost snow it correctly wore). */
-		bool ProjMaskPlacement = true;
-		/** @brief SKIN-PLACEMENT-PLAN S2b: object snow depth SCALES with the authored density instead of ProjMaskPlacement's hard cutoff - thick where the paint is solid, thinning to a dusting where it fades. Supersedes the sharp gate while on (multiplying both would double-punish sparse paint). */
-		bool ProjDepthDensity = true;
 		/** @brief Master toggle for the raised 3D object snow layer = the S4 shell (the rolling-ball fillet over the fill's cyan slice, PD-carrying draws only). The old object shell is RETIRED (2026-08-29): draws without projection data get no skin at all - the Lighting recolor still covers the technique-classified ones flat, and roads keep their own machinery regardless. Off skips only the skin draws - capture, height rasters and the road/trench patch keep running. */
 		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
@@ -607,6 +599,8 @@ public:
 		bool ProjSnowMatch = true;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
+		/** @brief Reserved: the Experimental section's placeholder for VOLUME-SNOW-PLAN. Read by nothing yet. */
+		bool VolumeSnow = false;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -1738,10 +1732,8 @@ public:
 		float RoadField;
 		/** @brief Vanilla projected-UV mask threshold (BSLightingShaderProperty::projectedUVParams.w) for this draw; -1 when the property carries no kProjectedUV (or kTreeAnim, whose vertex alpha is wind weight, not a snow mask). Feeds the S0 debug view and the S2 placement suppressor (SKIN-PLACEMENT-PLAN.md). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjThreshold;
-		/** @brief >0.5: Settings::ProjMaskPlacement - ApplySkinLift multiplies its up-facing mask by the authored projected-snow term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ProjMaskEnable;
-		/** @brief >0.5: Settings::ProjDepthDensity - the graded density factor replaces the sharp gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ProjDensityEnable;
+		float padProjMask;
+		float padProjDensity;
 		/** @brief Class override code: 0 = flat classifier decides, 1 = force ROUNDED (CapturedSnowStatic::forceRounded, and every PD draw in authored-relief mode), 2 = force FLAT (plankFamily in authored-relief mode). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
@@ -1756,12 +1748,11 @@ public:
 		float HasSkinNormalCopy;
 		/** @brief cos(Settings::ShellMaxSlopeDeg): minimum normal Z that grows the S4 shell (the shell's up-facing gate, user-tunable). Grew the CB a row. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ShellMinNz;
-		/** @brief Settings::PlaneMergeHeight - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
 		/** @brief Settings::OverheadClearance - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float OverheadIgnore;
-		/** @brief Settings::MeldCoPlanar for the skin: >0.5 lets side faces at MELDED boundaries lift (the vertical snow closing the slit between co-planar shells). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float MeldPlanesSk;
+		float padMeldSk;
 
 		/** @brief Settings::PileHeightRatio - a dome may stand at most this many times the repose height its footprint supports (the cone value); thin features saturate early instead of stretching fins. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PileHeightRatio;
@@ -1964,6 +1955,8 @@ public:
 
 	/** @brief Raised snow more than this far above the terrain does not lift the height field (buildings must not become snow tents). Also doubles as the shader-side field-enable gate. */
 	static constexpr float kObjectLiftCap = 150.0f;
+	/** @brief Peel tolerance: surfaces within this many units below a peeled layer's top belong to that layer's plane. Was the "Plane Merge Height" slider, retired 2026-09-06 at its default. */
+	static constexpr float kPeelTol = 8.0f;
 
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
@@ -2048,8 +2041,7 @@ public:
 		/** @brief Settings::OverheadClearance - the seed's rise-rim upper bound: surfaces further above do not split the plane WHEN this plane continues beneath them (the next layer's top says); a silhouette edge against tall cover still rims. */
 		float OverheadIgnore;
 
-		/** @brief Settings::MeldCoPlanar - >0.5: the seed's drop-bridge reaches 3 texels so co-planar surfaces a sliver apart meld; 0: no bridging, every shell clings to its own raster edge. */
-		float MeldPlanes;
+		float padMeld;
 		/** @brief P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields (Settings::SnowSettlingPct / 100 * 0.5; 0 = off). */
 		float DiffuseLambda;
 		float padHeight[2];
