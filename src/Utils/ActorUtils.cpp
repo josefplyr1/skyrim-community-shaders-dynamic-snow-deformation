@@ -1,6 +1,7 @@
 #include "ActorUtils.h"
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 
 namespace Util
 {
@@ -9,18 +10,53 @@ namespace Util
 		if (!collisionObj)
 			return false;
 
-		RE::bhkRigidBody* bhkRigid = collisionObj->body.get() ? collisionObj->body.get()->AsBhkRigidBody() : nullptr;
-		RE::hkpRigidBody* hkpRigid = bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(bhkRigid->referencedObject.get()) : nullptr;
-		if (bhkRigid && hkpRigid && !skyrim_cast<RE::hkpListShape*>(hkpRigid)) {  // Ignore hkpListShape, unsupported
-			RE::hkVector4 massCenter;
-			bhkRigid->GetCenterOfMassWorld(massCenter);
-			float massTrans[4];
-			// Use unaligned store to avoid UB from potential stack misalignment
-			_mm_storeu_ps(massTrans, massCenter.quad);
-			centerPos = RE::NiPoint3(massTrans[0], massTrans[1], massTrans[2]) * RE::bhkWorld::GetWorldScaleInverse();
-			return Util::ExtractShapeBound(hkpRigid->collidable.GetShape(), radius);
+		// Memo per collision object: the two RTTI casts and the shape's six
+		// projections are the cost, and the radius is a property of the shape.
+		// Validated by the body, the referenced Havok body and the shape
+		// pointers, so a swapped body or shape recomputes; only the centre of
+		// mass is read live. Render thread only.
+		struct Cached
+		{
+			const void* body = nullptr;
+			RE::bhkRigidBody* bhkRigid = nullptr;
+			RE::hkpRigidBody* hkpRigid = nullptr;
+			const RE::hkpShape* shape = nullptr;
+			float radius = 0.0f;
+			bool valid = false;
+		};
+		static std::unordered_map<const void*, Cached> memo;
+		if (memo.size() > 8192)
+			memo.clear();
+		auto* body = collisionObj->body.get();
+		auto [it, inserted] = memo.try_emplace(collisionObj);
+		auto& c = it->second;
+		bool fresh = inserted || c.body != body;
+		if (!fresh && c.bhkRigid) {
+			if (c.bhkRigid->referencedObject.get() != c.hkpRigid)
+				fresh = true;
+			else if (c.hkpRigid && c.hkpRigid->collidable.GetShape() != c.shape)
+				fresh = true;
 		}
-		return false;
+		if (fresh) {
+			c = {};
+			c.body = body;
+			c.bhkRigid = body ? body->AsBhkRigidBody() : nullptr;
+			c.hkpRigid = c.bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(c.bhkRigid->referencedObject.get()) : nullptr;
+			if (c.bhkRigid && c.hkpRigid && !skyrim_cast<RE::hkpListShape*>(c.hkpRigid)) {  // Ignore hkpListShape, unsupported
+				c.shape = c.hkpRigid->collidable.GetShape();
+				c.valid = Util::ExtractShapeBound(c.shape, c.radius);
+			}
+		}
+		if (!c.valid)
+			return false;
+		RE::hkVector4 massCenter;
+		c.bhkRigid->GetCenterOfMassWorld(massCenter);
+		float massTrans[4];
+		// Use unaligned store to avoid UB from potential stack misalignment
+		_mm_storeu_ps(massTrans, massCenter.quad);
+		centerPos = RE::NiPoint3(massTrans[0], massTrans[1], massTrans[2]) * RE::bhkWorld::GetWorldScaleInverse();
+		radius = c.radius;
+		return true;
 	}
 
 	bool ExtractShapeHalfExtents(const RE::hkpShape* shape, float& hx, float& hy, float& hz)
