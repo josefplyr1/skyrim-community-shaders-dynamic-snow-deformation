@@ -642,6 +642,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				DirectX::XMVectorGetZ(clip.r[1]) * DirectX::XMVectorGetZ(clip.r[1]) +
 				DirectX::XMVectorGetZ(clip.r[2]) * DirectX::XMVectorGetZ(clip.r[2]));
 
+			cpuCensus.casterPasses++;
 			for (const auto& cap : capturedStatics) {
 				auto* geometry = cap.geometry.get();
 				if (!geometry)
@@ -721,6 +722,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				// SHADOWCAST lift measures from the height window's centre
 				// instead (ApplySkinLift's SHADOWCAST branch).
 				staticsCB->Update(scb);
+				cpuCensus.casterCBUpdates++;
+				cpuCensus.casterDraws++;
 				context->DrawIndexed(indexCount, 0, 0);
 			}
 			if (splitRow)

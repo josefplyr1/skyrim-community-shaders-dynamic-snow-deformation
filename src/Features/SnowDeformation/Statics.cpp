@@ -423,6 +423,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 
 void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
+	ScopedTicks _hookTicks(cpuCensus.hookTicks, cpuCensus.hookCalls);
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	// No depth-slider gate: the snow cover must exist at ANY slider values
@@ -2919,6 +2920,7 @@ void SnowDeformation::DrawCapturedStatics()
 			FillSkinDrawCB(cap, d.s4Shell, d.vertexCount,
 				smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
 			staticsCB->Update(scb);
+			cpuCensus.skinLoopCBUpdates++;
 
 			// Depth export only where the carve can fire: SnowStaticsShell's
 			// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
@@ -2945,6 +2947,7 @@ void SnowDeformation::DrawCapturedStatics()
 				}
 			}
 
+			cpuCensus.skinLoopDraws++;
 			if (cullActive)
 				context->DrawIndexedInstancedIndirect(skinCullArgs->resource.get(), d.slot * kSkinCullArgStride);
 			else

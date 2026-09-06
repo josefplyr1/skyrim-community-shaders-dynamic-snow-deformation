@@ -1840,6 +1840,62 @@ public:
 	bool clusterCullDisabled = false;
 
 	/** @brief One-shot debug probe: snapshots the next full-detail landscape draw's index and vertex buffers and reports how the land mesh splits its quads - which diagonal, and whether it alternates - on the world 128-unit lattice. The shell's own triangulation has to match it or the shell sags inside a quad (DISTANT-SHELL-STABILITY-PLAN, Stage 1's live caveat). Implemented in SnowDeformation/Statics.cpp. */
+	/** @brief CPU census (PERF-RESEARCH §11.1): QPC ticks and counts accumulated across one frame, rolled into cpuShown by RollCpuCensus at the next Prepass. Static so the free helpers in Stamping.cpp can reach it. The capture hook has no profiler row of its own: it runs inside the game's lighting draws. */
+	struct CpuCensus
+	{
+		int64_t hookTicks = 0;
+		uint32_t hookCalls = 0;
+		int64_t actorTicks = 0;
+		uint32_t actors = 0;
+		int64_t landTicks = 0;
+		uint32_t landCalls = 0;
+		int64_t depthTicks = 0;
+		uint32_t depthCalls = 0;
+		int64_t traverseTicks = 0;
+		uint32_t traverseCalls = 0;
+		uint32_t skinLoopDraws = 0;
+		uint32_t skinLoopCBUpdates = 0;
+		uint32_t casterDraws = 0;
+		uint32_t casterCBUpdates = 0;
+		uint32_t casterPasses = 0;
+		/** @brief FNV-1a of (StampCount, Stamps, StampEnds) as uploaded: the bit-identity check for every CPU lever. */
+		uint64_t stampHash = 0;
+		uint32_t stampHashStable = 0;
+		static constexpr uint32_t kHashRing = 300;
+		uint64_t stampHashRing[kHashRing] = {};
+		uint32_t stampHashHead = 0;
+		bool stampHashDumpRequested = false;
+	};
+	static inline CpuCensus cpuCensus;
+	struct CpuCensusShown
+	{
+		float hookMs = 0.0f, hookCalls = 0.0f, actorMs = 0.0f, actors = 0.0f, landMs = 0.0f, landCalls = 0.0f;
+		float depthMs = 0.0f, depthCalls = 0.0f, traverseMs = 0.0f, traverseCalls = 0.0f;
+		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f, casterDraws = 0.0f, casterCBUpdates = 0.0f, casterPasses = 0.0f;
+	};
+	CpuCensusShown cpuShown;
+	struct ScopedTicks
+	{
+		int64_t& acc;
+		uint32_t& calls;
+		LARGE_INTEGER t0;
+		ScopedTicks(int64_t& a_acc, uint32_t& a_calls) :
+			acc(a_acc), calls(a_calls) { QueryPerformanceCounter(&t0); }
+		~ScopedTicks()
+		{
+			LARGE_INTEGER t1;
+			QueryPerformanceCounter(&t1);
+			acc += t1.QuadPart - t0.QuadPart;
+			calls++;
+		}
+	};
+	template <class F>
+	static void TimedTraverse(RE::NiAVObject* a_root, F&& a_visitor)
+	{
+		ScopedTicks _t(cpuCensus.traverseTicks, cpuCensus.traverseCalls);
+		RE::BSVisit::TraverseScenegraphCollision(a_root, std::forward<F>(a_visitor));
+	}
+	void RollCpuCensus();
 	bool landTriProbeArmed = false;
 	struct LandTriProbe
 	{

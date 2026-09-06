@@ -510,7 +510,7 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 	if (a_byFeetOut)
 		*a_byFeetOut = measuredByFeet;
 	if (!measuredByFeet && a_root)
-		RE::BSVisit::TraverseScenegraphCollision(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+		SnowDeformation::TimedTraverse(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
 			if (Util::GetShapeBound(a_object, centerPos, radius))
@@ -694,8 +694,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// elevated-surface behavior.
 		if (!isDead) {
 			float landZ = position.z;
-			if (const auto tesLand = RE::TES::GetSingleton())
+			if (const auto tesLand = RE::TES::GetSingleton()) {
+				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 				tesLand->GetLandHeight(position, landZ);
+			}
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
 			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
@@ -711,8 +713,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// snow beneath its flight arc.
 		float groundZ = position.z;
 		if (isDead)
-			if (const auto tesGround = RE::TES::GetSingleton())
+			if (const auto tesGround = RE::TES::GetSingleton()) {
+				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 				tesGround->GetLandHeight(position, groundZ);
+			}
 
 		if (rest) {
 			// Flight gate: a flung ragdoll must not carve under its arc.
@@ -933,8 +937,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (!stampStats.nearestValid || distSq < nearestDistSq) {
 				nearestDistSq = distSq;
 				float landZ = position.z;
-				if (const auto tesNear = RE::TES::GetSingleton())
+				if (const auto tesNear = RE::TES::GetSingleton()) {
+					ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 					tesNear->GetLandHeight(position, landZ);
+				}
 				stampStats.nearestValid = true;
 				stampStats.nearestGapToRoot = floatingGap;
 				stampStats.nearestGapToLand = position.z - landZ;
@@ -1346,7 +1352,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float bandRefZ = std::max(groundZ, position.z);
 		uint32_t shapeIndex = 0;
 		if (!useCorpseBones)
-			RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+			SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				RE::NiPoint3 centerPos;
 				float radius;
 				if (Util::GetShapeBound(a_object, centerPos, radius)) {
@@ -1433,12 +1439,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 	};
 
-	if (auto player = RE::PlayerCharacter::GetSingleton())
+	if (auto player = RE::PlayerCharacter::GetSingleton()) {
+		ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
 		addStamps(player->GetHandle());
+	}
 
 	if (const auto processLists = RE::ProcessLists::GetSingleton()) {
-		for (auto& actorHandle : processLists->highActorHandles)
+		for (auto& actorHandle : processLists->highActorHandles) {
+			ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
 			addStamps(actorHandle);
+		}
 	}
 	// One frame of lag: the probe follows whoever ended THIS gather nearest,
 	// and fills during the next, so the pick is settled before any row is
@@ -1561,7 +1571,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 		uint32_t shapeIndex = 0;
-		RE::BSVisit::TraverseScenegraphCollision(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+		SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
 			if (Util::GetShapeBound(a_object, centerPos, radius)) {
@@ -1760,4 +1770,46 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			[](const BowWave& a, const BowWave& b) { return a.distSq < b.distSq; });
 	perFrameData.StampCount = stampCount;
 	globals::profiler->EndPass();
+}
+
+// Once per frame, from Prepass: the frame's accumulators into 30-frame
+// averages, then reset. The hash ring is kept; a dump request logs it oldest
+// first.
+void SnowDeformation::RollCpuCensus()
+{
+	static const double ticksToMs = [] {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		return 1000.0 / static_cast<double>(f.QuadPart);
+	}();
+	auto ema = [](float& a_shown, float a_value) { a_shown += (a_value - a_shown) * (1.0f / 30.0f); };
+	auto& c = cpuCensus;
+	auto& s = cpuShown;
+	ema(s.hookMs, float(c.hookTicks * ticksToMs));
+	ema(s.hookCalls, float(c.hookCalls));
+	ema(s.actorMs, float(c.actorTicks * ticksToMs));
+	ema(s.actors, float(c.actors));
+	ema(s.landMs, float(c.landTicks * ticksToMs));
+	ema(s.landCalls, float(c.landCalls));
+	ema(s.depthMs, float(c.depthTicks * ticksToMs));
+	ema(s.depthCalls, float(c.depthCalls));
+	ema(s.traverseMs, float(c.traverseTicks * ticksToMs));
+	ema(s.traverseCalls, float(c.traverseCalls));
+	ema(s.skinLoopDraws, float(c.skinLoopDraws));
+	ema(s.skinLoopCBUpdates, float(c.skinLoopCBUpdates));
+	ema(s.casterDraws, float(c.casterDraws));
+	ema(s.casterCBUpdates, float(c.casterCBUpdates));
+	ema(s.casterPasses, float(c.casterPasses));
+	c.hookTicks = c.actorTicks = c.landTicks = c.depthTicks = c.traverseTicks = 0;
+	c.hookCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
+	c.skinLoopDraws = c.skinLoopCBUpdates = c.casterDraws = c.casterCBUpdates = c.casterPasses = 0;
+	if (c.stampHashDumpRequested) {
+		c.stampHashDumpRequested = false;
+		std::string line;
+		for (uint32_t i = 0; i < CpuCensus::kHashRing; i++) {
+			const uint64_t h = c.stampHashRing[(c.stampHashHead + i) % CpuCensus::kHashRing];
+			line += std::format("{:016X}{}", h, (i % 8 == 7) ? "\n" : " ");
+		}
+		logger::info("[SNOW DEFORMATION] stamp hash ring ({} frames, oldest first):\n{}", CpuCensus::kHashRing, line);
+	}
 }

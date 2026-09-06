@@ -821,6 +821,7 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 void SnowDeformation::Prepass()
 {
 	LoadTraceFramePulse();
+	RollCpuCensus();
 	ApplyRangeSettings();
 
 	// Frame boundary for the once-per-frame local shadow atlas copy.
@@ -1226,6 +1227,23 @@ void SnowDeformation::Prepass()
 		auto* map = deformationTextures[0];
 		auto* scratch = deformationTextures[1];
 		const bool ringRan = perFrameData.RingTotalTexels > 0;
+		{
+			uint64_t h = 1469598103934665603ull;
+			auto mix = [&](const void* a_p, size_t a_n) {
+				const auto* b = static_cast<const uint8_t*>(a_p);
+				for (size_t i = 0; i < a_n; i++) {
+					h ^= b[i];
+					h *= 1099511628211ull;
+				}
+			};
+			mix(&perFrameData.StampCount, sizeof(perFrameData.StampCount));
+			mix(perFrameData.Stamps, perFrameData.StampCount * sizeof(perFrameData.Stamps[0]));
+			mix(perFrameData.StampEnds, perFrameData.StampCount * sizeof(perFrameData.StampEnds[0]));
+			cpuCensus.stampHashStable = h == cpuCensus.stampHash ? cpuCensus.stampHashStable + 1 : 0;
+			cpuCensus.stampHash = h;
+			cpuCensus.stampHashRing[cpuCensus.stampHashHead] = h;
+			cpuCensus.stampHashHead = (cpuCensus.stampHashHead + 1) % CpuCensus::kHashRing;
+		}
 		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.DepositParams.x > 0.5f ||
 		                      perFrameData.ContactDim > 0.5f;
 		// Whether the stamp pass actually wrote anything - a stamp set that

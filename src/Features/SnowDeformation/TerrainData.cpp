@@ -355,6 +355,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missing)
 {
+	ScopedTicks _depth(cpuCensus.depthTicks, cpuCensus.depthCalls);
 	// A cell is 33 vertices = 32 intervals of kShellVertexSpacing.
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	const int cellX = (int)std::floor(a_x / kCellSize);

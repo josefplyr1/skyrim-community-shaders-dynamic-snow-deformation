@@ -1255,6 +1255,21 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextUnformatted("fine probe: armed");
 		else if (!fineProbeResult.empty())
 			ImGui::TextWrapped("%s", fineProbeResult.c_str());
+		// CPU census (PERF-RESEARCH §11.1), 30-frame averages. The hook line
+		// is the one cost no profiler row carries.
+		{
+			const auto& s = cpuShown;
+			ImGui::Text("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
+				s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
+			ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates | caster %.0f draws, %.0f CB updates over %.0f passes",
+				s.skinLoopDraws, s.skinLoopCBUpdates, s.casterDraws, s.casterCBUpdates, s.casterPasses);
+			ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
+			ImGui::SameLine();
+			if (ImGui::Button("Dump Stamp Hash Ring"))
+				cpuCensus.stampHashDumpRequested = true;
+			if (auto _ttRing = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("stamp_hash_ring_tooltip"), "Writes the last 300 frames' stamp checksums to the log. Record one with a lever off and one with it on, in the same scene with the same motion; matching sequences mean the change did not touch what reaches the deformation map."));
+		}
 		if (!skinCullDisabled) {
 			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
 			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",
