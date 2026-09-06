@@ -205,6 +205,8 @@ namespace Util
 			macros.push_back({ "HULLSHADER", "" });
 		else if (!_stricmp(ProgramType, "ds_5_0"))
 			macros.push_back({ "DOMAINSHADER", "" });
+		else if (!_stricmp(ProgramType, "gs_5_0"))
+			macros.push_back({ "GSHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_5_0"))
 			macros.push_back({ "COMPUTESHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_4_0"))

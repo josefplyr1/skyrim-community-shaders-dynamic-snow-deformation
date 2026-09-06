@@ -43,12 +43,16 @@ bool SnowDeformation::EnsureVoxelResources()
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
 			.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = kVoxelDim }
 		};
+		// Fresh VRAM is not blank: cleared so a never-written volume reads
+		// empty rather than as whatever lived there before.
+		const float clearZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		for (int i = 0; i < 2; i++) {
 			if (voxelVolume[i])
 				continue;
 			voxelVolume[i] = new Texture3D(desc, i ? "SnowDeformation::VoxelVolume1" : "SnowDeformation::VoxelVolume0");
 			voxelVolume[i]->CreateSRV(srvDesc);
 			voxelVolume[i]->CreateUAV(uavDesc);
+			globals::d3d::context->ClearUnorderedAccessViewFloat(voxelVolume[i]->uav.get(), clearZero);
 		}
 		voxelValid = false;
 	}
@@ -76,6 +80,9 @@ bool SnowDeformation::EnsureVoxelResources()
 		voxelSliceTexture = new Texture2D(desc, "SnowDeformation::VoxelSlice");
 		voxelSliceTexture->CreateSRV(srvDesc);
 		voxelSliceTexture->CreateUAV(uavDesc);
+		// Shown by the menu before the first write; black, not stale VRAM.
+		const float clearZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		globals::d3d::context->ClearUnorderedAccessViewFloat(voxelSliceTexture->uav.get(), clearZero);
 	}
 	if (!voxelCB)
 		voxelCB = new ConstantBuffer(ConstantBufferDesc<VoxelVolumeCB>(), "SnowDeformation::VoxelVolumeCB");
@@ -85,22 +92,27 @@ bool SnowDeformation::EnsureVoxelResources()
 		desc.Usage = D3D11_USAGE_DEFAULT;
 		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		if (SUCCEEDED(device->CreateBuffer(&desc, nullptr, voxelCountBuffer.put()))) {
+		HRESULT hr = device->CreateBuffer(&desc, nullptr, voxelCountBuffer.put());
+		if (SUCCEEDED(hr)) {
 			Util::SetResourceName(voxelCountBuffer.get(), "SnowDeformation::VoxelOccupancyCount");
 			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
 			uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 			uavDesc.Buffer.NumElements = 4;
 			uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-			device->CreateUnorderedAccessView(voxelCountBuffer.get(), &uavDesc, voxelCountUAV.put());
+			hr = device->CreateUnorderedAccessView(voxelCountBuffer.get(), &uavDesc, voxelCountUAV.put());
 			D3D11_BUFFER_DESC stagingDesc{};
 			stagingDesc.ByteWidth = 16;
 			stagingDesc.Usage = D3D11_USAGE_STAGING;
 			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-			for (int i = 0; i < 2; i++)
-				if (SUCCEEDED(device->CreateBuffer(&stagingDesc, nullptr, voxelCountStaging[i].put())))
+			for (int i = 0; i < 2 && SUCCEEDED(hr); i++) {
+				hr = device->CreateBuffer(&stagingDesc, nullptr, voxelCountStaging[i].put());
+				if (SUCCEEDED(hr))
 					Util::SetResourceName(voxelCountStaging[i].get(), "SnowDeformation::VoxelOccupancyStaging");
+			}
 		}
+		if (FAILED(hr))
+			logger::warn("[SNOW DEFORMATION] Voxel occupancy counter unavailable (HRESULT {:#x}); the volume still runs", (unsigned)hr);
 	}
 	if (!voxelRasterState) {
 		// Both faces: undersides are what the roof test is about.
@@ -115,19 +127,20 @@ bool SnowDeformation::EnsureVoxelResources()
 		Util::SetResourceName(voxelRasterState.get(), "SnowDeformation::VoxelRaster");
 	}
 
+	// Util::CompileShader adds the stage define from the target itself.
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowVoxelCapture.hlsl";
 	if (!voxelVS) {
-		voxelVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(path, { { "VSHADER", "" } }, "vs_5_0"));
+		voxelVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(path, {}, "vs_5_0"));
 		if (voxelVS)
 			Util::SetResourceName(voxelVS, "SnowDeformation::VoxelCaptureVS");
 	}
 	if (!voxelGS) {
-		voxelGS = static_cast<ID3D11GeometryShader*>(CompileSnowShader(path, { { "GSHADER", "" } }, "gs_5_0"));
+		voxelGS = static_cast<ID3D11GeometryShader*>(CompileSnowShader(path, {}, "gs_5_0"));
 		if (voxelGS)
 			Util::SetResourceName(voxelGS, "SnowDeformation::VoxelCaptureGS");
 	}
 	if (!voxelPS) {
-		voxelPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(path, { { "PSHADER", "" } }, "ps_5_0"));
+		voxelPS = static_cast<ID3D11PixelShader*>(CompileSnowShader(path, {}, "ps_5_0"));
 		if (voxelPS)
 			Util::SetResourceName(voxelPS, "SnowDeformation::VoxelCapturePS");
 	}
@@ -143,7 +156,9 @@ bool SnowDeformation::EnsureVoxelResources()
 	}
 	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed)");
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {})",
+			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
+			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED");
 		return false;
 	}
 	return true;

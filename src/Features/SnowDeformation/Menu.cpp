@@ -289,6 +289,12 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttVol = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "VOLUME-SNOW-PLAN V0: rasterises the captured objects into a cube of 256 x 256 x 256 voxels, 8 units each, around the camera - about 30 m across, 32 MB, kept until the game closes. Remembered between frames and fading where nothing redraws, like the height maps.\n\nNOTHING READS IT YET and no snow changes. This is the measurement that decides whether a 3D snow field - one whose shape is not inherited from the object's mesh, so it can overhang, stack and sit under a roof - is worth building. Its cost is the VoxelVolume pass."));
 		if (settings.VolumeSnow) {
+			// Says so when the pass is not running: a slice that never
+			// updates is indistinguishable from a broken volume otherwise.
+			if (voxelShadersFailed)
+				ImGui::TextColored({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile - see CommunityShaders.log. The picture below is stale."));
+			else if (!voxelValid)
+				ImGui::TextDisabled("%s", T(TKEY("voxel_status_waiting"), "Waiting for the first frame."));
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
