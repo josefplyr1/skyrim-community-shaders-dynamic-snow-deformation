@@ -3205,6 +3205,18 @@ void SnowDeformation::DrawCapturedStatics()
 	}
 	globals::profiler->EndPass();
 
+	// Everything after inherits b1 rather than binding it: put staticsCB
+	// back on every stage the offset path rebound, or the trench patch
+	// draws against the record buffer at the last skin's offset (shadowed
+	// road floors, Josef 2026-09-06).
+	if (skinRecordsLive) {
+		ID3D11Buffer* restore = staticsCB->CB();
+		context->VSSetConstantBuffers(1, 1, &restore);
+		context->PSSetConstantBuffers(1, 1, &restore);
+		context->HSSetConstantBuffers(1, 1, &restore);
+		context->DSSetConstantBuffers(1, 1, &restore);
+	}
+
 	// The trench patch and everything after run the normal pipeline.
 	if (tessellateSkins) {
 		context->HSSetShader(nullptr, nullptr, 0);
