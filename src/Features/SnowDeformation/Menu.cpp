@@ -811,857 +811,946 @@ void SnowDeformation::DrawSettings()
 
 #if !SNOW_ALPHA_BUILD
 	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
-		ImGui::SeparatorText(T(TKEY("debug_cat_deform_map"), "Deformation Map"));
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_contact"), "Actor & Prop Contact"))) {
+			ImGui::Checkbox("Actor mesh contact (actors and corpses carve by their render mesh; off = bones)", &debugActorContact);
 
-		ImGui::Checkbox(T(TKEY("show_debug"), "Show Deformation Map"), &settings.ShowDebugTexture);
-		if (settings.ShowDebugTexture) {
-			// The honest caption. ImGui blends by the texture's alpha, and this
-			// map's .w was claimed by the bow wave's deposit field, so the view
-			// is drawn through deposit: transparent wherever nothing has been
-			// pushed, whatever the depth channel holds. Right after a load it is
-			// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
-			// were read backwards from this image before anyone noticed.
-			// The map's own depth, copied to a single channel so ImGui cannot
-			// draw it through the bow wave's deposit alpha. This is the image
-			// that answers "did the trench reach the map".
-			ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
-			const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
-			if (trenchDebugSRV)
-				ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
-			else
-				ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+			if (debugActorContact)
+				ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u standing still (not drawn), %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
+					stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactStillLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
 
-			// Where the player is, drawn ON the map. Without it "the trench did
-			// not load" and "the trench is eighty metres that way" look
-			// identical: the window is 14000 units across, so a mark 200 px off
-			// centre is most of a hundred metres away.
-			{
-				auto* draw = ImGui::GetWindowDrawList();
-				const ImVec2 centre{ imageTopLeft.x + 256.0f, imageTopLeft.y + 256.0f };
-				const float pixelsPerUnit = 512.0f / std::max(deformWorldSize, 1.0f);
-				const float ring = 25.0f * kUnitsPerMeter * pixelsPerUnit;
-				const ImU32 ink = IM_COL32(80, 220, 255, 220);
-				draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
-				draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
-				draw->AddCircle(centre, ring, IM_COL32(80, 220, 255, 90), 0, 1.0f);
-			}
+			ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
 
-			// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
-			// can be trusted. It is the store's own answer to "what does the
-			// window look like", which is exactly the question a reload raises.
-			if (trenchInjectSRV) {
-				ImGui::Text("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
-				ImGui::Image(trenchInjectSRV.get(), { 512.0f, 512.0f });
-			}
-		}
-
-		if (ImGui::Button(T(TKEY("clear"), "Clear Deformation Map"))) {
-			clearRequested = true;
-			// Deliberate wipe, so the store goes with it: left alone, the
-			// inject would put every trench back on the very next frame.
-			ClearTrenchStore("the Clear Deformation Map button");
-		}
-
-		// S1: the idle skip and its measurement override. The readout names
-		// what is holding the pass on, so "why is it running" answers itself.
-		ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Deformation Update"), &debugForceDeformationUpdate);
-		// S3: the tile dispatch's one-click cross-check. A symptom that
-		// vanishes with this on means a dirty-tracking path missed a writer.
-		ImGui::Checkbox(T(TKEY("debug_force_tiles"), "Force All Tiles Dirty"), &debugForceAllTilesDirty);
-		// The count is the magnitude behind a map-active blocker: a handful of
-		// texels is a precision tail, millions is a logic bug. From the newest
-		// verdict, so it lags the dispatch by the readback ring.
-		ImGui::Checkbox(T(TKEY("debug_activity_view"), "Show Update Activity"), &debugActivityView);
-		if (debugActivityView) {
-			ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
-			const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
-			if (activityViewSRV)
-				ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
-
-			const bool bboxValid = deformChangedTexels > 0 &&
-			                       deformChangedMinX <= deformChangedMaxX &&
-			                       deformChangedMinY <= deformChangedMaxY;
-			if (bboxValid && activityViewSRV) {
-				const float scale = 512.0f / std::max((float)deformMapDim, 1.0f);
-				auto* draw = ImGui::GetWindowDrawList();
-				draw->AddRect(
-					{ activityTopLeft.x + (float)deformChangedMinX * scale - 2.0f,
-						activityTopLeft.y + (float)deformChangedMinY * scale - 2.0f },
-					{ activityTopLeft.x + (float)(deformChangedMaxX + 1) * scale + 2.0f,
-						activityTopLeft.y + (float)(deformChangedMaxY + 1) * scale + 2.0f },
-					IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
-			}
-
-			// The mean delta is the fingerprint: the slump step is
-			// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
-			// Snow Slumping slider; storage-precision creep is an order
-			// smaller and scales with nothing.
-			ImGui::Text("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u), mean delta %.5f",
-				deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
-				deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
-			if (bboxValid) {
-				const float texel = deformWorldSize / std::max((float)deformMapDim, 1.0f);
-				const float cx = ((float)(deformChangedMinX + deformChangedMaxX) * 0.5f + 0.5f) * texel;
-				const float cy = ((float)(deformChangedMinY + deformChangedMaxY) * 0.5f + 0.5f) * texel;
-				const float half = deformWorldSize * 0.5f;
-				ImGui::Text("Bbox: (%u,%u)-(%u,%u), %.1f x %.1f m, centre %.1f m E / %.1f m N of camera",
-					deformChangedMinX, deformChangedMinY, deformChangedMaxX, deformChangedMaxY,
-					(float)(deformChangedMaxX - deformChangedMinX + 1) * texel / kUnitsPerMeter,
-					(float)(deformChangedMaxY - deformChangedMinY + 1) * texel / kUnitsPerMeter,
-					(cx - half) / kUnitsPerMeter, (cy - half) / kUnitsPerMeter);
-			}
-		}
-
-		if (deformIdleSkipped) {
-			if (deformSkipRate >= 0.0f)
-				ImGui::Text("Update pass: idle (skipped) - %.0f%% of last 300 frames", deformSkipRate * 100.0f);
-			else
-				ImGui::Text("Update pass: idle (skipped)");
-		} else {
-			static const char* kBlockerNames[9] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
-			std::string held;
-			for (int bit = 0; bit < 9; bit++)
-				if (deformIdleBlockers & (1u << bit)) {
-					if (!held.empty())
-						held += ", ";
-					held += kBlockerNames[bit];
+			if (debugContactView) {
+				ImGui::SliderFloat("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
+				ImGui::Checkbox("Still bodies skip the draw (A/B; off = every rasterized actor draws every frame)", &debugContactStillGate);
+				const float viewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
+				ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
+					2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
+				if (contactViewSRV) {
+					const float scale = 512.0f / (2.0f * viewHalf);
+					const float2 center = contactViewCenter;
+					auto drawHalf = [&](float a_v0, float a_v1) {
+						const ImVec2 topLeft = ImGui::GetCursorScreenPos();
+						// The crop is the left 512 texels of the 1024-wide view.
+						ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 0.5f, a_v1 });
+						if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+							if (auto* root = player->Get3D(false)) {
+								const auto& bound = root->worldBound;
+								auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
+								auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
+								ImGui::GetWindowDrawList()->AddRect(
+									{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
+									{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
+									IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+								// Bone positions over the silhouette: feet white, hands cyan,
+								// head/spine magenta. A mesh stretched against its own bones
+								// shows as a silhouette reaching past them.
+								struct BoneDot { const char* name; ImU32 color; };
+								static const BoneDot dots[] = {
+									{ "NPC L Foot [Lft ]", IM_COL32(255, 255, 255, 255) }, { "NPC R Foot [Rft ]", IM_COL32(255, 255, 255, 255) },
+									{ "NPC L Hand [LHnd]", IM_COL32(80, 240, 255, 255) }, { "NPC R Hand [RHnd]", IM_COL32(80, 240, 255, 255) },
+									{ "NPC Head [Head]", IM_COL32(255, 80, 255, 255) }, { "NPC Spine2 [Spn2]", IM_COL32(255, 80, 255, 255) },
+									{ "NPC L Calf [LClf]", IM_COL32(200, 200, 200, 255) }, { "NPC R Calf [RClf]", IM_COL32(200, 200, 200, 255) },
+								};
+								for (const auto& dot : dots) {
+									if (auto* node = root->GetObjectByName(RE::BSFixedString(dot.name)))
+										ImGui::GetWindowDrawList()->AddCircle({ toX(node->world.translate.x), toY(node->world.translate.y) }, 4.0f, dot.color, 0, 1.5f);
+								}
+							}
+						}
+					};
+					drawHalf(0.0f, 0.5f);
+					drawHalf(0.5f, 1.0f);
+					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						if (auto* root = player->Get3D(false))
+							ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
+								root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(), contactCenter.x, contactCenter.y,
+								contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
+					}
+					// Heights against the baked ground: what the carve's (contact - ground) / layer
+					// sees, in numbers. Red arms with hands 60 units up means the raster's Z
+					// or the ground sample is wrong, not the silhouette.
+					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+						if (auto* root = player->Get3D(false)) {
+							const auto probe = ProbeShellData(player->GetPositionX(), player->GetPositionY());
+							ImGui::Text("  ground at player (baked vertex): %.1f, layer %.1f | player Z %.1f (%.1f above ground)",
+								probe.height, probe.rampDepth, player->GetPositionZ(), player->GetPositionZ() - probe.height);
+							static const char* heightBones[] = { "NPC L Foot [Lft ]", "NPC R Foot [Rft ]", "NPC L Hand [LHnd]", "NPC R Hand [RHnd]", "NPC Head [Head]" };
+							std::string line = "  bone Z above ground:";
+							for (const char* name : heightBones) {
+								if (auto* node = root->GetObjectByName(RE::BSFixedString(name)))
+									line += std::format(" {} {:.0f} |", name, node->world.translate.z - probe.height);
+							}
+							ImGui::TextUnformatted(line.c_str());
+						}
+					}
+				} else {
+					ImGui::Text("(no field this frame)");
 				}
-			if (debugForceDeformationUpdate)
-				held = held.empty() ? "forced" : "forced, " + held;
-			if (deformSkipRate >= 0.0f)
-				ImGui::Text("Update pass: running (%s) - skipped %.0f%% of last 300 frames",
-					held.empty() ? "none - engages next verdict" : held.c_str(), deformSkipRate * 100.0f);
-			else
-				ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
-			// Within a running frame the evolve pass has its own gate: idle
-			// means its last full run changed nothing and no external write
-			// (ring inject, stamps) or refill has re-armed it - the ring and
-			// stamp passes are the only cost while walking settled ground.
-			ImGui::Text("Evolve pass: %s", evolveIdleLastFrame ? "idle (settled)" : "active");
-		}
-		if (deformSkipRate >= 0.0f) {
-			// The flicker census: count changes are stamps appearing or
-			// vanishing (plant-band flicker), drift is a matched stamp moving
-			// past tolerance. Either resets the quiet window.
-			ImGui::Text("Stamp set changes: %u/300 frames (count %u, drift %u)",
-				stampSetCountChanges + stampSetDriftChanges, stampSetCountChanges, stampSetDriftChanges);
-		}
-		{
-			// The tile census: dispatch domain vs the whole map. Cost should
-			// track these counts; if it does not, the force-all-dirty toggle
-			// is the discriminator.
-			const uint32_t totalTiles = (deformMapDim / 8) * (deformMapDim / 8);
-			if (debugForceAllTilesDirty)
-				ImGui::Text("Stamp tiles: forced to full map (%u tiles)", totalTiles);
-			else if (stampTilesLast > kStampTileCap)
-				ImGui::Text("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
-			else
-				ImGui::Text("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
-			// Occupied + slump halo and changed + tap halo, from the last
-			// executed scans (lag by the readback ring, like the verdict).
-			ImGui::Text("Evolve tiles: %u of %u", evolveTilesLast, totalTiles);
-			ImGui::Text("Berm tiles: %u of %u", bermTilesLast, totalTiles);
-		}
-
-		{
-			// One tile is 512 world units square, only trodden ground has one,
-			// and refill deletes the ones it takes back to bare snow. Occupancy
-			// separates real trails from tiles a shallow refill residue is
-			// keeping alive: a high thin count wants a bigger store epsilon,
-			// not a faster fade.
-			const auto stats = GetTrenchStoreStats();
-			ImGui::Text("Trench store: %zu tiles, %.1f KB raw, %.1f%% full, %zu thin",
-				stats.tiles, (double)stats.bytes / 1024.0, stats.occupancy * 100.0f, stats.thin);
-			// Encoded is the number that matters: it is what a save will cost
-			// once Stage C writes it, and what the budget is spent in.
-			ImGui::Text("Save cost: %.0f KB of %.0f KB budget (%.0fx vs raw)",
-				(double)stats.encoded / 1024.0,
-				(double)settings.TrenchMemoryMB * 1024.0,
-				stats.encoded ? (double)stats.bytes / (double)stats.encoded : 0.0);
-		}
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_accumulation"), "Snow Accumulation"));
-
-		{
-			// The rate is spelled out because the exit test is "does the number
-			// do what the plan's table says", which needs the arithmetic
-			// visible rather than inferred from watching it drift.
-			const float accum = snowAccumulation.load(std::memory_order_relaxed);
-			const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
-			const float growth = settings.AccumulationHours > 0.01f ? intensity / settings.AccumulationHours : 0.0f;
-			const float melt = settings.AccumulationMeltHours > 0.01f ? (1.0f - intensity) / settings.AccumulationMeltHours : 0.0f;
-			const float fade = settings.AccumulationFadeDays > 0.01f ? 1.0f / (settings.AccumulationFadeDays * 24.0f) : 0.0f;
-			const float rate = growth - melt - fade;
-
-			auto* tes = RE::TES::GetSingleton();
-			const bool indoors = tes && tes->interiorCell;
-
-			// The scale the shells are actually handed, not what the peak would
-			// give: with the toggle off it reads x1.000, which is the other
-			// half of the A/B saying so.
-			ImGui::Text("Accumulation: %.3f (depth x%.3f%s), snowfall %.2f%s",
-				accum, GetAccumulationDepthScale(),
-				settings.EnableSnowAccumulation ? "" : ", not applied", intensity,
-				indoors ? " (held, indoors)" : "");
-			ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
-				rate, growth, melt, fade);
-			ImGui::Text("Clock: %.2f game hours, timescale %.0f",
-				gameClock.lastHours, gameClock.timescale);
-			ImGui::Text("Co-save: %s", settings.PersistAccumulation ? "remembered" : "not written");
-		}
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_spells"), "Spell Integration"));
-
-		if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
-			// Diagnostics use plain text by existing convention (no i18n).
-			ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
-				spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
-				spellStats.groundContacts, spellStats.trails);
-			ImGui::Text("blasts: armed %u | detonations %u | casts %u | shouts %u (%u discs)   [totals since load]",
-				spellStats.armed, spellStats.detonations, spellStats.casts,
-				spellStats.shouts, spellStats.shoutDiscs);
-			ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
-				spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks, spellStats.lifted);
-			if (spellStats.lastShoutVerdict) {
-				static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
-				static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
-				ImGui::Text("last shout: %s | proj speed %.0f | impact force %.0f | %s",
-					spellStats.lastShoutElement < IM_ARRAYSIZE(kElem) ? kElem[spellStats.lastShoutElement] : "?",
-					spellStats.lastShoutSpeed, spellStats.lastShoutForce,
-					spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
 			}
-			ImGui::Text("rejected: no element %u | no blast form %u",
-				spellStats.rejectedElement, spellStats.rejectedNoBlast);
-			ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",
-				spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating, stampStats.incorporeal);
-			ImGui::Text("death events seen %u | death blasts opened %u",
-				spellStats.deathsSeen, spellStats.deathBlasts);
-			if (stampStats.nearestValid) {
-				static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
-				const uint state = stampStats.nearestState;
-				ImGui::Text("nearest actor: %s | gap to its own footing %.0f | gap to land %.0f | state %s",
-					stampStats.nearestFloating ? "FLOATING" : "touching",
-					stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
-					state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
-				ImGui::Text("             bones: feet %u usable %u%s | dry travel %.0f | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u | failsafe actors %u)",
-					stampStats.nearestFeet, stampStats.nearestUsableFeet,
-					stampStats.nearestFallback ? " FAILSAFE" : "",
-					stampStats.nearestDryTravel, stampStats.nearestLimbs,
-					stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
-					stampStats.fallbackActors);
-				ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
-					stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
-					stampStats.nearestGhostFlag ? "yes" : "no",
-					stampStats.nearestIncorporeal ? "INCORPOREAL" :
-						(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));
+
+			ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
+
+			ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
+
+			ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
+
+			ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
+			if (debugSkeletonProbe) {
+				ImGui::SameLine();
+				if (ImGui::Button("Dump skeleton to log"))
+					skeletonProbeDumpRequested = true;
+				if (!skeletonProbe.valid) {
+					ImGui::Text("probe: no NPC in range this frame");
+				} else {
+					ImGui::Text("probe: %s (%08X) - %s",
+						skeletonProbe.actorName.empty() ? "<unnamed>" : skeletonProbe.actorName.c_str(),
+						skeletonProbe.formID, skeletonProbe.verdict);
+					if (skeletonProbe.rasterCandidate)
+						ImGui::Text("  contact pass candidate: airborne/elevated/floating gates bypassed, penetration decides");
+					ImGui::Text("  feet %zu (usable %u) | limbs %u (stamped %u) | shapes stamped %u | dry travel %.0f%s",
+						skeletonProbe.feet.size(), skeletonProbe.usableFeet,
+						skeletonProbe.limbs, skeletonProbe.limbsStamped, skeletonProbe.shapes,
+						skeletonProbe.dryTravel, skeletonProbe.collisionFallback ? " [FAILSAFE]" : "");
+					ImGui::Text("  body alpha %.2f (reads %u) | above land %.0f | floating gap %.0f",
+						skeletonProbe.bodyAlpha, (uint)skeletonProbe.alphaSettle,
+						skeletonProbe.gapToLand, skeletonProbe.floatingGap);
+					{
+						const char* surface;
+						if (!skeletonProbe.cellBaked)
+							surface = "cell not baked yet (stamps assume snow)";
+						else if (skeletonProbe.shellDepth <= 0.0f)
+							surface = "NO SHELL HERE: ground class carries no snow - nothing can display a trench";
+						else if (skeletonProbe.gapToLand > 10.0f)
+							surface = "standing on a mesh ABOVE the landscape - snow there is object skin (trenches only on roads / Object Trenches)";
+						else
+							surface = "landscape shell underfoot - trenches should show";
+						ImGui::Text("  ground: shell depth %.0f | %s", skeletonProbe.shellDepth, surface);
+					}
+					if (!skeletonProbe.feet.empty() &&
+						ImGui::BeginTable("##skelprobe", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
+						ImGui::TableSetupColumn("Foot node");
+						ImGui::TableSetupColumn("Toe");
+						ImGui::TableSetupColumn("Scale");
+						ImGui::TableSetupColumn("Attached");
+						ImGui::TableSetupColumn("z-ref / band");
+						ImGui::TableSetupColumn("Result");
+						ImGui::TableHeadersRow();
+						for (const auto& row : skeletonProbe.feet) {
+							ImGui::TableNextRow();
+							ImGui::TableNextColumn();
+							ImGui::TextUnformatted(row.name.c_str());
+							ImGui::TableNextColumn();
+							ImGui::TextUnformatted(row.toe.c_str());
+							ImGui::TableNextColumn();
+							ImGui::Text("%.3f", row.scale);
+							ImGui::TableNextColumn();
+							ImGui::TextUnformatted(row.attached ? "yes" : "DETACHED");
+							ImGui::TableNextColumn();
+							ImGui::Text("%.1f / %.1f", row.zAboveRef, row.band);
+							ImGui::TableNextColumn();
+							if (row.stamped)
+								ImGui::Text("STAMPED r=%.1f", row.radius);
+							else if (row.planted)
+								ImGui::TextUnformatted("planted, no stamp");
+							else if (row.scale < 0.01f)
+								ImGui::TextUnformatted("ZERO SCALE");
+							else
+								ImGui::TextUnformatted("lifted");
+						}
+						ImGui::EndTable();
+					}
+				}
 			}
-			ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
-				spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
-			ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u | actors turned away %u",
-				stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
-				stampStats.spells, kSpellStampReserve, spellStats.emittersCulled,
-				stampStats.budgetTurnedAway);
+
+			ImGui::SliderInt("Solo skinned geometry (-1 = all; step through to find whose silhouette is wide)", &debugContactSolo, -1, 31);
+
+			if (debugContactSolo >= 0)
+				ImGui::Text("  soloed: %s", contactSoloName.c_str());
+
+			// Diagnostics: plain text by existing convention (no i18n).
+			ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (refs at last scan %u, movers %u, scan every 6 frames)",
+				stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
+				propScanRefs, stampStats.propMovers);
 			ImGui::TreePop();
 		}
 
-		ImGui::SeparatorText(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"));
-		if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_cat_melt_emitter_tooltip"), "A stand-in heat source that answers to no spell at all. Kept for testing a mark on its own: when a school stops marking, this says whether the fault is in the detector or in the mark itself."));
-		if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
-			if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-				debugMeltEmitterPos = player->GetPosition();
-				debugMeltEmitterActive = true;
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_cpu"), "CPU & Memory"))) {
+			// CPU census (PERF-RESEARCH §11.1), 30-frame averages. The hook line
+			// is the one cost no profiler row carries.
+			{
+				const auto& s = cpuShown;
+				ImGui::Text("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
+					s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
+				ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates | caster %.0f draws, %.0f CB updates over %.0f passes",
+					s.skinLoopDraws, s.skinLoopCBUpdates, s.casterDraws, s.casterCBUpdates, s.casterPasses);
+				ImGui::Text("Capture hash %016llX over %u skins", (unsigned long long)cpuCensus.captureHash, cpuCensus.captureCount);
+				ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
+				ImGui::SameLine();
+				if (ImGui::Button("Dump Stamp Hash Ring"))
+					cpuCensus.stampHashDumpRequested = true;
+				if (auto _ttRing = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("stamp_hash_ring_tooltip"), "Writes the last 300 frames' stamp checksums to the log. Record one with a lever off and one with it on, in the same scene with the same motion; matching sequences mean the change did not touch what reaches the deformation map."));
 			}
-		}
-		ImGui::SameLine();
-		if (ImGui::Button(T(TKEY("melt_emitter_remove"), "Remove")))
-			debugMeltEmitterActive = false;
-		ImGui::Text("%s", debugMeltEmitterActive ?
-							  T(TKEY("melt_emitter_active"), "Emitter: active") :
-							  T(TKEY("melt_emitter_off"), "Emitter: off"));
 
-		ImGui::SliderFloat(T(TKEY("melt_emitter_radius"), "Emitter Radius"), &debugMeltEmitterRadius, 40.0f, 600.0f, "%.0f");
+			uint64_t vramUsageMB = 0, vramBudgetMB = 0;
+			QueryAdapterVRAM(vramUsageMB, vramBudgetMB);
+			std::string vramBreakdown;
+			const uint64_t vramFeatureMB = SumFeatureTextureBytes(vramBreakdown) >> 20;
+			ImGui::Text("VRAM: adapter %llu / %llu MB (%llu%%), this feature ~%llu MB",
+				(unsigned long long)vramUsageMB, (unsigned long long)vramBudgetMB,
+				(unsigned long long)(vramBudgetMB ? vramUsageMB * 100 / vramBudgetMB : 0),
+				(unsigned long long)vramFeatureMB);
+			if (vramBudgetMB && vramUsageMB > vramBudgetMB)
+				ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "OVER BUDGET: driver is demoting textures to system RAM; FPS stays degraded until the game restarts.");
+			ImGui::TextWrapped("%s", vramBreakdown.c_str());
 
-		ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
-		if (auto _ttMeltRate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_shell"), "Shell & Terrain Data"));
-
-		ImGui::Checkbox(T(TKEY("shell_data_debug"), "Shell: Data Debug Plane"), &shellDataDebug);
-
-		ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Shell: Exclusion Debug Plane"), &shellExclusionDebug);
-		ImGui::Checkbox(T(TKEY("shell_border_debug"), "Shell: Border Debug Plane"), &shellBorderDebug);
-		ImGui::Checkbox(T(TKEY("shell_sss_debug"), "Shell: SSS Gate Debug"), &shellSSSDebug);
-		ImGui::Checkbox(T(TKEY("shell_wall_debug"), "Shell: Wall Material Debug"), &shellWallDebug);
-		if (auto _ttWallDbg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
-		if (auto _ttSssDbg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
-		if (auto _ttBdbg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_border_debug_tooltip"), "False-color plane of the border fields: dark red = designed bare (below -0.5), orange = slice ribbon zone (-0.5..1), green = the cut zone (1..3, white line at the cut contour), cyan/blue = deeper snow. Brightness = snow grain; magenta grid = land grain data present at that pixel."));
-		if (auto _ttExcl = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_exclusion_debug_tooltip"), "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on."));
-		if (auto _ttPlane = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
-
-		ImGui::Checkbox(T(TKEY("shell_distant_exclusions_disabled"), "Shell: Disable Distant Clearings"), &shellDistantExclusionsDisabled);
-		if (auto _ttExclusionField = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_distant_exclusions_disabled_tooltip"), "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render."));
-
-		ImGui::Checkbox(T(TKEY("shell_berm_bake_disabled"), "Shell: Disable Berm Bake"), &shellBermBakeDisabled);
-		if (auto _ttBerm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
-
-		ImGui::Checkbox(T(TKEY("shell_undulation_bake_disabled"), "Shell: Disable Undulation Bake"), &shellUndulationBakeDisabled);
-		if (auto _ttUndBake = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_undulation_bake_disabled_tooltip"), "Measurement aid: returns both shells to evaluating the dune field's two noise octaves live - one eval per vertex and march tap, four per shaded pixel - instead of reading the baked map. The snow looks the same; Shell and Object Snow get slower. Hold the camera still and toggle to read the trade."));
-
-		ImGui::Checkbox(T(TKEY("shell_march_bicubic"), "Shell: Bicubic March"), &shellMarchBicubicRestored);
-		if (auto _ttMarch = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
-
-		ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Shell: Bilinear Terrain Height"), &shellBilinearHeight);
-		if (auto _ttBilin = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
-
-		ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Shell: Non-indexed Grid Draws"), &shellGridNonIndexed);
-		if (auto _ttGridIdx = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
-
-		ImGui::Checkbox(T(TKEY("caster_cull_disabled"), "Shell: Disable Caster Culling"), &casterCullDisabled);
-		if (auto _ttCasterCull = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("caster_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object into every shadow cascade, as it worked before. With culling on, an object whose bounding sphere lies entirely outside a cascade's box is skipped for that cascade only - it could not have darkened a single texel of it, so the shadow maps come out identical. The census below counts what was skipped."));
-		if (!casterCullDisabled) {
-			const uint32_t total = casterSkinsCulledLast + casterSkinsDrawnLast;
-			ImGui::Text("Caster skins: %u drawn, %u culled of %u across cascades (%.0f%% skipped)",
-				casterSkinsDrawnLast, casterSkinsCulledLast, total,
-				total ? 100.0 * double(casterSkinsCulledLast) / double(total) : 0.0);
+			ImGui::TreePop();
 		}
 
-		ImGui::Checkbox(T(TKEY("shell_caster_split"), "Shell: Split Caster Row"), &shellCasterSplitDebug);
-		if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_deform_map"), "Deformation Map"))) {
+			if (ImGui::Button(T(TKEY("clear"), "Clear Map"))) {
+				clearRequested = true;
+				// Deliberate wipe, so the store goes with it: left alone, the
+				// inject would put every trench back on the very next frame.
+				ClearTrenchStore("the Clear Deformation Map button");
+			}
 
-		ImGui::Checkbox(T(TKEY("shell_vertex_bake_disabled"), "Shell: Disable Vertex Bake"), &shellVertexBakeDisabled);
-		if (auto _ttBake = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_vertex_bake_disabled_tooltip"), "Measurement aid: returns the tessellated shell to evaluating its surface live at every vertex. With the bake on, a compute pass evaluates each base-grid vertex once per frame and the domain shader reads the result by index - the same function at full float precision, so the surface is bit-identical - while vertices that tessellation adds inside a patch stay live. Hold the camera still and read the Shell row plus the ShellVertexBake row against the Shell row alone."));
 
-		ImGui::Checkbox(T(TKEY("shell_vertex_bake_check"), "Shell: Vertex Bake Mismatch View"), &shellVertexBakeCheck);
-		if (auto _ttBakeChk = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_vertex_bake_check_tooltip"), "Proof view for the vertex bake: the domain shader evaluates every baked corner live as well and lifts any vertex whose bits differ by 50 units, so a mismatch shows as an unmissable spike. A clean shell everywhere is the bit-identity guarantee, verified rather than assumed. Costs the live evaluation on top of the bake while on."));
+			// S3: the tile dispatch's one-click cross-check. A symptom that
+			// vanishes with this on means a dirty-tracking path missed a writer.
+			ImGui::Checkbox(T(TKEY("debug_force_tiles"), "Force All Tiles Dirty"), &debugForceAllTilesDirty);
 
-		ImGui::Checkbox(T(TKEY("shell_flat_ds_debug"), "Shell: Flat Domain Shader"), &shellFlatDSDebug);
-		if (auto _ttFlatDS = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));
+			// S1: the idle skip and its measurement override. The readout names
+			// what is holding the pass on, so "why is it running" answers itself.
+			ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Update"), &debugForceDeformationUpdate);
 
-		ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Shell: Pipeline Statistics"), &shellPipelineStatsEnabled);
-		if (auto _ttStats = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With a depth prepass on, a line counts all of that pass's draws - the prepass's own cheap invocations and the fullscreen fills' samples are in there - so read the Shell and StaticsShell profiler rows as the verdict and these lines as the explanation."));
-		if (shellPipelineStatsEnabled) {
-			auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
-				if (!a_r.valid) {
-					ImGui::Text("%s: waiting for query results", a_label);
-					return;
+			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &settings.ShowDebugTexture);
+			if (settings.ShowDebugTexture) {
+				// The honest caption. ImGui blends by the texture's alpha, and this
+				// map's .w was claimed by the bow wave's deposit field, so the view
+				// is drawn through deposit: transparent wherever nothing has been
+				// pushed, whatever the depth channel holds. Right after a load it is
+				// blank BY CONSTRUCTION, because deposit is not stored. Two rounds
+				// were read backwards from this image before anyone noticed.
+				// The map's own depth, copied to a single channel so ImGui cannot
+				// draw it through the bow wave's deposit alpha. This is the image
+				// that answers "did the trench reach the map".
+				ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
+				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
+				if (trenchDebugSRV)
+					ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
+				else
+					ImGui::Image(GetDeformationSRV(), { 512.0f, 512.0f });
+
+				// Where the player is, drawn ON the map. Without it "the trench did
+				// not load" and "the trench is eighty metres that way" look
+				// identical: the window is 14000 units across, so a mark 200 px off
+				// centre is most of a hundred metres away.
+				{
+					auto* draw = ImGui::GetWindowDrawList();
+					const ImVec2 centre{ imageTopLeft.x + 256.0f, imageTopLeft.y + 256.0f };
+					const float pixelsPerUnit = 512.0f / std::max(deformWorldSize, 1.0f);
+					const float ring = 25.0f * kUnitsPerMeter * pixelsPerUnit;
+					const ImU32 ink = IM_COL32(80, 220, 255, 220);
+					draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
+					draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
+					draw->AddCircle(centre, ring, IM_COL32(80, 220, 255, 90), 0, 1.0f);
 				}
-				const double perVisible = a_r.samplesPassed ? static_cast<double>(a_r.psInvocations) / static_cast<double>(a_r.samplesPassed) : 0.0;
-				ImGui::Text("%s: PS %.2f M inv / %.2f M px visible = %.2f per px; prims %.2f M; VS %.2f M, HS %.2f M, DS %.2f M",
-					a_label,
-					a_r.psInvocations / 1e6, a_r.samplesPassed / 1e6, perVisible,
-					a_r.rasterizedPrimitives / 1e6,
-					a_r.vsInvocations / 1e6, a_r.hsInvocations / 1e6, a_r.dsInvocations / 1e6);
-			};
-			statsLine("Shell grid", shellStatsLast);
-			statsLine("Object snow", staticsStatsLast);
-		}
 
-		ImGui::Checkbox(T(TKEY("shell_main_viewport_range_disabled"), "Shell: Decal Viewport Depth Range"), &shellMainViewportRangeDisabled);
-		if (auto _ttVpRange = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_main_viewport_range_disabled_tooltip"), "Measurement aid: draws every shell through the viewport bound when the deferred span ends (the blended decals' cap, max depth ~3e-5 under the main pass's) instead of the main pass's own depth range. That cap used to put every shell slightly nearer than its object - a third of a unit on a rock at 4 m, thousands of units on a mountain at 450 m. Off, shells write the same depth the game wrote for the same mesh. Flip it with the camera held still to read what the range fix changed about distant object snow."));
-
-		ImGui::Checkbox(T(TKEY("shell_depth_prepass_disabled"), "Shell: Disable Depth Prepass"), &shellDepthPrepassDisabled);
-		if (auto _ttPrepass = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_depth_prepass_disabled_tooltip"), "Measurement aid: returns the tessellated shell to its earlier near/far split draws. With the prepass on, a cheap depth-only draw decides which pixels the shell owns and the full shader then runs once per owned pixel instead of once per rasterised fragment - fragments hidden by the scene, by the shell's own slopes, or cut by the alpha test never shade. Same depth, same alpha decision, same look; hold the camera still and read the Shell row and the pipeline statistics."));
-
-		ImGui::Checkbox(T(TKEY("shell_frustum_cull_disabled"), "Shell: Disable Frustum Cull"), &shellFrustumCullDisabled);
-		if (auto _ttFrustum = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_frustum_cull_disabled_tooltip"), "Measurement aid: builds the whole snow grid every frame, including the three quarters of it that lie outside the view. Snow you cannot see draws no pixels either way - the card throws those triangles away - so skipping them earlier changes nothing on screen, and it saves the subdivision and the map sampling they would have cost. Shadows are unaffected: snow behind the camera is drawn separately from the sun's point of view and is never skipped. Hold the camera still and read the Shell row and the pipeline statistics."));
-
-		ImGui::Checkbox(T(TKEY("shell_land_height_disabled"), "Shell: Disable Land-Exact Height"), &shellLandHeightDisabled);
-		if (auto _ttLand = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
-
-		ImGui::Checkbox(T(TKEY("shell_far_tess_disabled"), "Shell: Disable Far Relief Tessellation"), &shellFarTessDisabled);
-		if (auto _ttFarTess = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_far_tess_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground - the distant holes. With this off, the shell checks each far square against the real ground and subdivides the ones where the ground bulges above the span, so every added vertex sits exactly on the ground; flat ground costs nothing. On restores the plain squares."));
-
-		ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Shell: Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
-		if (auto _ttDiag = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell now matches that split. The hardware's own choice of diagonal is assumed; if a checkerboard of sag shows on the 32-unit band around 1,600-1,900 units in the height-delta view, this toggle is the other guess."));
-
-		ImGui::Checkbox(T(TKEY("shell_old_union_jack"), "Shell: Old Union-Jack Grid"), &shellOldUnionJack);
-		if (auto _ttUJ = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_old_union_jack_tooltip"), "A/B for the non-tessellated grid: draws with the previous alternating diagonals, which did not follow the ground's own split, instead of the land-matched index buffer."));
-
-		ImGui::Checkbox(T(TKEY("statics_depth_prepass_disabled"), "Object Snow: Disable Depth Prepass"), &staticsDepthPrepassDisabled);
-		if (auto _ttStaticsPrepass = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
-
-		ImGui::Checkbox(T(TKEY("skin_cull_disabled"), "Object Snow: Disable Skin Culling"), &skinCullDisabled);
-		if (auto _ttSkinCull = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped."));
-
-		ImGui::Checkbox(T(TKEY("statics_record_disabled"), "Object Snow: Disable Per-Draw Constant offsets (D3D11-1)"), &staticsRecordDisabled);
-		if (auto _ttRecord = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_record_disabled_tooltip"), "Measurement aid. Normally every object's constants are uploaded once per frame and each draw binds its block by offset instead of updating a constant buffer per draw (about 3,500 updates a frame): the same pixels for less CPU. Needs Direct3D 11.1 constant-buffer offsetting; where the driver or an interposer says no, the log records why and every draw takes the old path anyway. Tick to force the old path and A/B."));
-		ImGui::Checkbox(T(TKEY("cluster_cull_disabled"), "Object Snow: Disable Cluster Culling"), &clusterCullDisabled);
-		if (auto _ttCluster = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("cluster_cull_disabled_tooltip"), "Measurement aid: draws every visible object's snow layer whole. The game merges whole neighbourhoods into single objects, so an object that is mostly hidden behind a hill is still drawn entire - and because you are standing inside its bounds, the per-object test above cannot reject it. With this on, each object is cut into small pieces of surface, each piece is checked against the same far-depth map, and only the pieces that could show are drawn. Hidden pieces produce no pixels either way, so nothing changes on screen. The line below counts the triangles that survived."));
-
-		if (ImGui::Button(T(TKEY("land_tri_probe"), "Probe Landscape Triangulation")))
-			landTriProbeArmed = true;
-		if (auto _ttLandProbe = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("land_tri_probe_tooltip"), "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log."));
-		if (landTriProbeArmed)
-			ImGui::TextUnformatted("probe: armed, waiting for a landscape draw");
-		else if (!landTriProbeResult.empty())
-			ImGui::TextWrapped("%s", landTriProbeResult.c_str());
-		if (ImGui::Button(T(TKEY("fine_probe"), "Probe Land-Exact Layer")))
-			fineProbeArmed = true;
-		if (auto _ttFineProbe = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fine_probe_tooltip"), "Diagnostic: reads the land-exact height layer back from the GPU and checks it three ways - the terrain window against the baked cell data, the fine texture against a CPU copy of the pass that builds it, and the shader's own lookup along your line of sight against the same rule evaluated from the cells. Stand facing the ground you are asking about; the result appears here and in the log."));
-		if (fineProbeArmed)
-			ImGui::TextUnformatted("fine probe: armed");
-		else if (!fineProbeResult.empty())
-			ImGui::TextWrapped("%s", fineProbeResult.c_str());
-		// CPU census (PERF-RESEARCH §11.1), 30-frame averages. The hook line
-		// is the one cost no profiler row carries.
-		{
-			const auto& s = cpuShown;
-			ImGui::Text("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
-				s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
-			ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates | caster %.0f draws, %.0f CB updates over %.0f passes",
-				s.skinLoopDraws, s.skinLoopCBUpdates, s.casterDraws, s.casterCBUpdates, s.casterPasses);
-			ImGui::Text("Capture hash %016llX over %u skins", (unsigned long long)cpuCensus.captureHash, cpuCensus.captureCount);
-			ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
-			ImGui::SameLine();
-			if (ImGui::Button("Dump Stamp Hash Ring"))
-				cpuCensus.stampHashDumpRequested = true;
-			if (auto _ttRing = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("stamp_hash_ring_tooltip"), "Writes the last 300 frames' stamp checksums to the log. Record one with a lever off and one with it on, in the same scene with the same motion; matching sequences mean the change did not touch what reaches the deformation map."));
-		}
-		if (!skinCullDisabled) {
-			const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
-			ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",
-				skinCullDrawnLast, skinCullCulledLast, total,
-				total ? 100.0 * skinCullCulledLast / total : 0.0);
-			ImGui::Text("  clusters: %u skins cut, %.2f M of %.2f M triangles drawn, scratch %.2f M indices",
-				clusterSkinsLast, skinCullTrisDrawnLast / 1e6, skinCullTrisTotalLast / 1e6, clusterScratchUsedLast / 1e6);
-			ImGui::Text("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
-				skinCullReasonLast[0], skinCullReasonLast[1] + skinCullReasonLast[6] + skinCullReasonLast[7],
-				skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
-				skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
-				skinCullHiZTopLast);
-		}
-
-		ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Shell: Disable Split Draw"), &shellSplitDisabled);
-		if (auto _ttSplit = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
-
-		ImGui::Checkbox(T(TKEY("shell_depth_clamp_disabled"), "Shell: Disable Depth Clamp"), &shellDepthClampDisabled);
-		if (auto _ttClampDbg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_depth_clamp_disabled_tooltip"), "Measurement aid, demoted from a setting: drops the shell's SV_DepthLessEqual export outright - one no-export draw, early-Z everywhere, and NO far-field clamp, so distant z-fighting returns while it is on. With the split draw on by default there is no configuration where this is a good trade; it exists to A/B what the clamp costs. Recompiles the shell PS on toggle."));
-
-		ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Object Snow: Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike);
-		if (auto _ttEZS = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("statics_earlyz_spike_tooltip"), "Measurement aid: forces the no-depth pixel shader onto EVERY object-snow draw, roads included. Normally only draws that can carve keep the depth export, which is already the bulk of the win at no visual cost; this shows the remaining ceiling. UPPER BOUND, not a clean A/B - the carve projects its parallax hit into that depth, so on roads this changes which pixels survive as well as what they cost, and their trench relief goes flat while it is on."));
-
-		ImGui::Checkbox(T(TKEY("debug_overlay"), "Debug Terrain Overlay"), &debugTerrainOverlay);
-		if (auto _tt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
-
-		ImGui::Checkbox(T(TKEY("debug_tiling_ruler"), "Debug Tiling Ruler"), &debugTilingRuler);
-		if (auto _ttRuler = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
-
-		// The three projected-snow debug tints live under Object Snow below
-		// (Josef's cleanup, 2026-09-06); the counters stay here.
-		ImGui::Text("Projected match, last frame: %u classified / %u no projection / %u vetoed",
-			statProjMatchedPrev, statProjNoProjectionPrev, statProjVetoedPrev);
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_object_snow"), "Object Snow"));
-
-		{
-			const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
-			ImGui::Combo(T(TKEY("statics_debug_view"), "Object Snow Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
-			if (auto _ttDbgView = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports."));
-#if !SNOW_ALPHA_BUILD
-			ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Debug Snow Fill Coverage"), &debugProjFillView);
-			if (auto _ttFillDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
-			ImGui::Checkbox(T(TKEY("debug_proj_weight"), "Debug Recolor Weight"), &debugProjWeightView);
-			if (auto _ttWeightDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid, Snow Fill included; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));
-			ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Debug Projected Snow Match"), &debugProjSnowView);
-			if (auto _ttProjDbg = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
-#endif
-			// Height-field probe: the seven object maps under the player's
-			// feet, one frame old. The numbers behind every layer/height
-			// question - tops per peeled layer, the depth cones, and the
-			// bridged surface. Sentinels (no data) print as '-'.
-			if (probeValid) {
-				auto fmtHeight = [](float v, char* out, size_t n) {
-					if (v < -50000.0f || v > 50000.0f)
-						snprintf(out, n, "-");
-					else
-						snprintf(out, n, "%.0f", v);
-				};
-				char l1[16], l2[16], l3[16];
-				fmtHeight(probeVals[0], l1, sizeof(l1));
-				fmtHeight(probeVals[1], l2, sizeof(l2));
-				fmtHeight(probeVals[2], l3, sizeof(l3));
-				char probeLine1[160], probeLine2[160];
-				snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s  L3 %s", probeWorldPos.z, l1, l2, l3);
-				snprintf(probeLine2, sizeof(probeLine2), "cone depths: L1 %.1f  L2 %.1f  L3 %.1f", probeVals[3], probeVals[4], probeVals[5]);
-				ImGui::TextUnformatted(probeLine1);
-				ImGui::TextUnformatted(probeLine2);
+				// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
+				// can be trusted. It is the store's own answer to "what does the
+				// window look like", which is exactly the question a reload raises.
+				if (trenchInjectSRV) {
+					ImGui::Text("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
+					ImGui::Image(trenchInjectSRV.get(), { 512.0f, 512.0f });
+				}
 			}
-			if (auto _ttSdv = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));
+
+
+			// The count is the magnitude behind a map-active blocker: a handful of
+			// texels is a precision tail, millions is a logic bug. From the newest
+			// verdict, so it lags the dispatch by the readback ring.
+			ImGui::Checkbox(T(TKEY("debug_activity_view"), "Update Activity View"), &debugActivityView);
+			if (debugActivityView) {
+				ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
+				const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
+				if (activityViewSRV)
+					ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
+
+				const bool bboxValid = deformChangedTexels > 0 &&
+				                       deformChangedMinX <= deformChangedMaxX &&
+				                       deformChangedMinY <= deformChangedMaxY;
+				if (bboxValid && activityViewSRV) {
+					const float scale = 512.0f / std::max((float)deformMapDim, 1.0f);
+					auto* draw = ImGui::GetWindowDrawList();
+					draw->AddRect(
+						{ activityTopLeft.x + (float)deformChangedMinX * scale - 2.0f,
+							activityTopLeft.y + (float)deformChangedMinY * scale - 2.0f },
+						{ activityTopLeft.x + (float)(deformChangedMaxX + 1) * scale + 2.0f,
+							activityTopLeft.y + (float)(deformChangedMaxY + 1) * scale + 2.0f },
+						IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+				}
+
+				// The mean delta is the fingerprint: the slump step is
+				// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
+				// Snow Slumping slider; storage-precision creep is an order
+				// smaller and scales with nothing.
+				ImGui::Text("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/deposit %u), mean delta %.5f",
+					deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
+					deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
+				if (bboxValid) {
+					const float texel = deformWorldSize / std::max((float)deformMapDim, 1.0f);
+					const float cx = ((float)(deformChangedMinX + deformChangedMaxX) * 0.5f + 0.5f) * texel;
+					const float cy = ((float)(deformChangedMinY + deformChangedMaxY) * 0.5f + 0.5f) * texel;
+					const float half = deformWorldSize * 0.5f;
+					ImGui::Text("Bbox: (%u,%u)-(%u,%u), %.1f x %.1f m, centre %.1f m E / %.1f m N of camera",
+						deformChangedMinX, deformChangedMinY, deformChangedMaxX, deformChangedMaxY,
+						(float)(deformChangedMaxX - deformChangedMinX + 1) * texel / kUnitsPerMeter,
+						(float)(deformChangedMaxY - deformChangedMinY + 1) * texel / kUnitsPerMeter,
+						(cx - half) / kUnitsPerMeter, (cy - half) / kUnitsPerMeter);
+				}
+			}
+
+
+			if (deformIdleSkipped) {
+				if (deformSkipRate >= 0.0f)
+					ImGui::Text("Update pass: idle (skipped) - %.0f%% of last 300 frames", deformSkipRate * 100.0f);
+				else
+					ImGui::Text("Update pass: idle (skipped)");
+			} else {
+				static const char* kBlockerNames[9] = { "scroll", "stamps", "waves", "inject", "refill", "clear", "map-active", "verdict-stale", "contact" };
+				std::string held;
+				for (int bit = 0; bit < 9; bit++)
+					if (deformIdleBlockers & (1u << bit)) {
+						if (!held.empty())
+							held += ", ";
+						held += kBlockerNames[bit];
+					}
+				if (debugForceDeformationUpdate)
+					held = held.empty() ? "forced" : "forced, " + held;
+				if (deformSkipRate >= 0.0f)
+					ImGui::Text("Update pass: running (%s) - skipped %.0f%% of last 300 frames",
+						held.empty() ? "none - engages next verdict" : held.c_str(), deformSkipRate * 100.0f);
+				else
+					ImGui::Text("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
+				// Within a running frame the evolve pass has its own gate: idle
+				// means its last full run changed nothing and no external write
+				// (ring inject, stamps) or refill has re-armed it - the ring and
+				// stamp passes are the only cost while walking settled ground.
+				ImGui::Text("Evolve pass: %s", evolveIdleLastFrame ? "idle (settled)" : "active");
+			}
+
+			if (deformSkipRate >= 0.0f) {
+				// The flicker census: count changes are stamps appearing or
+				// vanishing (plant-band flicker), drift is a matched stamp moving
+				// past tolerance. Either resets the quiet window.
+				ImGui::Text("Stamp set changes: %u/300 frames (count %u, drift %u)",
+					stampSetCountChanges + stampSetDriftChanges, stampSetCountChanges, stampSetDriftChanges);
+			}
+
+			{
+				// The tile census: dispatch domain vs the whole map. Cost should
+				// track these counts; if it does not, the force-all-dirty toggle
+				// is the discriminator.
+				const uint32_t totalTiles = (deformMapDim / 8) * (deformMapDim / 8);
+				if (debugForceAllTilesDirty)
+					ImGui::Text("Stamp tiles: forced to full map (%u tiles)", totalTiles);
+				else if (stampTilesLast > kStampTileCap)
+					ImGui::Text("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
+				else
+					ImGui::Text("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
+				// Occupied + slump halo and changed + tap halo, from the last
+				// executed scans (lag by the readback ring, like the verdict).
+				ImGui::Text("Evolve tiles: %u of %u", evolveTilesLast, totalTiles);
+				ImGui::Text("Berm tiles: %u of %u", bermTilesLast, totalTiles);
+			}
+
+
+			{
+				// One tile is 512 world units square, only trodden ground has one,
+				// and refill deletes the ones it takes back to bare snow. Occupancy
+				// separates real trails from tiles a shallow refill residue is
+				// keeping alive: a high thin count wants a bigger store epsilon,
+				// not a faster fade.
+				const auto stats = GetTrenchStoreStats();
+				ImGui::Text("Trench store: %zu tiles, %.1f KB raw, %.1f%% full, %zu thin",
+					stats.tiles, (double)stats.bytes / 1024.0, stats.occupancy * 100.0f, stats.thin);
+				// Encoded is the number that matters: it is what a save will cost
+				// once Stage C writes it, and what the budget is spent in.
+				ImGui::Text("Save cost: %.0f KB of %.0f KB budget (%.0fx vs raw)",
+					(double)stats.encoded / 1024.0,
+					(double)settings.TrenchMemoryMB * 1024.0,
+					stats.encoded ? (double)stats.bytes / (double)stats.encoded : 0.0);
+			}
+
+			ImGui::TreePop();
 		}
 
-		ImGui::SeparatorText(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"));
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_lod"), "Distant Snow & LOD"))) {
+			{
+				std::string lodModes;
+				lodModes += T(TKEY("lod_debug_off"), "Off");
+				lodModes += '\0';
+				lodModes += T(TKEY("lod_debug_heatmap"), "Depth Delta Heatmap");
+				lodModes += '\0';
+				lodModes += T(TKEY("lod_debug_rings"), "Vertex Spacing Bands");
+				lodModes += '\0';
+				lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
+				lodModes += '\0';
+				lodModes += T(TKEY("lod_debug_fine_delta"), "Land-Exact Delta");
+				lodModes += '\0';
+				ImGui::Combo(T(TKEY("lod_debug_view"), "Debug View"), &lodDebugView, lodModes.c_str());
+				if (auto _ttLod = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Band View: the shell's VERTEX SPACING, not its depth - gray 8 units, yellow 16, green 32, cyan 64, blue 128 (the landscape's own vertex spacing), magenta coarser still. Each band brightens toward its outer edge. The bands are world-anchored: they must sit still on the ground as you move, and stripes that crawl mean the band table has lost its lattice alignment. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
 
-		{
-			std::string lodModes;
-			lodModes += T(TKEY("lod_debug_off"), "Off");
-			lodModes += '\0';
-			lodModes += T(TKEY("lod_debug_heatmap"), "Depth Delta Heatmap");
-			lodModes += '\0';
-			lodModes += T(TKEY("lod_debug_rings"), "Vertex Spacing Bands");
-			lodModes += '\0';
-			lodModes += T(TKEY("lod_debug_provenance"), "Terrain Data Provenance");
-			lodModes += '\0';
-			lodModes += T(TKEY("lod_debug_fine_delta"), "Land-Exact Delta");
-			lodModes += '\0';
-			ImGui::Combo(T(TKEY("lod_debug_view"), "Distant Debug View"), &lodDebugView, lodModes.c_str());
-			if (auto _ttLod = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_debug_view_tooltip"), "Heatmap: colors the shell by its vertical gap to the rendered ground (reds = buried, yellow = z-fight range, greens/blues = clearance) and fills the histogram below. Band View: the shell's VERTEX SPACING, not its depth - gray 8 units, yellow 16, green 32, cyan 64, blue 128 (the landscape's own vertex spacing), magenta coarser still. Each band brightens toward its outer edge. The bands are world-anchored: they must sit still on the ground as you move, and stripes that crawl mean the band table has lost its lattice alignment. Provenance: green = baked terrain data, red sheet = no data (unvisited cells)."));
-
-			// Diagnostics below use plain text by existing convention (no i18n).
-			if (lodDebugView == 1) {
-				static const char* kBandLabels[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
-				static const char* kBucketLabels[kLODHistBuckets] = { "<-32", "-32..-8", "-8..-2", "+-2", "2..8", "8..32", "32..128", ">128" };
-				if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
-					ImGui::TableNextRow();
-					ImGui::TableNextColumn();
-					ImGui::Text("units");
-					ImGui::TableNextColumn();
-					ImGui::Text("pixels");
-					for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
-						ImGui::TableNextColumn();
-						if (bucketI == 3)
-							ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", kBucketLabels[bucketI]);
-						else
-							ImGui::Text("%s", kBucketLabels[bucketI]);
-					}
-					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+				// Diagnostics below use plain text by existing convention (no i18n).
+				if (lodDebugView == 1) {
+					static const char* kBandLabels[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
+					static const char* kBucketLabels[kLODHistBuckets] = { "<-32", "-32..-8", "-8..-2", "+-2", "2..8", "8..32", "32..128", ">128" };
+					if (ImGui::BeginTable("##lodhist", kLODHistBuckets + 2, ImGuiTableFlags_Borders | ImGuiTableFlags_SizingFixedFit)) {
 						ImGui::TableNextRow();
 						ImGui::TableNextColumn();
-						ImGui::Text("%s", kBandLabels[bandI]);
-						uint64_t bandTotal = 0;
-						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI)
-							bandTotal += lodHistData[bandI * kLODHistBuckets + bucketI];
-						// Raw sample size: percent-only misleads when a band
-						// holds a handful of pixels.
+						ImGui::Text("units");
 						ImGui::TableNextColumn();
-						ImGui::Text("%llu", (unsigned long long)bandTotal);
+						ImGui::Text("pixels");
 						for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
 							ImGui::TableNextColumn();
-							const float pct = bandTotal ? 100.0f * lodHistData[bandI * kLODHistBuckets + bucketI] / bandTotal : 0.0f;
-							if (bucketI == 3 && pct >= 0.05f)
-								ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%.1f%%", pct);
+							if (bucketI == 3)
+								ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%s", kBucketLabels[bucketI]);
 							else
-								ImGui::Text("%.1f%%", pct);
+								ImGui::Text("%s", kBucketLabels[bucketI]);
 						}
-					}
-					ImGui::EndTable();
-				}
-				ImGui::Text("Rows: camera distance bands. Columns: shell minus rendered ground, world units (share of band pixels).");
-			}
-
-			ImGui::Checkbox(T(TKEY("lod_no_far_pad"), "A/B: No Far Height Pad"), &lodDebugNoFarPad);
-			if (auto _ttNoPad = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_no_far_pad_tooltip"), "Disables the far-field height pad (the neighbour-max plus ridge pad past 3000 units), which scales with VIEWING DISTANCE and so moves distant ground as you walk toward it. Off is the shipped behaviour. Expect pinholes to come back if the pad was the thing hiding them - read the shimmer meter, not the holes."));
-
-			ImGui::Checkbox(T(TKEY("lod_no_data_morph"), "A/B: No Data Morph"), &lodDebugNoDataMorph);
-			if (auto _ttNoMorph = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_no_data_morph_tooltip"), "Disables the coarse-lattice data morph, so every shell vertex reads its own fine-lattice terrain height. Off is the shipped behaviour. The morph blends height by ring index, which is a camera-distance term, so this is the other half of the distant up/down test."));
-
-			ImGui::Checkbox(T(TKEY("lod_shimmer"), "Far-Field Shimmer Meter"), &lodShimmerMeter);
-			if (auto _ttShimmer = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("lod_shimmer_tooltip"), "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field."));
-			if (lodShimmerMeter) {
-				static const char* kShimmerBands[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
-				if (ImGui::Button("Reset Shimmer Window")) {
-					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-						lodShimmerRunMax[bandI] = 0.0f;
-						lodShimmerRunSum[bandI] = 0.0;
-						lodShimmerRunCnt[bandI] = 0;
-						lodShimmerRunHops[bandI] = 0;
-					}
-					lodShimmerRunFrames = 0;
-					lodSeamChanges = 0;
-					lodWindowRebuilds = 0;
-				}
-				ImGui::SameLine();
-				ImGui::Text("%u frames measured", lodShimmerRunFrames);
-				for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
-					const double runAvg = lodShimmerRunCnt[bandI] ? lodShimmerRunSum[bandI] / (double)lodShimmerRunCnt[bandI] : 0.0;
-					char overlay[128];
-					snprintf(overlay, sizeof(overlay), "%s: PEAK %.2f  mean %.3f  hops %u  (now %.2f, %u valid)",
-						kShimmerBands[bandI], lodShimmerRunMax[bandI], runAvg, lodShimmerRunHops[bandI],
-						lodShimmerMax[bandI], lodShimmerValid[bandI]);
-					char plotId[16];
-					snprintf(plotId, sizeof(plotId), "##shim%u", bandI);
-					ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
-						overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
-				}
-				ImGui::Text("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
-				ImGui::Text("Discrete events since reset: seam square %u, terrain window rebuilds %u", lodSeamChanges, lodWindowRebuilds);
-			}
-		}
-
-		ImGui::SeparatorText(T(TKEY("debug_cat_stats"), "Statistics"));
-		// Diagnostics: plain text by existing convention (no i18n).
-		ImGui::Text("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (refs at last scan %u, movers %u, scan every 6 frames)",
-			stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
-			propScanRefs, stampStats.propMovers);
-		ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
-		ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
-			settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");
-		{
-			static const char* kSnowGateNames[] = {
-				"running (snowy cell in reach)",
-				"running (unbaked ground in reach, assumed snow)",
-				"suspended (all ground in reach known bare)"
-			};
-			ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
-		}
-
-		ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
-		ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
-		ImGui::Checkbox("Actor mesh contact (actors and corpses carve by their render mesh; off = bones)", &debugActorContact);
-		ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
-		ImGui::SliderInt("Solo skinned geometry (-1 = all; step through to find whose silhouette is wide)", &debugContactSolo, -1, 31);
-		if (debugContactSolo >= 0)
-			ImGui::Text("  soloed: %s", contactSoloName.c_str());
-		if (debugContactView) {
-			ImGui::SliderFloat("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
-			ImGui::Checkbox("Still bodies skip the draw (A/B; off = every rasterized actor draws every frame)", &debugContactStillGate);
-			const float viewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-			ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
-				2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
-			if (contactViewSRV) {
-				const float scale = 512.0f / (2.0f * viewHalf);
-				const float2 center = contactViewCenter;
-				auto drawHalf = [&](float a_v0, float a_v1) {
-					const ImVec2 topLeft = ImGui::GetCursorScreenPos();
-					// The crop is the left 512 texels of the 1024-wide view.
-					ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 0.5f, a_v1 });
-					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-						if (auto* root = player->Get3D(false)) {
-							const auto& bound = root->worldBound;
-							auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
-							auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
-							ImGui::GetWindowDrawList()->AddRect(
-								{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
-								{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
-								IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
-							// Bone positions over the silhouette: feet white, hands cyan,
-							// head/spine magenta. A mesh stretched against its own bones
-							// shows as a silhouette reaching past them.
-							struct BoneDot { const char* name; ImU32 color; };
-							static const BoneDot dots[] = {
-								{ "NPC L Foot [Lft ]", IM_COL32(255, 255, 255, 255) }, { "NPC R Foot [Rft ]", IM_COL32(255, 255, 255, 255) },
-								{ "NPC L Hand [LHnd]", IM_COL32(80, 240, 255, 255) }, { "NPC R Hand [RHnd]", IM_COL32(80, 240, 255, 255) },
-								{ "NPC Head [Head]", IM_COL32(255, 80, 255, 255) }, { "NPC Spine2 [Spn2]", IM_COL32(255, 80, 255, 255) },
-								{ "NPC L Calf [LClf]", IM_COL32(200, 200, 200, 255) }, { "NPC R Calf [RClf]", IM_COL32(200, 200, 200, 255) },
-							};
-							for (const auto& dot : dots) {
-								if (auto* node = root->GetObjectByName(RE::BSFixedString(dot.name)))
-									ImGui::GetWindowDrawList()->AddCircle({ toX(node->world.translate.x), toY(node->world.translate.y) }, 4.0f, dot.color, 0, 1.5f);
+						for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+							ImGui::TableNextRow();
+							ImGui::TableNextColumn();
+							ImGui::Text("%s", kBandLabels[bandI]);
+							uint64_t bandTotal = 0;
+							for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI)
+								bandTotal += lodHistData[bandI * kLODHistBuckets + bucketI];
+							// Raw sample size: percent-only misleads when a band
+							// holds a handful of pixels.
+							ImGui::TableNextColumn();
+							ImGui::Text("%llu", (unsigned long long)bandTotal);
+							for (uint32_t bucketI = 0; bucketI < kLODHistBuckets; ++bucketI) {
+								ImGui::TableNextColumn();
+								const float pct = bandTotal ? 100.0f * lodHistData[bandI * kLODHistBuckets + bucketI] / bandTotal : 0.0f;
+								if (bucketI == 3 && pct >= 0.05f)
+									ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "%.1f%%", pct);
+								else
+									ImGui::Text("%.1f%%", pct);
 							}
 						}
+						ImGui::EndTable();
 					}
-				};
-				drawHalf(0.0f, 0.5f);
-				drawHalf(0.5f, 1.0f);
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-					if (auto* root = player->Get3D(false))
-						ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
-							root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(), contactCenter.x, contactCenter.y,
-							contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
+					ImGui::Text("Rows: camera distance bands. Columns: shell minus rendered ground, world units (share of band pixels).");
 				}
-				// Heights against the baked ground: what the carve's (contact - ground) / layer
-				// sees, in numbers. Red arms with hands 60 units up means the raster's Z
-				// or the ground sample is wrong, not the silhouette.
-				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-					if (auto* root = player->Get3D(false)) {
-						const auto probe = ProbeShellData(player->GetPositionX(), player->GetPositionY());
-						ImGui::Text("  ground at player (baked vertex): %.1f, layer %.1f | player Z %.1f (%.1f above ground)",
-							probe.height, probe.rampDepth, player->GetPositionZ(), player->GetPositionZ() - probe.height);
-						static const char* heightBones[] = { "NPC L Foot [Lft ]", "NPC R Foot [Rft ]", "NPC L Hand [LHnd]", "NPC R Hand [RHnd]", "NPC Head [Head]" };
-						std::string line = "  bone Z above ground:";
-						for (const char* name : heightBones) {
-							if (auto* node = root->GetObjectByName(RE::BSFixedString(name)))
-								line += std::format(" {} {:.0f} |", name, node->world.translate.z - probe.height);
+
+				ImGui::Checkbox(T(TKEY("lod_no_far_pad"), "A/B: No Far Height Pad"), &lodDebugNoFarPad);
+				if (auto _ttNoPad = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("lod_no_far_pad_tooltip"), "Disables the far-field height pad (the neighbour-max plus ridge pad past 3000 units), which scales with VIEWING DISTANCE and so moves distant ground as you walk toward it. Off is the shipped behaviour. Expect pinholes to come back if the pad was the thing hiding them - read the shimmer meter, not the holes."));
+
+				ImGui::Checkbox(T(TKEY("lod_no_data_morph"), "A/B: No Data Morph"), &lodDebugNoDataMorph);
+				if (auto _ttNoMorph = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("lod_no_data_morph_tooltip"), "Disables the coarse-lattice data morph, so every shell vertex reads its own fine-lattice terrain height. Off is the shipped behaviour. The morph blends height by ring index, which is a camera-distance term, so this is the other half of the distant up/down test."));
+
+				ImGui::Checkbox(T(TKEY("lod_shimmer"), "Far-Field Shimmer Meter"), &lodShimmerMeter);
+				if (auto _ttShimmer = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("lod_shimmer_tooltip"), "Evaluates the shell mesh surface at fixed world-anchored probe rings each frame and plots the frame-to-frame height change per distance band. Move the camera: spikes are vertex hops (the distant up/down shifting). Near-zero everywhere = stable far field."));
+				if (lodShimmerMeter) {
+					static const char* kShimmerBands[kLODHistBands] = { "0-4k", "4-8k", "8-16k", "16k+" };
+					if (ImGui::Button("Reset Shimmer Window")) {
+						for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+							lodShimmerRunMax[bandI] = 0.0f;
+							lodShimmerRunSum[bandI] = 0.0;
+							lodShimmerRunCnt[bandI] = 0;
+							lodShimmerRunHops[bandI] = 0;
 						}
-						ImGui::TextUnformatted(line.c_str());
+						lodShimmerRunFrames = 0;
+						lodSeamChanges = 0;
+						lodWindowRebuilds = 0;
 					}
+					ImGui::SameLine();
+					ImGui::Text("%u frames measured", lodShimmerRunFrames);
+					for (uint32_t bandI = 0; bandI < kLODHistBands; ++bandI) {
+						const double runAvg = lodShimmerRunCnt[bandI] ? lodShimmerRunSum[bandI] / (double)lodShimmerRunCnt[bandI] : 0.0;
+						char overlay[128];
+						snprintf(overlay, sizeof(overlay), "%s: PEAK %.2f  mean %.3f  hops %u  (now %.2f, %u valid)",
+							kShimmerBands[bandI], lodShimmerRunMax[bandI], runAvg, lodShimmerRunHops[bandI],
+							lodShimmerMax[bandI], lodShimmerValid[bandI]);
+						char plotId[16];
+						snprintf(plotId, sizeof(plotId), "##shim%u", bandI);
+						ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
+							overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
+					}
+					ImGui::Text("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
+					ImGui::Text("Discrete events since reset: seam square %u, terrain window rebuilds %u", lodSeamChanges, lodWindowRebuilds);
 				}
-			} else {
-				ImGui::Text("(no field this frame)");
 			}
+
+			ImGui::TreePop();
 		}
-		if (debugActorContact)
-			ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u standing still (not drawn), %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
-				stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactStillLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
-		ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
-		ImGui::Checkbox("Skeleton Probe (nearest NPC)", &debugSkeletonProbe);
-		if (debugSkeletonProbe) {
+
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell"), "Landscape Shell"))) {
+			ImGui::Checkbox(T(TKEY("shell_march_bicubic"), "Bicubic March"), &shellMarchBicubicRestored);
+			if (auto _ttMarch = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Bilinear Terrain Height"), &shellBilinearHeight);
+			if (auto _ttBilin = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_border_debug"), "Border Debug Plane"), &shellBorderDebug);
+			if (auto _ttBdbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_border_debug_tooltip"), "False-color plane of the border fields: dark red = designed bare (below -0.5), orange = slice ribbon zone (-0.5..1), green = the cut zone (1..3, white line at the cut contour), cyan/blue = deeper snow. Brightness = snow grain; magenta grid = land grain data present at that pixel."));
+
+			ImGui::Checkbox(T(TKEY("shell_data_debug"), "Data Debug Plane"), &shellDataDebug);
+
+			if (auto _ttPlane = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_data_debug_tooltip"), "Renders the shell as an always-visible conforming plane colored by the terrain data it samples: red = height, green = snow coverage, blue = ramp depth. Black = no data reaches the shader."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_main_viewport_range_disabled"), "Decal Viewport Depth Range"), &shellMainViewportRangeDisabled);
+			if (auto _ttVpRange = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_main_viewport_range_disabled_tooltip"), "Measurement aid: draws every shell through the viewport bound when the deferred span ends (the blended decals' cap, max depth ~3e-5 under the main pass's) instead of the main pass's own depth range. That cap used to put every shell slightly nearer than its object - a third of a unit on a rock at 4 m, thousands of units on a mountain at 450 m. Off, shells write the same depth the game wrote for the same mesh. Flip it with the camera held still to read what the range fix changed about distant object snow."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_berm_bake_disabled"), "Disable Berm Bake"), &shellBermBakeDisabled);
+			if (auto _ttBerm = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
+
+
+			ImGui::Checkbox(T(TKEY("caster_cull_disabled"), "Disable Caster Culling"), &casterCullDisabled);
+			if (auto _ttCasterCull = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("caster_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object into every shadow cascade, as it worked before. With culling on, an object whose bounding sphere lies entirely outside a cascade's box is skipped for that cascade only - it could not have darkened a single texel of it, so the shadow maps come out identical. The census below counts what was skipped."));
+
+			if (!casterCullDisabled) {
+				const uint32_t total = casterSkinsCulledLast + casterSkinsDrawnLast;
+				ImGui::Text("Caster skins: %u drawn, %u culled of %u across cascades (%.0f%% skipped)",
+					casterSkinsDrawnLast, casterSkinsCulledLast, total,
+					total ? 100.0 * double(casterSkinsCulledLast) / double(total) : 0.0);
+			}
+
+
+			ImGui::Checkbox(T(TKEY("shell_depth_clamp_disabled"), "Disable Depth Clamp"), &shellDepthClampDisabled);
+			if (auto _ttClampDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_depth_clamp_disabled_tooltip"), "Measurement aid, demoted from a setting: drops the shell's SV_DepthLessEqual export outright - one no-export draw, early-Z everywhere, and NO far-field clamp, so distant z-fighting returns while it is on. With the split draw on by default there is no configuration where this is a good trade; it exists to A/B what the clamp costs. Recompiles the shell PS on toggle."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_depth_prepass_disabled"), "Disable Depth Prepass"), &shellDepthPrepassDisabled);
+			if (auto _ttPrepass = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_depth_prepass_disabled_tooltip"), "Measurement aid: returns the tessellated shell to its earlier near/far split draws. With the prepass on, a cheap depth-only draw decides which pixels the shell owns and the full shader then runs once per owned pixel instead of once per rasterised fragment - fragments hidden by the scene, by the shell's own slopes, or cut by the alpha test never shade. Same depth, same alpha decision, same look; hold the camera still and read the Shell row and the pipeline statistics."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_distant_exclusions_disabled"), "Disable Distant Clearings"), &shellDistantExclusionsDisabled);
+			if (auto _ttExclusionField = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_distant_exclusions_disabled_tooltip"), "Comparison aid: gates the wide exclusion field off, so campfire, workspace, bedroll and doorway clearings again stop at the object height window (about 57 m) and snow closes over them beyond it. Shelter under roofs and tents is unaffected either way - it needs the near window's geometry render."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_far_tess_disabled"), "Disable Far Relief Tessellation"), &shellFarTessDisabled);
+			if (auto _ttFarTess = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_far_tess_disabled_tooltip"), "A/B: beyond about 1,900 units the shell's squares are 64 and 128 units wide and span several of the ground's own squares, so a straight span across a convex slope dips below the ground - the distant holes. With this off, the shell checks each far square against the real ground and subdivides the ones where the ground bulges above the span, so every added vertex sits exactly on the ground; flat ground costs nothing. On restores the plain squares."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_frustum_cull_disabled"), "Disable Frustum Cull"), &shellFrustumCullDisabled);
+			if (auto _ttFrustum = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_frustum_cull_disabled_tooltip"), "Measurement aid: builds the whole snow grid every frame, including the three quarters of it that lie outside the view. Snow you cannot see draws no pixels either way - the card throws those triangles away - so skipping them earlier changes nothing on screen, and it saves the subdivision and the map sampling they would have cost. Shadows are unaffected: snow behind the camera is drawn separately from the sun's point of view and is never skipped. Hold the camera still and read the Shell row and the pipeline statistics."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_land_height_disabled"), "Disable Land-Exact Height"), &shellLandHeightDisabled);
+			if (auto _ttLand = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_land_height_disabled_tooltip"), "A/B: returns the snow shell to standing on a straight line between the terrain's 128-unit height samples. The game itself renders the ground as a smooth curve through those samples at four times the detail, and on steep ground the curve rises above the line by more than the snow is deep - the holes where rock shows through. With this off, the shell stands on the ground exactly as the game draws it."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_split_disabled"), "Disable Split Draw"), &shellSplitDisabled);
+			if (auto _ttSplit = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_split_disabled_tooltip"), "Measurement aid: returns the shell to a single draw that exports depth everywhere, which is how it worked before the split. With the split on, patches inside the far-clamp distance are drawn by a shader with no depth export so the GPU can reject hidden pixels before shading them, and only the far field keeps the export. The snow looks the same either way; hold the camera still and toggle to read what the split is worth. Does nothing while Depth Clamp is off - that is already a single no-export draw."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_undulation_bake_disabled"), "Disable Undulation Bake"), &shellUndulationBakeDisabled);
+			if (auto _ttUndBake = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_undulation_bake_disabled_tooltip"), "Measurement aid: returns both shells to evaluating the dune field's two noise octaves live - one eval per vertex and march tap, four per shaded pixel - instead of reading the baked map. The snow looks the same; Shell and Object Snow get slower. Hold the camera still and toggle to read the trade."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_vertex_bake_disabled"), "Disable Vertex Bake"), &shellVertexBakeDisabled);
+			if (auto _ttBake = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_vertex_bake_disabled_tooltip"), "Measurement aid: returns the tessellated shell to evaluating its surface live at every vertex. With the bake on, a compute pass evaluates each base-grid vertex once per frame and the domain shader reads the result by index - the same function at full float precision, so the surface is bit-identical - while vertices that tessellation adds inside a patch stay live. Hold the camera still and read the Shell row plus the ShellVertexBake row against the Shell row alone."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_exclusion_debug"), "Exclusion Debug Plane"), &shellExclusionDebug);
+			if (auto _ttExcl = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_exclusion_debug_tooltip"), "Paints the exclusion channels on the debug plane: red = drift bank lift, green = melt fraction (fires, workspaces, sheltered ground), blue = door suppression. Black = untouched. The Data Debug Plane wins when both are on."));
+
+			ImGui::Checkbox(T(TKEY("shell_flat_ds_debug"), "Flat Domain Shader"), &shellFlatDSDebug);
+			if (auto _ttFlatDS = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_flat_ds_debug_tooltip"), "Measurement aid, WRONG-LOOKING BY DESIGN: the tessellated shell's domain shader returns terrain height plus class depth with none of the field work (deformation, berms, undulation, bow wave, relief), so trenches and all surface detail vanish while it is on. Hold the camera still and read the Shell row: the drop is an upper bound on what the vertex stages cost, which decides whether evaluating the surface once per vertex is worth building. Tessellation must be on."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_tess_diagonal_flip"), "Flip Tessellated Diagonal"), &shellTessDiagonalFlip);
+			if (auto _ttDiag = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_tess_diagonal_flip_tooltip"), "Diagnostic for the tessellated shell: the ground splits each 32-unit square into two triangles along alternating diagonals, and the shell now matches that split. The hardware's own choice of diagonal is assumed; if a checkerboard of sag shows on the 32-unit band around 1,600-1,900 units in the height-delta view, this toggle is the other guess."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_grid_nonindexed"), "Non-indexed Grid Draws"), &shellGridNonIndexed);
+			if (auto _ttGridIdx = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_grid_nonindexed_tooltip"), "Measurement aid: draws the non-tessellated shell grid and the shell's shadow caster the old way, six vertices per quad with no index buffer, so every lattice vertex is evaluated six times. Off, both draws go through an index buffer and each vertex is evaluated once. Same triangles either way; hold the camera still and read ShellShadowCast (and Shell with Tessellation off)."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_old_union_jack"), "Old Union-Jack Grid"), &shellOldUnionJack);
+			if (auto _ttUJ = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_old_union_jack_tooltip"), "A/B for the non-tessellated grid: draws with the previous alternating diagonals, which did not follow the ground's own split, instead of the land-matched index buffer."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_pipeline_stats"), "Pipeline Statistics"), &shellPipelineStatsEnabled);
+			if (auto _ttStats = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_pipeline_stats_tooltip"), "Hardware pipeline-statistics and occlusion queries around the shell grid draws and the object-snow pass, read back two frames later without stalling. PS invocations divided by samples passed is how many pixel-shader runs each visible pixel costs - overdraw times quad overshade - the number that decides the far-field depth prepass and the triangle-sizing work. The DS/HS/VS counts check the geometry-stage arithmetic. With a depth prepass on, a line counts all of that pass's draws - the prepass's own cheap invocations and the fullscreen fills' samples are in there - so read the Shell and StaticsShell profiler rows as the verdict and these lines as the explanation."));
+
+			if (shellPipelineStatsEnabled) {
+				auto statsLine = [](const char* a_label, const ShellStatsResult& a_r) {
+					if (!a_r.valid) {
+						ImGui::Text("%s: waiting for query results", a_label);
+						return;
+					}
+					const double perVisible = a_r.samplesPassed ? static_cast<double>(a_r.psInvocations) / static_cast<double>(a_r.samplesPassed) : 0.0;
+					ImGui::Text("%s: PS %.2f M inv / %.2f M px visible = %.2f per px; prims %.2f M; VS %.2f M, HS %.2f M, DS %.2f M",
+						a_label,
+						a_r.psInvocations / 1e6, a_r.samplesPassed / 1e6, perVisible,
+						a_r.rasterizedPrimitives / 1e6,
+						a_r.vsInvocations / 1e6, a_r.hsInvocations / 1e6, a_r.dsInvocations / 1e6);
+				};
+				statsLine("Shell grid", shellStatsLast);
+				statsLine("Object snow", staticsStatsLast);
+			}
+
+
+			if (ImGui::Button(T(TKEY("fine_probe"), "Probe Land-Exact Layer")))
+				fineProbeArmed = true;
+			if (auto _ttFineProbe = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("fine_probe_tooltip"), "Diagnostic: reads the land-exact height layer back from the GPU and checks it three ways - the terrain window against the baked cell data, the fine texture against a CPU copy of the pass that builds it, and the shader's own lookup along your line of sight against the same rule evaluated from the cells. Stand facing the ground you are asking about; the result appears here and in the log."));
+
+			if (fineProbeArmed)
+				ImGui::TextUnformatted("fine probe: armed");
+			else if (!fineProbeResult.empty())
+				ImGui::TextWrapped("%s", fineProbeResult.c_str());
+
+			if (ImGui::Button(T(TKEY("land_tri_probe"), "Probe Landscape Triangulation")))
+				landTriProbeArmed = true;
+			if (auto _ttLandProbe = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("land_tri_probe_tooltip"), "Diagnostic: reads the next full-detail terrain mesh the game draws and reports how it splits each ground square into two triangles - always the same diagonal, alternating, or neither. The snow shell must split its squares the same way or it sags below the ground inside them on steep terrain. Stand in an exterior with terrain in view; the result appears here and in the log."));
+
+			if (landTriProbeArmed)
+				ImGui::TextUnformatted("probe: armed, waiting for a landscape draw");
+			else if (!landTriProbeResult.empty())
+				ImGui::TextWrapped("%s", landTriProbeResult.c_str());
+
+			ImGui::Checkbox(T(TKEY("shell_sss_debug"), "SSS Gate Debug"), &shellSSSDebug);
+			if (auto _ttSssDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
+
+			ImGui::Checkbox(T(TKEY("shell_caster_split"), "Split Caster Row"), &shellCasterSplitDebug);
+			if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));
+
+
+			ImGui::Checkbox(T(TKEY("debug_overlay"), "Terrain Overlay"), &debugTerrainOverlay);
+			if (auto _tt = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_overlay_tooltip"), "Paints diagnostics on terrain: red = outside deformation window, green = deformation, blue = detected snow."));
+
+
+			ImGui::Checkbox(T(TKEY("debug_tiling_ruler"), "Tiling Ruler"), &debugTilingRuler);
+			if (auto _ttRuler = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_tiling_ruler_tooltip"), "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_vertex_bake_check"), "Vertex Bake Mismatch View"), &shellVertexBakeCheck);
+			if (auto _ttBakeChk = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_vertex_bake_check_tooltip"), "Proof view for the vertex bake: the domain shader evaluates every baked corner live as well and lifts any vertex whose bits differ by 50 units, so a mismatch shows as an unmissable spike. A clean shell everywhere is the bit-identity guarantee, verified rather than assumed. Costs the live evaluation on top of the bake while on."));
+
+
+			ImGui::Checkbox(T(TKEY("shell_wall_debug"), "Wall Material Debug"), &shellWallDebug);
+			if (auto _ttWallDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
+
+			ImGui::Text("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
+				statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");
+
+			ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
+				dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
+
+
+			// Shell probe: what the landscape shell reads at the camera. A shell
+			// artifact that this call cannot account for is not the landscape
+			// shell - it is object snow, which the Object Snow debug view owns.
+			{
+				auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+				const ShellProbe probe = ProbeShellData(eye.x, eye.y);
+				const char* worldspaceName = "none";
+				if (auto* tes = RE::TES::GetSingleton())
+					if (auto* worldspace = tes->GetRuntimeData2().worldSpace)
+						worldspaceName = worldspace->GetFormEditorID();
+
+				ImGui::Text("Shell probe @ (%.0f, %.0f) cell (%d, %d) vertex (%d, %d)",
+					probe.worldX, probe.worldY, probe.cellX, probe.cellY, probe.vertexX, probe.vertexY);
+				ImGui::Text("  worldspace %08X %s, window built for %08X",
+					probe.activeWorldspaceID, worldspaceName, probe.windowWorldspaceID);
+				if (!probe.cellFound) {
+					ImGui::Text("  no baked cell: the shell has NO terrain data here");
+				} else if (!probe.worldspaceMatch) {
+					ImGui::Text("  cell baked in worldspace %08X: REJECTED, shell has no data here", probe.cellWorldspace);
+				} else {
+					ImGui::Text("  height %.0f, depth %.1f, coverage %.2f -> surface %.0f",
+						probe.height, probe.rampDepth, probe.coverage, probe.height + probe.rampDepth);
+					for (const auto& layer : probe.layers)
+						ImGui::Text("    %s x%.2f @ %.0f units", layer.label.c_str(), layer.weight, layer.depth);
+				}
+
+				// Object snow probe: which captured meshes cover this spot, largest
+				// first. Bound top Z against the camera height says whether one of
+				// them is the surface an artifact sits on.
+				const ObjectSnowProbe objects = ProbeObjectSnow(eye.x, eye.y);
+				ImGui::Text("Object snow probe: %zu captured this frame, %zu cover this spot (camera z %.0f)",
+					objects.captured, objects.overlapping, eye.z);
+				for (const auto& entry : objects.entries)
+					ImGui::Text("  %s r%.0f top %.0f (%.0f away)%s  %s",
+						entry.name.empty() ? "<unnamed>" : entry.name.c_str(),
+						entry.radius, entry.topZ, entry.distXY, entry.road ? " [road]" : "", entry.model.c_str());
+			}
+
+			ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
+				snowMasksSizeForUI(),
+				(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
+				(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
+
+			ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
+				ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
+				shellStatMinHeight, shellStatMaxHeight);
+
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"))) {
+			if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_cat_melt_emitter_tooltip"), "A stand-in heat source that answers to no spell at all. Kept for testing a mark on its own: when a school stops marking, this says whether the fault is in the detector or in the mark itself."));
+			if (ImGui::Button(T(TKEY("melt_emitter_drop"), "Drop Melt Emitter Here"))) {
+				if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+					debugMeltEmitterPos = player->GetPosition();
+					debugMeltEmitterActive = true;
+				}
+			}
 			ImGui::SameLine();
-			if (ImGui::Button("Dump skeleton to log"))
-				skeletonProbeDumpRequested = true;
-			if (!skeletonProbe.valid) {
-				ImGui::Text("probe: no NPC in range this frame");
-			} else {
-				ImGui::Text("probe: %s (%08X) - %s",
-					skeletonProbe.actorName.empty() ? "<unnamed>" : skeletonProbe.actorName.c_str(),
-					skeletonProbe.formID, skeletonProbe.verdict);
-				if (skeletonProbe.rasterCandidate)
-					ImGui::Text("  contact pass candidate: airborne/elevated/floating gates bypassed, penetration decides");
-				ImGui::Text("  feet %zu (usable %u) | limbs %u (stamped %u) | shapes stamped %u | dry travel %.0f%s",
-					skeletonProbe.feet.size(), skeletonProbe.usableFeet,
-					skeletonProbe.limbs, skeletonProbe.limbsStamped, skeletonProbe.shapes,
-					skeletonProbe.dryTravel, skeletonProbe.collisionFallback ? " [FAILSAFE]" : "");
-				ImGui::Text("  body alpha %.2f (reads %u) | above land %.0f | floating gap %.0f",
-					skeletonProbe.bodyAlpha, (uint)skeletonProbe.alphaSettle,
-					skeletonProbe.gapToLand, skeletonProbe.floatingGap);
-				{
-					const char* surface;
-					if (!skeletonProbe.cellBaked)
-						surface = "cell not baked yet (stamps assume snow)";
-					else if (skeletonProbe.shellDepth <= 0.0f)
-						surface = "NO SHELL HERE: ground class carries no snow - nothing can display a trench";
-					else if (skeletonProbe.gapToLand > 10.0f)
-						surface = "standing on a mesh ABOVE the landscape - snow there is object skin (trenches only on roads / Object Trenches)";
-					else
-						surface = "landscape shell underfoot - trenches should show";
-					ImGui::Text("  ground: shell depth %.0f | %s", skeletonProbe.shellDepth, surface);
-				}
-				if (!skeletonProbe.feet.empty() &&
-					ImGui::BeginTable("##skelprobe", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
-					ImGui::TableSetupColumn("Foot node");
-					ImGui::TableSetupColumn("Toe");
-					ImGui::TableSetupColumn("Scale");
-					ImGui::TableSetupColumn("Attached");
-					ImGui::TableSetupColumn("z-ref / band");
-					ImGui::TableSetupColumn("Result");
-					ImGui::TableHeadersRow();
-					for (const auto& row : skeletonProbe.feet) {
-						ImGui::TableNextRow();
-						ImGui::TableNextColumn();
-						ImGui::TextUnformatted(row.name.c_str());
-						ImGui::TableNextColumn();
-						ImGui::TextUnformatted(row.toe.c_str());
-						ImGui::TableNextColumn();
-						ImGui::Text("%.3f", row.scale);
-						ImGui::TableNextColumn();
-						ImGui::TextUnformatted(row.attached ? "yes" : "DETACHED");
-						ImGui::TableNextColumn();
-						ImGui::Text("%.1f / %.1f", row.zAboveRef, row.band);
-						ImGui::TableNextColumn();
-						if (row.stamped)
-							ImGui::Text("STAMPED r=%.1f", row.radius);
-						else if (row.planted)
-							ImGui::TextUnformatted("planted, no stamp");
-						else if (row.scale < 0.01f)
-							ImGui::TextUnformatted("ZERO SCALE");
+			if (ImGui::Button(T(TKEY("melt_emitter_remove"), "Remove")))
+				debugMeltEmitterActive = false;
+			ImGui::Text("%s", debugMeltEmitterActive ?
+								  T(TKEY("melt_emitter_active"), "Emitter: active") :
+								  T(TKEY("melt_emitter_off"), "Emitter: off"));
+
+
+			ImGui::SliderFloat(T(TKEY("melt_emitter_radius"), "Emitter Radius"), &debugMeltEmitterRadius, 40.0f, 600.0f, "%.0f");
+
+
+			ImGui::SliderFloat(T(TKEY("melt_emitter_rate"), "Emitter Melt Rate"), &debugMeltEmitterRate, 0.02f, 2.0f, "%.2f /s");
+			if (auto _ttMeltRate = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("melt_emitter_rate_tooltip"), "Depth melted per second at the bowl core. At 1.0 the core reaches full depth in a second; low values make the deepening easy to watch."));
+
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
+			{
+				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
+				ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
+				if (auto _ttDbgView = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports."));
+#if !SNOW_ALPHA_BUILD
+				ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Snow Fill Coverage Tint"), &debugProjFillView);
+				if (auto _ttFillDbg = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
+				ImGui::Checkbox(T(TKEY("debug_proj_weight"), "Recolor Weight Tint"), &debugProjWeightView);
+				if (auto _ttWeightDbg = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid, Snow Fill included; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));
+				ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Projected Snow Match Tint"), &debugProjSnowView);
+				if (auto _ttProjDbg = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
+#endif
+				// Height-field probe: the seven object maps under the player's
+				// feet, one frame old. The numbers behind every layer/height
+				// question - tops per peeled layer, the depth cones, and the
+				// bridged surface. Sentinels (no data) print as '-'.
+				if (probeValid) {
+					auto fmtHeight = [](float v, char* out, size_t n) {
+						if (v < -50000.0f || v > 50000.0f)
+							snprintf(out, n, "-");
 						else
-							ImGui::TextUnformatted("lifted");
-					}
-					ImGui::EndTable();
+							snprintf(out, n, "%.0f", v);
+					};
+					char l1[16], l2[16], l3[16];
+					fmtHeight(probeVals[0], l1, sizeof(l1));
+					fmtHeight(probeVals[1], l2, sizeof(l2));
+					fmtHeight(probeVals[2], l3, sizeof(l3));
+					char probeLine1[160], probeLine2[160];
+					snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s  L3 %s", probeWorldPos.z, l1, l2, l3);
+					snprintf(probeLine2, sizeof(probeLine2), "cone depths: L1 %.1f  L2 %.1f  L3 %.1f", probeVals[3], probeVals[4], probeVals[5]);
+					ImGui::TextUnformatted(probeLine1);
+					ImGui::TextUnformatted(probeLine2);
 				}
-			}
-		}
-		if (auto* sky = RE::Sky::GetSingleton())
-			ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
-				Util::Units::RadiansToDegrees(sky->windAngle));
-		ImGui::Text("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
-			statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");
-		ImGui::Text("Snow mask cache: %zu entries, %llu hits, %llu misses",
-			snowMasksSizeForUI(),
-			(unsigned long long)landMaskHits.load(std::memory_order_relaxed),
-			(unsigned long long)landMaskMisses.load(std::memory_order_relaxed));
-		ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
-			ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
-			shellStatMinHeight, shellStatMaxHeight);
-
-		// Shell probe: what the landscape shell reads at the camera. A shell
-		// artifact that this call cannot account for is not the landscape
-		// shell - it is object snow, which the Object Snow debug view owns.
-		{
-			auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-			const ShellProbe probe = ProbeShellData(eye.x, eye.y);
-			const char* worldspaceName = "none";
-			if (auto* tes = RE::TES::GetSingleton())
-				if (auto* worldspace = tes->GetRuntimeData2().worldSpace)
-					worldspaceName = worldspace->GetFormEditorID();
-
-			ImGui::Text("Shell probe @ (%.0f, %.0f) cell (%d, %d) vertex (%d, %d)",
-				probe.worldX, probe.worldY, probe.cellX, probe.cellY, probe.vertexX, probe.vertexY);
-			ImGui::Text("  worldspace %08X %s, window built for %08X",
-				probe.activeWorldspaceID, worldspaceName, probe.windowWorldspaceID);
-			if (!probe.cellFound) {
-				ImGui::Text("  no baked cell: the shell has NO terrain data here");
-			} else if (!probe.worldspaceMatch) {
-				ImGui::Text("  cell baked in worldspace %08X: REJECTED, shell has no data here", probe.cellWorldspace);
-			} else {
-				ImGui::Text("  height %.0f, depth %.1f, coverage %.2f -> surface %.0f",
-					probe.height, probe.rampDepth, probe.coverage, probe.height + probe.rampDepth);
-				for (const auto& layer : probe.layers)
-					ImGui::Text("    %s x%.2f @ %.0f units", layer.label.c_str(), layer.weight, layer.depth);
+				if (auto _ttSdv = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));
 			}
 
-			// Object snow probe: which captured meshes cover this spot, largest
-			// first. Bound top Z against the camera height says whether one of
-			// them is the surface an artifact sits on.
-			const ObjectSnowProbe objects = ProbeObjectSnow(eye.x, eye.y);
-			ImGui::Text("Object snow probe: %zu captured this frame, %zu cover this spot (camera z %.0f)",
-				objects.captured, objects.overlapping, eye.z);
-			for (const auto& entry : objects.entries)
-				ImGui::Text("  %s r%.0f top %.0f (%.0f away)%s  %s",
-					entry.name.empty() ? "<unnamed>" : entry.name.c_str(),
-					entry.radius, entry.topZ, entry.distXY, entry.road ? " [road]" : "", entry.model.c_str());
+
+			ImGui::Checkbox(T(TKEY("cluster_cull_disabled"), "Disable Cluster Culling"), &clusterCullDisabled);
+			if (auto _ttCluster = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("cluster_cull_disabled_tooltip"), "Measurement aid: draws every visible object's snow layer whole. The game merges whole neighbourhoods into single objects, so an object that is mostly hidden behind a hill is still drawn entire - and because you are standing inside its bounds, the per-object test above cannot reject it. With this on, each object is cut into small pieces of surface, each piece is checked against the same far-depth map, and only the pieces that could show are drawn. Hidden pieces produce no pixels either way, so nothing changes on screen. The line below counts the triangles that survived."));
+
+
+			ImGui::Checkbox(T(TKEY("statics_depth_prepass_disabled"), "Disable Depth Prepass"), &staticsDepthPrepassDisabled);
+			if (auto _ttStaticsPrepass = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
+
+
+			ImGui::Checkbox(T(TKEY("statics_record_disabled"), "Disable Per-Draw Constant Offsets (D3D11.1)"), &staticsRecordDisabled);
+			if (auto _ttRecord = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_record_disabled_tooltip"), "Measurement aid. Normally every object's constants are uploaded once per frame and each draw binds its block by offset instead of updating a constant buffer per draw (about 3,500 updates a frame): the same pixels for less CPU. Needs Direct3D 11.1 constant-buffer offsetting; where the driver or an interposer says no, the log records why and every draw takes the old path anyway. Tick to force the old path and A/B."));
+
+			ImGui::Checkbox(T(TKEY("skin_cull_disabled"), "Disable Skin Culling"), &skinCullDisabled);
+			if (auto _ttSkinCull = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("skin_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped."));
+
+
+			if (!skinCullDisabled) {
+				const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
+				ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",
+					skinCullDrawnLast, skinCullCulledLast, total,
+					total ? 100.0 * skinCullCulledLast / total : 0.0);
+				ImGui::Text("  clusters: %u skins cut, %.2f M of %.2f M triangles drawn, scratch %.2f M indices",
+					clusterSkinsLast, skinCullTrisDrawnLast / 1e6, skinCullTrisTotalLast / 1e6, clusterScratchUsedLast / 1e6);
+				ImGui::Text("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
+					skinCullReasonLast[0], skinCullReasonLast[1] + skinCullReasonLast[6] + skinCullReasonLast[7],
+					skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
+					skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
+					skinCullHiZTopLast);
+			}
+
+
+			ImGui::Checkbox(T(TKEY("statics_earlyz_spike"), "Drop Depth Export (early-Z spike)"), &staticsEarlyZSpike);
+			if (auto _ttEZS = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_earlyz_spike_tooltip"), "Measurement aid: forces the no-depth pixel shader onto EVERY object-snow draw, roads included. Normally only draws that can carve keep the depth export, which is already the bulk of the win at no visual cost; this shows the remaining ceiling. UPPER BOUND, not a clean A/B - the carve projects its parallax hit into that depth, so on roads this changes which pixels survive as well as what they cost, and their trench relief goes flat while it is on."));
+
+
+			ImGui::Text("Projected match, last frame: %u classified / %u no projection / %u vetoed",
+				statProjMatchedPrev, statProjNoProjectionPrev, statProjVetoedPrev);
+
+
+			ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
+			ImGui::TreePop();
 		}
-		ImGui::Text("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
-			dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 
-		uint64_t vramUsageMB = 0, vramBudgetMB = 0;
-		QueryAdapterVRAM(vramUsageMB, vramBudgetMB);
-		std::string vramBreakdown;
-		const uint64_t vramFeatureMB = SumFeatureTextureBytes(vramBreakdown) >> 20;
-		ImGui::Text("VRAM: adapter %llu / %llu MB (%llu%%), this feature ~%llu MB",
-			(unsigned long long)vramUsageMB, (unsigned long long)vramBudgetMB,
-			(unsigned long long)(vramBudgetMB ? vramUsageMB * 100 / vramBudgetMB : 0),
-			(unsigned long long)vramFeatureMB);
-		if (vramBudgetMB && vramUsageMB > vramBudgetMB)
-			ImGui::TextColored(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "OVER BUDGET: driver is demoting textures to system RAM; FPS stays degraded until the game restarts.");
-		ImGui::TextWrapped("%s", vramBreakdown.c_str());
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_accumulation"), "Snow Accumulation"))) {
+			{
+				// The rate is spelled out because the exit test is "does the number
+				// do what the plan's table says", which needs the arithmetic
+				// visible rather than inferred from watching it drift.
+				const float accum = snowAccumulation.load(std::memory_order_relaxed);
+				const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
+				const float growth = settings.AccumulationHours > 0.01f ? intensity / settings.AccumulationHours : 0.0f;
+				const float melt = settings.AccumulationMeltHours > 0.01f ? (1.0f - intensity) / settings.AccumulationMeltHours : 0.0f;
+				const float fade = settings.AccumulationFadeDays > 0.01f ? 1.0f / (settings.AccumulationFadeDays * 24.0f) : 0.0f;
+				const float rate = growth - melt - fade;
 
+				auto* tes = RE::TES::GetSingleton();
+				const bool indoors = tes && tes->interiorCell;
+
+				// The scale the shells are actually handed, not what the peak would
+				// give: with the toggle off it reads x1.000, which is the other
+				// half of the A/B saying so.
+				ImGui::Text("Accumulation: %.3f (depth x%.3f%s), snowfall %.2f%s",
+					accum, GetAccumulationDepthScale(),
+					settings.EnableSnowAccumulation ? "" : ", not applied", intensity,
+					indoors ? " (held, indoors)" : "");
+				ImGui::Text("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
+					rate, growth, melt, fade);
+				ImGui::Text("Clock: %.2f game hours, timescale %.0f",
+					gameClock.lastHours, gameClock.timescale);
+				ImGui::Text("Co-save: %s", settings.PersistAccumulation ? "remembered" : "not written");
+			}
+
+
+			ImGui::Text("Snowfall intensity: %.2f (refill %s)", snowfallIntensity,
+				settings.RefillOnlyWhenSnowing ? "weather-driven" : "baseline");
+
+			{
+				static const char* kSnowGateNames[] = {
+					"running (snowy cell in reach)",
+					"running (unbaked ground in reach, assumed snow)",
+					"suspended (all ground in reach known bare)"
+				};
+				ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
+			}
+
+
+			if (auto* sky = RE::Sky::GetSingleton())
+				ImGui::Text("Wind: %.2f toward %.0f deg (drift-biased refill)", sky->windSpeed,
+					Util::Units::RadiansToDegrees(sky->windAngle));
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
+			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
+				// Diagnostics use plain text by existing convention (no i18n).
+				ImGui::Text("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
+					spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
+					spellStats.groundContacts, spellStats.trails);
+				ImGui::Text("blasts: armed %u | detonations %u | casts %u | shouts %u (%u discs)   [totals since load]",
+					spellStats.armed, spellStats.detonations, spellStats.casts,
+					spellStats.shouts, spellStats.shoutDiscs);
+				ImGui::Text("dash watches %u | furrows cut %u | travelling shoves %u | frost effects raised %u",
+					spellStats.dashWatches, spellStats.dashGouges, spellStats.forceTracks, spellStats.lifted);
+				if (spellStats.lastShoutVerdict) {
+					static const char* kElem[] = { "none", "fire", "frost", "shock", "force" };
+					static const char* kVerdict[] = { "-", "WEDGE", "TRACK", "rejected" };
+					ImGui::Text("last shout: %s | proj speed %.0f | impact force %.0f | %s",
+						spellStats.lastShoutElement < IM_ARRAYSIZE(kElem) ? kElem[spellStats.lastShoutElement] : "?",
+						spellStats.lastShoutSpeed, spellStats.lastShoutForce,
+						spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
+				}
+				ImGui::Text("rejected: no element %u | no blast form %u",
+					spellStats.rejectedElement, spellStats.rejectedNoBlast);
+				ImGui::Text("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",
+					spellStats.innate, spellStats.burning, spellStats.corpses, stampStats.floating, stampStats.incorporeal);
+				ImGui::Text("death events seen %u | death blasts opened %u",
+					spellStats.deathsSeen, spellStats.deathBlasts);
+				if (stampStats.nearestValid) {
+					static const char* kStateNames[] = { "on ground", "jumping", "in air", "climbing", "flying", "swimming" };
+					const uint state = stampStats.nearestState;
+					ImGui::Text("nearest actor: %s | gap to its own footing %.0f | gap to land %.0f | state %s",
+						stampStats.nearestFloating ? "FLOATING" : "touching",
+						stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
+						state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
+					ImGui::Text("             bones: feet %u usable %u%s | dry travel %.0f | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u | failsafe actors %u)",
+						stampStats.nearestFeet, stampStats.nearestUsableFeet,
+						stampStats.nearestFallback ? " FAILSAFE" : "",
+						stampStats.nearestDryTravel, stampStats.nearestLimbs,
+						stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
+						stampStats.fallbackActors);
+					ImGui::Text("             body alpha %s | marked Ghost %s | verdict %s",
+						stampStats.nearestElemental ? "not read" : std::format("{:.2f}", stampStats.nearestBodyAlpha).c_str(),
+						stampStats.nearestGhostFlag ? "yes" : "no",
+						stampStats.nearestIncorporeal ? "INCORPOREAL" :
+							(stampStats.nearestElemental ? "solid (made of an element)" : "solid"));
+				}
+				ImGui::Text("emitters %u | awaiting their step %u | last mark: strength %.2f radius %.0f",
+					spellStats.emitters, spellStats.pending, spellStats.lastStrength, spellStats.lastRadius);
+				ImGui::Text("budget: actors+props %u/%u | spells %u/%u | emitters culled by distance %u | actors turned away %u",
+					stampStats.beforeSpells, kMaxStamps - kSpellStampReserve,
+					stampStats.spells, kSpellStampReserve, spellStats.emittersCulled,
+					stampStats.budgetTurnedAway);
+				ImGui::TreePop();
+			}
+
+			ImGui::TreePop();
+		}
 		ImGui::TreePop();
 	}
 #endif
