@@ -214,7 +214,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
 		if (auto _tt3d = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The raised 3D snow layer on objects: a rounded blanket grown over the Snow Fill area where the game paints projected snow - its edge rolls over like a real snow lip, and the rounding lengthens as the depth rises. Objects without projected-snow data carry no raised layer. Roads and their trenches are separate machinery and stay on."));
+			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The RAISED 3D snow layer on objects: a rounded blanket grown over the Snow Fill area where the game paints projected snow - its edge rolls over like a real snow lip, and the rounding lengthens as the depth rises. Off, the snow lies flat on the object and keeps its coat and edge lumps (Edge Lump Size / Reach) - only the rise goes. Objects without projected-snow data carry no raised layer. Roads and their trenches are separate machinery and stay on."));
 		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
@@ -293,7 +293,7 @@ void SnowDeformation::DrawSettings()
 			// updates is indistinguishable from a broken volume otherwise.
 			if (voxelShadersFailed)
 				ImGui::TextColored({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile - see CommunityShaders.log. The picture below is stale."));
-			else if (!voxelValid)
+			else if (!voxelLevels[0].valid)
 				ImGui::TextDisabled("%s", T(TKEY("voxel_status_waiting"), "Waiting for the first frame."));
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
@@ -304,13 +304,22 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
 			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
-			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 3.0f, 24.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is. The grid is a fixed 256 voxels a side, so this trades DETAIL against REACH and the two cannot both improve: smaller voxels resolve rails and steps but the cube shrinks around you. Getting both needs nested grids (fine near, coarse far), which is a separate piece of work. Changing this restarts the volume."));
+				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
+			ImGui::SliderInt(T(TKEY("volume_levels"), "Volume Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
+			if (auto _ttVoxLevels = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is 256 voxels a side at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. 48 MB per level, and each level runs its own capture and field passes."));
 			{
-				const float across = kVoxelDim * std::clamp(settings.VolumeVoxelSize, 3.0f, 24.0f) / kUnitsPerMeter;
-				ImGui::Text("Covers %.0f m across (%.0f m around you)", across, across * 0.5f);
+				const float voxel = std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f);
+				const int levels = std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
+				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
+				const float farAcross = nearAcross * float(1 << (levels - 1));
+				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, levels * 48);
 			}
+			ImGui::SliderFloat(T(TKEY("volume_snow_spread"), "Volume Snow Spread"), &settings.VolumeSnowSpread, 0.1f, 3.0f, "%.2f");
+			if (auto _ttVoxSpread = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_spread_tooltip"), "How far snow reaches sideways from the surface it grew on, as a fraction of its depth: the lip past an edge, and how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps."));
 			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the captured shape itself (which way the empty space lies around each surface voxel), so it knows a wall from a floor without any mesh data."));
@@ -335,6 +344,7 @@ void SnowDeformation::DrawSettings()
 					ImGui::Text("%s", T(TKEY("voxel_xray_tooltip"), "On: everything along the view direction is flattened into one image, so whole objects show as silhouettes - look at this first. Off: a single plane, one voxel thin, at the Offset - the only view that can show a roof with empty space beneath it."));
 				const char* voxelSources[] = { "Objects (occupancy)", "Snow field (raw)", "Snow surface (field at Coverage)" };
 				ImGui::Combo(T(TKEY("voxel_slice_source"), "Show"), &voxelSliceSource, voxelSources, IM_ARRAYSIZE(voxelSources));
+				ImGui::SliderInt(T(TKEY("voxel_slice_level"), "Level"), &voxelSliceLevel, 0, std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels) - 1);
 				if (auto _ttVoxSrc = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("voxel_slice_source_tooltip"), "Objects: what V0 captured. Snow field: the soft blob field grown from every object top (brighter = more snow). Snow surface: that field cut at Coverage - the shape the snow would take, before anything is drawn."));
 				const char* voxelAxes[] = { "Top-down", "Side: looking north", "Side: looking east" };

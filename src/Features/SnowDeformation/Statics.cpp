@@ -1811,8 +1811,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		// The rise only; with it off the raster and cones carry no lift.
+		const float captureDepth = settings.ObjectSnow3D ? settings.ObjectsSnowDepth : 0.0f;
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : captureDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : captureDepth;
 		scb.VertexCountF = vertexCountF;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
@@ -1824,8 +1826,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.ProjThreshold = cap.projThreshold;
 		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		{
-			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
-			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
+			// The S4 path no longer depends on the 3D toggle: that toggle is
+			// the RISE only. The coat and its edge lumps live in the S4 draw,
+			// so gating the draw on it took the border Josef keeps along with
+			// the shell (his test, 2026-09-06).
+			const bool s4Shell = !cap.road && cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		}
 		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
@@ -2215,8 +2220,12 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_cap.world.translate.x };
 	a_scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_cap.world.translate.y };
 	a_scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_cap.world.translate.z };
-	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+	// "3D Snow on Objects" is the RISE: off, the S4 draw runs at depth 0,
+	// which is the coat and its edge lumps alone (the look at Josef's own
+	// depth-0 default). Roads are the patch's and keep theirs.
+	const float objectDepth = settings.ObjectSnow3D ? settings.ObjectsSnowDepth : 0.0f;
+	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : objectDepth;
+	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : objectDepth;
 	a_scb.VertexCountF = a_vertexCount;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
@@ -2246,7 +2255,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).
 	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
-	a_scb.HasSkinMasksCopy = (settings.ObjectSnow3D && landMasksCopySRV) ? 1.0f : 0.0f;
+	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:
@@ -2824,12 +2833,14 @@ void SnowDeformation::DrawCapturedStatics()
 	// The S4 shell's per-pixel footprint cut: vanilla's noise map (PS t21)
 	// and the pre-shell normals copy (PS t23, per-pixel nz with the
 	// interpolated fallback).
-	ID3D11ShaderResourceView* projNoiseSRV = settings.ObjectSnow3D ? SD_ProjNoiseMapSRV() : nullptr;
+	// Bound whenever they exist: the coat's contour is built from these, and
+	// the coat draws with the 3D rise off.
+	ID3D11ShaderResourceView* projNoiseSRV = SD_ProjNoiseMapSRV();
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	ID3D11ShaderResourceView* skinNormalsSRV = settings.ObjectSnow3D ? preSkinNormalsCopySRV.get() : nullptr;
+	ID3D11ShaderResourceView* skinNormalsSRV = preSkinNormalsCopySRV.get();
 	context->PSSetShaderResources(23, 1, &skinNormalsSRV);
 	// The pre-shell Masks copy: the recolor's real projected weight.
-	ID3D11ShaderResourceView* skinMasksSRV = settings.ObjectSnow3D ? landMasksCopySRV.get() : nullptr;
+	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
 	context->PSSetShaderResources(32, 1, &skinMasksSRV);
 
 	// Depth prepass for the skins. Unlike the shell's, the private test
@@ -2915,8 +2926,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// Lighting recolor still covers the technique-classified ones
 		// (fence family) flat. The classic shader path survives only
 		// because roads run through it.
-		const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
-		                     cap.projThreshold > -0.5f && projNoiseSRV;
+		const bool s4Shell = !cap.road && cap.projThreshold > -0.5f && projNoiseSRV;
 		if (!cap.road && !s4Shell)
 			continue;
 		auto triShape = geometry->AsTriShape();

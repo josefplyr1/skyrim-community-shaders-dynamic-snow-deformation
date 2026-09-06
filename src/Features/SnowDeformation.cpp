@@ -160,6 +160,8 @@
 	X(VolumeVoxelSize) \
 	X(VolumeSnowMaxSlopeDeg) \
 	X(VolumeSkyExposurePct) \
+	X(VolumeSnowSpread) \
+	X(VolumeLevels) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
@@ -2209,7 +2211,9 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	auto tex3Bytes = [](Texture3D* a_wrap) -> uint64_t {
 		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * a_wrap->desc.Depth : 0;
 	};
-	const uint64_t voxel = tex3Bytes(voxelVolume[0]) + tex3Bytes(voxelVolume[1]) + tex3Bytes(voxelField);
+	uint64_t voxel = 0;
+	for (const auto& lv : voxelLevels)
+		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field);
 
 	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex + voxel;
 

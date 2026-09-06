@@ -47,7 +47,12 @@ cbuffer VoxelCB : register(b0)
 	float4 EyeVox;
 	// Strength of the sky-openness weighting on the seed, 0-1.
 	float SkyStrength;
-	float3 padSky;
+	// Clipmap: half-extent of the next-finer level's core in THIS level's
+	// voxels; bricks inside it belong to that level. 0 on the finest level.
+	float InnerHalfVox;
+	// Sideways sigma as a fraction of the vertical one.
+	float SpreadScale;
+	float padSky;
 }
 
 struct VS_OUTPUT
@@ -144,6 +149,8 @@ Texture2D<float2> ShelterMask : register(t1);
 // ObjectSkyOpenCS: 1 = open sky
 Texture2D<float> SkyOpen : register(t2);
 Texture3D<float> FieldIn : register(t3);
+// The sideways blur's solid blocker: this frame's occupancy.
+Texture3D<float> OccupancyIn : register(t4);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
 // Occupied-voxel count for the menu: one atomic per group, not per thread.
@@ -275,27 +282,63 @@ float3 SurfaceUp(int3 logical)
 // k > 0 means taking a seed that sits ABOVE this voxel - snow below its own
 // surface - so that side gets SigmaDownScale of the sigma: enough to round
 // the lip under an edge, not enough to hang.
+//
+// THE SIDEWAYS PASSES RUN AFTER Z AND STOP AT SOLID. With the up pass first
+// they run in the air above surfaces; walking outward from each voxel they
+// stop at the first occupied voxel, so a step riser or a wall blocks the
+// snow from one plane melding into the next (the "Plane Split" Josef asked
+// for, as physics rather than a threshold). Normalised over what was
+// reached, so snow piles against a wall instead of thinning beside it.
+// SpreadScale is the user's reach: the sideways sigma as a fraction of the
+// vertical.
 [numthreads(8, 8, 8)] void VoxelBlurCS(uint3 p
 									   : SV_DispatchThreadID) {
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
-	float sigma = max(SeedSigma, 0.25);
 	bool vertical = BlurAxis == 2;
-	float sigmaDown = max(sigma * SigmaDownScale, 0.25);
+	float sigmaUp = max(SeedSigma, 0.25);
+	float sigmaDown = max(sigmaUp * SigmaDownScale, 0.25);
+	float sigmaSide = max(sigmaUp * SpreadScale, 0.25);
+	float sigma = vertical ? sigmaUp : sigmaSide;
 	int radius = min((int)ceil(sigma * 2.5), 8);
 	int3 step = BlurAxis == 0 ? int3(1, 0, 0) : (BlurAxis == 1 ? int3(0, 1, 0) : int3(0, 0, 1));
 	float sum = 0.0;
 	float wsum = 0.0;
-	[loop] for (int k = -radius; k <= radius; k++)
+	[branch] if (vertical)
 	{
-		int3 l = logical + step * k;
-		float s = (vertical && k > 0) ? sigmaDown : sigma;
-		float w = exp(-(float)(k * k) * (0.5 / (s * s)));
-		wsum += w;
-		[flatten] if (all(l >= 0) && all(l < Dim))
-			sum += w * VolumeIn[Phys(l)];
+		[loop] for (int k = -radius; k <= radius; k++)
+		{
+			int3 l = logical + step * k;
+			float s = k > 0 ? sigmaDown : sigmaUp;
+			float w = exp(-(float)(k * k) * (0.5 / (s * s)));
+			wsum += w;
+			[flatten] if (all(l >= 0) && all(l < Dim))
+				sum += w * VolumeIn[Phys(l)];
+		}
+		VolumeOut[p] = sum;
 	}
-	VolumeOut[p] = vertical ? sum : sum / wsum;
+	else
+	{
+		float invTwoS2 = 0.5 / (sigma * sigma);
+		sum = VolumeIn[p];
+		wsum = 1.0;
+		[unroll] for (int dir = -1; dir <= 1; dir += 2)
+		{
+			[loop] for (int k = 1; k <= radius; k++)
+			{
+				int3 l = logical + step * (k * dir);
+				if (any(l < 0) || any(l >= Dim))
+					break;
+				uint3 ph = Phys(l);
+				if (OccupancyIn[ph] > 0.0)
+					break;
+				float w = exp(-(float)(k * k) * invTwoS2);
+				wsum += w;
+				sum += w * VolumeIn[ph];
+			}
+		}
+		VolumeOut[p] = sum / wsum;
+	}
 }
 
 // V1b: the draw's brick list. One thread per 8^3 brick, listed when the
@@ -314,6 +357,10 @@ AppendStructuredBuffer<uint> BrickList : register(u3);
 	float3 centre = (float3)(base + OriginVox.xyz) + 4.0;
 	// Half the brick diagonal past the reach still counts.
 	if (distance(centre, EyeVox.xyz) > EyeVox.w + 7.0)
+		return;
+	// Clipmap ring: inside the finer level's core is that level's to draw.
+	float3 fromEye = abs(centre - EyeVox.xyz);
+	if (InnerHalfVox > 0.0 && all(fromEye < InnerHalfVox))
 		return;
 	bool anyIn = false;
 	bool allIn = true;

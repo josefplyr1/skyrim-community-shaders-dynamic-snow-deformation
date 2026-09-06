@@ -601,18 +601,22 @@ public:
 		bool LODObjectSnow = true;
 		/** @brief "Build Snow Volume" (VOLUME-SNOW-PLAN V0): rasterise the captured statics into the 256^3 voxel occupancy window each frame. Nothing consumes the volume - the slice view is the deliverable - so this changes no snow, only cost. */
 		bool VolumeSnow = false;
-		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels). V1a. */
-		float VolumeSnowDepth = 24.0f;
-		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. V1a. */
-		float VolumeSnowCoverage = 0.5f;
+		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels). Josef's tuned default. */
+		float VolumeSnowDepth = 8.0f;
+		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. Josef's tuned default. */
+		float VolumeSnowCoverage = 0.25f;
+		/** @brief "Volume Snow Spread": the sideways blur sigma as a fraction of the vertical one - how far snow reaches past an edge and how easily two planes' snow melds. Solid always blocks it. */
+		float VolumeSnowSpread = 1.0f;
+		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 48 MB each. Reach doubles per level; detail stays the base voxel near the camera. */
+		int VolumeLevels = 3;
 		/** @brief "Draw Volume Snow" (V1b): march the field per pixel inside brick AABBs and shade it with the skins' own material. Off = the field only exists in the slice view. */
 		bool VolumeSnowDraw = true;
-		/** @brief "Volume Voxel Size", world units. The grid is a fixed 256^3, so this trades detail against reach: 8 = 29 m across, 4 = 15 m, 16 = 59 m. Smaller AND further needs a clipmap. */
-		float VolumeVoxelSize = 8.0f;
-		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow (the seed's own up-ness, from the occupancy shell). */
-		float VolumeSnowMaxSlopeDeg = 65.0f;
-		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. */
-		float VolumeSkyExposurePct = 100.0f;
+		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
+		float VolumeVoxelSize = 3.0f;
+		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow (the seed's own up-ness, from the occupancy shell). Josef's tuned default: off. */
+		float VolumeSnowMaxSlopeDeg = 90.0f;
+		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default. */
+		float VolumeSkyExposurePct = 50.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -2067,7 +2071,7 @@ public:
 	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */
 	static constexpr uint kVoxelDim = 256;
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
-	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 3.0f, 24.0f); }
+	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
 
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
@@ -2104,11 +2108,36 @@ public:
 		float EyeVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		float padSky[3];
+		/** @brief Clipmap: half-extent of the next-finer level's usable core, in THIS level's voxels; bricks inside it are that level's. 0 on level 0. */
+		float InnerHalfVox;
+		/** @brief Settings::VolumeSnowSpread - the sideways sigma as a fraction of the vertical one. */
+		float SpreadScale;
+		float padSky;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	/** @brief Sigma below a seed as a fraction of the sigma above: rounds the lip under an edge without hanging snow beneath beams. Tune here, not in the menu. */
 	static constexpr float kVoxelSigmaDown = 0.3f;
+	/** @brief Fraction of a level's half-extent the level outside it treats as already covered; the rest is that level's blur-truncated edge. */
+	static constexpr float kVoxelInnerFrac = 0.9f;
+	static constexpr uint kVoxelMaxLevels = 4;
+	/** @brief One clipmap level: occupancy ping-pong, its blob field, and the draw's brick list. Level L's voxel is VoxelSizeLive() * 2^L. */
+	struct VoxelLevel
+	{
+		Texture3D* volume[2] = { nullptr, nullptr };
+		Texture3D* field = nullptr;
+		Buffer* bricks = nullptr;
+		Buffer* drawArgs = nullptr;
+		uint current = 0;
+		bool valid = false;
+		DirectX::XMINT3 origin = { 0, 0, 0 };
+	};
+	VoxelLevel voxelLevels[kVoxelMaxLevels];
+	uint VoxelLevelsLive() const { return (uint)std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels); }
+	float VoxelSizeForLevel(uint a_level) const;
+	/** @brief Fills every per-level field of the volume CB from live state; ScrollDelta and the clear flag are the caller's. Implemented in SnowDeformation/Volume.cpp. */
+	void FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const;
+	/** @brief Runtime-only: which level the slice shows. */
+	int voxelSliceLevel = 0;
 
 	/** @brief V1b draw constants (b2 on the VOXEL variant of SnowStaticsShell). Layout must match VoxelDrawCB there. */
 	struct alignas(16) VoxelDrawCB
@@ -2130,17 +2159,9 @@ public:
 	/** @brief Seed weight under a roof/fire: the 2D pipeline's dusting, as a fraction of full. */
 	static constexpr float kVoxelShelterDust = 0.1f;
 
-	/** @brief Ping-pong R8 occupancy in physical (toroidal) layout; created on first enable and kept. */
-	Texture3D* voxelVolume[2] = { nullptr, nullptr };
-	/** @brief V1a: the snow field - top-facing occupied voxels, gated by shelter/sky, blurred in 3D. Its threshold isosurface is the snow; its gradient the normal. Scratch for the separable passes is the dead ping-pong volume. */
-	Texture3D* voxelField = nullptr;
 	ID3D11ComputeShader* voxelSeedCS = nullptr;
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
 	// ---- V1b: the draw ----
-	/** @brief Append list of bricks the isosurface crosses (packed x | y<<8 | z<<16); its counter is the instance count. */
-	Buffer* voxelBrickBuffer = nullptr;
-	/** @brief DrawInstancedIndirect args {36, count, 0, 0}; count copied from the list's counter each frame. */
-	Buffer* voxelDrawArgs = nullptr;
 	ConstantBuffer* voxelDrawCB = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;
 	ID3D11ComputeShader* voxelBrickListCS = nullptr;
@@ -2161,9 +2182,6 @@ public:
 	ID3D11ComputeShader* voxelScrollCS = nullptr;
 	ID3D11ComputeShader* voxelSliceCS = nullptr;
 	bool voxelShadersFailed = false;
-	uint voxelCurrent = 0;
-	bool voxelValid = false;
-	DirectX::XMINT3 voxelOriginVox = { 0, 0, 0 };
 	/** @brief Runtime-only: write and show the slice. */
 	bool showVoxelSlice = false;
 	/** @brief 0 top-down (XY), 1 side XZ, 2 side YZ. */

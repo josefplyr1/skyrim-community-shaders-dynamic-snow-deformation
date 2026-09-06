@@ -3336,6 +3336,44 @@ float VoxelFieldAt(float3 relPos)
 	return VoxelFieldTex.SampleLevel(VoxelWrapSampler, uvw, 0.0);
 }
 
+// Cubic B-spline reconstruction of the field (Sigg & Hadwiger: eight
+// trilinear taps at offset positions). Trilinear is C0 - its gradient jumps
+// at every voxel boundary, and a normal differenced from it prints the
+// voxel lattice into the shading as a grid. Only the normal reads through
+// this; the march itself is fine on trilinear.
+float VoxelFieldCubic(float3 relPos)
+{
+	float dim = VoxParams.y;
+	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
+	logical = clamp(logical, 1.5, dim - 1.5);
+	// Texel centres at integers for the weights.
+	float3 x = logical - 0.5;
+	float3 i = floor(x);
+	float3 f = x - i;
+	float3 f2 = f * f;
+	float3 f3 = f2 * f;
+	float3 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+	float3 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	float3 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+	float3 w3 = f3 / 6.0;
+	float3 g0 = w0 + w1;
+	float3 g1 = w2 + w3;
+	// Back to centres-at-half for the sampler, torus offset folded in.
+	float3 o = (float3)VoxOrigin.xyz + 0.5;
+	float3 h0 = (i - 1.0 + w1 / g0 + o) / dim;
+	float3 h1 = (i + 1.0 + w3 / g1 + o) / dim;
+	float v = 0.0;
+	v += g0.x * g0.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h0.y, h0.z)), 0.0);
+	v += g1.x * g0.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h0.y, h0.z)), 0.0);
+	v += g0.x * g1.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h1.y, h0.z)), 0.0);
+	v += g1.x * g1.y * g0.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h1.y, h0.z)), 0.0);
+	v += g0.x * g0.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h0.y, h1.z)), 0.0);
+	v += g1.x * g0.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h0.y, h1.z)), 0.0);
+	v += g0.x * g1.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h0.x, h1.y, h1.z)), 0.0);
+	v += g1.x * g1.y * g1.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(h1.x, h1.y, h1.z)), 0.0);
+	return v;
+}
+
 // Whatever the march hits shades through SkinShadeSurface exactly as a
 // skin pixel would, from a synthesised interpolant set: the material is the
 // skins' own, so the two layers cannot disagree in colour.
@@ -3379,12 +3417,19 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	// (Josef's moving squares, 2026-09-06). Quantising t to a multiple of
 	// the step makes the sample positions identical whichever brick owns
 	// them, so the surface is continuous across the boundary.
+	// AND SAMPLE ONE LATTICE POINT PAST THE EXIT. Stopping at the exit
+	// leaves the last sub-step before every brick face to nobody: this
+	// brick breaks before sampling it, the next finds itself already
+	// inside and discards - a hole along every brick boundary, the dark
+	// lines forming squares. The overshoot lands in the next brick, which
+	// is fine: the field is global, the depth is right, and the neighbour
+	// discards that pixel as already inside.
 	float tPrev = tNear;
 	float t = (floor(tNear / stepLen) + 1.0) * stepLen;
 	bool hit = false;
 	[loop] for (int i = 0; i < 48; i++)
 	{
-		if (t > tFar)
+		if (t > tFar + stepLen)
 			break;
 		if (VoxelFieldAt(rayDir * t) >= threshold) {
 			hit = true;
@@ -3412,12 +3457,13 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 		discard;
 
 	float3 P = rayDir * tHit;
-	// The field grows into the snow, so the surface normal is minus its gradient.
+	// The field grows into the snow, so the surface normal is minus its
+	// gradient - of the CUBIC reconstruction, so the lattice does not shade.
 	const float h = 0.5 * voxel;
 	float3 g;
-	g.x = VoxelFieldAt(P + float3(h, 0.0, 0.0)) - VoxelFieldAt(P - float3(h, 0.0, 0.0));
-	g.y = VoxelFieldAt(P + float3(0.0, h, 0.0)) - VoxelFieldAt(P - float3(0.0, h, 0.0));
-	g.z = VoxelFieldAt(P + float3(0.0, 0.0, h)) - VoxelFieldAt(P - float3(0.0, 0.0, h));
+	g.x = VoxelFieldCubic(P + float3(h, 0.0, 0.0)) - VoxelFieldCubic(P - float3(h, 0.0, 0.0));
+	g.y = VoxelFieldCubic(P + float3(0.0, h, 0.0)) - VoxelFieldCubic(P - float3(0.0, h, 0.0));
+	g.z = VoxelFieldCubic(P + float3(0.0, 0.0, h)) - VoxelFieldCubic(P - float3(0.0, 0.0, h));
 	float3 normalWS = normalize(-g + float3(0.0, 0.0, 1e-5));
 
 	float2 worldXY = P.xy + ShellCameraPosAdjust.xy;
