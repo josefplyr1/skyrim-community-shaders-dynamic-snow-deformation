@@ -866,8 +866,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
-#	if defined(SNOW_DEFORMATION)
-// Every permutation: the whole-mesh snow recolor below can hit any technique.
+#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV) || defined(TRUE_PBR))
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #	endif
 
@@ -1867,30 +1866,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif      // SPARKLE
 
 #	endif  // SNOW
-
-#	if defined(SNOW_DEFORMATION)
-	// Whole-mesh snow (drifts): the projected recolor's own path at weight
-	// 1, with no projection to mask it. Same textures, same tiling.
-	[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
-				 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowMeshIsSnow) != 0)
-	{
-		float3 meshSnowPos = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-		float3 meshFaceNormal = normalize(-cross(ddx(input.WorldPosition.xyz), ddy(input.WorldPosition.xyz)));
-		float3 meshTriWeights = Triplanar::GetWeights(worldNormal.xyz, meshFaceNormal);
-		float3 meshSnowSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, meshSnowPos, meshTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-		snowProjAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(meshSnowSample) : meshSnowSample;
-		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-			snowProjAlbedo = float3(1.0, 0.0, 1.0);
-		snowProjMatch = true;
-		projectedMaterialWeight = 1.0;
-#		if defined(TRUE_PBR)
-		baseColor.xyz = Color::ColorToLinear(snowProjAlbedo);
-		rawRMAOS.xyw = float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028);
-#		else
-		baseColor.xyz = Color::ColorToLinear(snowProjAlbedo) * Color::VanillaDiffuseColorMult();
-#		endif
-	}
-#	endif
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);

@@ -130,7 +130,6 @@ struct GeometryNameFacts
 	bool plank = false;
 	bool iceFamily = false;
 	bool drift = false;
-	bool blackPlane = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
@@ -163,9 +162,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
-		// Coast wave sheets ("BlackPlane01", gkbwaves textures) arrive
-		// snow-flagged; their skin was a red line across the sea.
-		f.blackPlane = ContainsNoCase(name, "blackplane");
 	}
 	return f;
 }
@@ -489,7 +485,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			r.pathMountain = path.mountain;
 			if (auto textureSet = a_material->textureSet.get()) {
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood") || ContainsNoCase(diffuse, "wave");
+					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
 					r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
 				}
 			}
@@ -518,7 +514,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// game's SetupGeometry (the ExtendedTranslucency pattern): the
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowMeshIsSnow));
+	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -527,14 +523,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	bool bindSnowSet = false;
 	if (settings.ProjSnowMatch) {
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
-		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
-		if (!treeAnim && NameFactsOf(a_pass->geometry).drift) {
-			// Drift meshes: the whole mesh is snow, recolored like the
-			// projected material at weight 1 (Lighting.hlsl, SnowMeshIsSnow).
-			statProjMatched.fetch_add(1, std::memory_order_relaxed);
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMeshIsSnow);
-			bindSnowSet = true;
-		} else if (!passProjected || treeAnim) {
+		if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)).mato == MatoClass::kNotSnow) {
 			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
@@ -632,13 +621,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// merged sheet for the containment test, and the material gate is its
 	// only way in.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
-	// Drifts take the whole-mesh recolor (SetProjectedSnowBit) instead of a
-	// skin: the mesh already is the snow, and a skin under the shell's lift
-	// was never seen (Josef, 2026-09-06).
-	if (nameFacts.drift) {
-		LogIceJourney(a_pass, true, "rejected: drift, recolored whole");
-		return;
-	}
 	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
 	bool largeRefMountain = false;
 
@@ -734,7 +716,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// them snow-projected so they pass the flag gate, but the capture sees
 	// sparse cards and the skin wraps them into broken shards. Name-matched
 	// on the diffuse path; extend the list as offenders surface.
-	if (rec.shard || nameFacts.blackPlane) {
+	if (rec.shard) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: twig-card shape class");
 		return;
 	}
@@ -747,14 +729,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// and cell unload they stood out bright; the skin now covers them at
 	// every loaded distance and skips the fade to match.
 	const bool fadeExempt = rec.pathNatural || rec.iceName;
-	// Roads keep their shell at every loaded distance (Josef, 2026-09-06);
-	// the road decision itself comes below, this mirrors its two signals.
-	const bool roadLike = nameFacts.road || rec.roadTex != 0;
+	// Drifts: the mesh IS the snow, and at range the vanilla material reads
+	// far brighter than the shell (Josef, 2026-09-06). Coated whole at every
+	// loaded distance; the projection default below still applies.
+	const bool fullCoat = nameFacts.drift;
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
-	if (!fadeExempt && !roadLike && dx * dx + dy * dy > captureRange * captureRange) {
+	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
 	}
@@ -850,7 +833,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || road, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1771,6 +1754,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
+		// Drifts stay out of the object field: their skin is the cover, and
+		// the shell's 150-unit lift would drape the whole mound over it.
+		if (cap.fullCoat)
+			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
 			continue;
@@ -1807,6 +1794,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
+		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
@@ -1838,6 +1826,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		const auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
+			continue;
+		// Drifts stay out of the object field: their skin is the cover, and
+		// the shell's 150-unit lift would drape the whole mound over it.
+		if (cap.fullCoat)
 			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
@@ -1915,6 +1907,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
+				continue;
+			if (cap.fullCoat)
 				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
@@ -2213,6 +2207,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
 	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
+	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
 	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
@@ -2639,6 +2634,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.forceRounded, sizeof(cap.forceRounded));
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
+			mix(&cap.fullCoat, sizeof(cap.fullCoat));
 			h += e;
 		}
 		cpuCensus.captureHash = h;
