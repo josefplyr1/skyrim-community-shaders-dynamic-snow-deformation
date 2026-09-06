@@ -374,7 +374,7 @@ namespace SharedData
 		// snow set is bound at t102.
 		float ProjSnowEnable;
 		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
-		float padBaked;
+		float LODObjectEnable;
 		// Snow Fill, 0..1: fraction of the projected-snow footprint the
 		// recolor pushes to FULL shell-snow weight, most up-facing pixels
 		// first; 1 = every angle solid. Mirror in SnowDeformation.h.

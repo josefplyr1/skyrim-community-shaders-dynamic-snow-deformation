@@ -514,7 +514,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// game's SetupGeometry (the ExtendedTranslucency pattern): the
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-	extraDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -532,6 +532,17 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 			bindSnowSet = true;
 		}
+	}
+	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles
+	// past the loaded grid) carry baked snow in the atlas and no projection,
+	// so the hook never sees them; Lighting classifies their texels like the
+	// horizon terrain. Snow-flagged LOD stays on the projected path above.
+	if (settings.LODObjectSnow && !bindSnowSet &&
+		a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
+		!a_pass->shaderProperty->flags.all(Flag::kTreeAnim) &&
+		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
+		bindSnowSet = true;
 	}
 	if (bindSnowSet) {
 		// The Prepass-time t102/t103 bind does NOT survive to the Lighting

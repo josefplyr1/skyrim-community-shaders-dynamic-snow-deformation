@@ -156,6 +156,7 @@
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(ProjSnowMatch) \
+	X(LODObjectSnow) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
@@ -606,6 +607,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
+	data.LODObjectEnable = (settings.EnableSnowDeformation && settings.LODObjectSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// Snow Fill, 0..1 across the slider's span: how much of the projected
 	// footprint the recolor pushes to FULL shell-snow weight, most
 	// up-facing pixels first (SKIN-PLACEMENT-PLAN round 11 - the fill
@@ -617,6 +619,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	if (globals::state->isMapMenuOpen) {
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
+		data.LODObjectEnable = 0.0f;
 	}
 	return data;
 }

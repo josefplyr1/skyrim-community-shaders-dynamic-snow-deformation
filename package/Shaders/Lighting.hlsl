@@ -866,7 +866,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV) || defined(TRUE_PBR))
+#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(TRUE_PBR))
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #	endif
 
@@ -897,7 +897,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(PROJECTED_UV)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 // Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
 // the LOD terrain family (horizon snow) and projected-snow statics (the
 // frame7075 fence, technique ENVMAP+PROJECTED_UV). The optional-lobe
@@ -1487,7 +1487,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	glossiness = normal.w;
 #	endif  // MODELSPACENORMALS
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// Horizon snow: where the game's own LOD terrain bake reads as snow,
 	// wear the shell's snow material instead — same albedo, same world
 	// tiling — so the shell's geometry hands off to identically-dressed
@@ -1499,11 +1499,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// vanilla INPUTS here instead.
 	float snowLodReplaceW = 0.0;
 	float3 snowLodAlbedo = 0.0;
-	[branch] if (SharedData::snowDeformationSettings.LODReplaceEnable > 0.5)
+#		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
+	// Plain object-LOD batches flagged by the statics hook: their baked snow
+	// (drifts, roads, piles in the atlas) takes the horizon recipe. The
+	// bake covers the mesh whole, so only undersides are kept out.
+	bool snowLodOn = SharedData::snowDeformationSettings.LODObjectEnable > 0.5 &&
+	                 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0;
+#		else
+	bool snowLodOn = SharedData::snowDeformationSettings.LODReplaceEnable > 0.5;
+#		endif
+	[branch] if (snowLodOn)
 	{
 		float lodSnowScore = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb);
 		float lodReplaceT = saturate((length(input.WorldPosition.xy) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
+#		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
+		float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);
+#		else
 		float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
+#		endif
 		[branch] if (lodReplaceW > 0.003)
 		{
 			// frac + explicit gradients: correct mip selection across the
@@ -2870,7 +2883,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE)) && !defined(WORLD_MAP)
+#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
 	// re-evaluated through the SAME PBR functions the shell and TruePBR
 	// statics use — dirLightContext already carries this pixel's perturbed

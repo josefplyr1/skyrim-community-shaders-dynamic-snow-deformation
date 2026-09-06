@@ -106,6 +106,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttHs = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
 
+		ImGui::Checkbox(T(TKEY("lod_object_snow"), "Recolor Baked LOD Snow"), &settings.LODObjectSnow);
+		if (auto _ttLodObj = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lod_object_snow_tooltip"), "Distant objects the game draws as LOD without its projected-snow flags - snow drifts, snowy roads, piles - keep their own baked snow texture, which reads far brighter than the shell. This applies the Horizon Snow recolor to those pixels too, with the same detection slider below."));
 		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
 		if (auto _ttLss = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. The same setting drives the Horizon Snow recolor, so it decides where snow sits on the far terrain as well as how the shell reads it."));

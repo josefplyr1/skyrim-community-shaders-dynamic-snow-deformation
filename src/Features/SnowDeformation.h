@@ -605,6 +605,8 @@ public:
 		bool HorizonSnow = true;
 		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (ProjSnowFillPct -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
+		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
+		bool LODObjectSnow = true;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -631,7 +633,7 @@ public:
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
-		float padBaked;
+		float LODObjectEnable;
 		/** @brief Snow Fill, 0..1: fraction of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 1 = every angle solid. Mirror in SharedData.hlsli. */
 		float ProjSnowFill;
 
