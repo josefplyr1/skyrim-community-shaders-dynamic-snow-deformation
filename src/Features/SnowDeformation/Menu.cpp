@@ -1264,9 +1264,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates | caster %.0f draws, %.0f CB updates over %.0f passes",
 				s.skinLoopDraws, s.skinLoopCBUpdates, s.casterDraws, s.casterCBUpdates, s.casterPasses);
 			ImGui::Text("Capture hash %016llX over %u skins", (unsigned long long)cpuCensus.captureHash, cpuCensus.captureCount);
-			ImGui::Checkbox(T(TKEY("hook_cache_disabled"), "Capture Hook: Disable Verdict Cache"), &hookCacheDisabled);
-			if (auto _ttHook = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("hook_cache_disabled_tooltip"), "Measurement aid: judges every draw call afresh, as before. With the cache on, a mesh that reaches the hook several times in one frame (shadow, prepass, each light) is judged once. Camera still, the capture hash must read the same either way; the CPU line's hook time is the saving."));
 			ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
 			ImGui::SameLine();
 			if (ImGui::Button("Dump Stamp Hash Ring"))

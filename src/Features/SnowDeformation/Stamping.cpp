@@ -1777,11 +1777,27 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 // first.
 void SnowDeformation::RollCpuCensus()
 {
-	static const double ticksToMs = [] {
-		LARGE_INTEGER f;
-		QueryPerformanceFrequency(&f);
-		return 1000.0 / static_cast<double>(f.QuadPart);
-	}();
+	// rdtsc -> ms, from the rdtsc and QPC deltas since the last roll.
+	static double ticksToMs = 0.0;
+	{
+		static LARGE_INTEGER qpcFreq = [] {
+			LARGE_INTEGER f;
+			QueryPerformanceFrequency(&f);
+			return f;
+		}();
+		static LARGE_INTEGER qpcPrev{};
+		static uint64_t tscPrev = 0;
+		LARGE_INTEGER qpcNow;
+		QueryPerformanceCounter(&qpcNow);
+		const uint64_t tscNow = __rdtsc();
+		if (tscPrev != 0 && tscNow > tscPrev) {
+			const double ms = 1000.0 * double(qpcNow.QuadPart - qpcPrev.QuadPart) / double(qpcFreq.QuadPart);
+			const double ratio = ms / double(tscNow - tscPrev);
+			ticksToMs = ticksToMs == 0.0 ? ratio : ticksToMs + (ratio - ticksToMs) * 0.05;
+		}
+		qpcPrev = qpcNow;
+		tscPrev = tscNow;
+	}
 	auto ema = [](float& a_shown, float a_value) { a_shown += (a_value - a_shown) * (1.0f / 30.0f); };
 	auto& c = cpuCensus;
 	auto& s = cpuShown;
@@ -1801,7 +1817,7 @@ void SnowDeformation::RollCpuCensus()
 	ema(s.casterCBUpdates, float(c.casterCBUpdates));
 	ema(s.casterPasses, float(c.casterPasses));
 	c.hookTicks = c.actorTicks = c.landTicks = c.depthTicks = c.traverseTicks = 0;
-	c.hookCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
+	c.hookCalls = c.hookBitCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
 	c.skinLoopDraws = c.skinLoopCBUpdates = c.casterDraws = c.casterCBUpdates = c.casterPasses = 0;
 	if (c.stampHashDumpRequested) {
 		c.stampHashDumpRequested = false;

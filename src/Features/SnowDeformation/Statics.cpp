@@ -438,6 +438,7 @@ namespace
 
 void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass)
 {
+	ScopedTicks _bitTicks(cpuCensus.hookTicks, cpuCensus.hookBitCalls);
 	// Projected-snow bit for Lighting's material match (SNOW-MATCH Phase 2):
 	// cleared every pass so it never leaks, set when this draw's projected
 	// material is actually snow. Classified from the PASS TECHNIQUE
@@ -514,18 +515,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// One verdict per geometry per frame: the same geometry arrives once per
 	// pass that draws it, and nothing below depends on the pass. A capture
 	// already returned at the set insert; this returns the rejections too.
-	if (!hookCacheDisabled) {
-		const uint32_t frame = globals::state->frameCount;
-		if (hookSeen.size() > 65536)
-			hookSeen.clear();
-		auto [seenIt, seenNew] = hookSeen.try_emplace(a_pass->geometry, frame);
-		if (!seenNew) {
-			if (seenIt->second == frame)
-				return;
-			seenIt->second = frame;
-		}
-	}
-
 	// The clean gate: projected-UV + snow flags together; covers rocks,
 	// roofs, logs, stumps and never flora, because foliage is not
 	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture
@@ -2459,15 +2448,19 @@ void SnowDeformation::DrawCapturedStatics()
 		return;
 	ServiceLandTriProbe();
 	{
-		uint64_t h = 1469598103934665603ull;
+		// Order-free: the game hands the passes over in a different order
+		// each frame, so entries hash on their own and the sum is the list.
+		uint64_t h = 0;
+		uint64_t e = 0;
 		auto mix = [&](const void* a_p, size_t a_n) {
 			const auto* b = static_cast<const uint8_t*>(a_p);
 			for (size_t i = 0; i < a_n; i++) {
-				h ^= b[i];
-				h *= 1099511628211ull;
+				e ^= b[i];
+				e *= 1099511628211ull;
 			}
 		};
 		for (const auto& cap : capturedStatics) {
+			e = 1469598103934665603ull;
 			const void* g = cap.geometry.get();
 			mix(&g, sizeof(g));
 			mix(&cap.world.translate, sizeof(cap.world.translate));
@@ -2480,6 +2473,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.forceRounded, sizeof(cap.forceRounded));
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
+			h += e;
 		}
 		cpuCensus.captureHash = h;
 		cpuCensus.captureCount = (uint32_t)capturedStatics.size();

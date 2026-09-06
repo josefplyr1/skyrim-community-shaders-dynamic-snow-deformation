@@ -6,6 +6,8 @@
 
 #include "Buffer.h"
 
+#include <intrin.h>
+
 struct SnowDeformation : Feature
 {
 public:
@@ -1591,10 +1593,6 @@ public:
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
 	std::vector<CapturedSnowStatic> capturedStatics;
 	std::unordered_set<void*> capturedStaticsSet;
-	/** @brief Capture hook verdict cache: geometry -> the frame it was last judged in (PERF-RESEARCH §11.2-A). */
-	std::unordered_map<const void*, uint32_t> hookSeen;
-	/** @brief A/B: every pass re-runs the hook's classification, as before the cache. Runtime-only. */
-	bool hookCacheDisabled = false;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
 	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). */
@@ -1849,6 +1847,8 @@ public:
 	{
 		int64_t hookTicks = 0;
 		uint32_t hookCalls = 0;
+		/** @brief SetProjectedSnowBit's calls; its ticks go into hookTicks (it is the same hook, before the game's own setup). */
+		uint32_t hookBitCalls = 0;
 		int64_t actorTicks = 0;
 		uint32_t actors = 0;
 		int64_t landTicks = 0;
@@ -1881,18 +1881,19 @@ public:
 		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f, casterDraws = 0.0f, casterCBUpdates = 0.0f, casterPasses = 0.0f;
 	};
 	CpuCensusShown cpuShown;
+	// rdtsc, not QPC: two QPC reads are ~50 ns and the hook runs thousands of
+	// times a frame, so the instrument was a fifth of what it measured.
+	// Calibrated against QPC once per frame in RollCpuCensus.
 	struct ScopedTicks
 	{
 		int64_t& acc;
 		uint32_t& calls;
-		LARGE_INTEGER t0;
+		uint64_t t0;
 		ScopedTicks(int64_t& a_acc, uint32_t& a_calls) :
-			acc(a_acc), calls(a_calls) { QueryPerformanceCounter(&t0); }
+			acc(a_acc), calls(a_calls), t0(__rdtsc()) {}
 		~ScopedTicks()
 		{
-			LARGE_INTEGER t1;
-			QueryPerformanceCounter(&t1);
-			acc += t1.QuadPart - t0.QuadPart;
+			acc += int64_t(__rdtsc() - t0);
 			calls++;
 		}
 	};
