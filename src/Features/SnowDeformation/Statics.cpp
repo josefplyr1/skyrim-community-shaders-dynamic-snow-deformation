@@ -1765,10 +1765,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
-		// Drifts stay out of the object field: their skin is the cover, and
-		// the shell's 150-unit lift would drape the whole mound over it.
-		if (cap.fullCoat)
-			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
 			continue;
@@ -1837,10 +1833,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		const auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
-			continue;
-		// Drifts stay out of the object field: their skin is the cover, and
-		// the shell's 150-unit lift would drape the whole mound over it.
-		if (cap.fullCoat)
 			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
@@ -1918,8 +1910,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
-				continue;
-			if (cap.fullCoat)
 				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
