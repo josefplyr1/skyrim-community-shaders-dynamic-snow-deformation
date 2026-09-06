@@ -1337,7 +1337,7 @@ bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t 
 	return true;
 }
 
-void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, uint32_t& a_parity)
+void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity)
 {
 	ID3D11Buffer* buffer = staticsRecordCB[a_parity & 1].get();
 	a_parity++;
@@ -1346,6 +1346,13 @@ void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, uin
 	staticsContext1->VSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	if (a_pixelStage)
 		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
+	// Tessellated skins read the block in the hull and domain stages too;
+	// left on the old buffer they computed every skin from one frozen
+	// block (snow on vertical faces, Josef 2026-09-06).
+	if (a_tessStages) {
+		staticsContext1->HSSetConstantBuffers1(1, 1, &buffer, &first, &count);
+		staticsContext1->DSSetConstantBuffers1(1, 1, &buffer, &first, &count);
+	}
 }
 
 void SnowDeformation::RenderObjectHeightMap()
@@ -1839,7 +1846,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11ShaderResourceView* captureSmoothSRV = captureSmoothSRVs[ci].get();
 		context->VSSetShaderResources(10, 1, &captureSmoothSRV);
 		if (captureRecordsLive)
-			BindStaticsRecord(ci, true, captureParity);
+			BindStaticsRecord(ci, true, false, captureParity);
 		else
 			staticsCB->Update(captureRecords[ci]);
 
@@ -1913,7 +1920,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			ID3D11ShaderResourceView* peelSmoothSRV = captureSmoothSRVs[ci].get();
 			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
 			if (captureRecordsLive)
-				BindStaticsRecord(captureCount + ci, true, captureParity);
+				BindStaticsRecord(captureCount + ci, true, false, captureParity);
 			else
 				staticsCB->Update(captureRecords[size_t(captureCount) + ci]);
 			context->DrawIndexed(indexCount, 0, 0);
@@ -3118,7 +3125,7 @@ void SnowDeformation::DrawCapturedStatics()
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
 			context->VSSetShaderResources(10, 1, &skinSmoothSRV);
 			if (skinRecordsLive) {
-				BindStaticsRecord(recordIndex, true, skinParity);
+				BindStaticsRecord(recordIndex, true, tessellateSkins, skinParity);
 			} else {
 				staticsCB->Update(skinRecords[recordIndex]);
 				cpuCensus.skinLoopCBUpdates++;

@@ -2311,7 +2311,7 @@ public:
 	static constexpr uint32_t kStaticsRecordMax = 4096;
 	bool EnsureStaticsRecordCB();
 	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count);
-	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, uint32_t& a_parity);
+	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity);
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
 	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
 	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
