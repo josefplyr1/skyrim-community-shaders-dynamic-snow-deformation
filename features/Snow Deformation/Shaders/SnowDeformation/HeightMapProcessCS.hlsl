@@ -265,9 +265,16 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 		int2 p = int2(dtid.xy) + offs;
 		if (any(p < 0) || any(p >= int2(dims)))
 			continue;
-		// Cling: the shell rolls at its own raster edge whatever sits nearby
-		// (the meld-across-a-sliver option was retired 2026-09-06).
-		float n = InA[uint2(p)];
+		float n1 = InA[uint2(p)];
+		// The 2-texel tap feeds the slope-continuation carry of both rim
+		// tests below; it was never the meld option's (that was the 3-texel
+		// tap and the max across them, retired 2026-09-06). Cling: the shell
+		// rolls at its own raster edge whatever sits nearby.
+		float n2 = -100000.0;
+		int2 p2 = int2(dtid.xy) + offs * 2;
+		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
+			n2 = InA[uint2(p2)];
+		float n = n1;
 		if (n < -50000.0) {
 			rim = true;
 			continue;
