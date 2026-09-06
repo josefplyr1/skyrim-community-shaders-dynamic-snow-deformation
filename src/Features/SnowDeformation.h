@@ -43,15 +43,15 @@ public:
 	// so trench detail coarsens with range.
 	static constexpr uint kTextureDim = 2048;
 	static constexpr uint kMaxStamps = 256;
-	/** @brief Prop contact field: texels across, and half the window (world units) it covers around the deformation centre - 3 units per texel, finer than the map it feeds. */
-	static constexpr uint kContactDim = 1024;
-	static constexpr float kContactHalfExtent = 1536.0f;
+	/** @brief Prop contact field: texels across, and half the window (world units) it covers around the deformation centre - 3 units per texel, finer than the map it feeds. Doubled 2026-09-06 (Josef: NPCs in a fight printed by bones until he closed in); the texel size is kept, the field is 4x the texels. */
+	static constexpr uint kContactDim = 2048;
+	static constexpr float kContactHalfExtent = 3072.0f;
 	/** @brief Clear value of the contact field: nothing drawn over this column. */
 	static constexpr float kContactNone = 1.0e30f;
 	/** @brief Bones a single skin partition may carry: 240 float4 rows at 3 per bone, the game's own ceiling. Partitions past it are skipped rather than truncated. */
 	static constexpr uint kContactMaxBones = 80;
-	/** @brief Actors rasterized per frame at most; a crowd must not turn the spike into a full character pass. */
-	static constexpr uint kContactMaxActors = 8;
+	/** @brief Living actors rasterized per frame at most, the NEAREST first (contactPriority); a crowd must not turn the spike into a full character pass. 8 → 16 at Josef's call, 2026-09-06. */
+	static constexpr uint kContactMaxActors = 16;
 	/** @brief Corpses drawn by the contact pass, budgeted apart from the living: a corpse holds its slot only until it settles. */
 	static constexpr uint kContactMaxCorpses = 8;
 	/** @brief Must match MAX_BOW_WAVES in SnowShell.hlsl and MAX_DEPOSIT_WAVES in DeformationUpdateCS.hlsl. Declared HERE because PerFrame sizes arrays with it - an in-class static constexpr must precede the struct that uses it (S4 r20 lesson). */
@@ -2376,6 +2376,8 @@ public:
 	/** @brief This frame's living and corpse entries in contactActors, against their separate caps. */
 	uint contactLivingCount = 0;
 	uint contactCorpseCount = 0;
+	/** @brief FormIDs of the living actors that hold this frame's raster slots: the player and the nearest inside the contact window, up to kContactMaxActors. Anyone else inside the window prints by bones. Before this the slots went in process-list order, so a near NPC could print by bones while a far one rasterized. */
+	std::vector<uint32_t> contactPriority;
 	/** @brief Per-geometry scratch for the skinned contact palette: one composed transform per skin bone, built on first use and shared by every partition of the geometry. */
 	std::vector<RE::NiTransform> contactPaletteScratch;
 	std::vector<uint8_t> contactPaletteBuilt;

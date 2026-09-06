@@ -584,18 +584,20 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// match; a catch-all "snow" match drags frosted bushes in, whose leaf
 	// cards shard under the skin.
 	auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
+	// Drifts ride the ice journey log: same once-per-outcome budget.
+	const bool driftJourney = NameFactsOf(a_pass->geometry).drift;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim)) {
-		LogIceJourney(a_pass, rec.ice, "rejected: tree-anim flag");
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: tree-anim flag");
 		return;
 	}
 	// Skinned geometry never qualifies: with the family acceptance no
 	// longer LOD-only, an "Ice"-prefixed actor mesh (ice wraith) would
 	// otherwise capture and drag a static skin behind a moving creature.
 	if (a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
-		LogIceJourney(a_pass, rec.ice, "rejected: skinned geometry");
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: skinned geometry");
 		return;
 	}
 	// Ice-family meshes keep their skins at every range: the always-covered
@@ -657,7 +659,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			// off across sheet boundaries.
 			const bool iceSheet = rec.pathNatural;
 			if (!referenced && !iceSheet && !largeRefLOD) {
-				LogIceJourney(a_pass, rec.ice, "rejected: containment (big, camera inside, no owning reference found)");
+				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
 			}
@@ -700,9 +702,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		                   GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
 		if (!(rec.pathBase || naturalFeature || largeRefMountain)) {
 			if (matoVetoed)
-				LogIceJourney(a_pass, rec.ice, "rejected: family matched but MATO vetoed (kNotSnow)");
+				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: family matched but MATO vetoed (kNotSnow)");
 			else
-				LogIceJourney(a_pass, rec.ice, "rejected: no family signal at material gate (name/texture both missed)");
+				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no family signal at material gate (name/texture both missed)");
 			if (isObjectLOD)
 				SampleMaterialReject(a_pass->geometry, material);
 			return;
@@ -715,7 +717,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// sparse cards and the skin wraps them into broken shards. Name-matched
 	// on the diffuse path; extend the list as offenders surface.
 	if (rec.shard) {
-		LogIceJourney(a_pass, rec.ice, "rejected: twig-card shape class");
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: twig-card shape class");
 		return;
 	}
 
@@ -736,14 +738,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
 	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
-		LogIceJourney(a_pass, rec.ice, "rejected: range cap despite family signal (fadeExempt did not fire)");
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
 	}
 
 	// The same geometry renders through multiple passes; capture once.
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
-	LogIceJourney(a_pass, rec.ice, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
+	LogIceJourney(a_pass, rec.ice || driftJourney, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
 
 	// Road-mesh model class: deterministic NAME + texture-path match. The
 	// name check matters: road models are built from MULTIPLE trishapes

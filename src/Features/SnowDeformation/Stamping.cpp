@@ -604,6 +604,44 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// (discrete alternating prints); skeletons without foot bones, corpses
 	// and props stamp their Havok collision shapes (Util::GetShapeBound over
 	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
+	// Raster slots to the player and the nearest living actors inside the
+	// contact window, not the first in the process list.
+	contactPriority.clear();
+	if (debugActorContact && !contactShadersFailed) {
+		struct Nearby
+		{
+			float d2;
+			uint32_t id;
+		};
+		static std::vector<Nearby> nearby;
+		nearby.clear();
+		auto consider = [&](RE::Actor* a_actor, float a_d2) {
+			if (!a_actor || a_actor->IsDead() || !a_actor->Is3DLoaded())
+				return;
+			auto* root = a_actor->Get3D(false);
+			if (!root)
+				return;
+			const auto& b = root->worldBound;
+			if (b.radius <= 0.0f ||
+				std::abs(b.center.x - contactCenter.x) + b.radius >= kContactHalfExtent ||
+				std::abs(b.center.y - contactCenter.y) + b.radius >= kContactHalfExtent)
+				return;
+			nearby.push_back({ a_d2, a_actor->formID });
+		};
+		if (auto player = RE::PlayerCharacter::GetSingleton())
+			consider(player, -1.0f);
+		if (const auto processLists = RE::ProcessLists::GetSingleton())
+			for (auto& handle : processLists->highActorHandles)
+				if (auto actor = handle.get(); actor)
+					consider(actor.get(), cameraPosition.GetSquaredDistance(actor->GetPosition()));
+		std::sort(nearby.begin(), nearby.end(), [](const Nearby& a_a, const Nearby& a_b) { return a_a.d2 < a_b.d2; });
+		for (size_t i = 0; i < nearby.size() && contactPriority.size() < kContactMaxActors; i++)
+			contactPriority.push_back(nearby[i].id);
+	}
+	auto prioritized = [&](uint32_t a_id) {
+		return std::find(contactPriority.begin(), contactPriority.end(), a_id) != contactPriority.end();
+	};
+
 	auto addStamps = [&](RE::ActorHandle a_handle) {
 		auto actor = a_handle.get();
 		if (!actor || !actor->Is3DLoaded())
@@ -660,7 +698,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// incorporeal gate is different: a ghost is solid geometry, and only
 		// its alpha says so, so it still refuses before the enqueue.
 		const bool rasterCandidate = debugActorContact && !contactShadersFailed &&
-		                             (isDead ? contactCorpseCount < kContactMaxCorpses : contactLivingCount < kContactMaxActors) &&
+		                             (isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID)) &&
 		                             root->worldBound.radius > 0.0f &&
 		                             std::abs(root->worldBound.center.x - contactCenter.x) + root->worldBound.radius < kContactHalfExtent &&
 		                             std::abs(root->worldBound.center.y - contactCenter.y) + root->worldBound.radius < kContactHalfExtent;
@@ -1011,7 +1049,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// moves off its resting place again.
 		if (debugActorContact && !contactShadersFailed) {
 			const auto& bound = root->worldBound;
-			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : contactLivingCount < kContactMaxActors;
+			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
 			if (budget && bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {

@@ -3562,6 +3562,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
+	// Drifts: whole mesh coated, no projection weight or vertex alpha cut.
+	[flatten] if (FullCoat > 0.5)
+		pixelCoverage = 1.0;
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every
