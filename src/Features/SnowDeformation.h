@@ -1575,7 +1575,7 @@ public:
 		bool road;
 		/** @brief Matched on "bridge" rather than "road". Held apart from `road` only to keep bridges out of the road heightfield (S0): their deck is elevated, and the stamp map has no z channel to tell a deck trail from the ground below it (#9e). */
 		bool bridge;
-		/** @brief Glacier/iceberg family: captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
+		/** @brief Glacier/iceberg family and roads (roads since 2026-09-06: Josef wants the road shell at every loaded distance): captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
 		bool fadeExempt;
 		/** @brief projectedUVParams.w from the draw's property, -1 without kProjectedUV; see StaticsCB::ProjThreshold. */
 		float projThreshold;
@@ -1589,8 +1589,6 @@ public:
 		bool plankFamily;
 		/** @brief The property really carries kProjectedUV (projThreshold read from it). False for the mesh-replacer default (threshold 0, no noise), whose reconstructed weight is a guess the coat and the edge lumps must not trust. */
 		bool projReal;
-		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
-		bool fullCoat;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1728,8 +1726,7 @@ public:
 		float MoundSteepness;
 		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
 		float ObjectTrenches;
-		/** @brief Drift meshes (geometry name): the whole mesh is the snow, so the skin coats every facing and never collapses, dissolves or drops out of range. */
-		float FullCoat;
+		float padDistantBareness;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
 		float FadeExempt;
 		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

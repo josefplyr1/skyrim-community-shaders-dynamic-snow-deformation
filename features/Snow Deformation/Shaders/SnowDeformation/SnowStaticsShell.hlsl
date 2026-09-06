@@ -217,8 +217,7 @@ cbuffer StaticCB : register(b1)
 	// objects are gated by the setting until the object trench work lands.
 	float ObjectTrenches;
 
-	// Drift meshes: coat every facing, no collapse, dissolve or range retire.
-	float FullCoat;
+	float padDistantBareness;
 	// >0.5: skip the SkinFade distance dissolve (glacier/iceberg captures,
 	// whose own baked snow never matches the shell). Mirror in
 	// SnowDeformation.h StaticsCB.
@@ -1737,9 +1736,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			projFactor = saturate(5.0 * projWeight);
 		upFacing *= projFactor;
 	}
-	// The whole drift mesh is snow: coated at every angle.
-	[flatten] if (FullCoat > 0.5)
-		upFacing = 1.0;
 	float depth = depthBase * upFacing;
 
 	// Geometry LOD: collapse the layer BEFORE the material dissolve begins, so
@@ -1802,7 +1798,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// the depth sliders' 25-unit maximum.
 	// Roads are exempt: their height must stay in step with the landscape
 	// shell they meet at the verge, and that shell does not collapse.
-	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5 && FullCoat < 0.5)
+	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5)
 	{
 		float collapseEnd = SkinCollapseEnd(depthBase);
 #if defined(SHADOWCAST)
@@ -2376,7 +2372,7 @@ float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 	// The collapse range is horizontal (see ApplySkinLift); the target
 	// edge length above stays on the true distance, which is screen size.
 	float rangeDist = length(mid.xy - ShellCameraPosAdjust.xy);
-	float rangeFade = FullCoat > 0.5 ? 1.0 : 1.0 - smoothstep(0.0, collapseEnd, rangeDist);
+	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, rangeDist);
 	return clamp(length(worldA - worldB) / targetLen * rangeFade, 1.0, 16.0);
 }
 
@@ -3562,9 +3558,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	else [flatten] if (ProjDensityEnable > 0.5 && ProjThreshold > -0.5)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
-	// Drifts: whole mesh coated, no projection weight or vertex alpha cut.
-	[flatten] if (FullCoat > 0.5)
-		pixelCoverage = 1.0;
 
 	// Coverage follows the layer's own HEIGHT, not the geometric face normal:
 	// geoFacing is constant across a triangle, so thresholding it tears every
@@ -3968,7 +3961,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 			bool realKnown = realEnc >= 1.5;
 			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
-			painted = painted || FullCoat > 0.5;
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;

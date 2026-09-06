@@ -36,7 +36,7 @@ cbuffer StaticCB : register(b1)
 	// texels dead for it, which is how a class is switched off.
 	float ObjectTrenches;
 
-	float FullCoat;
+	float padDistantBareness;
 	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
 	// >0.5: this draw is a road-heightfield object; RT2.g carries the bit so
 	// the patch can own the column outright.

@@ -289,7 +289,10 @@ public:
 		SnowLandIsSnowMask = 0b111111 << 10,
 		// Set per pass by SnowDeformation's statics hook: this draw's
 		// projected material is snow (flags + MATO classification).
-		SnowProjectedIsSnow = 1 << 16
+		SnowProjectedIsSnow = 1 << 16,
+		// Set per pass by the same hook: the whole mesh is snow (drifts),
+		// recolored at weight 1 with no projection.
+		SnowMeshIsSnow = 1 << 17
 	};
 
 	bool inWorld = false;
