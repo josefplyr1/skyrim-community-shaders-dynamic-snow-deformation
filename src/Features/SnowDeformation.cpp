@@ -2199,13 +2199,19 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	const uint64_t snowTex = SRVBytes(shellSnowDiffuseSRV.get()) + SRVBytes(shellSnowNormalSRV.get()) +
 	                         SRVBytes(shellSnowRmaosSRV.get()) + SRVBytes(shellSnowHeightSRV.get());
 
-	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex;
+	// R8 volumes: one byte per voxel.
+	auto tex3Bytes = [](Texture3D* a_wrap) -> uint64_t {
+		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * a_wrap->desc.Depth : 0;
+	};
+	const uint64_t voxel = tex3Bytes(voxelVolume[0]) + tex3Bytes(voxelVolume[1]);
+
+	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex + voxel;
 
 	char line[256];
-	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, snowTex %llu (MB)",
+	snprintf(line, sizeof(line), "deform %llu, terrain %llu, heights %llu, sunShadowCopies %llu, pointShadowCopy %llu, snowTex %llu, voxel %llu (MB)",
 		(unsigned long long)(deform >> 20), (unsigned long long)(terrain >> 20), (unsigned long long)(heights >> 20),
 		(unsigned long long)(shadowCopies >> 20), (unsigned long long)(pointCopy >> 20),
-		(unsigned long long)(snowTex >> 20));
+		(unsigned long long)(snowTex >> 20), (unsigned long long)(voxel >> 20));
 	a_breakdown = line;
 	return total;
 }

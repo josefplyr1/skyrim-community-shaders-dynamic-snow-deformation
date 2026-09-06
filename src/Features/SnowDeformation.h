@@ -2050,6 +2050,61 @@ public:
 
 	ConstantBuffer* heightProcessCB = nullptr;
 
+	// ---- Voxel occupancy volume (VOLUME-SNOW-PLAN V0) ----
+
+	/** @brief 256 voxels of 8 units: a 2048-unit cube around the camera. Pow2 for the torus. Mirrors Dim/VoxelSize in SnowVoxelCapture.hlsl. */
+	static constexpr uint kVoxelDim = 256;
+	static constexpr float kVoxelSize = 8.0f;
+
+	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
+	struct alignas(16) VoxelVolumeCB
+	{
+		/** @brief xyz = window origin in voxels, w = clear all. */
+		DirectX::XMINT4 OriginVox;
+		/** @brief xyz = this frame's origin minus last frame's. */
+		DirectX::XMINT4 ScrollDelta;
+		float VoxelSize;
+		/** @brief Occupancy lost per frame; a voxel not re-rasterised fades out. */
+		float Decay;
+		int Dim;
+		int SliceAxis;
+		int SliceIndex;
+		int padSlice[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
+
+	/** @brief Ping-pong R8 occupancy in physical (toroidal) layout; created on first enable and kept. */
+	Texture3D* voxelVolume[2] = { nullptr, nullptr };
+	/** @brief The menu's plane through the current volume. */
+	Texture2D* voxelSliceTexture = nullptr;
+	ConstantBuffer* voxelCB = nullptr;
+	winrt::com_ptr<ID3D11RasterizerState> voxelRasterState;
+	ID3D11VertexShader* voxelVS = nullptr;
+	ID3D11GeometryShader* voxelGS = nullptr;
+	ID3D11PixelShader* voxelPS = nullptr;
+	ID3D11ComputeShader* voxelScrollCS = nullptr;
+	ID3D11ComputeShader* voxelSliceCS = nullptr;
+	bool voxelShadersFailed = false;
+	uint voxelCurrent = 0;
+	bool voxelValid = false;
+	DirectX::XMINT3 voxelOriginVox = { 0, 0, 0 };
+	/** @brief Runtime-only: build the volume each frame. Nothing reads it; V0 is the measurement. */
+	bool voxelVolumeEnable = false;
+	/** @brief Runtime-only: write and show the slice. */
+	bool showVoxelSlice = false;
+	/** @brief 0 top-down (XY), 1 side XZ, 2 side YZ. */
+	int voxelSliceAxis = 1;
+	/** @brief Slice plane offset from the camera, world units. */
+	float voxelSliceOffset = 0.0f;
+	/** @brief Seconds an unseen voxel takes to fade, at 60 fps. */
+	float voxelMemorySeconds = 4.0f;
+	/** @brief Creates the volumes, slice, CB, rasterizer and shaders on first use. Implemented in SnowDeformation/Volume.cpp. */
+	bool EnsureVoxelResources();
+	/** @brief Scrolls and decays the volume, then rasterises this frame's captured statics into it. Called inside RenderObjectHeightMap after the peel passes; a_records are the capture blocks it filled. Implemented in SnowDeformation/Volume.cpp. */
+	void RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity);
+	/** @brief Writes the selected plane of the current volume to voxelSliceTexture. Implemented in SnowDeformation/Volume.cpp. */
+	void UpdateVoxelSliceTexture();
+
 	// ---- Exclusion zones: bare-by-design clearings in the snow field ----
 
 	/** @brief Doors get elliptical clears stretched along their facing (load doors; cave and building entrances; larger) that fade coverage to bare ground. Fires get noisy-edged MELT BASINS instead: the shell's depth thins toward a small floor that never vanishes and never sinks below terrain (negative values in the shelter-mask channel; see CombineCS). */

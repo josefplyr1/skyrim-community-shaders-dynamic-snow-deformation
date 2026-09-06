@@ -160,6 +160,10 @@ namespace Util
 			ID3D11DomainShader* regShader;
 			DX::ThrowIfFailed(device->CreateDomainShader(Data, Size, nullptr, &regShader));
 			return regShader;
+		} else if (!_stricmp(ProgramType, "gs_5_0")) {
+			ID3D11GeometryShader* regShader;
+			DX::ThrowIfFailed(device->CreateGeometryShader(Data, Size, nullptr, &regShader));
+			return regShader;
 		} else if (!_stricmp(ProgramType, "cs_5_0") || !_stricmp(ProgramType, "cs_4_0")) {
 			ID3D11ComputeShader* regShader;
 			DX::ThrowIfFailed(device->CreateComputeShader(Data, Size, nullptr, &regShader));

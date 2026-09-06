@@ -1647,6 +1647,34 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_volume"), "Object Snow Volume"))) {
+			ImGui::Checkbox(T(TKEY("voxel_enable"), "Build Volume"), &voxelVolumeEnable);
+			if (auto _ttVox = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("voxel_enable_tooltip"), "VOLUME-SNOW-PLAN V0: rasterises this frame's captured statics into a cube of 256 x 256 x 256 voxels, 8 units each, around the camera (about 30 m across, 32 MB, kept until the game closes). Remembered between frames and fading where nothing redraws, like the height maps. Nothing reads it yet: this is the measurement that decides whether the volume route is worth building. Its cost is the VoxelVolume pass."));
+			if (voxelVolumeEnable) {
+				ImGui::SliderFloat(T(TKEY("voxel_memory"), "Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
+				if (auto _ttVoxMem = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade."));
+				ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
+				if (showVoxelSlice) {
+					const char* voxelAxes[] = { "Top-down", "Side: east-west", "Side: north-south" };
+					ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
+					ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
+					ImGui::Text("%s", T(TKEY("voxel_slice_hint"), "Red = an object surface, bright when drawn this frame and dimming as it is remembered. Top-down: north is up. Side views: up is up. The cross is the camera. The exit test is a roof: solid above, empty beneath, and the floor under it as its own line."));
+					const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
+					if (voxelSliceTexture && voxelSliceTexture->srv) {
+						ImGui::Image(voxelSliceTexture->srv.get(), { 512.0f, 512.0f });
+						auto* draw = ImGui::GetWindowDrawList();
+						const ImVec2 centre{ voxelImageTopLeft.x + 256.0f, voxelImageTopLeft.y + 256.0f };
+						const ImU32 ink = IM_COL32(80, 220, 255, 220);
+						draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
+						draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
+					}
+				}
+			}
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_accumulation"), "Snow Accumulation"))) {
 			{
 				// The rate is spelled out because the exit test is "does the number

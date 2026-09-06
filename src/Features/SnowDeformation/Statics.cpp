@@ -1950,6 +1950,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->PSSetShaderResources(3, 2, nullPeelSRVs);
 	}
 
+	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive, captureParity);
+
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
