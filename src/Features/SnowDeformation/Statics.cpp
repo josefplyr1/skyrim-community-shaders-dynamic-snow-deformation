@@ -1297,6 +1297,10 @@ bool SnowDeformation::EnsureStaticsRecordCB()
 		logger::info("[SNOW DEFORMATION] statics record buffer: no ID3D11DeviceContext1; per-draw updates stay");
 		return false;
 	}
+	// An interposer's proxy may answer the query with itself; log what came back.
+	logger::info("[SNOW DEFORMATION] statics record buffer: ID3D11DeviceContext1 {:X} (base context {:X}, {})",
+		reinterpret_cast<uintptr_t>(staticsContext1.get()), reinterpret_cast<uintptr_t>(context),
+		static_cast<void*>(staticsContext1.get()) == static_cast<void*>(context) ? "same object" : "different object");
 	for (int i = 0; i < 2; i++) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = kStaticsRecordMax * kStaticsRecordStride;
@@ -1318,7 +1322,7 @@ bool SnowDeformation::EnsureStaticsRecordCB()
 
 bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count)
 {
-	if (a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
+	if (!staticsRecordEnabled || a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
 		return false;
 	auto* context = globals::d3d::context;
 	for (int i = 0; i < 2; i++) {

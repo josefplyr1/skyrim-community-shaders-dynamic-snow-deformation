@@ -2305,6 +2305,8 @@ public:
 	winrt::com_ptr<ID3D11DeviceContext1> staticsContext1;
 	winrt::com_ptr<ID3D11Buffer> staticsRecordCB[2];
 	bool staticsRecordChecked = false;
+	/** @brief Opt-in (runtime-only, default OFF): the per-draw offset bind path. Josef's first run with it CTD'd inside the NVIDIA driver the moment the world appeared - a D3D11 interposer (Streamline is loaded) can answer the ID3D11DeviceContext1 query with a proxy whose 11.1 methods are not real. Off, every draw takes the Update path from the same records. */
+	bool staticsRecordEnabled = false;
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
 	static constexpr uint32_t kStaticsRecordMax = 4096;
 	bool EnsureStaticsRecordCB();
