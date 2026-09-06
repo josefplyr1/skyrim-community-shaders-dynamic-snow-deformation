@@ -605,6 +605,8 @@ public:
 		float VolumeSnowDepth = 24.0f;
 		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. V1a. */
 		float VolumeSnowCoverage = 0.5f;
+		/** @brief "Draw Volume Snow" (V1b): march the field per pixel inside brick AABBs and shade it with the skins' own material. Off = the field only exists in the slice view. */
+		bool VolumeSnowDraw = true;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -2087,8 +2089,28 @@ public:
 		float SeedSigma;
 		float FieldThreshold;
 		float padField[2];
+		/** @brief xyz = the camera in voxel units (absolute), w = the draw's reach in voxels (brick cull). */
+		float EyeVox[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
+
+	/** @brief V1b draw constants (b2 on the VOXEL variant of SnowStaticsShell). Layout must match VoxelDrawCB there. */
+	struct alignas(16) VoxelDrawCB
+	{
+		/** @brief xyz = window origin in voxels. */
+		DirectX::XMINT4 VoxOrigin;
+		/** @brief x voxel size, y dim, z field threshold, w march step in voxels. */
+		float4 VoxParams;
+		/** @brief x fade start, y fade end - units from the camera; the dithered distance dissolve, inside the window's reach. */
+		float4 VoxFade;
+	};
+	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
+	/** @brief Bricks per axis (kVoxelDim / 8) and the list's capacity. */
+	static constexpr uint kVoxelBricksPerAxis = kVoxelDim / 8;
+	static constexpr uint kVoxelBrickCapacity = kVoxelBricksPerAxis * kVoxelBricksPerAxis * kVoxelBricksPerAxis;
+	/** @brief The volume draw dissolves over this fraction of the window's half-extent. */
+	static constexpr float kVoxelFadeStartFrac = 0.70f;
+	static constexpr float kVoxelFadeEndFrac = 0.95f;
 	/** @brief Seed weight under a roof/fire: the 2D pipeline's dusting, as a fraction of full. */
 	static constexpr float kVoxelShelterDust = 0.1f;
 
@@ -2098,6 +2120,19 @@ public:
 	Texture3D* voxelField = nullptr;
 	ID3D11ComputeShader* voxelSeedCS = nullptr;
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
+	// ---- V1b: the draw ----
+	/** @brief Append list of bricks the isosurface crosses (packed x | y<<8 | z<<16); its counter is the instance count. */
+	Buffer* voxelBrickBuffer = nullptr;
+	/** @brief DrawInstancedIndirect args {36, count, 0, 0}; count copied from the list's counter each frame. */
+	Buffer* voxelDrawArgs = nullptr;
+	ConstantBuffer* voxelDrawCB = nullptr;
+	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;
+	ID3D11ComputeShader* voxelBrickListCS = nullptr;
+	/** @brief The VOXEL variant of SnowStaticsShell: brick AABB VS + marching PS through SkinShadeSurface. Compiled with the other statics variants; optional. */
+	ID3D11VertexShader* voxelShellVS = nullptr;
+	ID3D11PixelShader* voxelShellPS = nullptr;
+	/** @brief Draws the volume snow at the end of the statics pass (targets, depth and every skin binding still live). Implemented in SnowDeformation/Volume.cpp. */
+	void DrawVoxelSnow();
 	/** @brief Runtime-only: what the slice draws - 0 occupancy, 1 the field, 2 the field at the threshold (the snow). */
 	int voxelSliceSource = 2;
 	/** @brief The menu's plane through the current volume. */

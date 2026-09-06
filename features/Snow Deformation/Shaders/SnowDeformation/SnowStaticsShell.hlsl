@@ -2105,7 +2105,51 @@ float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
 }
 #endif
 
-#if defined(VSHADER) && !defined(PATCH)
+#if defined(VOXEL)
+// Volume snow draw (VOLUME-SNOW-PLAN V1b): one brick AABB per instance, the
+// snow field marched per pixel inside it. Layout must match VoxelDrawCB in
+// SnowDeformation.h.
+cbuffer VoxelDrawCB : register(b2)
+{
+	int4 VoxOrigin;    // xyz = window origin in voxels
+	float4 VoxParams;  // x voxel size, y dim, z field threshold, w march step (voxels)
+	float4 VoxFade;    // x fade start, y fade end (units from the camera)
+}
+StructuredBuffer<uint> VoxelBricks : register(t41);
+Texture3D<float> VoxelFieldTex : register(t42);
+SamplerState VoxelWrapSampler : register(s3);
+
+struct VOXEL_VS_OUTPUT
+{
+	float4 Position : SV_POSITION;
+	// Camera-relative, on the brick's surface.
+	float3 WorldPos : TEXCOORD0;
+	nointerpolation float3 BrickMin : TEXCOORD1;
+};
+#endif
+
+#if defined(VSHADER) && defined(VOXEL)
+VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
+{
+	// 12 triangles over the 8 corners (bit 0 = x, 1 = y, 2 = z). Winding is
+	// irrelevant: the PS keeps the back face by distance, not by facing.
+	static const uint kCube[36] = { 4, 6, 7, 4, 7, 5, 0, 1, 3, 0, 3, 2, 1, 5, 7, 1, 7, 3,
+		0, 2, 6, 0, 6, 4, 2, 3, 7, 2, 7, 6, 0, 4, 5, 0, 5, 1 };
+	uint packed = VoxelBricks[instanceID];
+	int3 brick = int3(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF);
+	float3 minAbs = (float3)(brick * 8 + VoxOrigin.xyz) * VoxParams.x;
+	uint corner = kCube[vertexID % 36];
+	float3 c = float3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+	float3 rel = minAbs + c * (8.0 * VoxParams.x) - ShellCameraPosAdjust.xyz;
+	VOXEL_VS_OUTPUT o;
+	o.Position = mul(CameraViewProj, float4(rel, 1.0));
+	o.WorldPos = rel;
+	o.BrickMin = minAbs - ShellCameraPosAdjust.xyz;
+	return o;
+}
+#endif
+
+#if defined(VSHADER) && !defined(PATCH) && !defined(VOXEL)
 // Object -> world transform and the smoothed-normal lookup. The lift is
 // applied separately so the domain shader can evaluate it per generated
 // vertex.
@@ -3280,6 +3324,131 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	return r;
 }
 
+#if defined(VOXEL)
+// Trilinear read of the field at a camera-relative position. Logical
+// coordinates are clamped, then the WRAP sampler does the torus (the
+// rotation keeps adjacency everywhere but the clamped window border).
+float VoxelFieldAt(float3 relPos)
+{
+	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
+	logical = clamp(logical, 0.5, VoxParams.y - 0.5);
+	float3 uvw = frac((logical + (float3)VoxOrigin.xyz) / VoxParams.y);
+	return VoxelFieldTex.SampleLevel(VoxelWrapSampler, uvw, 0.0);
+}
+
+// Whatever the march hits shades through SkinShadeSurface exactly as a
+// skin pixel would, from a synthesised interpolant set: the material is the
+// skins' own, so the two layers cannot disagree in colour.
+PS_OUTPUT main(VOXEL_VS_OUTPUT input)
+{
+	const float voxel = VoxParams.x;
+	const float brickSize = 8.0 * voxel;
+	float tFrag = length(input.WorldPos);
+	float3 rayDir = input.WorldPos / max(tFrag, 1e-4);
+	float3 dSafe = (abs(rayDir) < 1e-6) ? float3(1e-6, 1e-6, 1e-6) : rayDir;
+	float3 invD = 1.0 / dSafe;
+	float3 bmin = input.BrickMin;
+	float3 bmax = bmin + brickSize;
+	float3 t0 = bmin * invD;
+	float3 t1 = bmax * invD;
+	float tNearRaw = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
+	float tFar = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
+	// Both faces rasterise; the back face is the one nearer the exit. A
+	// camera inside the brick sees only back faces, and tNear clamps to 0.
+	[branch] if (abs(tFrag - tFar) > abs(tFrag - tNearRaw))
+		discard;
+	float tNear = max(tNearRaw, 0.0);
+	// Nothing behind what is already drawn.
+	float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+	float rayViewZ = mul(CameraView, float4(rayDir, 0.0)).z;
+	float tScene = sceneZ / max(rayViewZ, 1e-4);
+	tFar = min(tFar, tScene);
+	[branch] if (tFar <= tNear)
+		discard;
+
+	float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	const float threshold = VoxParams.z;
+	const float stepLen = max(VoxParams.w, 0.1) * voxel;
+	float t = tNear;
+	// Entering already inside the snow: the surface lies in an earlier brick.
+	[branch] if (VoxelFieldAt(rayDir * t) >= threshold)
+		discard;
+	float tPrev = t;
+	bool hit = false;
+	[loop] for (int i = 0; i < 48; i++)
+	{
+		tPrev = t;
+		t += stepLen;
+		if (t > tFar)
+			break;
+		if (VoxelFieldAt(rayDir * t) >= threshold) {
+			hit = true;
+			break;
+		}
+	}
+	[branch] if (!hit)
+		discard;
+	float a = tPrev;
+	float b = t;
+	[unroll] for (int k = 0; k < 4; k++)
+	{
+		float m = 0.5 * (a + b);
+		if (VoxelFieldAt(rayDir * m) >= threshold)
+			b = m;
+		else
+			a = m;
+	}
+	float tHit = 0.5 * (a + b);
+	// Distance dissolve, dithered as the skins' is.
+	float fade = 1.0 - smoothstep(VoxFade.x, VoxFade.y, tHit);
+	[branch] if (fade <= noise)
+		discard;
+
+	float3 P = rayDir * tHit;
+	// The field grows into the snow, so the surface normal is minus its gradient.
+	const float h = 0.5 * voxel;
+	float3 g;
+	g.x = VoxelFieldAt(P + float3(h, 0.0, 0.0)) - VoxelFieldAt(P - float3(h, 0.0, 0.0));
+	g.y = VoxelFieldAt(P + float3(0.0, h, 0.0)) - VoxelFieldAt(P - float3(0.0, h, 0.0));
+	g.z = VoxelFieldAt(P + float3(0.0, 0.0, h)) - VoxelFieldAt(P - float3(0.0, 0.0, h));
+	float3 normalWS = normalize(-g + float3(0.0, 0.0, 1e-5));
+
+	float2 worldXY = P.xy + ShellCameraPosAdjust.xy;
+	float4 clip = mul(CameraViewProj, float4(P, 1.0));
+	float4 currentClip = mul(CameraViewProjUnjittered, float4(P, 1.0));
+	float3 prevRel = P + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz;
+	float4 previousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
+	float2 motionVector = float2(-0.5, 0.5) * (currentClip.xy / currentClip.w - previousClip.xy / previousClip.w);
+
+	SkinShadeInput ssi;
+	ssi.WorldPos = P;
+	ssi.Position = float4(input.Position.xy, clip.z / clip.w, clip.w);
+	ssi.CurrentClip = currentClip;
+	ssi.Flat = 0.0;
+	ssi.GridLocal = worldXY - GridOrigin;
+	ssi.trenchGridLocal = ssi.GridLocal;
+	ssi.worldXY = worldXY;
+	ssi.pixelDist = tHit;
+	ssi.pixelDeform = 0.0;
+	ssi.screenNoise = noise;
+	ssi.selfShadowReject = 0.0;
+	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
+
+	PS_OUTPUT psout;
+	psout.Depth = clip.z / clip.w;
+	psout.Diffuse = float4(r.preLit, 1.0);
+	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 0.0);
+	psout.Albedo = float4(r.diffuseLobe, 1.0);
+	psout.Specular = float4(r.directSpecular, 1.0);
+	psout.Reflectance = float4(r.specularLobe, 1.0);
+	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(r.ambientPart).x, 1.0);
+	psout.Masks2 = float4(1.0 - r.landVertexAO, 0.0, 0.0, 1.0);
+	return psout;
+}
+#endif
+
+#if !defined(VOXEL)
 // Depth prepass (SNOW_STATICS_DEPTH_PREPASS): the alpha cut and nothing else,
 // no colour, no export - the hardware writes the raster depth exactly as the
 // shipping no-export twin does. Only non-carving draws take it; a carving
@@ -4268,4 +4437,5 @@ PS_OUTPUT main(VS_OUTPUT input)
 	return psout;
 #endif  // !SNOW_STATICS_DEPTH_PREPASS
 }
+#endif  // !VOXEL
 #endif

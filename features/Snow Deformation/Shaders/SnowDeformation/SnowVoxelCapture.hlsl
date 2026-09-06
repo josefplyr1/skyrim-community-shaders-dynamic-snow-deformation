@@ -39,6 +39,8 @@ cbuffer VoxelCB : register(b0)
 	float SeedSigma;
 	float FieldThreshold;
 	float2 padField;
+	// xyz = the camera in voxel units (absolute), w = the draw's reach in voxels
+	float4 EyeVox;
 }
 
 struct VS_OUTPUT
@@ -241,6 +243,42 @@ float2 ShelterAt(float2 worldXY)
 			sum += w * VolumeIn[Phys(l)];
 	}
 	VolumeOut[p] = BlurAxis == 2 ? sum : sum / wsum;
+}
+
+// V1b: the draw's brick list. One thread per 8^3 brick, listed when the
+// threshold crosses inside its one-voxel-dilated neighbourhood (a crossing
+// between two bricks' voxel centres lands in either, so both must draw)
+// and it lies within the draw's reach. The append counter is the instance
+// count.
+AppendStructuredBuffer<uint> BrickList : register(u3);
+
+[numthreads(8, 8, 8)] void VoxelBrickListCS(uint3 b
+											: SV_DispatchThreadID) {
+	int bricks = Dim >> 3;
+	if (any((int3)b >= bricks))
+		return;
+	int3 base = (int3)b * 8;
+	float3 centre = (float3)(base + OriginVox.xyz) + 4.0;
+	// Half the brick diagonal past the reach still counts.
+	if (distance(centre, EyeVox.xyz) > EyeVox.w + 7.0)
+		return;
+	bool anyIn = false;
+	bool allIn = true;
+	[loop] for (int z = -1; z <= 8; z++)
+	{
+		[loop] for (int y = -1; y <= 8; y++)
+		{
+			[loop] for (int x = -1; x <= 8; x++)
+			{
+				int3 l = base + int3(x, y, z);
+				bool inside = all(l >= 0) && all(l < Dim) && FieldIn[Phys(l)] >= FieldThreshold;
+				anyIn = anyIn || inside;
+				allIn = allIn && inside;
+			}
+		}
+	}
+	if (anyIn && !allIn)
+		BrickList.Append(b.x | (b.y << 8) | (b.z << 16));
 }
 
 // Single return: an early return inside a branch reads as X4000 to fxc.

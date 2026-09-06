@@ -304,6 +304,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
 			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
+			ImGui::Checkbox(T(TKEY("volume_snow_draw"), "Draw Volume Snow"), &settings.VolumeSnowDraw);
+			if (auto _ttVoxDraw = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_draw_tooltip"), "V1b: draws the snow surface in the world - marched per pixel inside boxes around it, shaded with the object shell's own material, so it matches the 3D shell and the coat beneath it. Dissolves toward the edge of the 30 m cube. The 3D shell and the coat keep drawing; this sits above them. Cost is the VolumeSnow pass."));
 			if (voxelOccupancyValid) {
 				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(kVoxelDim) * kVoxelDim * kVoxelDim);
 				ImGui::Text("Occupied voxels, last frame: %u (%.2f%% of the cube)", voxelOccupancy, occupiedPct);

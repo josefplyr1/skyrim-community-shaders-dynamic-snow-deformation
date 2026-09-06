@@ -14,7 +14,8 @@
 bool SnowDeformation::EnsureVoxelResources()
 {
 	if (voxelVolume[0] && voxelVolume[1] && voxelField && voxelSliceTexture && voxelCB && voxelRasterState &&
-		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurCS)
+		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurCS &&
+		voxelBrickBuffer && voxelDrawArgs && voxelDrawCB && voxelWrapSampler && voxelBrickListCS)
 		return true;
 	if (voxelShadersFailed)
 		return false;
@@ -92,6 +93,52 @@ bool SnowDeformation::EnsureVoxelResources()
 	}
 	if (!voxelCB)
 		voxelCB = new ConstantBuffer(ConstantBufferDesc<VoxelVolumeCB>(), "SnowDeformation::VoxelVolumeCB");
+	if (!voxelDrawCB)
+		voxelDrawCB = new ConstantBuffer(ConstantBufferDesc<VoxelDrawCB>(), "SnowDeformation::VoxelDrawCB");
+	if (!voxelBrickBuffer) {
+		D3D11_BUFFER_DESC desc{};
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(uint32_t);
+		desc.ByteWidth = sizeof(uint32_t) * kVoxelBrickCapacity;
+		voxelBrickBuffer = new Buffer(desc, nullptr, "SnowDeformation::VoxelBricks");
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = kVoxelBrickCapacity;
+		voxelBrickBuffer->CreateSRV(srvDesc);
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.NumElements = kVoxelBrickCapacity;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_APPEND;
+		voxelBrickBuffer->CreateUAV(uavDesc);
+	}
+	if (!voxelDrawArgs) {
+		// {VertexCountPerInstance, InstanceCount, StartVertex, StartInstance};
+		// only the count changes, copied from the list's counter.
+		const uint32_t args[4] = { 36, 0, 0, 0 };
+		D3D11_SUBRESOURCE_DATA init{ args, 0, 0 };
+		D3D11_BUFFER_DESC desc{};
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.ByteWidth = sizeof(args);
+		desc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+		voxelDrawArgs = new Buffer(desc, &init, "SnowDeformation::VoxelDrawArgs");
+	}
+	if (!voxelWrapSampler) {
+		// Trilinear + WRAP: the torus, after the shader clamps in logical space.
+		D3D11_SAMPLER_DESC sampDesc{};
+		sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+		sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+		sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+		sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+		if (SUCCEEDED(device->CreateSamplerState(&sampDesc, voxelWrapSampler.put())))
+			Util::SetResourceName(voxelWrapSampler.get(), "SnowDeformation::VoxelWrapSampler");
+	}
 	if (!voxelCountBuffer) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = 16;
@@ -170,12 +217,17 @@ bool SnowDeformation::EnsureVoxelResources()
 		if (voxelBlurCS)
 			Util::SetResourceName(voxelBlurCS, "SnowDeformation::VoxelBlurCS");
 	}
-	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurCS) {
+	if (!voxelBrickListCS) {
+		voxelBrickListCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(path, {}, "cs_5_0", "VoxelBrickListCS"));
+		if (voxelBrickListCS)
+			Util::SetResourceName(voxelBrickListCS, "SnowDeformation::VoxelBrickListCS");
+	}
+	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurCS || !voxelBrickListCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurCS {})",
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurCS {} BrickListCS {})",
 			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
 			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED",
-			voxelSeedCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED");
+			voxelSeedCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED");
 		return false;
 	}
 	return true;
@@ -219,6 +271,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s.
 	cb.SeedSigma = std::max(settings.VolumeSnowDepth, 4.0f) / (1.177f * kVoxelSize);
 	cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
+	cb.EyeVox[0] = eye.x / kVoxelSize;
+	cb.EyeVox[1] = eye.y / kVoxelSize;
+	cb.EyeVox[2] = eye.z / kVoxelSize;
+	cb.EyeVox[3] = kVoxelFadeEndFrac * half / kVoxelSize;
 	{
 		const float along = cb.SliceAxis == 0 ? eye.z : (cb.SliceAxis == 1 ? eye.y : eye.x);
 		const int originAlong = cb.SliceAxis == 0 ? origin.z : (cb.SliceAxis == 1 ? origin.y : origin.x);
@@ -373,6 +429,23 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			std::swap(blurIn, blurOut);
 		}
 		// Three swaps: the result is in the field, the scratch is dead again.
+
+		// V1b: the brick list for the draw. Binding the append UAV with a
+		// zero initial count resets its counter; the count then becomes the
+		// instance count.
+		if (settings.VolumeSnowDraw) {
+			const UINT zeroCount = 0;
+			ID3D11UnorderedAccessView* listUAV = voxelBrickBuffer->uav.get();
+			ID3D11ShaderResourceView* fieldSRV = voxelField->srv.get();
+			context->CSSetUnorderedAccessViews(3, 1, &listUAV, &zeroCount);
+			context->CSSetShaderResources(3, 1, &fieldSRV);
+			context->CSSetShader(voxelBrickListCS, nullptr, 0);
+			constexpr UINT brickGroups = kVoxelBricksPerAxis / 8;
+			context->Dispatch(brickGroups, brickGroups, brickGroups);
+			context->CSSetShaderResources(3, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(3, 1, &nullUAV, nullptr);
+			context->CopyStructureCount(voxelDrawArgs->resource.get(), 4, listUAV);
+		}
 		context->CSSetShader(nullptr, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &nullCB);
 		globals::profiler->EndPass();
@@ -380,6 +453,85 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 
 	if (showVoxelSlice)
 		UpdateVoxelSliceTexture();
+}
+
+void SnowDeformation::DrawVoxelSnow()
+{
+	if (!settings.VolumeSnow || !settings.VolumeSnowDraw || !voxelValid || !voxelField ||
+		!voxelBrickBuffer || !voxelDrawArgs || !voxelDrawCB || !voxelWrapSampler || !voxelShellVS || !voxelShellPS)
+		return;
+	auto* context = globals::d3d::context;
+
+	// One block for the whole draw, as the patch does: rounded class at the
+	// volume's depth, the window for the footprint reads, no coat, no relief.
+	StaticsCB scb{};
+	scb.ObjectsDepth = settings.VolumeSnowDepth;
+	scb.RoundedDepth = settings.VolumeSnowDepth;
+	scb.HeightWindowCenter = heightWindowCenter;
+	scb.HeightHalfExtent = kHeightMapHalfExtent;
+	scb.HasObjectTop = 1.0f;
+	scb.ClassOverride = 1.0f;
+	staticsCB->Update(scb);
+	ID3D11Buffer* cb1 = staticsCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+	context->PSSetConstantBuffers(1, 1, &cb1);
+
+	constexpr float half = kVoxelDim * kVoxelSize * 0.5f;
+	VoxelDrawCB d{};
+	d.VoxOrigin = { voxelOriginVox.x, voxelOriginVox.y, voxelOriginVox.z, 0 };
+	d.VoxParams = { kVoxelSize, float(kVoxelDim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), 0.5f };
+	d.VoxFade = { kVoxelFadeStartFrac * half, kVoxelFadeEndFrac * half, 0.0f, 0.0f };
+	voxelDrawCB->Update(d);
+	ID3D11Buffer* cb2 = voxelDrawCB->CB();
+	context->VSSetConstantBuffers(2, 1, &cb2);
+	context->PSSetConstantBuffers(2, 1, &cb2);
+
+	ID3D11ShaderResourceView* bricksSRV = voxelBrickBuffer->srv.get();
+	context->VSSetShaderResources(41, 1, &bricksSRV);
+	ID3D11ShaderResourceView* fieldSRV = voxelField->srv.get();
+	context->PSSetShaderResources(42, 1, &fieldSRV);
+	ID3D11SamplerState* wrap = voxelWrapSampler.get();
+	context->PSSetSamplers(3, 1, &wrap);
+	// What the skin pass unbinds and the patch rebinds: the march's depth
+	// cap and SkinShadeSurface's footprint reads.
+	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
+	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
+	ID3D11ShaderResourceView* topSRV = (heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv) ? heightTopRaw[heightCurrent]->srv.get() : nullptr;
+	context->PSSetShaderResources(11, 1, &topSRV);
+	ID3D11ShaderResourceView* skinDepthSRV = (heightSkinDepth && heightSkinDepth->srv) ? heightSkinDepth->srv.get() : nullptr;
+	context->PSSetShaderResources(12, 1, &skinDepthSRV);
+
+	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
+	context->RSGetState(savedRaster.put());
+	// Both faces: the PS keeps the back one by distance (see the shader).
+	context->RSSetState(voxelRasterState.get());
+	context->OMSetDepthStencilState(shellDepthState.get(), 0);
+	context->IASetInputLayout(nullptr);
+	ID3D11Buffer* nullVB = nullptr;
+	UINT zero = 0;
+	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(voxelShellVS, nullptr, 0);
+	context->HSSetShader(nullptr, nullptr, 0);
+	context->DSSetShader(nullptr, nullptr, 0);
+	context->GSSetShader(nullptr, nullptr, 0);
+	context->PSSetShader(voxelShellPS, nullptr, 0);
+
+	globals::profiler->BeginPass("SnowDeformation::VolumeSnow");
+	context->DrawInstancedIndirect(voxelDrawArgs->resource.get(), 0);
+	globals::profiler->EndPass();
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	ID3D11SamplerState* nullSampler = nullptr;
+	ID3D11Buffer* nullCB = nullptr;
+	context->VSSetShaderResources(41, 1, &nullSRV);
+	context->PSSetShaderResources(42, 1, &nullSRV);
+	context->PSSetShaderResources(3, 1, &nullSRV);
+	context->PSSetSamplers(3, 1, &nullSampler);
+	context->VSSetConstantBuffers(2, 1, &nullCB);
+	context->PSSetConstantBuffers(2, 1, &nullCB);
+	context->RSSetState(savedRaster.get());
 }
 
 void SnowDeformation::UpdateVoxelSliceTexture()

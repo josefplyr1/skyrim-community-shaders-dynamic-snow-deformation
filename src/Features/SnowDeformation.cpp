@@ -156,6 +156,7 @@
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
+	X(VolumeSnowDraw) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)

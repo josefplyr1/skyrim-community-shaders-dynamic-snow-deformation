@@ -1167,6 +1167,24 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(skinShadowVS, "SnowDeformation::SkinShadowVS");
 		}
 	}
+	// Volume snow (VOXEL): brick VS + marching PS. Optional; the draw guards
+	// on the pointers.
+	if (!voxelShellVS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "VOXEL"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &voxelShellVS)))
+				Util::SetResourceName(voxelShellVS, "SnowDeformation::VolumeSnowVS");
+		}
+	}
+	if (!voxelShellPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "VOXEL"));
+		if (blob) {
+			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &voxelShellPS)))
+				Util::SetResourceName(voxelShellPS, "SnowDeformation::VolumeSnowPS");
+		}
+	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
@@ -3362,6 +3380,10 @@ void SnowDeformation::DrawCapturedStatics()
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);
 		globals::profiler->EndPass();
 	}
+
+	// Volume snow last: it depth-tests against everything above, skins
+	// included, and shades through the same material.
+	DrawVoxelSnow();
 
 	ID3D11Buffer* nullCB = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB);
