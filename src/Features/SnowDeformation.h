@@ -2069,7 +2069,9 @@ public:
 		int Dim;
 		int SliceAxis;
 		int SliceIndex;
-		int padSlice[3];
+		/** @brief >0: the slice is a max over the whole fixed axis (silhouettes), not one plane. */
+		int SliceXray;
+		int padSlice[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 
@@ -2096,6 +2098,15 @@ public:
 	float voxelSliceOffset = 0.0f;
 	/** @brief Seconds an unseen voxel takes to fade, at 60 fps. */
 	float voxelMemorySeconds = 4.0f;
+	/** @brief Runtime-only: the slice flattens the whole cube along the view axis (silhouettes) instead of showing one plane. The readable first look. */
+	bool voxelSliceXray = true;
+	/** @brief Occupied-voxel count: a raw UAV summed by VoxelScrollCS (post-decay, pre-raster, so it describes LAST frame's volume), read back one frame late through a staging pair so it never stalls. */
+	winrt::com_ptr<ID3D11Buffer> voxelCountBuffer;
+	winrt::com_ptr<ID3D11UnorderedAccessView> voxelCountUAV;
+	winrt::com_ptr<ID3D11Buffer> voxelCountStaging[2];
+	uint voxelCountCursor = 0;
+	uint32_t voxelOccupancy = 0;
+	bool voxelOccupancyValid = false;
 	/** @brief Creates the volumes, slice, CB, rasterizer and shaders on first use. Implemented in SnowDeformation/Volume.cpp. */
 	bool EnsureVoxelResources();
 	/** @brief Scrolls and decays the volume, then rasterises this frame's captured statics into it. Called inside RenderObjectHeightMap after the peel passes; a_records are the capture blocks it filled. Implemented in SnowDeformation/Volume.cpp. */

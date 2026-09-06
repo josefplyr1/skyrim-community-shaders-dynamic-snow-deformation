@@ -292,16 +292,26 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
+			if (voxelOccupancyValid) {
+				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(kVoxelDim) * kVoxelDim * kVoxelDim);
+				ImGui::Text("Occupied voxels, last frame: %u (%.2f%% of the cube)", voxelOccupancy, occupiedPct);
+				if (auto _ttOcc = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("voxel_occupancy_tooltip"), "The sanity number. Geometry is surfaces, so a few percent is plausible even in a busy town; tens of percent means the volume holds something other than surfaces and the picture cannot be trusted."));
+			}
 			ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
 			if (auto _ttVoxSlice = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("voxel_show_slice_tooltip"), "Draws one flat plane cut through the volume, so you can see what it holds."));
+				ImGui::Text("%s", T(TKEY("voxel_show_slice_tooltip"), "Draws a picture of what the volume holds."));
 			if (showVoxelSlice) {
-				const char* voxelAxes[] = { "Top-down (cut at your height)", "Side: looking north", "Side: looking east" };
+				ImGui::Checkbox(T(TKEY("voxel_xray"), "X-ray (see through the whole cube)"), &voxelSliceXray);
+				if (auto _ttXray = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("voxel_xray_tooltip"), "On: everything along the view direction is flattened into one image, so whole objects show as silhouettes - look at this first. Off: a single plane, one voxel thin, at the Offset - the only view that can show a roof with empty space beneath it."));
+				const char* voxelAxes[] = { "Top-down", "Side: looking north", "Side: looking east" };
 				ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
-				ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
+				if (!voxelSliceXray)
+					ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
 				// Long-form: the whole point of V0 is that this image can be
 				// read without the plan open beside it.
-				ImGui::TextWrapped("%s", T(TKEY("voxel_slice_hint"), "The whole square is about 30 m across and each red block is one voxel, 8 units (a hand's width). The cross is you. Red = an object surface here; bright means drawn this frame, dim means remembered.\n\nThe plane is one voxel thin, so a surface drifting up and down weaves in and out of it and prints as a dotted line rather than a solid one - that is normal, not a gap.\n\nTHE TEST: stand beside a covered walkway or porch, pick a Side plane, and slide the Offset until it cuts through. Look for the roof as a line with EMPTY space beneath it and the floor as a second line below. Two surfaces in one vertical column is the thing no existing snow structure can represent."));
+				ImGui::TextWrapped("%s", T(TKEY("voxel_slice_hint"), "The square is about 30 m across, the cross is you, and red = an object surface: bright when drawn this frame, dim as it fades. Each red block is one voxel, 8 units.\n\nStart with X-ray ON and a Side plane. A house should read as a box with a pitched roof, a rock as a blob. Uniform speckle with no shapes means the volume is wrong, and the number above will say so.\n\nThen X-ray OFF for the real test: slide the Offset until the plane cuts through a porch or covered walkway, and look for the roof as a line with EMPTY space beneath it and the floor as a second line below. A thin plane prints a drifting surface as dots rather than a line - that is normal."));
 				const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
 				if (voxelSliceTexture && voxelSliceTexture->srv) {
 					ImGui::Image(voxelSliceTexture->srv.get(), { 512.0f, 512.0f });

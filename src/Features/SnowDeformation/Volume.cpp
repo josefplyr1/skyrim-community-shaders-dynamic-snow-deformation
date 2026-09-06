@@ -79,6 +79,29 @@ bool SnowDeformation::EnsureVoxelResources()
 	}
 	if (!voxelCB)
 		voxelCB = new ConstantBuffer(ConstantBufferDesc<VoxelVolumeCB>(), "SnowDeformation::VoxelVolumeCB");
+	if (!voxelCountBuffer) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = 16;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		if (SUCCEEDED(device->CreateBuffer(&desc, nullptr, voxelCountBuffer.put()))) {
+			Util::SetResourceName(voxelCountBuffer.get(), "SnowDeformation::VoxelOccupancyCount");
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+			uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
+			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+			uavDesc.Buffer.NumElements = 4;
+			uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+			device->CreateUnorderedAccessView(voxelCountBuffer.get(), &uavDesc, voxelCountUAV.put());
+			D3D11_BUFFER_DESC stagingDesc{};
+			stagingDesc.ByteWidth = 16;
+			stagingDesc.Usage = D3D11_USAGE_STAGING;
+			stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+			for (int i = 0; i < 2; i++)
+				if (SUCCEEDED(device->CreateBuffer(&stagingDesc, nullptr, voxelCountStaging[i].put())))
+					Util::SetResourceName(voxelCountStaging[i].get(), "SnowDeformation::VoxelOccupancyStaging");
+		}
+	}
 	if (!voxelRasterState) {
 		// Both faces: undersides are what the roof test is about.
 		D3D11_RASTERIZER_DESC rasterDesc{};
@@ -152,6 +175,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	cb.Decay = 1.0f / std::max(voxelMemorySeconds * 60.0f, 1.0f);
 	cb.Dim = (int)kVoxelDim;
 	cb.SliceAxis = std::clamp(voxelSliceAxis, 0, 2);
+	cb.SliceXray = voxelSliceXray ? 1 : 0;
 	{
 		const float along = cb.SliceAxis == 0 ? eye.z : (cb.SliceAxis == 1 ? eye.y : eye.x);
 		const int originAlong = cb.SliceAxis == 0 ? origin.z : (cb.SliceAxis == 1 ? origin.y : origin.x);
@@ -170,18 +194,36 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 
 	globals::profiler->BeginPass("SnowDeformation::VoxelVolume");
 	{
+		const bool counting = voxelCountUAV && voxelCountStaging[0] && voxelCountStaging[1];
+		if (counting) {
+			const UINT zeros[4] = { 0, 0, 0, 0 };
+			context->ClearUnorderedAccessViewUint(voxelCountUAV.get(), zeros);
+		}
 		ID3D11ShaderResourceView* srv = voxelVolume[previous]->srv.get();
-		ID3D11UnorderedAccessView* uav = voxelVolume[voxelCurrent]->uav.get();
+		ID3D11UnorderedAccessView* uavs[3] = { voxelVolume[voxelCurrent]->uav.get(), nullptr, counting ? voxelCountUAV.get() : nullptr };
 		context->CSSetConstantBuffers(0, 1, &cbPtr);
 		context->CSSetShaderResources(0, 1, &srv);
-		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+		context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 		context->CSSetShader(voxelScrollCS, nullptr, 0);
 		constexpr UINT groups = kVoxelDim / 8;
 		context->Dispatch(groups, groups, groups);
+		ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
 		context->CSSetShaderResources(0, 1, &nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 		context->CSSetConstantBuffers(0, 1, &nullCB);
+
+		// Copy this frame's count, map LAST frame's copy without waiting.
+		if (counting) {
+			context->CopyResource(voxelCountStaging[voxelCountCursor].get(), voxelCountBuffer.get());
+			voxelCountCursor ^= 1;
+			D3D11_MAPPED_SUBRESOURCE mapped{};
+			if (SUCCEEDED(context->Map(voxelCountStaging[voxelCountCursor].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+				voxelOccupancy = *static_cast<const uint32_t*>(mapped.pData);
+				context->Unmap(voxelCountStaging[voxelCountCursor].get(), 0);
+				voxelOccupancyValid = true;
+			}
+		}
 	}
 
 	// UAV-only raster: no target, the viewport sizes it. The game's VS b0

@@ -24,7 +24,9 @@ cbuffer VoxelCB : register(b0)
 	int Dim;
 	int SliceAxis;
 	int SliceIndex;
-	int3 padSlice;
+	// >0: the slice is a max over the whole axis (silhouettes), not one plane
+	int SliceXray;
+	int2 padSlice;
 }
 
 struct VS_OUTPUT
@@ -118,22 +120,39 @@ void main(GS_OUTPUT input)
 Texture3D<float> VolumeIn : register(t0);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
+// Occupied-voxel count for the menu: one atomic per group, not per thread.
+RWByteAddressBuffer OccupancyCount : register(u2);
+
+groupshared uint gOccupied;
 
 // Physical voxels never move; the origin does. A voxel whose logical
 // position was inside last frame's window keeps its value, decayed; one
 // that scrolled in is cleared.
 [numthreads(8, 8, 8)] void VoxelScrollCS(uint3 p
-										 : SV_DispatchThreadID) {
+										 : SV_DispatchThreadID, uint gi
+										 : SV_GroupIndex) {
+	if (gi == 0)
+		gOccupied = 0;
+	GroupMemoryBarrierWithGroupSync();
+
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 old = logical + ScrollDelta.xyz;
 	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dim);
 	float v = inside ? VolumeIn[p] : 0.0;
-	VolumeOut[p] = max(v - Decay, 0.0);
+	v = max(v - Decay, 0.0);
+	VolumeOut[p] = v;
+
+	if (v > 0.0)
+		InterlockedAdd(gOccupied, 1u);
+	GroupMemoryBarrierWithGroupSync();
+	if (gi == 0)
+		OccupancyCount.InterlockedAdd(0, gOccupied);
 }
 
 // One plane of the window for the menu, world-aligned: image top is north
-// (axis 0) or up (axes 1 and 2).
+// (axis 0) or up (axes 1 and 2). X-ray: the max over the whole fixed axis,
+// so objects read as silhouettes.
 [numthreads(8, 8, 1)] void VoxelSliceCS(uint3 id
 										: SV_DispatchThreadID) {
 	if (any(id.xy >= (uint2)Dim))
@@ -147,7 +166,23 @@ RWTexture2D<float> SliceOut : register(u1);
 		logical = int3(x, SliceIndex, y);
 	else
 		logical = int3(SliceIndex, x, y);
-	uint3 phys = (uint3)((logical + OriginVox.xyz) & (Dim - 1));
-	SliceOut[id.xy] = VolumeIn[phys];
+	int mask = Dim - 1;
+	float v = 0.0;
+	if (SliceXray > 0) {
+		[loop] for (int i = 0; i < Dim; i++)
+		{
+			int3 l = logical;
+			if (SliceAxis == 0)
+				l.z = i;
+			else if (SliceAxis == 1)
+				l.y = i;
+			else
+				l.x = i;
+			v = max(v, VolumeIn[(uint3)((l + OriginVox.xyz) & mask)]);
+		}
+	} else {
+		v = VolumeIn[(uint3)((logical + OriginVox.xyz) & mask)];
+	}
+	SliceOut[id.xy] = v;
 }
 #endif
