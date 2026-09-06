@@ -3673,13 +3673,37 @@ protected:
 	SkeletonProbe skeletonProbe;
 
 	/** @brief Last 3D-root position per loose prop (formID), rebuilt every frame from the in-range scan. The position gate runs before any collision traversal, so resting clutter costs one hash lookup per frame. */
-	std::unordered_map<uint32_t, RE::NiPoint3> propPrevPositions;
+	struct PropAnchor
+	{
+		RE::NiPoint3 pos;
+		uint32_t cycle = 0;  // the scan cycle that last visited it; a full cycle unseen = the reference left
+	};
+	std::unordered_map<uint32_t, PropAnchor> propPrevPositions;
+	static constexpr uint32_t kPropScanInterval = 6;
+	/** @brief Scan cycles completed; anchors carry the cycle they were last visited in. */
+	uint32_t propScanCycle = 0;
+	/** @brief The cells TES::ForEachReferenceInRange would walk, gathered the same way each frame and scanned a sixth at a time (PERF-RESEARCH §11.2-C): the engine's walk over every loaded reference was the 0.3 ms spike every sixth frame, not the callback. */
+	std::vector<RE::TESObjectCELL*> propScanCells;
 	/** @brief Frames since the last full reference scan (0 = scan this frame). The scan runs every kPropScanInterval frames; between scans only propScanMovers and propScanHazards are revisited and anchors update in place. */
 	uint32_t propScanFrame = 0;
 	/** @brief Props the last full scan saw moving, revisited every frame until the next scan. */
-	std::vector<RE::ObjectRefHandle> propScanMovers;
+	std::vector<RE::ObjectRefHandle> propScanMovers[kPropScanInterval];
 	/** @brief Placed hazards the last full scan found, replayed through ConsiderHazard every frame because the emitter list is rebuilt per frame. */
-	std::vector<RE::ObjectRefHandle> propScanHazards;
+	std::vector<RE::ObjectRefHandle> propScanHazards[kPropScanInterval];
+	size_t PropScanMoverCount() const
+	{
+		size_t n = 0;
+		for (const auto& slice : propScanMovers)
+			n += slice.size();
+		return n;
+	}
+	size_t PropScanHazardCount() const
+	{
+		size_t n = 0;
+		for (const auto& slice : propScanHazards)
+			n += slice.size();
+		return n;
+	}
 	/** @brief References visited by the last full scan, for the menu; stampStats.propRefs counts only the movers on the frames between. */
 	uint propScanRefs = 0;
 

@@ -22,7 +22,6 @@ static constexpr float kStampMovementGate = 3.0f;
 // Full reference scan cadence, in frames. Between scans only the movers and
 // hazards the last scan found are revisited; a prop's first motion waits at
 // most one interval (~100 ms), which no one has seen.
-static constexpr uint32_t kPropScanInterval = 6;
 // Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
@@ -1466,7 +1465,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// hazards it found are revisited, and anchors update in place rather
 	// than being rebuilt. Hazards replay every frame from the cache because
 	// the emitter list is cleared per frame.
-	std::unordered_map<uint32_t, RE::NiPoint3> currentPropPositions;
 	const auto tes = RE::TES::GetSingleton();
 	auto* playerRef = RE::PlayerCharacter::GetSingleton();
 	// Hazards present means a wall or rune spell is live: those spawn a
@@ -1474,8 +1472,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	// between scans is invisible until the next one - the wall's growing
 	// edge flickered. Scan every frame while any hazard stands; spell
 	// combat is brief, and the throttle holds for the rest of play.
-	const bool fullScan = propScanFrame == 0 || propPrevPositions.empty() || !propScanHazards.empty();
+	const uint32_t phase = propScanFrame;
 	propScanFrame = (propScanFrame + 1) % kPropScanInterval;
+	if (phase == 0)
+		propScanCycle++;
+	// True inside the cell walk: a mover found there joins this phase's
+	// slice and is revisited every frame until its cell is walked again.
+	bool scanning = false;
 	auto considerProp = [&](RE::TESObjectREFR* a_ref) {
 		auto* base = a_ref->GetBaseObject();
 		if (!base)
@@ -1510,21 +1513,23 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
-		// Full scan rebuilds the anchors; between scans they update in place.
-		auto& anchors = fullScan ? currentPropPositions : propPrevPositions;
+		// Anchors update in place; the cycle stamp says when the reference was
+		// last seen, and a whole cycle unseen retires it.
 		auto prevIt = propPrevPositions.find(formID);
 		if (prevIt == propPrevPositions.end()) {
-			anchors[formID] = position;
+			propPrevPositions[formID] = { position, propScanCycle };
 			return;  // first sight: baseline only
 		}
 		// Frozen anchor: slow motion accumulates toward the gate instead
 		// of resetting every frame.
-		const bool propMoved = position.GetSquaredDistance(prevIt->second) >= kStampMovementGate * kStampMovementGate;
-		anchors[formID] = propMoved ? position : prevIt->second;
+		const bool propMoved = position.GetSquaredDistance(prevIt->second.pos) >= kStampMovementGate * kStampMovementGate;
+		prevIt->second.cycle = propScanCycle;
+		if (propMoved)
+			prevIt->second.pos = position;
 		if (propMoved) {
 			stampStats.propMovers++;
-			if (fullScan)
-				propScanMovers.push_back(a_ref->CreateRefHandle());
+			if (scanning)
+				propScanMovers[phase].push_back(a_ref->CreateRefHandle());
 		}
 		if (!propMoved)
 			return;  // at rest: the refill buries it
@@ -1534,7 +1539,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// Fast-falling props must not carve under their arc; supported
 		// ones stamp wherever they lie, including on top of statics.
 		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
-		if ((position.z - prevIt->second.z) / dt < -kFallSpeedGate)
+		if ((position.z - prevIt->second.pos.z) / dt < -kFallSpeedGate)
 			return;
 
 		float groundZ = position.z;
@@ -1653,34 +1658,85 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		return;
 	};
-	if (tes && playerRef && fullScan) {
-		propScanMovers.clear();
-		propScanHazards.clear();
-		tes->ForEachReferenceInRange(playerRef, 0.5f * deformWorldSize, [&](RE::TESObjectREFR* a_ref) {
-			if (!a_ref || a_ref->As<RE::Actor>())
-				return RE::BSContainer::ForEachResult::kContinue;
-			// Spell walls and runes ride this scan instead of adding one of
-			// their own: they are ordinary references and this pass already
-			// runs at the right radius. Note the form type is PlacedHazard -
-			// Hazard is the base form, and filtering on that silently
-			// matches nothing.
-			if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
-				ConsiderHazard(a_ref);
-				propScanHazards.push_back(a_ref->CreateRefHandle());
-				return RE::BSContainer::ForEachResult::kContinue;
+	if (tes && playerRef) {
+		// The cells TES::ForEachReferenceInRange would walk, gathered the
+		// same way (the interior cell, else every attached grid cell whose
+		// extents reach the radius, plus the sky cell), then a sixth of them
+		// this frame. Hazards live: every cell every frame, as before.
+		const auto originPos = playerRef->GetPosition();
+		const float radius = 0.5f * deformWorldSize;
+		auto& cells = propScanCells;
+		cells.clear();
+		if (auto* parentCell = playerRef->GetParentCell(); parentCell && parentCell->IsInteriorCell()) {
+			cells.push_back(parentCell);
+		} else {
+			if (auto* grid = tes->gridCells) {
+				const uint32_t length = grid->length;
+				for (uint32_t x = 0; x < length; x++) {
+					for (uint32_t y = 0; y < length; y++) {
+						auto* cell = grid->GetCell(x, y);
+						if (!cell || !cell->IsAttached())
+							continue;
+						if (auto* coords = cell->GetCoordinates()) {
+							constexpr float kCell = 4096.0f;
+							const float minX = coords->cellX * kCell, minY = coords->cellY * kCell;
+							if (originPos.x + radius < minX || originPos.x - radius > minX + kCell ||
+								originPos.y + radius < minY || originPos.y - radius > minY + kCell)
+								continue;
+						}
+						cells.push_back(cell);
+					}
+				}
 			}
-			considerProp(a_ref);
-			return RE::BSContainer::ForEachResult::kContinue;
-		});
+			if (auto* worldspace = playerRef->GetWorldspace())
+				if (auto* sky = worldspace->GetSkyCell())
+					cells.push_back(sky);
+		}
+		const bool scanAll = PropScanHazardCount() != 0 || propPrevPositions.empty();
+		auto scanCell = [&](RE::TESObjectCELL* a_cell) {
+			a_cell->ForEachReferenceInRange(originPos, radius, [&](RE::TESObjectREFR* a_ref) {
+				if (!a_ref || a_ref->As<RE::Actor>())
+					return RE::BSContainer::ForEachResult::kContinue;
+				if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
+					ConsiderHazard(a_ref);
+					propScanHazards[phase].push_back(a_ref->CreateRefHandle());
+					return RE::BSContainer::ForEachResult::kContinue;
+				}
+				considerProp(a_ref);
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
+		};
+		scanning = true;
+		if (scanAll) {
+			for (auto& slice : propScanMovers)
+				slice.clear();
+			for (auto& slice : propScanHazards)
+				slice.clear();
+			for (auto* cell : cells)
+				scanCell(cell);
+		} else {
+			propScanMovers[phase].clear();
+			propScanHazards[phase].clear();
+			for (size_t i = phase; i < cells.size(); i += kPropScanInterval)
+				scanCell(cells[i]);
+		}
+		scanning = false;
 		propScanRefs = stampStats.propRefs;
-		propPrevPositions = std::move(currentPropPositions);
-	} else if (tes && playerRef) {
-		for (const auto& handle : propScanHazards)
-			if (auto ref = handle.get(); ref)
-				ConsiderHazard(ref.get());
-		for (const auto& handle : propScanMovers)
-			if (auto ref = handle.get(); ref)
-				considerProp(ref.get());
+		// The other slices' movers and hazards, revisited; this phase's were
+		// just found in the walk.
+		for (uint32_t slice = 0; slice < kPropScanInterval; slice++) {
+			if (scanAll || slice == phase)
+				continue;
+			for (const auto& handle : propScanHazards[slice])
+				if (auto ref = handle.get(); ref)
+					ConsiderHazard(ref.get());
+			for (const auto& handle : propScanMovers[slice])
+				if (auto ref = handle.get(); ref)
+					considerProp(ref.get());
+		}
+		// A whole cycle unseen: the reference left the range or unloaded.
+		if (phase == 0 && propScanCycle >= 2)
+			std::erase_if(propPrevPositions, [&](const auto& a_kv) { return a_kv.second.cycle + 1 < propScanCycle; });
 	}
 
 	// Spell emitters melt rather than displace. Appended AFTER actors and
