@@ -482,7 +482,7 @@ public:
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
-		float ObjectsSnowDepth = 10.0f;
+		float ObjectsSnowDepth = 0.0f;
 		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). Rocks/mountains/cliffs use RockMaxSlopeDeg instead. */
 		float ShellMaxSlopeDeg = 65.0f;
 		/** @brief The rock family's own max slope (Josef's call: rocks/mountains/cliffs were the only sufferers of a low global slope) - applies to draws the mountain/cliff name match flags (CapturedSnowStatic::forceRounded). */
@@ -498,9 +498,9 @@ public:
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.01f;
 		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
-		float SkyExposurePct = 25.0f;
+		float SkyExposurePct = 100.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
-		float SnowSettlingPct = 0.0f;
+		float SnowSettlingPct = 100.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
 		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
