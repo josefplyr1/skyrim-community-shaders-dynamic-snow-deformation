@@ -1711,6 +1711,11 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
+	// The peel pixel shader reads the block too (window centre, extent,
+	// PeelTol). It used to find staticsCB at b1 by accident, left there by
+	// the skin pass; bound here so the fallback path never depends on that,
+	// and the offset path binds the pixel stage per draw below.
+	context->PSSetConstantBuffers(1, 1, &cb1);
 	// The capture PS rejects grounded fragments from the bottoms raster
 	// (elevated undersides only); it reads terrain via the process CB.
 	ID3D11Buffer* captureCB0 = heightProcessCB->CB();
@@ -1834,7 +1839,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11ShaderResourceView* captureSmoothSRV = captureSmoothSRVs[ci].get();
 		context->VSSetShaderResources(10, 1, &captureSmoothSRV);
 		if (captureRecordsLive)
-			BindStaticsRecord(ci, false, captureParity);
+			BindStaticsRecord(ci, true, captureParity);
 		else
 			staticsCB->Update(captureRecords[ci]);
 
@@ -1908,7 +1913,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			ID3D11ShaderResourceView* peelSmoothSRV = captureSmoothSRVs[ci].get();
 			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
 			if (captureRecordsLive)
-				BindStaticsRecord(captureCount + ci, false, captureParity);
+				BindStaticsRecord(captureCount + ci, true, captureParity);
 			else
 				staticsCB->Update(captureRecords[size_t(captureCount) + ci]);
 			context->DrawIndexed(indexCount, 0, 0);
