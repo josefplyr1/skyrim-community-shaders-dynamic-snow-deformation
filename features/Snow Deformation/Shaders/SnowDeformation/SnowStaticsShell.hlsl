@@ -1810,7 +1810,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		// eye no longer sees (Josef's distance streaks).
 		float camDist = length(worldBase.xy - HeightWindowCenter);
 #else
-		float camDist = length(worldBase - ShellCameraPosAdjust.xyz);
+		// Horizontal, like the caster's: measured as a sphere, a cliff face
+		// close by but high above the camera collapsed while its neighbour
+		// at eye level did not (Josef's dome, 2026-09-06). The range is a
+		// column over the loaded grid.
+		float camDist = length(worldBase.xy - ShellCameraPosAdjust.xy);
 #endif
 		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
 		// Floor at the minimum coat instead of zero. Collapsing all the way
@@ -2365,7 +2369,10 @@ float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 	targetLen = max(targetLen, dist * SkinTessCapSlope);
 	// Retire subdivision over the geometry range, reaching no subdivision at
 	// the distance where the layer itself has collapsed.
-	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, dist);
+	// The collapse range is horizontal (see ApplySkinLift); the target
+	// edge length above stays on the true distance, which is screen size.
+	float rangeDist = length(mid.xy - ShellCameraPosAdjust.xy);
+	float rangeFade = 1.0 - smoothstep(0.0, collapseEnd, rangeDist);
 	return clamp(length(worldA - worldB) / targetLen * rangeFade, 1.0, 16.0);
 }
 
@@ -3885,7 +3892,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// skin in one frame.
 	float fadeAlpha = 1.0;
 	[flatten] if (FadeExempt < 0.5)
-		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, pixelDist);
+		fadeAlpha = 1.0 - smoothstep(SkinFadeStart, SkinFadeEnd, length(input.WorldPos.xy));
 
 #	ifndef PATCH
 	// THE COAT AND THE EDGE LUMPS (projected-snow draws whose property
