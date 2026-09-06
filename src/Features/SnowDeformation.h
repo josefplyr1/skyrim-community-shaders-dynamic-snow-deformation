@@ -601,6 +601,10 @@ public:
 		bool LODObjectSnow = true;
 		/** @brief "Build Snow Volume" (VOLUME-SNOW-PLAN V0): rasterise the captured statics into the 256^3 voxel occupancy window each frame. Nothing consumes the volume - the slice view is the deliverable - so this changes no snow, only cost. */
 		bool VolumeSnow = false;
+		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels). V1a. */
+		float VolumeSnowDepth = 24.0f;
+		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. V1a. */
+		float VolumeSnowCoverage = 0.5f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -2071,12 +2075,31 @@ public:
 		int SliceIndex;
 		/** @brief >0: the slice is a max over the whole fixed axis (silhouettes), not one plane. */
 		int SliceXray;
-		int padSlice[2];
+		/** @brief 0 occupancy, 1 the snow field, 2 the field at the threshold. */
+		int SliceSource;
+		int BlurAxis;
+		/** @brief The height window, for the seed gate's shelter/sky maps; HalfExtent 0 = no maps bound, treat every column as open sky. */
+		float2 HeightWindowCenter;
+		float HeightHalfExtent;
+		/** @brief Seed weight under shelter: a dusting, not bare. */
+		float ShelterDust;
+		/** @brief Gaussian sigma in voxels; with Z unnormalised a flat top's field is exp(-h^2/2s^2), so the threshold picks the depth. */
+		float SeedSigma;
+		float FieldThreshold;
+		float padField[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
+	/** @brief Seed weight under a roof/fire: the 2D pipeline's dusting, as a fraction of full. */
+	static constexpr float kVoxelShelterDust = 0.1f;
 
 	/** @brief Ping-pong R8 occupancy in physical (toroidal) layout; created on first enable and kept. */
 	Texture3D* voxelVolume[2] = { nullptr, nullptr };
+	/** @brief V1a: the snow field - top-facing occupied voxels, gated by shelter/sky, blurred in 3D. Its threshold isosurface is the snow; its gradient the normal. Scratch for the separable passes is the dead ping-pong volume. */
+	Texture3D* voxelField = nullptr;
+	ID3D11ComputeShader* voxelSeedCS = nullptr;
+	ID3D11ComputeShader* voxelBlurCS = nullptr;
+	/** @brief Runtime-only: what the slice draws - 0 occupancy, 1 the field, 2 the field at the threshold (the snow). */
+	int voxelSliceSource = 2;
 	/** @brief The menu's plane through the current volume. */
 	Texture2D* voxelSliceTexture = nullptr;
 	ConstantBuffer* voxelCB = nullptr;

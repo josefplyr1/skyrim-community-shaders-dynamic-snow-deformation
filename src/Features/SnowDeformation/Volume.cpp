@@ -13,8 +13,8 @@
 
 bool SnowDeformation::EnsureVoxelResources()
 {
-	if (voxelVolume[0] && voxelVolume[1] && voxelSliceTexture && voxelCB && voxelRasterState &&
-		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS)
+	if (voxelVolume[0] && voxelVolume[1] && voxelField && voxelSliceTexture && voxelCB && voxelRasterState &&
+		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurCS)
 		return true;
 	if (voxelShadersFailed)
 		return false;
@@ -53,6 +53,12 @@ bool SnowDeformation::EnsureVoxelResources()
 			voxelVolume[i]->CreateSRV(srvDesc);
 			voxelVolume[i]->CreateUAV(uavDesc);
 			globals::d3d::context->ClearUnorderedAccessViewFloat(voxelVolume[i]->uav.get(), clearZero);
+		}
+		if (!voxelField) {
+			voxelField = new Texture3D(desc, "SnowDeformation::VoxelField");
+			voxelField->CreateSRV(srvDesc);
+			voxelField->CreateUAV(uavDesc);
+			globals::d3d::context->ClearUnorderedAccessViewFloat(voxelField->uav.get(), clearZero);
 		}
 		voxelValid = false;
 	}
@@ -154,11 +160,22 @@ bool SnowDeformation::EnsureVoxelResources()
 		if (voxelSliceCS)
 			Util::SetResourceName(voxelSliceCS, "SnowDeformation::VoxelSliceCS");
 	}
-	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS) {
+	if (!voxelSeedCS) {
+		voxelSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(path, {}, "cs_5_0", "VoxelSeedCS"));
+		if (voxelSeedCS)
+			Util::SetResourceName(voxelSeedCS, "SnowDeformation::VoxelSeedCS");
+	}
+	if (!voxelBlurCS) {
+		voxelBlurCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(path, {}, "cs_5_0", "VoxelBlurCS"));
+		if (voxelBlurCS)
+			Util::SetResourceName(voxelBlurCS, "SnowDeformation::VoxelBlurCS");
+	}
+	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {})",
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurCS {})",
 			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
-			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED");
+			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED",
+			voxelSeedCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED");
 		return false;
 	}
 	return true;
@@ -191,6 +208,17 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	cb.Dim = (int)kVoxelDim;
 	cb.SliceAxis = std::clamp(voxelSliceAxis, 0, 2);
 	cb.SliceXray = voxelSliceXray ? 1 : 0;
+	cb.SliceSource = std::clamp(voxelSliceSource, 0, 2);
+	// The seed gate's maps live in the height window; without them every
+	// column reads as open sky (HalfExtent 0 fails the window test).
+	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
+	cb.HeightWindowCenter = heightWindowCenter;
+	cb.HeightHalfExtent = seedMaps ? kHeightMapHalfExtent : 0.0f;
+	cb.ShelterDust = kVoxelShelterDust;
+	// sigma such that coverage 0.5 lands the isosurface at the slider depth:
+	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s.
+	cb.SeedSigma = std::max(settings.VolumeSnowDepth, 4.0f) / (1.177f * kVoxelSize);
+	cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
 	{
 		const float along = cb.SliceAxis == 0 ? eye.z : (cb.SliceAxis == 1 ? eye.y : eye.x);
 		const int originAlong = cb.SliceAxis == 0 ? origin.z : (cb.SliceAxis == 1 ? origin.y : origin.x);
@@ -309,20 +337,63 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	context->PSSetConstantBuffers(0, 1, &nullCB);
 	context->RSSetState(savedRaster.get());
 
+	// V1a: the snow field. Seeds into the dead ping-pong volume (nothing
+	// reads it again before next frame's scroll overwrites it), then three
+	// separable passes bouncing between it and the field, ending in the
+	// field. Every pass fully overwrites its output.
+	{
+		globals::profiler->BeginPass("SnowDeformation::VoxelField");
+		Texture3D* scratch = voxelVolume[previous];
+		constexpr UINT groups = kVoxelDim / 8;
+		auto runPass = [&](ID3D11ComputeShader* a_cs, Texture3D* a_in, Texture3D* a_out) {
+			ID3D11ShaderResourceView* srv = a_in->srv.get();
+			ID3D11UnorderedAccessView* uav = a_out->uav.get();
+			context->CSSetShaderResources(0, 1, &srv);
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->CSSetShader(a_cs, nullptr, 0);
+			context->Dispatch(groups, groups, groups);
+			context->CSSetShaderResources(0, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		};
+		context->CSSetConstantBuffers(0, 1, &cbPtr);
+		ID3D11ShaderResourceView* mapSRVs[2] = {
+			seedMaps ? heightBottomFiltered->srv.get() : nullptr,
+			seedMaps ? objectSkyOpen->srv.get() : nullptr
+		};
+		context->CSSetShaderResources(1, 2, mapSRVs);
+		runPass(voxelSeedCS, voxelVolume[voxelCurrent], scratch);
+		ID3D11ShaderResourceView* nullMapSRVs[2] = { nullptr, nullptr };
+		context->CSSetShaderResources(1, 2, nullMapSRVs);
+		Texture3D* blurIn = scratch;
+		Texture3D* blurOut = voxelField;
+		for (int axis = 0; axis < 3; axis++) {
+			cb.BlurAxis = axis;
+			voxelCB->Update(cb);
+			runPass(voxelBlurCS, blurIn, blurOut);
+			std::swap(blurIn, blurOut);
+		}
+		// Three swaps: the result is in the field, the scratch is dead again.
+		context->CSSetShader(nullptr, nullptr, 0);
+		context->CSSetConstantBuffers(0, 1, &nullCB);
+		globals::profiler->EndPass();
+	}
+
 	if (showVoxelSlice)
 		UpdateVoxelSliceTexture();
 }
 
 void SnowDeformation::UpdateVoxelSliceTexture()
 {
-	if (!voxelSliceCS || !voxelSliceTexture || !voxelCB || !voxelValid || !voxelVolume[voxelCurrent])
+	if (!voxelSliceCS || !voxelSliceTexture || !voxelCB || !voxelValid || !voxelVolume[voxelCurrent] || !voxelField)
 		return;
 	auto* context = globals::d3d::context;
 	ID3D11Buffer* cbPtr = voxelCB->CB();
 	ID3D11ShaderResourceView* srv = voxelVolume[voxelCurrent]->srv.get();
+	ID3D11ShaderResourceView* fieldSRV = voxelField->srv.get();
 	ID3D11UnorderedAccessView* uavs[2] = { nullptr, voxelSliceTexture->uav.get() };
 	context->CSSetConstantBuffers(0, 1, &cbPtr);
 	context->CSSetShaderResources(0, 1, &srv);
+	context->CSSetShaderResources(3, 1, &fieldSRV);
 	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 	context->CSSetShader(voxelSliceCS, nullptr, 0);
 	context->Dispatch(kVoxelDim / 8, kVoxelDim / 8, 1);
@@ -331,6 +402,7 @@ void SnowDeformation::UpdateVoxelSliceTexture()
 	ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
 	ID3D11Buffer* nullCB = nullptr;
 	context->CSSetShaderResources(0, 1, &nullSRV);
+	context->CSSetShaderResources(3, 1, &nullSRV);
 	context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
 	context->CSSetConstantBuffers(0, 1, &nullCB);

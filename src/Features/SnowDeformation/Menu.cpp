@@ -298,6 +298,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
+			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Volume Snow Depth"), &settings.VolumeSnowDepth, 8.0f, 64.0f, "%.0f u");
+			if (auto _ttVoxDepth = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "V1a, the snow field: how high the snow surface sits over a flat, open object top, at Coverage 0.5. Every object top seeds one soft blob; the blobs melt into each other, which is what gives a lip past an edge and a bridge between two close rocks."));
+			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
+			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
 			if (voxelOccupancyValid) {
 				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(kVoxelDim) * kVoxelDim * kVoxelDim);
 				ImGui::Text("Occupied voxels, last frame: %u (%.2f%% of the cube)", voxelOccupancy, occupiedPct);
@@ -311,6 +317,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Checkbox(T(TKEY("voxel_xray"), "X-ray (see through the whole cube)"), &voxelSliceXray);
 				if (auto _ttXray = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("voxel_xray_tooltip"), "On: everything along the view direction is flattened into one image, so whole objects show as silhouettes - look at this first. Off: a single plane, one voxel thin, at the Offset - the only view that can show a roof with empty space beneath it."));
+				const char* voxelSources[] = { "Objects (occupancy)", "Snow field (raw)", "Snow surface (field at Coverage)" };
+				ImGui::Combo(T(TKEY("voxel_slice_source"), "Show"), &voxelSliceSource, voxelSources, IM_ARRAYSIZE(voxelSources));
+				if (auto _ttVoxSrc = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("voxel_slice_source_tooltip"), "Objects: what V0 captured. Snow field: the soft blob field grown from every object top (brighter = more snow). Snow surface: that field cut at Coverage - the shape the snow would take, before anything is drawn."));
 				const char* voxelAxes[] = { "Top-down", "Side: looking north", "Side: looking east" };
 				ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
 				if (!voxelSliceXray)

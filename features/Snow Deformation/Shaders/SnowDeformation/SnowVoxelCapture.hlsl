@@ -26,7 +26,19 @@ cbuffer VoxelCB : register(b0)
 	int SliceIndex;
 	// >0: the slice is a max over the whole axis (silhouettes), not one plane
 	int SliceXray;
-	int2 padSlice;
+	// 0 = occupancy, 1 = the snow field, 2 = the field at the threshold
+	int SliceSource;
+	int BlurAxis;
+	// The top-down height window (SnowHeightCapture), for the seed gate's
+	// shelter and sky-openness maps; HalfExtent 0 = no maps, open sky.
+	float2 HeightWindowCenter;
+	float HeightHalfExtent;
+	// Seed weight where the column is sheltered (a dusting, not bare)
+	float ShelterDust;
+	// Gaussian sigma in voxels; threshold picks the isosurface = the depth
+	float SeedSigma;
+	float FieldThreshold;
+	float2 padField;
 }
 
 struct VS_OUTPUT
@@ -118,12 +130,128 @@ void main(GS_OUTPUT input)
 
 #else
 Texture3D<float> VolumeIn : register(t0);
+// HeightMapProcessCS CombineCS mask: x = suppress (doors), y = melt (shelter, fires)
+Texture2D<float2> ShelterMask : register(t1);
+// ObjectSkyOpenCS: 1 = open sky
+Texture2D<float> SkyOpen : register(t2);
+Texture3D<float> FieldIn : register(t3);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
 // Occupied-voxel count for the menu: one atomic per group, not per thread.
 RWByteAddressBuffer OccupancyCount : register(u2);
 
 groupshared uint gOccupied;
+
+uint3 Phys(int3 logical)
+{
+	return (uint3)((logical + OriginVox.xyz) & (Dim - 1));
+}
+
+// PatchTexel's mapping (SnowStaticsShell): +worldY is texture v = 0.
+bool InWindow(float2 worldXY)
+{
+	if (HeightHalfExtent <= 0.0)
+		return false;
+	float2 wl = abs(worldXY - HeightWindowCenter);
+	return max(wl.x, wl.y) < HeightHalfExtent;
+}
+
+float2 WindowTexel(float2 worldXY, float2 dims)
+{
+	float2 local = (worldXY - HeightWindowCenter) / HeightHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+float SkyOpenAt(float2 worldXY)
+{
+	if (!InWindow(worldXY))
+		return 1.0;
+	float2 dims;
+	SkyOpen.GetDimensions(dims.x, dims.y);
+	float2 t = WindowTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = SkyOpen.Load(int3(t0.x, t0.y, 0));
+	float s10 = SkyOpen.Load(int3(t1.x, t0.y, 0));
+	float s01 = SkyOpen.Load(int3(t0.x, t1.y, 0));
+	float s11 = SkyOpen.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+float2 ShelterAt(float2 worldXY)
+{
+	if (!InWindow(worldXY))
+		return 0.0;
+	float2 dims;
+	ShelterMask.GetDimensions(dims.x, dims.y);
+	float2 t = WindowTexel(worldXY, dims);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float2 s00 = ShelterMask.Load(int3(t0.x, t0.y, 0));
+	float2 s10 = ShelterMask.Load(int3(t1.x, t0.y, 0));
+	float2 s01 = ShelterMask.Load(int3(t0.x, t1.y, 0));
+	float2 s11 = ShelterMask.Load(int3(t1.x, t1.y, 0));
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Snow seeds: occupied voxels with nothing directly above (tops, not walls
+// or undersides), weighted by the column's sky openness and shelter the
+// way the 2D pipeline weights the skin, doors suppressing.
+[numthreads(8, 8, 8)] void VoxelSeedCS(uint3 p
+									   : SV_DispatchThreadID) {
+	int mask = Dim - 1;
+	int3 logical = ((int3)p - OriginVox.xyz) & mask;
+	float occ = VolumeIn[p];
+	float above = logical.z + 1 < Dim ? VolumeIn[Phys(logical + int3(0, 0, 1))] : 0.0;
+	float seed = 0.0;
+	[branch] if (occ > 0.0 && above <= 0.0)
+	{
+		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
+		float2 shelter = ShelterAt(worldXY);
+		float exposure = min(SkyOpenAt(worldXY), 1.0 - shelter.y);
+		seed = lerp(ShelterDust, 1.0, exposure) * (1.0 - shelter.x);
+	}
+	VolumeOut[p] = seed;
+}
+
+// Separable gaussian along BlurAxis in logical space (past the window edge
+// is empty). X and Y are normalised so a plane of seeds stays 1; Z keeps a
+// peak weight of 1, so a flat top's field falls as exp(-h^2 / 2 sigma^2)
+// and the threshold picks the depth. The sum of it all is the smooth union
+// of one blob per seed.
+[numthreads(8, 8, 8)] void VoxelBlurCS(uint3 p
+									   : SV_DispatchThreadID) {
+	int mask = Dim - 1;
+	int3 logical = ((int3)p - OriginVox.xyz) & mask;
+	float sigma = max(SeedSigma, 0.25);
+	int radius = min((int)ceil(sigma * 2.5), 8);
+	float invTwoS2 = 0.5 / (sigma * sigma);
+	int3 step = BlurAxis == 0 ? int3(1, 0, 0) : (BlurAxis == 1 ? int3(0, 1, 0) : int3(0, 0, 1));
+	float sum = 0.0;
+	float wsum = 0.0;
+	[loop] for (int k = -radius; k <= radius; k++)
+	{
+		int3 l = logical + step * k;
+		float w = exp(-(float)(k * k) * invTwoS2);
+		wsum += w;
+		[flatten] if (all(l >= 0) && all(l < Dim))
+			sum += w * VolumeIn[Phys(l)];
+	}
+	VolumeOut[p] = BlurAxis == 2 ? sum : sum / wsum;
+}
+
+// Single return: an early return inside a branch reads as X4000 to fxc.
+float SliceRead(int3 logical)
+{
+	uint3 ph = Phys(logical);
+	float occ = VolumeIn[ph];
+	float f = FieldIn[ph];
+	float cut = f >= FieldThreshold ? 1.0 : 0.0;
+	return SliceSource == 0 ? occ : (SliceSource == 1 ? f : cut);
+}
 
 // Physical voxels never move; the origin does. A voxel whose logical
 // position was inside last frame's window keeps its value, decayed; one
@@ -166,7 +294,6 @@ groupshared uint gOccupied;
 		logical = int3(x, SliceIndex, y);
 	else
 		logical = int3(SliceIndex, x, y);
-	int mask = Dim - 1;
 	float v = 0.0;
 	if (SliceXray > 0) {
 		[loop] for (int i = 0; i < Dim; i++)
@@ -178,10 +305,10 @@ groupshared uint gOccupied;
 				l.y = i;
 			else
 				l.x = i;
-			v = max(v, VolumeIn[(uint3)((l + OriginVox.xyz) & mask)]);
+			v = max(v, SliceRead(l));
 		}
 	} else {
-		v = VolumeIn[(uint3)((logical + OriginVox.xyz) & mask)];
+		v = SliceRead(logical);
 	}
 	SliceOut[id.xy] = v;
 }
