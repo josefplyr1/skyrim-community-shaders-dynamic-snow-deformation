@@ -129,6 +129,7 @@ struct GeometryNameFacts
 	bool mountainCliff = false;
 	bool plank = false;
 	bool iceFamily = false;
+	bool drift = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
@@ -159,6 +160,8 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f.plank = ContainsNoCase(name, "plank") || ContainsNoCase(name, "walkway") || ContainsNoCase(name, "catwalk");
 		f.iceFamily = (std::tolower((unsigned char)name[0]) == 'i' && std::tolower((unsigned char)name[1]) == 'c' && std::tolower((unsigned char)name[2]) == 'e') ||
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
+		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
+		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 	}
 	return f;
 }
@@ -724,11 +727,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// and cell unload they stood out bright; the skin now covers them at
 	// every loaded distance and skips the fade to match.
 	const bool fadeExempt = rec.pathNatural || rec.iceName;
+	// Drifts: the mesh IS the snow, and at range the vanilla material reads
+	// far brighter than the shell (Josef, 2026-09-06). Coated whole at every
+	// loaded distance; the projection default below still applies.
+	const bool fullCoat = nameFacts.drift;
 	const auto& translate = a_pass->geometry->world.translate;
 	float dx = translate.x - eye.x;
 	float dy = translate.y - eye.y;
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
-	if (!fadeExempt && dx * dx + dy * dy > captureRange * captureRange) {
+	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
 		LogIceJourney(a_pass, rec.ice, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
 	}
@@ -824,7 +831,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1322,7 +1329,7 @@ bool SnowDeformation::EnsureStaticsRecordCB()
 
 bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count)
 {
-	if (!staticsRecordEnabled || a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
+	if (staticsRecordDisabled || a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
 		return false;
 	auto* context = globals::d3d::context;
 	for (int i = 0; i < 2; i++) {
@@ -1781,6 +1788,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.HeightHalfExtent = kHeightMapHalfExtent;
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
+		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
 		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
@@ -2187,6 +2195,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
 	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
+	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
 	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
@@ -2613,6 +2622,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.forceRounded, sizeof(cap.forceRounded));
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
+			mix(&cap.fullCoat, sizeof(cap.fullCoat));
 			h += e;
 		}
 		cpuCensus.captureHash = h;

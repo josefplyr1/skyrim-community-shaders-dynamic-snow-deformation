@@ -1589,6 +1589,8 @@ public:
 		bool plankFamily;
 		/** @brief The property really carries kProjectedUV (projThreshold read from it). False for the mesh-replacer default (threshold 0, no noise), whose reconstructed weight is a guess the coat and the edge lumps must not trust. */
 		bool projReal;
+		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
+		bool fullCoat;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1726,7 +1728,8 @@ public:
 		float MoundSteepness;
 		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
 		float ObjectTrenches;
-		float padDistantBareness;
+		/** @brief Drift meshes (geometry name): the whole mesh is the snow, so the skin coats every facing and never collapses, dissolves or drops out of range. */
+		float FullCoat;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
 		float FadeExempt;
 		/** @brief >0.5: road heightfield active. On capture and skin draws it also means THIS draw is a road-heightfield object (road, not bridge), so the capture writes the per-texel road bit and the skin steps aside; on the patch draw it is the global gate. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
@@ -2305,8 +2308,8 @@ public:
 	winrt::com_ptr<ID3D11DeviceContext1> staticsContext1;
 	winrt::com_ptr<ID3D11Buffer> staticsRecordCB[2];
 	bool staticsRecordChecked = false;
-	/** @brief The per-draw offset bind path, default ON since 2026-09-06 (Josef's call after the fourth re-look): -0.15 ms of CPU at the anchor, pixels identical. Runtime A/B; off, every draw takes the Update path from the same records. The capability check and the 11.1 context query still gate it at first use. */
-	bool staticsRecordEnabled = true;
+	/** @brief Disables the per-draw offset bind path (on by default since 2026-09-06, Josef's call after the fourth re-look: -0.15 ms of CPU at the anchor, pixels identical). Set, every draw takes the Update path from the same records. The capability check and the 11.1 context query still gate the path at first use. */
+	bool staticsRecordDisabled = false;
 	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
 	static constexpr uint32_t kStaticsRecordMax = 4096;
 	bool EnsureStaticsRecordCB();
