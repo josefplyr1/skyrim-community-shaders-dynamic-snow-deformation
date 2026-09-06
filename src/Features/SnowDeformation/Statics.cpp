@@ -1724,7 +1724,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	// in each loop, so HasSmoothedNormals and the view never disagree.
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
 	std::vector<StaticsCB> captureRecords(size_t(captureCount) * 2);
-	std::vector<ID3D11ShaderResourceView*> captureSmoothSRVs(captureCount, nullptr);
+	// Owning references: the cache clears itself past 1,024 entries, and a
+	// raw pointer taken before that clear is a freed view by the time the
+	// loops bind it (Josef's driver-thread CTD, 2026-09-06).
+	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> captureSmoothSRVs(captureCount);
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
@@ -1753,7 +1756,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		const float scale = cap.world.scale;
 		const float vertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
 		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
-		captureSmoothSRVs[ci] = smoothSRV;
+		captureSmoothSRVs[ci].copy_from(smoothSRV);
 
 		StaticsCB& scb = captureRecords[ci];
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
@@ -1828,7 +1831,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-		context->VSSetShaderResources(10, 1, &captureSmoothSRVs[ci]);
+		ID3D11ShaderResourceView* captureSmoothSRV = captureSmoothSRVs[ci].get();
+		context->VSSetShaderResources(10, 1, &captureSmoothSRV);
 		if (captureRecordsLive)
 			BindStaticsRecord(ci, false, captureParity);
 		else
@@ -1901,7 +1905,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-			context->VSSetShaderResources(10, 1, &captureSmoothSRVs[ci]);
+			ID3D11ShaderResourceView* peelSmoothSRV = captureSmoothSRVs[ci].get();
+			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
 			if (captureRecordsLive)
 				BindStaticsRecord(captureCount + ci, false, captureParity);
 			else
@@ -3074,10 +3079,10 @@ void SnowDeformation::DrawCapturedStatics()
 	// Every skin's block, filled once for both loops; the view taken here is
 	// the one bound, so HasSmoothedNormals and the view never disagree.
 	std::vector<StaticsCB> skinRecords(skinDraws.size());
-	std::vector<ID3D11ShaderResourceView*> skinSmoothSRVs(skinDraws.size(), nullptr);
+	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinSmoothSRVs(skinDraws.size());
 	for (size_t si = 0; si < skinDraws.size(); si++) {
 		const auto& d = skinDraws[si];
-		skinSmoothSRVs[si] = EnsureSmoothedNormals(d.geometry);
+		skinSmoothSRVs[si].copy_from(EnsureSmoothedNormals(d.geometry));
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
 	}
@@ -3105,7 +3110,8 @@ void SnowDeformation::DrawCapturedStatics()
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.
 			const uint32_t recordIndex = drawIndex++;
-			context->VSSetShaderResources(10, 1, &skinSmoothSRVs[recordIndex]);
+			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
+			context->VSSetShaderResources(10, 1, &skinSmoothSRV);
 			if (skinRecordsLive) {
 				BindStaticsRecord(recordIndex, true, skinParity);
 			} else {
