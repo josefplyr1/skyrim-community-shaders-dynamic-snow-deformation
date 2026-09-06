@@ -304,6 +304,19 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
 			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
+			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 3.0f, 24.0f, "%.0f u");
+			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is. The grid is a fixed 256 voxels a side, so this trades DETAIL against REACH and the two cannot both improve: smaller voxels resolve rails and steps but the cube shrinks around you. Getting both needs nested grids (fine near, coarse far), which is a separate piece of work. Changing this restarts the volume."));
+			{
+				const float across = kVoxelDim * std::clamp(settings.VolumeVoxelSize, 3.0f, 24.0f) / kUnitsPerMeter;
+				ImGui::Text("Covers %.0f m across (%.0f m around you)", across, across * 0.5f);
+			}
+			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
+			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the captured shape itself (which way the empty space lies around each surface voxel), so it knows a wall from a floor without any mesh data."));
+			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Volume Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
+			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
 			ImGui::Checkbox(T(TKEY("volume_snow_draw"), "Draw Volume Snow"), &settings.VolumeSnowDraw);
 			if (auto _ttVoxDraw = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_draw_tooltip"), "V1b: draws the snow surface in the world - marched per pixel inside boxes around it, shaded with the object shell's own material, so it matches the 3D shell and the coat beneath it. Dissolves toward the edge of the 30 m cube. The 3D shell and the coat keep drawing; this sits above them. Cost is the VolumeSnow pass."));

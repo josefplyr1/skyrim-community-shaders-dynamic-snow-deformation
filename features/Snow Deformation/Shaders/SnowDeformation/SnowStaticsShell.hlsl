@@ -3369,22 +3369,29 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	const float threshold = VoxParams.z;
 	const float stepLen = max(VoxParams.w, 0.1) * voxel;
-	float t = tNear;
 	// Entering already inside the snow: the surface lies in an earlier brick.
-	[branch] if (VoxelFieldAt(rayDir * t) >= threshold)
+	[branch] if (VoxelFieldAt(rayDir * tNear) >= threshold)
 		discard;
-	float tPrev = t;
+	// SAMPLE ON A GLOBAL LATTICE, never from the brick's own entry point.
+	// Phased per brick, two bricks sharing a ray sample the field at
+	// different offsets and resolve the surface a step apart - a seam on
+	// every brick face, sliding with the camera because the ray does
+	// (Josef's moving squares, 2026-09-06). Quantising t to a multiple of
+	// the step makes the sample positions identical whichever brick owns
+	// them, so the surface is continuous across the boundary.
+	float tPrev = tNear;
+	float t = (floor(tNear / stepLen) + 1.0) * stepLen;
 	bool hit = false;
 	[loop] for (int i = 0; i < 48; i++)
 	{
-		tPrev = t;
-		t += stepLen;
 		if (t > tFar)
 			break;
 		if (VoxelFieldAt(rayDir * t) >= threshold) {
 			hit = true;
 			break;
 		}
+		tPrev = t;
+		t += stepLen;
 	}
 	[branch] if (!hit)
 		discard;

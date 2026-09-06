@@ -607,6 +607,12 @@ public:
 		float VolumeSnowCoverage = 0.5f;
 		/** @brief "Draw Volume Snow" (V1b): march the field per pixel inside brick AABBs and shade it with the skins' own material. Off = the field only exists in the slice view. */
 		bool VolumeSnowDraw = true;
+		/** @brief "Volume Voxel Size", world units. The grid is a fixed 256^3, so this trades detail against reach: 8 = 29 m across, 4 = 15 m, 16 = 59 m. Smaller AND further needs a clipmap. */
+		float VolumeVoxelSize = 8.0f;
+		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow (the seed's own up-ness, from the occupancy shell). */
+		float VolumeSnowMaxSlopeDeg = 65.0f;
+		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. */
+		float VolumeSkyExposurePct = 100.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -2058,9 +2064,11 @@ public:
 
 	// ---- Voxel occupancy volume (VOLUME-SNOW-PLAN V0) ----
 
-	/** @brief 256 voxels of 8 units: a 2048-unit cube around the camera. Pow2 for the torus. Mirrors Dim/VoxelSize in SnowVoxelCapture.hlsl. */
+	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */
 	static constexpr uint kVoxelDim = 256;
-	static constexpr float kVoxelSize = 8.0f;
+	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
+	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 3.0f, 24.0f); }
+	float voxelSizeBuilt = 0.0f;
 
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
 	struct alignas(16) VoxelVolumeCB
@@ -2088,11 +2096,19 @@ public:
 		/** @brief Gaussian sigma in voxels; with Z unnormalised a flat top's field is exp(-h^2/2s^2), so the threshold picks the depth. */
 		float SeedSigma;
 		float FieldThreshold;
-		float padField[2];
+		/** @brief Sigma BELOW a seed as a fraction of the sigma above it: snow grows up from a surface, it does not hang under one. */
+		float SigmaDownScale;
+		/** @brief cos(Settings::VolumeSnowMaxSlopeDeg): minimum up-ness of a seed's own surface. */
+		float SlopeMinNz;
 		/** @brief xyz = the camera in voxel units (absolute), w = the draw's reach in voxels (brick cull). */
 		float EyeVox[4];
+		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
+		float SkyStrength;
+		float padSky[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
+	/** @brief Sigma below a seed as a fraction of the sigma above: rounds the lip under an edge without hanging snow beneath beams. Tune here, not in the menu. */
+	static constexpr float kVoxelSigmaDown = 0.3f;
 
 	/** @brief V1b draw constants (b2 on the VOXEL variant of SnowStaticsShell). Layout must match VoxelDrawCB there. */
 	struct alignas(16) VoxelDrawCB

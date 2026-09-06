@@ -157,6 +157,9 @@
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
 	X(VolumeSnowDraw) \
+	X(VolumeVoxelSize) \
+	X(VolumeSnowMaxSlopeDeg) \
+	X(VolumeSkyExposurePct) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)

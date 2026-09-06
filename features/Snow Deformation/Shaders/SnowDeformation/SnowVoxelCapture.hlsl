@@ -38,9 +38,16 @@ cbuffer VoxelCB : register(b0)
 	// Gaussian sigma in voxels; threshold picks the isosurface = the depth
 	float SeedSigma;
 	float FieldThreshold;
-	float2 padField;
+	// Sigma BELOW a seed as a fraction of the sigma above it: snow grows up
+	// from a surface, it does not hang under one.
+	float SigmaDownScale;
+	// Minimum up-ness of a seed's own surface, cos(max slope).
+	float SlopeMinNz;
 	// xyz = the camera in voxel units (absolute), w = the draw's reach in voxels
 	float4 EyeVox;
+	// Strength of the sky-openness weighting on the seed, 0-1.
+	float SkyStrength;
+	float3 padSky;
 }
 
 struct VS_OUTPUT
@@ -199,9 +206,38 @@ float2 ShelterAt(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+// Which way the surface faces, for a SHELL occupancy field. The raster marks
+// surface voxels only (both faces, no interior), so a finite difference of
+// occupancy is ~0 and useless. Instead point away from the empty space: sum
+// the unit offsets of the EMPTY neighbours in the 3x3x3 block. A floor voxel
+// has its empty side above (nz -> 1), a wall face has it sideways (nz -> 0),
+// a rail top has it above and around (nz mostly up).
+float3 SurfaceUp(int3 logical)
+{
+	float3 emptyDir = 0.0;
+	[unroll] for (int dz = -1; dz <= 1; dz++)
+	{
+		[unroll] for (int dy = -1; dy <= 1; dy++)
+		{
+			[unroll] for (int dx = -1; dx <= 1; dx++)
+			{
+				int3 o = int3(dx, dy, dz);
+				if (all(o == 0))
+					continue;
+				int3 l = logical + o;
+				bool occupied = all(l >= 0) && all(l < Dim) && VolumeIn[Phys(l)] > 0.0;
+				if (!occupied)
+					emptyDir += normalize((float3)o);
+			}
+		}
+	}
+	return normalize(emptyDir + float3(0.0, 0.0, 1e-4));
+}
+
 // Snow seeds: occupied voxels with nothing directly above (tops, not walls
-// or undersides), weighted by the column's sky openness and shelter the
-// way the 2D pipeline weights the skin, doors suppressing.
+// or undersides), gated by the surface's own up-ness and weighted by the
+// column's sky openness and shelter the way the 2D pipeline weights the
+// skin, doors suppressing.
 [numthreads(8, 8, 8)] void VoxelSeedCS(uint3 p
 									   : SV_DispatchThreadID) {
 	int mask = Dim - 1;
@@ -211,10 +247,18 @@ float2 ShelterAt(float2 worldXY)
 	float seed = 0.0;
 	[branch] if (occ > 0.0 && above <= 0.0)
 	{
-		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
-		float2 shelter = ShelterAt(worldXY);
-		float exposure = min(SkyOpenAt(worldXY), 1.0 - shelter.y);
-		seed = lerp(ShelterDust, 1.0, exposure) * (1.0 - shelter.x);
+		// Graded, not a hard cut: a hard gate on a voxel-quantised normal
+		// prints the quantisation as a ragged contour.
+		float nz = SurfaceUp(logical).z;
+		float facing = smoothstep(SlopeMinNz - 0.15, SlopeMinNz + 0.15, nz);
+		[branch] if (facing > 0.0)
+		{
+			float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
+			float2 shelter = ShelterAt(worldXY);
+			float exposure = min(SkyOpenAt(worldXY), 1.0 - shelter.y);
+			exposure = lerp(1.0, exposure, SkyStrength);
+			seed = lerp(ShelterDust, 1.0, exposure) * (1.0 - shelter.x) * facing;
+		}
 	}
 	VolumeOut[p] = seed;
 }
@@ -224,25 +268,34 @@ float2 ShelterAt(float2 worldXY)
 // peak weight of 1, so a flat top's field falls as exp(-h^2 / 2 sigma^2)
 // and the threshold picks the depth. The sum of it all is the smooth union
 // of one blob per seed.
+//
+// Z IS ASYMMETRIC. A symmetric kernel spreads a seed as far DOWN as up, which
+// is snow hanging under beams, a band down every wall below its top edge, and
+// thin rails swallowed by their own halo (Josef, 2026-09-06). Reading from
+// k > 0 means taking a seed that sits ABOVE this voxel - snow below its own
+// surface - so that side gets SigmaDownScale of the sigma: enough to round
+// the lip under an edge, not enough to hang.
 [numthreads(8, 8, 8)] void VoxelBlurCS(uint3 p
 									   : SV_DispatchThreadID) {
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float sigma = max(SeedSigma, 0.25);
+	bool vertical = BlurAxis == 2;
+	float sigmaDown = max(sigma * SigmaDownScale, 0.25);
 	int radius = min((int)ceil(sigma * 2.5), 8);
-	float invTwoS2 = 0.5 / (sigma * sigma);
 	int3 step = BlurAxis == 0 ? int3(1, 0, 0) : (BlurAxis == 1 ? int3(0, 1, 0) : int3(0, 0, 1));
 	float sum = 0.0;
 	float wsum = 0.0;
 	[loop] for (int k = -radius; k <= radius; k++)
 	{
 		int3 l = logical + step * k;
-		float w = exp(-(float)(k * k) * invTwoS2);
+		float s = (vertical && k > 0) ? sigmaDown : sigma;
+		float w = exp(-(float)(k * k) * (0.5 / (s * s)));
 		wsum += w;
 		[flatten] if (all(l >= 0) && all(l < Dim))
 			sum += w * VolumeIn[Phys(l)];
 	}
-	VolumeOut[p] = BlurAxis == 2 ? sum : sum / wsum;
+	VolumeOut[p] = vertical ? sum : sum / wsum;
 }
 
 // V1b: the draw's brick list. One thread per 8^3 brick, listed when the

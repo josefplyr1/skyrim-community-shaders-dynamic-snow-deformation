@@ -244,18 +244,25 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	auto* context = globals::d3d::context;
 
 	// The cube centred on the camera, its origin snapped to the lattice.
+	// The origin is in VOXEL units, so a size change makes every stored
+	// voxel's world position wrong: start the window over.
+	const float voxelSize = VoxelSizeLive();
+	if (voxelSize != voxelSizeBuilt) {
+		voxelSizeBuilt = voxelSize;
+		voxelValid = false;
+	}
 	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	constexpr float half = kVoxelDim * kVoxelSize * 0.5f;
+	const float half = kVoxelDim * voxelSize * 0.5f;
 	const DirectX::XMINT3 origin{
-		(int)std::floor((eye.x - half) / kVoxelSize),
-		(int)std::floor((eye.y - half) / kVoxelSize),
-		(int)std::floor((eye.z - half) / kVoxelSize)
+		(int)std::floor((eye.x - half) / voxelSize),
+		(int)std::floor((eye.y - half) / voxelSize),
+		(int)std::floor((eye.z - half) / voxelSize)
 	};
 
 	VoxelVolumeCB cb{};
 	cb.OriginVox = { origin.x, origin.y, origin.z, voxelValid ? 0 : 1 };
 	cb.ScrollDelta = { origin.x - voxelOriginVox.x, origin.y - voxelOriginVox.y, origin.z - voxelOriginVox.z, 0 };
-	cb.VoxelSize = kVoxelSize;
+	cb.VoxelSize = voxelSize;
 	cb.Decay = 1.0f / std::max(voxelMemorySeconds * 60.0f, 1.0f);
 	cb.Dim = (int)kVoxelDim;
 	cb.SliceAxis = std::clamp(voxelSliceAxis, 0, 2);
@@ -269,16 +276,19 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	cb.ShelterDust = kVoxelShelterDust;
 	// sigma such that coverage 0.5 lands the isosurface at the slider depth:
 	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s.
-	cb.SeedSigma = std::max(settings.VolumeSnowDepth, 4.0f) / (1.177f * kVoxelSize);
+	cb.SeedSigma = std::max(settings.VolumeSnowDepth, 4.0f) / (1.177f * voxelSize);
 	cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
-	cb.EyeVox[0] = eye.x / kVoxelSize;
-	cb.EyeVox[1] = eye.y / kVoxelSize;
-	cb.EyeVox[2] = eye.z / kVoxelSize;
-	cb.EyeVox[3] = kVoxelFadeEndFrac * half / kVoxelSize;
+	cb.SigmaDownScale = kVoxelSigmaDown;
+	cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
+	cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
+	cb.EyeVox[0] = eye.x / voxelSize;
+	cb.EyeVox[1] = eye.y / voxelSize;
+	cb.EyeVox[2] = eye.z / voxelSize;
+	cb.EyeVox[3] = kVoxelFadeEndFrac * half / voxelSize;
 	{
 		const float along = cb.SliceAxis == 0 ? eye.z : (cb.SliceAxis == 1 ? eye.y : eye.x);
 		const int originAlong = cb.SliceAxis == 0 ? origin.z : (cb.SliceAxis == 1 ? origin.y : origin.x);
-		cb.SliceIndex = std::clamp((int)std::floor((along + voxelSliceOffset) / kVoxelSize) - originAlong, 0, (int)kVoxelDim - 1);
+		cb.SliceIndex = std::clamp((int)std::floor((along + voxelSliceOffset) / voxelSize) - originAlong, 0, (int)kVoxelDim - 1);
 	}
 	voxelCB->Update(cb);
 	voxelOriginVox = origin;
@@ -348,6 +358,12 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 
 	for (uint32_t ci = 0; ci < a_captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
+		// Roads and bridges belong to the trench patch, which drapes the
+		// road heightfield itself; the S4 skin excludes them for the same
+		// reason. Voxelising them put volume snow over every RoadChunk
+		// (Josef, 2026-09-06).
+		if (cap.road || cap.bridge)
+			continue;
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
@@ -476,10 +492,11 @@ void SnowDeformation::DrawVoxelSnow()
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
 
-	constexpr float half = kVoxelDim * kVoxelSize * 0.5f;
+	const float voxelSize = VoxelSizeLive();
+	const float half = kVoxelDim * voxelSize * 0.5f;
 	VoxelDrawCB d{};
 	d.VoxOrigin = { voxelOriginVox.x, voxelOriginVox.y, voxelOriginVox.z, 0 };
-	d.VoxParams = { kVoxelSize, float(kVoxelDim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), 0.5f };
+	d.VoxParams = { voxelSize, float(kVoxelDim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), 0.5f };
 	d.VoxFade = { kVoxelFadeStartFrac * half, kVoxelFadeEndFrac * half, 0.0f, 0.0f };
 	voxelDrawCB->Update(d);
 	ID3D11Buffer* cb2 = voxelDrawCB->CB();
