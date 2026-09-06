@@ -1591,6 +1591,10 @@ public:
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
 	std::vector<CapturedSnowStatic> capturedStatics;
 	std::unordered_set<void*> capturedStaticsSet;
+	/** @brief Capture hook verdict cache: geometry -> the frame it was last judged in (PERF-RESEARCH §11.2-A). */
+	std::unordered_map<const void*, uint32_t> hookSeen;
+	/** @brief A/B: every pass re-runs the hook's classification, as before the cache. Runtime-only. */
+	bool hookCacheDisabled = false;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
 	/** @brief Per-frame projected-snow classification counters (render thread writes, Prepass publishes, menu debug section reads). */
@@ -1861,6 +1865,9 @@ public:
 		/** @brief FNV-1a of (StampCount, Stamps, StampEnds) as uploaded: the bit-identity check for every CPU lever. */
 		uint64_t stampHash = 0;
 		uint32_t stampHashStable = 0;
+		/** @brief FNV-1a of the capture list as DrawCapturedStatics sees it (pointer, transform, every classification field): the identity check for hook levers. */
+		uint64_t captureHash = 0;
+		uint32_t captureCount = 0;
 		static constexpr uint32_t kHashRing = 300;
 		uint64_t stampHashRing[kHashRing] = {};
 		uint32_t stampHashHead = 0;

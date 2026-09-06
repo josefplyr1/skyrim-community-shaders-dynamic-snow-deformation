@@ -98,6 +98,71 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 // vanilla either) while a SNOW-textured one failing is a bug - and only the
 // path tells the two apart. Same single-threaded assumption as
 // driftMaterialCache below.
+// Allocation-free case-insensitive substring; the needle is lowercase ASCII.
+static bool ContainsNoCase(const char* a_text, const char* a_needle)
+{
+	if (!a_text || !a_needle || !*a_needle)
+		return false;
+	const size_t n = strlen(a_needle);
+	for (const char* p = a_text; *p; ++p) {
+		size_t i = 0;
+		while (i < n && p[i] && (char)std::tolower((unsigned char)p[i]) == a_needle[i])
+			++i;
+		if (i == n)
+			return true;
+	}
+	return false;
+}
+
+// Every name-derived fact the capture hook needs, computed once per interned
+// geometry name (BSFixedString: equal content, equal pointer). Validated by
+// length and the first eight bytes against pointer reuse. The logged flags
+// carry the "one line per unique name" logs that used to hash a std::string
+// per capture per frame.
+struct GeometryNameFacts
+{
+	uint32_t length = 0;
+	uint64_t head = 0;
+	bool largeRef = false;
+	bool bridge = false;
+	bool road = false;
+	bool mountainCliff = false;
+	bool plank = false;
+	bool iceFamily = false;
+	bool capturedLogged = false;
+	bool roundedLogged = false;
+	bool plankLogged = false;
+};
+
+static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
+{
+	static std::unordered_map<const char*, GeometryNameFacts> cache;
+	static GeometryNameFacts empty;
+	const char* name = a_geometry ? a_geometry->name.c_str() : nullptr;
+	if (!name || !*name)
+		return empty;
+	if (cache.size() > 16384)
+		cache.clear();
+	const uint32_t length = (uint32_t)strlen(name);
+	uint64_t head = 0;
+	memcpy(&head, name, std::min<size_t>(length, sizeof(head)));
+	auto [it, inserted] = cache.try_emplace(name);
+	auto& f = it->second;
+	if (inserted || f.length != length || f.head != head) {
+		f = {};
+		f.length = length;
+		f.head = head;
+		f.largeRef = ContainsNoCase(name, "largeref");
+		f.bridge = ContainsNoCase(name, "bridge");
+		f.road = f.bridge || ContainsNoCase(name, "road");
+		f.mountainCliff = ContainsNoCase(name, "mountain") || ContainsNoCase(name, "cliff");
+		f.plank = ContainsNoCase(name, "plank") || ContainsNoCase(name, "walkway") || ContainsNoCase(name, "catwalk");
+		f.iceFamily = (std::tolower((unsigned char)name[0]) == 'i' && std::tolower((unsigned char)name[1]) == 'c' && std::tolower((unsigned char)name[2]) == 'e') ||
+		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
+	}
+	return f;
+}
+
 static void SampleMaterialReject(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
 {
 	static std::unordered_set<std::string> seen;
@@ -270,14 +335,7 @@ namespace
 	// it hits Cornice/Device.
 	bool IsIceFamilyGeometry(RE::BSGeometry* a_geometry)
 	{
-		if (!a_geometry || a_geometry->name.empty())
-			return false;
-		std::string lowered(a_geometry->name.c_str());
-		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		return lowered.rfind("ice", 0) == 0 ||
-		       lowered.find("glacier") != std::string::npos ||
-		       lowered.find("iceberg") != std::string::npos;
+		return NameFactsOf(a_geometry).iceFamily;
 	}
 
 	// The combined family signal (node name OR diffuse path), cached per
@@ -324,13 +382,6 @@ namespace
 	{
 		auto* geometry = a_pass->geometry;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-		const char* texPath = "";
-		if (material) {
-			if (auto textureSet = material->textureSet.get()) {
-				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path)
-					texPath = path;
-			}
-		}
 		if (!IceFamilySignal(geometry, material))
 			return;
 		static std::unordered_set<uint64_t> logged;
@@ -338,6 +389,13 @@ namespace
 			return;
 		if (!logged.insert((uint64_t)(uintptr_t)geometry ^ ((uint64_t)(uintptr_t)a_outcome << 1)).second)
 			return;
+		const char* texPath = "";
+		if (material) {
+			if (auto textureSet = material->textureSet.get()) {
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path)
+					texPath = path;
+			}
+		}
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto& flags = a_pass->shaderProperty->flags;
 		RE::TESObjectREFR* refr = nullptr;
@@ -453,6 +511,21 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	if (landTriProbeArmed && !landTriProbe.pending)
 		CaptureLandTriProbe(a_pass);
 
+	// One verdict per geometry per frame: the same geometry arrives once per
+	// pass that draws it, and nothing below depends on the pass. A capture
+	// already returned at the set insert; this returns the rejections too.
+	if (!hookCacheDisabled) {
+		const uint32_t frame = globals::state->frameCount;
+		if (hookSeen.size() > 65536)
+			hookSeen.clear();
+		auto [seenIt, seenNew] = hookSeen.try_emplace(a_pass->geometry, frame);
+		if (!seenNew) {
+			if (seenIt->second == frame)
+				return;
+			seenIt->second = frame;
+		}
+	}
+
 	// The clean gate: projected-UV + snow flags together; covers rocks,
 	// roofs, logs, stumps and never flora, because foliage is not
 	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture
@@ -492,14 +565,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// full textures, no owning reference, no projected snow - so it is not a
 	// merged sheet for the containment test, and the material gate is its
 	// only way in.
-	bool largeRefLOD = false;
-	{
-		std::string loweredName(a_pass->geometry->name.c_str());
-		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
-		              loweredName.find("largeref") != std::string::npos;
-	}
+	auto& nameFacts = NameFactsOf(a_pass->geometry);
+	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
 	bool largeRefMountain = false;
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
@@ -650,20 +717,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// second hovering shell.
 	// `bridge` is tracked apart from `road` for the road heightfield only:
 	// both classes share RoadMeshesDepth exactly as before.
-	bool road = false;
-	bool bridge = false;
+	bool bridge = nameFacts.bridge;
+	bool road = nameFacts.road;
 	// Which signal decided it, for the road-classification log below.
-	const char* roadVia = "no";
+	const char* roadVia = road ? "name" : "no";
 	std::string roadTexPath;
-	{
-		std::string loweredName(a_pass->geometry->name.c_str());
-		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		bridge = loweredName.find("bridge") != std::string::npos;
-		road = bridge || loweredName.find("road") != std::string::npos;
-		if (road)
-			roadVia = "name";
-	}
 	if (!road) {
 		if (auto* roadMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)) {
 			// 0 = no match, 1 = road, 2 = bridge.
@@ -699,21 +757,16 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// being the fork in a diagnosis - RoadChunkS03's ':1' paper sheet is
 	// either an uncaptured vanilla snow drape or our own skin on a
 	// non-road-named trishape, and only this log can say which.
-	{
-		static std::unordered_set<std::string> loggedCaptureNames;
-		std::string name(a_pass->geometry->name.c_str());
-		if (loggedCaptureNames.size() > 4096)
-			loggedCaptureNames.clear();
-		if (loggedCaptureNames.insert(name).second) {
-			const char* diffusePath = "";
-			if (auto* logMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
-				if (auto textureSet = logMaterial->textureSet.get())
-					if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
-						diffusePath = path;
-			logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}){} heightfield={} tex='{}'",
-				name, road ? "yes" : "no", roadVia, bridge ? " (BRIDGE)" : "",
-				(road && !bridge && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
-		}
+	if (!nameFacts.capturedLogged) {
+		nameFacts.capturedLogged = true;
+		const char* diffusePath = "";
+		if (auto* logMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
+			if (auto textureSet = logMaterial->textureSet.get())
+				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
+					diffusePath = path;
+		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}){} heightfield={} tex='{}'",
+			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, bridge ? " (BRIDGE)" : "",
+			(road && !bridge && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
 	}
 
 	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
@@ -753,38 +806,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// the mesh drapes with a rigid plate lifted the full flat depth - the
 	// hovering translucent film. Name match like the road class; a false
 	// positive forces rounded on something already rounded, a no-op.
-	bool forceRounded = false;
-	bool plankFamily = false;
-	{
-		std::string loweredName(a_pass->geometry->name.c_str());
-		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		forceRounded = loweredName.find("mountain") != std::string::npos ||
-		               loweredName.find("cliff") != std::string::npos ||
-		               largeRefMountain;
-		if (forceRounded) {
-			static std::unordered_set<std::string> loggedRoundedNames;
-			if (loggedRoundedNames.size() > 4096)
-				loggedRoundedNames.clear();
-			if (loggedRoundedNames.insert(loweredName).second)
-				logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", loweredName);
-		}
-		// Plank family: in authored-relief mode the ONLY flat-class draws
-		// (cornice treatment, own fill slider); everything else PD is
-		// rounded. Same deterministic name match as the road class.
-		plankFamily = loweredName.find("plank") != std::string::npos ||
-		              loweredName.find("walkway") != std::string::npos ||
-		              loweredName.find("catwalk") != std::string::npos;
-		// (Drift-family special-casing removed: drifts ride the general
-		// fully-painted default above, like every technique-classified
-		// draw without property-level projection data.)
-		if (plankFamily) {
-			static std::unordered_set<std::string> loggedPlankNames;
-			if (loggedPlankNames.size() > 4096)
-				loggedPlankNames.clear();
-			if (loggedPlankNames.insert(loweredName).second)
-				logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", loweredName);
-		}
+	const bool forceRounded = nameFacts.mountainCliff || largeRefMountain;
+	if (forceRounded && !nameFacts.roundedLogged) {
+		nameFacts.roundedLogged = true;
+		logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", a_pass->geometry->name.c_str());
+	}
+	// Plank family: in authored-relief mode the ONLY flat-class draws
+	// (cornice treatment, own fill slider); everything else PD is
+	// rounded. Same deterministic name match as the road class.
+	const bool plankFamily = nameFacts.plank;
+	if (plankFamily && !nameFacts.plankLogged) {
+		nameFacts.plankLogged = true;
+		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal });
@@ -2425,6 +2458,32 @@ void SnowDeformation::DrawCapturedStatics()
 	if (SnowShadersPending(2))
 		return;
 	ServiceLandTriProbe();
+	{
+		uint64_t h = 1469598103934665603ull;
+		auto mix = [&](const void* a_p, size_t a_n) {
+			const auto* b = static_cast<const uint8_t*>(a_p);
+			for (size_t i = 0; i < a_n; i++) {
+				h ^= b[i];
+				h *= 1099511628211ull;
+			}
+		};
+		for (const auto& cap : capturedStatics) {
+			const void* g = cap.geometry.get();
+			mix(&g, sizeof(g));
+			mix(&cap.world.translate, sizeof(cap.world.translate));
+			mix(&cap.road, sizeof(cap.road));
+			mix(&cap.bridge, sizeof(cap.bridge));
+			mix(&cap.fadeExempt, sizeof(cap.fadeExempt));
+			mix(&cap.projThreshold, sizeof(cap.projThreshold));
+			mix(&cap.projNoiseScale, sizeof(cap.projNoiseScale));
+			mix(&cap.projNoiseTiling, sizeof(cap.projNoiseTiling));
+			mix(&cap.forceRounded, sizeof(cap.forceRounded));
+			mix(&cap.plankFamily, sizeof(cap.plankFamily));
+			mix(&cap.projReal, sizeof(cap.projReal));
+		}
+		cpuCensus.captureHash = h;
+		cpuCensus.captureCount = (uint32_t)capturedStatics.size();
+	}
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
 	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty())
