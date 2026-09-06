@@ -128,7 +128,7 @@ bool SnowDeformation::EnsureVoxelResources()
 
 void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity)
 {
-	if (!voxelVolumeEnable) {
+	if (!settings.VolumeSnow) {
 		voxelValid = false;
 		return;
 	}

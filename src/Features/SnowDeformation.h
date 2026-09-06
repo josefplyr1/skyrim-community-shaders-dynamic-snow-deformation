@@ -599,7 +599,7 @@ public:
 		bool ProjSnowMatch = true;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
-		/** @brief Reserved: the Experimental section's placeholder for VOLUME-SNOW-PLAN. Read by nothing yet. */
+		/** @brief "Build Snow Volume" (VOLUME-SNOW-PLAN V0): rasterise the captured statics into the 256^3 voxel occupancy window each frame. Nothing consumes the volume - the slice view is the deliverable - so this changes no snow, only cost. */
 		bool VolumeSnow = false;
 	};
 
@@ -2088,8 +2088,6 @@ public:
 	uint voxelCurrent = 0;
 	bool voxelValid = false;
 	DirectX::XMINT3 voxelOriginVox = { 0, 0, 0 };
-	/** @brief Runtime-only: build the volume each frame. Nothing reads it; V0 is the measurement. */
-	bool voxelVolumeEnable = false;
 	/** @brief Runtime-only: write and show the slice. */
 	bool showVoxelSlice = false;
 	/** @brief 0 top-down (XY), 1 side XZ, 2 side YZ. */

@@ -285,9 +285,34 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
-		ImGui::Checkbox(T(TKEY("volume_snow"), "Volume Snow (reserved)"), &settings.VolumeSnow);
+		ImGui::Checkbox(T(TKEY("volume_snow"), "Build Snow Volume"), &settings.VolumeSnow);
 		if (auto _ttVol = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "Placeholder for the volume-snow plan: a 3D snow field whose shape is not inherited from the object's mesh. Does nothing yet."));
+			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "VOLUME-SNOW-PLAN V0: rasterises the captured objects into a cube of 256 x 256 x 256 voxels, 8 units each, around the camera - about 30 m across, 32 MB, kept until the game closes. Remembered between frames and fading where nothing redraws, like the height maps.\n\nNOTHING READS IT YET and no snow changes. This is the measurement that decides whether a 3D snow field - one whose shape is not inherited from the object's mesh, so it can overhang, stack and sit under a roof - is worth building. Its cost is the VoxelVolume pass."));
+		if (settings.VolumeSnow) {
+			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
+			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
+			ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
+			if (auto _ttVoxSlice = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("voxel_show_slice_tooltip"), "Draws one flat plane cut through the volume, so you can see what it holds."));
+			if (showVoxelSlice) {
+				const char* voxelAxes[] = { "Top-down (cut at your height)", "Side: looking north", "Side: looking east" };
+				ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
+				ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
+				// Long-form: the whole point of V0 is that this image can be
+				// read without the plan open beside it.
+				ImGui::TextWrapped("%s", T(TKEY("voxel_slice_hint"), "The whole square is about 30 m across and each red block is one voxel, 8 units (a hand's width). The cross is you. Red = an object surface here; bright means drawn this frame, dim means remembered.\n\nThe plane is one voxel thin, so a surface drifting up and down weaves in and out of it and prints as a dotted line rather than a solid one - that is normal, not a gap.\n\nTHE TEST: stand beside a covered walkway or porch, pick a Side plane, and slide the Offset until it cuts through. Look for the roof as a line with EMPTY space beneath it and the floor as a second line below. Two surfaces in one vertical column is the thing no existing snow structure can represent."));
+				const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
+				if (voxelSliceTexture && voxelSliceTexture->srv) {
+					ImGui::Image(voxelSliceTexture->srv.get(), { 512.0f, 512.0f });
+					auto* draw = ImGui::GetWindowDrawList();
+					const ImVec2 centre{ voxelImageTopLeft.x + 256.0f, voxelImageTopLeft.y + 256.0f };
+					const ImU32 ink = IM_COL32(80, 220, 255, 220);
+					draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
+					draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
+				}
+			}
+		}
 
 		ImGui::TreePop();
 	}
@@ -1644,34 +1669,6 @@ void SnowDeformation::DrawSettings()
 
 
 			ImGui::Text("Snow statics captured: %u", statCapturedStatics.load(std::memory_order_relaxed));
-			ImGui::TreePop();
-		}
-
-		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_volume"), "Object Snow Volume"))) {
-			ImGui::Checkbox(T(TKEY("voxel_enable"), "Build Volume"), &voxelVolumeEnable);
-			if (auto _ttVox = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("voxel_enable_tooltip"), "VOLUME-SNOW-PLAN V0: rasterises this frame's captured statics into a cube of 256 x 256 x 256 voxels, 8 units each, around the camera (about 30 m across, 32 MB, kept until the game closes). Remembered between frames and fading where nothing redraws, like the height maps. Nothing reads it yet: this is the measurement that decides whether the volume route is worth building. Its cost is the VoxelVolume pass."));
-			if (voxelVolumeEnable) {
-				ImGui::SliderFloat(T(TKEY("voxel_memory"), "Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
-				if (auto _ttVoxMem = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade."));
-				ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
-				if (showVoxelSlice) {
-					const char* voxelAxes[] = { "Top-down", "Side: east-west", "Side: north-south" };
-					ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
-					ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
-					ImGui::Text("%s", T(TKEY("voxel_slice_hint"), "Red = an object surface, bright when drawn this frame and dimming as it is remembered. Top-down: north is up. Side views: up is up. The cross is the camera. The exit test is a roof: solid above, empty beneath, and the floor under it as its own line."));
-					const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
-					if (voxelSliceTexture && voxelSliceTexture->srv) {
-						ImGui::Image(voxelSliceTexture->srv.get(), { 512.0f, 512.0f });
-						auto* draw = ImGui::GetWindowDrawList();
-						const ImVec2 centre{ voxelImageTopLeft.x + 256.0f, voxelImageTopLeft.y + 256.0f };
-						const ImU32 ink = IM_COL32(80, 220, 255, 220);
-						draw->AddLine({ centre.x - 8.0f, centre.y }, { centre.x + 8.0f, centre.y }, ink, 1.5f);
-						draw->AddLine({ centre.x, centre.y - 8.0f }, { centre.x, centre.y + 8.0f }, ink, 1.5f);
-					}
-				}
-			}
 			ImGui::TreePop();
 		}
 
