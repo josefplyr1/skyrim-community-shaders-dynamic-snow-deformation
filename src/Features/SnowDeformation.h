@@ -6,6 +6,7 @@
 
 #include "Buffer.h"
 
+#include <d3d11_1.h>
 #include <intrin.h>
 
 struct SnowDeformation : Feature
@@ -2300,6 +2301,15 @@ public:
 	winrt::com_ptr<ID3DBlob> staticsVSBlob;
 	bool staticsShadersFailed = false;
 	ConstantBuffer* staticsCB = nullptr;
+	/** @brief Per-frame records of every static's StaticsCB at a 256-byte stride, bound per draw by offset (D3D11.1 *SetConstantBuffers1) instead of a Map/Unmap per draw (PERF-RESEARCH §11.1b). Two copies alternate per draw: the runtime's redundancy filter ignores the offsets on a rebound buffer. Null when the runtime or driver lacks constant-buffer offsetting; staticsCB->Update per draw is the fallback. */
+	winrt::com_ptr<ID3D11DeviceContext1> staticsContext1;
+	winrt::com_ptr<ID3D11Buffer> staticsRecordCB[2];
+	bool staticsRecordChecked = false;
+	static constexpr uint32_t kStaticsRecordStride = 256;  // 16 constants, the offset granularity
+	static constexpr uint32_t kStaticsRecordMax = 4096;
+	bool EnsureStaticsRecordCB();
+	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count);
+	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, uint32_t& a_parity);
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
 	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
 	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);

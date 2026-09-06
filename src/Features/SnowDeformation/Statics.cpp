@@ -1278,6 +1278,72 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
+bool SnowDeformation::EnsureStaticsRecordCB()
+{
+	if (staticsRecordChecked)
+		return staticsRecordCB[0] && staticsRecordCB[1] && staticsContext1;
+	staticsRecordChecked = true;
+	static_assert(sizeof(StaticsCB) <= kStaticsRecordStride);
+	auto* device = globals::d3d::device;
+	auto* context = globals::d3d::context;
+	if (!device || !context)
+		return false;
+	D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
+	if (FAILED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) || !options.ConstantBufferOffsetting) {
+		logger::info("[SNOW DEFORMATION] statics record buffer: no constant-buffer offsetting; per-draw updates stay");
+		return false;
+	}
+	if (FAILED(context->QueryInterface(IID_PPV_ARGS(staticsContext1.put())))) {
+		logger::info("[SNOW DEFORMATION] statics record buffer: no ID3D11DeviceContext1; per-draw updates stay");
+		return false;
+	}
+	for (int i = 0; i < 2; i++) {
+		D3D11_BUFFER_DESC desc{};
+		desc.ByteWidth = kStaticsRecordMax * kStaticsRecordStride;
+		desc.Usage = D3D11_USAGE_DYNAMIC;
+		desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, staticsRecordCB[i].put()))) {
+			logger::info("[SNOW DEFORMATION] statics record buffer: creation failed; per-draw updates stay");
+			staticsRecordCB[0] = nullptr;
+			staticsRecordCB[1] = nullptr;
+			staticsContext1 = nullptr;
+			return false;
+		}
+		Util::SetResourceName(staticsRecordCB[i].get(), i ? "SnowDeformation::StaticsRecords1" : "SnowDeformation::StaticsRecords0");
+	}
+	logger::info("[SNOW DEFORMATION] statics record buffer: {} records x {} bytes, two copies", kStaticsRecordMax, kStaticsRecordStride);
+	return true;
+}
+
+bool SnowDeformation::UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count)
+{
+	if (a_count == 0 || a_count > kStaticsRecordMax || !EnsureStaticsRecordCB())
+		return false;
+	auto* context = globals::d3d::context;
+	for (int i = 0; i < 2; i++) {
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (FAILED(context->Map(staticsRecordCB[i].get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			return false;
+		auto* dst = static_cast<uint8_t*>(mapped.pData);
+		for (uint32_t r = 0; r < a_count; r++)
+			memcpy(dst + size_t(r) * kStaticsRecordStride, &a_records[r], sizeof(StaticsCB));
+		context->Unmap(staticsRecordCB[i].get(), 0);
+	}
+	return true;
+}
+
+void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, uint32_t& a_parity)
+{
+	ID3D11Buffer* buffer = staticsRecordCB[a_parity & 1].get();
+	a_parity++;
+	const UINT first = a_index * (kStaticsRecordStride / 16);
+	const UINT count = kStaticsRecordStride / 16;
+	staticsContext1->VSSetConstantBuffers1(1, 1, &buffer, &first, &count);
+	if (a_pixelStage)
+		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
+}
+
 void SnowDeformation::RenderObjectHeightMap()
 {
 	LoadTraceScope _loadTrace(this, "Statics: RenderObjectHeightMap");
@@ -1648,8 +1714,83 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11ShaderResourceView* captureTerrainSRV = shellTerrainTexture->srv.get();
 	context->PSSetShaderResources(2, 1, &captureTerrainSRV);
 
+	// Every static's capture and peel blocks, filled once: the three loops
+	// below bind them by offset (or Update from them on the fallback path).
+	// The smoothed-normals view is taken here and bound from the same slot
+	// in each loop, so HasSmoothedNormals and the view never disagree.
+	const uint32_t captureCount = (uint32_t)capturedStatics.size();
+	std::vector<StaticsCB> captureRecords(size_t(captureCount) * 2);
+	std::vector<ID3D11ShaderResourceView*> captureSmoothSRVs(captureCount, nullptr);
+	for (uint32_t ci = 0; ci < captureCount; ci++) {
+		const auto& cap = capturedStatics[ci];
+		auto* geometry = cap.geometry.get();
+		if (!geometry)
+			continue;
+		auto triShape = geometry->AsTriShape();
+		if (!triShape)
+			continue;
+		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+			continue;
+		if (triShape->GetTrishapeRuntimeData().triangleCount == 0)
+			continue;
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+			continue;
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto layoutIt = staticsILCache.find(descKey);
+		if (layoutIt == staticsILCache.end() || !layoutIt->second)
+			continue;
+		if (uint32_t(descKey & 0xF) == 0)
+			continue;
+
+		const auto& rot = cap.world.rotate;
+		const float scale = cap.world.scale;
+		const float vertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+		ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
+		captureSmoothSRVs[ci] = smoothSRV;
+
+		StaticsCB& scb = captureRecords[ci];
+		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
+		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
+		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
+		scb.VertexCountF = vertexCountF;
+		scb.HeightWindowCenter = heightWindowCenter;
+		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
+		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
+		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
+		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
+		scb.ProjThreshold = cap.projThreshold;
+		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
+		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
+		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
+		{
+			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
+			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
+			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
+		}
+		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
+
+		StaticsCB& peel = captureRecords[size_t(captureCount) + ci];
+		peel.WorldRow0 = scb.WorldRow0;
+		peel.WorldRow1 = scb.WorldRow1;
+		peel.WorldRow2 = scb.WorldRow2;
+		peel.HeightWindowCenter = heightWindowCenter;
+		peel.HeightHalfExtent = kHeightMapHalfExtent;
+		peel.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
+		peel.VertexCountF = vertexCountF;
+		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
+	}
+	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), captureCount * 2);
+	uint32_t captureParity = 0;
+
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
-	for (const auto& cap : capturedStatics) {
+	for (uint32_t ci = 0; ci < captureCount; ci++) {
+		const auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
@@ -1683,40 +1824,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-		StaticsCB scb{};
-		const auto& rot = cap.world.rotate;
-		const float scale = cap.world.scale;
-		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
-		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
-		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : settings.ObjectsSnowDepth;
-		scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
-		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
-		// The raster VS zeroes skin depth for objects that may not carve, so
-		// both gates have to reach this pass; without them every object reads
-		// as non-carving and the trench patch dies everywhere, roads included.
-		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
-		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
-		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
-		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
-		scb.ProjThreshold = cap.projThreshold;
-		scb.ProjMaskEnable = settings.ProjMaskPlacement ? 1.0f : 0.0f;
-		scb.ProjDensityEnable = settings.ProjDepthDensity ? 1.0f : 0.0f;
-		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
-		// Same class pick as the skin: S4 shell draws are all ROUNDED.
-		{
-			const bool s4Shell = settings.ObjectSnow3D && !cap.road &&
-			                     cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
-			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
-		}
-		// Flat/rounded stats for the skin-depth output (RT2): the raster VS
-		// reads the same classification the skin uses.
-		ID3D11ShaderResourceView* rasterSmoothSRV = EnsureSmoothedNormals(geometry);
-		context->VSSetShaderResources(10, 1, &rasterSmoothSRV);
-		scb.HasSmoothedNormals = rasterSmoothSRV ? 1.0f : 0.0f;
-		staticsCB->Update(scb);
+		context->VSSetShaderResources(10, 1, &captureSmoothSRVs[ci]);
+		if (captureRecordsLive)
+			BindStaticsRecord(ci, false, captureParity);
+		else
+			staticsCB->Update(captureRecords[ci]);
 
 		context->DrawIndexed(indexCount, 0, 0);
 	}
@@ -1753,7 +1865,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
 		globals::profiler->BeginPass(peelPassNames[peelLayer]);
-		for (const auto& cap : capturedStatics) {
+		for (uint32_t ci = 0; ci < captureCount; ci++) {
+			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
 				continue;
@@ -1784,20 +1897,11 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 
-			StaticsCB scb{};
-			const auto& rot = cap.world.rotate;
-			const float scale = cap.world.scale;
-			scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
-			scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
-			scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-			scb.HeightWindowCenter = heightWindowCenter;
-			scb.HeightHalfExtent = kHeightMapHalfExtent;
-			scb.PeelTol = std::clamp(settings.PlaneMergeHeight, 1.0f, 32.0f);
-			scb.VertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
-			ID3D11ShaderResourceView* peelSmoothSRV = EnsureSmoothedNormals(geometry);
-			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
-			scb.HasSmoothedNormals = peelSmoothSRV ? 1.0f : 0.0f;
-			staticsCB->Update(scb);
+			context->VSSetShaderResources(10, 1, &captureSmoothSRVs[ci]);
+			if (captureRecordsLive)
+				BindStaticsRecord(captureCount + ci, false, captureParity);
+			else
+				staticsCB->Update(captureRecords[size_t(captureCount) + ci]);
 			context->DrawIndexed(indexCount, 0, 0);
 		}
 		globals::profiler->EndPass();
@@ -2963,11 +3067,25 @@ void SnowDeformation::DrawCapturedStatics()
 	// depth-only into the private copy, then every skin shading against it -
 	// non-carving under EQUAL with writes off, carving under the shipping
 	// LESS_EQUAL + write.
+	// Every skin's block, filled once for both loops; the view taken here is
+	// the one bound, so HasSmoothedNormals and the view never disagree.
+	std::vector<StaticsCB> skinRecords(skinDraws.size());
+	std::vector<ID3D11ShaderResourceView*> skinSmoothSRVs(skinDraws.size(), nullptr);
+	for (size_t si = 0; si < skinDraws.size(); si++) {
+		const auto& d = skinDraws[si];
+		skinSmoothSRVs[si] = EnsureSmoothedNormals(d.geometry);
+		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
+			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
+	}
+	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
+	uint32_t skinParity = 0;
+
 	auto drawSkins = [&](bool a_prepass) {
 		boundStaticsPS = nullptr;
+		uint32_t drawIndex = 0;
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
-			auto* geometry = d.geometry;
+			[[maybe_unused]] auto* geometry = d.geometry;
 			context->IASetInputLayout(d.layout);
 			UINT stride = d.stride;
 			UINT offset = 0;
@@ -2982,13 +3100,14 @@ void SnowDeformation::DrawCapturedStatics()
 
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.
-			ID3D11ShaderResourceView* smoothSRV = EnsureSmoothedNormals(geometry);
-			context->VSSetShaderResources(10, 1, &smoothSRV);
-			StaticsCB scb{};
-			FillSkinDrawCB(cap, d.s4Shell, d.vertexCount,
-				smoothSRV != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, scb);
-			staticsCB->Update(scb);
-			cpuCensus.skinLoopCBUpdates++;
+			const uint32_t recordIndex = drawIndex++;
+			context->VSSetShaderResources(10, 1, &skinSmoothSRVs[recordIndex]);
+			if (skinRecordsLive) {
+				BindStaticsRecord(recordIndex, true, skinParity);
+			} else {
+				staticsCB->Update(skinRecords[recordIndex]);
+				cpuCensus.skinLoopCBUpdates++;
+			}
 
 			// Depth export only where the carve can fire: SnowStaticsShell's
 			// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
