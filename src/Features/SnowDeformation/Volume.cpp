@@ -614,7 +614,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		FillVoxelCB(L, cb);
 		lv.rebuilds++;
 		const bool forceAll = !settings.VolumeDirtyBricks || (lv.rebuilds % kVoxelFullRefreshRebuilds) == 0;
-		cb.ForceDirty = forceAll ? 1.0f : 0.0f;
+		cb.ForceDirty = float((forceAll ? 1u : 0u) | (settings.VolumeSparseBricks ? 0u : 2u));
 		Texture3D* scratch = lv.volume[lv.current ^ 1];
 		Texture3D* occupancy = lv.volume[lv.current];
 		ID3D11ShaderResourceView* occSRV = occupancy->srv.get();
@@ -636,15 +636,17 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetConstantBuffers(0, 1, &cbPtr);
 
 		// What the raster changed: this rebuild's occupancy (t0) against
-		// the last one's (t4), still in the dead volume. Pointless when
-		// everything is dirty anyway.
-		if (!forceAll) {
+		// the last one's (t4), still in the dead volume. Every rebuild,
+		// dirty or not: it also keeps each brick's OCC bit in the flags.
+		{
 			context->CSSetShaderResources(0, 1, &occSRV);
 			context->CSSetShaderResources(4, 1, &scratchSRV);
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
+			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 			context->CSSetShader(voxelDiffCS, nullptr, 0);
 			context->Dispatch(groups, groups, groups);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
+			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
 			context->CSSetShaderResources(0, 1, &nullSRV);
 			context->CSSetShaderResources(4, 1, &nullSRV);
 		}
@@ -656,6 +658,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetUnorderedAccessViews(7, 1, &nullUAV, nullptr);
 		context->CSSetShaderResources(6, 1, &nullSRV);
 		context->CSSetShaderResources(7, 1, &listsSRV);
+		// The flags stay bound (u6) through the field passes: their active-
+		// brick gates read OCC/FIELD from it, Z writes FIELD, the flags pass
+		// writes the mask. Unbound before the compaction reads it at t8.
+		context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 
 		// Seeds: occupancy + the shelter/sky maps -> scratch, on D0.
 		ID3D11ShaderResourceView* mapSRVs[2] = {

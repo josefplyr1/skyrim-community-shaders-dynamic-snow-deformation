@@ -214,24 +214,74 @@ uint2 ListColumn(uint offset, uint index)
 	return uint2(e & 0xFFFFu, e >> 16);
 }
 
+// ---- Active bricks. Bits above the sub-cell mask in BrickFlags: the
+// compare pass keeps OCC (any solid voxel in the brick) for every brick,
+// the Z sweep keeps FIELD (any snow field in it) for the columns it ran.
+// A dirty column is still a 32-brick stack of mostly air; a pass whose
+// inputs cannot reach a brick from any FIELD brick skips its loads and
+// writes the zeros its persistent outputs need. ----
+#define FLAG_OCC 0x100u
+#define FLAG_FIELD 0x200u
+groupshared uint gNear;
+groupshared uint gZBrick[32];
+
+// Any brick within (rx, ry, rz) of `brick` with `bit` set - cooperative
+// loads through the UAV (the flags pass writes the same buffer), so every
+// thread of the group must call it. Physical wrap is the logical far edge:
+// conservative, never wrong. Dense mode (ForceDirty bit 1) says always.
+bool BricksNear(uint3 brick, int rx, int ry, int rz, uint bit, uint gi)
+{
+	if (gi == 0)
+		gNear = ((uint)ForceDirty & 2u) != 0u ? 1u : 0u;
+	GroupMemoryBarrierWithGroupSync();
+	int nx = 2 * rx + 1;
+	int ny = 2 * ry + 1;
+	uint n = (uint)(nx * ny * (2 * rz + 1));
+	int bricks = Dim >> 3;
+	[loop] for (uint i = gi; i < n; i += 512u)
+	{
+		int3 d = int3((int)(i % (uint)nx) - rx, (int)((i / (uint)nx) % (uint)ny) - ry, (int)(i / (uint)(nx * ny)) - rz);
+		int3 b = ((int3)brick + d) & (bricks - 1);
+		if (BrickFlags.Load(BrickIndex((uint3)b) * 4) & bit)
+			InterlockedOr(gNear, 1u);
+	}
+	GroupMemoryBarrierWithGroupSync();
+	return gNear != 0u;
+}
+
 // After the raster: which bricks' occupancy changed since the last rebuild
 // (t4 = the previous volume), solid/empty only - the facing nibble can flip
 // between two triangles' last writes and the life nibble ticks, and neither
 // moves the snow. One atomic per brick.
 groupshared uint gChanged;
+groupshared uint gSolid;
 [numthreads(8, 8, 8)] void VoxelDiffCS(uint3 p
 									   : SV_DispatchThreadID, uint gi
 									   : SV_GroupIndex) {
 	if (gi == 0)
+	{
 		gChanged = 0;
+		gSolid = 0;
+	}
 	GroupMemoryBarrierWithGroupSync();
 	bool wasSolid = OccupancyIn[p] > 0.0;
 	bool isSolid = VolumeIn[p] > 0.0;
 	if (wasSolid != isSolid)
 		InterlockedOr(gChanged, 1u);
+	if (isSolid)
+		InterlockedOr(gSolid, 1u);
 	GroupMemoryBarrierWithGroupSync();
-	if (gi == 0 && gChanged != 0)
-		DirtyBricks.InterlockedOr(BrickIndex(p >> 3) * 4, 1u);
+	if (gi == 0)
+	{
+		uint idx = BrickIndex(p >> 3) * 4;
+		if (gChanged != 0)
+			DirtyBricks.InterlockedOr(idx, 1u);
+		// OCC for every brick, every rebuild: the seed pass's gate.
+		if (gSolid != 0)
+			BrickFlags.InterlockedOr(idx, FLAG_OCC);
+		else
+			BrickFlags.InterlockedAnd(idx, ~FLAG_OCC);
+	}
 }
 
 // One group. A brick column is dirty (D0) if any brick in its stack is; the
@@ -394,6 +444,14 @@ float OccNz(float v)
 									   : SV_GroupThreadID) {
 	uint2 col = ListColumn(LIST0_OFF, gid.x);
 	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
+	// A seed is an occupied voxel: a brick with none has none. Zero, since
+	// the Z sweep reads this volume through the whole column.
+	uint gi = tid.x + tid.y * 8 + tid.z * 64;
+	[branch] if (!BricksNear(uint3(col, gid.y), 0, 0, 0, FLAG_OCC, gi))
+	{
+		VolumeOut[p] = 0.0;
+		return;
+	}
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float occ = VolumeIn[p];
@@ -440,6 +498,12 @@ float OccNz(float v)
 										: SV_GroupThreadID) {
 	uint2 col = ListColumn(LIST0_OFF, gid.x);
 	uint2 p = col * 8 + tid.xy;
+	uint gi = tid.x + tid.y * 8;
+	// FIELD per brick of this stack, for the passes after: set or cleared,
+	// since the sweep rewrites the whole column.
+	if (gi < 32u)
+		gZBrick[gi] = 0u;
+	GroupMemoryBarrierWithGroupSync();
 	int mask = Dim - 1;
 	int2 lxy = ((int2)p - OriginVox.xy) & mask;
 	float sigma = max(SeedSigma, 0.25);
@@ -457,7 +521,20 @@ float OccNz(float v)
 		}
 		else
 			dist += 1.0;
-		VolumeOut[ph] = carry * exp(-dist * dist * invTwoS2);
+		float f = carry * exp(-dist * dist * invTwoS2);
+		VolumeOut[ph] = f;
+		if (f >= 1.0 / 255.0)
+			InterlockedOr(gZBrick[ph.z >> 3], 1u);
+	}
+	GroupMemoryBarrierWithGroupSync();
+	uint bricks = (uint)Dim >> 3;
+	if (gi < bricks)
+	{
+		uint idx = BrickIndex(uint3(col, gi)) * 4;
+		if (gZBrick[gi] != 0u)
+			BrickFlags.InterlockedOr(idx, FLAG_FIELD);
+		else
+			BrickFlags.InterlockedAnd(idx, ~FLAG_FIELD);
 	}
 }
 
@@ -487,6 +564,38 @@ Texture3D<float> SupportIn : register(t5);
 	bool alongY = BlurAxis == 1;
 	uint2 col = ListColumn(alongY ? LIST2_OFF : LIST3_OFF, gid.x);
 	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
+	uint gi = tid.x + tid.y * 8 + tid.z * 64;
+	uint3 brick = uint3(col, gid.y);
+	// X's output is non-zero only within 2 bricks (9 voxels) in x of a
+	// FIELD brick; Y reads it, and the support, up to 2 bricks in y from
+	// where ITS output can be non-zero - within 2 in x and 2 in y of FIELD.
+	// So X computes within (2, 0), writes the zero and the "no support"
+	// distance within (2, 4), and skips the rest; Y computes within (2, 2)
+	// and zeroes the rest, the field being persistent.
+	[branch] if (alongY)
+	{
+		[branch] if (!BricksNear(brick, 2, 2, 0, FLAG_FIELD, gi))
+		{
+			VolumeOut[p] = 0.0;
+			return;
+		}
+	}
+	else
+	{
+		// Both lookups unconditionally: a group sync inside a branch on
+		// the first one's result is X4026 (fxc cannot see it is uniform).
+		bool nearXY = BricksNear(brick, 2, 4, 0, FLAG_FIELD, gi);
+		bool nearX = BricksNear(brick, 2, 0, 0, FLAG_FIELD, gi);
+		[branch] if (!nearX)
+		{
+			if (nearXY)
+			{
+				VolumeOut[p] = 0.0;
+				SupportOut[p] = 1.0;
+			}
+			return;
+		}
+	}
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
@@ -560,6 +669,16 @@ groupshared uint gAllIn;
 	uint2 col = ListColumn(LIST3_OFF, gid.x);
 	uint3 phys = uint3(col, gid.y);
 	int bricks = Dim >> 3;
+	// The field (Y's output) is non-zero within 2 bricks in x and y of a
+	// FIELD brick, and the crossing test reads a voxel past the brick: a
+	// brick beyond (3, 3, 1) of any FIELD brick has no crossing - its mask
+	// is cleared without the loads.
+	[branch] if (!BricksNear(phys, 3, 3, 1, FLAG_FIELD, gi))
+	{
+		if (gi == 0)
+			BrickFlags.InterlockedAnd(BrickIndex(phys) * 4, ~0xFFu);
+		return;
+	}
 	int3 base = (((int3)phys - (OriginVox.xyz >> 3)) & (bricks - 1)) * 8;
 	[loop] for (uint i = gi; i < 1000u; i += 512u)
 	{
@@ -575,8 +694,13 @@ groupshared uint gAllIn;
 			InterlockedAnd(gAllIn, ~cells);
 	}
 	GroupMemoryBarrierWithGroupSync();
+	// The mask only; OCC and FIELD above it belong to the other passes.
 	if (gi == 0)
-		BrickFlags.Store(BrickIndex(phys) * 4, gAnyIn & ~gAllIn & 0xFFu);
+	{
+		uint idx = BrickIndex(phys) * 4;
+		BrickFlags.InterlockedAnd(idx, ~0xFFu);
+		BrickFlags.InterlockedOr(idx, gAnyIn & ~gAllIn & 0xFFu);
+	}
 }
 
 // The draw list, every rebuild: each flagged physical brick in reach, as a

@@ -619,6 +619,8 @@ public:
 		bool VolumeSkipEmptyCells = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
 		bool VolumeDirtyBricks = true;
+		/** @brief "Sparse Bricks": within a rebuilt column, a brick no snow field can reach skips its loads (the seed, X, Y and flag passes) and only writes the zeros its persistent outputs need. Off loads every brick of every rebuilt column, for comparing. */
+		bool VolumeSparseBricks = true;
 		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
 		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
@@ -2123,7 +2125,7 @@ public:
 		float CentreVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		/** @brief >0.5: every brick column is rebuilt this time (the toggle off, the periodic refresh, or a level with nothing built). */
+		/** @brief Bit 0: every brick column is rebuilt this time (the toggle off, the periodic refresh, or a level with nothing built). Bit 1: dense - the active-brick gates in every field pass say yes. */
 		float ForceDirty;
 		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
 		float OverhangVox;
