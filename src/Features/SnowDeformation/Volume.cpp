@@ -843,11 +843,13 @@ void SnowDeformation::DrawVoxelSnow()
 		const auto centre = VoxelLevelCentre(L);
 		// w = the sub-cell skip switch.
 		d.VoxCentre = { centre.x - eye.x, centre.y - eye.y, centre.z - eye.z, settings.VolumeSkipEmptyCells ? 1.0f : 0.0f };
-		d.VoxInnerCentre = { 0.0f, 0.0f, 0.0f, 0.0f };
+		// w = the shading detail distance.
+		const float detailDist = std::clamp(settings.VolumeDetailDistance, 100.0f, 8000.0f);
+		d.VoxInnerCentre = { 0.0f, 0.0f, 0.0f, detailDist };
 		if (L > 0) {
 			VoxelReachBand(L - 1, inStart, inEnd);
 			const auto inner = VoxelLevelCentre(L - 1);
-			d.VoxInnerCentre = { inner.x - eye.x, inner.y - eye.y, inner.z - eye.z, 0.0f };
+			d.VoxInnerCentre = { inner.x - eye.x, inner.y - eye.y, inner.z - eye.z, detailDist };
 		}
 		VoxelReachBand(L, outStart, outEnd);
 		d.VoxFade = { inStart, inEnd, outStart, outEnd };

@@ -324,6 +324,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_march_step_tooltip"), "How far apart the draw samples the snow field along each pixel's ray, in voxels. The hit is refined afterwards, so this only has to find the crossing - but a lip thinner than a step can be stepped over. Halving it doubles the draw's cost."));
+			ImGui::SliderFloat(T(TKEY("volume_detail_distance"), "Volume Detail Distance"), &settings.VolumeDetailDistance, 100.0f, 8000.0f, "%.0f u");
+			if (auto _ttVoxDetail = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_detail_distance_tooltip"), "Inside this distance the volume snow shades with the object shell's full material. Over the next half of it the parts you cannot see at range fade out: the parallax relief marches, the berm ridges, and the five-tap horizon shadow march. The object shell itself is not affected. Raise it if far volume snow looks flatter than the shell beside it; lower it for a cheaper draw."));
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));

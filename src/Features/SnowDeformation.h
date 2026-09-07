@@ -615,6 +615,8 @@ public:
 		int VolumeFineLevels = 2;
 		/** @brief "March Step", voxels: the draw's sample spacing along each ray. The hit is refined on the cubic afterwards, so the march only has to find the crossing interval; features thinner than a step can be stepped over. */
 		float VolumeMarchStep = 1.0f;
+		/** @brief "Volume Detail Distance", world units: inside it the volume snow shades with the full skin material; over the next half of it the parts invisible at range - parallax marching, berm relief, the horizon shadow march - fade out. */
+		float VolumeDetailDistance = 1000.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */

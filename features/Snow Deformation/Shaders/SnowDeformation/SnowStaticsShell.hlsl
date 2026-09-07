@@ -2707,6 +2707,10 @@ struct SkinShadeInput
 	// >0 on coat/lump pixels: cascade occluders nearer than this along the
 	// light are the raised shell's own rim over its object and are ignored.
 	float selfShadowReject;
+	// 1 = the full material. Toward 0 the parts invisible at range - the
+	// parallax marches, the berm relief, the horizon march - drop out. The
+	// skins pass 1; the volume draw fades it with distance.
+	float detail;
 };
 struct SkinShadeResult
 {
@@ -2798,7 +2802,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// double it.
 	[branch] if (false)
 #else
-	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003)
+	[branch] if (ObjBermHeightAmp > 0.005 && bermC > 0.003 && input.detail > 0.001)
 #endif
 	{
 		const float bStep = 4.0;
@@ -2869,7 +2873,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// different 2D direction in each and the offsets are not interchangeable.
 	// Each plane therefore marches itself and shifts its OWN tap set; the
 	// existing sample blend then mixes them exactly as before.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001 && input.detail > 0.001)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
@@ -3037,7 +3041,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// skipped" cannot be misread as "march found nothing").
 	float3 dbgMarch = float3(0.0, 0.0, 0.0);
 	float dbgMarchRan = 0.0;
-	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
+	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001)
 	{
 		// Redistributed toward the NEAR field. The first tap set the finest
 		// boundary the horizon can resolve, so at 28 units every shadow edge
@@ -3412,6 +3416,61 @@ float VoxelFieldCubic(float3 relPos)
 	return v;
 }
 
+// The 8-tap trilinear combination with per-axis (ga, gb) weights at (ha, hb).
+float VoxelTri8(float3 ga, float3 gb, float3 ha, float3 hb)
+{
+	float v = 0.0;
+	v += ga.x * ga.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, ha.y, ha.z)), 0.0);
+	v += gb.x * ga.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, ha.y, ha.z)), 0.0);
+	v += ga.x * gb.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, hb.y, ha.z)), 0.0);
+	v += gb.x * gb.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, hb.y, ha.z)), 0.0);
+	v += ga.x * ga.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, ha.y, hb.z)), 0.0);
+	v += gb.x * ga.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, ha.y, hb.z)), 0.0);
+	v += ga.x * gb.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, hb.y, hb.z)), 0.0);
+	v += gb.x * gb.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, hb.y, hb.z)), 0.0);
+	return v;
+}
+
+// Cubic value AND gradient (per voxel) at once: the same 8-tap trick with
+// the B-spline's derivative weights on one axis at a time (Sigg &
+// Hadwiger) - 32 taps for both, where refining by bisection and then
+// differencing the normal took 104. The derivative pair sums (dg0 < 0,
+// dg1 > 0) never reach zero on [0, 1), so the offset ratios are safe.
+float4 VoxelFieldCubicGrad(float3 relPos)
+{
+	float dim = VoxParams.y;
+	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
+	logical = clamp(logical, 1.5, dim - 1.5);
+	float3 x = logical - 0.5;
+	float3 i = floor(x);
+	float3 f = x - i;
+	float3 f2 = f * f;
+	float3 f3 = f2 * f;
+	float3 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+	float3 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+	float3 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+	float3 w3 = f3 / 6.0;
+	float3 g0 = w0 + w1;
+	float3 g1 = w2 + w3;
+	float3 o = (float3)VoxOrigin.xyz + 0.5;
+	float3 h0 = (i - 1.0 + w1 / g0 + o) / dim;
+	float3 h1 = (i + 1.0 + w3 / g1 + o) / dim;
+	float3 d0 = -0.5 * (1.0 - f) * (1.0 - f);
+	float3 d1 = 0.5 * (3.0 * f2 - 4.0 * f);
+	float3 d2 = 0.5 * (1.0 + 2.0 * f - 3.0 * f2);
+	float3 d3 = 0.5 * f2;
+	float3 dg0 = d0 + d1;
+	float3 dg1 = d2 + d3;
+	float3 dh0 = (i - 1.0 + d1 / dg0 + o) / dim;
+	float3 dh1 = (i + 1.0 + d3 / dg1 + o) / dim;
+	float4 r;
+	r.w = VoxelTri8(g0, g1, h0, h1);
+	r.x = VoxelTri8(float3(dg0.x, g0.y, g0.z), float3(dg1.x, g1.y, g1.z), float3(dh0.x, h0.y, h0.z), float3(dh1.x, h1.y, h1.z));
+	r.y = VoxelTri8(float3(g0.x, dg0.y, g0.z), float3(g1.x, dg1.y, g1.z), float3(h0.x, dh0.y, h0.z), float3(h1.x, dh1.y, h1.z));
+	r.z = VoxelTri8(float3(g0.x, g0.y, dg0.z), float3(g1.x, g1.y, dg1.z), float3(h0.x, h0.y, dh0.z), float3(h1.x, h1.y, dh1.z));
+	return r;
+}
+
 // Whatever the march hits shades through SkinShadeSurface exactly as a
 // skin pixel would, from a synthesised interpolant set: the material is the
 // skins' own, so the two layers cannot disagree in colour.
@@ -3511,26 +3570,18 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	float tHit = 0.5 * (a + b);
 	// Refine on the CUBIC reconstruction. The trilinear isosurface creases
 	// at every voxel boundary, and at a distance the creases read as
-	// blocks; the B-spline's is C2. Searched within a voxel of the
-	// trilinear hit; a blob the smoothing flattens below the threshold
-	// keeps its trilinear surface rather than vanishing.
+	// blocks; the B-spline's is C2. One evaluation of value and gradient
+	// at the trilinear hit, one Newton step along the ray toward the
+	// cubic's threshold (clamped to half a voxel: a blob the smoothing
+	// flattens below the threshold keeps its trilinear surface rather than
+	// vanishing), and the gradient is the normal.
+	float3 g;
 	{
-		float ra = tHit - 0.5 * voxel;
-		float rb = tHit + 0.5 * voxel;
-		bool ia = VoxelFieldCubic(rayDir * ra) >= threshold;
-		bool ib = VoxelFieldCubic(rayDir * rb) >= threshold;
-		[branch] if (!ia && ib)
-		{
-			[unroll] for (int j = 0; j < 5; j++)
-			{
-				float m = 0.5 * (ra + rb);
-				if (VoxelFieldCubic(rayDir * m) >= threshold)
-					rb = m;
-				else
-					ra = m;
-			}
-			tHit = 0.5 * (ra + rb);
-		}
+		float4 vg = VoxelFieldCubicGrad(rayDir * tHit);
+		g = vg.xyz / voxel;
+		float slope = dot(g, rayDir);
+		[flatten] if (slope > 1e-4)
+			tHit -= clamp((vg.w - threshold) / slope, -0.5 * voxel, 0.5 * voxel);
 	}
 	float3 P = rayDir * tHit;
 	// Clipmap hand-over, dithered: over a level's outer band this level
@@ -3547,12 +3598,7 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 		discard;
 
 	// The field grows into the snow, so the surface normal is minus its
-	// gradient - of the CUBIC reconstruction, so the lattice does not shade.
-	const float h = 0.5 * voxel;
-	float3 g;
-	g.x = VoxelFieldCubic(P + float3(h, 0.0, 0.0)) - VoxelFieldCubic(P - float3(h, 0.0, 0.0));
-	g.y = VoxelFieldCubic(P + float3(0.0, h, 0.0)) - VoxelFieldCubic(P - float3(0.0, h, 0.0));
-	g.z = VoxelFieldCubic(P + float3(0.0, 0.0, h)) - VoxelFieldCubic(P - float3(0.0, 0.0, h));
+	// gradient - the cubic's, taken above with the value.
 	float3 normalWS = normalize(-g + float3(0.0, 0.0, 1e-5));
 
 	float2 worldXY = P.xy + ShellCameraPosAdjust.xy;
@@ -3574,6 +3620,9 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	ssi.pixelDeform = 0.0;
 	ssi.screenNoise = noise;
 	ssi.selfShadowReject = 0.0;
+	// Full material inside the detail distance, the range-invisible parts
+	// gone by one and a half times it.
+	ssi.detail = 1.0 - smoothstep(VoxInnerCentre.w, VoxInnerCentre.w * 1.5, tHit);
 	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
 
 	PS_OUTPUT psout;
@@ -4357,6 +4406,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	else
 	ssi.selfShadowReject = 0.0;
 #	endif
+	ssi.detail = 1.0;
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
 	float3 viewNormal = ssr.viewNormal;

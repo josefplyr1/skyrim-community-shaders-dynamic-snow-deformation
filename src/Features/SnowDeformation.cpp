@@ -167,6 +167,7 @@
 	X(VolumeDirtyBricks) \
 	X(VolumeSparseBricks) \
 	X(VolumeMarchStep) \
+	X(VolumeDetailDistance) \
 	X(VolumeSkipEmptyCells) \
 
 
