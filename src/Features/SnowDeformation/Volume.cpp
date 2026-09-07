@@ -276,30 +276,27 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
-	// Memory: the life nibble ticks down 15 times over voxelMemorySeconds.
-	const uint32_t tickEvery = std::max(1u, (uint32_t)std::lround(voxelMemorySeconds * 60.0f / 15.0f));
-	a_cb.Decay = (voxelFrame % tickEvery == 0) ? 1.0f : 0.0f;
+	// Memory: the life nibble ticks down 15 times over voxelMemorySeconds,
+	// counted in this level's own rebuilds - a lazy ring sees a 2^L-th of
+	// the frames.
+	const uint32_t period = VoxelLevelPeriod(a_level);
+	const uint32_t tickEvery = std::max(1u, (uint32_t)std::lround(voxelMemorySeconds * 60.0f / 15.0f) / period);
+	a_cb.Decay = ((voxelFrame / period) % tickEvery == 0) ? 1.0f : 0.0f;
 	const auto centre = VoxelLevelCentre(a_level);
 	a_cb.CentreVox[0] = centre.x / voxelSize;
 	a_cb.CentreVox[1] = centre.y / voxelSize;
 	a_cb.CentreVox[2] = centre.z / voxelSize;
-	// Bricks reach the end of this level's band; they also stop where the
-	// level inside takes over - the start of ITS band around ITS centre, in
-	// this level's voxels. Both Chebyshev, so the two surfaces coincide.
+	// Bricks reach the end of this level's band, Chebyshev. The hole for the
+	// level inside is the draw VS's, per frame.
 	float bandStart = 0.0f, bandEnd = 0.0f;
 	VoxelReachBand(a_level, bandStart, bandEnd);
 	a_cb.CentreVox[3] = bandEnd / voxelSize;
-	a_cb.InnerHalfVox = 0.0f;
-	a_cb.InnerCentreVox[0] = a_cb.InnerCentreVox[1] = a_cb.InnerCentreVox[2] = a_cb.InnerCentreVox[3] = 0.0f;
-	if (a_level > 0) {
-		float innerStart = 0.0f, innerEnd = 0.0f;
-		VoxelReachBand(a_level - 1, innerStart, innerEnd);
-		a_cb.InnerHalfVox = innerStart / voxelSize;
-		const auto inner = VoxelLevelCentre(a_level - 1);
-		a_cb.InnerCentreVox[0] = inner.x / voxelSize;
-		a_cb.InnerCentreVox[1] = inner.y / voxelSize;
-		a_cb.InnerCentreVox[2] = inner.z / voxelSize;
-	}
+	a_cb.pad0 = 0.0f;
+}
+
+uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
+{
+	return settings.VolumeLazyRings ? (1u << a_level) : 1u;
 }
 
 DirectX::XMFLOAT3 SnowDeformation::VoxelLevelCentre(uint a_level) const
@@ -355,6 +352,15 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	globals::profiler->BeginPass("SnowDeformation::VoxelVolume");
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];
+		// Lazy rings: level L rebuilds every 2^L frames, phased at 2^(L-1)
+		// so no frame carries more than two levels; a level with nothing
+		// built yet rebuilds now. Between rebuilds it keeps its origin,
+		// its field and its bricks, and draws off them.
+		const uint32_t period = VoxelLevelPeriod(L);
+		const uint32_t phase = period > 1 ? period / 2 : 0;
+		lv.updated = !lv.valid || (voxelFrame % period) == phase;
+		if (!lv.updated)
+			continue;
 		const float voxelSize = VoxelSizeForLevel(L);
 		const float half = kVoxelDim * voxelSize * 0.5f;
 		// The cube ahead of the camera, its origin snapped to the lattice.
@@ -494,6 +500,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];
+		if (!lv.updated)
+			continue;
 		VoxelVolumeCB cb{};
 		FillVoxelCB(L, cb);
 		Texture3D* scratch = lv.volume[lv.current ^ 1];

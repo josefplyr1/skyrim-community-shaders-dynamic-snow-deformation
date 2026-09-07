@@ -50,17 +50,11 @@ cbuffer VoxelCB : register(b0)
 	float4 CentreVox;
 	// Strength of the sky-openness weighting on the seed, 0-1.
 	float SkyStrength;
-	// Clipmap: where the next-finer level's hand-over band starts, in THIS
-	// level's voxels, Chebyshev; bricks inside belong to that level. 0 on
-	// the finest level.
-	float InnerHalfVox;
+	float pad0;
 	// How many voxels past a snow column the snow may reach sideways
 	float OverhangVox;
 	// Air voxels a seed needs above it: a member's own inside is not sky
 	float HeadroomVox;
-	// The next-finer window's centre in THIS level's voxels (absolute): its
-	// hand-over cube is around it, not around this window's own centre
-	float4 InnerCentreVox;
 }
 
 struct VS_OUTPUT
@@ -399,15 +393,13 @@ AppendStructuredBuffer<uint> BrickList : register(u3);
 		return;
 	int3 base = (int3)b * 8;
 	float3 centre = (float3)(base + OriginVox.xyz) + 4.0;
-	// Chebyshev both ways: the reach is a cube and the ring inside it a cube,
-	// so the finer level's edge and this level's hole are the same surface.
-	// (A radial reach against a cubic hole left the corners of every ring to
-	// nobody - the borders Josef saw, 2026-09-07.) Half a brick of slack.
+	// Chebyshev: the reach is a cube, as the rings are. (A radial reach
+	// against a cubic hole left the corners of every ring to nobody - the
+	// borders Josef saw, 2026-09-07.) Half a brick of slack. The hole for
+	// the finer level is cut in the draw VS, per frame: this list may be
+	// several frames old on a lazy ring.
 	float3 fromCentre = abs(centre - CentreVox.xyz);
 	if (any(fromCentre - 4.0 > CentreVox.w))
-		return;
-	float3 fromInner = abs(centre - InnerCentreVox.xyz);
-	if (InnerHalfVox > 0.0 && all(fromInner + 4.0 < InnerHalfVox))
 		return;
 	bool anyIn = false;
 	bool allIn = true;

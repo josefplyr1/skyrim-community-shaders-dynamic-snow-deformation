@@ -604,17 +604,19 @@ public:
 		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top - at ANY coverage, the sigma is solved from both (floored so the surface clears the seed voxel, kVoxelMinIsoVox). Josef's 10 at 0.10 under the old formula was 18 u; this default keeps his look. */
 		float VolumeSnowDepth = 15.0f;
 		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95. No longer the depth: how much a narrow member or an edge keeps of the full depth (lower = more), and how readily gaps bridge. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.33f;
+		float VolumeSnowCoverage = 0.25f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
-		float VolumeSnowOverhang = 2.0f;
+		float VolumeSnowOverhang = 16.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
-		float VolumeSnowRounding = 4.0f;
+		float VolumeSnowRounding = 6.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
-		int VolumeLevels = 6;
+		int VolumeLevels = 4;
+		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
+		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
 		float VolumeVoxelSize = 2.0f;
-		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the slope of the seed layer itself, so a flat top's rim is flat. Josef's tuned default: off. */
-		float VolumeSnowMaxSlopeDeg = 90.0f;
+		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the object's own normal, packed into the voxel at capture. Josef's tuned default. */
+		float VolumeSnowMaxSlopeDeg = 70.0f;
 		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default: off. */
 		float VolumeSkyExposurePct = 0.0f;
 	};
@@ -2108,19 +2110,18 @@ public:
 		float CentreVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		/** @brief Clipmap: where the next-finer level's hand-over band starts, in THIS level's voxels, Chebyshev; bricks inside are that level's. 0 on level 0. */
-		float InnerHalfVox;
+		float pad0;
 		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
-		/** @brief xyz = the next-finer window's centre in THIS level's voxels (absolute): its hand-over cube is around it. Zero on level 0. */
-		float InnerCentreVox[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	/** @brief The windows sit ahead of the camera by this fraction of their extent (XY only): half a cube behind the eye is empty air, so the reach ahead is 1.4 half-extents instead of 0.9. */
 	static constexpr float kVoxelForwardFrac = 0.25f;
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
+	/** @brief Frames between a level's rebuilds: 2^L with Settings::VolumeLazyRings, else 1. */
+	uint32_t VoxelLevelPeriod(uint a_level) const;
 	/** @brief Frames rendered with the volume on; the memory nibble ticks down every memorySeconds*60/15 of them. */
 	uint32_t voxelFrame = 0;
 	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge. Chebyshev, so the rings are cube shells and tile without gaps. */
@@ -2143,6 +2144,8 @@ public:
 		Buffer* drawArgs = nullptr;
 		uint current = 0;
 		bool valid = false;
+		/** @brief This frame rebuilt the level's occupancy, so its field and bricks are due too. */
+		bool updated = false;
 		DirectX::XMINT3 origin = { 0, 0, 0 };
 	};
 	VoxelLevel voxelLevels[kVoxelMaxLevels];

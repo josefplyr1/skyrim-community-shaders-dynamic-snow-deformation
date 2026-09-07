@@ -317,6 +317,9 @@ void SnowDeformation::DrawSettings()
 				const float farAcross = nearAcross * float(1 << (levels - 1));
 				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, levels * 64);
 			}
+			ImGui::Checkbox(T(TKEY("volume_lazy_rings"), "Lazy Far Rings"), &settings.VolumeLazyRings);
+			if (auto _ttVoxLazy = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_lazy_rings_tooltip"), "Each level rebuilds its snow only every 2nd, 4th, 8th... frame the further out it is - a step is nothing at a far ring's voxel size - and keeps drawing what it last built. No frame rebuilds more than two levels, so six levels cost about what two do. Off rebuilds every level every frame, for comparing."));
 			ImGui::SliderFloat(T(TKEY("volume_snow_overhang"), "Volume Snow Overhang"), &settings.VolumeSnowOverhang, 0.0f, 16.0f, "%.0f u");
 			if (auto _ttVoxOverhang = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_overhang_tooltip"), "How far past an edge the snow may jut sideways, in units, whatever its depth - past this it only grows up. Also how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps and caps posts wider."));

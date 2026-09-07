@@ -162,6 +162,7 @@
 	X(VolumeSnowOverhang) \
 	X(VolumeSnowRounding) \
 	X(VolumeLevels) \
+	X(VolumeLazyRings) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)

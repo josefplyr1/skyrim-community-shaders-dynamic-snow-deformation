@@ -2145,6 +2145,14 @@ VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceI
 	float3 rel = minAbs + c * (8.0 * VoxParams.x) - ShellCameraPosAdjust.xyz;
 	VOXEL_VS_OUTPUT o;
 	o.Position = mul(CameraViewProj, float4(rel, 1.0));
+	// The hole for the next-finer level is cut HERE, every frame, not in
+	// the brick list: a lazy ring rebuilds its list every 2^L frames, and a
+	// hole cut then sits where the finer window WAS. A brick wholly inside
+	// the finer window's core collapses to nothing.
+	float halfBrick = 4.0 * VoxParams.x;
+	float3 fromInner = abs(minAbs + halfBrick - ShellCameraPosAdjust.xyz - VoxInnerCentre.xyz);
+	[flatten] if (all(fromInner + halfBrick < VoxFade.x))
+		o.Position = float4(0.0, 0.0, 0.0, 1.0);
 	o.WorldPos = rel;
 	o.BrickMin = minAbs - ShellCameraPosAdjust.xyz;
 	return o;
