@@ -619,6 +619,8 @@ public:
 		float VolumeDetailDistance = 1000.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
+		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
+		bool VolumeStaggeredCapture = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
 		bool VolumeDirtyBricks = true;
 		/** @brief "Sparse Bricks": within a rebuilt column, a brick no snow field can reach skips its loads (the seed, X, Y and flag passes) and only writes the zeros its persistent outputs need. Off loads every brick of every rebuilt column, for comparing. */
@@ -2134,8 +2136,10 @@ public:
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
-		/** @brief x = Settings::VolumeEdgeNoise in this level's voxels, y = kVoxelEdgeNoiseCell. */
+		/** @brief x = Settings::VolumeEdgeNoise (world units), y = kVoxelEdgeNoiseCell, z = the ramp's half-width in this level's voxels (Rounding in voxels, 1..depth), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
+		/** @brief x = Settings::VolumeSnowRounding (world units), the lip's slope; unfloored, unlike RoundSigma. */
+		float LipParams[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	/** @brief The windows sit ahead of the camera by this fraction of their extent (XY only): half a cube behind the eye is empty air, so the reach ahead is 1.4 half-extents instead of 0.9. */
@@ -2187,6 +2191,8 @@ public:
 		Buffer* lists = nullptr;
 		/** @brief Rebuilds so far; every kVoxelFullRefreshRebuilds-th is forced whole. */
 		uint32_t rebuilds = 0;
+		/** @brief This rebuild started the level from nothing, so every record must capture, staggering or not. */
+		bool cleared = false;
 		uint current = 0;
 		/** @brief Cubes a side the textures were made with; a mismatch with VoxelDimForLevel remakes them. */
 		uint dim = 0;

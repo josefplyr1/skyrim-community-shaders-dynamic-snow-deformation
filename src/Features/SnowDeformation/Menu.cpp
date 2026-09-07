@@ -330,6 +330,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));
+			ImGui::Checkbox(T(TKEY("volume_staggered_capture"), "Staggered Capture"), &settings.VolumeStaggeredCapture);
+			if (auto _ttVoxStagger = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_staggered_capture_tooltip"), "An object already in a ring's volume is re-drawn into it only every 8th rebuild on the nearest ring (4th and 2nd on the next two); its memory keeps it there between. Everything you have not seen yet still draws within that many rebuilds - a few frames near you. Off draws every object into every ring every rebuild, for comparing the VoxelRaster row."));
 			ImGui::Checkbox(T(TKEY("volume_dirty_bricks"), "Dirty Bricks"), &settings.VolumeDirtyBricks);
 			if (auto _ttVoxDirty = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_dirty_bricks_tooltip"), "A rebuild recomputes the snow only in the columns of bricks whose captured shape changed since the last one - something newly seen, faded, or scrolled in - plus the blur's reach around them; everywhere else keeps last time's snow, which is world-anchored and does not move. Standing still, almost nothing is rebuilt. Every 120th rebuild is whole. Off rebuilds everything every time, for comparing."));

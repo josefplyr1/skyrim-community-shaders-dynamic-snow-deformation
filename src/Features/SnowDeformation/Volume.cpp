@@ -356,11 +356,18 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// crisp voxel edges rather than eroding a whole voxel at every one.
 	a_cb.DepthVox = std::max(settings.VolumeSnowDepth, 0.0f) / voxelSize;
 	a_cb.FieldThreshold = 0.5f;
-	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, 0.01f);
-	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f) / voxelSize;
+	// The smoothing kernel: the Rounding in voxels, floored at half a voxel
+	// so a far ring's columns meld across their steps (support-normalised,
+	// the floor no longer erodes an edge). The lip's slope (LipParams) and
+	// the ramp's half-width take the Rounding unfloored.
+	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
+	a_cb.RoundSigma = std::max(roundU / voxelSize, 0.5f);
+	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f);
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
-	a_cb.EdgeParams[2] = 0.0f;
-	a_cb.EdgeParams[3] = 0.0f;
+	a_cb.EdgeParams[2] = std::clamp(roundU / voxelSize, 1.0f, std::max(a_cb.DepthVox, 1.0f));
+	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
+	a_cb.LipParams[0] = roundU;
+	a_cb.LipParams[1] = a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
@@ -436,8 +443,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		}
 	}
 
-	// ---- Occupancy: scroll + decay, then this frame's captures ----
-	globals::profiler->BeginPass("SnowDeformation::VoxelVolume");
+	// ---- Occupancy: scroll + decay per rebuilding level ----
+	globals::profiler->BeginPass("SnowDeformation::VoxelScroll");
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];
 		// Lazy rings: level L rebuilds every 2^L frames, phased at 2^(L-1)
@@ -466,6 +473,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		};
 		const DirectX::XMINT3 delta{ origin.x - lv.origin.x, origin.y - lv.origin.y, origin.z - lv.origin.z };
 		const bool clearAll = !lv.valid;
+		lv.cleared = clearAll;
 		lv.origin = origin;
 		lv.valid = true;
 		VoxelVolumeCB cb{};
@@ -521,75 +529,102 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			}
 		}
 
-		// UAV-only raster: no target, the viewport sizes it. The game's VS b0
-		// goes back afterwards; the capture pass never touched it.
+	}
+	globals::profiler->EndPass();
+
+	// ---- This frame's captures, per rebuilding level ----
+	// UAV-only raster: no target, the viewport sizes it. The game's VS b0
+	// goes back afterwards; the capture pass never touched it. Its own
+	// profiler row: with the field passes at a quarter of a millisecond,
+	// this is where the building's time goes.
+	globals::profiler->BeginPass("SnowDeformation::VoxelRaster");
+	{
 		winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 		context->RSGetState(savedRaster.put());
 		winrt::com_ptr<ID3D11Buffer> savedVSCB0;
 		context->VSGetConstantBuffers(0, 1, savedVSCB0.put());
 		context->RSSetState(voxelRasterState.get());
-		D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f };
-		context->RSSetViewports(1, &viewport);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		// u0 occupancy, u1 the surface height within the voxel.
-		ID3D11UnorderedAccessView* rasterUAVs[2] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get() };
-		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, rasterUAVs, nullptr);
 		context->VSSetShader(voxelVS, nullptr, 0);
 		context->GSSetShader(voxelGS, nullptr, 0);
 		context->PSSetShader(voxelPS, nullptr, 0);
-		context->VSSetConstantBuffers(0, 1, &cbPtr);
-		context->GSSetConstantBuffers(0, 1, &cbPtr);
-		context->PSSetConstantBuffers(0, 1, &cbPtr);
 		ID3D11Buffer* cb1 = staticsCB->CB();
 		context->VSSetConstantBuffers(1, 1, &cb1);
+		for (uint L = 0; L < levels; L++) {
+			auto& lv = voxelLevels[L];
+			if (!lv.updated)
+				continue;
+			VoxelVolumeCB cb{};
+			FillVoxelCB(L, cb);
+			voxelCB->Update(cb);
+			context->VSSetConstantBuffers(0, 1, &cbPtr);
+			context->GSSetConstantBuffers(0, 1, &cbPtr);
+			context->PSSetConstantBuffers(0, 1, &cbPtr);
+			D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f };
+			context->RSSetViewports(1, &viewport);
+			// u0 occupancy, u1 the surface height within the voxel.
+			ID3D11UnorderedAccessView* rasterUAVs[2] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get() };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, rasterUAVs, nullptr);
+			// STAGGERED CAPTURE. A static already in the volume stays there on
+			// the memory nibble (a tick every 16 of this level's rebuilds, 15
+			// to expire), so drawing it every rebuild only paid for the same
+			// voxels again - after dirty bricks, the one full-cost pass left. A
+			// known record draws every 8th rebuild on the finest ring (4th,
+			// 2nd on the next two; the far rings rebuild rarely anyway); a
+			// level starting from nothing draws everything; a new record waits
+			// at most a period.
+			const uint32_t rasterPeriod = (settings.VolumeStaggeredCapture && !lv.cleared) ? std::max(1u, 8u >> L) : 1u;
 
-		for (uint32_t ci = 0; ci < a_captureCount; ci++) {
-			const auto& cap = capturedStatics[ci];
-			// Roads and bridges belong to the trench patch, which drapes the
-			// road heightfield itself; the S4 skin excludes them for the same
-			// reason. Voxelising them put volume snow over every RoadChunk
-			// (Josef, 2026-09-06).
-			if (cap.road || cap.bridge)
-				continue;
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
-				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
-				continue;
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				continue;
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				continue;
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				continue;
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto layoutIt = staticsILCache.find(descKey);
-			if (layoutIt == staticsILCache.end() || !layoutIt->second)
-				continue;
-			context->IASetInputLayout(layoutIt->second.get());
-			UINT stride = uint32_t(descKey & 0xF) * 4;
-			if (stride == 0)
-				continue;
-			UINT offset = 0;
-			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-			if (a_recordsLive)
-				BindStaticsRecord(ci, false, false, a_parity);
-			else
-				staticsCB->Update(a_records[ci]);
-			context->DrawIndexed(indexCount, 0, 0);
+			for (uint32_t ci = 0; ci < a_captureCount; ci++) {
+				if (rasterPeriod > 1 && ((ci + lv.rebuilds) % rasterPeriod) != 0)
+					continue;
+				const auto& cap = capturedStatics[ci];
+				// Roads and bridges belong to the trench patch, which drapes the
+				// road heightfield itself; the S4 skin excludes them for the same
+				// reason. Voxelising them put volume snow over every RoadChunk
+				// (Josef, 2026-09-06).
+				if (cap.road || cap.bridge)
+					continue;
+				auto* geometry = cap.geometry.get();
+				if (!geometry)
+					continue;
+				auto triShape = geometry->AsTriShape();
+				if (!triShape)
+					continue;
+				auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+				if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+					continue;
+				uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+				if (indexCount == 0)
+					continue;
+				auto desc = rendererData->vertexDesc;
+				if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+					continue;
+				uint64_t descKey;
+				memcpy(&descKey, &desc, sizeof(descKey));
+				auto layoutIt = staticsILCache.find(descKey);
+				if (layoutIt == staticsILCache.end() || !layoutIt->second)
+					continue;
+				context->IASetInputLayout(layoutIt->second.get());
+				UINT stride = uint32_t(descKey & 0xF) * 4;
+				if (stride == 0)
+					continue;
+				UINT offset = 0;
+				auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+				auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+				context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+				context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+				if (a_recordsLive)
+					BindStaticsRecord(ci, false, false, a_parity);
+				else
+					staticsCB->Update(a_records[ci]);
+				context->DrawIndexed(indexCount, 0, 0);
+			}
+
+			ID3D11UnorderedAccessView* nullRasterUAVs[2] = { nullptr, nullptr };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, nullRasterUAVs, nullptr);
 		}
-
 		context->GSSetShader(nullptr, nullptr, 0);
-		ID3D11UnorderedAccessView* nullRasterUAVs[2] = { nullptr, nullptr };
-		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, nullRasterUAVs, nullptr);
 		ID3D11Buffer* restoreVSCB0 = savedVSCB0.get();
 		context->VSSetConstantBuffers(0, 1, &restoreVSCB0);
 		context->GSSetConstantBuffers(0, 1, &nullCB);

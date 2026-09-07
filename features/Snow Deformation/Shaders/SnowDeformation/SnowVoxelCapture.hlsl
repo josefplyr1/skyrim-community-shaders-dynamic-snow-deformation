@@ -56,8 +56,11 @@ cbuffer VoxelCB : register(b0)
 	float OverhangVox;
 	// Air voxels a seed needs above it: a member's own inside is not sky
 	float HeadroomVox;
-	// x = the edge noise amplitude in voxels, y = its cell size in world units
+	// x = the edge noise amplitude in world units, y = its cell size in world
+	// units, z = the ramp's half-width in voxels, w = the overhang in units
 	float4 EdgeParams;
+	// x = the rounding in world units (the lip's slope), the rest padding
+	float4 LipParams;
 }
 
 struct VS_OUTPUT
@@ -527,6 +530,9 @@ float OccNz(float v)
 	int2 lxy = ((int2)p - OriginVox.xy) & mask;
 	float carry = 0.0;
 	float top = -1.0e4;
+	// The ramp's half-width: the Rounding in voxels, at least one, at most
+	// the depth. The lip's slope can lower a crossing by at most this much.
+	float rampVox = max(EdgeParams.z, 1.0);
 	[loop] for (int z = 0; z < Dim; z++)
 	{
 		uint3 ph = Phys(int3(lxy, z));
@@ -536,9 +542,20 @@ float OccNz(float v)
 			carry = s;
 			top = max((float)z + HeightIn[ph] + DepthVox * s, (float)z + 0.52);
 		}
-		float f = carry > 0.01 ? saturate(0.5 + (top - ((float)z + 0.5)) * 0.5) : 0.0;
+		float zc = (float)z + 0.5;
+		float f = 0.0;
+		[flatten] if (carry > 0.01)
+		{
+			f = saturate(0.5 + (top - zc) / (2.0 * rampVox));
+			// The support epsilon (one R8 step, under everything's threshold):
+			// for a few voxels over its top a snow column still says "mine,
+			// nothing at this height", so the sideways passes average it
+			// against a taller neighbour instead of ignoring it.
+			[flatten] if (zc < top + 4.0)
+				f = max(f, 1.0 / 255.0);
+		}
 		VolumeOut[ph] = f;
-		if (f >= 1.0 / 255.0)
+		if (f >= 2.0 / 255.0)
 			InterlockedOr(gZBrick[ph.z >> 3], 1u);
 	}
 	GroupMemoryBarrierWithGroupSync();
@@ -632,13 +649,21 @@ float EdgeNoise(float2 q)
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
 	float sigma = max(RoundSigma, 0.25);
-	int radius = min((int)ceil(sigma * 2.5), 8);
 	float invTwoS2 = 0.5 / (sigma * sigma);
 	int reach = (int)OverhangVox + 1;
-	int span = max(radius, reach);
-	float sum = VolumeIn[p];
-	float wsum = 1.0;
-	float dist = alongY ? round(SupportIn[p] * 8.0) : (sum > 0.0 ? 0.0 : (float)reach);
+	int span = min(max((int)ceil(sigma * 2.5), reach), 9);
+	// SUPPORT-NORMALISED: only columns that carry snow weigh in (the sweep's
+	// epsilon included), so an air column beside an edge takes its
+	// neighbour's full ramp out to the overhang and a lone post keeps its
+	// cap. The old normalised average could not cross the ramp's 0.5 past
+	// an edge at all - no lip, a rim at threshold (Josef, 2026-09-07). The
+	// lip's shape comes from the distance below, not from dilution, and the
+	// weights run out to the overhang so Overhang, not Rounding, sets its
+	// reach.
+	float v0 = VolumeIn[p];
+	float sum = v0 > 0.0 ? v0 : 0.0;
+	float wsum = v0 > 0.0 ? 1.0 : 0.0;
+	float dist = alongY ? round(SupportIn[p] * 8.0) : (v0 > 0.0 ? 0.0 : (float)reach);
 	[unroll] for (int dir = -1; dir <= 1; dir += 2)
 	{
 		[loop] for (int k = 1; k <= span; k++)
@@ -650,7 +675,7 @@ float EdgeNoise(float2 q)
 			if (OccupancyIn[ph] > 0.0)
 				break;
 			float v = VolumeIn[ph];
-			[flatten] if (k <= radius)
+			[flatten] if (v > 0.0)
 			{
 				float w = exp(-(float)(k * k) * invTwoS2);
 				wsum += w;
@@ -662,16 +687,23 @@ float EdgeNoise(float2 q)
 				dist = min(dist, (float)k);
 		}
 	}
-	float avg = sum / wsum;
+	float avg = wsum > 0.0 ? max(sum / wsum, 1.0 / 255.0) : 0.0;
 	[branch] if (alongY)
 	{
-		// The cap's reach wanders per column with a world-anchored noise, so
-		// the snow's edge is not the object's edge traced straight (Josef,
-		// 2026-09-07: too uniform on a flat, symmetrical step). Negative
-		// wobble on the last supported cell also lowers its crossing.
+		// THE LIP, from the Chebyshev distance to the nearest snow column:
+		// full height out to the Overhang, sloping down over the last
+		// Rounding units of it (into the rim itself where Rounding exceeds
+		// Overhang), cut one voxel past it. Scaling the ramp by `lip`
+		// lowers its crossing by ramp * (1 / lip - 1) voxels. The distance
+		// wanders with a world-anchored noise, so a flat symmetrical step's
+		// edge is not traced dead straight.
 		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
-		float wobble = EdgeNoise(worldXY / max(EdgeParams.y, 1.0)) * EdgeParams.x;
-		VolumeOut[p] = avg * saturate((float)reach + wobble - dist);
+		float dU = dist * VoxelSize - EdgeNoise(worldXY / max(EdgeParams.y, 1.0)) * EdgeParams.x;
+		float overhangU = EdgeParams.w;
+		float roundU = LipParams.x;
+		float lip = 1.0 - 0.5 * smoothstep(overhangU - roundU, overhangU + 1e-3, dU);
+		float cut = saturate((overhangU + VoxelSize - dU) / VoxelSize);
+		VolumeOut[p] = avg * lip * cut;
 	}
 	else
 	{

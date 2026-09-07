@@ -165,6 +165,7 @@
 	X(VolumeFineLevels) \
 	X(VolumeLazyRings) \
 	X(VolumeDirtyBricks) \
+	X(VolumeStaggeredCapture) \
 	X(VolumeSparseBricks) \
 	X(VolumeMarchStep) \
 	X(VolumeDetailDistance) \
