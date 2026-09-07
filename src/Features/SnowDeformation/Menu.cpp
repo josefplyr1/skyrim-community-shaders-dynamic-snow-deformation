@@ -298,19 +298,19 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("voxel_memory"), "Volume Memory"), &voxelMemorySeconds, 0.5f, 30.0f, "%.1f s");
 			if (auto _ttVoxMem = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
-			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Volume Snow Depth"), &settings.VolumeSnowDepth, 8.0f, 64.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Depth"), &settings.VolumeSnowDepth, 8.0f, 64.0f, "%.0f u");
 			if (auto _ttVoxDepth = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "How high the snow surface sits over an object's top - the same on every ring, near or far, whatever that ring's voxel size. Toward an edge it rounds down over Edge Rounding."));
-			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.02f, 0.5f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Coverage"), &settings.VolumeSnowCoverage, 0.02f, 0.5f, "%.2f");
 			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "How much thinning a lip survives before it ends. Lower = longer overhangs and thin things (rails, posts) keep their caps; higher = the snow ends sooner past an edge. It does not change the depth."));
-			ImGui::SliderFloat(T(TKEY("volume_edge_noise"), "Volume Edge Noise"), &settings.VolumeEdgeNoise, 0.0f, 16.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_edge_noise"), "Edge Noise"), &settings.VolumeEdgeNoise, 0.0f, 16.0f, "%.0f u");
 			if (auto _ttVoxEdgeNoise = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_edge_noise_tooltip"), "How far the lip's end wanders in and out about the Overhang, from a fixed noise in the world, so a flat symmetrical step does not get its edge traced dead straight; the same noise raises and lowers the lip a little. Only the lip - nothing inside the object's edge moves."));
-			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
-			ImGui::SliderInt(T(TKEY("volume_levels"), "Volume Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
+			ImGui::SliderInt(T(TKEY("volume_levels"), "Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
 			if (auto _ttVoxLevels = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is 256 voxels a side at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. 64 MB per level, and each level runs its own capture and field passes."));
 			ImGui::SliderInt(T(TKEY("volume_fine_levels"), "Fine Levels"), &settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
@@ -327,19 +327,19 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_march_step_tooltip"), "How far apart the draw samples the snow field along each pixel's ray, in voxels. The hit is refined afterwards, so this only has to find the crossing - but a lip thinner than a step can be stepped over. Halving it doubles the draw's cost."));
-			ImGui::SliderFloat(T(TKEY("volume_detail_distance"), "Volume Detail Distance"), &settings.VolumeDetailDistance, 100.0f, 8000.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_detail_distance"), "Detail Distance"), &settings.VolumeDetailDistance, 100.0f, 8000.0f, "%.0f u");
 			if (auto _ttVoxDetail = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_detail_distance_tooltip"), "Inside this distance the volume snow shades with the object shell's full material. Over the next half of it the parts you cannot see at range fade out: the parallax relief marches, the berm ridges, and the five-tap horizon shadow march. The object shell itself is not affected. Raise it if far volume snow looks flatter than the shell beside it; lower it for a cheaper draw."));
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));
-			ImGui::SliderFloat(T(TKEY("volume_forward_bias"), "Volume Forward Bias"), &settings.VolumeForwardBias, 0.0f, 0.45f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("volume_forward_bias"), "Forward Bias"), &settings.VolumeForwardBias, 0.0f, 0.45f, "%.2f");
 			if (auto _ttVoxFwd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_forward_bias_tooltip"), "How far ahead of you each ring's window sits, as a fraction of its width. 0 centres it on you; higher puts more of it in front, where you look, and less behind. At 0.35 the nearest ring reaches about 9 m ahead and 1 m behind. Turning around refreshes the near ring the same frame; the far rings take a few."));
-			ImGui::SliderFloat(T(TKEY("volume_vertical_bias"), "Volume Vertical Bias"), &settings.VolumeVerticalBias, -0.3f, 0.3f, "%.2f");
+			ImGui::SliderFloat(T(TKEY("volume_vertical_bias"), "Vertical Bias"), &settings.VolumeVerticalBias, -0.3f, 0.3f, "%.2f");
 			if (auto _ttVoxVert = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_vertical_bias_tooltip"), "How far below the eye each ring's window sits, as a fraction of its height. The third-person camera climbs when you look down, and a window centred on it then loses the ground beside you to the next ring out - the ring colours changing with pitch. Positive puts more of the nearest ring below you, where the fences and steps are, and less above, where the eaves are."));
-			ImGui::SliderFloat(T(TKEY("volume_max_distance"), "Volume Max Distance"), &settings.VolumeMaxDistance, 500.0f, 8000.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_max_distance"), "Max Distance"), &settings.VolumeMaxDistance, 500.0f, 8000.0f, "%.0f u");
 			if (auto _ttVoxMaxDist = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_max_distance_tooltip"), "Past this the volume snow dithers out and the object shell carries the object alone. The outermost rings sample a rock at 32 units a column, and there is a range at which the shell's own smooth cover simply looks better than that. 8000 = never."));
 			ImGui::Checkbox(T(TKEY("volume_conservative_capture"), "Conservative Capture"), &settings.VolumeConservativeCapture);
@@ -357,16 +357,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("volume_lazy_rings"), "Lazy Far Rings"), &settings.VolumeLazyRings);
 			if (auto _ttVoxLazy = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_lazy_rings_tooltip"), "Each level rebuilds its snow only every 2nd, 4th, 8th... frame the further out it is - a step is nothing at a far ring's voxel size - and keeps drawing what it last built. No frame rebuilds more than two levels, so six levels cost about what two do. Off rebuilds every level every frame, for comparing."));
-			ImGui::SliderFloat(T(TKEY("volume_snow_overhang"), "Volume Snow Overhang"), &settings.VolumeSnowOverhang, 0.0f, 16.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_snow_overhang"), "Overhang"), &settings.VolumeSnowOverhang, 0.0f, 16.0f, "%.0f u");
 			if (auto _ttVoxOverhang = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_overhang_tooltip"), "How far past an edge the snow may jut sideways, in units, whatever its depth - past this it only grows up. Also how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps and caps posts wider."));
-			ImGui::SliderFloat(T(TKEY("volume_snow_rounding"), "Volume Edge Rounding"), &settings.VolumeSnowRounding, 0.0f, 32.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_snow_rounding"), "Rounding"), &settings.VolumeSnowRounding, 0.0f, 32.0f, "%.0f u");
 			if (auto _ttVoxRound = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_rounding_tooltip"), "How the snow rounds toward an edge: where half the neighbourhood is air the snow is this much lower, and it keeps falling smoothly past the edge into the lip. Separate from Overhang, which is where the lip is cut. On a ring whose voxels are larger than this the rounding cannot show, and there the far snow keeps its full slab instead."));
-			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
+			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the object's own surface normal, captured into the volume with it - the same facing the 3D shell's Max Slope uses - so a wall is a wall whatever its stones do, and an underside never grows snow at any setting."));
-			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Volume Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
+			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
 			if (voxelOccupancyValid) {

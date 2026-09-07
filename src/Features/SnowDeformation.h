@@ -602,21 +602,21 @@ public:
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
 		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field crosses Coverage at it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
-		float VolumeSnowDepth = 12.0f;
+		float VolumeSnowDepth = 15.0f;
 		/** @brief "Volume Snow Coverage": the field's value at the snow top and its crossing, 0.02..0.5. Lower lets a lip survive more dilution (longer overhangs, thin things kept); it does not change the depth. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.05f;
+		float VolumeSnowCoverage = 0.15f;
 		/** @brief "Volume Edge Noise", world units: how far the snow's edge wanders about the overhang cap, from a world-anchored noise, so a straight flat edge is not traced straight. */
 		float VolumeEdgeNoise = 0.0f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
-		float VolumeSnowOverhang = 3.0f;
+		float VolumeSnowOverhang = 5.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
-		float VolumeSnowRounding = 3.0f;
+		float VolumeSnowRounding = 5.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
-		int VolumeLevels = 5;
+		int VolumeLevels = 4;
 		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
-		int VolumeFineLevels = 5;
+		int VolumeFineLevels = 6;
 		/** @brief "March Step", voxels: the draw's sample spacing along each ray. The hit is refined on the cubic afterwards, so the march only has to find the crossing interval; features thinner than a step can be stepped over. */
-		float VolumeMarchStep = 1.0f;
+		float VolumeMarchStep = 0.25f;
 		/** @brief "Volume Detail Distance", world units: inside it the volume snow shades with the full skin material; over the next half of it the parts invisible at range - parallax marching, berm relief, the horizon shadow march - fade out. */
 		float VolumeDetailDistance = 1000.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
@@ -624,9 +624,9 @@ public:
 		/** @brief "Conservative Capture": the voxeliser pushes each triangle's edges out by half a voxel so it marks every column it touches, not only those whose centre it covers - on the far rings a rock's triangles are a fraction of a voxel and were hit-or-miss. */
 		bool VolumeConservativeCapture = false;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
-		float VolumeForwardBias = 0.35f;
+		float VolumeForwardBias = 0.45f;
 		/** @brief "Volume Vertical Bias": how far BELOW the eye each window's centre sits, as a fraction of its extent. The third-person camera rises when it looks down, and a cube centred on it then puts the ground beside the player outside the nearest ring - which is why the ring colours changed with pitch (Josef, 2026-09-07). */
-		float VolumeVerticalBias = 0.15f;
+		float VolumeVerticalBias = 0.0f;
 		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object shell carries the object alone. The outermost rings sample a rock at 32 u a column; there is a range at which the shell simply looks better. */
 		float VolumeMaxDistance = 8000.0f;
 		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
