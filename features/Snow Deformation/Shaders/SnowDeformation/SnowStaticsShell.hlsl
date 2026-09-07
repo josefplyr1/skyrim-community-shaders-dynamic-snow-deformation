@@ -2116,6 +2116,7 @@ cbuffer VoxelDrawCB : register(b2)
 	float4 VoxFade;         // xy inner hand-over band, zw outer band (Chebyshev units from the window centres)
 	float4 VoxCentre;       // xyz = this window's centre, relative to the camera
 	float4 VoxInnerCentre;  // xyz = the next-finer window's centre, relative to the camera
+	float4 VoxDebug;        // x = this level's index, y > 0.5 = tint the snow by level
 }
 StructuredBuffer<uint> VoxelBricks : register(t41);
 Texture3D<float> VoxelFieldTex : register(t42);
@@ -3644,6 +3645,15 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	PS_OUTPUT psout;
 	// Never under the face it came in through: the conservative-depth promise.
 	psout.Depth = max(clip.z / clip.w, input.Position.z);
+	// Debug: which ring drew this pixel, as a tint on the lit colour and the
+	// albedo - the hand-over bands and any ring-bound artefact then read.
+	[branch] if (VoxDebug.y > 0.5)
+	{
+		static const float3 kRingTint[6] = { float3(0.5, 1.0, 0.5), float3(0.5, 0.6, 1.0), float3(1.0, 1.0, 0.4), float3(1.0, 0.5, 1.0), float3(0.4, 1.0, 1.0), float3(1.0, 0.5, 0.5) };
+		float3 tint = kRingTint[clamp((int)VoxDebug.x, 0, 5)];
+		r.preLit *= tint;
+		r.diffuseLobe *= tint;
+	}
 	psout.Diffuse = float4(r.preLit, 1.0);
 	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 0.0);

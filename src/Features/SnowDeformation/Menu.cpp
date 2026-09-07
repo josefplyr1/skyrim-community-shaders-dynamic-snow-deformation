@@ -369,6 +369,9 @@ void SnowDeformation::DrawSettings()
 				if (auto _ttOcc = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("voxel_occupancy_tooltip"), "The sanity number. Geometry is surfaces, so a few percent is plausible even in a busy town; tens of percent means the volume holds something other than surfaces and the picture cannot be trusted."));
 			}
+			ImGui::Checkbox(T(TKEY("voxel_show_rings"), "Colour Rings"), &showVolumeRings);
+			if (auto _ttVoxRings = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("voxel_show_rings_tooltip"), "Tints the volume snow by the ring that drew it: green, blue, yellow, magenta, cyan, red from the nearest out. The dithered hand-over bands show as a speckled mix. Not saved."));
 			ImGui::Checkbox(T(TKEY("voxel_show_slice"), "Show Slice"), &showVoxelSlice);
 			if (auto _ttVoxSlice = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("voxel_show_slice_tooltip"), "Draws a picture of what the volume holds."));

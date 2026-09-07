@@ -178,10 +178,19 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 			int a = (j2 + 2) % 3;
 			int b = j2;
 			float det = nrm[a].x * nrm[b].y - nrm[a].y * nrm[b].x;
+			// A sliver's corner: its pushed edges meet expand / sin(angle) away,
+			// which for a half-degree corner is fifty voxels - the streaks that
+			// radiated from every fence (Josef, 2026-09-07). The move is capped
+			// at a diagonal and a half; the tip under-covers instead.
 			[flatten] if (abs(det) > 1e-4)
 			{
 				float2 q = float2(c[a] * nrm[b].y - c[b] * nrm[a].y, nrm[a].x * c[b] - nrm[b].x * c[a]) / det;
-				vox[j2] = LiftToPlane(q, axis, tri[0].Vox, gn);
+				float2 dq = q - pr[j2];
+				float move = length(dq);
+				float cap = 2.1 * expand;
+				[flatten] if (move > cap)
+					dq *= cap / move;
+				vox[j2] = LiftToPlane(pr[j2] + dq, axis, tri[0].Vox, gn);
 			}
 		}
 	}
@@ -235,7 +244,13 @@ void main(GS_OUTPUT input)
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
 		Volume[phys] = packed;
-		HeightOut[phys] = saturate(vox.z - (float)p.z);
+		// The surface's height RELATIVE to this voxel's bottom, over [-1, 1]: a
+		// crack-closing voxel above the surface says "below me" rather than
+		// "at my bottom". The seed is the topmost solid voxel, which on a
+		// slope is that spread voxel for about half the columns, and reading
+		// its surface a voxel too high was the sawtooth of raised columns
+		// along every far roof (Josef's "triangles", 2026-09-07).
+		HeightOut[phys] = saturate((vox.z - (float)p.z + 1.0) * 0.5);
 	}
 }
 
@@ -611,7 +626,7 @@ float OccNz(float v)
 		[flatten] if (OccupancyIn[ph] > 0.0)
 		{
 			carry = s;
-			top = max((float)z + HeightIn[ph] + DepthVox * s, (float)z + 0.52);
+			top = max((float)z + (HeightIn[ph] * 2.0 - 1.0) + DepthVox * s, (float)z + 0.52);
 		}
 		float zc = (float)z + 0.5;
 		float f = 0.0;

@@ -622,7 +622,7 @@ public:
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
 		/** @brief "Conservative Capture": the voxeliser pushes each triangle's edges out by half a voxel so it marks every column it touches, not only those whose centre it covers - on the far rings a rock's triangles are a fraction of a voxel and were hit-or-miss. */
-		bool VolumeConservativeCapture = true;
+		bool VolumeConservativeCapture = false;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.35f;
 		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
@@ -2228,6 +2228,8 @@ public:
 		float4 VoxCentre;
 		/** @brief xyz = the next-finer window's centre relative to the camera. */
 		float4 VoxInnerCentre;
+		/** @brief x = this level's index, y = 1 to tint the snow by level (showVolumeRings). */
+		float4 VoxDebug;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
 	/** @brief Bricks per axis (kVoxelDim / 8) and the list's capacity. */
@@ -2264,6 +2266,8 @@ public:
 	bool voxelShadersFailed = false;
 	/** @brief Runtime-only: write and show the slice. */
 	bool showVoxelSlice = false;
+	/** @brief Runtime-only: the volume snow tinted by the ring that drew it. */
+	bool showVolumeRings = false;
 	/** @brief 0 top-down (XY), 1 side XZ, 2 side YZ. */
 	int voxelSliceAxis = 1;
 	/** @brief Slice plane offset from the camera, world units. */

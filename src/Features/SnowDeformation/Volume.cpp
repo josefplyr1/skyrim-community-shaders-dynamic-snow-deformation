@@ -918,6 +918,7 @@ void SnowDeformation::DrawVoxelSnow()
 		}
 		VoxelReachBand(L, outStart, outEnd);
 		d.VoxFade = { inStart, inEnd, outStart, outEnd };
+		d.VoxDebug = { float(L), showVolumeRings ? 1.0f : 0.0f, 0.0f, 0.0f };
 		voxelDrawCB->Update(d);
 		context->VSSetConstantBuffers(2, 1, &cb2);
 		context->PSSetConstantBuffers(2, 1, &cb2);
