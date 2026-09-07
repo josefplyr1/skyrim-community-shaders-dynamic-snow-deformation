@@ -601,8 +601,10 @@ public:
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
-		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field is a ramp about it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
+		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field crosses Coverage at it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
 		float VolumeSnowDepth = 12.0f;
+		/** @brief "Volume Snow Coverage": the field's value at the snow top and its crossing, 0.02..0.5. Lower lets a lip survive more dilution (longer overhangs, thin things kept); it does not change the depth. Josef's tuned default. */
+		float VolumeSnowCoverage = 0.05f;
 		/** @brief "Volume Edge Noise", world units: how far the snow's edge wanders about the overhang cap, from a world-anchored noise, so a straight flat edge is not traced straight. */
 		float VolumeEdgeNoise = 2.0f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
@@ -2136,9 +2138,9 @@ public:
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
-		/** @brief x = Settings::VolumeEdgeNoise (world units), y = kVoxelEdgeNoiseCell, z = the ramp's half-width in this level's voxels (Rounding in voxels, 1..depth), w = Settings::VolumeSnowOverhang (world units). */
+		/** @brief x = Settings::VolumeEdgeNoise (world units), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
-		/** @brief x = Settings::VolumeSnowRounding (world units), the lip's slope; unfloored, unlike RoundSigma. */
+		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). */
 		float LipParams[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);

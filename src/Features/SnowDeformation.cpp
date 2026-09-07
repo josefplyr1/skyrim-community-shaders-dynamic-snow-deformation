@@ -156,6 +156,7 @@
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeEdgeNoise) \
+	X(VolumeSnowCoverage) \
 	X(VolumeVoxelSize) \
 	X(VolumeSnowMaxSlopeDeg) \
 	X(VolumeSkyExposurePct) \

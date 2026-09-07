@@ -300,10 +300,13 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
 			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Volume Snow Depth"), &settings.VolumeSnowDepth, 8.0f, 64.0f, "%.0f u");
 			if (auto _ttVoxDepth = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "How high the snow surface sits over an object's top - the same on every ring, near or far, whatever that ring's voxel size. Narrow things and edges carry a little less through Edge Rounding."));
+				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "How high the snow surface sits over an object's top - the same on every ring, near or far, whatever that ring's voxel size. Toward an edge it rounds down over Edge Rounding."));
+			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.02f, 0.5f, "%.2f");
+			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "How much thinning a lip survives before it ends. Lower = longer overhangs and thin things (rails, posts) keep their caps; higher = the snow ends sooner past an edge. It does not change the depth."));
 			ImGui::SliderFloat(T(TKEY("volume_edge_noise"), "Volume Edge Noise"), &settings.VolumeEdgeNoise, 0.0f, 16.0f, "%.0f u");
 			if (auto _ttVoxEdgeNoise = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_edge_noise_tooltip"), "How far the snow's edge wanders in and out about the Overhang, from a fixed noise in the world, so a flat symmetrical step does not get its edge traced dead straight. Where it wanders in it also lowers the snow at the edge a little."));
+				ImGui::Text("%s", T(TKEY("volume_edge_noise_tooltip"), "How far the lip's end wanders in and out about the Overhang, from a fixed noise in the world, so a flat symmetrical step does not get its edge traced dead straight; the same noise raises and lowers the lip a little. Only the lip - nothing inside the object's edge moves."));
 			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
@@ -347,7 +350,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("volume_snow_overhang_tooltip"), "How far past an edge the snow may jut sideways, in units, whatever its depth - past this it only grows up. Also how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps and caps posts wider."));
 			ImGui::SliderFloat(T(TKEY("volume_snow_rounding"), "Volume Edge Rounding"), &settings.VolumeSnowRounding, 0.0f, 32.0f, "%.0f u");
 			if (auto _ttVoxRound = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_rounding_tooltip"), "How wide the shoulder is where the snow falls off toward an edge: the snow's full depth holds this far inside an edge and rounds down over it. Separate from Overhang, which is how far past the edge it may reach. Wider also means narrow things - a rail, a post - carry less than a wide top does, as they do."));
+				ImGui::Text("%s", T(TKEY("volume_snow_rounding_tooltip"), "How the snow rounds toward an edge: where half the neighbourhood is air the snow is this much lower, and it keeps falling smoothly past the edge into the lip. Separate from Overhang, which is where the lip is cut. On a ring whose voxels are larger than this the rounding cannot show, and there the far snow keeps its full slab instead."));
 			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the object's own surface normal, captured into the volume with it - the same facing the 3D shell's Max Slope uses - so a wall is a wall whatever its stones do, and an underside never grows snow at any setting."));

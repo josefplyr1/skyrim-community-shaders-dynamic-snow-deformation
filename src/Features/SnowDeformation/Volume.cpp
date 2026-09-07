@@ -355,18 +355,24 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// voxel the kernel radius rounds to zero and the coarse ring keeps its
 	// crisp voxel edges rather than eroding a whole voxel at every one.
 	a_cb.DepthVox = std::max(settings.VolumeSnowDepth, 0.0f) / voxelSize;
-	a_cb.FieldThreshold = 0.5f;
-	// The smoothing kernel: the Rounding in voxels, floored at half a voxel
-	// so a far ring's columns meld across their steps (support-normalised,
-	// the floor no longer erodes an edge). The lip's slope (LipParams) and
-	// the ramp's half-width take the Rounding unfloored.
+	a_cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
+	// The Rounding in this level's voxels. The smoothing kernel takes it
+	// floored at half a voxel, so a far ring's columns meld across their
+	// steps. The field's exponential rate is ln 2 over it floored at TWO
+	// voxels: a half-air neighbourhood then drops the snow by the Rounding
+	// (or two voxels, where that is more), and the crossing between the two
+	// centres bracketing the top interpolates within a tenth of a voxel.
+	// Air neighbours vote only where the voxel is small against the
+	// Rounding: on a ring whose voxel is the Rounding or more, dilution
+	// would take a whole voxel off every rim, so there they do not.
 	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
-	a_cb.RoundSigma = std::max(roundU / voxelSize, 0.5f);
+	const float roundVox = roundU / voxelSize;
+	a_cb.RoundSigma = std::max(roundVox, 0.5f);
 	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f);
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
-	a_cb.EdgeParams[2] = std::clamp(roundU / voxelSize, 1.0f, std::max(a_cb.DepthVox, 1.0f));
+	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
-	a_cb.LipParams[0] = roundU;
+	a_cb.LipParams[0] = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
 	a_cb.LipParams[1] = a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
@@ -881,7 +887,7 @@ void SnowDeformation::DrawVoxelSnow()
 		const float voxelSize = VoxelSizeForLevel(L);
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
-		d.VoxParams = { voxelSize, float(lv.dim), 0.5f, std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
+		d.VoxParams = { voxelSize, float(lv.dim), std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;
