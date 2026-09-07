@@ -2202,7 +2202,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float dYN = SampleDeformation(gridLocal - float2(0.0, step));
 
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
-	float pixelDepth = max(pixelRampDepth, 0.0);
+	// Shading depth mirrors ShellSurfaceZ's uncarved depth: melt thins toward
+	// kFireMeltFloor, then the touch-down toe. Every relief gradient below
+	// scales by it, so a print in a melt basin shades as flat as it is built.
+	float pixelDepth = lerp(pixelRampDepth, min(pixelRampDepth, kFireMeltFloor), pixelMelt);
+	pixelDepth = pixelDepth > 0.0 ? pixelDepth * smoothstep(0.0, 5.0, pixelDepth) : 0.0;
 	float2 profileGrad = float2(
 		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
 		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
@@ -2428,7 +2432,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// exactly on floors, walls and berms and never draws its own boundary.
 	// The darken/roughen halves were retired - IBL + DALC already darken
 	// trenches - so this feeds the glint suppression alone.
-	float churnMat = ChurnWeight(pixelCarve, bermCenter);
+	// Berm half gated by depth like the berm itself: no ridge, no matte ring.
+	float churnMat = ChurnWeight(pixelCarve, bermCenter * BermDepthGate(pixelDepth));
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
