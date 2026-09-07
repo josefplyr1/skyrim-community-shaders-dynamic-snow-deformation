@@ -82,6 +82,9 @@ struct GS_OUTPUT
 	// it instead of reconstructing a facing from the shell's neighbours,
 	// which was noise on rough walls and blind to undersides.
 	nointerpolation float Nz : TEXCOORD2;
+	// The triangle's plane in voxel space, xyz = geometric normal (unnormalised),
+	// w = its offset: the PS reads the surface's true z in each column it marks.
+	nointerpolation float4 Plane : TEXCOORD3;
 };
 
 #if defined(VSHADER)
@@ -204,6 +207,7 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 		o.Vox = v;
 		o.Axis = axis;
 		o.Nz = nz;
+		o.Plane = float4(gn, dot(gn, tri[0].Vox));
 		stream.Append(o);
 	}
 	stream.RestartStrip();
@@ -232,6 +236,16 @@ void main(GS_OUTPUT input)
 	// 15 fresh. Any non-zero value is solid; the scroll counts life down.
 	uint nzq = (uint)round(saturate(input.Nz * 0.5 + 0.5) * 15.0);
 	float packed = (float)(nzq * 16u + 15u) / 255.0;
+	// THE SURFACE'S Z IN THE COLUMN, from the plane. A triangle projected
+	// along X or Y (any face over 45 degrees) rasterises on a grid whose z
+	// IS the pixel, so vox.z here is the pixel's centre and says nothing
+	// about the surface - and the spread then carries that voxel sideways
+	// into columns whose surface is tan(slope) voxels away: the terraces on
+	// every cliff and roof pitch (Josef's chevrons, 2026-09-07). The plane
+	// at a column's centre is exact on every axis. A near-vertical face has
+	// no column height worth reading; it keeps the fragment's own z.
+	float4 pl = input.Plane;
+	bool usePlane = abs(pl.z) > 0.2 * length(pl.xyz);
 	for (int k = lo; k <= hi; k++) {
 		int3 p = base;
 		if (input.Axis == 0)
@@ -244,13 +258,14 @@ void main(GS_OUTPUT input)
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
 		Volume[phys] = packed;
-		// The surface's height RELATIVE to this voxel's bottom, over [-1, 1]: a
+		// The surface's height RELATIVE to this voxel's bottom, over [-4, 4]: a
 		// crack-closing voxel above the surface says "below me" rather than
 		// "at my bottom". The seed is the topmost solid voxel, which on a
 		// slope is that spread voxel for about half the columns, and reading
 		// its surface a voxel too high was the sawtooth of raised columns
 		// along every far roof (Josef's "triangles", 2026-09-07).
-		HeightOut[phys] = saturate((vox.z - (float)p.z + 4.0) * 0.125);
+		float zs = usePlane ? (pl.w - pl.x * ((float)p.x + 0.5) - pl.y * ((float)p.y + 0.5)) / pl.z : vox.z;
+		HeightOut[phys] = saturate((zs - (float)p.z + 4.0) * 0.125);
 	}
 }
 
