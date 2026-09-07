@@ -367,12 +367,22 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// would take a whole voxel off every rim, so there they do not.
 	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
 	const float roundVox = roundU / voxelSize;
-	a_cb.RoundSigma = std::max(roundVox, 0.5f);
+	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
+	// THE FLOOR IS A VOXEL where air does not vote. A far ring re-samples
+	// the mesh at its own pitch, one point per column and nothing between
+	// - aliasing, which every voxel LOD averages away and this did not: a
+	// Rounding of 5 u is a third of a 16 u voxel, no kernel at all. The
+	// support-normalised average cannot inflate (it is a soft-max of the
+	// tops, under a fifth of a voxel of bias), so the one-voxel floor that
+	// grew 78 u lumps under the gaussian's dilution is safe here. Where air
+	// still votes the floor stays at a half: a wider kernel there is more
+	// dilution at every rim.
+	a_cb.RoundSigma = std::max(roundVox, airWeight > 0.0f ? 0.5f : 1.0f);
 	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f);
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
-	a_cb.LipParams[0] = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
+	a_cb.LipParams[0] = airWeight;
 	a_cb.LipParams[1] = settings.VolumeConservativeCapture ? 0.5f : 0.0f;
 	a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
