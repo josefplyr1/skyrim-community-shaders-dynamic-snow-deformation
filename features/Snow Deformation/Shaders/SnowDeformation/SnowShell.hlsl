@@ -206,6 +206,10 @@ cbuffer ShellCB : register(b0)
 	// z = fine dim in texels (0 = none), w = fine texel size (32).
 	float4 FineWindow;
 	float4 SlopeDrape;
+	// Bump octave for the live undulation fallback: x = height (units),
+	// y = cell (units), z = coverage threshold, w spare. Mirror in
+	// SnowDeformation.h AND SnowStaticsShell.hlsl.
+	float4 UndulationBumps;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -291,8 +295,8 @@ Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
 
-// Baked undulation field (UndulationFieldCS): x = amp-free dune height,
-// yz = its +-12-unit shading gradient, over UndulationFieldWindow.
+// Baked undulation field (UndulationFieldCS): x = height in world units,
+// yz = its +-kUndulationGradStep shading gradient, over UndulationFieldWindow.
 Texture2D<float4> UndulationFieldMap : register(t29);
 
 SamplerState SnowSampler : register(s0);

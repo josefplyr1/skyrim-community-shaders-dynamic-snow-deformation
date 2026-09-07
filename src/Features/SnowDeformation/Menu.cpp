@@ -186,6 +186,18 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttUsp = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
 
+		ImGui::SliderFloat(T(TKEY("undulation_bump_height"), "Bump Height"), &settings.UndulationBumpHeight, 0.0f, 6.0f, "%.1f units");
+		if (auto _ttBh = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_bump_height_tooltip"), "Small mounds scattered over the dunes. Baked into the same field, so they cost nothing per frame; the landscape shell and the road patch share it. 0 = off."));
+
+		ImGui::SliderFloat(T(TKEY("undulation_bump_size"), "Bump Size"), &settings.UndulationBumpSize, 24.0f, 160.0f, "%.0f units");
+		if (auto _ttBs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_bump_size_tooltip"), "Mound footprint. The field resolves 16 units per texel, so the low end is where mounds start to alias; the road patch loses them past 16 m where its grid coarsens."));
+
+		ImGui::SliderFloat(T(TKEY("undulation_bump_coverage"), "Bump Coverage"), &settings.UndulationBumpCoverage, 0.0f, 100.0f, "%.0f%%");
+		if (auto _ttBc = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_bump_coverage_tooltip"), "How much of the deep snow carries mounds: low = rare isolated bumps, high = a continuous pillowed surface."));
+
 		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttPd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));

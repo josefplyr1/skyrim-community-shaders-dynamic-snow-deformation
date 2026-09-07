@@ -181,6 +181,7 @@ cbuffer ShellCB : register(b0)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
+	float4 UndulationBumps;  // bump octave, live fallback (see SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)
@@ -328,8 +329,8 @@ Texture2D<float> BermFieldMap : register(t14);
 Texture2D<float2> ExclusionFieldMap : register(t15);
 Texture2D<float4> FrostPatternNormal : register(t16);
 Texture2D<float4> FrostPatternDiffuse : register(t17);
-// Baked undulation field (UndulationFieldCS): x = amp-free dune height,
-// yz = its +-12-unit shading gradient, over UndulationFieldWindow.
+// Baked undulation field (UndulationFieldCS): x = height in world units,
+// yz = its +-kUndulationGradStep shading gradient, over UndulationFieldWindow.
 Texture2D<float4> UndulationFieldMap : register(t29);
 // Vanilla's projected-UV noise map (the BSGraphics default the game's own
 // Lighting.hlsl samples for projWeight), bound by the skin draw when

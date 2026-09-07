@@ -10,7 +10,7 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle), DeformationMap
+// UndulationAmp/Scale/Bumps, UndulationFieldWindow, BorderStyle), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
 // (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
@@ -265,11 +265,11 @@ static const float kFireMeltFloor = 1.0;
 
 float Undulation(float2 worldXY)
 {
-	return UndulationNorm(worldXY, UndulationScale) * UndulationAmp;
+	return UndulationHeight(worldXY, UndulationScale, UndulationAmp, UndulationBumps.xyz);
 }
 
 // ---- Baked undulation (UndulationFieldCS) ----
-// Height (x) and the +-12-unit shading gradient (yz), amp-free, in a
+// Height in world units (x) and its +-kUndulationGradStep gradient (yz) in a
 // camera-snapped world window: UndulationFieldWindow = (centre XY,
 // 1/half-extent, bake live > 0.5). Same manual-bilinear convention as
 // BermFieldBaked, so every stage reads it without a sampler. The live
@@ -303,21 +303,21 @@ float UndulationSampled(float2 worldXY)
 {
 	float result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).x * UndulationAmp;
+		result = UndulationBakedHG(worldXY).x;
 	else
 		result = Undulation(worldXY);
 	return result;
 }
 
-// Drop-in for the shading blocks' four-tap central difference (uStep 12,
+// Drop-in for the shading blocks' four-tap central difference (kUndulationGradStep,
 // the operator the bake stored).
 float2 UndulationGradSampled(float2 worldXY)
 {
 	float2 result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).yz * UndulationAmp;
+		result = UndulationBakedHG(worldXY).yz;
 	else {
-		const float uStep = 12.0;
+		const float uStep = kUndulationGradStep;
 		result = float2(
 					 Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
 					 Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) /

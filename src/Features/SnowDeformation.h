@@ -533,6 +533,12 @@ public:
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
 		float UndulationSpacing = 1.0f;
+		/** @brief Bump octave height in world units: one-sided mounds on the dunes, baked into the undulation field with them. 0 = off. */
+		float UndulationBumpHeight = 2.0f;
+		/** @brief Bump octave cell size in world units. The field texel is 16, so cells under ~32 alias. */
+		float UndulationBumpSize = 40.0f;
+		/** @brief Percent of deep snow the bumps cover; maps to the noise threshold they rise from. */
+		float UndulationBumpCoverage = 50.0f;
 		/** @brief Tessellate the shell and the trench patch. Its real job is trench smoothness: the hull shader's factors key off the deformation map, so carves get vertex density no coarse grid can express. Independent of ReliefDepth. */
 		bool Tessellation = true;
 		/** @brief Parallax self-shadow strength on the snow micro-relief (Extended Materials' term, the one PBR ground already receives). 0 skips the taps entirely. */
@@ -843,6 +849,10 @@ public:
 		float2 FieldOriginWorld;
 		float FieldTexel;
 		float FieldScale;
+		float FieldAmp;
+		float FieldBumpHeight;
+		float FieldBumpCell;
+		float FieldBumpLo;
 	};
 	STATIC_ASSERT_ALIGNAS_16(UndulationFieldCB);
 	ConstantBuffer* undulationFieldCB = nullptr;
@@ -851,6 +861,14 @@ public:
 	bool undulationFieldValid = false;
 	/** @brief UndulationScale the field was baked at; a Spacing change rebakes. */
 	float undulationFieldBakedScale = -1.0f;
+	/** @brief Strength and the bump octave (UndulationBumpParams xyz) the field was baked at; any change rebakes. */
+	float4 undulationFieldBakedParams = { -1.0f, -1.0f, -1.0f, -1.0f };
+	/** @brief Bump octave as the shaders take it: x = height, y = cell, z = coverage threshold, w = 0. One source for the bake and the live fallback. */
+	float4 UndulationBumpParams() const
+	{
+		return { std::max(settings.UndulationBumpHeight, 0.0f), std::max(settings.UndulationBumpSize, 1.0f),
+			0.75f - 0.5f * std::clamp(settings.UndulationBumpCoverage, 0.0f, 100.0f) * 0.01f, 0.0f };
+	}
 	/** @brief Rebakes on recenter/Spacing change; no-ops when current. Called once per frame from Prepass. */
 	void UpdateUndulationField();
 	ID3D11ShaderResourceView* GetUndulationFieldSRV() const { return undulationFieldTexture ? undulationFieldTexture->srv.get() : nullptr; }
@@ -1057,7 +1075,7 @@ public:
 		float CrispShadows;
 		/** @brief Screen-Space Shadows output bound at t45: the long-range depth-marched shadows carrying distant LOD tree shadows beyond the cascades. */
 		float ScreenSpaceShadowsActive;
-		/** @brief Dune-field amplitude in world units (0 flattens the undulation). */
+		/** @brief Dune-field amplitude in world units (0 flattens the undulation). Baked into the undulation field; the shells read it only on the live fallback. */
 		float UndulationAmp;
 
 		/** @brief Multiplier on the dune field's wavelengths (>1 = broader, calmer waves). */
@@ -1134,6 +1152,8 @@ public:
 		float4 FineWindow;
 		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30). */
 		float4 SlopeDrape;
+		/** @brief Bump octave for the live undulation fallback (UndulationBumpParams). Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float4 UndulationBumps;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
