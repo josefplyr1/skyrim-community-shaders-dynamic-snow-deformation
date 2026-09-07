@@ -17,9 +17,9 @@ bool SnowDeformation::EnsureVoxelResources()
 	bool levelsReady = true;
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
-		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.support && lv.height && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
-	if (levelsReady && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
+	if (levelsReady && voxelSupport && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
 		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
 		voxelDiffCS && voxelDirtyColsCS && voxelBrickFlagsCS)
 		return true;
@@ -72,8 +72,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			}
 			delete lv.field;
 			lv.field = nullptr;
-			delete lv.support;
-			lv.support = nullptr;
 			delete lv.height;
 			lv.height = nullptr;
 			delete lv.bricks;
@@ -93,8 +91,6 @@ bool SnowDeformation::EnsureVoxelResources()
 				lv.volume[p] = makeVolume(std::format("SnowDeformation::VoxelVolume{}{}", i, p), dim);
 		if (!lv.field)
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
-		if (!lv.support)
-			lv.support = makeVolume(std::format("SnowDeformation::VoxelSupport{}", i), dim);
 		if (!lv.height)
 			lv.height = makeVolume(std::format("SnowDeformation::VoxelHeight{}", i), dim);
 		if (!lv.bricks) {
@@ -171,6 +167,10 @@ bool SnowDeformation::EnsureVoxelResources()
 		}
 		lv.valid = false;
 	}
+	// One support volume for every level, at the finest grid: a coarser
+	// level's passes only ever touch its own [0, dim) corner of it.
+	if (!voxelSupport)
+		voxelSupport = makeVolume("SnowDeformation::VoxelSupport", kVoxelDim);
 	if (!voxelSliceTexture) {
 		D3D11_TEXTURE2D_DESC desc{
 			.Width = kVoxelDim,
@@ -373,7 +373,8 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
 	a_cb.LipParams[0] = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
-	a_cb.LipParams[1] = a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
+	a_cb.LipParams[1] = settings.VolumeConservativeCapture ? 0.5f : 0.0f;
+	a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
@@ -481,7 +482,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// (centred, so the snap is within half a brick): the dirty-brick
 		// bookkeeping is per physical brick, which is one logical brick only
 		// while the origin is a multiple of eight.
-		const float ahead = kVoxelForwardFrac * 2.0f * half;
+		const float ahead = std::clamp(settings.VolumeForwardBias, 0.0f, 0.45f) * 2.0f * half;
 		const float brickUnits = 8.0f * voxelSize;
 		const float snapBias = 4.0f * voxelSize;
 		const DirectX::XMINT3 origin{
@@ -680,13 +681,13 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		ID3D11ShaderResourceView* occSRV = occupancy->srv.get();
 		ID3D11ShaderResourceView* scratchSRV = scratch->srv.get();
 		ID3D11ShaderResourceView* fieldSRV = lv.field->srv.get();
-		ID3D11ShaderResourceView* supportSRV = lv.support->srv.get();
+		ID3D11ShaderResourceView* supportSRV = voxelSupport->srv.get();
 		ID3D11ShaderResourceView* listsSRV = lv.lists->srv.get();
 		ID3D11ShaderResourceView* dirtySRV = lv.dirty->srv.get();
 		ID3D11ShaderResourceView* flagsSRV = lv.flags->srv.get();
 		ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
 		ID3D11UnorderedAccessView* fieldUAV = lv.field->uav.get();
-		ID3D11UnorderedAccessView* supportUAV = lv.support->uav.get();
+		ID3D11UnorderedAccessView* supportUAV = voxelSupport->uav.get();
 		ID3D11UnorderedAccessView* dirtyUAV = lv.dirty->uav.get();
 		ID3D11UnorderedAccessView* listsUAV = lv.lists->uav.get();
 		ID3D11UnorderedAccessView* flagsUAV = lv.flags->uav.get();

@@ -322,7 +322,7 @@ void SnowDeformation::DrawSettings()
 				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
 				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 80 + (levels - fine) * 10);
+				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 64 + (levels - fine) * 8 + 16);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
@@ -333,6 +333,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));
+			ImGui::SliderFloat(T(TKEY("volume_forward_bias"), "Volume Forward Bias"), &settings.VolumeForwardBias, 0.0f, 0.45f, "%.2f");
+			if (auto _ttVoxFwd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_forward_bias_tooltip"), "How far ahead of you each ring's window sits, as a fraction of its width. 0 centres it on you; higher puts more of it in front, where you look, and less behind. At 0.35 the nearest ring reaches about 9 m ahead and 1 m behind. Turning around refreshes the near ring the same frame; the far rings take a few."));
+			ImGui::Checkbox(T(TKEY("volume_conservative_capture"), "Conservative Capture"), &settings.VolumeConservativeCapture);
+			if (auto _ttVoxCons = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_conservative_capture_tooltip"), "When an object is drawn into a ring's grid, each triangle is widened by half a voxel so it marks every voxel it touches - not only those whose centre it happens to cover. On the far rings a rock's triangles are smaller than a voxel and were hit-or-miss, which is the faceted, gappy far snow. Off for comparing."));
 			ImGui::Checkbox(T(TKEY("volume_staggered_capture"), "Staggered Capture"), &settings.VolumeStaggeredCapture);
 			if (auto _ttVoxStagger = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_staggered_capture_tooltip"), "An object already in a ring's volume is re-drawn into it only every 8th rebuild on the nearest ring (4th and 2nd on the next two); its memory keeps it there between. Everything you have not seen yet still draws within that many rebuilds - a few frames near you. Off draws every object into every ring every rebuild, for comparing the VoxelRaster row."));

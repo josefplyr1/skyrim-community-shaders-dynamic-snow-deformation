@@ -621,6 +621,10 @@ public:
 		float VolumeDetailDistance = 1000.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
+		/** @brief "Conservative Capture": the voxeliser pushes each triangle's edges out by half a voxel so it marks every column it touches, not only those whose centre it covers - on the far rings a rock's triangles are a fraction of a voxel and were hit-or-miss. */
+		bool VolumeConservativeCapture = true;
+		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
+		float VolumeForwardBias = 0.35f;
 		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
 		bool VolumeStaggeredCapture = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
@@ -2128,7 +2132,7 @@ public:
 		float RoundSigma;
 		/** @brief cos(Settings::VolumeSnowMaxSlopeDeg): the least up-ness a seed's surface may have, read from the normal the raster packed into the voxel. */
 		float SlopeMinNz;
-		/** @brief xyz = this window's centre in voxel units (absolute; ahead of the camera by kVoxelForwardFrac), w = the bricks' reach from it in voxels, Chebyshev. */
+		/** @brief xyz = this window's centre in voxel units (absolute; ahead of the camera by Settings::VolumeForwardBias), w = the bricks' reach from it in voxels, Chebyshev. */
 		float CentreVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
@@ -2140,12 +2144,10 @@ public:
 		float HeadroomVox;
 		/** @brief x = Settings::VolumeEdgeNoise (world units), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
-		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). */
+		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
 		float LipParams[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
-	/** @brief The windows sit ahead of the camera by this fraction of their extent (XY only): half a cube behind the eye is empty air, so the reach ahead is 1.4 half-extents instead of 0.9. */
-	static constexpr float kVoxelForwardFrac = 0.25f;
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
 	/** @brief Frames between a level's rebuilds: 2^L with Settings::VolumeLazyRings, else 1. */
 	uint32_t VoxelLevelPeriod(uint a_level) const;
@@ -2181,8 +2183,6 @@ public:
 	{
 		Texture3D* volume[2] = { nullptr, nullptr };
 		Texture3D* field = nullptr;
-		/** @brief The overhang cap's 1D distance between the X and Y passes. */
-		Texture3D* support = nullptr;
 		/** @brief The raster's surface height within each voxel (0 = bottom), read by the Z sweep to put the snow top at the true surface plus the depth. */
 		Texture3D* height = nullptr;
 		Buffer* bricks = nullptr;
@@ -2252,6 +2252,8 @@ public:
 	int voxelSliceSource = 2;
 	/** @brief The menu's plane through the current volume. */
 	Texture2D* voxelSliceTexture = nullptr;
+	/** @brief The overhang cap's 1D distance between the X and Y passes - ONE volume for every level, at the finest grid: it lives only inside a level's field pass and the levels run one after another. Four rings share what was five volumes (Josef, 2026-09-07). */
+	Texture3D* voxelSupport = nullptr;
 	ConstantBuffer* voxelCB = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> voxelRasterState;
 	ID3D11VertexShader* voxelVS = nullptr;

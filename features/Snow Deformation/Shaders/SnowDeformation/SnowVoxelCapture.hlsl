@@ -61,7 +61,8 @@ cbuffer VoxelCB : register(b0)
 	// units, z = the field's exponential rate per voxel, w = the overhang in
 	// units
 	float4 EdgeParams;
-	// x = an air neighbour's weight in the sideways average, the rest padding
+	// x = an air neighbour's weight in the sideways average, y = the capture's
+	// conservative expansion in voxels (0 = off), the rest padding
 	float4 LipParams;
 }
 
@@ -113,6 +114,30 @@ VS_OUTPUT main(VS_INPUT input)
 }
 
 #elif defined(GSHADER)
+// The projected point lifted back onto the triangle's plane along the
+// projection axis, so a moved corner's Vox stays consistent with the
+// others (the PS takes its voxel column from Vox, not SV_Position).
+float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
+{
+	float3 r;
+	[branch] if (axis == 0)
+	{
+		r.yz = q;
+		r.x = p0.x - (gn.y * (q.x - p0.y) + gn.z * (q.y - p0.z)) / gn.x;
+	}
+	else if (axis == 1)
+	{
+		r.xz = q;
+		r.y = p0.y - (gn.x * (q.x - p0.x) + gn.z * (q.y - p0.z)) / gn.y;
+	}
+	else
+	{
+		r.xy = q;
+		r.z = p0.z - (gn.x * (q.x - p0.x) + gn.y * (q.y - p0.y)) / gn.z;
+	}
+	return r;
+}
+
 [maxvertexcount(3)] void main(triangle VS_OUTPUT tri[3], inout TriangleStream<GS_OUTPUT> stream)
 {
 	float3 gn = cross(tri[1].Vox - tri[0].Vox, tri[2].Vox - tri[0].Vox);
@@ -123,9 +148,46 @@ VS_OUTPUT main(VS_INPUT input)
 	// without one.
 	float3 vn = tri[0].Normal + tri[1].Normal + tri[2].Normal;
 	float nz = dot(vn, vn) > 1e-4 ? normalize(vn).z : (dot(gn, gn) > 1e-8 ? normalize(gn).z : 1.0);
+	float3 vox[3] = { tri[0].Vox, tri[1].Vox, tri[2].Vox };
+	// CONSERVATIVE. The rasteriser marks a column only when the triangle
+	// covers the pixel's CENTRE, and one pixel is one voxel column: on a
+	// 16- or 32-unit ring a rock's triangles are a fraction of a pixel and
+	// hit or miss - a faceted, sparse occupancy that no slope gate and no
+	// draw-side fix can mend (Josef's far "triangles", 2026-09-07). Each
+	// edge is pushed outward by the expansion and the corners rebuilt at
+	// the pushed edges' crossings, so a triangle marks every column it
+	// touches. A corner whose edges are parallel keeps its place.
+	float expand = LipParams.y;
+	[branch] if (expand > 0.0 && dot(gn, gn) > 1e-10)
+	{
+		float2 pr[3];
+		[unroll] for (int j = 0; j < 3; j++)
+			pr[j] = axis == 0 ? vox[j].yz : (axis == 1 ? vox[j].xz : vox[j].xy);
+		float2 e[3] = { pr[1] - pr[0], pr[2] - pr[1], pr[0] - pr[2] };
+		float s = (e[0].x * e[1].y - e[0].y * e[1].x) >= 0.0 ? 1.0 : -1.0;
+		float2 nrm[3];
+		float c[3];
+		[unroll] for (int k = 0; k < 3; k++)
+		{
+			float len = max(length(e[k]), 1e-5);
+			nrm[k] = s * float2(e[k].y, -e[k].x) / len;
+			c[k] = dot(nrm[k], pr[k]) + expand;
+		}
+		[unroll] for (int j2 = 0; j2 < 3; j2++)
+		{
+			int a = (j2 + 2) % 3;
+			int b = j2;
+			float det = nrm[a].x * nrm[b].y - nrm[a].y * nrm[b].x;
+			[flatten] if (abs(det) > 1e-4)
+			{
+				float2 q = float2(c[a] * nrm[b].y - c[b] * nrm[a].y, nrm[a].x * c[b] - nrm[b].x * c[a]) / det;
+				vox[j2] = LiftToPlane(q, axis, tri[0].Vox, gn);
+			}
+		}
+	}
 	[unroll] for (int i = 0; i < 3; i++)
 	{
-		float3 v = tri[i].Vox;
+		float3 v = vox[i];
 		float2 proj = axis == 0 ? v.yz : (axis == 1 ? v.xz : v.xy);
 		GS_OUTPUT o;
 		// The viewport is Dim x Dim, so one pixel is one voxel column.
