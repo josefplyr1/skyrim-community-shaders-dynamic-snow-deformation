@@ -17,7 +17,7 @@ bool SnowDeformation::EnsureVoxelResources()
 	bool levelsReady = true;
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
-		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
 	if (levelsReady && voxelSupport && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
 		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
@@ -74,6 +74,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = nullptr;
 			delete lv.height;
 			lv.height = nullptr;
+			delete lv.heightMap;
+			lv.heightMap = nullptr;
 			delete lv.bricks;
 			lv.bricks = nullptr;
 			delete lv.drawArgs;
@@ -93,6 +95,34 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
 		if (!lv.height)
 			lv.height = makeVolume(std::format("SnowDeformation::VoxelHeight{}", i), dim);
+		if (!lv.heightMap) {
+			const uint hdim = dim * 4;
+			D3D11_TEXTURE2D_DESC desc{
+				.Width = hdim,
+				.Height = hdim,
+				.MipLevels = 1,
+				.ArraySize = 1,
+				.Format = DXGI_FORMAT_R32_UINT,
+				.SampleDesc = { .Count = 1 },
+				.Usage = D3D11_USAGE_DEFAULT,
+				.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
+			};
+			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			};
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			lv.heightMap = new Texture2D(desc, std::format("SnowDeformation::VoxelHeightMap{}", i).c_str());
+			lv.heightMap->CreateSRV(srvDesc);
+			lv.heightMap->CreateUAV(uavDesc);
+			const UINT zeros[4] = { 0, 0, 0, 0 };
+			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
+		}
 		if (!lv.bricks) {
 			const uint bricksPerAxis = dim / 8;
 			const uint capacity = bricksPerAxis * bricksPerAxis * bricksPerAxis;
@@ -533,16 +563,19 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			ID3D11ShaderResourceView* srv = lv.volume[previous]->srv.get();
 			ID3D11UnorderedAccessView* uavs[3] = { lv.volume[lv.current]->uav.get(), nullptr, countHere ? voxelCountUAV.get() : nullptr };
 			ID3D11UnorderedAccessView* dirtyUAV = lv.dirty->uav.get();
+			ID3D11UnorderedAccessView* heightMapUAV = lv.heightMap->uav.get();
 			context->CSSetConstantBuffers(0, 1, &cbPtr);
 			context->CSSetShaderResources(0, 1, &srv);
 			context->CSSetUnorderedAccessViews(0, 3, uavs, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
+			context->CSSetUnorderedAccessViews(8, 1, &heightMapUAV, nullptr);
 			context->CSSetShader(voxelScrollCS, nullptr, 0);
 			context->Dispatch(groups, groups, groups);
 			ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, 1, &nullSRV);
 			context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
+			context->CSSetUnorderedAccessViews(8, 1, &nullUAV, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 			context->CSSetConstantBuffers(0, 1, &nullCB);
 			// Copy this frame's count, map LAST frame's copy without waiting.
@@ -589,11 +622,16 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->VSSetConstantBuffers(0, 1, &cbPtr);
 			context->GSSetConstantBuffers(0, 1, &cbPtr);
 			context->PSSetConstantBuffers(0, 1, &cbPtr);
-			D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f };
-			context->RSSetViewports(1, &viewport);
-			// u0 occupancy, u1 the surface height within the voxel.
-			ID3D11UnorderedAccessView* rasterUAVs[2] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get() };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, rasterUAVs, nullptr);
+			// Viewport 0: one pixel a voxel column, the occupancy. Viewport 1:
+			// four a voxel side, the top-down heightmap copy the GS adds.
+			D3D11_VIEWPORT viewports[2] = {
+				{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f },
+				{ 0.0f, 0.0f, float(lv.dim * 4), float(lv.dim * 4), 0.0f, 1.0f }
+			};
+			context->RSSetViewports(2, viewports);
+			// u0 occupancy, u1 the surface height within the voxel, u2 the heightmap.
+			ID3D11UnorderedAccessView* rasterUAVs[3] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get(), lv.heightMap->uav.get() };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 3, rasterUAVs, nullptr);
 			// STAGGERED CAPTURE. A static already in the volume stays there on
 			// the memory nibble (a tick every 16 of this level's rebuilds, 15
 			// to expire), so drawing it every rebuild only paid for the same
@@ -650,8 +688,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				context->DrawIndexed(indexCount, 0, 0);
 			}
 
-			ID3D11UnorderedAccessView* nullRasterUAVs[2] = { nullptr, nullptr };
-			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, nullRasterUAVs, nullptr);
+			ID3D11UnorderedAccessView* nullRasterUAVs[3] = { nullptr, nullptr, nullptr };
+			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 3, nullRasterUAVs, nullptr);
 		}
 		context->GSSetShader(nullptr, nullptr, 0);
 		ID3D11Buffer* restoreVSCB0 = savedVSCB0.get();
@@ -753,13 +791,16 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// Z: scratch -> field, one thread per column, on D0; the raster's
 		// surface heights at t9.
 		ID3D11ShaderResourceView* heightSRV = lv.height->srv.get();
+		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
 		context->CSSetShaderResources(0, 1, &scratchSRV);
 		context->CSSetShaderResources(9, 1, &heightSRV);
+		context->CSSetShaderResources(10, 1, &heightMapSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->CSSetShader(voxelBlurZCS, nullptr, 0);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetShaderResources(9, 1, &nullSRV);
+		context->CSSetShaderResources(10, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;

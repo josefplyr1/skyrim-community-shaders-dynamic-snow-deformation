@@ -2187,6 +2187,8 @@ public:
 		Texture3D* field = nullptr;
 		/** @brief The raster's surface height within each voxel (0 = bottom), read by the Z sweep to put the snow top at the true surface plus the depth. */
 		Texture3D* height = nullptr;
+		/** @brief R32_UINT, (4 dim)^2, world-anchored like the volume: the topmost captured surface over each sub-pixel as the bits of (world z + 32768), kept by an atomic max, so a column's height is deterministic and prefiltered over sixteen samples. The Z sweep prefers it; `height` is the fallback for a seed under an overhang. */
+		Texture2D* heightMap = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
 		/** @brief Dirty bricks: a uint per physical brick, set by the scroll (reused slots) and the occupancy compare, cleared each rebuild. */

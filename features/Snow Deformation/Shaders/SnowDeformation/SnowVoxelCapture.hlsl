@@ -85,6 +85,10 @@ struct GS_OUTPUT
 	// The triangle's plane in voxel space, xyz = geometric normal (unnormalised),
 	// w = its offset: the PS reads the surface's true z in each column it marks.
 	nointerpolation float4 Plane : TEXCOORD3;
+	// 0 = the dominant-axis copy (occupancy), 1 = the top-down copy into
+	// the heightmap, four sub-pixels a voxel.
+	nointerpolation uint Copy : TEXCOORD4;
+	uint Viewport : SV_ViewportArrayIndex;
 };
 
 #if defined(VSHADER)
@@ -141,7 +145,7 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 	return r;
 }
 
-[maxvertexcount(3)] void main(triangle VS_OUTPUT tri[3], inout TriangleStream<GS_OUTPUT> stream)
+[maxvertexcount(6)] void main(triangle VS_OUTPUT tri[3], inout TriangleStream<GS_OUTPUT> stream)
 {
 	float3 gn = cross(tri[1].Vox - tri[0].Vox, tri[2].Vox - tri[0].Vox);
 	float3 n = abs(gn);
@@ -208,9 +212,35 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 		o.Axis = axis;
 		o.Nz = nz;
 		o.Plane = float4(gn, dot(gn, tri[0].Vox));
+		o.Copy = 0;
+		o.Viewport = 0;
 		stream.Append(o);
 	}
 	stream.RestartStrip();
+	// THE HEIGHTMAP COPY: the same triangle top-down, into the second
+	// viewport at four pixels a voxel, where the PS keeps the highest
+	// surface per sub-pixel with an atomic max. Deterministic where the
+	// occupancy's height was a last write (the flicker with Dirty Bricks
+	// off on every ring), and four samples a voxel side where the column
+	// had one - the prefilter a far ring never had (Josef, 2026-09-07).
+	// A vertical face covers nothing from above and is not sent.
+	[branch] if (abs(gn.z) > 0.05 * length(gn))
+	{
+		[unroll] for (int i2 = 0; i2 < 3; i2++)
+		{
+			float3 v = tri[i2].Vox;
+			GS_OUTPUT o;
+			o.Position = float4(v.xy * (2.0 / Dim) - 1.0, 0.5, 1.0);
+			o.Vox = v;
+			o.Axis = 2;
+			o.Nz = nz;
+			o.Plane = float4(gn, dot(gn, tri[0].Vox));
+			o.Copy = 1;
+			o.Viewport = 1;
+			stream.Append(o);
+		}
+		stream.RestartStrip();
+	}
 }
 
 #elif defined(PSHADER)
@@ -220,10 +250,21 @@ RWTexture3D<float> Volume : register(u0);
 // - on a 32-unit ring that is the difference between a 12-unit layer and a
 // 78-unit lump (Josef's far rings, 2026-09-07).
 RWTexture3D<float> HeightOut : register(u1);
+// The topmost surface over each sub-pixel (four a voxel side), as the bits
+// of (world z + 32768): positive floats order as uints, so a max is a max.
+RWTexture2D<uint> HeightMap : register(u2);
 
 void main(GS_OUTPUT input)
 {
 	float3 vox = input.Vox;
+	[branch] if (input.Copy == 1)
+	{
+		int mask4 = Dim * 4 - 1;
+		int2 sub = ((int2)floor(vox.xy * 4.0) + OriginVox.xy * 4) & mask4;
+		float worldZ = (vox.z + (float)OriginVox.z) * VoxelSize;
+		InterlockedMax(HeightMap[(uint2)sub], asuint(worldZ + 32768.0));
+		return;
+	}
 	// Extent of the fragment along the projection axis, from the screen
 	// derivatives: closes the crack a steep triangle leaves between voxels.
 	float d = input.Axis == 0 ? vox.x : (input.Axis == 1 ? vox.y : vox.z);
@@ -280,6 +321,10 @@ Texture3D<float> FieldIn : register(t3);
 Texture3D<float> OccupancyIn : register(t4);
 // The raster's surface height within each voxel (see the capture PS).
 Texture3D<float> HeightIn : register(t9);
+// The capture's heightmap: the topmost surface over each sub-pixel, four a
+// voxel side, as the bits of (world z + 32768); 0 = nothing captured.
+Texture2D<uint> HeightMapIn : register(t10);
+RWTexture2D<uint> HeightMapOut : register(u8);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
 // Occupied-voxel count for the menu: one atomic per group, not per thread.
@@ -625,8 +670,20 @@ float OccNz(float v)
 	float carry = 0.0;
 	float top = -1.0e4;
 	bool prevSolid = false;
-	float prevF = 0.0;
-	uint3 prevPh = uint3(0, 0, 0);
+	int runStart = 0;
+	// THE COLUMN'S SURFACE, from the capture's heightmap: sixteen sub-samples
+	// of the topmost surface over this column, a max rather than a last
+	// write, four a voxel side. Their mean inside a seed's solid run is the
+	// surface prefiltered over the column - the average every voxel LOD
+	// takes and the point sample never did (Josef's magenta bands,
+	// 2026-09-07). Read once; each seed takes the ones in its own run.
+	float hs[16];
+	uint2 hb = p * 4;
+	[unroll] for (int i = 0; i < 16; i++)
+	{
+		uint key = HeightMapIn[hb + uint2(i & 3, i >> 2)];
+		hs[i] = key != 0u ? (asfloat(key) - 32768.0) / VoxelSize - (float)OriginVox.z : -1.0e4;
+	}
 	// THE FIELD IS EXPONENTIAL IN HEIGHT: Coverage * exp(rate * (top - z)),
 	// so it crosses Coverage AT the top on every ring (near-linear over the
 	// two centres that bracket the top while the rate stays under ~0.35 a
@@ -643,21 +700,55 @@ float OccNz(float v)
 		float s = VolumeIn[ph];
 		bool solid = OccupancyIn[ph] > 0.0;
 		float zc = (float)z + 0.5;
+		[flatten] if (solid && !prevSolid)
+			runStart = z;
+		// A solid that is no seed (an underside, a wall's inside) still cuts
+		// the field: nothing grows through it from below.
 		[flatten] if (solid)
-		{
 			carry = s;
+		[branch] if (solid && s > 0.01)
+		{
+			// The surface: the mean of the sub-samples inside this run - the
+			// run is the object here and the surface is in it. A seed under
+			// an overhang sees only the overhang's samples, above its window,
+			// and keeps the capture's own per-voxel height.
+			float sum = 0.0;
+			float n = 0.0;
+			[unroll] for (int k = 0; k < 16; k++)
+			{
+				float hz = hs[k];
+				[flatten] if (hz > (float)runStart - 0.25 && hz < (float)z + 1.25)
+				{
+					sum += hz;
+					n += 1.0;
+				}
+			}
+			float surf = n > 0.0 ? sum / n : (float)z + (HeightIn[ph] * 8.0 - 4.0);
 			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
-			// threshold beneath it, and the field is written from here up -
-			// so the top may not sit under this centre unless the voxel
-			// below is solid too and can carry it. It is, whenever this is a
-			// crack-closing voxel over the true surface: on the two outer
-			// rings that case fired the old floor on most columns, raising
-			// each by up to a voxel with the surface's phase, which was the
-			// sawtooth Depth 64 made vanish (Josef, 2026-09-07). A lone thin
-			// member keeps the floor: what is under it is air, and air must
-			// not learn its top. Residual: under a seventh of a voxel.
-			float raw = (float)z + (HeightIn[ph] * 8.0 - 4.0) + DepthVox * s;
-			top = max(raw, prevSolid ? (float)z - 0.48 : (float)z + 0.52);
+			// threshold beneath it, and only the run's own voxels may carry
+			// one - never the air under a thin member. So the top may sit
+			// down to the run's bottom centre, and the run beneath this voxel
+			// is refilled with the field: the old one-voxel floor raised a
+			// crack-closing seed by up to a voxel on the outer rings (the
+			// sawtooth Depth 64 made vanish), and the one-voxel deferral
+			// after it still clamped a spread of two or three.
+			top = max(surf + DepthVox * s, (float)runStart + 0.52);
+			// Six at most: the spread caps at three voxels over the surface and
+			// three more carry the crossing's sample and the cubic's support.
+			int zFrom = max(runStart, (int)floor(top) - 3);
+			[unroll] for (int q = 1; q <= 6; q++)
+			{
+				int zz = z - q;
+				[branch] if (zz >= zFrom)
+				{
+					float zzc = (float)zz + 0.5;
+					float fb = saturate(FieldThreshold * exp(rate * (top - zzc)));
+					uint3 pb = Phys(int3(lxy, zz));
+					VolumeOut[pb] = fb;
+					if (fb >= 2.0 / 255.0)
+						InterlockedOr(gZBrick[pb.z >> 3], 1u);
+				}
+			}
 		}
 		float f = 0.0;
 		[flatten] if (carry > 0.01)
@@ -670,24 +761,11 @@ float OccNz(float v)
 			[flatten] if (zc < top + 4.0)
 				f = max(f, 1.0 / 255.0);
 		}
-		// The voxel below a seed, when it is the object's inside, takes the
-		// seed's top as well (written one step late): the sample beneath a
-		// crossing that lies under the seed's own centre.
-		[flatten] if (z > 0 && solid && prevSolid && carry > 0.01)
-			prevF = max(prevF, saturate(FieldThreshold * exp(rate * (top - (zc - 1.0)))));
-		[branch] if (z > 0)
-		{
-			VolumeOut[prevPh] = prevF;
-			if (prevF >= 2.0 / 255.0)
-				InterlockedOr(gZBrick[prevPh.z >> 3], 1u);
-		}
-		prevF = f;
-		prevPh = ph;
+		VolumeOut[ph] = f;
+		if (f >= 2.0 / 255.0)
+			InterlockedOr(gZBrick[ph.z >> 3], 1u);
 		prevSolid = solid;
 	}
-	VolumeOut[prevPh] = prevF;
-	if (prevF >= 2.0 / 255.0)
-		InterlockedOr(gZBrick[prevPh.z >> 3], 1u);
 	GroupMemoryBarrierWithGroupSync();
 	uint bricks = (uint)Dim >> 3;
 	if (gi < bricks)
@@ -965,6 +1043,19 @@ float SliceRead(int3 logical)
 	// whatever the occupancy compare says. One atomic per brick.
 	if (!inside)
 		InterlockedOr(gScrolledIn, 1u);
+	// The heightmap holds absolute z, so only an XY scroll (or a clear)
+	// retires a column's sub-pixels; one thread per column does it.
+	[branch] if (p.z == 0)
+	{
+		int2 old2 = logical.xy + ScrollDelta.xy;
+		bool keep = OriginVox.w == 0 && all(old2 >= 0) && all(old2 < Dim);
+		[branch] if (!keep)
+		{
+			uint2 hb = p.xy * 4;
+			[unroll] for (int i = 0; i < 16; i++)
+				HeightMapOut[hb + uint2(i & 3, i >> 2)] = 0u;
+		}
+	}
 	float v = inside ? VolumeIn[p] : 0.0;
 	// Memory is the low nibble: down one on tick frames (Decay = 1), gone
 	// at zero; the raster rewrites a re-seen voxel at 15 after this.

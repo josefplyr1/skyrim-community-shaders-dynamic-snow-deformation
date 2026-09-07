@@ -322,7 +322,7 @@ void SnowDeformation::DrawSettings()
 				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
 				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 64 + (levels - fine) * 8 + 16);
+				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 68 + (levels - fine) * 9 + 16);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())

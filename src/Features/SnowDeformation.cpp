@@ -2223,9 +2223,13 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	auto tex3Bytes = [](Texture3D* a_wrap) -> uint64_t {
 		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * a_wrap->desc.Depth : 0;
 	};
+	// The heightmap: four bytes per sub-pixel, sixteen a voxel column.
+	auto heightMapBytes = [](Texture2D* a_wrap) -> uint64_t {
+		return a_wrap ? uint64_t(a_wrap->desc.Width) * a_wrap->desc.Height * 4 : 0;
+	};
 	uint64_t voxel = 0;
 	for (const auto& lv : voxelLevels)
-		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + tex3Bytes(lv.height);
+		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + tex3Bytes(lv.height) + heightMapBytes(lv.heightMap);
 	voxel += tex3Bytes(voxelSupport);
 
 	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex + voxel;
