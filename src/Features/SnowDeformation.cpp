@@ -156,11 +156,10 @@
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
-	X(VolumeSnowDraw) \
 	X(VolumeVoxelSize) \
 	X(VolumeSnowMaxSlopeDeg) \
 	X(VolumeSkyExposurePct) \
-	X(VolumeSnowSpread) \
+	X(VolumeSnowOverhang) \
 	X(VolumeLevels) \
 
 

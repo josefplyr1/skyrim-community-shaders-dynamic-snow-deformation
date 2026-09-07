@@ -229,14 +229,17 @@ float SnowDeformation::VoxelSizeForLevel(uint a_level) const
 	return VoxelSizeLive() * float(1u << a_level);
 }
 
+void SnowDeformation::VoxelReachBand(uint a_level, float& a_start, float& a_end) const
+{
+	a_end = kVoxelDim * VoxelSizeForLevel(a_level) * 0.5f * kVoxelReachFrac;
+	a_start = a_end * (1.0f - kVoxelBandFrac);
+}
+
 void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 {
 	const auto& lv = voxelLevels[a_level];
 	const float voxelSize = VoxelSizeForLevel(a_level);
-	const float half = kVoxelDim * voxelSize * 0.5f;
 	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	const uint levels = VoxelLevelsLive();
-	const bool outermost = a_level + 1 >= levels;
 
 	a_cb.OriginVox = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 	a_cb.ScrollDelta = { 0, 0, 0, 0 };
@@ -257,22 +260,32 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.HeightWindowCenter = heightWindowCenter;
 	a_cb.HeightHalfExtent = seedMaps ? kHeightMapHalfExtent : 0.0f;
 	a_cb.ShelterDust = kVoxelShelterDust;
-	// sigma such that coverage 0.5 lands the isosurface at the slider depth:
-	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s.
-	a_cb.SeedSigma = std::max(settings.VolumeSnowDepth, 2.0f) / (1.177f * voxelSize);
+	// sigma such that coverage 0.5 lands the isosurface at the slider:
+	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s. Floored per level, so a
+	// coarse level's snow clears its own seed voxel.
+	a_cb.SeedSigma = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / (1.177f * voxelSize), kVoxelMinSigmaVox);
 	a_cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
-	a_cb.SigmaDownScale = kVoxelSigmaDown;
-	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
+	a_cb.SideSigma = std::max(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / (1.177f * voxelSize), kVoxelMinSideSigmaVox);
+	const float slopeDeg = std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f);
+	a_cb.SlopeTanMax = slopeDeg >= 89.5f ? 1.0e6f : std::tan(DirectX::XMConvertToRadians(slopeDeg));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
-	a_cb.SpreadScale = std::clamp(settings.VolumeSnowSpread, 0.1f, 3.0f);
 	a_cb.EyeVox[0] = eye.x / voxelSize;
 	a_cb.EyeVox[1] = eye.y / voxelSize;
 	a_cb.EyeVox[2] = eye.z / voxelSize;
-	// Bricks reach the whole window on inner levels; the outermost stops at
-	// its fade. A level's bricks also stop where the level inside it takes
-	// over: its usable core, in THIS level's voxel units.
-	a_cb.EyeVox[3] = (outermost ? kVoxelFadeEndFrac * half : half) / voxelSize;
-	a_cb.InnerHalfVox = a_level > 0 ? (kVoxelDim * VoxelSizeForLevel(a_level - 1) * 0.5f * kVoxelInnerFrac) / voxelSize : 0.0f;
+	// Bricks reach the end of this level's band; they also stop where the
+	// level inside takes over - the start of ITS band, in this level's
+	// voxels. Both Chebyshev, so the two surfaces coincide.
+	float bandStart = 0.0f, bandEnd = 0.0f;
+	VoxelReachBand(a_level, bandStart, bandEnd);
+	a_cb.EyeVox[3] = bandEnd / voxelSize;
+	a_cb.InnerHalfVox = 0.0f;
+	if (a_level > 0) {
+		float innerStart = 0.0f, innerEnd = 0.0f;
+		VoxelReachBand(a_level - 1, innerStart, innerEnd);
+		a_cb.InnerHalfVox = innerStart / voxelSize;
+	}
+	a_cb.pad0 = 0.0f;
+	a_cb.pad1 = 0.0f;
 }
 
 void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity)
@@ -470,11 +483,12 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		runPass(voxelSeedCS, occupancy, scratch);
 		ID3D11ShaderResourceView* nullMapSRVs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(1, 2, nullMapSRVs);
-		// Z: scratch -> field.
-		runPass(voxelBlurCS, scratch, lv.field);
-		// X and Y read the occupancy for the solid blocker.
+		// Every blur pass reads the occupancy at t4: Z stops at the first
+		// solid beneath, X and Y at the first solid beside.
 		ID3D11ShaderResourceView* blockerSRV = occupancy->srv.get();
 		context->CSSetShaderResources(4, 1, &blockerSRV);
+		// Z: scratch -> field.
+		runPass(voxelBlurCS, scratch, lv.field);
 		cb.BlurAxis = 0;
 		voxelCB->Update(cb);
 		runPass(voxelBlurCS, lv.field, scratch);
@@ -485,7 +499,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 
 		// The brick list. Binding the append UAV with a zero initial count
 		// resets its counter; the count then becomes the instance count.
-		if (settings.VolumeSnowDraw) {
+		{
 			const UINT zeroCount = 0;
 			ID3D11UnorderedAccessView* listUAV = lv.bricks->uav.get();
 			ID3D11ShaderResourceView* fieldSRV = lv.field->srv.get();
@@ -540,7 +554,7 @@ void SnowDeformation::UpdateVoxelSliceTexture()
 
 void SnowDeformation::DrawVoxelSnow()
 {
-	if (!settings.VolumeSnow || !settings.VolumeSnowDraw || !voxelDrawCB || !voxelWrapSampler || !voxelShellVS || !voxelShellPS)
+	if (!settings.VolumeSnow || !voxelDrawCB || !voxelWrapSampler || !voxelShellVS || !voxelShellPS)
 		return;
 	const uint levels = VoxelLevelsLive();
 	if (!voxelLevels[0].valid)
@@ -596,14 +610,16 @@ void SnowDeformation::DrawVoxelSnow()
 		if (!lv.valid || !lv.field || !lv.bricks || !lv.drawArgs)
 			continue;
 		const float voxelSize = VoxelSizeForLevel(L);
-		const float half = kVoxelDim * voxelSize * 0.5f;
-		const bool outermost = L + 1 >= levels;
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 		d.VoxParams = { voxelSize, float(kVoxelDim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), 0.5f };
-		// Only the outermost level dissolves; inner levels hand over to the
-		// next level's ring, which is not a fade.
-		d.VoxFade = outermost ? float4{ kVoxelFadeStartFrac * half, kVoxelFadeEndFrac * half, 0.0f, 0.0f } : float4{ 1.0e7f, 1.0e7f + 1.0f, 0.0f, 0.0f };
+		// Hand-over bands: in over the finer level's outer band (none on
+		// level 0: a band below zero reads as fully in), out over this one's.
+		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;
+		if (L > 0)
+			VoxelReachBand(L - 1, inStart, inEnd);
+		VoxelReachBand(L, outStart, outEnd);
+		d.VoxFade = { inStart, inEnd, outStart, outEnd };
 		voxelDrawCB->Update(d);
 		context->VSSetConstantBuffers(2, 1, &cb2);
 		context->PSSetConstantBuffers(2, 1, &cb2);

@@ -599,24 +599,22 @@ public:
 		bool ProjSnowMatch = true;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
-		/** @brief "Build Snow Volume" (VOLUME-SNOW-PLAN V0): rasterise the captured statics into the 256^3 voxel occupancy window each frame. Nothing consumes the volume - the slice view is the deliverable - so this changes no snow, only cost. */
+		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
-		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels). Josef's tuned default. */
+		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels, floored per level by kVoxelMinSigmaVox). Josef's tuned default. */
 		float VolumeSnowDepth = 8.0f;
 		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.25f;
-		/** @brief "Volume Snow Spread": the sideways blur sigma as a fraction of the vertical one - how far snow reaches past an edge and how easily two planes' snow melds. Solid always blocks it. */
-		float VolumeSnowSpread = 1.0f;
-		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 48 MB each. Reach doubles per level; detail stays the base voxel near the camera. */
-		int VolumeLevels = 3;
-		/** @brief "Draw Volume Snow" (V1b): march the field per pixel inside brick AABBs and shade it with the skins' own material. Off = the field only exists in the slice view. */
-		bool VolumeSnowDraw = true;
+		float VolumeSnowCoverage = 0.5f;
+		/** @brief "Volume Snow Overhang", world units: how far past an edge the snow may jut sideways at coverage 0.5, whatever the depth - past it the snow only grows up. Also how easily two planes' snow melds. Solid always blocks it. */
+		float VolumeSnowOverhang = 4.0f;
+		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 48 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
+		int VolumeLevels = 4;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
-		float VolumeVoxelSize = 3.0f;
-		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow (the seed's own up-ness, from the occupancy shell). Josef's tuned default: off. */
+		float VolumeVoxelSize = 2.0f;
+		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the slope of the seed layer itself, so a flat top's rim is flat. Josef's tuned default: off. */
 		float VolumeSnowMaxSlopeDeg = 90.0f;
-		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default. */
-		float VolumeSkyExposurePct = 50.0f;
+		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default: off. */
+		float VolumeSkyExposurePct = 0.0f;
 	};
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
@@ -2097,29 +2095,31 @@ public:
 		float HeightHalfExtent;
 		/** @brief Seed weight under shelter: a dusting, not bare. */
 		float ShelterDust;
-		/** @brief Gaussian sigma in voxels; with Z unnormalised a flat top's field is exp(-h^2/2s^2), so the threshold picks the depth. */
+		/** @brief Vertical sigma in voxels; peak 1, so a flat top's field is exp(-h^2/2s^2) and the threshold picks the depth. */
 		float SeedSigma;
 		float FieldThreshold;
-		/** @brief Sigma BELOW a seed as a fraction of the sigma above it: snow grows up from a surface, it does not hang under one. */
-		float SigmaDownScale;
-		/** @brief cos(Settings::VolumeSnowMaxSlopeDeg): minimum up-ness of a seed's own surface. */
-		float SlopeMinNz;
-		/** @brief xyz = the camera in voxel units (absolute), w = the draw's reach in voxels (brick cull). */
+		/** @brief Sideways sigma in voxels, from Settings::VolumeSnowOverhang: a seed's lateral reach, independent of the depth. */
+		float SideSigma;
+		/** @brief tan(Settings::VolumeSnowMaxSlopeDeg): the seed layer's own slope, height change per lateral voxel; huge at 90 = no gate. */
+		float SlopeTanMax;
+		/** @brief xyz = the camera in voxel units (absolute), w = the bricks' reach in voxels, Chebyshev. */
 		float EyeVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		/** @brief Clipmap: half-extent of the next-finer level's usable core, in THIS level's voxels; bricks inside it are that level's. 0 on level 0. */
+		/** @brief Clipmap: where the next-finer level's hand-over band starts, in THIS level's voxels, Chebyshev; bricks inside are that level's. 0 on level 0. */
 		float InnerHalfVox;
-		/** @brief Settings::VolumeSnowSpread - the sideways sigma as a fraction of the vertical one. */
-		float SpreadScale;
-		float padSky;
+		float pad0;
+		float pad1;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
-	/** @brief Sigma below a seed as a fraction of the sigma above: rounds the lip under an edge without hanging snow beneath beams. Tune here, not in the menu. */
-	static constexpr float kVoxelSigmaDown = 0.3f;
-	/** @brief Fraction of a level's half-extent the level outside it treats as already covered; the rest is that level's blur-truncated edge. */
-	static constexpr float kVoxelInnerFrac = 0.9f;
-	static constexpr uint kVoxelMaxLevels = 4;
+	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge. Chebyshev, so the rings are cube shells and tile without gaps. */
+	static constexpr float kVoxelReachFrac = 0.9f;
+	/** @brief The last fraction of that reach is the hand-over band: the level dithers out over it while the level outside dithers in, complementary per pixel. The outermost dithers to nothing. */
+	static constexpr float kVoxelBandFrac = 0.2f;
+	/** @brief Sigma floors in voxels. A coarse level whose slider depth is under a voxel would keep its surface inside the seed voxel, under the object's own face - invisible, which read as "less coverage far away". Snow deepens with distance instead. */
+	static constexpr float kVoxelMinSigmaVox = 0.85f;
+	static constexpr float kVoxelMinSideSigmaVox = 0.5f;
+	static constexpr uint kVoxelMaxLevels = 6;
 	/** @brief One clipmap level: occupancy ping-pong, its blob field, and the draw's brick list. Level L's voxel is VoxelSizeLive() * 2^L. */
 	struct VoxelLevel
 	{
@@ -2134,6 +2134,8 @@ public:
 	VoxelLevel voxelLevels[kVoxelMaxLevels];
 	uint VoxelLevelsLive() const { return (uint)std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels); }
 	float VoxelSizeForLevel(uint a_level) const;
+	/** @brief Where a level's bricks and draw end (kVoxelReachFrac) and where its hand-over band starts (kVoxelBandFrac before that), Chebyshev units from the camera. */
+	void VoxelReachBand(uint a_level, float& a_start, float& a_end) const;
 	/** @brief Fills every per-level field of the volume CB from live state; ScrollDelta and the clear flag are the caller's. Implemented in SnowDeformation/Volume.cpp. */
 	void FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const;
 	/** @brief Runtime-only: which level the slice shows. */
@@ -2146,16 +2148,13 @@ public:
 		DirectX::XMINT4 VoxOrigin;
 		/** @brief x voxel size, y dim, z field threshold, w march step in voxels. */
 		float4 VoxParams;
-		/** @brief x fade start, y fade end - units from the camera; the dithered distance dissolve, inside the window's reach. */
+		/** @brief xy = the inner hand-over band (the finer level's outer band; below zero on level 0), zw = this level's outer band - Chebyshev units from the camera. Per pixel one level owns the band: this one where the noise is under its weight, the outer where it is not. */
 		float4 VoxFade;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
 	/** @brief Bricks per axis (kVoxelDim / 8) and the list's capacity. */
 	static constexpr uint kVoxelBricksPerAxis = kVoxelDim / 8;
 	static constexpr uint kVoxelBrickCapacity = kVoxelBricksPerAxis * kVoxelBricksPerAxis * kVoxelBricksPerAxis;
-	/** @brief The volume draw dissolves over this fraction of the window's half-extent. */
-	static constexpr float kVoxelFadeStartFrac = 0.70f;
-	static constexpr float kVoxelFadeEndFrac = 0.95f;
 	/** @brief Seed weight under a roof/fire: the 2D pipeline's dusting, as a fraction of full. */
 	static constexpr float kVoxelShelterDust = 0.1f;
 

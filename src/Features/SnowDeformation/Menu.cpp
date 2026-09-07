@@ -285,9 +285,9 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
-		ImGui::Checkbox(T(TKEY("volume_snow"), "Build Snow Volume"), &settings.VolumeSnow);
+		ImGui::Checkbox(T(TKEY("volume_snow"), "Volume Snow"), &settings.VolumeSnow);
 		if (auto _ttVol = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "VOLUME-SNOW-PLAN V0: rasterises the captured objects into a cube of 256 x 256 x 256 voxels, 8 units each, around the camera - about 30 m across, 32 MB, kept until the game closes. Remembered between frames and fading where nothing redraws, like the height maps.\n\nNOTHING READS IT YET and no snow changes. This is the measurement that decides whether a 3D snow field - one whose shape is not inherited from the object's mesh, so it can overhang, stack and sit under a roof - is worth building. Its cost is the VoxelVolume pass."));
+			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "VOLUME-SNOW-PLAN: rasterises the captured objects into nested cubes of 256 x 256 x 256 voxels around the camera (Volume Levels), grows a snow field on every surface that faces up, and draws that field as snow - marched per pixel, shaded with the object shell's own material, so it matches the 3D shell and the coat beneath it, which keep drawing under it. Snow whose shape is not inherited from the object's mesh: it can overhang an edge, bridge two rocks, cap a post. Remembered between frames and fading where nothing redraws, like the height maps. Cost is the VoxelVolume, VoxelField and VolumeSnow passes, once per level."));
 		if (settings.VolumeSnow) {
 			// Says so when the pass is not running: a slice that never
 			// updates is indistinguishable from a broken volume otherwise.
@@ -317,18 +317,15 @@ void SnowDeformation::DrawSettings()
 				const float farAcross = nearAcross * float(1 << (levels - 1));
 				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, levels * 48);
 			}
-			ImGui::SliderFloat(T(TKEY("volume_snow_spread"), "Volume Snow Spread"), &settings.VolumeSnowSpread, 0.1f, 3.0f, "%.2f");
-			if (auto _ttVoxSpread = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_spread_tooltip"), "How far snow reaches sideways from the surface it grew on, as a fraction of its depth: the lip past an edge, and how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps."));
+			ImGui::SliderFloat(T(TKEY("volume_snow_overhang"), "Volume Snow Overhang"), &settings.VolumeSnowOverhang, 0.0f, 16.0f, "%.0f u");
+			if (auto _ttVoxOverhang = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_snow_overhang_tooltip"), "How far past an edge the snow may jut sideways, in units, whatever its depth - past this it only grows up. Also how readily the snow of two nearby surfaces melds into one. Solid always stops it - snow never spreads through a wall or up a step riser - so this is the reach across open air only. Lower keeps steps and rails distinct; higher bridges gaps and caps posts wider."));
 			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the captured shape itself (which way the empty space lies around each surface voxel), so it knows a wall from a floor without any mesh data."));
+				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the snow layer itself - how much its height changes from one voxel to the next - so a flat top's rim counts as flat and keeps its snow, and only a surface that actually climbs, like a leaning wall, counts as steep."));
 			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Volume Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
-			ImGui::Checkbox(T(TKEY("volume_snow_draw"), "Draw Volume Snow"), &settings.VolumeSnowDraw);
-			if (auto _ttVoxDraw = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_draw_tooltip"), "V1b: draws the snow surface in the world - marched per pixel inside boxes around it, shaded with the object shell's own material, so it matches the 3D shell and the coat beneath it. Dissolves toward the edge of the 30 m cube. The 3D shell and the coat keep drawing; this sits above them. Cost is the VolumeSnow pass."));
 			if (voxelOccupancyValid) {
 				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(kVoxelDim) * kVoxelDim * kVoxelDim);
 				ImGui::Text("Occupied voxels, last frame: %u (%.2f%% of the cube)", voxelOccupancy, occupiedPct);

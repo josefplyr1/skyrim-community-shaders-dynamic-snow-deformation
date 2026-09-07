@@ -2113,7 +2113,7 @@ cbuffer VoxelDrawCB : register(b2)
 {
 	int4 VoxOrigin;    // xyz = window origin in voxels
 	float4 VoxParams;  // x voxel size, y dim, z field threshold, w march step (voxels)
-	float4 VoxFade;    // x fade start, y fade end (units from the camera)
+	float4 VoxFade;    // xy inner hand-over band, zw outer band (Chebyshev units from the camera)
 }
 StructuredBuffer<uint> VoxelBricks : register(t41);
 Texture3D<float> VoxelFieldTex : register(t42);
@@ -3451,12 +3451,19 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 			a = m;
 	}
 	float tHit = 0.5 * (a + b);
-	// Distance dissolve, dithered as the skins' is.
-	float fade = 1.0 - smoothstep(VoxFade.x, VoxFade.y, tHit);
-	[branch] if (fade <= noise)
+	float3 P = rayDir * tHit;
+	// Clipmap hand-over, dithered: over a level's outer band this level
+	// keeps the pixels whose noise is under its weight, and the level
+	// outside keeps the rest of the SAME noise - one owner per pixel, so
+	// no z-fight, and TAA reads the dither as a blend between the two
+	// shapes. The bands are cubes (Chebyshev), as the rings are. The
+	// finest level has no inner band; the outermost dithers to nothing.
+	float cheb = max(abs(P.x), max(abs(P.y), abs(P.z)));
+	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, cheb);
+	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, cheb);
+	[branch] if (noise >= wOut || noise < wIn)
 		discard;
 
-	float3 P = rayDir * tHit;
 	// The field grows into the snow, so the surface normal is minus its
 	// gradient - of the CUBIC reconstruction, so the lattice does not shade.
 	const float h = 0.5 * voxel;
