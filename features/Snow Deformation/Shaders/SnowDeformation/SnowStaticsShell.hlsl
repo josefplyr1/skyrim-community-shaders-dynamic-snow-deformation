@@ -3583,8 +3583,18 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 		float4 vg = VoxelFieldCubicGrad(rayDir * tHit);
 		g = vg.xyz / voxel;
 		float slope = dot(g, rayDir);
+		// Only where the cubic agrees with the trilinear hit. On a far ring
+		// the snow is a third of a voxel thick, and the B-spline smooths a
+		// layer that thin below the threshold; the Newton step then pushed
+		// the hit into the object and the depth test ate it - the lattice
+		// of holes on distant roofs (Josef, 2026-09-07). A large correction
+		// means the cubic has no surface here; the trilinear one stands.
 		[flatten] if (slope > 1e-4)
-			tHit -= clamp((vg.w - threshold) / slope, -0.5 * voxel, 0.5 * voxel);
+		{
+			float dt = (vg.w - threshold) / slope;
+			[flatten] if (abs(dt) <= 0.35 * voxel)
+				tHit -= dt;
+		}
 	}
 	float3 P = rayDir * tHit;
 	// Clipmap hand-over, dithered: over a level's outer band this level

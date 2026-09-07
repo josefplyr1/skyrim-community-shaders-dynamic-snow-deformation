@@ -718,7 +718,9 @@ float EdgeNoise(float2 q)
 		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
 		float n = EdgeNoise(worldXY / max(EdgeParams.y, 1.0));
 		float dU = dist * VoxelSize - n * EdgeParams.x;
-		float cut = saturate((EdgeParams.w + VoxelSize - dU) / VoxelSize);
+		// A snow column (dist 0) is never cut: with an amplitude past the
+		// Overhang the noise reached inside the edge (Josef, 2026-09-07).
+		float cut = dist > 0.5 ? saturate((EdgeParams.w + VoxelSize - dU) / VoxelSize) : 1.0;
 		float wobble = 1.0 + 0.35 * n * saturate(dist);
 		VolumeOut[p] = avg * wobble * cut;
 	}

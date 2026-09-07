@@ -355,7 +355,7 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// voxel the kernel radius rounds to zero and the coarse ring keeps its
 	// crisp voxel edges rather than eroding a whole voxel at every one.
 	a_cb.DepthVox = std::max(settings.VolumeSnowDepth, 0.0f) / voxelSize;
-	a_cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
+	a_cb.FieldThreshold = VoxelThresholdForLevel(a_level);
 	// The Rounding in this level's voxels. The smoothing kernel takes it
 	// floored at half a voxel, so a far ring's columns meld across their
 	// steps. The field's exponential rate is ln 2 over it floored at TWO
@@ -399,6 +399,18 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
 {
 	return settings.VolumeLazyRings ? (1u << a_level) : 1u;
+}
+
+float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
+{
+	// Where air votes, the lip's survival is the ratio k >= Coverage / gain
+	// of the field's saturation, so the gain stays 1; where it does not,
+	// nothing dilutes and the gain only buys R8 precision for a thin layer.
+	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
+	const float roundVox = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / VoxelSizeForLevel(a_level);
+	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
+	const float gain = std::min(1.0f + 7.0f * (1.0f - airWeight), 0.5f / coverage);
+	return coverage * gain;
 }
 
 DirectX::XMFLOAT3 SnowDeformation::VoxelLevelCentre(uint a_level) const
@@ -887,7 +899,7 @@ void SnowDeformation::DrawVoxelSnow()
 		const float voxelSize = VoxelSizeForLevel(L);
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
-		d.VoxParams = { voxelSize, float(lv.dim), std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
+		d.VoxParams = { voxelSize, float(lv.dim), VoxelThresholdForLevel(L), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;

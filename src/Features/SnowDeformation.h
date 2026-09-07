@@ -606,11 +606,11 @@ public:
 		/** @brief "Volume Snow Coverage": the field's value at the snow top and its crossing, 0.02..0.5. Lower lets a lip survive more dilution (longer overhangs, thin things kept); it does not change the depth. Josef's tuned default. */
 		float VolumeSnowCoverage = 0.05f;
 		/** @brief "Volume Edge Noise", world units: how far the snow's edge wanders about the overhang cap, from a world-anchored noise, so a straight flat edge is not traced straight. */
-		float VolumeEdgeNoise = 2.0f;
+		float VolumeEdgeNoise = 0.0f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
 		float VolumeSnowOverhang = 3.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
-		float VolumeSnowRounding = 2.0f;
+		float VolumeSnowRounding = 3.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
 		int VolumeLevels = 5;
 		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
@@ -632,7 +632,7 @@ public:
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
 		float VolumeVoxelSize = 2.0f;
 		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the object's own normal, packed into the voxel at capture. Josef's tuned default. */
-		float VolumeSnowMaxSlopeDeg = 65.0f;
+		float VolumeSnowMaxSlopeDeg = 69.0f;
 		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default: off. */
 		float VolumeSkyExposurePct = 0.0f;
 	};
@@ -2149,6 +2149,8 @@ public:
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
 	/** @brief Frames between a level's rebuilds: 2^L with Settings::VolumeLazyRings, else 1. */
 	uint32_t VoxelLevelPeriod(uint a_level) const;
+	/** @brief The field's value at the snow top on this level: Coverage times a gain (up to 8) where air neighbours do not vote, so a far ring's third-of-a-voxel layer is not three R8 steps; capped so the threshold stays under 0.5. */
+	float VoxelThresholdForLevel(uint a_level) const;
 	/** @brief Frames rendered with the volume on; the memory nibble ticks down every memorySeconds*60/15 of them. */
 	uint32_t voxelFrame = 0;
 	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge plus the origin's brick snap (up to 4 voxels). Chebyshev, so the rings are cube shells and tile without gaps. The far grids have fewer voxels of slack, so a smaller fraction. */
@@ -2162,8 +2164,8 @@ public:
 	static constexpr uint kVoxelListArgsFlags = 48;
 	static constexpr uint kVoxelListHeaderBytes = 64;
 	static constexpr uint kVoxelListBytes = 64 + 3 * 4096;
-	/** @brief Every this-many rebuilds of a level are whole: the seed weights read the shelter/sky maps, which change without the occupancy changing. */
-	static constexpr uint32_t kVoxelFullRefreshRebuilds = 120;
+	/** @brief Every this-many rebuilds of a level are whole: the seed weights read the shelter/sky maps, which change without the occupancy changing. Rare on purpose: a whole rebuild also re-reads every voxel's captured height and facing, and overlapping triangles write those in GPU-arbitrary order, so each re-capture can differ by a hair - the incremental path never looks, the whole one does, and the snow shifts (Josef, 2026-09-07). The real fix is a deterministic capture (ordered writes or atomics); until then, 900 = 15 s on the finest ring. */
+	static constexpr uint32_t kVoxelFullRefreshRebuilds = 900;
 	ID3D11ComputeShader* voxelDiffCS = nullptr;
 	ID3D11ComputeShader* voxelDirtyColsCS = nullptr;
 	ID3D11ComputeShader* voxelBrickFlagsCS = nullptr;
