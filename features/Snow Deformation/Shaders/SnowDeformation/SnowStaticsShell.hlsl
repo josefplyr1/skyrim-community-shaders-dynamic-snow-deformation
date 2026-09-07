@@ -165,8 +165,8 @@ cbuffer ShellCB : register(b0)
 	// x/y landscape border dials (unused here); zw = sun cascade atlas
 	// slices for the crisp shadow path.
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
-	// re-march enable, zw = its DR scale (landscape shell only).
+	// x spare (compaction matte retired); y = shell-surface SSS re-march
+	// enable, zw = its DR scale (landscape shell only).
 	float4 CompactLook;
 	// Stage 3 P5 rim lip / teeth; consumed via CarveProfile in the march.
 	float4 RimStyle;
@@ -2794,11 +2794,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float snowHeightMip = SnowHeightMip(snowUV);
 	float snowHeightMipSide = SnowHeightMip(snowUVSideUnfolded);
 
-	// Object trench detail: shading-only berm ridge along trails; also the
-	// compaction weight's berm term. Geometry berm waits for the skin
-	// rework.
+	// Object trench detail: shading-only berm ridge along trails. Geometry
+	// berm waits for the skin rework.
 	float bermC = 0.0;
-	[branch] if (ObjBermHeightAmp > 0.005 || CompactLook.x > 0.001)
+	[branch] if (ObjBermHeightAmp > 0.005)
 		bermC = BermField(trenchGridLocal);
 #ifdef PATCH
 	// The patch's berm is real geometry (BuildPatchVertex), shaded by the
@@ -2962,11 +2961,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
-	// Compaction weight (Stage 1), shared constant with the terrain shell;
-	// feeds the glint suppression alone (the darken/roughen halves were
-	// retired - IBL + DALC already darken trenches).
-	float churnMat = ChurnWeight(pixelDeform, bermC);
-
 	// Spell marks on the albedo; the landscape recipes verbatim.
 	{
 		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
@@ -3294,13 +3288,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
-	// Compaction thins the glint field toward the smooth-GGX fallback
-	// (same recipe as SnowShell.hlsl; density under the 1.1 gate = no
-	// glints at all).
-	float4 glintParamsC = SnowGlintParams;
-	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

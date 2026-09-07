@@ -179,7 +179,7 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set).
 	float4 BorderStyle;
-	// x = compaction glint suppression (Stage 1); y = shell-surface SSS
+	// x spare (compaction matte retired); y = shell-surface SSS
 	// re-march, packed: integer part 0 off / 1 on / 2 on + thickness
 	// streak fix, fraction * 1000 = caster height cap in units; zw =
 	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
@@ -2428,18 +2428,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
-	// Compaction weight (Stage 1): the churn field, so the matte lands
-	// exactly on floors, walls and berms and never draws its own boundary.
-	// The darken/roughen halves were retired - IBL + DALC already darken
-	// trenches - so this feeds the glint suppression alone.
-	// Berm half gated by depth like the berm itself: no ridge, no matte ring.
-	float churnMat = ChurnWeight(pixelCarve, bermCenter * BermDepthGate(pixelDepth));
 	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
 	// has no wall to light, so it reads by material - pressed wet, darker and
 	// smoother. Gone by ~6 units of cover, where relief takes over.
-	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * saturate(CompactLook.x);
+	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth));
 	[branch] if (wetPrint > 0.001)
-		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.60, 0.62, 0.66), wetPrint);
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80), wetPrint);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -2487,7 +2481,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
 	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
-	snowRoughness = lerp(snowRoughness, snowRoughness * 0.6, wetPrint);
+	snowRoughness = lerp(snowRoughness, snowRoughness * 0.76, wetPrint);
 
 	// The crystal has to be the part that shines. A normal map alone tilts
 	// facets away from the light and puts the highlight in the gaps between
@@ -2748,14 +2742,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// few metres. Fold on a STATIC 4096-unit block (an exact tile multiple).
 	const float2 glintUV = fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
-	// Compaction thins the glint field toward the smooth-GGX fallback: at
-	// MinGlintDensity (1.0) the density sits under SnowBuildMaterial's 1.1
-	// gate and the sparkle is gone entirely. Log-space lerp, so partial
-	// churn reads as sparser glitter rather than dimmer.
-	float4 glintParamsC = SnowGlintParams;
-	glintParamsC.x = lerp(glintParamsC.x, PBR::Constants::MinGlintDensity, saturate(CompactLook.x * churnMat));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		glintParamsC, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

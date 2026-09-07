@@ -1078,8 +1078,8 @@ void SnowDeformation::DrawShell()
 	// (cap clamped below 1000 so the integer part stays the mode).
 	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
 	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
-	cbData.CompactLook = { std::clamp(settings.CompactMatte, 0.0f, 1.0f),
-		remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
+	// x is a layout keeper (compaction matte retired).
+	cbData.CompactLook = { 0.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
