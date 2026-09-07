@@ -336,6 +336,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_forward_bias"), "Volume Forward Bias"), &settings.VolumeForwardBias, 0.0f, 0.45f, "%.2f");
 			if (auto _ttVoxFwd = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_forward_bias_tooltip"), "How far ahead of you each ring's window sits, as a fraction of its width. 0 centres it on you; higher puts more of it in front, where you look, and less behind. At 0.35 the nearest ring reaches about 9 m ahead and 1 m behind. Turning around refreshes the near ring the same frame; the far rings take a few."));
+			ImGui::SliderFloat(T(TKEY("volume_vertical_bias"), "Volume Vertical Bias"), &settings.VolumeVerticalBias, -0.3f, 0.3f, "%.2f");
+			if (auto _ttVoxVert = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_vertical_bias_tooltip"), "How far below the eye each ring's window sits, as a fraction of its height. The third-person camera climbs when you look down, and a window centred on it then loses the ground beside you to the next ring out - the ring colours changing with pitch. Positive puts more of the nearest ring below you, where the fences and steps are, and less above, where the eaves are."));
+			ImGui::SliderFloat(T(TKEY("volume_max_distance"), "Volume Max Distance"), &settings.VolumeMaxDistance, 500.0f, 8000.0f, "%.0f u");
+			if (auto _ttVoxMaxDist = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_max_distance_tooltip"), "Past this the volume snow dithers out and the object shell carries the object alone. The outermost rings sample a rock at 32 units a column, and there is a range at which the shell's own smooth cover simply looks better than that. 8000 = never."));
 			ImGui::Checkbox(T(TKEY("volume_conservative_capture"), "Conservative Capture"), &settings.VolumeConservativeCapture);
 			if (auto _ttVoxCons = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_conservative_capture_tooltip"), "When an object is drawn into a ring's grid, each triangle is widened by half a voxel so it marks every voxel it touches - not only those whose centre it happens to cover. On the far rings a rock's triangles are smaller than a voxel and were hit-or-miss, which is the faceted, gappy far snow. Off for comparing."));

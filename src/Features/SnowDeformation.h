@@ -625,6 +625,10 @@ public:
 		bool VolumeConservativeCapture = false;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.35f;
+		/** @brief "Volume Vertical Bias": how far BELOW the eye each window's centre sits, as a fraction of its extent. The third-person camera rises when it looks down, and a cube centred on it then puts the ground beside the player outside the nearest ring - which is why the ring colours changed with pitch (Josef, 2026-09-07). */
+		float VolumeVerticalBias = 0.15f;
+		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object shell carries the object alone. The outermost rings sample a rock at 32 u a column; there is a range at which the shell simply looks better. */
+		float VolumeMaxDistance = 8000.0f;
 		/** @brief "Staggered Capture": a record already in a level's volume is re-rasterised only every 8th rebuild on the finest ring (4th, 2nd on the next two), the memory nibble keeping it alive between; a level starting from nothing captures everything. New records wait at most that long. Off captures every record every rebuild, for comparing. */
 		bool VolumeStaggeredCapture = true;
 		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
@@ -2228,7 +2232,7 @@ public:
 		float4 VoxCentre;
 		/** @brief xyz = the next-finer window's centre relative to the camera. */
 		float4 VoxInnerCentre;
-		/** @brief x = this level's index, y = 1 to tint the snow by level (showVolumeRings). */
+		/** @brief x = this level's index, y = 1 to tint the snow by level (showVolumeRings), z = Settings::VolumeMaxDistance, w = its fade width. */
 		float4 VoxDebug;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);

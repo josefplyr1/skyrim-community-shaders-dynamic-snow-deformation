@@ -250,7 +250,7 @@ void main(GS_OUTPUT input)
 		// slope is that spread voxel for about half the columns, and reading
 		// its surface a voxel too high was the sawtooth of raised columns
 		// along every far roof (Josef's "triangles", 2026-09-07).
-		HeightOut[phys] = saturate((vox.z - (float)p.z + 1.0) * 0.5);
+		HeightOut[phys] = saturate((vox.z - (float)p.z + 4.0) * 0.125);
 	}
 }
 
@@ -609,6 +609,9 @@ float OccNz(float v)
 	int2 lxy = ((int2)p - OriginVox.xy) & mask;
 	float carry = 0.0;
 	float top = -1.0e4;
+	bool prevSolid = false;
+	float prevF = 0.0;
+	uint3 prevPh = uint3(0, 0, 0);
 	// THE FIELD IS EXPONENTIAL IN HEIGHT: Coverage * exp(rate * (top - z)),
 	// so it crosses Coverage AT the top on every ring (near-linear over the
 	// two centres that bracket the top while the rate stays under ~0.35 a
@@ -623,12 +626,24 @@ float OccNz(float v)
 	{
 		uint3 ph = Phys(int3(lxy, z));
 		float s = VolumeIn[ph];
-		[flatten] if (OccupancyIn[ph] > 0.0)
+		bool solid = OccupancyIn[ph] > 0.0;
+		float zc = (float)z + 0.5;
+		[flatten] if (solid)
 		{
 			carry = s;
-			top = max((float)z + (HeightIn[ph] * 2.0 - 1.0) + DepthVox * s, (float)z + 0.52);
+			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
+			// threshold beneath it, and the field is written from here up -
+			// so the top may not sit under this centre unless the voxel
+			// below is solid too and can carry it. It is, whenever this is a
+			// crack-closing voxel over the true surface: on the two outer
+			// rings that case fired the old floor on most columns, raising
+			// each by up to a voxel with the surface's phase, which was the
+			// sawtooth Depth 64 made vanish (Josef, 2026-09-07). A lone thin
+			// member keeps the floor: what is under it is air, and air must
+			// not learn its top. Residual: under a seventh of a voxel.
+			float raw = (float)z + (HeightIn[ph] * 8.0 - 4.0) + DepthVox * s;
+			top = max(raw, prevSolid ? (float)z - 0.48 : (float)z + 0.52);
 		}
-		float zc = (float)z + 0.5;
 		float f = 0.0;
 		[flatten] if (carry > 0.01)
 		{
@@ -640,10 +655,24 @@ float OccNz(float v)
 			[flatten] if (zc < top + 4.0)
 				f = max(f, 1.0 / 255.0);
 		}
-		VolumeOut[ph] = f;
-		if (f >= 2.0 / 255.0)
-			InterlockedOr(gZBrick[ph.z >> 3], 1u);
+		// The voxel below a seed, when it is the object's inside, takes the
+		// seed's top as well (written one step late): the sample beneath a
+		// crossing that lies under the seed's own centre.
+		[flatten] if (z > 0 && solid && prevSolid && carry > 0.01)
+			prevF = max(prevF, saturate(FieldThreshold * exp(rate * (top - (zc - 1.0)))));
+		[branch] if (z > 0)
+		{
+			VolumeOut[prevPh] = prevF;
+			if (prevF >= 2.0 / 255.0)
+				InterlockedOr(gZBrick[prevPh.z >> 3], 1u);
+		}
+		prevF = f;
+		prevPh = ph;
+		prevSolid = solid;
 	}
+	VolumeOut[prevPh] = prevF;
+	if (prevF >= 2.0 / 255.0)
+		InterlockedOr(gZBrick[prevPh.z >> 3], 1u);
 	GroupMemoryBarrierWithGroupSync();
 	uint bricks = (uint)Dim >> 3;
 	if (gi < bricks)

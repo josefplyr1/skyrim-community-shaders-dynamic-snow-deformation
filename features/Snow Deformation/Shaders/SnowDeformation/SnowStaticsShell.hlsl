@@ -2116,7 +2116,7 @@ cbuffer VoxelDrawCB : register(b2)
 	float4 VoxFade;         // xy inner hand-over band, zw outer band (Chebyshev units from the window centres)
 	float4 VoxCentre;       // xyz = this window's centre, relative to the camera
 	float4 VoxInnerCentre;  // xyz = the next-finer window's centre, relative to the camera
-	float4 VoxDebug;        // x = this level's index, y > 0.5 = tint the snow by level
+	float4 VoxDebug;        // x = this level's index, y > 0.5 = tint the snow by level, z = max draw distance, w = its fade width
 }
 StructuredBuffer<uint> VoxelBricks : register(t41);
 Texture3D<float> VoxelFieldTex : register(t42);
@@ -3608,6 +3608,9 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	float3 rOut = abs(P - VoxCentre.xyz);
 	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, max(rIn.x, max(rIn.y, rIn.z)));
 	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, max(rOut.x, max(rOut.y, rOut.z)));
+	// The user's own horizon, the same dither: past it the object shell
+	// stands alone, which at that range it does as well.
+	wOut = min(wOut, 1.0 - smoothstep(VoxDebug.z, VoxDebug.z + VoxDebug.w, tHit));
 	[branch] if (noise >= wOut || noise < wIn)
 		discard;
 

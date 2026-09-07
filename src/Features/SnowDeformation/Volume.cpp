@@ -488,7 +488,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		const DirectX::XMINT3 origin{
 			(int)std::floor((eye.x + fwdX * ahead - half + snapBias) / brickUnits) * 8,
 			(int)std::floor((eye.y + fwdY * ahead - half + snapBias) / brickUnits) * 8,
-			(int)std::floor((eye.z - half + snapBias) / brickUnits) * 8
+			(int)std::floor((eye.z - std::clamp(settings.VolumeVerticalBias, -0.3f, 0.3f) * 2.0f * half - half + snapBias) / brickUnits) * 8
 		};
 		const DirectX::XMINT3 delta{ origin.x - lv.origin.x, origin.y - lv.origin.y, origin.z - lv.origin.z };
 		const bool clearAll = !lv.valid;
@@ -918,7 +918,8 @@ void SnowDeformation::DrawVoxelSnow()
 		}
 		VoxelReachBand(L, outStart, outEnd);
 		d.VoxFade = { inStart, inEnd, outStart, outEnd };
-		d.VoxDebug = { float(L), showVolumeRings ? 1.0f : 0.0f, 0.0f, 0.0f };
+		const float maxDist = std::clamp(settings.VolumeMaxDistance, 500.0f, 8000.0f);
+		d.VoxDebug = { float(L), showVolumeRings ? 1.0f : 0.0f, maxDist, maxDist * 0.25f };
 		voxelDrawCB->Update(d);
 		context->VSSetConstantBuffers(2, 1, &cb2);
 		context->PSSetConstantBuffers(2, 1, &cb2);

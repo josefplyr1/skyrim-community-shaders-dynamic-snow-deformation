@@ -169,6 +169,8 @@
 	X(VolumeStaggeredCapture) \
 	X(VolumeConservativeCapture) \
 	X(VolumeForwardBias) \
+	X(VolumeVerticalBias) \
+	X(VolumeMaxDistance) \
 	X(VolumeSparseBricks) \
 	X(VolumeMarchStep) \
 	X(VolumeDetailDistance) \
