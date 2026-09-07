@@ -17,7 +17,7 @@ bool SnowDeformation::EnsureVoxelResources()
 	bool levelsReady = true;
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
-		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.support && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.support && lv.height && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
 	if (levelsReady && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
 		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
@@ -74,6 +74,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = nullptr;
 			delete lv.support;
 			lv.support = nullptr;
+			delete lv.height;
+			lv.height = nullptr;
 			delete lv.bricks;
 			lv.bricks = nullptr;
 			delete lv.drawArgs;
@@ -93,6 +95,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
 		if (!lv.support)
 			lv.support = makeVolume(std::format("SnowDeformation::VoxelSupport{}", i), dim);
+		if (!lv.height)
+			lv.height = makeVolume(std::format("SnowDeformation::VoxelHeight{}", i), dim);
 		if (!lv.bricks) {
 			const uint bricksPerAxis = dim / 8;
 			const uint capacity = bricksPerAxis * bricksPerAxis * bricksPerAxis;
@@ -346,16 +350,17 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.HeightWindowCenter = heightWindowCenter;
 	a_cb.HeightHalfExtent = seedMaps ? kHeightMapHalfExtent : 0.0f;
 	a_cb.ShelterDust = kVoxelShelterDust;
-	// sigma such that the isosurface lands at the slider depth AT THIS
-	// COVERAGE: exp(-h^2 / 2 s^2) = c -> h = s sqrt(-2 ln c). (Solved for
-	// 0.5 only, Coverage 0.10 made Depth 10 read 18 u, and the slider cap
-	// with it.) Floored per level, so a coarse level's snow clears its own
-	// seed voxel.
-	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
-	const float isoK = std::sqrt(-2.0f * std::log(coverage));
-	a_cb.SeedSigma = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / (voxelSize * isoK), kVoxelMinSigmaVox);
-	a_cb.FieldThreshold = coverage;
-	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, kVoxelMinSigmaVox);
+	// The ramp field: the depth in this level's voxels, unfloored, and a
+	// fixed crossing at 0.5. Rounding likewise unfloored - under about 0.4
+	// voxel the kernel radius rounds to zero and the coarse ring keeps its
+	// crisp voxel edges rather than eroding a whole voxel at every one.
+	a_cb.DepthVox = std::max(settings.VolumeSnowDepth, 0.0f) / voxelSize;
+	a_cb.FieldThreshold = 0.5f;
+	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, 0.01f);
+	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f) / voxelSize;
+	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
+	a_cb.EdgeParams[2] = 0.0f;
+	a_cb.EdgeParams[3] = 0.0f;
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
@@ -526,8 +531,9 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f };
 		context->RSSetViewports(1, &viewport);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		ID3D11UnorderedAccessView* volumeUAV = lv.volume[lv.current]->uav.get();
-		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &volumeUAV, nullptr);
+		// u0 occupancy, u1 the surface height within the voxel.
+		ID3D11UnorderedAccessView* rasterUAVs[2] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get() };
+		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, rasterUAVs, nullptr);
 		context->VSSetShader(voxelVS, nullptr, 0);
 		context->GSSetShader(voxelGS, nullptr, 0);
 		context->PSSetShader(voxelPS, nullptr, 0);
@@ -582,7 +588,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		}
 
 		context->GSSetShader(nullptr, nullptr, 0);
-		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 1, &nullUAV, nullptr);
+		ID3D11UnorderedAccessView* nullRasterUAVs[2] = { nullptr, nullptr };
+		context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 2, nullRasterUAVs, nullptr);
 		ID3D11Buffer* restoreVSCB0 = savedVSCB0.get();
 		context->VSSetConstantBuffers(0, 1, &restoreVSCB0);
 		context->GSSetConstantBuffers(0, 1, &nullCB);
@@ -679,12 +686,16 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// Every field pass reads the occupancy at t4: Z stops at the first
 		// solid beneath, X and Y at the first solid beside.
 		context->CSSetShaderResources(4, 1, &occSRV);
-		// Z: scratch -> field, one thread per column, on D0.
+		// Z: scratch -> field, one thread per column, on D0; the raster's
+		// surface heights at t9.
+		ID3D11ShaderResourceView* heightSRV = lv.height->srv.get();
 		context->CSSetShaderResources(0, 1, &scratchSRV);
+		context->CSSetShaderResources(9, 1, &heightSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->CSSetShader(voxelBlurZCS, nullptr, 0);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetShaderResources(9, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;
@@ -835,7 +846,7 @@ void SnowDeformation::DrawVoxelSnow()
 		const float voxelSize = VoxelSizeForLevel(L);
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
-		d.VoxParams = { voxelSize, float(lv.dim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
+		d.VoxParams = { voxelSize, float(lv.dim), 0.5f, std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;

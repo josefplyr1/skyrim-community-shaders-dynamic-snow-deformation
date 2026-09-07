@@ -35,10 +35,10 @@ cbuffer VoxelCB : register(b0)
 	float HeightHalfExtent;
 	// Seed weight where the column is sheltered (a dusting, not bare)
 	float ShelterDust;
-	// Vertical sigma in voxels, from the depth AND the threshold (the C++
-	// side solves exp(-h^2 / 2 s^2) = threshold for s), so Depth is the depth
-	// at any Coverage
-	float SeedSigma;
+	// The snow depth in this level's voxels, unfloored: the field is a ramp
+	// about the true top, so a depth under a voxel still reads at height
+	float DepthVox;
+	// 0.5: the ramp's crossing
 	float FieldThreshold;
 	// Sideways sigma in voxels: the shoulder's width at an edge
 	float RoundSigma;
@@ -56,6 +56,8 @@ cbuffer VoxelCB : register(b0)
 	float OverhangVox;
 	// Air voxels a seed needs above it: a member's own inside is not sky
 	float HeadroomVox;
+	// x = the edge noise amplitude in voxels, y = its cell size in world units
+	float4 EdgeParams;
 }
 
 struct VS_OUTPUT
@@ -133,6 +135,11 @@ VS_OUTPUT main(VS_INPUT input)
 
 #elif defined(PSHADER)
 RWTexture3D<float> Volume : register(u0);
+// The surface's height within its voxel (0 = bottom), so the field can put
+// the snow top at the true surface plus the depth, not at the voxel centre
+// - on a 32-unit ring that is the difference between a 12-unit layer and a
+// 78-unit lump (Josef's far rings, 2026-09-07).
+RWTexture3D<float> HeightOut : register(u1);
 
 void main(GS_OUTPUT input)
 {
@@ -159,7 +166,9 @@ void main(GS_OUTPUT input)
 			p.z = k;
 		if (any(p < 0) || any(p >= Dim))
 			continue;
-		Volume[(uint3)((p + OriginVox.xyz) & mask)] = packed;
+		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
+		Volume[phys] = packed;
+		HeightOut[phys] = saturate(vox.z - (float)p.z);
 	}
 }
 
@@ -172,6 +181,8 @@ Texture2D<float> SkyOpen : register(t2);
 Texture3D<float> FieldIn : register(t3);
 // The sideways blur's solid blocker: this frame's occupancy.
 Texture3D<float> OccupancyIn : register(t4);
+// The raster's surface height within each voxel (see the capture PS).
+Texture3D<float> HeightIn : register(t9);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
 // Occupied-voxel count for the menu: one atomic per group, not per thread.
@@ -486,12 +497,20 @@ float OccNz(float v)
 // empty): Z, then X, then Y.
 //
 // Z IS A COLUMN SWEEP, bottom to top, one thread per column. A voxel takes
-// the seed of the first solid beneath it at exp(-d^2 / 2 sigma^2) for its
-// distance d - nothing past that solid, nothing from above, so no seed
-// reaches under the surface it sits on (no snow under a beam, a rail or an
-// eave, however thin the member). Unbounded reach: the gathered version's
-// 8-voxel radius was the ceiling Josef hit at 21 u, and why each ring's
-// ceiling differed (2026-09-07) - at a 256th of the loads.
+// the seed of the first solid beneath it - nothing past that solid, nothing
+// from above, so no seed reaches under the surface it sits on (no snow
+// under a beam, a rail or an eave, however thin the member).
+//
+// THE FIELD IS A RAMP ABOUT THE SNOW TOP, not a gaussian off the voxel
+// centre: 0.5 + (top - z) / 2 over a voxel either side, top = the surface's
+// height within its voxel (the raster's) plus the depth. Between the two
+// centres that bracket it the ramp is linear, so the draw's interpolation
+// puts the crossing AT the top, on any ring - the gaussian needed a sigma
+// of at least a voxel to be visible at all, and on the 32-unit ring that
+// made a 12-unit layer a 78-unit lump, and the hand-over between rings a
+// gap with a shadow (Josef, 2026-09-07). The seed weight scales the depth.
+// The top never sits under the voxel centre, so the crossing is always
+// between this centre and the next, never under the surface.
 // Indirect over the D0 column list, one group per entry.
 [numthreads(8, 8, 1)] void VoxelBlurZCS(uint3 gid
 										: SV_GroupID, uint3 tid
@@ -506,10 +525,8 @@ float OccNz(float v)
 	GroupMemoryBarrierWithGroupSync();
 	int mask = Dim - 1;
 	int2 lxy = ((int2)p - OriginVox.xy) & mask;
-	float sigma = max(SeedSigma, 0.25);
-	float invTwoS2 = 0.5 / (sigma * sigma);
 	float carry = 0.0;
-	float dist = 1.0e4;
+	float top = -1.0e4;
 	[loop] for (int z = 0; z < Dim; z++)
 	{
 		uint3 ph = Phys(int3(lxy, z));
@@ -517,11 +534,9 @@ float OccNz(float v)
 		[flatten] if (OccupancyIn[ph] > 0.0)
 		{
 			carry = s;
-			dist = 0.0;
+			top = max((float)z + HeightIn[ph] + DepthVox * s, (float)z + 0.52);
 		}
-		else
-			dist += 1.0;
-		float f = carry * exp(-dist * dist * invTwoS2);
+		float f = carry > 0.01 ? saturate(0.5 + (top - ((float)z + 0.5)) * 0.5) : 0.0;
 		VolumeOut[ph] = f;
 		if (f >= 1.0 / 255.0)
 			InterlockedOr(gZBrick[ph.z >> 3], 1u);
@@ -541,6 +556,23 @@ float OccNz(float v)
 // Support for the overhang cap, built with the sideways passes.
 RWTexture3D<float> SupportOut : register(u4);
 Texture3D<float> SupportIn : register(t5);
+// World-anchored value noise in [-1, 1] for the snow's edge.
+float EdgeHash(float2 c)
+{
+	return frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float EdgeNoise(float2 q)
+{
+	float2 i = floor(q);
+	float2 f = frac(q);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = EdgeHash(i);
+	float b = EdgeHash(i + float2(1.0, 0.0));
+	float c = EdgeHash(i + float2(0.0, 1.0));
+	float d = EdgeHash(i + float2(1.0, 1.0));
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 2.0 - 1.0;
+}
 
 // SIDEWAYS IS A NORMALISED AVERAGE THAT STOPS AT SOLID, with an overhang
 // cap on top. The average over RoundSigma is the shoulder: a slab's inside
@@ -633,7 +665,13 @@ Texture3D<float> SupportIn : register(t5);
 	float avg = sum / wsum;
 	[branch] if (alongY)
 	{
-		VolumeOut[p] = avg * saturate((float)reach - dist);
+		// The cap's reach wanders per column with a world-anchored noise, so
+		// the snow's edge is not the object's edge traced straight (Josef,
+		// 2026-09-07: too uniform on a flat, symmetrical step). Negative
+		// wobble on the last supported cell also lowers its crossing.
+		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
+		float wobble = EdgeNoise(worldXY / max(EdgeParams.y, 1.0)) * EdgeParams.x;
+		VolumeOut[p] = avg * saturate((float)reach + wobble - dist);
 	}
 	else
 	{

@@ -601,10 +601,10 @@ public:
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
-		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top - at ANY coverage, the sigma is solved from both (floored so the surface clears the seed voxel, kVoxelMinIsoVox). Josef's 10 at 0.10 under the old formula was 18 u; this default keeps his look. */
+		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field is a ramp about it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
 		float VolumeSnowDepth = 12.0f;
-		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95. No longer the depth: how much a narrow member or an edge keeps of the full depth (lower = more), and how readily gaps bridge. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.05f;
+		/** @brief "Volume Edge Noise", world units: how far the snow's edge wanders about the overhang cap, from a world-anchored noise, so a straight flat edge is not traced straight. */
+		float VolumeEdgeNoise = 2.0f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
 		float VolumeSnowOverhang = 3.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
@@ -2116,8 +2116,9 @@ public:
 		float HeightHalfExtent;
 		/** @brief Seed weight under shelter: a dusting, not bare. */
 		float ShelterDust;
-		/** @brief Vertical sigma in voxels, solved from Depth AND Coverage: exp(-h^2/2s^2) = threshold at h = depth. */
-		float SeedSigma;
+		/** @brief Settings::VolumeSnowDepth in this level's voxels, unfloored: the field is a ramp about the true snow top (surface height + depth), so a depth under a voxel still reads at height on a coarse ring. */
+		float DepthVox;
+		/** @brief 0.5: the ramp's crossing. */
 		float FieldThreshold;
 		/** @brief Sideways averaging sigma in voxels, from Settings::VolumeSnowRounding: the shoulder at an edge. */
 		float RoundSigma;
@@ -2133,6 +2134,8 @@ public:
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
+		/** @brief x = Settings::VolumeEdgeNoise in this level's voxels, y = kVoxelEdgeNoiseCell. */
+		float EdgeParams[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	/** @brief The windows sit ahead of the camera by this fraction of their extent (XY only): half a cube behind the eye is empty air, so the reach ahead is 1.4 half-extents instead of 0.9. */
@@ -2160,8 +2163,8 @@ public:
 	ID3D11ComputeShader* voxelBrickFlagsCS = nullptr;
 	/** @brief The last fraction of that reach is the hand-over band: the level dithers out over it while the level outside dithers in, complementary per pixel. The outermost dithers to nothing. */
 	static constexpr float kVoxelBandFrac = 0.2f;
-	/** @brief Floors on both sigmas, in voxels. Under a voxel the field is a spike per seed column: a coarse level's surface sat inside its seed voxel under the object's own face ("less coverage far away"), and the isosurface between four spiked columns dipped through the threshold at every cell centre - the lattice of holes Josef saw on distant snow. Snow deepens and rounds wider with distance instead. */
-	static constexpr float kVoxelMinSigmaVox = 1.0f;
+	/** @brief World units per cell of the edge noise (the cap's reach wanders per column so the snow's edge is not the object's edge traced straight). No sigma floors any more: the ramp field reads at height on any ring, and equal-height ramps interpolate flat between columns, so neither reason for them remains. */
+	static constexpr float kVoxelEdgeNoiseCell = 12.0f;
 	/** @brief Air a seed needs above it, world units: a roof's or a beam's underside shell has its member's own inside above it, one voxel of air, and seeded snow that grew out through the eave. */
 	static constexpr float kVoxelHeadroomUnits = 8.0f;
 	static constexpr uint kVoxelMaxLevels = 6;
@@ -2172,6 +2175,8 @@ public:
 		Texture3D* field = nullptr;
 		/** @brief The overhang cap's 1D distance between the X and Y passes. */
 		Texture3D* support = nullptr;
+		/** @brief The raster's surface height within each voxel (0 = bottom), read by the Z sweep to put the snow top at the true surface plus the depth. */
+		Texture3D* height = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
 		/** @brief Dirty bricks: a uint per physical brick, set by the scroll (reused slots) and the occupancy compare, cleared each rebuild. */

@@ -2711,6 +2711,9 @@ struct SkinShadeInput
 	// parallax marches, the berm relief, the horizon march - drop out. The
 	// skins pass 1; the volume draw fades it with distance.
 	float detail;
+	// 1 = parallax-occlusion relief. The volume passes 0: fresh snow's height
+	// variation is the field's own, and the glints stay regardless.
+	float pom;
 };
 struct SkinShadeResult
 {
@@ -2873,7 +2876,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// different 2D direction in each and the offsets are not interchangeable.
 	// Each plane therefore marches itself and shifts its OWN tap set; the
 	// existing sample blend then mixes them exactly as before.
-	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001 && input.detail > 0.001)
+	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001 && input.detail > 0.001 && input.pom > 0.5)
 	{
 		DisplacementParams pomParams = SnowDisplacementParams();
 		pomParams.HeightScale *= SnowParallax.z;
@@ -3623,6 +3626,9 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	// Full material inside the detail distance, the range-invisible parts
 	// gone by one and a half times it.
 	ssi.detail = 1.0 - smoothstep(VoxInnerCentre.w, VoxInnerCentre.w * 1.5, tHit);
+	// No parallax relief on fresh snow: its height variation is the field's
+	// own and the edge noise's (Josef, 2026-09-07); the glints stay.
+	ssi.pom = 0.0;
 	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
 
 	PS_OUTPUT psout;
@@ -4407,6 +4413,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.selfShadowReject = 0.0;
 #	endif
 	ssi.detail = 1.0;
+	ssi.pom = 1.0;
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
 	float3 viewNormal = ssr.viewNormal;

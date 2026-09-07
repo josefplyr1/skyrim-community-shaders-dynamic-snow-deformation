@@ -300,10 +300,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("voxel_memory_tooltip"), "How long a voxel stays after its object last drew, at 60 fps. Objects behind the camera are not in the capture list, so the volume keeps what it has seen and lets it fade. An object you have not looked at since switching this on is not in the volume yet."));
 			ImGui::SliderFloat(T(TKEY("volume_snow_depth"), "Volume Snow Depth"), &settings.VolumeSnowDepth, 8.0f, 64.0f, "%.0f u");
 			if (auto _ttVoxDepth = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "V1a, the snow field: how high the snow surface sits over a flat, open object top, at Coverage 0.5. Every object top seeds one soft blob; the blobs melt into each other, which is what gives a lip past an edge and a bridge between two close rocks."));
-			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
-			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
+				ImGui::Text("%s", T(TKEY("volume_snow_depth_tooltip"), "How high the snow surface sits over an object's top - the same on every ring, near or far, whatever that ring's voxel size. Narrow things and edges carry a little less through Edge Rounding."));
+			ImGui::SliderFloat(T(TKEY("volume_edge_noise"), "Volume Edge Noise"), &settings.VolumeEdgeNoise, 0.0f, 16.0f, "%.0f u");
+			if (auto _ttVoxEdgeNoise = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_edge_noise_tooltip"), "How far the snow's edge wanders in and out about the Overhang, from a fixed noise in the world, so a flat symmetrical step does not get its edge traced dead straight. Where it wanders in it also lowers the snow at the edge a little."));
 			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
@@ -319,7 +319,7 @@ void SnowDeformation::DrawSettings()
 				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
 				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 64 + (levels - fine) * 8);
+				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 80 + (levels - fine) * 10);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
