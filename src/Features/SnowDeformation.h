@@ -611,6 +611,8 @@ public:
 		float VolumeSnowRounding = 6.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
 		int VolumeLevels = 4;
+		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
+		int VolumeFineLevels = 2;
 		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
 		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
@@ -2072,6 +2074,11 @@ public:
 
 	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */
 	static constexpr uint kVoxelDim = 256;
+	/** @brief Grid size of the far rings (Settings::VolumeFineLevels and beyond): half the cubes a side at twice the voxel, so the extent is a full ring's and the work an eighth. */
+	static constexpr uint kVoxelFarDim = 128;
+	uint VoxelDimForLevel(uint a_level) const;
+	/** @brief The window's width in world units: kVoxelDim * base voxel * 2^L whatever its grid size. */
+	float VoxelExtentForLevel(uint a_level) const;
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
 	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
@@ -2143,6 +2150,8 @@ public:
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
 		uint current = 0;
+		/** @brief Cubes a side the textures were made with; a mismatch with VoxelDimForLevel remakes them. */
+		uint dim = 0;
 		bool valid = false;
 		/** @brief This frame rebuilt the level's occupancy, so its field and bricks are due too. */
 		bool updated = false;

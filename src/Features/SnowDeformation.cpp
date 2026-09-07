@@ -162,6 +162,7 @@
 	X(VolumeSnowOverhang) \
 	X(VolumeSnowRounding) \
 	X(VolumeLevels) \
+	X(VolumeFineLevels) \
 	X(VolumeLazyRings) \
 
 

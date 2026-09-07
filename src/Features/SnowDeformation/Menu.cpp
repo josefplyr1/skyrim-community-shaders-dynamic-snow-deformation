@@ -310,12 +310,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderInt(T(TKEY("volume_levels"), "Volume Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
 			if (auto _ttVoxLevels = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is 256 voxels a side at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. 64 MB per level, and each level runs its own capture and field passes."));
+			ImGui::SliderInt(T(TKEY("volume_fine_levels"), "Fine Levels"), &settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
+			if (auto _ttVoxFine = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_fine_levels_tooltip"), "How many levels, counting out from the camera, keep the full 256-cube grid. The rest use 128 cubes a side at twice the voxel: the same reach for an eighth of the work and memory, and one step less detail out where it is too far to see. Changing this rebuilds those levels."));
 			{
 				const float voxel = std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f);
 				const int levels = std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
+				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
 				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, levels * 64);
+				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 64 + (levels - fine) * 8);
 			}
 			ImGui::Checkbox(T(TKEY("volume_lazy_rings"), "Lazy Far Rings"), &settings.VolumeLazyRings);
 			if (auto _ttVoxLazy = Util::HoverTooltipWrapper())
