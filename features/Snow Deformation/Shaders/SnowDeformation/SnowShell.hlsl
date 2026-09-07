@@ -2434,6 +2434,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// trenches - so this feeds the glint suppression alone.
 	// Berm half gated by depth like the berm itself: no ridge, no matte ring.
 	float churnMat = ChurnWeight(pixelCarve, bermCenter * BermDepthGate(pixelDepth));
+	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
+	// has no wall to light, so it reads by material - pressed wet, darker and
+	// smoother. Gone by ~6 units of cover, where relief takes over.
+	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * saturate(CompactLook.x);
+	[branch] if (wetPrint > 0.001)
+		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.60, 0.62, 0.66), wetPrint);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
 	// conserving lobes. Light and ambient stay in the frame's units
 	// (DirLightColor is already pi-scaled by pipeline convention, so no
@@ -2480,6 +2486,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
+	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
+	snowRoughness = lerp(snowRoughness, snowRoughness * 0.6, wetPrint);
 
 	// The crystal has to be the part that shines. A normal map alone tilts
 	// facets away from the light and puts the highlight in the gaps between
