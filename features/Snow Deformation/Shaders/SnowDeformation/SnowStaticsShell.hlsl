@@ -2113,7 +2113,9 @@ cbuffer VoxelDrawCB : register(b2)
 {
 	int4 VoxOrigin;    // xyz = window origin in voxels
 	float4 VoxParams;  // x voxel size, y dim, z field threshold, w march step (voxels)
-	float4 VoxFade;    // xy inner hand-over band, zw outer band (Chebyshev units from the camera)
+	float4 VoxFade;         // xy inner hand-over band, zw outer band (Chebyshev units from the window centres)
+	float4 VoxCentre;       // xyz = this window's centre, relative to the camera
+	float4 VoxInnerCentre;  // xyz = the next-finer window's centre, relative to the camera
 }
 StructuredBuffer<uint> VoxelBricks : register(t41);
 Texture3D<float> VoxelFieldTex : register(t42);
@@ -3481,9 +3483,10 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	// no z-fight, and TAA reads the dither as a blend between the two
 	// shapes. The bands are cubes (Chebyshev), as the rings are. The
 	// finest level has no inner band; the outermost dithers to nothing.
-	float cheb = max(abs(P.x), max(abs(P.y), abs(P.z)));
-	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, cheb);
-	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, cheb);
+	float3 rIn = abs(P - VoxInnerCentre.xyz);
+	float3 rOut = abs(P - VoxCentre.xyz);
+	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, max(rIn.x, max(rIn.y, rIn.z)));
+	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, max(rOut.x, max(rOut.y, rOut.z)));
 	[branch] if (noise >= wOut || noise < wIn)
 		discard;
 

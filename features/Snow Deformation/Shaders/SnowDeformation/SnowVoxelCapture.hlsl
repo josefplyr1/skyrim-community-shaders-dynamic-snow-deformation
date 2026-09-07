@@ -42,11 +42,12 @@ cbuffer VoxelCB : register(b0)
 	float FieldThreshold;
 	// Sideways sigma in voxels: the shoulder's width at an edge
 	float RoundSigma;
-	// tan(max slope) of the seed layer itself; huge = no gate
-	float SlopeTanMax;
-	// xyz = the camera in voxel units (absolute), w = the bricks' reach in
-	// voxels, Chebyshev (the window is a cube, so are its rings)
-	float4 EyeVox;
+	// cos(max slope): the least up-ness a seed's own surface may have
+	float SlopeMinNz;
+	// xyz = this window's centre in voxel units (absolute), w = the bricks'
+	// reach from it in voxels, Chebyshev (the window is a cube, so are its
+	// rings). The centre sits AHEAD of the camera, not on it.
+	float4 CentreVox;
 	// Strength of the sky-openness weighting on the seed, 0-1.
 	float SkyStrength;
 	// Clipmap: where the next-finer level's hand-over band starts, in THIS
@@ -57,12 +58,16 @@ cbuffer VoxelCB : register(b0)
 	float OverhangVox;
 	// Air voxels a seed needs above it: a member's own inside is not sky
 	float HeadroomVox;
+	// The next-finer window's centre in THIS level's voxels (absolute): its
+	// hand-over cube is around it, not around this window's own centre
+	float4 InnerCentreVox;
 }
 
 struct VS_OUTPUT
 {
 	// Position in voxel units, relative to the window origin.
 	float3 Vox : TEXCOORD0;
+	float3 Normal : TEXCOORD1;
 };
 
 struct GS_OUTPUT
@@ -70,6 +75,10 @@ struct GS_OUTPUT
 	float4 Position : SV_POSITION;
 	float3 Vox : TEXCOORD0;
 	nointerpolation uint Axis : TEXCOORD1;
+	// The surface's up-ness, stored with the voxel: the seed gate reads
+	// it instead of reconstructing a facing from the shell's neighbours,
+	// which was noise on rough walls and blind to undersides.
+	nointerpolation float Nz : TEXCOORD2;
 };
 
 #if defined(VSHADER)
@@ -96,14 +105,22 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
 	VS_OUTPUT vsout;
 	vsout.Vox = worldAbs / VoxelSize - (float3)OriginVox.xyz;
+	float3 nMS = input.Normal.xyz * 2.0 - 1.0;
+	vsout.Normal = float3(dot(WorldRow0.xyz, nMS), dot(WorldRow1.xyz, nMS), dot(WorldRow2.xyz, nMS));
 	return vsout;
 }
 
 #elif defined(GSHADER)
 [maxvertexcount(3)] void main(triangle VS_OUTPUT tri[3], inout TriangleStream<GS_OUTPUT> stream)
 {
-	float3 n = abs(cross(tri[1].Vox - tri[0].Vox, tri[2].Vox - tri[0].Vox));
+	float3 gn = cross(tri[1].Vox - tri[0].Vox, tri[2].Vox - tri[0].Vox);
+	float3 n = abs(gn);
 	uint axis = (n.x > n.y && n.x > n.z) ? 0 : (n.y > n.z ? 1 : 2);
+	// The vertex normal's up-ness: it knows a top from an underside, which
+	// a winding-blind facing cannot. The geometric normal only for a mesh
+	// without one.
+	float3 vn = tri[0].Normal + tri[1].Normal + tri[2].Normal;
+	float nz = dot(vn, vn) > 1e-4 ? normalize(vn).z : (dot(gn, gn) > 1e-8 ? normalize(gn).z : 1.0);
 	[unroll] for (int i = 0; i < 3; i++)
 	{
 		float3 v = tri[i].Vox;
@@ -113,6 +130,7 @@ VS_OUTPUT main(VS_INPUT input)
 		o.Position = float4(proj * (2.0 / Dim) - 1.0, 0.5, 1.0);
 		o.Vox = v;
 		o.Axis = axis;
+		o.Nz = nz;
 		stream.Append(o);
 	}
 	stream.RestartStrip();
@@ -132,6 +150,10 @@ void main(GS_OUTPUT input)
 	int hi = min((int)floor(d + spread), lo + 3);
 	int3 base = (int3)floor(vox);
 	int mask = Dim - 1;
+	// Packed: high nibble = up-ness (-1..1 over 0..15), low nibble = life,
+	// 15 fresh. Any non-zero value is solid; the scroll counts life down.
+	uint nzq = (uint)round(saturate(input.Nz * 0.5 + 0.5) * 15.0);
+	float packed = (float)(nzq * 16u + 15u) / 255.0;
 	for (int k = lo; k <= hi; k++) {
 		int3 p = base;
 		if (input.Axis == 0)
@@ -142,7 +164,7 @@ void main(GS_OUTPUT input)
 			p.z = k;
 		if (any(p < 0) || any(p >= Dim))
 			continue;
-		Volume[(uint3)((p + OriginVox.xyz) & mask)] = 1.0;
+		Volume[(uint3)((p + OriginVox.xyz) & mask)] = packed;
 	}
 }
 
@@ -217,95 +239,19 @@ float2 ShelterAt(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// A seed voxel: occupied with air above.
-bool IsTop(int3 l)
+// The up-ness the raster stored with the voxel (see the capture PS).
+// Two rounds of reconstructing a facing from the shell's neighbours - the
+// empty-neighbour direction, then the seed layer's rise - were noise on a
+// rough wall and blind to an underside; the mesh knows both.
+float OccNz(float v)
 {
-	int3 a = l + int3(0, 0, 1);
-	bool occ = all(l >= 0) && all(l < Dim) && VolumeIn[Phys(l)] > 0.0;
-	bool above = all(a >= 0) && all(a < Dim) && VolumeIn[Phys(a)] > 0.0;
-	return occ && !above;
+	uint q = (uint)round(v * 255.0);
+	return (float)(q >> 4) / 15.0 * 2.0 - 1.0;
 }
 
-#define SLOPE_REACH 4
-
-// Height of the nearest seed in the column beside this one, within
-// +-SLOPE_REACH; SLOPE_REACH + 1 = none.
-int NearestTopDz(int3 logical, int2 o)
-{
-	int found = SLOPE_REACH + 1;
-	[loop] for (int k = 0; k <= SLOPE_REACH && found > SLOPE_REACH; k++)
-	{
-		if (IsTop(logical + int3(o, k)))
-			found = k;
-		else if (k > 0 && IsTop(logical + int3(o, -k)))
-			found = -k;
-	}
-	return found;
-}
-
-// One axis of the seed layer's slope. a = rise to the + side, b = rise from
-// the - side: a slope has both, the same sign; an edge, a ridge, or a lone
-// side is 0. So a top's rim reads FLAT and keeps its snow, and only a
-// surface that actually climbs - a leaning wall's stair of seeds - is steep.
-float SlopeAxis(int plusDz, int minusDz)
-{
-	bool both = abs(plusDz) <= SLOPE_REACH && abs(minusDz) <= SLOPE_REACH;
-	float a = (float)plusDz;
-	float b = -(float)minusDz;
-	return (both && a * b > 0.0) ? min(abs(a), abs(b)) : 0.0;
-}
-
-#define RUN_REACH 6
-
-// Solid voxels directly below a seed in its own column. For a SHELL this is
-// the face's rise per lateral voxel: a wall leaning 85 degrees puts its next
-// seed 11 voxels up the next column - past SLOPE_REACH, so the neighbour
-// test read it as a lone edge and kept it (the wall snow at 65, Josef,
-// 2026-09-07). A flat top's run is 1: its inside is hollow.
-int SolidRunBelow(int3 logical)
-{
-	int run = 0;
-	[loop] for (int k = 1; k <= RUN_REACH; k++)
-	{
-		int3 l = logical - int3(0, 0, k);
-		if (l.z < 0 || VolumeIn[Phys(l)] <= 0.0)
-			break;
-		run = k;
-	}
-	return run;
-}
-
-// tan of the seed layer's slope at a seed, from how its height changes per
-// lateral voxel. The old gate read the occupancy shell's own facing, which
-// tilts sideways on every rim voxel of a flat top - the snow shrank from
-// its edges as the slope came down (Josef, 2026-09-07). Per axis: seeds on
-// both sides -> their agreed rise; on one side -> an edge, flat; on neither
-// side while the OTHER axis has some -> a face running that way, whose rise
-// is the solid run below. Nothing on any side is a post's top: flat.
-float SeedSlopeTan(int3 logical)
-{
-	int px = NearestTopDz(logical, int2(1, 0));
-	int mx = NearestTopDz(logical, int2(-1, 0));
-	int py = NearestTopDz(logical, int2(0, 1));
-	int my = NearestTopDz(logical, int2(0, -1));
-	bool fpx = abs(px) <= SLOPE_REACH;
-	bool fmx = abs(mx) <= SLOPE_REACH;
-	bool fpy = abs(py) <= SLOPE_REACH;
-	bool fmy = abs(my) <= SLOPE_REACH;
-	bool anyX = fpx || fmx;
-	bool anyY = fpy || fmy;
-	float run = 0.0;
-	[branch] if (anyX != anyY)
-		run = (float)SolidRunBelow(logical);
-	float gx = (fpx && fmx) ? SlopeAxis(px, mx) : ((!anyX && anyY) ? run : 0.0);
-	float gy = (fpy && fmy) ? SlopeAxis(py, my) : ((!anyY && anyX) ? run : 0.0);
-	return length(float2(gx, gy));
-}
-
-// Snow seeds: occupied voxels with nothing directly above (tops, not walls
-// or undersides), gated by the seed layer's own slope and weighted by the
-// column's sky openness and shelter the way the 2D pipeline weights the
-// skin, doors suppressing.
+// Snow seeds: occupied voxels facing up enough, with open air above, and
+// weighted by the column's sky openness and shelter the way the 2D
+// pipeline weights the skin, doors suppressing.
 [numthreads(8, 8, 8)] void VoxelSeedCS(uint3 p
 									   : SV_DispatchThreadID) {
 	int mask = Dim - 1;
@@ -324,10 +270,8 @@ float SeedSlopeTan(int3 logical)
 	}
 	[branch] if (open)
 	{
-		// Graded, not a hard cut: the slope is voxel-quantised.
-		float facing = 1.0;
-		[branch] if (SlopeTanMax < 1.0e5)
-			facing = 1.0 - smoothstep(SlopeTanMax, SlopeTanMax + 0.5, SeedSlopeTan(logical));
+		// An underside is nz -1 and never seeds, at any setting.
+		float facing = smoothstep(SlopeMinNz - 0.05, SlopeMinNz + 0.05, OccNz(occ));
 		[branch] if (facing > 0.0)
 		{
 			float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
@@ -459,10 +403,11 @@ AppendStructuredBuffer<uint> BrickList : register(u3);
 	// so the finer level's edge and this level's hole are the same surface.
 	// (A radial reach against a cubic hole left the corners of every ring to
 	// nobody - the borders Josef saw, 2026-09-07.) Half a brick of slack.
-	float3 fromEye = abs(centre - EyeVox.xyz);
-	if (any(fromEye - 4.0 > EyeVox.w))
+	float3 fromCentre = abs(centre - CentreVox.xyz);
+	if (any(fromCentre - 4.0 > CentreVox.w))
 		return;
-	if (InnerHalfVox > 0.0 && all(fromEye + 4.0 < InnerHalfVox))
+	float3 fromInner = abs(centre - InnerCentreVox.xyz);
+	if (InnerHalfVox > 0.0 && all(fromInner + 4.0 < InnerHalfVox))
 		return;
 	bool anyIn = false;
 	bool allIn = true;
@@ -487,7 +432,7 @@ AppendStructuredBuffer<uint> BrickList : register(u3);
 float SliceRead(int3 logical)
 {
 	uint3 ph = Phys(logical);
-	float occ = VolumeIn[ph];
+	float occ = VolumeIn[ph] > 0.0 ? 1.0 : 0.0;
 	float f = FieldIn[ph];
 	float cut = f >= FieldThreshold ? 1.0 : 0.0;
 	return SliceSource == 0 ? occ : (SliceSource == 1 ? f : cut);
@@ -508,7 +453,15 @@ float SliceRead(int3 logical)
 	int3 old = logical + ScrollDelta.xyz;
 	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dim);
 	float v = inside ? VolumeIn[p] : 0.0;
-	v = max(v - Decay, 0.0);
+	// Memory is the low nibble: down one on tick frames (Decay = 1), gone
+	// at zero; the raster rewrites a re-seen voxel at 15 after this.
+	[flatten] if (v > 0.0 && Decay > 0.5)
+	{
+		uint q = (uint)round(v * 255.0);
+		uint life = q & 15u;
+		life = life > 0u ? life - 1u : 0u;
+		v = life == 0u ? 0.0 : (float)((q & 0xF0u) | life) / 255.0;
+	}
 	VolumeOut[p] = v;
 
 	if (v > 0.0)

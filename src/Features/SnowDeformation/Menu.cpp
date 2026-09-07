@@ -304,7 +304,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_snow_coverage"), "Volume Snow Coverage"), &settings.VolumeSnowCoverage, 0.05f, 0.95f, "%.2f");
 			if (auto _ttVoxCov = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_snow_coverage_tooltip"), "Where the snow surface is cut out of the field. Lower = fatter snow that also covers thin things (rails, posts); higher = thinner, tops only. The Snow surface view below shows exactly this cut."));
-			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 1.0f, 24.0f, "%.0f u");
+			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Volume Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
 			ImGui::SliderInt(T(TKEY("volume_levels"), "Volume Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
@@ -325,7 +325,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("volume_snow_rounding_tooltip"), "How wide the shoulder is where the snow falls off toward an edge: the snow's full depth holds this far inside an edge and rounds down over it. Separate from Overhang, which is how far past the edge it may reach. Wider also means narrow things - a rail, a post - carry less than a wide top does, as they do."));
 			ImGui::SliderFloat(T(TKEY("volume_max_slope"), "Volume Snow Max Slope"), &settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xc2\xb0");
 			if (auto _ttVoxSlope = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the snow layer itself - how much its height changes from one voxel to the next - so a flat top's rim counts as flat and keeps its snow, and only a surface that actually climbs, like a leaning wall, counts as steep."));
+				ImGui::Text("%s", T(TKEY("volume_max_slope_tooltip"), "Surfaces steeper than this grow no volume snow. Read from the object's own surface normal, captured into the volume with it - the same facing the 3D shell's Max Slope uses - so a wall is a wall whatever its stones do, and an underside never grows snow at any setting."));
 			ImGui::SliderFloat(T(TKEY("volume_sky_exposure"), "Volume Sky Exposure"), &settings.VolumeSkyExposurePct, 0.0f, 100.0f, "%.0f%%");
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));

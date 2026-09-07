@@ -247,7 +247,6 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.OriginVox = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 	a_cb.ScrollDelta = { 0, 0, 0, 0 };
 	a_cb.VoxelSize = voxelSize;
-	a_cb.Decay = 1.0f / std::max(voxelMemorySeconds * 60.0f, 1.0f);
 	a_cb.Dim = (int)kVoxelDim;
 	a_cb.SliceAxis = std::clamp(voxelSliceAxis, 0, 2);
 	a_cb.SliceXray = voxelSliceXray ? 1 : 0;
@@ -270,30 +269,45 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// seed voxel.
 	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
 	const float isoK = std::sqrt(-2.0f * std::log(coverage));
-	const float isoVox = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / voxelSize, kVoxelMinIsoVox);
-	a_cb.SeedSigma = isoVox / isoK;
+	a_cb.SeedSigma = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / (voxelSize * isoK), kVoxelMinSigmaVox);
 	a_cb.FieldThreshold = coverage;
-	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, 0.5f);
+	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, kVoxelMinSigmaVox);
 	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
-	const float slopeDeg = std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f);
-	a_cb.SlopeTanMax = slopeDeg >= 89.5f ? 1.0e6f : std::tan(DirectX::XMConvertToRadians(slopeDeg));
+	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
-	a_cb.EyeVox[0] = eye.x / voxelSize;
-	a_cb.EyeVox[1] = eye.y / voxelSize;
-	a_cb.EyeVox[2] = eye.z / voxelSize;
+	// Memory: the life nibble ticks down 15 times over voxelMemorySeconds.
+	const uint32_t tickEvery = std::max(1u, (uint32_t)std::lround(voxelMemorySeconds * 60.0f / 15.0f));
+	a_cb.Decay = (voxelFrame % tickEvery == 0) ? 1.0f : 0.0f;
+	const auto centre = VoxelLevelCentre(a_level);
+	a_cb.CentreVox[0] = centre.x / voxelSize;
+	a_cb.CentreVox[1] = centre.y / voxelSize;
+	a_cb.CentreVox[2] = centre.z / voxelSize;
 	// Bricks reach the end of this level's band; they also stop where the
-	// level inside takes over - the start of ITS band, in this level's
-	// voxels. Both Chebyshev, so the two surfaces coincide.
+	// level inside takes over - the start of ITS band around ITS centre, in
+	// this level's voxels. Both Chebyshev, so the two surfaces coincide.
 	float bandStart = 0.0f, bandEnd = 0.0f;
 	VoxelReachBand(a_level, bandStart, bandEnd);
-	a_cb.EyeVox[3] = bandEnd / voxelSize;
+	a_cb.CentreVox[3] = bandEnd / voxelSize;
 	a_cb.InnerHalfVox = 0.0f;
+	a_cb.InnerCentreVox[0] = a_cb.InnerCentreVox[1] = a_cb.InnerCentreVox[2] = a_cb.InnerCentreVox[3] = 0.0f;
 	if (a_level > 0) {
 		float innerStart = 0.0f, innerEnd = 0.0f;
 		VoxelReachBand(a_level - 1, innerStart, innerEnd);
 		a_cb.InnerHalfVox = innerStart / voxelSize;
+		const auto inner = VoxelLevelCentre(a_level - 1);
+		a_cb.InnerCentreVox[0] = inner.x / voxelSize;
+		a_cb.InnerCentreVox[1] = inner.y / voxelSize;
+		a_cb.InnerCentreVox[2] = inner.z / voxelSize;
 	}
+}
+
+DirectX::XMFLOAT3 SnowDeformation::VoxelLevelCentre(uint a_level) const
+{
+	const auto& o = voxelLevels[a_level].origin;
+	const float voxelSize = VoxelSizeForLevel(a_level);
+	const float halfVox = kVoxelDim * 0.5f;
+	return { (o.x + halfVox) * voxelSize, (o.y + halfVox) * voxelSize, (o.z + halfVox) * voxelSize };
 }
 
 void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity)
@@ -323,6 +337,19 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	ID3D11Buffer* nullCB = nullptr;
 	constexpr UINT groups = kVoxelDim / 8;
 	const bool counting = voxelCountUAV && voxelCountStaging[0] && voxelCountStaging[1];
+	voxelFrame++;
+	// The camera's heading (TerrainData's derivation): the windows sit ahead
+	// of the eye, since what is behind it is not in the capture list anyway.
+	float fwdX = 0.0f, fwdY = 0.0f;
+	if (auto* cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
+		const auto& r = cam->cameraRoot->world.rotate;
+		const float fx = r.entry[0][1], fy = r.entry[1][1];
+		const float len = std::sqrt(fx * fx + fy * fy);
+		if (len > 1e-3f) {
+			fwdX = fx / len;
+			fwdY = fy / len;
+		}
+	}
 
 	// ---- Occupancy: scroll + decay, then this frame's captures ----
 	globals::profiler->BeginPass("SnowDeformation::VoxelVolume");
@@ -330,10 +357,11 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		auto& lv = voxelLevels[L];
 		const float voxelSize = VoxelSizeForLevel(L);
 		const float half = kVoxelDim * voxelSize * 0.5f;
-		// The cube centred on the camera, its origin snapped to the lattice.
+		// The cube ahead of the camera, its origin snapped to the lattice.
+		const float ahead = kVoxelForwardFrac * 2.0f * half;
 		const DirectX::XMINT3 origin{
-			(int)std::floor((eye.x - half) / voxelSize),
-			(int)std::floor((eye.y - half) / voxelSize),
+			(int)std::floor((eye.x + fwdX * ahead - half) / voxelSize),
+			(int)std::floor((eye.y + fwdY * ahead - half) / voxelSize),
 			(int)std::floor((eye.z - half) / voxelSize)
 		};
 		const DirectX::XMINT3 delta{ origin.x - lv.origin.x, origin.y - lv.origin.y, origin.z - lv.origin.z };
@@ -641,8 +669,15 @@ void SnowDeformation::DrawVoxelSnow()
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;
-		if (L > 0)
+		const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
+		const auto centre = VoxelLevelCentre(L);
+		d.VoxCentre = { centre.x - eye.x, centre.y - eye.y, centre.z - eye.z, 0.0f };
+		d.VoxInnerCentre = { 0.0f, 0.0f, 0.0f, 0.0f };
+		if (L > 0) {
 			VoxelReachBand(L - 1, inStart, inEnd);
+			const auto inner = VoxelLevelCentre(L - 1);
+			d.VoxInnerCentre = { inner.x - eye.x, inner.y - eye.y, inner.z - eye.z, 0.0f };
+		}
 		VoxelReachBand(L, outStart, outEnd);
 		d.VoxFade = { inStart, inEnd, outStart, outEnd };
 		voxelDrawCB->Update(d);
