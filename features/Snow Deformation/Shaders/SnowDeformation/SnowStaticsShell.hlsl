@@ -2117,6 +2117,7 @@ cbuffer VoxelDrawCB : register(b2)
 	float4 VoxCentre;       // xyz = this window's centre, relative to the camera
 	float4 VoxInnerCentre;  // xyz = the next-finer window's centre, relative to the camera
 	float4 VoxDebug;        // x = this level's index, y > 0.5 = tint the snow by level, z = max draw distance, w = its fade width
+	float4 VoxDims;         // xyz = voxels a side, w = x / z (a wide ring's z reach is shorter by this)
 }
 StructuredBuffer<uint> VoxelBricks : register(t41);
 Texture3D<float> VoxelFieldTex : register(t42);
@@ -2173,7 +2174,7 @@ VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceI
 	// the finer window's core collapses to nothing.
 	float halfBrick = 4.0 * VoxParams.x;
 	float3 fromInner = abs(minAbs + halfBrick - ShellCameraPosAdjust.xyz - VoxInnerCentre.xyz);
-	[flatten] if (all(fromInner + halfBrick < VoxFade.x))
+	[flatten] if (all((fromInner + halfBrick) * float3(1.0, 1.0, VoxDims.w) < VoxFade.x))
 		o.Position = float4(0.0, 0.0, 0.0, 1.0);
 	o.WorldPos = rel;
 	o.BrickMin = minAbs - ShellCameraPosAdjust.xyz;
@@ -3366,8 +3367,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 float VoxelFieldAt(float3 relPos)
 {
 	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
-	logical = clamp(logical, 0.5, VoxParams.y - 0.5);
-	float3 uvw = frac((logical + (float3)VoxOrigin.xyz) / VoxParams.y);
+	logical = clamp(logical, 0.5, VoxDims.xyz - 0.5);
+	float3 uvw = frac((logical + (float3)VoxOrigin.xyz) / VoxDims.xyz);
 	return VoxelFieldTex.SampleLevel(VoxelWrapSampler, uvw, 0.0);
 }
 
@@ -3378,7 +3379,7 @@ float VoxelFieldAt(float3 relPos)
 // this; the march itself is fine on trilinear.
 float VoxelFieldCubic(float3 relPos)
 {
-	float dim = VoxParams.y;
+	float3 dim = VoxDims.xyz;
 	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
 	logical = clamp(logical, 1.5, dim - 1.5);
 	// Texel centres at integers for the weights.
@@ -3431,7 +3432,7 @@ float VoxelTri8(float3 ga, float3 gb, float3 ha, float3 hb)
 // dg1 > 0) never reach zero on [0, 1), so the offset ratios are safe.
 float4 VoxelFieldCubicGrad(float3 relPos)
 {
-	float dim = VoxParams.y;
+	float3 dim = VoxDims.xyz;
 	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
 	logical = clamp(logical, 1.5, dim - 1.5);
 	float3 x = logical - 0.5;
@@ -3593,8 +3594,9 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	// no z-fight, and TAA reads the dither as a blend between the two
 	// shapes. The bands are cubes (Chebyshev), as the rings are. The
 	// finest level has no inner band; the outermost dithers to nothing.
-	float3 rIn = abs(P - VoxInnerCentre.xyz);
-	float3 rOut = abs(P - VoxCentre.xyz);
+	// Chebyshev in the window's own shape: z counts for more on a wide ring.
+	float3 rIn = abs(P - VoxInnerCentre.xyz) * float3(1.0, 1.0, VoxDims.w);
+	float3 rOut = abs(P - VoxCentre.xyz) * float3(1.0, 1.0, VoxDims.w);
 	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, max(rIn.x, max(rIn.y, rIn.z)));
 	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, max(rOut.x, max(rOut.y, rOut.z)));
 	// The user's own horizon, the same dither: past it the object shell

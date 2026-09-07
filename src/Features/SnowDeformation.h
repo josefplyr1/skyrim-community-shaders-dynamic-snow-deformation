@@ -623,6 +623,8 @@ public:
 		bool VolumeConservativeCapture = false;
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.45f;
+		/** @brief "Ring Shape": 0 = cubic (256 voxels a side), 1 = wide (512 x 512 x 256: twice the reach sideways and ahead for twice the memory), 2 = wide and flat (512 x 512 x 128: the reach of wide at the memory of cubic, half the height). Every ring shares the shape, so each still doubles the one inside it in every axis. */
+		int VolumeRingShape = 0;
 		/** @brief "Volume Vertical Bias": how far BELOW the eye each window's centre sits, as a fraction of its extent. The third-person camera rises when it looks down, and a cube centred on it then puts the ground beside the player outside the nearest ring - which is why the ring colours changed with pitch (Josef, 2026-09-07). */
 		float VolumeVerticalBias = 0.0f;
 		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object shell carries the object alone. The outermost rings sample a rock at 32 u a column; there is a range at which the shell simply looks better. */
@@ -2094,11 +2096,17 @@ public:
 
 	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */
 	static constexpr uint kVoxelDim = 256;
-	/** @brief Grid size of the far rings (Settings::VolumeFineLevels and beyond): half the cubes a side at twice the voxel, so the extent is a full ring's and the work an eighth. */
+	/** @brief A wide ring's voxels a side in x and y (Settings::VolumeRingShape), and the flat shape's in z. */
+	static constexpr uint kVoxelDimWide = 512;
+	static constexpr uint kVoxelDimFlatZ = 128;
+	/** @brief Grid size of the far rings (Settings::VolumeFineLevels and beyond): half the voxels a side at twice the voxel, so the extent is a full ring's and the work an eighth. */
 	static constexpr uint kVoxelFarDim = 128;
-	uint VoxelDimForLevel(uint a_level) const;
-	/** @brief The window's width in world units: kVoxelDim * base voxel * 2^L whatever its grid size. */
-	float VoxelExtentForLevel(uint a_level) const;
+	/** @brief Voxels a side per axis for a level: the shape's, halved per axis on the far rings. */
+	DirectX::XMUINT3 VoxelDimsForLevel(uint a_level) const;
+	/** @brief The largest dims any level uses (the shape's fine dims): the shared support volume's size. */
+	DirectX::XMUINT3 VoxelDimsMax() const;
+	/** @brief The window's extent in world units per axis: shape dims * base voxel * 2^L whatever the grid size. */
+	DirectX::XMFLOAT3 VoxelExtentForLevel(uint a_level) const;
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
 	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
@@ -2113,7 +2121,7 @@ public:
 		float VoxelSize;
 		/** @brief Occupancy lost per frame; a voxel not re-rasterised fades out. */
 		float Decay;
-		int Dim;
+		int DimLegacy;
 		int SliceAxis;
 		int SliceIndex;
 		/** @brief >0: the slice is a max over the whole fixed axis (silhouettes), not one plane. */
@@ -2148,6 +2156,8 @@ public:
 		float EdgeParams[4];
 		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
 		float LipParams[4];
+		/** @brief xyz = voxels a side per axis (pow2 each); w unused. */
+		int Dims[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
@@ -2167,7 +2177,7 @@ public:
 	static constexpr uint kVoxelListArgsY = 36;
 	static constexpr uint kVoxelListArgsFlags = 48;
 	static constexpr uint kVoxelListHeaderBytes = 64;
-	static constexpr uint kVoxelListBytes = 64 + 3 * 4096;
+	static constexpr uint kVoxelListBytes = 64 + 3 * 16384;
 	/** @brief Every this-many rebuilds of a level are whole: the seed weights read the shelter/sky maps, which change without the occupancy changing. Rare on purpose: a whole rebuild also re-reads every voxel's captured height and facing, and overlapping triangles write those in GPU-arbitrary order, so each re-capture can differ by a hair - the incremental path never looks, the whole one does, and the snow shifts (Josef, 2026-09-07). The real fix is a deterministic capture (ordered writes or atomics); until then, 900 = 15 s on the finest ring. */
 	static constexpr uint32_t kVoxelFullRefreshRebuilds = 900;
 	ID3D11ComputeShader* voxelDiffCS = nullptr;
@@ -2202,8 +2212,8 @@ public:
 		/** @brief This rebuild started the level from nothing, so every record must capture, staggering or not. */
 		bool cleared = false;
 		uint current = 0;
-		/** @brief Cubes a side the textures were made with; a mismatch with VoxelDimForLevel remakes them. */
-		uint dim = 0;
+		/** @brief Voxels a side per axis the textures were made with; a mismatch with VoxelDimsForLevel remakes them. */
+		DirectX::XMUINT3 dims = { 0, 0, 0 };
 		bool valid = false;
 		/** @brief This frame rebuilt the level's occupancy, so its field and bricks are due too. */
 		bool updated = false;
@@ -2234,11 +2244,10 @@ public:
 		float4 VoxInnerCentre;
 		/** @brief x = this level's index, y = 1 to tint the snow by level (showVolumeRings), z = Settings::VolumeMaxDistance, w = its fade width. */
 		float4 VoxDebug;
+		/** @brief xyz = voxels a side per axis, w = x / z: the factor a wide ring's z distances carry in every Chebyshev test. */
+		float4 VoxDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
-	/** @brief Bricks per axis (kVoxelDim / 8) and the list's capacity. */
-	static constexpr uint kVoxelBricksPerAxis = kVoxelDim / 8;
-	static constexpr uint kVoxelBrickCapacity = kVoxelBricksPerAxis * kVoxelBricksPerAxis * kVoxelBricksPerAxis;
 	/** @brief Seed weight under a roof/fire: the 2D pipeline's dusting, as a fraction of full. */
 	static constexpr float kVoxelShelterDust = 0.1f;
 
@@ -2260,6 +2269,8 @@ public:
 	Texture2D* voxelSliceTexture = nullptr;
 	/** @brief The overhang cap's 1D distance between the X and Y passes - ONE volume for every level, at the finest grid: it lives only inside a level's field pass and the levels run one after another. Four rings share what was five volumes (Josef, 2026-09-07). */
 	Texture3D* voxelSupport = nullptr;
+	/** @brief The dims voxelSupport was made with; a shape change remakes it. */
+	DirectX::XMUINT3 voxelSupportDims = { 0, 0, 0 };
 	ConstantBuffer* voxelCB = nullptr;
 	winrt::com_ptr<ID3D11RasterizerState> voxelRasterState;
 	ID3D11VertexShader* voxelVS = nullptr;

@@ -17,9 +17,11 @@ bool SnowDeformation::EnsureVoxelResources()
 	bool levelsReady = true;
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
-		levelsReady = levelsReady && lv.dim == VoxelDimForLevel(i) && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		const auto want = VoxelDimsForLevel(i);
+		levelsReady = levelsReady && lv.dims.x == want.x && lv.dims.y == want.y && lv.dims.z == want.z && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
-	if (levelsReady && voxelSupport && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
+	const auto wantMax = VoxelDimsMax();
+	if (levelsReady && voxelSupport && voxelSupportDims.x == wantMax.x && voxelSupportDims.y == wantMax.y && voxelSupportDims.z == wantMax.z && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
 		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
 		voxelDiffCS && voxelDirtyColsCS && voxelBrickFlagsCS)
 		return true;
@@ -32,11 +34,11 @@ bool SnowDeformation::EnsureVoxelResources()
 	// Fresh VRAM is not blank: cleared so a never-written volume reads
 	// empty rather than as whatever lived there before.
 	const float clearZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	auto makeVolume = [&](const std::string& a_name, uint a_dim) {
+	auto makeVolume = [&](const std::string& a_name, DirectX::XMUINT3 a_dims) {
 		D3D11_TEXTURE3D_DESC volDesc{
-			.Width = a_dim,
-			.Height = a_dim,
-			.Depth = a_dim,
+			.Width = a_dims.x,
+			.Height = a_dims.y,
+			.Depth = a_dims.z,
 			.MipLevels = 1,
 			.Format = DXGI_FORMAT_R8_UNORM,
 			.Usage = D3D11_USAGE_DEFAULT,
@@ -52,7 +54,7 @@ bool SnowDeformation::EnsureVoxelResources()
 		D3D11_UNORDERED_ACCESS_VIEW_DESC volUavDesc = {
 			.Format = volDesc.Format,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D,
-			.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = a_dim }
+			.Texture3D = { .MipSlice = 0, .FirstWSlice = 0, .WSize = a_dims.z }
 		};
 		auto* tex = new Texture3D(volDesc, a_name.c_str());
 		tex->CreateSRV(volSrvDesc);
@@ -62,10 +64,10 @@ bool SnowDeformation::EnsureVoxelResources()
 	};
 	for (uint i = 0; i < levels; i++) {
 		auto& lv = voxelLevels[i];
-		const uint dim = VoxelDimForLevel(i);
-		// A level whose grid size changed (Fine Levels moved) is rebuilt
-		// from nothing; its old textures are the wrong size for every pass.
-		if (lv.dim != dim) {
+		const auto dim = VoxelDimsForLevel(i);
+		// A level whose grid size changed (Fine Levels or the shape moved) is
+		// rebuilt from nothing; its old textures are the wrong size for every pass.
+		if (lv.dims.x != dim.x || lv.dims.y != dim.y || lv.dims.z != dim.z) {
 			for (int p = 0; p < 2; p++) {
 				delete lv.volume[p];
 				lv.volume[p] = nullptr;
@@ -86,7 +88,8 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.flags = nullptr;
 			delete lv.lists;
 			lv.lists = nullptr;
-			lv.dim = dim;
+			lv.dims = dim;
+			lv.valid = false;
 		}
 		for (int p = 0; p < 2; p++)
 			if (!lv.volume[p])
@@ -96,7 +99,7 @@ bool SnowDeformation::EnsureVoxelResources()
 		if (!lv.height)
 			lv.height = makeVolume(std::format("SnowDeformation::VoxelHeight{}", i), dim);
 		if (!lv.heightMap) {
-			const uint hdim = dim * 4;
+			const uint hdim = dim.x * 4;
 			D3D11_TEXTURE2D_DESC desc{
 				.Width = hdim,
 				.Height = hdim,
@@ -124,8 +127,7 @@ bool SnowDeformation::EnsureVoxelResources()
 			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
 		}
 		if (!lv.bricks) {
-			const uint bricksPerAxis = dim / 8;
-			const uint capacity = bricksPerAxis * bricksPerAxis * bricksPerAxis;
+			const uint capacity = (dim.x / 8) * (dim.y / 8) * (dim.z / 8);
 			D3D11_BUFFER_DESC desc{};
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
@@ -186,8 +188,7 @@ bool SnowDeformation::EnsureVoxelResources()
 			return buf;
 		};
 		{
-			const uint bricksPerAxis = dim / 8;
-			const uint brickBytes = bricksPerAxis * bricksPerAxis * bricksPerAxis * sizeof(uint32_t);
+			const uint brickBytes = (dim.x / 8) * (dim.y / 8) * (dim.z / 8) * sizeof(uint32_t);
 			if (!lv.dirty)
 				lv.dirty = makeRaw(std::format("SnowDeformation::VoxelDirty{}", i), brickBytes, false);
 			if (!lv.flags)
@@ -199,12 +200,18 @@ bool SnowDeformation::EnsureVoxelResources()
 	}
 	// One support volume for every level, at the finest grid: a coarser
 	// level's passes only ever touch its own [0, dim) corner of it.
-	if (!voxelSupport)
-		voxelSupport = makeVolume("SnowDeformation::VoxelSupport", kVoxelDim);
+	if (voxelSupport && (voxelSupportDims.x != wantMax.x || voxelSupportDims.y != wantMax.y || voxelSupportDims.z != wantMax.z)) {
+		delete voxelSupport;
+		voxelSupport = nullptr;
+	}
+	if (!voxelSupport) {
+		voxelSupport = makeVolume("SnowDeformation::VoxelSupport", wantMax);
+		voxelSupportDims = wantMax;
+	}
 	if (!voxelSliceTexture) {
 		D3D11_TEXTURE2D_DESC desc{
-			.Width = kVoxelDim,
-			.Height = kVoxelDim,
+			.Width = kVoxelDimWide,
+			.Height = kVoxelDimWide,
 			.MipLevels = 1,
 			.ArraySize = 1,
 			.Format = DXGI_FORMAT_R8_UNORM,
@@ -333,26 +340,41 @@ bool SnowDeformation::EnsureVoxelResources()
 // A far ring has half the cubes a side at twice the voxel, so its extent
 // is what a full ring's would be: the reach doubles per level throughout,
 // the far rings at an eighth of the work and memory.
-uint SnowDeformation::VoxelDimForLevel(uint a_level) const
+DirectX::XMUINT3 SnowDeformation::VoxelDimsMax() const
+{
+	const int shape = std::clamp(settings.VolumeRingShape, 0, 2);
+	const uint xy = shape == 0 ? kVoxelDim : kVoxelDimWide;
+	const uint z = shape == 2 ? kVoxelDimFlatZ : kVoxelDim;
+	return { xy, xy, z };
+}
+
+DirectX::XMUINT3 SnowDeformation::VoxelDimsForLevel(uint a_level) const
 {
 	const uint fine = (uint)std::clamp(settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
-	return a_level < fine ? kVoxelDim : kVoxelFarDim;
+	auto d = VoxelDimsMax();
+	if (a_level >= fine)
+		d = { d.x / 2, d.y / 2, d.z / 2 };
+	return d;
 }
 
 float SnowDeformation::VoxelSizeForLevel(uint a_level) const
 {
-	return VoxelSizeLive() * float(1u << a_level) * float(kVoxelDim / VoxelDimForLevel(a_level));
+	const uint fine = (uint)std::clamp(settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
+	return VoxelSizeLive() * float(1u << a_level) * (a_level < fine ? 1.0f : 2.0f);
 }
 
-float SnowDeformation::VoxelExtentForLevel(uint a_level) const
+DirectX::XMFLOAT3 SnowDeformation::VoxelExtentForLevel(uint a_level) const
 {
-	return kVoxelDim * VoxelSizeLive() * float(1u << a_level);
+	const auto d = VoxelDimsMax();
+	const float unit = VoxelSizeLive() * float(1u << a_level);
+	return { d.x * unit, d.y * unit, d.z * unit };
 }
 
 void SnowDeformation::VoxelReachBand(uint a_level, float& a_start, float& a_end) const
 {
-	const float frac = VoxelDimForLevel(a_level) == kVoxelDim ? kVoxelReachFrac : kVoxelReachFracFar;
-	a_end = VoxelExtentForLevel(a_level) * 0.5f * frac;
+	const uint fine = (uint)std::clamp(settings.VolumeFineLevels, 1, (int)kVoxelMaxLevels);
+	const float frac = a_level < fine ? kVoxelReachFrac : kVoxelReachFracFar;
+	a_end = VoxelExtentForLevel(a_level).x * 0.5f * frac;
 	a_start = a_end * (1.0f - kVoxelBandFrac);
 }
 
@@ -365,14 +387,19 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.OriginVox = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 	a_cb.ScrollDelta = { 0, 0, 0, 0 };
 	a_cb.VoxelSize = voxelSize;
-	a_cb.Dim = (int)lv.dim;
+	a_cb.DimLegacy = (int)lv.dims.x;
+	a_cb.Dims[0] = (int)lv.dims.x;
+	a_cb.Dims[1] = (int)lv.dims.y;
+	a_cb.Dims[2] = (int)lv.dims.z;
+	a_cb.Dims[3] = 0;
 	a_cb.SliceAxis = std::clamp(voxelSliceAxis, 0, 2);
 	a_cb.SliceXray = voxelSliceXray ? 1 : 0;
 	a_cb.SliceSource = std::clamp(voxelSliceSource, 0, 2);
 	{
 		const float along = a_cb.SliceAxis == 0 ? eye.z : (a_cb.SliceAxis == 1 ? eye.y : eye.x);
 		const int originAlong = a_cb.SliceAxis == 0 ? lv.origin.z : (a_cb.SliceAxis == 1 ? lv.origin.y : lv.origin.x);
-		a_cb.SliceIndex = std::clamp((int)std::floor((along + voxelSliceOffset) / voxelSize) - originAlong, 0, (int)lv.dim - 1);
+		const int fixedDim = a_cb.SliceAxis == 0 ? (int)lv.dims.z : (a_cb.SliceAxis == 1 ? (int)lv.dims.y : (int)lv.dims.x);
+		a_cb.SliceIndex = std::clamp((int)std::floor((along + voxelSliceOffset) / voxelSize) - originAlong, 0, fixedDim - 1);
 	}
 	// The seed gate's maps live in the height window; without them every
 	// column reads as open sky (HalfExtent 0 fails the window test).
@@ -457,9 +484,9 @@ float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
 DirectX::XMFLOAT3 SnowDeformation::VoxelLevelCentre(uint a_level) const
 {
 	const auto& o = voxelLevels[a_level].origin;
+	const auto& d = voxelLevels[a_level].dims;
 	const float voxelSize = VoxelSizeForLevel(a_level);
-	const float halfVox = voxelLevels[a_level].dim * 0.5f;
-	return { (o.x + halfVox) * voxelSize, (o.y + halfVox) * voxelSize, (o.z + halfVox) * voxelSize };
+	return { (o.x + d.x * 0.5f) * voxelSize, (o.y + d.y * 0.5f) * voxelSize, (o.z + d.z * 0.5f) * voxelSize };
 }
 
 void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity)
@@ -516,8 +543,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		if (!lv.updated)
 			continue;
 		const float voxelSize = VoxelSizeForLevel(L);
-		const float half = VoxelExtentForLevel(L) * 0.5f;
-		const UINT groups = lv.dim / 8;
+		const auto extent = VoxelExtentForLevel(L);
+		const float half = extent.x * 0.5f;
+		const float halfZ = extent.z * 0.5f;
+		const UINT gx = lv.dims.x / 8, gy = lv.dims.y / 8, gz = lv.dims.z / 8;
 		// The cube ahead of the camera, its origin snapped to WHOLE BRICKS
 		// (centred, so the snap is within half a brick): the dirty-brick
 		// bookkeeping is per physical brick, which is one logical brick only
@@ -528,7 +557,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		const DirectX::XMINT3 origin{
 			(int)std::floor((eye.x + fwdX * ahead - half + snapBias) / brickUnits) * 8,
 			(int)std::floor((eye.y + fwdY * ahead - half + snapBias) / brickUnits) * 8,
-			(int)std::floor((eye.z - std::clamp(settings.VolumeVerticalBias, -0.3f, 0.3f) * 2.0f * half - half + snapBias) / brickUnits) * 8
+			(int)std::floor((eye.z - std::clamp(settings.VolumeVerticalBias, -0.3f, 0.3f) * 2.0f * halfZ - halfZ + snapBias) / brickUnits) * 8
 		};
 		const DirectX::XMINT3 delta{ origin.x - lv.origin.x, origin.y - lv.origin.y, origin.z - lv.origin.z };
 		const bool clearAll = !lv.valid;
@@ -545,7 +574,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		{
 			const UINT zeros[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(lv.dirty->uav.get(), zeros);
-			const uint32_t zb = lv.dim / 8;
+			const uint32_t zb = lv.dims.z / 8;
 			const uint32_t header[16] = { 0, zb, 1, 0, 1, 1, 0, zb, 1, 0, zb, 1, 0, zb, 1, 0 };
 			D3D11_BOX box{ 0, 0, 0, kVoxelListHeaderBytes, 1, 1 };
 			context->UpdateSubresource(lv.lists->resource.get(), 0, &box, header, 0, 0);
@@ -570,7 +599,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &heightMapUAV, nullptr);
 			context->CSSetShader(voxelScrollCS, nullptr, 0);
-			context->Dispatch(groups, groups, groups);
+			context->Dispatch(gx, gy, gz);
 			ID3D11UnorderedAccessView* nullUAVs[3] = { nullptr, nullptr, nullptr };
 			context->CSSetShaderResources(0, 1, &nullSRV);
 			context->CSSetUnorderedAccessViews(0, 3, nullUAVs, nullptr);
@@ -625,8 +654,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			// Viewport 0: one pixel a voxel column, the occupancy. Viewport 1:
 			// four a voxel side, the top-down heightmap copy the GS adds.
 			D3D11_VIEWPORT viewports[2] = {
-				{ 0.0f, 0.0f, float(lv.dim), float(lv.dim), 0.0f, 1.0f },
-				{ 0.0f, 0.0f, float(lv.dim * 4), float(lv.dim * 4), 0.0f, 1.0f }
+				{ 0.0f, 0.0f, float(lv.dims.x), float(lv.dims.x), 0.0f, 1.0f },
+				{ 0.0f, 0.0f, float(lv.dims.x * 4), float(lv.dims.x * 4), 0.0f, 1.0f }
 			};
 			context->RSSetViewports(2, viewports);
 			// u0 occupancy, u1 the surface height within the voxel, u2 the heightmap.
@@ -718,7 +747,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		auto& lv = voxelLevels[L];
 		if (!lv.updated)
 			continue;
-		const UINT groups = lv.dim / 8;
+		const UINT gx = lv.dims.x / 8, gy = lv.dims.y / 8, gz = lv.dims.z / 8;
 		VoxelVolumeCB cb{};
 		FillVoxelCB(L, cb);
 		lv.rebuilds++;
@@ -753,7 +782,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetUnorderedAccessViews(5, 1, &dirtyUAV, nullptr);
 			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 			context->CSSetShader(voxelDiffCS, nullptr, 0);
-			context->Dispatch(groups, groups, groups);
+			context->Dispatch(gx, gy, gz);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
 			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
 			context->CSSetShaderResources(0, 1, &nullSRV);
@@ -763,7 +792,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetShaderResources(6, 1, &dirtySRV);
 		context->CSSetUnorderedAccessViews(7, 1, &listsUAV, nullptr);
 		context->CSSetShader(voxelDirtyColsCS, nullptr, 0);
-		context->Dispatch(1, 1, 1);
+		context->Dispatch((gx + 31) / 32, (gy + 31) / 32, 1);
 		context->CSSetUnorderedAccessViews(7, 1, &nullUAV, nullptr);
 		context->CSSetShaderResources(6, 1, &nullSRV);
 		context->CSSetShaderResources(7, 1, &listsSRV);
@@ -841,8 +870,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetShaderResources(8, 1, &flagsSRV);
 			context->CSSetUnorderedAccessViews(3, 1, &listUAV, &zeroCount);
 			context->CSSetShader(voxelBrickListCS, nullptr, 0);
-			const UINT brickGroups = lv.dim / 64;
-			context->Dispatch(brickGroups, brickGroups, brickGroups);
+			context->Dispatch(std::max(1u, lv.dims.x / 64), std::max(1u, lv.dims.y / 64), std::max(1u, lv.dims.z / 64));
 			context->CSSetShaderResources(8, 1, &nullSRV);
 			context->CSSetUnorderedAccessViews(3, 1, &nullUAV, nullptr);
 			context->CopyStructureCount(lv.drawArgs->resource.get(), 4, listUAV);
@@ -875,11 +903,8 @@ void SnowDeformation::UpdateVoxelSliceTexture()
 	context->CSSetShaderResources(3, 1, &fieldSRV);
 	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 	context->CSSetShader(voxelSliceCS, nullptr, 0);
-	// A far ring fills only a corner of the 256^2 slice; clear the rest.
-	const float clearZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-	if (lv.dim < kVoxelDim)
-		context->ClearUnorderedAccessViewFloat(voxelSliceTexture->uav.get(), clearZero);
-	context->Dispatch(lv.dim / 8, lv.dim / 8, 1);
+	// The CS zeroes whatever the window's plane does not cover.
+	context->Dispatch(kVoxelDimWide / 8, kVoxelDimWide / 8, 1);
 
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
@@ -951,7 +976,8 @@ void SnowDeformation::DrawVoxelSnow()
 		const float voxelSize = VoxelSizeForLevel(L);
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
-		d.VoxParams = { voxelSize, float(lv.dim), VoxelThresholdForLevel(L), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
+		d.VoxParams = { voxelSize, float(lv.dims.x), VoxelThresholdForLevel(L), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
+		d.VoxDims = { float(lv.dims.x), float(lv.dims.y), float(lv.dims.z), float(lv.dims.x) / float(lv.dims.z) };
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;

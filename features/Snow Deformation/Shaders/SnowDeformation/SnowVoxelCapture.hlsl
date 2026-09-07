@@ -21,7 +21,7 @@ cbuffer VoxelCB : register(b0)
 	int4 ScrollDelta;
 	float VoxelSize;
 	float Decay;
-	int Dim;
+	int DimLegacy;
 	int SliceAxis;
 	int SliceIndex;
 	// >0: the slice is a max over the whole axis (silhouettes), not one plane
@@ -64,6 +64,9 @@ cbuffer VoxelCB : register(b0)
 	// x = an air neighbour's weight in the sideways average, y = the capture's
 	// conservative expansion in voxels (0 = off), the rest padding
 	float4 LipParams;
+	// xyz = voxels a side, pow2 each; z may be shorter than x = y (a wide
+	// ring). Every torus mask is per axis.
+	int4 Dims;
 }
 
 struct VS_OUTPUT
@@ -206,8 +209,9 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 		float3 v = vox[i];
 		float2 proj = axis == 0 ? v.yz : (axis == 1 ? v.xz : v.xy);
 		GS_OUTPUT o;
-		// The viewport is Dim x Dim, so one pixel is one voxel column.
-		o.Position = float4(proj * (2.0 / Dim) - 1.0, 0.5, 1.0);
+		// The viewport is Dims.x square, so one pixel is one voxel column;
+		// a projection's z axis uses the top of that range and no more.
+		o.Position = float4(proj * (2.0 / Dims.x) - 1.0, 0.5, 1.0);
 		o.Vox = v;
 		o.Axis = axis;
 		o.Nz = nz;
@@ -230,7 +234,7 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 		{
 			float3 v = tri[i2].Vox;
 			GS_OUTPUT o;
-			o.Position = float4(v.xy * (2.0 / Dim) - 1.0, 0.5, 1.0);
+			o.Position = float4(v.xy * (2.0 / Dims.x) - 1.0, 0.5, 1.0);
 			o.Vox = v;
 			o.Axis = 2;
 			o.Nz = nz;
@@ -259,7 +263,7 @@ void main(GS_OUTPUT input)
 	float3 vox = input.Vox;
 	[branch] if (input.Copy == 1)
 	{
-		int mask4 = Dim * 4 - 1;
+		int mask4 = Dims.x * 4 - 1;
 		int2 sub = ((int2)floor(vox.xy * 4.0) + OriginVox.xy * 4) & mask4;
 		float worldZ = (vox.z + (float)OriginVox.z) * VoxelSize;
 		InterlockedMax(HeightMap[(uint2)sub], asuint(worldZ + 32768.0));
@@ -272,7 +276,7 @@ void main(GS_OUTPUT input)
 	int lo = (int)floor(d - spread);
 	int hi = min((int)floor(d + spread), lo + 3);
 	int3 base = (int3)floor(vox);
-	int mask = Dim - 1;
+	int3 mask = Dims.xyz - 1;
 	// Packed: high nibble = up-ness (-1..1 over 0..15), low nibble = life,
 	// 15 fresh. Any non-zero value is solid; the scroll counts life down.
 	uint nzq = (uint)round(saturate(input.Nz * 0.5 + 0.5) * 15.0);
@@ -295,7 +299,7 @@ void main(GS_OUTPUT input)
 			p.y = k;
 		else
 			p.z = k;
-		if (any(p < 0) || any(p >= Dim))
+		if (any(p < 0) || any(p >= Dims.xyz))
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
 		Volume[phys] = packed;
@@ -352,13 +356,13 @@ ByteAddressBuffer BrickFlagsIn : register(t8);
 #define LIST_ARGS_Y 36
 #define LIST_ARGS_FLAGS 48
 #define LIST0_OFF 64
-#define LIST2_OFF 4160
-#define LIST3_OFF 8256
+#define LIST2_OFF 16448
+#define LIST3_OFF 32832
 
 uint BrickIndex(uint3 physBrick)
 {
-	uint bricks = (uint)Dim >> 3;
-	return (physBrick.z * bricks + physBrick.y) * bricks + physBrick.x;
+	uint3 bricks = (uint3)Dims.xyz >> 3;
+	return (physBrick.z * bricks.y + physBrick.y) * bricks.x + physBrick.x;
 }
 
 uint2 ListColumn(uint offset, uint index)
@@ -390,7 +394,7 @@ bool BricksNear(uint3 brick, int rx, int ry, int rz, uint bit, uint gi)
 	int nx = 2 * rx + 1;
 	int ny = 2 * ry + 1;
 	uint n = (uint)(nx * ny * (2 * rz + 1));
-	int bricks = Dim >> 3;
+	int3 bricks = Dims.xyz >> 3;
 	[loop] for (uint i = gi; i < n; i += 512u)
 	{
 		int3 d = int3((int)(i % (uint)nx) - rx, (int)((i / (uint)nx) % (uint)ny) - ry, (int)(i / (uint)(nx * ny)) - rz);
@@ -443,65 +447,87 @@ groupshared uint gSolid;
 // exists only where X ran, and Y's result is read by the flags a voxel
 // aside. So: D1 = D0 + 2 bricks in x; D2 = D1 + 2 in y (Y); D3 = D2 + 2 in
 // y + 1 in x (X, and the flags). Each list is the dispatch's group count.
-groupshared uint gCol0[1024];
-groupshared uint gCol1[1024];
-groupshared uint gCol2[1024];
-groupshared uint gCol3[1024];
+// Per 32 x 32 tile of brick columns, with a six-column halo loaded from
+// the torus (wrapping over-dilates at the window border, which is safe):
+// D3's reach is 3 in x and 4 in y. Two arrays of 44^2 alternate.
+#define COL_TILE 32
+#define COL_HALO 6
+#define COL_W 44
+groupshared uint gColA[COL_W * COL_W];
+groupshared uint gColB[COL_W * COL_W];
 [numthreads(32, 32, 1)] void VoxelDirtyColsCS(uint3 tid
-											  : SV_GroupThreadID) {
-	uint bricks = (uint)Dim >> 3;
-	bool live = all(tid.xy < bricks);
-	uint idx = tid.y * 32 + tid.x;
-	uint d0 = 0;
-	[branch] if (live)
+											  : SV_GroupThreadID, uint3 gid
+											  : SV_GroupID) {
+	int2 bricks = Dims.xy >> 3;
+	int2 tileOrigin = (int2)gid.xy * COL_TILE;
+	uint li = tid.y * 32 + tid.x;
+	uint zb = (uint)(Dims.z >> 3);
+	[loop] for (uint e = li; e < (uint)(COL_W * COL_W); e += 1024u)
 	{
+		int2 t = int2((int)(e % (uint)COL_W), (int)(e / (uint)COL_W)) - COL_HALO;
+		int2 c = (tileOrigin + t) & (bricks - 1);
+		uint d = 0;
 		[branch] if (ForceDirty > 0.5)
-			d0 = 1;
+			d = 1;
 		else
 		{
-			[loop] for (uint bz = 0; bz < bricks; bz++)
-				d0 |= DirtyBricksIn.Load(BrickIndex(uint3(tid.xy, bz)) * 4);
+			[loop] for (uint bz = 0; bz < zb; bz++)
+				d |= DirtyBricksIn.Load(BrickIndex(uint3((uint2)c, bz)) * 4);
 		}
+		gColA[e] = d != 0 ? 1u : 0u;
 	}
-	gCol0[idx] = d0 != 0 ? 1u : 0u;
 	GroupMemoryBarrierWithGroupSync();
-	uint d1 = 0;
-	[unroll] for (int dx = -2; dx <= 2; dx++)
+	uint own = (tid.y + COL_HALO) * COL_W + (tid.x + COL_HALO);
+	uint d0 = gColA[own];
+	// D1 = D0 + 2 in x -> B
+	[loop] for (uint e1 = li; e1 < (uint)(COL_W * COL_W); e1 += 1024u)
 	{
-		int x = (int)tid.x + dx;
-		if (live && x >= 0 && x < (int)bricks)
-			d1 |= gCol0[tid.y * 32 + x];
+		int x = (int)(e1 % (uint)COL_W);
+		uint d = 0;
+		[unroll] for (int dx = -2; dx <= 2; dx++)
+		{
+			int xx = x + dx;
+			if (xx >= 0 && xx < COL_W)
+				d |= gColA[(int)e1 + dx];
+		}
+		gColB[e1] = d;
 	}
-	gCol1[idx] = d1;
 	GroupMemoryBarrierWithGroupSync();
-	uint d2 = 0;
-	[unroll] for (int dy = -2; dy <= 2; dy++)
+	// D2 = D1 + 2 in y -> A
+	[loop] for (uint e2 = li; e2 < (uint)(COL_W * COL_W); e2 += 1024u)
 	{
-		int y = (int)tid.y + dy;
-		if (live && y >= 0 && y < (int)bricks)
-			d2 |= gCol1[y * 32 + tid.x];
+		int y = (int)(e2 / (uint)COL_W);
+		uint d = 0;
+		[unroll] for (int dy = -2; dy <= 2; dy++)
+		{
+			int yy = y + dy;
+			if (yy >= 0 && yy < COL_W)
+				d |= gColB[(int)e2 + dy * COL_W];
+		}
+		gColA[e2] = d;
 	}
-	gCol2[idx] = d2;
 	GroupMemoryBarrierWithGroupSync();
-	uint d3y = 0;
-	[unroll] for (int dy2 = -2; dy2 <= 2; dy2++)
+	uint d2 = gColA[own];
+	// D3 = D2 + 2 in y -> B, then + 1 in x, read for the own column only
+	[loop] for (uint e3 = li; e3 < (uint)(COL_W * COL_W); e3 += 1024u)
 	{
-		int y = (int)tid.y + dy2;
-		if (live && y >= 0 && y < (int)bricks)
-			d3y |= gCol2[y * 32 + tid.x];
+		int y = (int)(e3 / (uint)COL_W);
+		uint d = 0;
+		[unroll] for (int dy2 = -2; dy2 <= 2; dy2++)
+		{
+			int yy = y + dy2;
+			if (yy >= 0 && yy < COL_W)
+				d |= gColA[(int)e3 + dy2 * COL_W];
+		}
+		gColB[e3] = d;
 	}
-	gCol3[idx] = d3y;
 	GroupMemoryBarrierWithGroupSync();
-	uint d3 = 0;
-	[unroll] for (int dx2 = -1; dx2 <= 1; dx2++)
-	{
-		int x = (int)tid.x + dx2;
-		if (live && x >= 0 && x < (int)bricks)
-			d3 |= gCol3[tid.y * 32 + x];
-	}
+	uint d3 = gColB[own - 1] | gColB[own] | gColB[own + 1];
+	int2 colXY = tileOrigin + (int2)tid.xy;
+	bool live = all(colXY < bricks);
 	[branch] if (live)
 	{
-		uint packed = tid.x | (tid.y << 16);
+		uint packed = (uint)colXY.x | ((uint)colXY.y << 16);
 		uint slot;
 		if (d0 != 0)
 		{
@@ -525,7 +551,7 @@ groupshared uint gCol3[1024];
 
 uint3 Phys(int3 logical)
 {
-	return (uint3)((logical + OriginVox.xyz) & (Dim - 1));
+	return (uint3)((logical + OriginVox.xyz) & (Dims.xyz - 1));
 }
 
 // PatchTexel's mapping (SnowStaticsShell): +worldY is texture v = 0.
@@ -605,7 +631,7 @@ float OccNz(float v)
 		VolumeOut[p] = 0.0;
 		return;
 	}
-	int mask = Dim - 1;
+	int3 mask = Dims.xyz - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float occ = VolumeIn[p];
 	float seed = 0.0;
@@ -617,7 +643,7 @@ float OccNz(float v)
 	[loop] for (int k = 1; k <= headroom && open; k++)
 	{
 		int3 a = logical + int3(0, 0, k);
-		open = a.z >= Dim || VolumeIn[Phys(a)] <= 0.0;
+		open = a.z >= Dims.z || VolumeIn[Phys(a)] <= 0.0;
 	}
 	[branch] if (open)
 	{
@@ -665,7 +691,7 @@ float OccNz(float v)
 	if (gi < 32u)
 		gZBrick[gi] = 0u;
 	GroupMemoryBarrierWithGroupSync();
-	int mask = Dim - 1;
+	int2 mask = Dims.xy - 1;
 	int2 lxy = ((int2)p - OriginVox.xy) & mask;
 	float carry = 0.0;
 	float top = -1.0e4;
@@ -694,7 +720,7 @@ float OccNz(float v)
 	// plateau). The rate is ln 2 over the Rounding in voxels: a half-air
 	// neighbourhood drops the snow by the Rounding.
 	float rate = EdgeParams.z;
-	[loop] for (int z = 0; z < Dim; z++)
+	[loop] for (int z = 0; z < Dims.z; z++)
 	{
 		uint3 ph = Phys(int3(lxy, z));
 		float s = VolumeIn[ph];
@@ -767,7 +793,7 @@ float OccNz(float v)
 		prevSolid = solid;
 	}
 	GroupMemoryBarrierWithGroupSync();
-	uint bricks = (uint)Dim >> 3;
+	uint bricks = (uint)Dims.z >> 3;
 	if (gi < bricks)
 	{
 		uint idx = BrickIndex(uint3(col, gi)) * 4;
@@ -861,7 +887,7 @@ float EdgeNoise(float2 q)
 			return;
 		}
 	}
-	int mask = Dim - 1;
+	int3 mask = Dims.xyz - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
 	float sigma = max(RoundSigma, 0.25);
@@ -887,7 +913,7 @@ float EdgeNoise(float2 q)
 		[loop] for (int k = 1; k <= span; k++)
 		{
 			int3 l = logical + step * (k * dir);
-			if (any(l < 0) || any(l >= Dim))
+			if (any(l < 0) || any(l >= Dims.xyz))
 				break;
 			uint3 ph = Phys(l);
 			if (OccupancyIn[ph] > 0.0)
@@ -956,7 +982,7 @@ groupshared uint gAllIn;
 	GroupMemoryBarrierWithGroupSync();
 	uint2 col = ListColumn(LIST3_OFF, gid.x);
 	uint3 phys = uint3(col, gid.y);
-	int bricks = Dim >> 3;
+	int3 bricks = Dims.xyz >> 3;
 	// The field (Y's output) is non-zero within 2 bricks in x and y of a
 	// FIELD brick, and the crossing test reads a voxel past the brick: a
 	// brick beyond (3, 3, 1) of any FIELD brick has no crossing - its mask
@@ -975,7 +1001,7 @@ groupshared uint gAllIn;
 		int z = (int)(i / 100u) - 1;
 		uint cells = (z <= 2 ? 0x0Fu : (z >= 5 ? 0xF0u : 0xFFu)) & (y <= 2 ? 0x33u : (y >= 5 ? 0xCCu : 0xFFu)) & (x <= 2 ? 0x55u : (x >= 5 ? 0xAAu : 0xFFu));
 		int3 l = base + int3(x, y, z);
-		bool inside = all(l >= 0) && all(l < Dim) && FieldIn[Phys(l)] >= FieldThreshold;
+		bool inside = all(l >= 0) && all(l < Dims.xyz) && FieldIn[Phys(l)] >= FieldThreshold;
 		if (inside)
 			InterlockedOr(gAnyIn, cells);
 		else
@@ -998,7 +1024,7 @@ groupshared uint gAllIn;
 // slack. The hole for the finer level is cut in the draw VS, per frame.
 [numthreads(8, 8, 8)] void VoxelBrickListCS(uint3 b
 											: SV_DispatchThreadID) {
-	int bricks = Dim >> 3;
+	int3 bricks = Dims.xyz >> 3;
 	if (any((int3)b >= bricks))
 		return;
 	uint mask = BrickFlagsIn.Load(BrickIndex(b) * 4) & 0xFFu;
@@ -1007,7 +1033,9 @@ groupshared uint gAllIn;
 	int3 logical = ((int3)b - (OriginVox.xyz >> 3)) & (bricks - 1);
 	float3 centre = (float3)(logical * 8 + OriginVox.xyz) + 4.0;
 	float3 fromCentre = abs(centre - CentreVox.xyz);
-	if (any(fromCentre - 4.0 > CentreVox.w))
+	// The reach is the window's shape: a wide ring reaches less in z.
+	float3 reach = CentreVox.w * float3(1.0, 1.0, (float)Dims.z / (float)Dims.x);
+	if (any(fromCentre - 4.0 > reach))
 		return;
 	BrickList.Append((uint)logical.x | ((uint)logical.y << 8) | ((uint)logical.z << 16) | (mask << 24));
 }
@@ -1035,10 +1063,10 @@ float SliceRead(int3 logical)
 	}
 	GroupMemoryBarrierWithGroupSync();
 
-	int mask = Dim - 1;
+	int3 mask = Dims.xyz - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 old = logical + ScrollDelta.xyz;
-	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dim);
+	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dims.xyz);
 	// A slot reused for a voxel 256 away holds the OLD world's field: dirty,
 	// whatever the occupancy compare says. One atomic per brick.
 	if (!inside)
@@ -1048,7 +1076,7 @@ float SliceRead(int3 logical)
 	[branch] if (p.z == 0)
 	{
 		int2 old2 = logical.xy + ScrollDelta.xy;
-		bool keep = OriginVox.w == 0 && all(old2 >= 0) && all(old2 < Dim);
+		bool keep = OriginVox.w == 0 && all(old2 >= 0) && all(old2 < Dims.xy);
 		[branch] if (!keep)
 		{
 			uint2 hb = p.xy * 4;
@@ -1084,10 +1112,17 @@ float SliceRead(int3 logical)
 // so objects read as silhouettes.
 [numthreads(8, 8, 1)] void VoxelSliceCS(uint3 id
 										: SV_DispatchThreadID) {
-	if (any(id.xy >= (uint2)Dim))
+	// The image's axes: (x, y), (x, z) or (y, z) of the window; the rest of
+	// the texture is cleared here rather than by the CPU.
+	int2 img = SliceAxis == 0 ? Dims.xy : (SliceAxis == 1 ? int2(Dims.x, Dims.z) : int2(Dims.y, Dims.z));
+	int fixedDim = SliceAxis == 0 ? Dims.z : (SliceAxis == 1 ? Dims.y : Dims.x);
+	if (any(id.xy >= (uint2)img))
+	{
+		SliceOut[id.xy] = 0.0;
 		return;
+	}
 	int x = (int)id.x;
-	int y = Dim - 1 - (int)id.y;
+	int y = img.y - 1 - (int)id.y;
 	int3 logical;
 	if (SliceAxis == 0)
 		logical = int3(x, y, SliceIndex);
@@ -1097,7 +1132,7 @@ float SliceRead(int3 logical)
 		logical = int3(SliceIndex, x, y);
 	float v = 0.0;
 	if (SliceXray > 0) {
-		[loop] for (int i = 0; i < Dim; i++)
+		[loop] for (int i = 0; i < fixedDim; i++)
 		{
 			int3 l = logical;
 			if (SliceAxis == 0)

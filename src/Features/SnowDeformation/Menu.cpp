@@ -310,6 +310,12 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("volume_voxel_size"), "Voxel Size"), &settings.VolumeVoxelSize, 2.0f, 24.0f, "%.0f u");
 			if (auto _ttVoxSize = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_voxel_size_tooltip"), "How fine the snow field is nearest the camera. Each further level doubles the voxel and doubles the reach, so detail near you and reach far from you are set separately: this slider for detail, Volume Levels for reach. Changing this restarts the volume."));
+			{
+				const char* shapes[] = { "Cubic (256 x 256 x 256)", "Wide (512 x 512 x 256)", "Wide, flat (512 x 512 x 128)" };
+				ImGui::Combo(T(TKEY("volume_ring_shape"), "Ring Shape"), &settings.VolumeRingShape, shapes, 3);
+				if (auto _ttVoxShape = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("volume_ring_shape_tooltip"), "The window every ring is cut from. Wide doubles the reach sideways and ahead for twice the memory; wide and flat keeps cubic's memory by halving the height, so eaves above you go to the next ring out. Every ring shares the shape, each still twice the one inside it in every axis."));
+			}
 			ImGui::SliderInt(T(TKEY("volume_levels"), "Levels"), &settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
 			if (auto _ttVoxLevels = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_levels_tooltip"), "Nested grids around the camera - the clipmap. Each level is 256 voxels a side at twice the voxel of the one inside it, and draws only the ring the finer level does not reach, so the reach doubles per level while the near detail stays the base voxel. 64 MB per level, and each level runs its own capture and field passes."));
@@ -320,9 +326,15 @@ void SnowDeformation::DrawSettings()
 				const float voxel = std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f);
 				const int levels = std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels);
 				const int fine = std::clamp(settings.VolumeFineLevels, 1, levels);
-				const float nearAcross = kVoxelDim * voxel / kUnitsPerMeter;
+				const auto dims = VoxelDimsMax();
+				const float nearAcross = dims.x * voxel / kUnitsPerMeter;
+				const float nearTall = dims.z * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				ImGui::Text("Finest level %.0f m across; outermost %.0f m across (%.0f m around you); %d MB", nearAcross, farAcross, farAcross * 0.5f, fine * 68 + (levels - fine) * 9 + 16);
+				// Per ring: four R8 volumes plus the R32 heightmap at four a side; the far rings an eighth and a quarter of those.
+				const double fineMB = (4.0 * dims.x * dims.y * dims.z + 4.0 * 16.0 * dims.x * dims.x) / 1048576.0;
+				const double farMB = (4.0 * dims.x * dims.y * dims.z / 8.0 + 4.0 * 16.0 * dims.x * dims.x / 4.0) / 1048576.0;
+				const double supportMB = double(dims.x) * dims.y * dims.z / 1048576.0;
+				ImGui::Text("Finest level %.0f m across, %.0f m tall; outermost %.0f m across (%.0f m around you); %.0f MB", nearAcross, nearTall, farAcross, farAcross * 0.5f, fine * fineMB + (levels - fine) * farMB + supportMB);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
@@ -370,7 +382,8 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttVoxSky = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_sky_exposure_tooltip"), "How much the sky matters. At 100%% a spot that can see little sky grows little snow, so open ground piles deep and sheltered corners stay thin; at 0%% every surface grows the same depth."));
 			if (voxelOccupancyValid) {
-				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(kVoxelDim) * kVoxelDim * kVoxelDim);
+				const auto d0 = VoxelDimsForLevel(0);
+				const double occupiedPct = 100.0 * double(voxelOccupancy) / (double(d0.x) * d0.y * d0.z);
 				ImGui::Text("Occupied voxels, last frame: %u (%.2f%% of the cube)", voxelOccupancy, occupiedPct);
 				if (auto _ttOcc = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("voxel_occupancy_tooltip"), "The sanity number. Geometry is surfaces, so a few percent is plausible even in a busy town; tens of percent means the volume holds something other than surfaces and the picture cannot be trusted."));

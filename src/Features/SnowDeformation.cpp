@@ -170,6 +170,7 @@
 	X(VolumeForwardBias) \
 	X(VolumeVerticalBias) \
 	X(VolumeMaxDistance) \
+	X(VolumeRingShape) \
 	X(VolumeSparseBricks) \
 	X(VolumeMarchStep) \
 	X(VolumeDetailDistance) \
