@@ -602,17 +602,17 @@ public:
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
 		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top - at ANY coverage, the sigma is solved from both (floored so the surface clears the seed voxel, kVoxelMinIsoVox). Josef's 10 at 0.10 under the old formula was 18 u; this default keeps his look. */
-		float VolumeSnowDepth = 15.0f;
+		float VolumeSnowDepth = 12.0f;
 		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95. No longer the depth: how much a narrow member or an edge keeps of the full depth (lower = more), and how readily gaps bridge. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.25f;
+		float VolumeSnowCoverage = 0.05f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
-		float VolumeSnowOverhang = 16.0f;
+		float VolumeSnowOverhang = 3.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
-		float VolumeSnowRounding = 6.0f;
+		float VolumeSnowRounding = 2.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
-		int VolumeLevels = 4;
+		int VolumeLevels = 5;
 		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
-		int VolumeFineLevels = 2;
+		int VolumeFineLevels = 5;
 		/** @brief "March Step", voxels: the draw's sample spacing along each ray. The hit is refined on the cubic afterwards, so the march only has to find the crossing interval; features thinner than a step can be stepped over. */
 		float VolumeMarchStep = 1.0f;
 		/** @brief "Volume Detail Distance", world units: inside it the volume snow shades with the full skin material; over the next half of it the parts invisible at range - parallax marching, berm relief, the horizon shadow march - fade out. */
@@ -628,7 +628,7 @@ public:
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
 		float VolumeVoxelSize = 2.0f;
 		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the object's own normal, packed into the voxel at capture. Josef's tuned default. */
-		float VolumeSnowMaxSlopeDeg = 70.0f;
+		float VolumeSnowMaxSlopeDeg = 65.0f;
 		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default: off. */
 		float VolumeSkyExposurePct = 0.0f;
 	};
