@@ -164,6 +164,7 @@
 	X(VolumeLevels) \
 	X(VolumeFineLevels) \
 	X(VolumeLazyRings) \
+	X(VolumeDirtyBricks) \
 	X(VolumeMarchStep) \
 	X(VolumeSkipEmptyCells) \
 

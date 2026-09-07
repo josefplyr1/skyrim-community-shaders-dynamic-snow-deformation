@@ -617,6 +617,8 @@ public:
 		float VolumeMarchStep = 1.0f;
 		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
 		bool VolumeSkipEmptyCells = true;
+		/** @brief "Dirty Bricks": a rebuild recomputes the field only in the brick columns whose occupancy changed (plus the blur's reach around them); the rest keeps last time's. Off rebuilds every column every time, for comparing. */
+		bool VolumeDirtyBricks = true;
 		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
 		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
@@ -2121,7 +2123,8 @@ public:
 		float CentreVox[4];
 		/** @brief Settings::VolumeSkyExposurePct / 100 - strength of the sky-openness weighting on the seed. */
 		float SkyStrength;
-		float pad0;
+		/** @brief >0.5: every brick column is rebuilt this time (the toggle off, the periodic refresh, or a level with nothing built). */
+		float ForceDirty;
 		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
@@ -2135,8 +2138,22 @@ public:
 	uint32_t VoxelLevelPeriod(uint a_level) const;
 	/** @brief Frames rendered with the volume on; the memory nibble ticks down every memorySeconds*60/15 of them. */
 	uint32_t voxelFrame = 0;
-	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge. Chebyshev, so the rings are cube shells and tile without gaps. */
+	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge plus the origin's brick snap (up to 4 voxels). Chebyshev, so the rings are cube shells and tile without gaps. The far grids have fewer voxels of slack, so a smaller fraction. */
 	static constexpr float kVoxelReachFrac = 0.9f;
+	static constexpr float kVoxelReachFracFar = 0.85f;
+	/** @brief Byte offsets of the partial passes' DispatchIndirect args in VoxelLevel::lists, then the three column lists (1024 entries each); mirrors LIST_* in SnowVoxelCapture.hlsl. */
+	static constexpr uint kVoxelListArgsSeed = 0;
+	static constexpr uint kVoxelListArgsZ = 12;
+	static constexpr uint kVoxelListArgsX = 24;
+	static constexpr uint kVoxelListArgsY = 36;
+	static constexpr uint kVoxelListArgsFlags = 48;
+	static constexpr uint kVoxelListHeaderBytes = 64;
+	static constexpr uint kVoxelListBytes = 64 + 3 * 4096;
+	/** @brief Every this-many rebuilds of a level are whole: the seed weights read the shelter/sky maps, which change without the occupancy changing. */
+	static constexpr uint32_t kVoxelFullRefreshRebuilds = 120;
+	ID3D11ComputeShader* voxelDiffCS = nullptr;
+	ID3D11ComputeShader* voxelDirtyColsCS = nullptr;
+	ID3D11ComputeShader* voxelBrickFlagsCS = nullptr;
 	/** @brief The last fraction of that reach is the hand-over band: the level dithers out over it while the level outside dithers in, complementary per pixel. The outermost dithers to nothing. */
 	static constexpr float kVoxelBandFrac = 0.2f;
 	/** @brief Floors on both sigmas, in voxels. Under a voxel the field is a spike per seed column: a coarse level's surface sat inside its seed voxel under the object's own face ("less coverage far away"), and the isosurface between four spiked columns dipped through the threshold at every cell centre - the lattice of holes Josef saw on distant snow. Snow deepens and rounds wider with distance instead. */
@@ -2153,6 +2170,14 @@ public:
 		Texture3D* support = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
+		/** @brief Dirty bricks: a uint per physical brick, set by the scroll (reused slots) and the occupancy compare, cleared each rebuild. */
+		Buffer* dirty = nullptr;
+		/** @brief A uint per physical brick: its sub-cell crossing mask, kept between rebuilds, recomputed on dirty columns only. */
+		Buffer* flags = nullptr;
+		/** @brief The partial passes' dispatch args and column lists (kVoxelListBytes); the header is rewritten each rebuild. */
+		Buffer* lists = nullptr;
+		/** @brief Rebuilds so far; every kVoxelFullRefreshRebuilds-th is forced whole. */
+		uint32_t rebuilds = 0;
 		uint current = 0;
 		/** @brief Cubes a side the textures were made with; a mismatch with VoxelDimForLevel remakes them. */
 		uint dim = 0;

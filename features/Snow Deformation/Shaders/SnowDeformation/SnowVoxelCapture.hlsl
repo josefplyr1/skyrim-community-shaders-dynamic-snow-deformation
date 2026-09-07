@@ -50,7 +50,8 @@ cbuffer VoxelCB : register(b0)
 	float4 CentreVox;
 	// Strength of the sky-openness weighting on the seed, 0-1.
 	float SkyStrength;
-	float pad0;
+	// >0.5: every brick column is dirty this rebuild
+	float ForceDirty;
 	// How many voxels past a snow column the snow may reach sideways
 	float OverhangVox;
 	// Air voxels a seed needs above it: a member's own inside is not sky
@@ -177,6 +178,147 @@ RWTexture2D<float> SliceOut : register(u1);
 RWByteAddressBuffer OccupancyCount : register(u2);
 
 groupshared uint gOccupied;
+groupshared uint gScrolledIn;
+
+// ---- Dirty bricks. Physical throughout: the window origin snaps to whole
+// bricks, so a physical brick is exactly one logical brick, and a scroll
+// moves nothing - the slots it reuses are simply marked. ----
+// A uint per brick, 1 = its field must be rebuilt this rebuild.
+RWByteAddressBuffer DirtyBricks : register(u5);
+// A uint per brick: its 8-bit sub-cell crossing mask, kept between rebuilds.
+RWByteAddressBuffer BrickFlags : register(u6);
+// Dispatch args for the partial passes, then three brick-column lists.
+RWByteAddressBuffer DirtyLists : register(u7);
+ByteAddressBuffer DirtyBricksIn : register(t6);
+ByteAddressBuffer DirtyListsIn : register(t7);
+ByteAddressBuffer BrickFlagsIn : register(t8);
+// Mirrors kVoxelListArgs* / kVoxelListBytes in SnowDeformation.h.
+#define LIST_ARGS_SEED 0
+#define LIST_ARGS_Z 12
+#define LIST_ARGS_X 24
+#define LIST_ARGS_Y 36
+#define LIST_ARGS_FLAGS 48
+#define LIST0_OFF 64
+#define LIST2_OFF 4160
+#define LIST3_OFF 8256
+
+uint BrickIndex(uint3 physBrick)
+{
+	uint bricks = (uint)Dim >> 3;
+	return (physBrick.z * bricks + physBrick.y) * bricks + physBrick.x;
+}
+
+uint2 ListColumn(uint offset, uint index)
+{
+	uint e = DirtyListsIn.Load(offset + index * 4);
+	return uint2(e & 0xFFFFu, e >> 16);
+}
+
+// After the raster: which bricks' occupancy changed since the last rebuild
+// (t4 = the previous volume), solid/empty only - the facing nibble can flip
+// between two triangles' last writes and the life nibble ticks, and neither
+// moves the snow. One atomic per brick.
+groupshared uint gChanged;
+[numthreads(8, 8, 8)] void VoxelDiffCS(uint3 p
+									   : SV_DispatchThreadID, uint gi
+									   : SV_GroupIndex) {
+	if (gi == 0)
+		gChanged = 0;
+	GroupMemoryBarrierWithGroupSync();
+	bool wasSolid = OccupancyIn[p] > 0.0;
+	bool isSolid = VolumeIn[p] > 0.0;
+	if (wasSolid != isSolid)
+		InterlockedOr(gChanged, 1u);
+	GroupMemoryBarrierWithGroupSync();
+	if (gi == 0 && gChanged != 0)
+		DirtyBricks.InterlockedOr(BrickIndex(p >> 3) * 4, 1u);
+}
+
+// One group. A brick column is dirty (D0) if any brick in its stack is; the
+// seed and Z passes run there, Z being per column anyway. X reads Z's
+// result up to 9 voxels aside, so it runs on D3; Y reads X's result, which
+// exists only where X ran, and Y's result is read by the flags a voxel
+// aside. So: D1 = D0 + 2 bricks in x; D2 = D1 + 2 in y (Y); D3 = D2 + 2 in
+// y + 1 in x (X, and the flags). Each list is the dispatch's group count.
+groupshared uint gCol0[1024];
+groupshared uint gCol1[1024];
+groupshared uint gCol2[1024];
+groupshared uint gCol3[1024];
+[numthreads(32, 32, 1)] void VoxelDirtyColsCS(uint3 tid
+											  : SV_GroupThreadID) {
+	uint bricks = (uint)Dim >> 3;
+	bool live = all(tid.xy < bricks);
+	uint idx = tid.y * 32 + tid.x;
+	uint d0 = 0;
+	[branch] if (live)
+	{
+		[branch] if (ForceDirty > 0.5)
+			d0 = 1;
+		else
+		{
+			[loop] for (uint bz = 0; bz < bricks; bz++)
+				d0 |= DirtyBricksIn.Load(BrickIndex(uint3(tid.xy, bz)) * 4);
+		}
+	}
+	gCol0[idx] = d0 != 0 ? 1u : 0u;
+	GroupMemoryBarrierWithGroupSync();
+	uint d1 = 0;
+	[unroll] for (int dx = -2; dx <= 2; dx++)
+	{
+		int x = (int)tid.x + dx;
+		if (live && x >= 0 && x < (int)bricks)
+			d1 |= gCol0[tid.y * 32 + x];
+	}
+	gCol1[idx] = d1;
+	GroupMemoryBarrierWithGroupSync();
+	uint d2 = 0;
+	[unroll] for (int dy = -2; dy <= 2; dy++)
+	{
+		int y = (int)tid.y + dy;
+		if (live && y >= 0 && y < (int)bricks)
+			d2 |= gCol1[y * 32 + tid.x];
+	}
+	gCol2[idx] = d2;
+	GroupMemoryBarrierWithGroupSync();
+	uint d3y = 0;
+	[unroll] for (int dy2 = -2; dy2 <= 2; dy2++)
+	{
+		int y = (int)tid.y + dy2;
+		if (live && y >= 0 && y < (int)bricks)
+			d3y |= gCol2[y * 32 + tid.x];
+	}
+	gCol3[idx] = d3y;
+	GroupMemoryBarrierWithGroupSync();
+	uint d3 = 0;
+	[unroll] for (int dx2 = -1; dx2 <= 1; dx2++)
+	{
+		int x = (int)tid.x + dx2;
+		if (live && x >= 0 && x < (int)bricks)
+			d3 |= gCol3[tid.y * 32 + x];
+	}
+	[branch] if (live)
+	{
+		uint packed = tid.x | (tid.y << 16);
+		uint slot;
+		if (d0 != 0)
+		{
+			DirtyLists.InterlockedAdd(LIST_ARGS_SEED, 1u, slot);
+			DirtyLists.InterlockedAdd(LIST_ARGS_Z, 1u);
+			DirtyLists.Store(LIST0_OFF + slot * 4, packed);
+		}
+		if (d2 != 0)
+		{
+			DirtyLists.InterlockedAdd(LIST_ARGS_Y, 1u, slot);
+			DirtyLists.Store(LIST2_OFF + slot * 4, packed);
+		}
+		if (d3 != 0)
+		{
+			DirtyLists.InterlockedAdd(LIST_ARGS_X, 1u, slot);
+			DirtyLists.InterlockedAdd(LIST_ARGS_FLAGS, 1u);
+			DirtyLists.Store(LIST3_OFF + slot * 4, packed);
+		}
+	}
+}
 
 uint3 Phys(int3 logical)
 {
@@ -246,8 +388,12 @@ float OccNz(float v)
 // Snow seeds: occupied voxels facing up enough, with open air above, and
 // weighted by the column's sky openness and shelter the way the 2D
 // pipeline weights the skin, doors suppressing.
-[numthreads(8, 8, 8)] void VoxelSeedCS(uint3 p
-									   : SV_DispatchThreadID) {
+// Indirect over the D0 column list: group x = list entry, group y = brick z.
+[numthreads(8, 8, 8)] void VoxelSeedCS(uint3 gid
+									   : SV_GroupID, uint3 tid
+									   : SV_GroupThreadID) {
+	uint2 col = ListColumn(LIST0_OFF, gid.x);
+	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float occ = VolumeIn[p];
@@ -288,10 +434,14 @@ float OccNz(float v)
 // eave, however thin the member). Unbounded reach: the gathered version's
 // 8-voxel radius was the ceiling Josef hit at 21 u, and why each ring's
 // ceiling differed (2026-09-07) - at a 256th of the loads.
-[numthreads(16, 16, 1)] void VoxelBlurZCS(uint3 p
-										  : SV_DispatchThreadID) {
+// Indirect over the D0 column list, one group per entry.
+[numthreads(8, 8, 1)] void VoxelBlurZCS(uint3 gid
+										: SV_GroupID, uint3 tid
+										: SV_GroupThreadID) {
+	uint2 col = ListColumn(LIST0_OFF, gid.x);
+	uint2 p = col * 8 + tid.xy;
 	int mask = Dim - 1;
-	int2 lxy = ((int2)p.xy - OriginVox.xy) & mask;
+	int2 lxy = ((int2)p - OriginVox.xy) & mask;
 	float sigma = max(SeedSigma, 0.25);
 	float invTwoS2 = 0.5 / (sigma * sigma);
 	float carry = 0.0;
@@ -330,11 +480,15 @@ Texture3D<float> SupportIn : register(t5);
 // max(dx, |j|), and the field is cut past OverhangVox with a one-voxel
 // ramp. So the shoulder's width and the reach past an edge are two
 // settings: deep, rounded snow that still stops at the step's edge.
-[numthreads(8, 8, 8)] void VoxelBlurCS(uint3 p
-									   : SV_DispatchThreadID) {
+// Indirect: X over the D3 column list, Y over D2.
+[numthreads(8, 8, 8)] void VoxelBlurCS(uint3 gid
+									   : SV_GroupID, uint3 tid
+									   : SV_GroupThreadID) {
+	bool alongY = BlurAxis == 1;
+	uint2 col = ListColumn(alongY ? LIST2_OFF : LIST3_OFF, gid.x);
+	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
-	bool alongY = BlurAxis == 1;
 	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
 	float sigma = max(RoundSigma, 0.25);
 	int radius = min((int)ceil(sigma * 2.5), 8);
@@ -386,49 +540,64 @@ Texture3D<float> SupportIn : register(t5);
 // count.
 AppendStructuredBuffer<uint> BrickList : register(u3);
 
+// The flags: per PHYSICAL brick, its 8-bit sub-cell crossing mask, kept
+// between rebuilds and recomputed only on the D3 column list (indirect, one
+// group per brick, 512 threads over the 1000 dilated voxels). Per 4^3
+// sub-cell (bit = sx | sy << 1 | sz << 2): a crossing inside its own one-
+// voxel-dilated range; a voxel at local 3 or 4 on an axis is in both of
+// that axis's sub-cells. The draw's march skips sub-cells with no bit.
+groupshared uint gAnyIn;
+groupshared uint gAllIn;
+[numthreads(8, 8, 8)] void VoxelBrickFlagsCS(uint3 gid
+											 : SV_GroupID, uint gi
+											 : SV_GroupIndex) {
+	if (gi == 0)
+	{
+		gAnyIn = 0u;
+		gAllIn = 0xFFu;
+	}
+	GroupMemoryBarrierWithGroupSync();
+	uint2 col = ListColumn(LIST3_OFF, gid.x);
+	uint3 phys = uint3(col, gid.y);
+	int bricks = Dim >> 3;
+	int3 base = (((int3)phys - (OriginVox.xyz >> 3)) & (bricks - 1)) * 8;
+	[loop] for (uint i = gi; i < 1000u; i += 512u)
+	{
+		int x = (int)(i % 10u) - 1;
+		int y = (int)((i / 10u) % 10u) - 1;
+		int z = (int)(i / 100u) - 1;
+		uint cells = (z <= 2 ? 0x0Fu : (z >= 5 ? 0xF0u : 0xFFu)) & (y <= 2 ? 0x33u : (y >= 5 ? 0xCCu : 0xFFu)) & (x <= 2 ? 0x55u : (x >= 5 ? 0xAAu : 0xFFu));
+		int3 l = base + int3(x, y, z);
+		bool inside = all(l >= 0) && all(l < Dim) && FieldIn[Phys(l)] >= FieldThreshold;
+		if (inside)
+			InterlockedOr(gAnyIn, cells);
+		else
+			InterlockedAnd(gAllIn, ~cells);
+	}
+	GroupMemoryBarrierWithGroupSync();
+	if (gi == 0)
+		BrickFlags.Store(BrickIndex(phys) * 4, gAnyIn & ~gAllIn & 0xFFu);
+}
+
+// The draw list, every rebuild: each flagged physical brick in reach, as a
+// LOGICAL brick for the draw VS. Chebyshev: the reach is a cube, as the
+// rings are. (A radial reach against a cubic hole left the corners of every
+// ring to nobody - the borders Josef saw, 2026-09-07.) Half a brick of
+// slack. The hole for the finer level is cut in the draw VS, per frame.
 [numthreads(8, 8, 8)] void VoxelBrickListCS(uint3 b
 											: SV_DispatchThreadID) {
 	int bricks = Dim >> 3;
 	if (any((int3)b >= bricks))
 		return;
-	int3 base = (int3)b * 8;
-	float3 centre = (float3)(base + OriginVox.xyz) + 4.0;
-	// Chebyshev: the reach is a cube, as the rings are. (A radial reach
-	// against a cubic hole left the corners of every ring to nobody - the
-	// borders Josef saw, 2026-09-07.) Half a brick of slack. The hole for
-	// the finer level is cut in the draw VS, per frame: this list may be
-	// several frames old on a lazy ring.
+	uint mask = BrickFlagsIn.Load(BrickIndex(b) * 4) & 0xFFu;
+	if (mask == 0u)
+		return;
+	int3 logical = ((int3)b - (OriginVox.xyz >> 3)) & (bricks - 1);
+	float3 centre = (float3)(logical * 8 + OriginVox.xyz) + 4.0;
 	float3 fromCentre = abs(centre - CentreVox.xyz);
 	if (any(fromCentre - 4.0 > CentreVox.w))
 		return;
-	// Per 4^3 sub-cell (bit = sx | sy << 1 | sz << 2): a crossing inside
-	// its own one-voxel-dilated range, from the same loads the brick test
-	// already makes. A voxel at local 3 or 4 on an axis is in both of that
-	// axis's sub-cells. The draw's march skips sub-cells with no bit: most
-	// of a listed brick is air on one side of a sheet of snow.
-	uint anyIn = 0u;
-	uint allIn = 0xFFu;
-	[loop] for (int z = -1; z <= 8; z++)
-	{
-		uint zs = z <= 2 ? 0x0Fu : (z >= 5 ? 0xF0u : 0xFFu);
-		[loop] for (int y = -1; y <= 8; y++)
-		{
-			uint ys = y <= 2 ? 0x33u : (y >= 5 ? 0xCCu : 0xFFu);
-			[loop] for (int x = -1; x <= 8; x++)
-			{
-				uint cells = zs & ys & (x <= 2 ? 0x55u : (x >= 5 ? 0xAAu : 0xFFu));
-				int3 l = base + int3(x, y, z);
-				bool inside = all(l >= 0) && all(l < Dim) && FieldIn[Phys(l)] >= FieldThreshold;
-				[flatten] if (inside)
-					anyIn |= cells;
-				else
-					allIn &= ~cells;
-			}
-		}
-	}
-	uint mask = anyIn & ~allIn & 0xFFu;
-	if (mask != 0u)
-		BrickList.Append(b.x | (b.y << 8) | (b.z << 16) | (mask << 24));
+	BrickList.Append((uint)logical.x | ((uint)logical.y << 8) | ((uint)logical.z << 16) | (mask << 24));
 }
 
 // Single return: an early return inside a branch reads as X4000 to fxc.
@@ -448,13 +617,20 @@ float SliceRead(int3 logical)
 										 : SV_DispatchThreadID, uint gi
 										 : SV_GroupIndex) {
 	if (gi == 0)
+	{
 		gOccupied = 0;
+		gScrolledIn = 0;
+	}
 	GroupMemoryBarrierWithGroupSync();
 
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	int3 old = logical + ScrollDelta.xyz;
 	bool inside = OriginVox.w == 0 && all(old >= 0) && all(old < Dim);
+	// A slot reused for a voxel 256 away holds the OLD world's field: dirty,
+	// whatever the occupancy compare says. One atomic per brick.
+	if (!inside)
+		InterlockedOr(gScrolledIn, 1u);
 	float v = inside ? VolumeIn[p] : 0.0;
 	// Memory is the low nibble: down one on tick frames (Decay = 1), gone
 	// at zero; the raster rewrites a re-seen voxel at 15 after this.
@@ -471,7 +647,11 @@ float SliceRead(int3 logical)
 		InterlockedAdd(gOccupied, 1u);
 	GroupMemoryBarrierWithGroupSync();
 	if (gi == 0)
+	{
 		OccupancyCount.InterlockedAdd(0, gOccupied);
+		if (gScrolledIn != 0)
+			DirtyBricks.InterlockedOr(BrickIndex(p >> 3) * 4, 1u);
+	}
 }
 
 // One plane of the window for the menu, world-aligned: image top is north

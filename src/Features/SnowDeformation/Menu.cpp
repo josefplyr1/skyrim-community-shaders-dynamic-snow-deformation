@@ -327,6 +327,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox(T(TKEY("volume_skip_empty"), "Skip Empty Cells"), &settings.VolumeSkipEmptyCells);
 			if (auto _ttVoxSkip = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_skip_empty_tooltip"), "The ray jumps over the eighths of a brick that hold no snow surface instead of sampling through them. No visible change; off for comparing cost."));
+			ImGui::Checkbox(T(TKEY("volume_dirty_bricks"), "Dirty Bricks"), &settings.VolumeDirtyBricks);
+			if (auto _ttVoxDirty = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("volume_dirty_bricks_tooltip"), "A rebuild recomputes the snow only in the columns of bricks whose captured shape changed since the last one - something newly seen, faded, or scrolled in - plus the blur's reach around them; everywhere else keeps last time's snow, which is world-anchored and does not move. Standing still, almost nothing is rebuilt. Every 120th rebuild is whole. Off rebuilds everything every time, for comparing."));
 			ImGui::Checkbox(T(TKEY("volume_lazy_rings"), "Lazy Far Rings"), &settings.VolumeLazyRings);
 			if (auto _ttVoxLazy = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("volume_lazy_rings_tooltip"), "Each level rebuilds its snow only every 2nd, 4th, 8th... frame the further out it is - a step is nothing at a far ring's voxel size - and keeps drawing what it last built. No frame rebuilds more than two levels, so six levels cost about what two do. Off rebuilds every level every frame, for comparing."));
