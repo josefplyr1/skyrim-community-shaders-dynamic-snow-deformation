@@ -401,23 +401,34 @@ AppendStructuredBuffer<uint> BrickList : register(u3);
 	float3 fromCentre = abs(centre - CentreVox.xyz);
 	if (any(fromCentre - 4.0 > CentreVox.w))
 		return;
-	bool anyIn = false;
-	bool allIn = true;
+	// Per 4^3 sub-cell (bit = sx | sy << 1 | sz << 2): a crossing inside
+	// its own one-voxel-dilated range, from the same loads the brick test
+	// already makes. A voxel at local 3 or 4 on an axis is in both of that
+	// axis's sub-cells. The draw's march skips sub-cells with no bit: most
+	// of a listed brick is air on one side of a sheet of snow.
+	uint anyIn = 0u;
+	uint allIn = 0xFFu;
 	[loop] for (int z = -1; z <= 8; z++)
 	{
+		uint zs = z <= 2 ? 0x0Fu : (z >= 5 ? 0xF0u : 0xFFu);
 		[loop] for (int y = -1; y <= 8; y++)
 		{
+			uint ys = y <= 2 ? 0x33u : (y >= 5 ? 0xCCu : 0xFFu);
 			[loop] for (int x = -1; x <= 8; x++)
 			{
+				uint cells = zs & ys & (x <= 2 ? 0x55u : (x >= 5 ? 0xAAu : 0xFFu));
 				int3 l = base + int3(x, y, z);
 				bool inside = all(l >= 0) && all(l < Dim) && FieldIn[Phys(l)] >= FieldThreshold;
-				anyIn = anyIn || inside;
-				allIn = allIn && inside;
+				[flatten] if (inside)
+					anyIn |= cells;
+				else
+					allIn &= ~cells;
 			}
 		}
 	}
-	if (anyIn && !allIn)
-		BrickList.Append(b.x | (b.y << 8) | (b.z << 16));
+	uint mask = anyIn & ~allIn & 0xFFu;
+	if (mask != 0u)
+		BrickList.Append(b.x | (b.y << 8) | (b.z << 16) | (mask << 24));
 }
 
 // Single return: an early return inside a branch reads as X4000 to fxc.

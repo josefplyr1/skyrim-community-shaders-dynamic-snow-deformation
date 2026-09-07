@@ -613,6 +613,10 @@ public:
 		int VolumeLevels = 4;
 		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
 		int VolumeFineLevels = 2;
+		/** @brief "March Step", voxels: the draw's sample spacing along each ray. The hit is refined on the cubic afterwards, so the march only has to find the crossing interval; features thinner than a step can be stepped over. */
+		float VolumeMarchStep = 1.0f;
+		/** @brief "Skip Empty Cells": the march jumps over the 4^3 sub-cells of a brick that the brick list marked as holding no crossing. */
+		bool VolumeSkipEmptyCells = true;
 		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
 		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */

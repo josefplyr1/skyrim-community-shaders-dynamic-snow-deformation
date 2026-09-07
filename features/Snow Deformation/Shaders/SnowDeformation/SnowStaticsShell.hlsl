@@ -2123,28 +2123,49 @@ SamplerState VoxelWrapSampler : register(s3);
 
 struct VOXEL_VS_OUTPUT
 {
-	float4 Position : SV_POSITION;
+	// noperspective centroid: what SV_DepthGreaterEqual requires of the
+	// position input (X8000 otherwise, at game launch, silently).
+	noperspective centroid float4 Position : SV_POSITION;
 	// Camera-relative, on the brick's surface.
 	float3 WorldPos : TEXCOORD0;
 	nointerpolation float3 BrickMin : TEXCOORD1;
+	// Which of the brick's eight 4^3 sub-cells hold a crossing.
+	nointerpolation uint Mask : TEXCOORD2;
 };
 #endif
 
 #if defined(VSHADER) && defined(VOXEL)
 VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
 {
-	// 12 triangles over the 8 corners (bit 0 = x, 1 = y, 2 = z). Winding is
-	// irrelevant: the PS keeps the back face by distance, not by facing.
+	// 12 triangles over the 8 corners (bit 0 = x, 1 = y, 2 = z), six faces
+	// of six vertices: +Z, -Z, +X, -X, +Y, -Y. Winding is irrelevant: the
+	// faces are chosen here, not by the rasteriser.
 	static const uint kCube[36] = { 4, 6, 7, 4, 7, 5, 0, 1, 3, 0, 3, 2, 1, 5, 7, 1, 7, 3,
 		0, 2, 6, 0, 6, 4, 2, 3, 7, 2, 7, 6, 0, 4, 5, 0, 5, 1 };
+	static const float3 kFaceNormal[6] = { float3(0, 0, 1), float3(0, 0, -1), float3(1, 0, 0), float3(-1, 0, 0), float3(0, 1, 0), float3(0, -1, 0) };
 	uint packed = VoxelBricks[instanceID];
 	int3 brick = int3(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF);
 	float3 minAbs = (float3)(brick * 8 + VoxOrigin.xyz) * VoxParams.x;
 	uint corner = kCube[vertexID % 36];
 	float3 c = float3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
-	float3 rel = minAbs + c * (8.0 * VoxParams.x) - ShellCameraPosAdjust.xyz;
+	float brickSize = 8.0 * VoxParams.x;
+	float3 rel = minAbs + c * brickSize - ShellCameraPosAdjust.xyz;
 	VOXEL_VS_OUTPUT o;
 	o.Position = mul(CameraViewProj, float4(rel, 1.0));
+	// FRONT FACES ONLY, so the PS's SV_DepthGreaterEqual promise holds (a hit
+	// lies at or past the face it was rasterised through) and the hardware
+	// rejects, before the march, every fragment already behind what is
+	// drawn - the bricks behind the first hit, which used to march in full.
+	// A camera inside the brick sees only back faces: those are kept and
+	// rasterised AT THE NEAR PLANE, which every hit is at or past.
+	float3 camLocal = ShellCameraPosAdjust.xyz - minAbs;
+	bool inside = all(camLocal > 0.0) && all(camLocal < brickSize);
+	float3 n = kFaceNormal[(vertexID % 36) / 6];
+	bool front = dot(n, camLocal) > max(dot(n, brickSize.xxx), 0.0);
+	[flatten] if (inside)
+		o.Position.z = 0.0;
+	else if (!front)
+		o.Position = float4(0.0, 0.0, 0.0, 1.0);
 	// The hole for the next-finer level is cut HERE, every frame, not in
 	// the brick list: a lazy ring rebuilds its list every 2^L frames, and a
 	// hole cut then sits where the finer window WAS. A brick wholly inside
@@ -2155,6 +2176,7 @@ VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceI
 		o.Position = float4(0.0, 0.0, 0.0, 1.0);
 	o.WorldPos = rel;
 	o.BrickMin = minAbs - ShellCameraPosAdjust.xyz;
+	o.Mask = packed >> 24;
 	return o;
 }
 #endif
@@ -2567,7 +2589,13 @@ struct PS_OUTPUT
 	// and camera motion sees a geometrically consistent surface. The PATCH
 	// is real geometry and skips it; keeping early-z, which is what makes
 	// its full-span coverage cheap (hidden pixels reject before shading).
+	// The VOXEL march promises its hit is at or past the face it came in
+	// through, so early-z rejects bricks behind an earlier hit.
+#		if defined(VOXEL)
+	float Depth : SV_DepthGreaterEqual;
+#		else
 	float Depth : SV_Depth;
+#		endif
 #	endif
 };
 
@@ -3401,10 +3429,8 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	float3 t1 = bmax * invD;
 	float tNearRaw = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
 	float tFar = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
-	// Both faces rasterise; the back face is the one nearer the exit. A
-	// camera inside the brick sees only back faces, and tNear clamps to 0.
-	[branch] if (abs(tFrag - tFar) > abs(tFrag - tNearRaw))
-		discard;
+	// The VS sends front faces, or back faces when the camera is inside the
+	// brick; either way the ray starts at the entry, or at the eye.
 	float tNear = max(tNearRaw, 0.0);
 	// Nothing behind what is already drawn.
 	float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
@@ -3437,10 +3463,32 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	float tPrev = tNear;
 	float t = (floor(tNear / stepLen) + 1.0) * stepLen;
 	bool hit = false;
+	const bool skipEmpty = VoxCentre.w > 0.5;
+	const float cell = 4.0 * voxel;
 	[loop] for (int i = 0; i < 48; i++)
 	{
 		if (t > tFar + stepLen)
 			break;
+		// SUB-CELL SKIP. The brick list marks which of the brick's eight 4^3
+		// cells hold a crossing; a cell without one, entered from air, is
+		// air throughout, so the ray jumps to the lattice point past its
+		// exit without sampling. The lattice stays global, so the surface
+		// is still continuous across cells and bricks.
+		[branch] if (skipEmpty)
+		{
+			float3 local = rayDir * t - bmin;
+			int3 sc = clamp((int3)floor(local / cell), 0, 1);
+			uint bit = 1u << (uint)(sc.x | (sc.y << 1) | (sc.z << 2));
+			[branch] if ((input.Mask & bit) == 0u)
+			{
+				float3 cmin = bmin + (float3)sc * cell;
+				float3 tb = (cmin + step(0.0, rayDir) * cell) * invD;
+				float tExit = min(tb.x, min(tb.y, tb.z));
+				t = (floor(max(tExit, t) / stepLen) + 1.0) * stepLen;
+				tPrev = t - stepLen;
+				continue;
+			}
+		}
 		if (VoxelFieldAt(rayDir * t) >= threshold) {
 			hit = true;
 			break;
@@ -3529,7 +3577,8 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
 
 	PS_OUTPUT psout;
-	psout.Depth = clip.z / clip.w;
+	// Never under the face it came in through: the conservative-depth promise.
+	psout.Depth = max(clip.z / clip.w, input.Position.z);
 	psout.Diffuse = float4(r.preLit, 1.0);
 	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 0.0);

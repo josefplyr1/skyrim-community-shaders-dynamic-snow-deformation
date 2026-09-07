@@ -712,13 +712,14 @@ void SnowDeformation::DrawVoxelSnow()
 		const float voxelSize = VoxelSizeForLevel(L);
 		VoxelDrawCB d{};
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
-		d.VoxParams = { voxelSize, float(lv.dim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), 0.5f };
+		d.VoxParams = { voxelSize, float(lv.dim), std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
 		// Hand-over bands: in over the finer level's outer band (none on
 		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;
 		const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 		const auto centre = VoxelLevelCentre(L);
-		d.VoxCentre = { centre.x - eye.x, centre.y - eye.y, centre.z - eye.z, 0.0f };
+		// w = the sub-cell skip switch.
+		d.VoxCentre = { centre.x - eye.x, centre.y - eye.y, centre.z - eye.z, settings.VolumeSkipEmptyCells ? 1.0f : 0.0f };
 		d.VoxInnerCentre = { 0.0f, 0.0f, 0.0f, 0.0f };
 		if (L > 0) {
 			VoxelReachBand(L - 1, inStart, inEnd);

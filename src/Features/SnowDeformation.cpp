@@ -164,6 +164,8 @@
 	X(VolumeLevels) \
 	X(VolumeFineLevels) \
 	X(VolumeLazyRings) \
+	X(VolumeMarchStep) \
+	X(VolumeSkipEmptyCells) \
 
 
 void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
