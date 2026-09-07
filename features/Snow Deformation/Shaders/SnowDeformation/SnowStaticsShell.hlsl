@@ -3451,6 +3451,29 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 			a = m;
 	}
 	float tHit = 0.5 * (a + b);
+	// Refine on the CUBIC reconstruction. The trilinear isosurface creases
+	// at every voxel boundary, and at a distance the creases read as
+	// blocks; the B-spline's is C2. Searched within a voxel of the
+	// trilinear hit; a blob the smoothing flattens below the threshold
+	// keeps its trilinear surface rather than vanishing.
+	{
+		float ra = tHit - 0.5 * voxel;
+		float rb = tHit + 0.5 * voxel;
+		bool ia = VoxelFieldCubic(rayDir * ra) >= threshold;
+		bool ib = VoxelFieldCubic(rayDir * rb) >= threshold;
+		[branch] if (!ia && ib)
+		{
+			[unroll] for (int j = 0; j < 5; j++)
+			{
+				float m = 0.5 * (ra + rb);
+				if (VoxelFieldCubic(rayDir * m) >= threshold)
+					rb = m;
+				else
+					ra = m;
+			}
+			tHit = 0.5 * (ra + rb);
+		}
+	}
 	float3 P = rayDir * tHit;
 	// Clipmap hand-over, dithered: over a level's outer band this level
 	// keeps the pixels whose noise is under its weight, and the level

@@ -35,11 +35,13 @@ cbuffer VoxelCB : register(b0)
 	float HeightHalfExtent;
 	// Seed weight where the column is sheltered (a dusting, not bare)
 	float ShelterDust;
-	// Vertical sigma in voxels; threshold picks the isosurface = the depth
+	// Vertical sigma in voxels, from the depth AND the threshold (the C++
+	// side solves exp(-h^2 / 2 s^2) = threshold for s), so Depth is the depth
+	// at any Coverage
 	float SeedSigma;
 	float FieldThreshold;
-	// Sideways sigma in voxels: the overhang past an edge, whatever the depth
-	float SideSigma;
+	// Sideways sigma in voxels: the shoulder's width at an edge
+	float RoundSigma;
 	// tan(max slope) of the seed layer itself; huge = no gate
 	float SlopeTanMax;
 	// xyz = the camera in voxel units (absolute), w = the bricks' reach in
@@ -51,8 +53,10 @@ cbuffer VoxelCB : register(b0)
 	// level's voxels, Chebyshev; bricks inside belong to that level. 0 on
 	// the finest level.
 	float InnerHalfVox;
-	float pad0;
-	float pad1;
+	// How many voxels past a snow column the snow may reach sideways
+	float OverhangVox;
+	// Air voxels a seed needs above it: a member's own inside is not sky
+	float HeadroomVox;
 }
 
 struct VS_OUTPUT
@@ -251,14 +255,50 @@ float SlopeAxis(int plusDz, int minusDz)
 	return (both && a * b > 0.0) ? min(abs(a), abs(b)) : 0.0;
 }
 
+#define RUN_REACH 6
+
+// Solid voxels directly below a seed in its own column. For a SHELL this is
+// the face's rise per lateral voxel: a wall leaning 85 degrees puts its next
+// seed 11 voxels up the next column - past SLOPE_REACH, so the neighbour
+// test read it as a lone edge and kept it (the wall snow at 65, Josef,
+// 2026-09-07). A flat top's run is 1: its inside is hollow.
+int SolidRunBelow(int3 logical)
+{
+	int run = 0;
+	[loop] for (int k = 1; k <= RUN_REACH; k++)
+	{
+		int3 l = logical - int3(0, 0, k);
+		if (l.z < 0 || VolumeIn[Phys(l)] <= 0.0)
+			break;
+		run = k;
+	}
+	return run;
+}
+
 // tan of the seed layer's slope at a seed, from how its height changes per
 // lateral voxel. The old gate read the occupancy shell's own facing, which
 // tilts sideways on every rim voxel of a flat top - the snow shrank from
-// its edges as the slope came down (Josef, 2026-09-07).
+// its edges as the slope came down (Josef, 2026-09-07). Per axis: seeds on
+// both sides -> their agreed rise; on one side -> an edge, flat; on neither
+// side while the OTHER axis has some -> a face running that way, whose rise
+// is the solid run below. Nothing on any side is a post's top: flat.
 float SeedSlopeTan(int3 logical)
 {
-	float gx = SlopeAxis(NearestTopDz(logical, int2(1, 0)), NearestTopDz(logical, int2(-1, 0)));
-	float gy = SlopeAxis(NearestTopDz(logical, int2(0, 1)), NearestTopDz(logical, int2(0, -1)));
+	int px = NearestTopDz(logical, int2(1, 0));
+	int mx = NearestTopDz(logical, int2(-1, 0));
+	int py = NearestTopDz(logical, int2(0, 1));
+	int my = NearestTopDz(logical, int2(0, -1));
+	bool fpx = abs(px) <= SLOPE_REACH;
+	bool fmx = abs(mx) <= SLOPE_REACH;
+	bool fpy = abs(py) <= SLOPE_REACH;
+	bool fmy = abs(my) <= SLOPE_REACH;
+	bool anyX = fpx || fmx;
+	bool anyY = fpy || fmy;
+	float run = 0.0;
+	[branch] if (anyX != anyY)
+		run = (float)SolidRunBelow(logical);
+	float gx = (fpx && fmx) ? SlopeAxis(px, mx) : ((!anyX && anyY) ? run : 0.0);
+	float gy = (fpy && fmy) ? SlopeAxis(py, my) : ((!anyY && anyX) ? run : 0.0);
 	return length(float2(gx, gy));
 }
 
@@ -271,9 +311,18 @@ float SeedSlopeTan(int3 logical)
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float occ = VolumeIn[p];
-	float above = logical.z + 1 < Dim ? VolumeIn[Phys(logical + int3(0, 0, 1))] : 0.0;
 	float seed = 0.0;
-	[branch] if (occ > 0.0 && above <= 0.0)
+	// Open air above, HeadroomVox deep. The underside shell of a roof or a
+	// beam has one air voxel above it - the member's own inside - and its
+	// seeded snow grew out through the eave as a fringe (Josef, 2026-09-07).
+	bool open = occ > 0.0;
+	int headroom = (int)HeadroomVox;
+	[loop] for (int k = 1; k <= headroom && open; k++)
+	{
+		int3 a = logical + int3(0, 0, k);
+		open = a.z >= Dim || VolumeIn[Phys(a)] <= 0.0;
+	}
+	[branch] if (open)
 	{
 		// Graded, not a hard cut: the slope is voxel-quantised.
 		float facing = 1.0;
@@ -291,65 +340,104 @@ float SeedSlopeTan(int3 logical)
 	VolumeOut[p] = seed;
 }
 
-// Separable blur along BlurAxis in logical space (past the window edge is
-// empty); Z first, then X and Y. Every pass keeps a peak of 1, so a flat
-// top's field is exp(-h^2 / 2 sigma^2) and the threshold picks the depth,
-// and a lone post's cap is as full as a slab's.
+// The field, in three passes over logical space (past the window edge is
+// empty): Z, then X, then Y.
 //
-// Z READS DOWN ONLY, TO THE FIRST SOLID. A voxel takes the seed of the
-// surface beneath it and nothing past that solid, and nothing from above -
-// so no seed reaches under the surface it sits on: no snow under a beam, a
-// rail or a roof's eave, however thin the member (Josef, 2026-09-07; the
-// earlier 0.3-sigma down half still hung under anything one voxel thick).
+// Z IS A COLUMN SWEEP, bottom to top, one thread per column. A voxel takes
+// the seed of the first solid beneath it at exp(-d^2 / 2 sigma^2) for its
+// distance d - nothing past that solid, nothing from above, so no seed
+// reaches under the surface it sits on (no snow under a beam, a rail or an
+// eave, however thin the member). Unbounded reach: the gathered version's
+// 8-voxel radius was the ceiling Josef hit at 21 u, and why each ring's
+// ceiling differed (2026-09-07) - at a 256th of the loads.
+[numthreads(16, 16, 1)] void VoxelBlurZCS(uint3 p
+										  : SV_DispatchThreadID) {
+	int mask = Dim - 1;
+	int2 lxy = ((int2)p.xy - OriginVox.xy) & mask;
+	float sigma = max(SeedSigma, 0.25);
+	float invTwoS2 = 0.5 / (sigma * sigma);
+	float carry = 0.0;
+	float dist = 1.0e4;
+	[loop] for (int z = 0; z < Dim; z++)
+	{
+		uint3 ph = Phys(int3(lxy, z));
+		float s = VolumeIn[ph];
+		[flatten] if (OccupancyIn[ph] > 0.0)
+		{
+			carry = s;
+			dist = 0.0;
+		}
+		else
+			dist += 1.0;
+		VolumeOut[ph] = carry * exp(-dist * dist * invTwoS2);
+	}
+}
+
+// Support for the overhang cap, built with the sideways passes.
+RWTexture3D<float> SupportOut : register(u4);
+Texture3D<float> SupportIn : register(t5);
+
+// SIDEWAYS IS A NORMALISED AVERAGE THAT STOPS AT SOLID, with an overhang
+// cap on top. The average over RoundSigma is the shoulder: a slab's inside
+// stays at 1, its rim falls to a half, so the surface rounds off over the
+// kernel's width toward the edge, and a narrow member carries less - snow
+// on a post is a small cap, as it is. (A max kept every lone seed at full
+// height: the 20-u spikes and the fringe of teeth Josef saw.) Normalised
+// over what was reached, so snow piles against a wall instead of thinning
+// beside it; walking outward it stops at the first occupied voxel, so a
+// step riser or a wall blocks one plane's snow from melding into the next.
 //
-// SIDEWAYS IS A MAX, NOT A SUM, AND STOPS AT SOLID. Max is peak-preserving
-// without being width-amplifying: a normalised sum starved thin things at
-// coarse levels, an unnormalised one would let a wide slab's rows sum past
-// 1 and the depth calibration drift with the overhang. Walking outward from
-// each voxel it stops at the first occupied voxel, so a step riser or a
-// wall blocks one plane's snow from melding into the next (the "Plane
-// Split" Josef asked for, as physics). SideSigma is the overhang, absolute:
-// deeper snow no longer juts further.
+// THE CAP is the Chebyshev distance to the nearest column with snow, built
+// separably: X stores its 1D distance in Support, Y takes min over j of
+// max(dx, |j|), and the field is cut past OverhangVox with a one-voxel
+// ramp. So the shoulder's width and the reach past an edge are two
+// settings: deep, rounded snow that still stops at the step's edge.
 [numthreads(8, 8, 8)] void VoxelBlurCS(uint3 p
 									   : SV_DispatchThreadID) {
 	int mask = Dim - 1;
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
-	bool vertical = BlurAxis == 2;
-	float sigma = max(vertical ? SeedSigma : SideSigma, 0.25);
+	bool alongY = BlurAxis == 1;
+	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
+	float sigma = max(RoundSigma, 0.25);
 	int radius = min((int)ceil(sigma * 2.5), 8);
 	float invTwoS2 = 0.5 / (sigma * sigma);
-	int3 step = BlurAxis == 0 ? int3(1, 0, 0) : (BlurAxis == 1 ? int3(0, 1, 0) : int3(0, 0, 1));
-	float v = VolumeIn[p];
-	[branch] if (vertical)
+	int reach = (int)OverhangVox + 1;
+	int span = max(radius, reach);
+	float sum = VolumeIn[p];
+	float wsum = 1.0;
+	float dist = alongY ? round(SupportIn[p] * 8.0) : (sum > 0.0 ? 0.0 : (float)reach);
+	[unroll] for (int dir = -1; dir <= 1; dir += 2)
 	{
-		[loop] for (int k = 1; k <= radius; k++)
+		[loop] for (int k = 1; k <= span; k++)
 		{
-			int3 l = logical - step * k;
-			if (l.z < 0)
+			int3 l = logical + step * (k * dir);
+			if (any(l < 0) || any(l >= Dim))
 				break;
 			uint3 ph = Phys(l);
-			v += exp(-(float)(k * k) * invTwoS2) * VolumeIn[ph];
 			if (OccupancyIn[ph] > 0.0)
 				break;
+			float v = VolumeIn[ph];
+			[flatten] if (k <= radius)
+			{
+				float w = exp(-(float)(k * k) * invTwoS2);
+				wsum += w;
+				sum += w * v;
+			}
+			[flatten] if (alongY)
+				dist = min(dist, max(round(SupportIn[ph] * 8.0), (float)k));
+			else if (v > 0.0)
+				dist = min(dist, (float)k);
 		}
-		VolumeOut[p] = saturate(v);
+	}
+	float avg = sum / wsum;
+	[branch] if (alongY)
+	{
+		VolumeOut[p] = avg * saturate((float)reach - dist);
 	}
 	else
 	{
-		[unroll] for (int dir = -1; dir <= 1; dir += 2)
-		{
-			[loop] for (int k = 1; k <= radius; k++)
-			{
-				int3 l = logical + step * (k * dir);
-				if (any(l < 0) || any(l >= Dim))
-					break;
-				uint3 ph = Phys(l);
-				if (OccupancyIn[ph] > 0.0)
-					break;
-				v = max(v, exp(-(float)(k * k) * invTwoS2) * VolumeIn[ph]);
-			}
-		}
-		VolumeOut[p] = v;
+		VolumeOut[p] = avg;
+		SupportOut[p] = min(dist, 8.0) / 8.0;
 	}
 }
 

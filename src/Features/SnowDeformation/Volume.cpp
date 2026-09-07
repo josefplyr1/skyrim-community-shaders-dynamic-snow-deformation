@@ -17,10 +17,10 @@ bool SnowDeformation::EnsureVoxelResources()
 	bool levelsReady = true;
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
-		levelsReady = levelsReady && lv.volume[0] && lv.volume[1] && lv.field && lv.bricks && lv.drawArgs;
+		levelsReady = levelsReady && lv.volume[0] && lv.volume[1] && lv.field && lv.support && lv.bricks && lv.drawArgs;
 	}
 	if (levelsReady && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
-		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurCS && voxelBrickListCS)
+		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS)
 		return true;
 	if (voxelShadersFailed)
 		return false;
@@ -66,6 +66,8 @@ bool SnowDeformation::EnsureVoxelResources()
 				lv.volume[p] = makeVolume(std::format("SnowDeformation::VoxelVolume{}{}", i, p));
 		if (!lv.field)
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i));
+		if (!lv.support)
+			lv.support = makeVolume(std::format("SnowDeformation::VoxelSupport{}", i));
 		if (!lv.bricks) {
 			D3D11_BUFFER_DESC desc{};
 			desc.Usage = D3D11_USAGE_DEFAULT;
@@ -211,14 +213,15 @@ bool SnowDeformation::EnsureVoxelResources()
 	compileCS(voxelScrollCS, "VoxelScrollCS", "SnowDeformation::VoxelScrollCS");
 	compileCS(voxelSliceCS, "VoxelSliceCS", "SnowDeformation::VoxelSliceCS");
 	compileCS(voxelSeedCS, "VoxelSeedCS", "SnowDeformation::VoxelSeedCS");
+	compileCS(voxelBlurZCS, "VoxelBlurZCS", "SnowDeformation::VoxelBlurZCS");
 	compileCS(voxelBlurCS, "VoxelBlurCS", "SnowDeformation::VoxelBlurCS");
 	compileCS(voxelBrickListCS, "VoxelBrickListCS", "SnowDeformation::VoxelBrickListCS");
-	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurCS || !voxelBrickListCS) {
+	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurZCS || !voxelBlurCS || !voxelBrickListCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurCS {} BrickListCS {})",
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurZCS {} BlurCS {} BrickListCS {})",
 			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
 			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED",
-			voxelSeedCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED");
+			voxelSeedCS ? "ok" : "FAILED", voxelBlurZCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED");
 		return false;
 	}
 	return true;
@@ -260,12 +263,19 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.HeightWindowCenter = heightWindowCenter;
 	a_cb.HeightHalfExtent = seedMaps ? kHeightMapHalfExtent : 0.0f;
 	a_cb.ShelterDust = kVoxelShelterDust;
-	// sigma such that coverage 0.5 lands the isosurface at the slider:
-	// exp(-h^2 / 2 s^2) = 0.5 -> h = 1.177 s. Floored per level, so a
-	// coarse level's snow clears its own seed voxel.
-	a_cb.SeedSigma = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / (1.177f * voxelSize), kVoxelMinSigmaVox);
-	a_cb.FieldThreshold = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
-	a_cb.SideSigma = std::max(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / (1.177f * voxelSize), kVoxelMinSideSigmaVox);
+	// sigma such that the isosurface lands at the slider depth AT THIS
+	// COVERAGE: exp(-h^2 / 2 s^2) = c -> h = s sqrt(-2 ln c). (Solved for
+	// 0.5 only, Coverage 0.10 made Depth 10 read 18 u, and the slider cap
+	// with it.) Floored per level, so a coarse level's snow clears its own
+	// seed voxel.
+	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.05f, 0.95f);
+	const float isoK = std::sqrt(-2.0f * std::log(coverage));
+	const float isoVox = std::max(std::max(settings.VolumeSnowDepth, 2.0f) / voxelSize, kVoxelMinIsoVox);
+	a_cb.SeedSigma = isoVox / isoK;
+	a_cb.FieldThreshold = coverage;
+	a_cb.RoundSigma = std::max(std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / voxelSize, 0.5f);
+	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
+	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	const float slopeDeg = std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f);
 	a_cb.SlopeTanMax = slopeDeg >= 89.5f ? 1.0e6f : std::tan(DirectX::XMConvertToRadians(slopeDeg));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
@@ -284,8 +294,6 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 		VoxelReachBand(a_level - 1, innerStart, innerEnd);
 		a_cb.InnerHalfVox = innerStart / voxelSize;
 	}
-	a_cb.pad0 = 0.0f;
-	a_cb.pad1 = 0.0f;
 }
 
 void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity)
@@ -483,18 +491,35 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		runPass(voxelSeedCS, occupancy, scratch);
 		ID3D11ShaderResourceView* nullMapSRVs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(1, 2, nullMapSRVs);
-		// Every blur pass reads the occupancy at t4: Z stops at the first
+		// Every field pass reads the occupancy at t4: Z stops at the first
 		// solid beneath, X and Y at the first solid beside.
 		ID3D11ShaderResourceView* blockerSRV = occupancy->srv.get();
 		context->CSSetShaderResources(4, 1, &blockerSRV);
-		// Z: scratch -> field.
-		runPass(voxelBlurCS, scratch, lv.field);
+		// Z: scratch -> field, one thread per column.
+		{
+			ID3D11ShaderResourceView* srv = scratch->srv.get();
+			ID3D11UnorderedAccessView* uav = lv.field->uav.get();
+			context->CSSetShaderResources(0, 1, &srv);
+			context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+			context->CSSetShader(voxelBlurZCS, nullptr, 0);
+			context->Dispatch(kVoxelDim / 16, kVoxelDim / 16, 1);
+			context->CSSetShaderResources(0, 1, &nullSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+		}
+		// X: field -> scratch, and its 1D distance -> support (u4).
 		cb.BlurAxis = 0;
 		voxelCB->Update(cb);
+		ID3D11UnorderedAccessView* supportUAV = lv.support->uav.get();
+		context->CSSetUnorderedAccessViews(4, 1, &supportUAV, nullptr);
 		runPass(voxelBlurCS, lv.field, scratch);
+		context->CSSetUnorderedAccessViews(4, 1, &nullUAV, nullptr);
+		// Y: scratch -> field, reading support (t5) for the cap.
 		cb.BlurAxis = 1;
 		voxelCB->Update(cb);
+		ID3D11ShaderResourceView* supportSRV = lv.support->srv.get();
+		context->CSSetShaderResources(5, 1, &supportSRV);
 		runPass(voxelBlurCS, scratch, lv.field);
+		context->CSSetShaderResources(5, 1, &nullSRV);
 		context->CSSetShaderResources(4, 1, &nullSRV);
 
 		// The brick list. Binding the append UAV with a zero initial count

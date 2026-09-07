@@ -601,12 +601,14 @@ public:
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
-		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top at coverage 0.5 (sigma = depth / 1.18 voxels, floored per level by kVoxelMinSigmaVox). Josef's tuned default. */
-		float VolumeSnowDepth = 8.0f;
-		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95; lower = fatter snow, thin features covered. Josef's tuned default. */
-		float VolumeSnowCoverage = 0.5f;
-		/** @brief "Volume Snow Overhang", world units: how far past an edge the snow may jut sideways at coverage 0.5, whatever the depth - past it the snow only grows up. Also how easily two planes' snow melds. Solid always blocks it. */
-		float VolumeSnowOverhang = 4.0f;
+		/** @brief "Volume Snow Depth", world units: the field's isosurface height over a flat open top - at ANY coverage, the sigma is solved from both (floored so the surface clears the seed voxel, kVoxelMinIsoVox). Josef's 10 at 0.10 under the old formula was 18 u; this default keeps his look. */
+		float VolumeSnowDepth = 16.0f;
+		/** @brief "Volume Snow Coverage": the field threshold, 0.05..0.95. No longer the depth: how much a narrow member or an edge keeps of the full depth (lower = more), and how readily gaps bridge. Josef's tuned default. */
+		float VolumeSnowCoverage = 0.1f;
+		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
+		float VolumeSnowOverhang = 2.0f;
+		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. */
+		float VolumeSnowRounding = 8.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 48 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
 		int VolumeLevels = 4;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
@@ -2069,7 +2071,7 @@ public:
 	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */
 	static constexpr uint kVoxelDim = 256;
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
-	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f); }
+	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 1.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
 
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
@@ -2095,11 +2097,11 @@ public:
 		float HeightHalfExtent;
 		/** @brief Seed weight under shelter: a dusting, not bare. */
 		float ShelterDust;
-		/** @brief Vertical sigma in voxels; peak 1, so a flat top's field is exp(-h^2/2s^2) and the threshold picks the depth. */
+		/** @brief Vertical sigma in voxels, solved from Depth AND Coverage: exp(-h^2/2s^2) = threshold at h = depth. */
 		float SeedSigma;
 		float FieldThreshold;
-		/** @brief Sideways sigma in voxels, from Settings::VolumeSnowOverhang: a seed's lateral reach, independent of the depth. */
-		float SideSigma;
+		/** @brief Sideways averaging sigma in voxels, from Settings::VolumeSnowRounding: the shoulder at an edge. */
+		float RoundSigma;
 		/** @brief tan(Settings::VolumeSnowMaxSlopeDeg): the seed layer's own slope, height change per lateral voxel; huge at 90 = no gate. */
 		float SlopeTanMax;
 		/** @brief xyz = the camera in voxel units (absolute), w = the bricks' reach in voxels, Chebyshev. */
@@ -2108,23 +2110,28 @@ public:
 		float SkyStrength;
 		/** @brief Clipmap: where the next-finer level's hand-over band starts, in THIS level's voxels, Chebyshev; bricks inside are that level's. 0 on level 0. */
 		float InnerHalfVox;
-		float pad0;
-		float pad1;
+		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
+		float OverhangVox;
+		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
+		float HeadroomVox;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
 	/** @brief Bricks and the draw reach this fraction of a level's half-extent; the rest is the blur-truncated edge. Chebyshev, so the rings are cube shells and tile without gaps. */
 	static constexpr float kVoxelReachFrac = 0.9f;
 	/** @brief The last fraction of that reach is the hand-over band: the level dithers out over it while the level outside dithers in, complementary per pixel. The outermost dithers to nothing. */
 	static constexpr float kVoxelBandFrac = 0.2f;
-	/** @brief Sigma floors in voxels. A coarse level whose slider depth is under a voxel would keep its surface inside the seed voxel, under the object's own face - invisible, which read as "less coverage far away". Snow deepens with distance instead. */
-	static constexpr float kVoxelMinSigmaVox = 0.85f;
-	static constexpr float kVoxelMinSideSigmaVox = 0.5f;
+	/** @brief Floor on the isosurface height in voxels. A coarse level whose slider depth is under a voxel would keep its surface inside the seed voxel, under the object's own face - invisible, which read as "less coverage far away". Snow deepens with distance instead. */
+	static constexpr float kVoxelMinIsoVox = 1.0f;
+	/** @brief Air a seed needs above it, world units: a roof's or a beam's underside shell has its member's own inside above it, one voxel of air, and seeded snow that grew out through the eave. */
+	static constexpr float kVoxelHeadroomUnits = 8.0f;
 	static constexpr uint kVoxelMaxLevels = 6;
 	/** @brief One clipmap level: occupancy ping-pong, its blob field, and the draw's brick list. Level L's voxel is VoxelSizeLive() * 2^L. */
 	struct VoxelLevel
 	{
 		Texture3D* volume[2] = { nullptr, nullptr };
 		Texture3D* field = nullptr;
+		/** @brief The overhang cap's 1D distance between the X and Y passes. */
+		Texture3D* support = nullptr;
 		Buffer* bricks = nullptr;
 		Buffer* drawArgs = nullptr;
 		uint current = 0;
@@ -2159,6 +2166,7 @@ public:
 	static constexpr float kVoxelShelterDust = 0.1f;
 
 	ID3D11ComputeShader* voxelSeedCS = nullptr;
+	ID3D11ComputeShader* voxelBlurZCS = nullptr;
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
 	// ---- V1b: the draw ----
 	ConstantBuffer* voxelDrawCB = nullptr;
