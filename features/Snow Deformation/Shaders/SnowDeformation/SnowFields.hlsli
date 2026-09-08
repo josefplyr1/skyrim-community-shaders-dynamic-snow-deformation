@@ -263,7 +263,21 @@ float2 SampleExclusionField(float2 worldXY)
 // shell snow, never bare ground, never below the terrain mesh.
 static const float kFireMeltFloor = 1.0;
 
+// THE GEOMETRY HEIGHT: dunes only. The bump octave is SHADING-ONLY - it
+// perturbs the normal and never displaces the surface. Raising the landscape
+// shell by even two units darkened distant object caps, and the cause sits in
+// how the shells' depths relate rather than in the bumps (Josef, 2026-09-08:
+// eight bisect splits; the depth clamp guarded in `5215fbe2` and still dark).
+// Everything that must agree with the built surface - the vertex displacement,
+// the road patch, both shells' self-shadow marches - reads this.
 float Undulation(float2 worldXY)
+{
+	return UndulationNorm(worldXY, UndulationScale) * UndulationAmp;
+}
+
+// THE SHADING HEIGHT: dunes plus the bump octave, the field whose gradient
+// lights the mounds. Only the normal is taken from it.
+float UndulationShadeHeight(float2 worldXY)
 {
 	return UndulationHeight(worldXY, UndulationScale, UndulationAmp, UndulationBumps.xyz);
 }
@@ -319,8 +333,8 @@ float2 UndulationGradSampled(float2 worldXY)
 	else {
 		const float uStep = kUndulationGradStep;
 		result = float2(
-					 Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
-					 Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) /
+					 UndulationShadeHeight(worldXY + float2(uStep, 0.0)) - UndulationShadeHeight(worldXY - float2(uStep, 0.0)),
+					 UndulationShadeHeight(worldXY + float2(0.0, uStep)) - UndulationShadeHeight(worldXY - float2(0.0, uStep))) /
 		         (2.0 * uStep);
 	}
 	return result;

@@ -188,7 +188,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("undulation_bump_height"), "Bump Height"), &settings.UndulationBumpHeight, 0.0f, 6.0f, "%.1f units");
 		if (auto _ttBh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("undulation_bump_height_tooltip"), "Small mounds scattered over the dunes. Baked into the same field, so they cost nothing per frame; the landscape shell and the road patch share it. 0 = off."));
+			ImGui::Text("%s", T(TKEY("undulation_bump_height_tooltip"), "Small mounds scattered over the dunes, SHADING-ONLY: they light and shade as mounds but do not displace the surface, so nothing else in the scene has to agree with them. Baked into the same field, so they cost nothing per frame; the landscape shell and the road patch share it. 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("undulation_bump_size"), "Bump Size"), &settings.UndulationBumpSize, 24.0f, 160.0f, "%.0f units");
 		if (auto _ttBs = Util::HoverTooltipWrapper())

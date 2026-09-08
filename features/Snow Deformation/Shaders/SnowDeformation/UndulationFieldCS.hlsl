@@ -35,7 +35,9 @@ RWTexture2D<float4> UndulationField : register(u0);
 	float2 w = FieldOriginWorld + float2(id.xy) * FieldTexel;
 	const float3 bumps = float3(FieldBumpHeight, FieldBumpCell, FieldBumpLo);
 	const float uStep = kUndulationGradStep;
-	float h = UndulationHeight(w, FieldScale, FieldAmp, bumps);
+	// Height WITHOUT the bumps (they are shading-only, see SnowFields.hlsli);
+	// the gradient below carries them, so the mounds light without standing.
+	float h = UndulationHeight(w, FieldScale, FieldAmp, (float3)0.0);
 	float2 g = float2(
 					UndulationHeight(w + float2(uStep, 0.0), FieldScale, FieldAmp, bumps) - UndulationHeight(w - float2(uStep, 0.0), FieldScale, FieldAmp, bumps),
 					UndulationHeight(w + float2(0.0, uStep), FieldScale, FieldAmp, bumps) - UndulationHeight(w - float2(0.0, uStep), FieldScale, FieldAmp, bumps)) /
