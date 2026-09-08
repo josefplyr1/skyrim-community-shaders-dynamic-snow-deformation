@@ -4387,6 +4387,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// block is the only thing that can raise coverage again, and Recolor
 	// Projected Snow still owns whether it does.
 	coverageAlpha *= ShellCoverage;
+	// Drifts carry no projected diffuse: nothing for the coat to read back,
+	// so with the sheet off nothing can raise coverage again. Whole mesh, any
+	// facing - the pixel-side twin of the lift's FullCoat gate.
+	[flatten] if (FullCoat > 0.5)
+		coverageAlpha = 1.0;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
 	[branch] if (LegacySkin < 0.5 && (coatOn || fadeAlpha < 0.5))
@@ -4429,7 +4434,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 			}
 			bool realKnown = realEnc >= 1.5;
 			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
-			painted = painted || FullCoat > 0.5;
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
