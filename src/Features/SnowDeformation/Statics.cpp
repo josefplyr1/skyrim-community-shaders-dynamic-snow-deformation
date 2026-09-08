@@ -3132,20 +3132,27 @@ void SnowDeformation::DrawCapturedStatics()
 		if (!layout)
 			continue;
 
-		// "3D Snow on Objects" OFF means NO shell surface on an object, not
-		// a shell with no rise. The coat drape is not a separate thing that
-		// could stay behind: it is THIS draw at zero depth, the same skin
-		// geometry, so it goes with it. What survives is the recolor of the
-		// game's OWN projected snow - a Lighting-pass descriptor bit gated
-		// on Recolor Projected Snow, carrying no geometry of ours at all.
-		// Roads belong to Road Meshes Depth and keep their skin either way.
+		// Two toggles, two things, and the skin draw serves both.
+		//
+		// "3D Snow on Objects" is the RISE: off, FillSkinDrawCB hands this
+		// draw zero depth and nothing stands above the mesh.
+		//
+		// "Recolor Projected Snow" is the DRAPE: the skin finds where the
+		// game's projected diffuse is and lays the shell's snow set over it,
+		// with Edge Lump Size and Edge Lump Reach shaping how far it spreads
+		// and how it breaks up. That is geometry - the Lighting-pass recolor
+		// can change the projected snow's COLOUR but cannot give it the
+		// shell's material or an edge - so the draw has to happen for it.
+		//
+		// Only with both off is nothing of ours drawn on an object. Roads
+		// belong to Road Meshes Depth and keep their skin either way.
 		//
 		// The layout above is created BEFORE this gate on purpose: the
 		// object height raster draws through that same cache, and the
 		// landscape shell's lift, the shelter mask and the trench patch all
 		// read the raster. Skipping the layout would silently drop objects
 		// out of the height field the moment the shell was switched off.
-		if (!cap.road && !settings.ObjectSnow3D)
+		if (!cap.road && !settings.ObjectSnow3D && !settings.ProjSnowMatch)
 			continue;
 
 		// Stride comes from the descriptor's low nibble (in dwords); the
