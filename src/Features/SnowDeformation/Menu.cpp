@@ -1740,6 +1740,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("statics_depth_prepass_disabled_tooltip"), "Measurement aid: returns the object snow to its single draw loop. With the prepass on, the non-carving skins first draw depth-only into a private copy of the scene depth (alpha cut included), then every skin draws its shading against that copy - non-carving ones under an exact depth match, so fragments hidden behind other skins or the scene, or cut by the alpha test, never run the full shader; roads keep their own carve draw as before. The copy is then written back as the scene depth. Same pixels, same depth, same look. Hold the camera still and read the StaticsShell row."));
 
 
+			ImGui::Checkbox(T(TKEY("statics_fine_level_disabled"), "Disable Near Detail Level"), &fineLevelDisabled);
+			if (auto _ttFineLevel = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("statics_fine_level_disabled_tooltip"), "The object height raster the skin's shape is read from covers 4096 units around the camera in 2048 texels, so one texel is 4 world units and no snow shape finer than that can exist. The near level rasterises the same objects a second time over 1024 units, where a texel is 1 unit, and the skin reads it wherever it reaches, fading back to the coarse map at the border. Tick to switch it off and A/B the shape. Cost is the ObjectHeightMapFine pass plus one cone chain."));
+
 			ImGui::Checkbox(T(TKEY("statics_record_disabled"), "Disable Per-Draw Constant Offsets (D3D11.1)"), &staticsRecordDisabled);
 			if (auto _ttRecord = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("statics_record_disabled_tooltip"), "Measurement aid. Normally every object's constants are uploaded once per frame and each draw binds its block by offset instead of updating a constant buffer per draw (about 3,500 updates a frame): the same pixels for less CPU. Needs Direct3D 11.1 constant-buffer offsetting; where the driver or an interposer says no, the log records why and every draw takes the old path anyway. Tick to force the old path and A/B."));

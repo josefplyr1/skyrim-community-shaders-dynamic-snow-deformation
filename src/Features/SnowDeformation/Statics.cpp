@@ -966,6 +966,10 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	a_scb.RoundedDepth = settings.ObjectsSnowDepth;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
+	// The patch stays on the coarse maps: its pass does not bind t33/t34, and
+	// a stale non-zero here would send PatchTop to an unbound texture, whose
+	// zero reads as an object top at world Z 0.
+	a_scb.FineHalfExtent = 0.0f;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
 	// The REAL setting, not the forced 1.0 this used to carry: the patch VS
@@ -1275,6 +1279,11 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTop3Raw[0] = makeHeightTexture("SnowDeformation::HeightTop3Raw0");
 	heightTop3Raw[1] = makeHeightTexture("SnowDeformation::HeightTop3Raw1");
 	objectSnowCone3 = makeHeightTexture("SnowDeformation::ObjectSnowCone3");
+	// Near clipmap level 0: same grid, quarter reach, so one texel is one
+	// world unit. Two textures, not six - no ghost pair, and the cone chain
+	// borrows heightScratch (the passes are sequential and same-sized).
+	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
+	objectSnowConeFine = makeHeightTexture("SnowDeformation::ObjectSnowConeFine");
 	// P3: the sky-openness field at half the raster's resolution - a soft
 	// field, and half res quarters the bake cost. No RTV: compute-written.
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
@@ -1784,7 +1793,11 @@ void SnowDeformation::RenderObjectHeightMap()
 	// The smoothed-normals view is taken here and bound from the same slot
 	// in each loop, so HasSmoothedNormals and the view never disagree.
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
-	std::vector<StaticsCB> captureRecords(size_t(captureCount) * 2);
+	// Three blocks per capture: the coarse raster, the peel, and the near
+	// clipmap's raster (the same draw against a quarter-width window).
+	const bool fineLevel = !fineLevelDisabled && heightTopRawFine && objectSnowConeFine;
+	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
+	std::vector<StaticsCB> captureRecords(size_t(captureCount) * recordBlocks);
 	// Owning references: the cache clears itself past 1,024 entries, and a
 	// raw pointer taken before that clear is a freed view by the time the
 	// loops bind it (Josef's driver-thread CTD, 2026-09-06).
@@ -1856,8 +1869,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		peel.PeelTol = kPeelTol;
 		peel.VertexCountF = vertexCountF;
 		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
+
+		if (fineLevel) {
+			// Same transform, same class depths - only the window narrows.
+			StaticsCB& fine = captureRecords[size_t(captureCount) * 2 + ci];
+			fine = scb;
+			fine.HeightHalfExtent = kHeightFineHalfExtent;
+		}
 	}
-	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), captureCount * 2);
+	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), captureCount * recordBlocks);
 	uint32_t captureParity = 0;
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
@@ -1913,6 +1933,65 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
 	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent]);
+
+	// Near clipmap level 0: the same captures against a quarter-width window,
+	// so the layer-1 top lands at one world unit per texel. No ghost and no
+	// bottoms - readers fall back to the coarse level outside the window, and
+	// the shelter mask is the coarse level's business. RT1/RT2 stay unbound;
+	// the capture PS still writes them and the writes are dropped.
+	if (fineLevel) {
+		context->ClearRenderTargetView(heightTopRawFine->rtv.get(), topClear);
+		ID3D11RenderTargetView* fineRTVs[1] = { heightTopRawFine->rtv.get() };
+		context->OMSetRenderTargets(1, fineRTVs, nullptr);
+		globals::profiler->BeginPass("SnowDeformation::ObjectHeightMapFine");
+		for (uint32_t ci = 0; ci < captureCount; ci++) {
+			const auto& cap = capturedStatics[ci];
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			// Everything outside the narrow window would rasterize to nothing;
+			// most of the capture list is, so the reject is most of the saving.
+			const auto& wb = geometry->worldBound;
+			if (std::abs(wb.center.x - heightWindowCenter.x) > kHeightFineHalfExtent + wb.radius ||
+				std::abs(wb.center.y - heightWindowCenter.y) > kHeightFineHalfExtent + wb.radius)
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape)
+				continue;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				continue;
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				continue;
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				continue;
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto layoutIt = staticsILCache.find(descKey);
+			if (layoutIt == staticsILCache.end() || !layoutIt->second)
+				continue;
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				continue;
+			context->IASetInputLayout(layoutIt->second.get());
+			UINT offset = 0;
+			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+			ID3D11ShaderResourceView* fineSmoothSRV = captureSmoothSRVs[ci].get();
+			context->VSSetShaderResources(10, 1, &fineSmoothSRV);
+			if (captureRecordsLive)
+				BindStaticsRecord(captureCount * 2 + ci, true, false, captureParity);
+			else
+				staticsCB->Update(captureRecords[size_t(captureCount) * 2 + ci]);
+			context->DrawIndexed(indexCount, 0, 0);
+		}
+		globals::profiler->EndPass();
+		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	}
 
 	// S4 phase 2 - the layer PEELS (K=3): re-rasterize the captures
 	// against the completed layers above (now readable), keeping only
@@ -2122,6 +2201,55 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		settleCone(objIn, objOut);
 
+		// The same seed + repose chain over the near clipmap's top, at one
+		// unit per texel. Two inputs differ from the coarse chain: InB (the
+		// per-texel skin-depth raster) is unbound, so the seed is the class
+		// constant - roads seed per texel on the coarse level only, and the
+		// patch reads that one; and InC (the next peeled layer, for the rise
+		// rim's "does our plane continue under the cover" test) is the fine
+		// top itself, which makes every upward break a plane boundary. That
+		// is what a detail level wants: a rock's own steps rim.
+		if (fineLevel) {
+			HeightProcessCB fineData = processData;
+			fineData.HeightHalfExtent = kHeightFineHalfExtent;
+			fineData.ConeStep = 1;
+			heightProcessCB->Update(fineData);
+			context->CSSetShader(objectConeSeedCS, nullptr, 0);
+			ID3D11ShaderResourceView* fineSeedSRVs[2] = { heightTopRawFine->srv.get(), nullptr };
+			ID3D11ShaderResourceView* fineNextSRV = heightTopRawFine->srv.get();
+			ID3D11UnorderedAccessView* fineSeedUAV = objectSnowConeFine->uav.get();
+			context->CSSetShaderResources(0, 2, fineSeedSRVs);
+			context->CSSetShaderResources(3, 1, &fineNextSRV);
+			context->CSSetUnorderedAccessViews(0, 1, &fineSeedUAV, nullptr);
+			context->Dispatch(dispatchDim, dispatchDim, 1);
+			ID3D11ShaderResourceView* nullFineSeedSRVs[2] = { nullptr, nullptr };
+			context->CSSetShaderResources(0, 2, nullFineSeedSRVs);
+			context->CSSetShaderResources(3, 1, nullCsSRVs);
+			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+
+			context->CSSetShader(objectConeCS, nullptr, 0);
+			Texture2D* fineIn = objectSnowConeFine;
+			Texture2D* fineOut = heightScratch;
+			for (uint step : kConeSteps) {
+				fineData.ConeStep = step;
+				heightProcessCB->Update(fineData);
+				ID3D11ShaderResourceView* fineSRV = fineIn->srv.get();
+				ID3D11UnorderedAccessView* fineUAV = fineOut->uav.get();
+				context->CSSetShaderResources(0, 1, &fineSRV);
+				context->CSSetUnorderedAccessViews(0, 1, &fineUAV, nullptr);
+				context->Dispatch(dispatchDim, dispatchDim, 1);
+				context->CSSetShaderResources(0, 1, nullCsSRVs);
+				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
+				std::swap(fineIn, fineOut);
+			}
+			// The chain must land back in objectSnowConeFine; kConeSteps'
+			// even length is what guarantees it, and the coarse chain above
+			// depends on the same invariant.
+			settleCone(fineIn, fineOut);
+			// The coarse chain's constants are what every later pass expects.
+			heightProcessCB->Update(processData);
+		}
+
 		// S4 phase 2: the same seed + repose chain over each PEELED layer
 		// top, so every below-top plane gets its own rims and distances.
 		Texture2D* peelTops[2] = { heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent] };
@@ -2287,6 +2415,9 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
+	// The near clipmap shares the coarse window's centre, so its half-extent
+	// is all the shaders need; 0 turns every fine read back into a coarse one.
+	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? kHeightFineHalfExtent : 0.0f;
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()
@@ -2841,6 +2972,17 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	context->VSSetShaderResources(27, 2, layer3SRVs);
 	context->DSSetShaderResources(27, 2, layer3SRVs);
+	// Near clipmap (t33 cone, t34 top): the same two maps at one unit per
+	// texel over the inner window. Every reader that takes them falls back to
+	// t13/t11 outside it, so a null bind here is simply the coarse behaviour.
+	ID3D11ShaderResourceView* fineSRVs[2] = {
+		(!fineLevelDisabled && objectSnowConeFine && objectSnowConeFine->srv) ? objectSnowConeFine->srv.get() : nullptr,
+		(!fineLevelDisabled && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr
+	};
+	context->VSSetShaderResources(33, 2, fineSRVs);
+	context->DSSetShaderResources(33, 2, fineSRVs);
+	context->PSSetShaderResources(33, 2, fineSRVs);
+	context->HSSetShaderResources(33, 2, fineSRVs);
 	// P3: the sky-openness field (t25), the lift's depth weighting.
 	ID3D11ShaderResourceView* skyOpenSRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
 	context->VSSetShaderResources(25, 1, &skyOpenSRV);

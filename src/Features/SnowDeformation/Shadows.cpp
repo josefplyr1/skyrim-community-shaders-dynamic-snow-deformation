@@ -612,6 +612,14 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				objectSnowCone3 ? objectSnowCone3->srv.get() : nullptr
 			};
 			context->VSSetShaderResources(26, 3, castLayerSRVs);
+			// The caster runs FillSkinDrawCB, so it carries FineHalfExtent and
+			// WILL read the near clipmap: unbound here it would sample zeros
+			// and cast a shadow off a surface the visible skin never had.
+			ID3D11ShaderResourceView* castFineSRVs[2] = {
+				(!fineLevelDisabled && objectSnowConeFine) ? objectSnowConeFine->srv.get() : nullptr,
+				(!fineLevelDisabled && heightTopRawFine) ? heightTopRawFine->srv.get() : nullptr
+			};
+			context->VSSetShaderResources(33, 2, castFineSRVs);
 			// P3: the sky-openness field (t25) - the caster must carry the
 			// same exposure-weighted depth as the visible skin. Inside the
 			// saved t24-t28 range, so the restore set is untouched.
@@ -823,6 +831,9 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetShaderResources(24, 1, &nullCasterMax[0]);
 		context->VSSetShaderResources(26, 1, &nullCasterMax[1]);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
+		// The near clipmap pair; nothing else in the frame holds t33/t34.
+		ID3D11ShaderResourceView* nullFinePair[2] = {};
+		context->VSSetShaderResources(33, 2, nullFinePair);
 		// The skin casters' map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)

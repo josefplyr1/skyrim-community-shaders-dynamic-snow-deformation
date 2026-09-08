@@ -305,7 +305,9 @@ cbuffer StaticCB : register(b1)
 	// >0.5 (Recolor Projected Snow): the shell's material coats every
 	// pixel the projected snow paints solidly, at zero lift.
 	float EdgeCoat;
-	float PadStatics0;
+	// Near clipmap: half-extent of the fine object window, 0 = off. Shares
+	// the coarse window's centre.
+	float FineHalfExtent;
 	float PadStatics1;
 	float PadStatics2;
 }
@@ -655,6 +657,11 @@ Texture2D<float> ObjectTopRaw : register(t11);
 // Cone-transformed snow surface over the same window: the angle of repose
 // already applied, so the edge taper is one read instead of a ring walk.
 Texture2D<float> ObjectSnowCone : register(t13);
+// Near clipmap level 0: the same top raster and cone over a quarter-width
+// window, one world unit per texel. Shares HeightWindowCenter; the reach is
+// FineHalfExtent (0 = the level is off and every read below stays coarse).
+Texture2D<float> ObjectSnowConeFine : register(t33);
+Texture2D<float> ObjectTopFine : register(t34);
 // S4 phase 2 - the PEELED second layer: the highest up-facing surface
 // more than the peel tolerance below layer 1 per column, with its own
 // cone. A vertex whose height matches layer 2 takes its roll from here,
@@ -702,22 +709,89 @@ float2 PatchTexel(float2 worldXY, float2 dims)
 	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 }
 
+// Texel of the FINE window, which shares the coarse window's centre.
+float2 FineTexel(float2 worldXY, float2 dims)
+{
+	float2 local = (worldXY - HeightWindowCenter) / FineHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+// How much of the fine level a point may take: 1 well inside it, ramping to 0
+// at its border so a reader crossing the boundary sees no step. Mirror of
+// kHeightFineFade in SnowDeformation.h.
+float FineWeight(float2 worldXY)
+{
+	float result = 0.0;
+	[branch] if (FineHalfExtent > 0.0)
+	{
+		float2 d = abs(worldXY - HeightWindowCenter);
+		result = 1.0 - smoothstep(FineHalfExtent - 128.0, FineHalfExtent, max(d.x, d.y));
+	}
+	return result;
+}
+
+// The fine top, MAX of four like PatchTop; the empty sentinel where the fine
+// level has nothing (outside its window, or a column no capture reached).
+float FineTop(float2 worldXY)
+{
+	float result = -1000000.0;
+	float2 d = abs(worldXY - HeightWindowCenter);
+	[branch] if (FineHalfExtent > 0.0 && max(d.x, d.y) <= FineHalfExtent)
+	{
+		float2 dims;
+		ObjectTopFine.GetDimensions(dims.x, dims.y);
+		float2 tf = FineTexel(worldXY, dims);
+		int2 t0 = (int2)tf;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		result = max(max(ObjectTopFine.Load(int3(t0.x, t0.y, 0)), ObjectTopFine.Load(int3(t1.x, t0.y, 0))),
+			max(ObjectTopFine.Load(int3(t0.x, t1.y, 0)), ObjectTopFine.Load(int3(t1.x, t1.y, 0))));
+	}
+	return result;
+}
+
+float FineTopPoint(float2 worldXY)
+{
+	float result = -1000000.0;
+	float2 d = abs(worldXY - HeightWindowCenter);
+	[branch] if (FineHalfExtent > 0.0 && max(d.x, d.y) <= FineHalfExtent)
+	{
+		float2 dims;
+		ObjectTopFine.GetDimensions(dims.x, dims.y);
+		int2 tp = int2(FineTexel(worldXY, dims) + 0.5);
+		result = ObjectTopFine.Load(int3(tp, 0));
+	}
+	return result;
+}
+
 float PatchTop(float2 worldXY)
 {
-	// Outside the window: sentinel, never the clamped edge texel. The patch
-	// grid never leaves the window, but skin draws reach the full capture
-	// range, where a clamped read returns an unrelated object's top.
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-
-	float2 dims;
-	ObjectTopRaw.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	return max(max(ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0))),
-		max(ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0))));
+	// The fine level first where it has this column; it rasterizes the same
+	// captures, so the two agree to within a texel and the switch needs no
+	// blend. Empty there (a ghost the fine level carries none of) falls back.
+	// Outside the coarse window: sentinel, never the clamped edge texel. The
+	// patch grid never leaves the window, but skin draws reach the full
+	// capture range, where a clamped read returns an unrelated object's top.
+	float result = FineTop(worldXY);
+	[branch] if (result <= -50000.0)
+	{
+		float2 windowLocal = abs(worldXY - HeightWindowCenter);
+		[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		{
+			result = -1000000.0;
+		}
+		else
+		{
+			float2 dims;
+			ObjectTopRaw.GetDimensions(dims.x, dims.y);
+			float2 t = PatchTexel(worldXY, dims);
+			int2 t0 = (int2)t;
+			int2 t1 = min(t0 + 1, int2(dims) - 1);
+			result = max(max(ObjectTopRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopRaw.Load(int3(t1.x, t0.y, 0))),
+				max(ObjectTopRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopRaw.Load(int3(t1.x, t1.y, 0))));
+		}
+	}
+	return result;
 }
 
 // Snow DEPTH the repose field allows above the local surface, bilinear over
@@ -727,6 +801,28 @@ float ObjectConeDepth(float2 worldXY)
 	float2 windowLocal = abs(worldXY - HeightWindowCenter);
 	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
 		return 1000000.0;
+
+	// The cone is a SMOOTHED field, so its coarse and fine answers genuinely
+	// differ - a hard switch would draw the fine window's border across the
+	// snow. Blended over kHeightFineFade instead. Both are real numbers here:
+	// the fine window is contained in the coarse one, so neither read can be
+	// the out-of-window sentinel.
+	float fineW = FineWeight(worldXY);
+	float fineCone = 0.0;
+	[branch] if (fineW > 0.0)
+	{
+		float2 fineDims;
+		ObjectSnowConeFine.GetDimensions(fineDims.x, fineDims.y);
+		float2 ft = FineTexel(worldXY, fineDims);
+		int2 f0 = (int2)ft;
+		float2 ff = ft - f0;
+		int2 f1 = min(f0 + 1, int2(fineDims) - 1);
+		float g00 = ObjectSnowConeFine.Load(int3(f0.x, f0.y, 0));
+		float g10 = ObjectSnowConeFine.Load(int3(f1.x, f0.y, 0));
+		float g01 = ObjectSnowConeFine.Load(int3(f0.x, f1.y, 0));
+		float g11 = ObjectSnowConeFine.Load(int3(f1.x, f1.y, 0));
+		fineCone = lerp(lerp(g00, g10, ff.x), lerp(g01, g11, ff.x), ff.y);
+	}
 
 	float2 dims;
 	ObjectSnowCone.GetDimensions(dims.x, dims.y);
@@ -738,7 +834,8 @@ float ObjectConeDepth(float2 worldXY)
 	float s10 = ObjectSnowCone.Load(int3(t1.x, t0.y, 0));
 	float s01 = ObjectSnowCone.Load(int3(t0.x, t1.y, 0));
 	float s11 = ObjectSnowCone.Load(int3(t1.x, t1.y, 0));
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float coarse = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	return lerp(coarse, fineCone, fineW);
 }
 
 // P3: baked sky openness, bilinear (the map is half the raster's resolution;
@@ -840,13 +937,23 @@ float ObjectConeDepth3(float2 worldXY)
 // The select wants the top of the vertex's own column, nothing wider.
 float PatchTopPoint(float2 worldXY)
 {
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-	float2 dims;
-	ObjectTopRaw.GetDimensions(dims.x, dims.y);
-	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
-	return ObjectTopRaw.Load(int3(t, 0));
+	float result = FineTopPoint(worldXY);
+	[branch] if (result <= -50000.0)
+	{
+		float2 windowLocal = abs(worldXY - HeightWindowCenter);
+		[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+		{
+			result = -1000000.0;
+		}
+		else
+		{
+			float2 dims;
+			ObjectTopRaw.GetDimensions(dims.x, dims.y);
+			int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
+			result = ObjectTopRaw.Load(int3(t, 0));
+		}
+	}
+	return result;
 }
 
 float PatchTop2Point(float2 worldXY)

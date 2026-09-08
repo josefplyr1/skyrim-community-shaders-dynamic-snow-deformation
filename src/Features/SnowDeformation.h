@@ -1812,7 +1812,8 @@ public:
 		float EdgeFlankWidth;
 		/** @brief Settings::ProjSnowMatch as 0/1: the skin coats the solidly painted projected snow with its own material near the camera. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeCoat;
-		float PadStatics0;
+		/** @brief Near clipmap: half-extent of the fine object window in world units, 0 when the level is off. Its centre is the coarse window's (the fine texel divides the coarse one, so one snap serves both). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float FineHalfExtent;
 		float PadStatics1;
 		float PadStatics2;
 	};
@@ -1991,6 +1992,21 @@ public:
 	// kHeightTexel in SnowStaticsShell.hlsl.
 	static constexpr uint kHeightMapDim = 2048;
 	static constexpr float kHeightMapHalfExtent = 4096.0f;
+
+	/**
+	 * @brief Near clipmap level: the same 2048 grid over a QUARTER of the
+	 * reach, so its texel is 1 world unit where the coarse level's is 4.
+	 *
+	 * Single-buffered on purpose - it is rebuilt from this frame's captures
+	 * every frame and carries no ghost. The coarse level keeps the history,
+	 * and every reader falls back to it outside the fine window, which is
+	 * also what makes the fine level free of the scroll/decay machinery.
+	 * Its centre IS the coarse window's: 4 is a multiple of 1, so one snap
+	 * serves both grids and only the half-extent has to reach the shaders.
+	 */
+	static constexpr float kHeightFineHalfExtent = 1024.0f;
+	/** @brief World units of the fine window given over to the fade into the coarse one, so a reader crossing the boundary sees no step. */
+	static constexpr float kHeightFineFade = 128.0f;
 	/** @brief Height sentinels for texels no object covers. */
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
@@ -2017,6 +2033,11 @@ public:
 	Texture2D* objectSnowCone3 = nullptr;
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
+	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside kHeightFineHalfExtent. */
+	Texture2D* heightTopRawFine = nullptr;
+	Texture2D* objectSnowConeFine = nullptr;
+	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
+	bool fineLevelDisabled = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
