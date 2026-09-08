@@ -100,9 +100,7 @@
 	X(PlaneSplitStep) \
 	X(OverheadClearance) \
 	X(PileHeightRatio) \
-	X(SkinEdgeLumpSize) \
 	X(SkinEdgeFlankWidth) \
-	X(SkyExposurePct) \
 	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \

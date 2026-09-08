@@ -2410,9 +2410,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.PeelTol = kPeelTol;
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
-	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
-	// silhouette keeps the plain contour (as the lift-band cut always did).
-	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
@@ -2420,7 +2417,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// the mesh-replacer default reconstructs a weight the game never paints.
 	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.projReal && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
-	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The sheet is the 3D toggle's; the drape below it is the recolor's.
 	a_scb.ShellCoverage = settings.ObjectSnow3D ? 1.0f : 0.0f;

@@ -211,7 +211,7 @@ void SnowDeformation::DrawSettings()
 		// recolor of the game's own projected snow, and our raised 3D layer.
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Size and Edge Lump Reach shape that second half - how far it spreads past the paint and how it breaks into lobes - and Snow Fill below pushes the pattern toward full coverage, most up-facing parts first. The drape stands on its own: with 3D Snow on Objects off it still draws, flat on the mesh with no rise. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint - and Snow Fill below pushes the pattern toward full coverage, most up-facing parts first. The drape stands on its own: with 3D Snow on Objects off it still draws, flat on the mesh with no rise. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
 		ImGui::SliderFloat(T(TKEY("proj_snow_fill"), "Snow Fill"), &settings.ProjSnowFillPct, 0.0f, 100.0f, "%.0f%%");
 		if (auto _ttFill = Util::HoverTooltipWrapper())
@@ -236,19 +236,12 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttOverhead = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
 
-		ImGui::SliderFloat(T(TKEY("edge_lump_size"), "Edge Lump Size"), &settings.SkinEdgeLumpSize, 0.0f, 3.0f, "%.2fx");
-		if (auto _ttEdgeL = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("edge_lump_size_tooltip"), "Size of the round lumps the snow's edge breaks into, on the raised layer and the painted snow alike. 0 keeps the plain edge; 0.25 is a few centimetres across; higher gives broader lobes."));
 		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
 		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
 		if (auto _ttPile = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
-
-		ImGui::SliderFloat(T(TKEY("sky_exposure"), "Sky Exposure"), &settings.SkyExposurePct, 0.0f, 100.0f, "%.0f%%");
-		if (auto _ttSkyExp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("sky_exposure_tooltip"), "Snow falls from the sky, so how much a surface collects depends on how much sky it can see. Open tops keep their full depth; a ledge under a roof or railing, and pockets shadowed by taller neighbours, thin toward a dusting instead of wearing the same layer as everything else. The strength of that thinning - 0 turns it off and every surface gets the full depth again."));
 
 		ImGui::SliderFloat(T(TKEY("snow_settling"), "Snow Settling"), &settings.SnowSettlingPct, 0.0f, 100.0f, "%.0f%%");
 		if (auto _ttSettle = Util::HoverTooltipWrapper())

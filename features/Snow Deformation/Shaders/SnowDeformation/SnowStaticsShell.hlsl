@@ -284,21 +284,15 @@ cbuffer StaticCB : register(b1)
 	// this many times the repose height its footprint supports. Mirror in
 	// SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PileHeightRatio;
-	// P3: strength of the sky-exposure depth weighting (Settings::
-	// SkyExposurePct / 100). Took a padPile slot; layout unchanged. Mirror
-	// in SnowHeightCapture.hlsl / SnowDeformation.h.
-	float SkyExposureSk;
+	float padSkyExposure;
 	float padCorniceLip;
 	float padBreakup;
 	float padWeld;
 
-	// Edge breakup: reach of the rim erosion in world units (0 = off) and
-	// the lump cell-size multiplier. Mirror in SnowHeightCapture.hlsl /
-	// SnowDeformation.h.
 	// >0.5: PreSkinMasks is bound. Mirror in SnowHeightCapture.hlsl /
 	// SnowDeformation.h.
 	float HasSkinMasksCopy;
-	float EdgeBreakupScale;
+	float padLumpSize;
 	// How far past the edge the lumps reach: a fraction of the projected
 	// weight's own fade on coated draws, a normal-z band elsewhere.
 	float EdgeFlankWidth;
@@ -464,10 +458,6 @@ static const float kSkinShadeSmooth = 0.0;
 // World width of the cornice roll on flat plates, and the band over which a
 // surface standing below another counts as sheltered from snowfall.
 static const float kCorniceRoll = 4.0;
-// Edge breakup: lump cell size in world units (one blob per cell) and the
-// mound tilt (dimensionless: blob gradient x cell size x this).
-static const float kEdgeLumpBig = 12.0;
-static const float kEdgeLumpTilt = 0.6;
 // View-ray bias (world units) that keeps a zero-lift coat/lump pixel off
 // the object's own z.
 static const float kEdgeFlankLift = 0.4;
@@ -476,10 +466,8 @@ static const float kEdgeFlankLift = 0.4;
 static const float kCoatSolidW = 0.15;
 // Edge Lump Reach 1 in world units past the solid contour.
 static const float kEdgeReachUnits = 32.0;
-// Edge Lump Size: how far (in weight) the solid contour wanders through the
-// blob field; and the largest shortfall below the contour the lumps may
-// hang from (the game's own fade is 0.2 wide).
-static const float kEdgeLobeAmp = 0.1;
+// The largest shortfall below the solid contour the lumps may hang from
+// (the game's own fade is 0.2 wide).
 static const float kEdgeMaxDrop = 0.12;
 // The coat's slope gate on the SMOOTH normal (~81 degrees): steep enough to
 // follow the paint down a rock's flank, still above any wall.
@@ -2149,7 +2137,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// thinning toward the dusting rather than zero, matching the landscape
 	// shell's under-roof rule. The casters share this path, so shadow and
 	// shape stay one surface.
-	[branch] if (SkyExposureSk > 0.001 && HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
+	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001)
 	{
 		float open = SampleSkyOpenness(worldBase.xy);
 		[flatten] if (ProjPixelEnable > 1.5)
@@ -2158,7 +2146,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 			[flatten] if (coverTop > -50000.0)
 				open = min(open, 1.0 - smoothstep(kShelterNear, kShelterFar, coverTop - worldBase.z));
 		}
-		float sheltered = (1.0 - open) * SkyExposureSk;
+		float sheltered = 1.0 - open;
 		depth = lerp(depth, min(depth, kShelterDust), sheltered);
 		coverDepth = lerp(coverDepth, min(coverDepth, kShelterDust), sheltered);
 		depthTarget = lerp(depthTarget, min(depthTarget, kShelterDust), sheltered);
@@ -2710,32 +2698,6 @@ struct PS_OUTPUT
 #		endif
 #	endif
 };
-
-// Edge breakup lump field, [0,1]: a metaball sum of jittered gaussian blobs,
-// one per cell, so lumps are round and meld where they touch. p in cells.
-float EdgeLumpBlobs(float2 p)
-{
-	float2 i = floor(p);
-	float acc = 0.0;
-	[unroll] for (int dy = -1; dy <= 1; dy++)
-	{
-		[unroll] for (int dx = -1; dx <= 1; dx++)
-		{
-			float2 cell = i + float2(dx, dy);
-			float2 c = cell + 0.5 + (StochasticHash(cell) - 0.5) * 0.8;
-			float2 d = p - c;
-			acc += exp(-dot(d, d) * 3.0);
-		}
-	}
-	return saturate(acc);
-}
-
-// Triplanar (w = axis weights), so a flank gets lumps rather than the XY
-// field stretched into drips.
-float EdgeLumpField(float3 p, float3 w, float cell)
-{
-	return w.z * EdgeLumpBlobs(p.xy / cell) + w.x * EdgeLumpBlobs(p.yz / cell + 31.7) + w.y * EdgeLumpBlobs(p.xz / cell + 63.1);
-}
 
 // Smooth value noise (~24-unit cells) modulating the coverage edge, standing
 // in for the projection's noise texture so snow extent looks organic rather
@@ -3943,20 +3905,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		edgeFill = smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
 		float wFill = wpix > 0.003 ? max(wpix, 0.2 * edgeFill) : wpix;
 		float wSmoothFill = wSmooth > 0.003 ? max(wSmooth, 0.2 * edgeFill) : wSmooth;
-		// The contour lobes: Edge Lump Size wanders the solid threshold
-		// through the blob field near the cut, so the shell's and the
-		// coat's edge breaks into round lumps of that size rather than the
-		// normal map's speckle alone. Retires under a few px.
-		float lobeAmp = kEdgeLobeAmp * saturate(EdgeBreakupScale * 2.0);
-		[branch] if (lobeAmp > 0.001 && abs(wFill - kCoatSolidW) < lobeAmp + 0.03)
-		{
-			float lobeCell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
-			float lobeLod = smoothstep(2.0, 5.0, lobeCell / max(footprint, 1e-3));
-			float3 lobePos = float3(worldXY, input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift);
-			float3 lobeW = pow(abs(normalWS), 4.0);
-			lobeW /= max(lobeW.x + lobeW.y + lobeW.z, 1e-4);
-			edgeThr += lobeLod * lobeAmp * (0.5 - EdgeLumpField(lobePos, lobeW, lobeCell));
-		}
 		pdCoverage = smoothstep(edgeThr - 0.03, edgeThr, wFill) * smoothstep(edgeThr - 0.18, edgeThr + 0.08, wSmoothFill);
 		edgeW = wFill;
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
@@ -4398,7 +4346,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		bool solid = inside;
 		bool needField = inside && fadeIn < 0.5;
 		float nearPaint = 0.0;
-		float cell = max(kEdgeLumpBig * EdgeBreakupScale, 0.5);
 		[branch] if (!inside && coatOn)
 		{
 			// Bilinear reads of the copy: under TAA the frame jitters by a
@@ -4455,32 +4402,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		fadeAlpha = 1.0;
 		float keep = solid ? 1.0 : -1.0;
+		// Solid: only the distance fade (the -0.7 is the retired lump
+		// field's neutral 0.5 less the fade's own 1.2). Band: on the
+		// contour (half the disc painted) most of it holds and the bays
+		// open; a third of the disc keeps cores only; a fifth keeps nothing.
 		[branch] if (needField)
 		{
-			float lod = smoothstep(2.0, 5.0, cell / max(footprint, 1e-3));
-			float3 lumpPos = float3(worldXY, pixelAbsZ - input.Lift);
-			float3 lumpW = pow(abs(normalWS), 4.0);
-			lumpW /= max(lumpW.x + lumpW.y + lumpW.z, 1e-4);
-			float blob = EdgeLumpField(lumpPos, lumpW, cell);
-			// Solid: only the distance fade. Band: on the contour (half the
-			// disc painted) most blobs hold and the bays open; a third of
-			// the disc keeps cores only; a fifth keeps nothing.
 			[flatten] if (solid)
-				keep = lerp(0.5, blob, lod) + 2.4 * fadeIn - 1.2;
+				keep = 2.4 * fadeIn - 0.7;
 			else
-				keep = lod * (blob - 0.5) + (nearPaint - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
-			// Each blob shades as a mound: tilt the normal down its own
-			// slope, along the pixel's world tangents so it stays in the
-			// surface on tops and flanks alike.
-			[branch] if (!solid && keep >= 0.0 && lod > 0.001)
-			{
-				const float ns = 0.5;
-				float3 tX = normalize(dPosX);
-				float3 tY = normalize(dPosY);
-				float gU = (EdgeLumpField(lumpPos + tX * ns, lumpW, cell) - blob) / ns;
-				float gV = (EdgeLumpField(lumpPos + tY * ns, lumpW, cell) - blob) / ns;
-				normalWS = normalize(normalWS - (tX * gU + tY * gV) * cell * kEdgeLumpTilt * lod);
-			}
+				keep = (nearPaint - 0.4) * 2.5 - 1.5 * (1.0 - fadeIn);
 		}
 		[flatten] if (inside && keep < 0.0)
 			coverageAlpha = 0.0;

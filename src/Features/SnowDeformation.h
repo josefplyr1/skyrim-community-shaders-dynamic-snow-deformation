@@ -489,12 +489,8 @@ public:
 		float OverheadClearance = 0.0f;
 		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
 		float PileHeightRatio = 1.0f;
-		/** @brief "Edge Lump Size", 0-3: the solid contour of the shell and the coat wanders through a blob field of this cell size (x kEdgeLumpBig), so the edge breaks into round lumps; 0 = the plain ragged edge. Also the cell size of the Edge Lump Reach islands. Feeds StaticsCB::EdgeBreakupScale. */
-		float SkinEdgeLumpSize = 0.0f;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.01f;
-		/** @brief P3 (edge-research study), 0-100%: how strongly sky exposure weights the object shell's depth. Open tops keep full depth; surfaces under cover in their own column and columns shaded by tall neighbours thin toward a dusting. 0 = off (pre-P3 behaviour). */
-		float SkyExposurePct = 100.0f;
 		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
 		float SnowSettlingPct = 100.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
@@ -1796,16 +1792,14 @@ public:
 
 		/** @brief Settings::PileHeightRatio - a dome may stand at most this many times the repose height its footprint supports (the cone value); thin features saturate early instead of stretching fins. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PileHeightRatio;
-		/** @brief Settings::SkyExposurePct / 100 - strength of the P3 sky-exposure depth weighting (took a padPile slot; layout unchanged). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float SkyExposureSk;
+		float padSkyExposure;
 		float padCorniceLip;
 		float padBreakup;
 		float padWeld;
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinMasksCopy;
-		/** @brief Settings::SkinEdgeLumpSize - lump cell-size multiplier. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float EdgeBreakupScale;
+		float padLumpSize;
 		/** @brief Settings::SkinEdgeFlankWidth. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float EdgeFlankWidth;
 		/** @brief Settings::ProjSnowMatch as 0/1: the skin coats the solidly painted projected snow with its own material near the camera. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
