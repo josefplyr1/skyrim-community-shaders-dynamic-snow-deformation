@@ -483,10 +483,6 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
 		float ObjectsSnowDepth = 0.0f;
-		/** @brief Steepest surface slope (degrees) that still grows the S4 shell; steeper faces keep the flat recolor only. 90 = every up-facing surface, small values = near-horizontal tops only (Josef's angle knob, 2026-08-29). Rocks/mountains/cliffs use RockMaxSlopeDeg instead. */
-		float ShellMaxSlopeDeg = 65.0f;
-		/** @brief The rock family's own max slope (Josef's call: rocks/mountains/cliffs were the only sufferers of a low global slope) - applies to draws the mountain/cliff name match flags (CapturedSnowStatic::forceRounded). */
-		float RockMaxSlopeDeg = 65.0f;
 		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this - in either direction - becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
 		float PlaneSplitStep = 6.0f;
 		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
@@ -1790,7 +1786,7 @@ public:
 		float ProjPixelEnable;
 		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinNormalCopy;
-		/** @brief cos(Settings::ShellMaxSlopeDeg): minimum normal Z that grows the S4 shell (the shell's up-facing gate, user-tunable). Grew the CB a row. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief kShellMinNz - minimum normal Z that grows the S4 dome (vertex-rate placement gate). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ShellMinNz;
 		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
@@ -2021,6 +2017,8 @@ public:
 	static constexpr float kObjectLiftCap = 150.0f;
 	/** @brief Peel tolerance: surfaces within this many units below a peeled layer's top belong to that layer's plane. Was the "Plane Merge Height" slider, retired 2026-09-06 at its default. */
 	static constexpr float kPeelTol = 8.0f;
+	/** @brief cos(65 deg): steepest slope the S4 dome grows on. Was the "3D Shell Max Slope" / "Rock & Cliff Max Slope" sliders, retired 2026-09-08 at their default. */
+	static constexpr float kShellMinNz = 0.42261826f;
 
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };

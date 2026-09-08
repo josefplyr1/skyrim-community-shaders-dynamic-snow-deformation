@@ -2406,10 +2406,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
-	// The rock family (mountain/cliff name match) carries its own max
-	// slope: rocks were the only sufferers of a low global slope.
-	const float maxSlopeDeg = a_cap.forceRounded ? settings.RockMaxSlopeDeg : settings.ShellMaxSlopeDeg;
-	a_scb.ShellMinNz = std::cos(std::clamp(maxSlopeDeg, 0.0f, 90.0f) * 3.14159265f / 180.0f);
+	a_scb.ShellMinNz = kShellMinNz;
 	a_scb.PeelTol = kPeelTol;
 	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);

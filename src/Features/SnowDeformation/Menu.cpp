@@ -235,14 +235,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttObj = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider above."));
 
-		ImGui::SliderFloat(T(TKEY("shell_max_slope"), "3D Shell Max Slope"), &settings.ShellMaxSlopeDeg, 0.0f, 90.0f, "%.0fÂ°");
-		if (auto _ttSlope = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("shell_max_slope_tooltip"), "Steepest surface angle that still grows the raised 3D layer. Steeper faces keep the flat recolored snow only - small values restrict the raised layer to near-horizontal tops, 90 allows every up-facing surface. Rocks, mountains and cliffs use their own slider below instead."));
-
-		ImGui::SliderFloat(T(TKEY("rock_max_slope"), "Rock & Cliff Max Slope"), &settings.RockMaxSlopeDeg, 0.0f, 90.0f, "%.0f\xC2\xB0");
-		if (auto _ttRock = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("rock_max_slope_tooltip"), "The 3D shell's max slope for the rock family only (mountains, cliffs, large rocks - matched by mesh name). These were the only surfaces hurt by a low global Max Slope, so they get their own: 90 covers every up-facing rock face regardless of the main slider."));
-
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this - in either direction, and regardless of snow depth - marks the boundary of a distinct snow plane, each wearing its own dome (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps into one surface. Sloped roofs and rocks never self-split, and surfaces at the SAME height separated by a small horizontal gap meld into one."));

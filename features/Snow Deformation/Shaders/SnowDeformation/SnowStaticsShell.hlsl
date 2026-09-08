@@ -3959,10 +3959,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 		pdCoverage = smoothstep(edgeThr - 0.03, edgeThr, wFill) * smoothstep(edgeThr - 0.18, edgeThr + 0.08, wSmoothFill);
 		edgeW = wFill;
-		// Match the geometry's up-facing gate per pixel: the shell's
-		// material belongs to top surfaces; steep faces keep the recolor.
-		float upGateP = smoothstep(ShellMinNz, ShellMinNz + 0.15, nzPix);
-		pdCoverage *= upGateP;
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
 		// the last sliver would shade coincident with the surface below it
 		// - cut the material where the lift drops under the clearance and

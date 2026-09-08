@@ -97,8 +97,6 @@
 	X(ObjectsSnowDepth) \
 	X(ObjectRasterReachM) \
 	X(ProjSnowFillPct) \
-	X(ShellMaxSlopeDeg) \
-	X(RockMaxSlopeDeg) \
 	X(PlaneSplitStep) \
 	X(OverheadClearance) \
 	X(PileHeightRatio) \
