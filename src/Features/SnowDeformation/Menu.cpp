@@ -220,20 +220,13 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
 		if (auto _tt3d = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The RISE, and only the rise: a rounded blanket grown over the Snow Fill area where the game paints projected snow, its edge rolling over like a real snow lip, the rounding lengthening as the depth rises. Off, nothing stands above the mesh - but the drape stays if Recolor Projected Snow is on, lying flat on the object with its lumps and reach intact, so you can have this mod's snow on a rock with none of its height. Turn BOTH off and nothing of ours is drawn on an object at all. Objects without projected-snow data carry no layer either way; roads and their trenches are separate machinery and stay on; and objects go on lifting and sheltering the ground shell around them however this is set."));
-		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
-		if (auto _ttRhf = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
-
-		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
-		if (auto _ttRoad = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 
 		// One depth for the whole 3D layer (round 13): the flat/rounded
 		// class split kept its shading differences but no longer has two
 		// user knobs - the rebuilt shell will be one thing.
 		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "3D Snow Shell Depth"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
 		if (auto _ttObj = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider above."));
+			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider under Snow Depth by Texture Class."));
 
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())
@@ -425,6 +418,16 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("class_depths"), "Snow Depth by Texture Class"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttClasses = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Starting height for each snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). This is the DEFAULT a texture uses until it is given its own value below. Negative values submerge the shell below the surface. Retunes live from cached data."));
+		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
+		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
+		if (auto _ttRhf = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
+
+		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
+		if (auto _ttRoad = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
+
+		ImGui::SeparatorText(T(TKEY("landscape_class_group"), "Landscape Texture Class"));
 		bool classDepthsChanged = false;
 		for (uint32_t classI = 0; classI < kSnowClassCount; ++classI)
 			classDepthsChanged |= ImGui::SliderFloat(kSnowClasses[classI].label, &settings.SnowClassDepths[classI], -20.0f, 64.0f, "%.0f units");
