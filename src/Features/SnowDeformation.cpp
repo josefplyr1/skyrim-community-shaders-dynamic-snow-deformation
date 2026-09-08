@@ -95,6 +95,7 @@
 	X(SnowClassDepths) \
 	X(TextureDepths) \
 	X(ObjectsSnowDepth) \
+	X(ObjectRasterReachM) \
 	X(ProjSnowFillPct) \
 	X(ShellMaxSlopeDeg) \
 	X(RockMaxSlopeDeg) \
@@ -1060,7 +1061,7 @@ void SnowDeformation::Prepass()
 	// Road columns measure the contact against the road's own top (t9).
 	const bool roadRaster = heightMapValid && heightSkinDepth && heightSkinDepth->srv;
 	perFrameData.HeightWindowCenter = heightWindowCenter;
-	perFrameData.HeightHalfExtent = kHeightMapHalfExtent;
+	perFrameData.HeightHalfExtent = ObjectRasterHalfExtent();
 	perFrameData.HasRoadRaster = roadRaster ? 1.0f : 0.0f;
 	{
 		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;

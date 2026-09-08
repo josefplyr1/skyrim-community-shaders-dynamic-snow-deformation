@@ -1104,7 +1104,7 @@ void SnowDeformation::DrawShell()
 	// center is re-uploaded below once the height pass has recentered.
 	cbData.ObjectLiftCap = kObjectLiftCap;
 	cbData.ObjectHeightCenter = heightWindowCenter;
-	cbData.ObjectHeightHalfExtent = kHeightMapHalfExtent;
+	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 
 	// Crisp shadows: full-resolution comparison PCF against the cascade-atlas
 	// copies taken at the shadow-mask pass. When the copies are missing this

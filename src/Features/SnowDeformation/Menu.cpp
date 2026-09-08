@@ -127,6 +127,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRkg = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before the skins' own distance dissolve starts, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
 
+		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Snow Shape Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
+		if (auto _ttOrr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far out object snow is SHAPED. Inside this radius the layer has rims, cornice rolls and shelter, all read from a top-down height map of the objects around you; outside it there is no map, so the layer is a uniform coat over the whole mesh - the same snow, but with none of its edges - and the switch is a circle at this distance that moves with you. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: 58 m puts a texel at 4 world units, 117 m at 8. The near detail level keeps one unit a texel close to you whatever this says. Costs nothing extra to raise; it coarsens the shape near you instead."));
+
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
 

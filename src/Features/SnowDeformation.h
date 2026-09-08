@@ -581,6 +581,8 @@ public:
 		float RangeSkinsM = 750.0f;
 		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
 		float RangeSkinsGeometryM = 100.0f;
+		/** @brief Reach (m) of the object height window - the radius inside which the skin has rim, cornice and shelter data at all. Outside it ObjectConeDepth and PatchTop return their sentinels and the skin is a uniform coat over the whole mesh, which is the coarse look. The window is a fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near clipmap stays a quarter of it, so the near field coarsens by the same factor. */
+		float ObjectRasterReachM = 58.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
 		float SkinDepthBias = 64.0f;
 		/** @brief Slope-scaled part of the same bias (D3D11 SlopeScaledDepthBias, negated): grows on grazing faces. Default 0: the constant term alone settled the contest with no visible cost. */
@@ -1992,6 +1994,10 @@ public:
 	// kHeightTexel in SnowStaticsShell.hlsl.
 	static constexpr uint kHeightMapDim = 2048;
 	static constexpr float kHeightMapHalfExtent = 4096.0f;
+	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
+	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
+	/** @brief The reach the accumulated maps were built at; a change re-texels the grid, so the scroll cannot carry them and the window clears instead. */
+	float objectRasterHalfExtentBuilt = 0.0f;
 
 	/**
 	 * @brief Near clipmap level: the same 2048 grid over a QUARTER of the
@@ -2004,9 +2010,8 @@ public:
 	 * Its centre IS the coarse window's: 4 is a multiple of 1, so one snap
 	 * serves both grids and only the half-extent has to reach the shaders.
 	 */
-	static constexpr float kHeightFineHalfExtent = 1024.0f;
-	/** @brief World units of the fine window given over to the fade into the coarse one, so a reader crossing the boundary sees no step. */
-	static constexpr float kHeightFineFade = 128.0f;
+	/** @brief A QUARTER of the coarse reach, always: the two levels then sit a fixed factor of four apart however far the coarse one is asked to reach, so raising the reach coarsens the near field by the same factor it coarsens the far one instead of stranding it. At the 58 m default that is 14.6 m at one world unit a texel. */
+	float FineRasterHalfExtent() const { return ObjectRasterHalfExtent() * 0.25f; }
 	/** @brief Height sentinels for texels no object covers. */
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
@@ -2033,7 +2038,7 @@ public:
 	Texture2D* objectSnowCone3 = nullptr;
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
-	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside kHeightFineHalfExtent. */
+	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
 	Texture2D* heightTopRawFine = nullptr;
 	Texture2D* objectSnowConeFine = nullptr;
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */

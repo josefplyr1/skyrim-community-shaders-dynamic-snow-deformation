@@ -405,7 +405,7 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// column reads as open sky (HalfExtent 0 fails the window test).
 	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
 	a_cb.HeightWindowCenter = heightWindowCenter;
-	a_cb.HeightHalfExtent = seedMaps ? kHeightMapHalfExtent : 0.0f;
+	a_cb.HeightHalfExtent = seedMaps ? ObjectRasterHalfExtent() : 0.0f;
 	a_cb.ShelterDust = kVoxelShelterDust;
 	// The ramp field: the depth in this level's voxels, unfloored, and a
 	// fixed crossing at 0.5. Rounding likewise unfloored - under about 0.4
@@ -931,7 +931,7 @@ void SnowDeformation::DrawVoxelSnow()
 	scb.ObjectsDepth = settings.VolumeSnowDepth;
 	scb.RoundedDepth = settings.VolumeSnowDepth;
 	scb.HeightWindowCenter = heightWindowCenter;
-	scb.HeightHalfExtent = kHeightMapHalfExtent;
+	scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	scb.HasObjectTop = 1.0f;
 	scb.ClassOverride = 1.0f;
 	staticsCB->Update(scb);

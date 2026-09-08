@@ -965,7 +965,7 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	a_scb.ObjectsDepth = settings.ObjectsSnowDepth;
 	a_scb.RoundedDepth = settings.ObjectsSnowDepth;
 	a_scb.HeightWindowCenter = heightWindowCenter;
-	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
+	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	// The patch stays on the coarse maps: its pass does not bind t33/t34, and
 	// a stale non-zero here would send PatchTop to an unbound texture, whose
 	// zero reads as an object top at world Z 0.
@@ -1409,7 +1409,8 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	// Camera-following window, snapped to texel size for stability.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	constexpr float texel = kHeightMapHalfExtent * 2.0f / kHeightMapDim;
+	const float halfExtent = ObjectRasterHalfExtent();
+	const float texel = halfExtent * 2.0f / kHeightMapDim;
 	float2 newCenter = {
 		std::floor(eye.x / texel) * texel,
 		std::floor(eye.y / texel) * texel
@@ -1422,9 +1423,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		(int)std::lround((newCenter.x - heightWindowCenter.x) / texel),
 		-(int)std::lround((newCenter.y - heightWindowCenter.y) / texel)
 	};
+	// A reach change re-texels the grid: the scrolled map would be read at
+	// the wrong scale, so it clears and rebuilds from this frame's captures.
+	if (objectRasterHalfExtentBuilt != halfExtent) {
+		objectRasterHalfExtentBuilt = halfExtent;
+		heightMapValid = false;
+	}
 	processData.ClearAll = heightMapValid ? 0u : 1u;
 	processData.HeightWindowCenter = newCenter;
-	processData.HeightHalfExtent = kHeightMapHalfExtent;
+	processData.HeightHalfExtent = halfExtent;
 	processData.SlopePerUnit = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
 	constexpr float shellCellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	processData.TerrainWindowOrigin = { shellWindowCellX * shellCellSize, shellWindowCellY * shellCellSize };
@@ -1842,7 +1849,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : captureDepth;
 		scb.VertexCountF = vertexCountF;
 		scb.HeightWindowCenter = heightWindowCenter;
-		scb.HeightHalfExtent = kHeightMapHalfExtent;
+		scb.HeightHalfExtent = halfExtent;
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
@@ -1865,7 +1872,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		peel.WorldRow1 = scb.WorldRow1;
 		peel.WorldRow2 = scb.WorldRow2;
 		peel.HeightWindowCenter = heightWindowCenter;
-		peel.HeightHalfExtent = kHeightMapHalfExtent;
+		peel.HeightHalfExtent = halfExtent;
 		peel.PeelTol = kPeelTol;
 		peel.VertexCountF = vertexCountF;
 		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
@@ -1874,7 +1881,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			// Same transform, same class depths - only the window narrows.
 			StaticsCB& fine = captureRecords[size_t(captureCount) * 2 + ci];
 			fine = scb;
-			fine.HeightHalfExtent = kHeightFineHalfExtent;
+			fine.HeightHalfExtent = FineRasterHalfExtent();
 		}
 	}
 	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), captureCount * recordBlocks);
@@ -1952,8 +1959,9 @@ void SnowDeformation::RenderObjectHeightMap()
 			// Everything outside the narrow window would rasterize to nothing;
 			// most of the capture list is, so the reject is most of the saving.
 			const auto& wb = geometry->worldBound;
-			if (std::abs(wb.center.x - heightWindowCenter.x) > kHeightFineHalfExtent + wb.radius ||
-				std::abs(wb.center.y - heightWindowCenter.y) > kHeightFineHalfExtent + wb.radius)
+			const float fineHalf = FineRasterHalfExtent();
+			if (std::abs(wb.center.x - heightWindowCenter.x) > fineHalf + wb.radius ||
+				std::abs(wb.center.y - heightWindowCenter.y) > fineHalf + wb.radius)
 				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
@@ -2211,7 +2219,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// is what a detail level wants: a rock's own steps rim.
 		if (fineLevel) {
 			HeightProcessCB fineData = processData;
-			fineData.HeightHalfExtent = kHeightFineHalfExtent;
+			fineData.HeightHalfExtent = FineRasterHalfExtent();
 			fineData.ConeStep = 1;
 			heightProcessCB->Update(fineData);
 			context->CSSetShader(objectConeSeedCS, nullptr, 0);
@@ -2343,8 +2351,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			const auto pos = probePlayer->GetPosition();
 			probeWorldPos = { pos.x, pos.y, pos.z };
 			// Same world->texel mapping as PatchTexel / the capture VS.
-			float u = (pos.x - heightWindowCenter.x) / kHeightMapHalfExtent * 0.5f + 0.5f;
-			float v = 0.5f - (pos.y - heightWindowCenter.y) / kHeightMapHalfExtent * 0.5f;
+			float u = (pos.x - heightWindowCenter.x) / ObjectRasterHalfExtent() * 0.5f + 0.5f;
+			float v = 0.5f - (pos.y - heightWindowCenter.y) / ObjectRasterHalfExtent() * 0.5f;
 			uint tx = uint(std::clamp(int(u * kHeightMapDim), 0, int(kHeightMapDim) - 1));
 			uint ty = uint(std::clamp(int(v * kHeightMapDim), 0, int(kHeightMapDim) - 1));
 			Texture2D* probeMaps[6] = { heightTopRaw[heightCurrent], heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent],
@@ -2379,7 +2387,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : objectDepth;
 	a_scb.VertexCountF = a_vertexCount;
 	a_scb.HeightWindowCenter = heightWindowCenter;
-	a_scb.HeightHalfExtent = kHeightMapHalfExtent;
+	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	a_scb.HasSmoothedNormals = a_hasSmoothedNormals ? 1.0f : 0.0f;
 	a_scb.HasObjectTop = a_hasObjectTop ? 1.0f : 0.0f;
 	a_scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
@@ -2417,7 +2425,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
-	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? kHeightFineHalfExtent : 0.0f;
+	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()

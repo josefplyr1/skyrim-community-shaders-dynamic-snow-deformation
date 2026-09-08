@@ -718,15 +718,16 @@ float2 FineTexel(float2 worldXY, float2 dims)
 }
 
 // How much of the fine level a point may take: 1 well inside it, ramping to 0
-// at its border so a reader crossing the boundary sees no step. Mirror of
-// kHeightFineFade in SnowDeformation.h.
+// at its border so a reader crossing the boundary sees no step. The band is
+// an eighth of the window, so it scales with the level rather than pinning a
+// world width that would swallow a narrow one.
 float FineWeight(float2 worldXY)
 {
 	float result = 0.0;
 	[branch] if (FineHalfExtent > 0.0)
 	{
 		float2 d = abs(worldXY - HeightWindowCenter);
-		result = 1.0 - smoothstep(FineHalfExtent - 128.0, FineHalfExtent, max(d.x, d.y));
+		result = 1.0 - smoothstep(FineHalfExtent * 0.875, FineHalfExtent, max(d.x, d.y));
 	}
 	return result;
 }
@@ -804,7 +805,7 @@ float ObjectConeDepth(float2 worldXY)
 
 	// The cone is a SMOOTHED field, so its coarse and fine answers genuinely
 	// differ - a hard switch would draw the fine window's border across the
-	// snow. Blended over kHeightFineFade instead. Both are real numbers here:
+	// snow. Blended over the window's outer eighth instead. Both are real here:
 	// the fine window is contained in the coarse one, so neither read can be
 	// the out-of-window sentinel.
 	float fineW = FineWeight(worldXY);
