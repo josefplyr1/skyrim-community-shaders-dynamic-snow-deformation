@@ -8,7 +8,10 @@
 //            the current window position (whole-texel offsets). The maps
 //            must not depend on what the camera renders this frame; the
 //            capture list is frustum-culled, and rebuilding from it alone
-//            makes object heights vanish behind the camera.
+//            makes object heights vanish behind the camera. Runs AFTER the
+//            capture rasterizes into the cleared maps, and fills only what
+//            nothing drew into - see the ghost-merge note on the entry
+//            point.
 // CombineCS  builds the base snow-height field and the shelter mask: a
 //            structure floating well above the ground shelters what is under
 //            it, as a soft melt to a dusting rather than a coverage kill.
@@ -65,6 +68,14 @@ cbuffer HeightProcessCB : register(b0)
 #define SHELTER_RING_TEXELS 10
 
 
+// ScrollCS only (b2 is unbound for every other entry point here). Mirror of
+// HeightGhostCB in SnowDeformation.h.
+cbuffer GhostCB : register(b2)
+{
+	row_major float4x4 GhostViewProj;
+	float4 GhostCameraPosAdjust;
+}
+
 #include "SnowDeformation/SnowExclusions.hlsli"
 
 Texture2D<float> InA : register(t0);
@@ -106,12 +117,42 @@ float SampleTerrainHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
+// Would a surface at this world point have been submitted this frame? Inside
+// the camera frustum the game draws it, so the capture saw it; outside, the
+// capture list cannot speak for it at all.
+bool GhostInView(float2 worldXY, float worldZ)
+{
+	float3 rel = float3(worldXY, worldZ) - GhostCameraPosAdjust.xyz;
+	float4 clip = mul(GhostViewProj, float4(rel, 1.0));
+	return clip.w > 0.0 && all(abs(clip.xy) <= clip.w) && clip.z >= 0.0 && clip.z <= clip.w;
+}
+
+// Runs after the capture rasterizes into maps CLEARED to the sentinels, so
+// what it finds is exactly this frame's truth wherever anything drew. The
+// ghost fills the rest.
+//
+// The old order - scroll the accumulated map in, then MAX the captures over
+// it - could only ever RAISE a texel. A reference swapping LOD meshes kept
+// the taller silhouette of the mesh it replaced until GhostDecay ate the
+// difference at half a unit per frame, which is seconds of skins shaped to a
+// mesh that is no longer drawn (and, where the stale top cleared the
+// shelter band, seconds of bare rock under it).
+//
+// A live raster only overrules the ghost where the ghost is IN VIEW: a
+// surface the camera can see and nothing re-rasterized is gone. Out of view
+// it stands, decayed, which is what keeps the roof over a walkway sheltering
+// its floor while the camera looks straight down at the boards.
 [numthreads(8, 8, 1)] void ScrollCS(uint3 dtid
 									: SV_DispatchThreadID) {
 	uint2 dims;
 	OutA.GetDimensions(dims.x, dims.y);
 	if (any(dtid.xy >= dims))
 		return;
+
+	float rasterTop = OutA[dtid.xy];
+	float rasterBottom = OutB[dtid.xy];
+	bool haveTop = rasterTop > -50000.0;
+	bool haveBottom = rasterBottom < 50000.0;
 
 	float top = -100000.0;
 	float bottom = 100000.0;
@@ -126,6 +167,20 @@ float SampleTerrainHeight(float2 worldXY)
 			top = InA[uint2(src)] - GhostDecay;
 			bottom = InB[uint2(src)] + GhostDecay;
 		}
+	}
+
+	// The view test costs a clip transform, so it is asked only where the
+	// ghost actually disagrees with a live raster - a small minority of
+	// texels. Everywhere else the old MAX/MIN answer already holds.
+	[branch] if (haveTop)
+	{
+		if (top <= rasterTop || GhostInView(TexelWorldXY(dtid.xy, dims), top))
+			top = rasterTop;
+	}
+	[branch] if (haveBottom)
+	{
+		if (bottom >= rasterBottom || GhostInView(TexelWorldXY(dtid.xy, dims), bottom))
+			bottom = rasterBottom;
 	}
 
 	OutA[dtid.xy] = top;

@@ -2092,6 +2092,15 @@ public:
 
 	ConstantBuffer* heightProcessCB = nullptr;
 
+	/** @brief ScrollCS only: the camera clip transform, so the ghost merge can ask whether the surface that wrote a stale texel would still have been submitted this frame. Its own buffer, not a HeightProcessCB growth - that block is prefix-mirrored by the capture PS. Layout must match GhostCB in HeightMapProcessCS.hlsl. */
+	struct alignas(16) HeightGhostCB
+	{
+		Matrix GhostViewProj;
+		float4 GhostCameraPosAdjust;
+	};
+	STATIC_ASSERT_ALIGNAS_16(HeightGhostCB);
+	ConstantBuffer* heightGhostCB = nullptr;
+
 	// ---- Voxel occupancy volume (VOLUME-SNOW-PLAN V0) ----
 
 	/** @brief 256 voxels a side; pow2 for the torus. The voxel SIZE is Settings::VolumeVoxelSize, so the cube's reach and its detail trade against each other at fixed memory - which is what a clipmap would break. Mirrors Dim in SnowVoxelCapture.hlsl. */

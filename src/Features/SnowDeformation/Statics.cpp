@@ -1702,44 +1702,56 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightCurrent ^= 1;
 
 	ID3D11Buffer* processCB = heightProcessCB->CB();
-	context->CSSetConstantBuffers(0, 1, &processCB);
-	ID3D11ShaderResourceView* scrollSRVs[2] = { heightTopRaw[previous]->srv.get(), heightBottomRaw[previous]->srv.get() };
-	ID3D11UnorderedAccessView* scrollUAVs[2] = { heightTopRaw[heightCurrent]->uav.get(), heightBottomRaw[heightCurrent]->uav.get() };
-	context->CSSetShaderResources(0, 2, scrollSRVs);
-	context->CSSetUnorderedAccessViews(0, 2, scrollUAVs, nullptr);
-	context->CSSetShader(heightScrollCS, nullptr, 0);
-	context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
-
 	ID3D11ShaderResourceView* nullCsSRVs[2] = { nullptr, nullptr };
 	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
-	context->CSSetShaderResources(0, 2, nullCsSRVs);
-	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
 
-	// S4 phase 2: scroll the peeled layer tops the same way. ScrollCS's
-	// bottom slot reads last frame's bottoms (harmless) and writes into
-	// heightScratch as a throwaway (the scratch is fully overwritten by
-	// the cone chains below), so the CS runs unmodified.
+	// The ghost merge runs AFTER each layer rasterizes, not before: the maps
+	// are cleared to their sentinels, the capture writes this frame's truth
+	// into them, and this fills what nothing drew into from the previous
+	// window. Scrolling in first and MAX-blending the captures over it could
+	// only ever RAISE a texel, so a reference that swapped LOD meshes kept
+	// the taller silhouette of the mesh it replaced for as long as GhostDecay
+	// needed to eat the difference. Rationale for the in-view rule (what
+	// stops this un-sheltering a walkway floor) is on ScrollCS itself.
 	{
-		Texture2D* peelPrev[2] = { heightTop2Raw[previous], heightTop3Raw[previous] };
-		Texture2D* peelCur[2] = { heightTop2Raw[heightCurrent], heightTop3Raw[heightCurrent] };
-		for (int peelLayer = 0; peelLayer < 2; peelLayer++) {
-			if (!peelPrev[peelLayer] || !peelCur[peelLayer])
-				continue;
-			ID3D11ShaderResourceView* scroll2SRVs[2] = { peelPrev[peelLayer]->srv.get(), heightBottomRaw[previous]->srv.get() };
-			ID3D11UnorderedAccessView* scroll2UAVs[2] = { peelCur[peelLayer]->uav.get(), heightScratch->uav.get() };
-			context->CSSetShaderResources(0, 2, scroll2SRVs);
-			context->CSSetUnorderedAccessViews(0, 2, scroll2UAVs, nullptr);
-			context->CSSetShader(heightScrollCS, nullptr, 0);
-			context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
-			context->CSSetShaderResources(0, 2, nullCsSRVs);
-			context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
-		}
+		auto& fb = globals::game::frameBufferCached;
+		HeightGhostCB ghostData{};
+		ghostData.GhostViewProj = fb.GetCameraViewProj();
+		ghostData.GhostCameraPosAdjust = fb.GetCameraPosAdjust();
+		heightGhostCB->Update(ghostData);
 	}
-	ID3D11Buffer* nullProcessCB = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
-	context->CSSetShader(nullptr, nullptr, 0);
+	ID3D11Buffer* ghostCB = heightGhostCB->CB();
+	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom) {
+		if (!a_prevTop || !a_curTop || !a_prevBottom || !a_curBottom)
+			return;
+		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), a_prevBottom->srv.get() };
+		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), a_curBottom->uav.get() };
+		context->CSSetConstantBuffers(0, 1, &processCB);
+		context->CSSetConstantBuffers(2, 1, &ghostCB);
+		context->CSSetShaderResources(0, 2, mergeSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
+		context->CSSetShader(heightScrollCS, nullptr, 0);
+		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
+		context->CSSetShaderResources(0, 2, nullCsSRVs);
+		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		ID3D11Buffer* nullMergeCB = nullptr;
+		context->CSSetConstantBuffers(0, 1, &nullMergeCB);
+		context->CSSetConstantBuffers(2, 1, &nullMergeCB);
+	};
 
-	// Rasterize this frame's captures on top of the scrolled maps.
+	// Every raw map starts empty, including the peeled layers: the sentinel
+	// is what tells the merge which texels this frame's capture owns.
+	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
+	const float bottomClear[4] = { kHeightMapEmptyBottom, 0.0f, 0.0f, 0.0f };
+	context->ClearRenderTargetView(heightTopRaw[heightCurrent]->rtv.get(), topClear);
+	context->ClearRenderTargetView(heightBottomRaw[heightCurrent]->rtv.get(), bottomClear);
+	if (heightTop2Raw[heightCurrent])
+		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
+	if (heightTop3Raw[heightCurrent])
+		context->ClearRenderTargetView(heightTop3Raw[heightCurrent]->rtv.get(), topClear);
+
+	// Rasterize this frame's captures into the cleared maps.
 	// G = road top, so it clears to the no-road sentinel, not to zero: zero is
 	// a legal world Z and would read as a road at sea level.
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
@@ -1898,6 +1910,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 
+	// Layer 1 is complete only once the ghost is under it: the peels below
+	// test against it, and so does everything downstream.
+	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent]);
+
 	// S4 phase 2 - the layer PEELS (K=3): re-rasterize the captures
 	// against the completed layers above (now readable), keeping only
 	// up-facing fragments below them by the peel tolerance; MAX blending
@@ -1971,6 +1987,12 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->OMSetRenderTargets(3, nullRTVs, nullptr);
 		ID3D11ShaderResourceView* nullPeelSRVs[2] = { nullptr, nullptr };
 		context->PSSetShaderResources(3, 2, nullPeelSRVs);
+
+		// Same merge for the peeled layer, before the next peel reads it.
+		// The bottom slot is the scratch: ScrollCS writes a bottoms result
+		// the cone chains below overwrite anyway.
+		mergeGhost(peelLayer == 0 ? heightTop2Raw[previous] : heightTop3Raw[previous],
+			peelTarget, heightBottomRaw[previous], heightScratch);
 	}
 
 	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive, captureParity);
@@ -2161,6 +2183,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(2, 2, nullTailSRVs);
+	ID3D11Buffer* nullProcessCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 
