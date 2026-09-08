@@ -181,7 +181,6 @@ cbuffer ShellCB : register(b0)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
-	float4 UndulationBumps;  // bump octave, live fallback (see SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)

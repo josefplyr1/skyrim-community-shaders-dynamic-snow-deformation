@@ -206,10 +206,6 @@ cbuffer ShellCB : register(b0)
 	// z = fine dim in texels (0 = none), w = fine texel size (32).
 	float4 FineWindow;
 	float4 SlopeDrape;
-	// Bump octave for the live undulation fallback: x = height (units),
-	// y = cell (units), z = coverage threshold, w spare. Mirror in
-	// SnowDeformation.h AND SnowStaticsShell.hlsl.
-	float4 UndulationBumps;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.

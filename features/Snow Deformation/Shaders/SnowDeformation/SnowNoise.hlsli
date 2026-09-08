@@ -37,25 +37,6 @@ float UndulationNorm(float2 worldXY, float scale)
 	return (n - 0.5) * 2.0;
 }
 
-// Bump octave: one-sided mounds from one value-noise octave at `cell` world
-// units, rising from the coverage threshold `lo` to the peak. World-anchored,
-// independent of the dune Spacing.
-float UndulationBumpNorm(float2 worldXY, float cell, float lo)
-{
-	return smoothstep(lo, 1.0, ShapeNoise(worldXY / max(cell, 1.0)));
-}
-
-// Full undulation height in world units: dunes * Strength + bumps. The bake
-// CS and the live fallback both call this, so field and fallback agree.
-// bumps: x = height (units), y = cell (units), z = coverage threshold.
-float UndulationHeight(float2 worldXY, float scale, float amp, float3 bumps)
-{
-	float h = UndulationNorm(worldXY, scale) * amp;
-	[branch] if (bumps.x > 0.001)
-		h += UndulationBumpNorm(worldXY, bumps.y, bumps.z) * bumps.x;
-	return h;
-}
-
 // Central-difference step for the shading gradient, shared by the bake and
 // the live fallback. Response is sinc(2*pi*step/wavelength): 12 went to zero
 // at a 24-unit wavelength, 6 keeps a 32-unit one at 78%.

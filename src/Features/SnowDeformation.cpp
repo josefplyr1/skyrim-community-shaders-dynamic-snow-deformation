@@ -117,9 +117,6 @@
 	X(SnowMoundSteepness) \
 	X(UndulationStrength) \
 	X(UndulationSpacing) \
-	X(UndulationBumpHeight) \
-	X(UndulationBumpSize) \
-	X(UndulationBumpCoverage) \
 	X(Tessellation) \
 	X(ParallaxShadowStrength) \
 	X(ParallaxDepth) \
@@ -1707,14 +1704,10 @@ void SnowDeformation::UpdateUndulationField()
 		std::round(eye.y / kUndulationFieldSnap) * kUndulationFieldSnap
 	};
 	const float scale = std::max(settings.UndulationSpacing, 0.05f);
-	const float4 bumps = UndulationBumpParams();
-	const float4 params = { std::max(settings.UndulationStrength, 0.0f), bumps.x, bumps.y, bumps.z };
 
 	const bool dirty = !undulationFieldValid ||
 	                   snapped.x != undulationFieldCenter.x || snapped.y != undulationFieldCenter.y ||
-	                   scale != undulationFieldBakedScale ||
-	                   params.x != undulationFieldBakedParams.x || params.y != undulationFieldBakedParams.y ||
-	                   params.z != undulationFieldBakedParams.z || params.w != undulationFieldBakedParams.w;
+	                   scale != undulationFieldBakedScale;
 	if (!dirty) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::UndulationField");
 		return;
@@ -1731,10 +1724,6 @@ void SnowDeformation::UpdateUndulationField()
 		snapped.y - kUndulationFieldHalfExtent + 0.5f * kUndulationFieldTexel };
 	cbData.FieldTexel = kUndulationFieldTexel;
 	cbData.FieldScale = scale;
-	cbData.FieldAmp = params.x;
-	cbData.FieldBumpHeight = params.y;
-	cbData.FieldBumpCell = params.z;
-	cbData.FieldBumpLo = params.w;
 	undulationFieldCB->Update(cbData);
 
 	ID3D11Buffer* cb = undulationFieldCB->CB();
@@ -1750,7 +1739,6 @@ void SnowDeformation::UpdateUndulationField()
 
 	undulationFieldCenter = snapped;
 	undulationFieldBakedScale = scale;
-	undulationFieldBakedParams = params;
 	undulationFieldValid = true;
 }
 

@@ -10,7 +10,7 @@
 // (ROUTING-ROADMAP M8), so landscape and
 // object snow cannot drift apart. Relies on the including shell's ShellCB
 // (GridToDeformOffset, DeformInvWorldSize, ExclusionFieldWindow,
-// UndulationAmp/Scale/Bumps, UndulationFieldWindow, BorderStyle), DeformationMap
+// UndulationAmp/Scale, UndulationFieldWindow, BorderStyle), DeformationMap
 // (t1) with the shell's DeformTexel torus helper, BermFieldMap
 // (t14), ExclusionFieldMap (t15), the frost patterns (t16/t17),
 // UndulationFieldMap (t29), SnowSampler
@@ -263,28 +263,15 @@ float2 SampleExclusionField(float2 worldXY)
 // shell snow, never bare ground, never below the terrain mesh.
 static const float kFireMeltFloor = 1.0;
 
-// THE GEOMETRY HEIGHT: dunes only. The bump octave is SHADING-ONLY - it
-// perturbs the normal and never displaces the surface. Raising the landscape
-// shell by even two units darkened distant object caps, and the cause sits in
-// how the shells' depths relate rather than in the bumps (Josef, 2026-09-08:
-// eight bisect splits; the depth clamp guarded in `5215fbe2` and still dark).
-// Everything that must agree with the built surface - the vertex displacement,
-// the road patch, both shells' self-shadow marches - reads this.
 float Undulation(float2 worldXY)
 {
 	return UndulationNorm(worldXY, UndulationScale) * UndulationAmp;
 }
 
-// THE SHADING HEIGHT: dunes plus the bump octave, the field whose gradient
-// lights the mounds. Only the normal is taken from it.
-float UndulationShadeHeight(float2 worldXY)
-{
-	return UndulationHeight(worldXY, UndulationScale, UndulationAmp, UndulationBumps.xyz);
-}
-
 // ---- Baked undulation (UndulationFieldCS) ----
-// Height in world units (x) and its +-kUndulationGradStep gradient (yz) in a
-// camera-snapped world window: UndulationFieldWindow = (centre XY,
+// Amp-free height (x) and its +-kUndulationGradStep gradient (yz), both
+// multiplied by UndulationAmp on read so the Strength slider needs no
+// rebake, in a camera-snapped world window: UndulationFieldWindow = (centre XY,
 // 1/half-extent, bake live > 0.5). Same manual-bilinear convention as
 // BermFieldBaked, so every stage reads it without a sampler. The live
 // Undulation() path stays compiled underneath: the fallback for taps
@@ -317,7 +304,7 @@ float UndulationSampled(float2 worldXY)
 {
 	float result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).x;
+		result = UndulationBakedHG(worldXY).x * UndulationAmp;
 	else
 		result = Undulation(worldXY);
 	return result;
@@ -329,12 +316,12 @@ float2 UndulationGradSampled(float2 worldXY)
 {
 	float2 result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).yz;
+		result = UndulationBakedHG(worldXY).yz * UndulationAmp;
 	else {
 		const float uStep = kUndulationGradStep;
 		result = float2(
-					 UndulationShadeHeight(worldXY + float2(uStep, 0.0)) - UndulationShadeHeight(worldXY - float2(uStep, 0.0)),
-					 UndulationShadeHeight(worldXY + float2(0.0, uStep)) - UndulationShadeHeight(worldXY - float2(0.0, uStep))) /
+					 Undulation(worldXY + float2(uStep, 0.0)) - Undulation(worldXY - float2(uStep, 0.0)),
+					 Undulation(worldXY + float2(0.0, uStep)) - Undulation(worldXY - float2(0.0, uStep))) /
 		         (2.0 * uStep);
 	}
 	return result;
