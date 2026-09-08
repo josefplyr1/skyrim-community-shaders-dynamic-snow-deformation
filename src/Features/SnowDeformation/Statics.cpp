@@ -970,6 +970,8 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// a stale non-zero here would send PatchTop to an unbound texture, whose
 	// zero reads as an object top at world Z 0.
 	a_scb.FineHalfExtent = 0.0f;
+	// Roads are Road Meshes Depth's and keep their whole surface.
+	a_scb.ShellCoverage = 1.0f;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
 	// The REAL setting, not the forced 1.0 this used to carry: the patch VS
@@ -2423,6 +2425,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.SkyExposureSk = std::clamp(settings.SkyExposurePct / 100.0f, 0.0f, 1.0f);
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
+	// The sheet is the 3D toggle's; the drape below it is the recolor's.
+	a_scb.ShellCoverage = settings.ObjectSnow3D ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;

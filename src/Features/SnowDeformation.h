@@ -1816,7 +1816,8 @@ public:
 		float EdgeCoat;
 		/** @brief Near clipmap: half-extent of the fine object window in world units, 0 when the level is off. Its centre is the coarse window's (the fine texel divides the coarse one, so one snap serves both). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float FineHalfExtent;
-		float PadStatics1;
+		/** @brief Settings::ObjectSnow3D as 0/1, and it is the SHEET: the skin's own facing-gated coverage, everything the coat did not claim from the game's paint. Zero leaves only what the coat claims - the drape. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float ShellCoverage;
 		float PadStatics2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);

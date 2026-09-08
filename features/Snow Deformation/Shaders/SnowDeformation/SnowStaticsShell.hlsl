@@ -308,7 +308,9 @@ cbuffer StaticCB : register(b1)
 	// Near clipmap: half-extent of the fine object window, 0 = off. Shares
 	// the coarse window's centre.
 	float FineHalfExtent;
-	float PadStatics1;
+	// >0.5: the skin keeps its own coverage (the sheet). 0: only the coat's
+	// claim on the game's projected paint survives (the drape).
+	float ShellCoverage;
 	float PadStatics2;
 }
 
@@ -4376,6 +4378,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Josef's shack roofs, bright with vanilla's snow rim light from one
 	// angle, correct straight down or close (2026-09-04).
 	float coatPush = 0.0;
+	// "3D Snow on Objects" is the SHEET - the skin's own facing-gated
+	// blanket, opaque and hole-free, that owns every pixel the coat did not
+	// claim. Off, it goes and the coat's claim on the game's own projected
+	// paint is all that is left: the torn pieces that fit the paint exactly,
+	// which is the drape. Zeroing here rather than at the draw is what keeps
+	// them separable - every pixel then reads as !inside below, so the coat
+	// block is the only thing that can raise coverage again, and Recolor
+	// Projected Snow still owns whether it does.
+	coverageAlpha *= ShellCoverage;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
 	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
 	[branch] if (LegacySkin < 0.5 && (coatOn || fadeAlpha < 0.5))
