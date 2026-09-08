@@ -1855,6 +1855,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// blends by, as a grey ramp, fill included.
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
 				snowProjAlbedo = projectedMaterialWeight.xxx;
+			// Sampled-albedo view (bit 64): the texture read above, raw. The
+			// magenta and weight views both REPLACE snowProjSample, so they
+			// say nothing about whether HorizonSnowAlbedo reached the draw -
+			// and a recolor whose block runs at full weight while the pixel
+			// does not change can only be the sample.
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 64) != 0)
+				snowProjAlbedo = snowProjSample;
 #			if defined(TRUE_PBR)
 			// PBR pixels are convention-correct already: albedo + the shell's
 			// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).

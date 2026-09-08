@@ -1701,6 +1701,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Snow Fill Coverage Tint"), &debugProjFillView);
 				if (auto _ttFillDbg = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
+				ImGui::Checkbox(T(TKEY("debug_proj_albedo"), "Recolor Sampled Albedo"), &debugProjAlbedoView);
+				if (auto _ttProjAlbedo = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("debug_proj_albedo_tooltip"), "Paints classified projected snow with the snow texture the recolor JUST SAMPLED, raw and unshaded, in place of blending it in. The magenta view cannot answer this: it replaces the sample with a constant, so it proves the block runs and its weight, and nothing about the texture. Snow here means the sample is good and the recolor is failing further on; the object's own rock or black means the shell snow texture is not reaching the draw."));
+
 				ImGui::Checkbox(T(TKEY("debug_proj_weight"), "Recolor Weight Tint"), &debugProjWeightView);
 				if (auto _ttWeightDbg = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid, Snow Fill included; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));

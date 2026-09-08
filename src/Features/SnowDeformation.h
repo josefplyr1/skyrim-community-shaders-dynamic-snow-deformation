@@ -2763,6 +2763,8 @@ public:
 	bool debugProjFillView = false;
 	/** @brief DebugTerrainOverlay bit 32: the Lighting recolor paints its real blend weight as a grey ramp and projected draws it does not classify in red. Hold against the object snow debug view's Projected mask mode (R = the skin's reconstruction). */
 	bool debugProjWeightView = false;
+	/** @brief DebugTerrainOverlay bit 64: the recolor paints the SNOW TEXTURE IT JUST SAMPLED, raw and unshaded, instead of blending it. Answers the one question the magenta view cannot - whether HorizonSnowAlbedo is reaching the draw at all - since the magenta path bypasses the sample. Not serialized, like every debug view. */
+	bool debugProjAlbedoView = false;
 	/** @brief Tints classified baked-snow (glacier) pixels cyan (DebugTerrainOverlay bit 8), same verification pattern as the projected view. */
 
 protected:
