@@ -3132,6 +3132,22 @@ void SnowDeformation::DrawCapturedStatics()
 		if (!layout)
 			continue;
 
+		// "3D Snow on Objects" OFF means NO shell on an object, not a shell
+		// with no rise: the draw is skipped, not run at depth zero. The
+		// recolor of the game's own projected snow is a Lighting-pass bit
+		// (Recolor Projected Snow) and is untouched by this, so an object
+		// keeps its painted snow matched to the shell's colour with no
+		// geometry of ours over it. Roads belong to Road Meshes Depth and
+		// keep their skin.
+		//
+		// The layout above is created BEFORE this gate on purpose: the
+		// object height raster draws through that same cache, and the
+		// landscape shell's lift, the shelter mask and the trench patch all
+		// read the raster. Skipping the layout would silently drop objects
+		// out of the height field the moment the shell was switched off.
+		if (!settings.ObjectSnow3D && !cap.road)
+			continue;
+
 		// Stride comes from the descriptor's low nibble (in dwords); the
 		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
 		// equivalent: it reconstructs from flags assuming 16-byte float
