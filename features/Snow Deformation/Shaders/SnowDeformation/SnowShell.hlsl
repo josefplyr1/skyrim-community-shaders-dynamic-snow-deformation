@@ -1900,15 +1900,34 @@ struct PS_PREPASS_OUTPUT
 // of the mesh; 0.75 units is too thin to overdraw feet or props.
 //
 // sceneAbove tells a coincident terrain surface from an occluder: the scene
-// point on this pixel's ray, in world height over the shell's own. Terrain
-// the shell z-fights sits within the snow's thickness of it; a wall, a rock
-// or a roof edge with the shell BEHIND it in view depth stands well above.
+// point on this pixel's ray, in world height over THE SNOW LINE AT ITS OWN
+// FOOTPRINT (ShellSceneAboveSnowLine). Terrain the shell z-fights sits on
+// that line; a wall, a rock or a roof edge stands above it.
 // Without this the far clamp pulled the ground behind a wall in front of the
 // wall, the object's skin drawn after lost the depth test, and the ground in
 // the wall's own shadow showed where the cap was - per object, past 4000
 // units, moving with the camera, deaf to every shading toggle, and tipped
 // into view by two units of bump octave (Josef, 2026-09-08).
 static const float kShellClampOccluderSlack = 8.0;
+// Is the scene surface on this pixel's ray the TERRAIN this shell covers, or
+// something standing on it? Take the scene point along the ray and read the
+// snow line at ITS OWN footprint: terrain the shell z-fights sits on that
+// line, a wall top or a rock cap stands well above it. Measuring against the
+// shell fragment's own height instead is not enough - ground banked up behind
+// a low wall reads at the wall's height, so the clamp fired anyway and the
+// caps stayed dark (Josef, 2026-09-08). Outside the terrain window, and over
+// missing data, this says nothing and the clamp keeps its old behaviour.
+float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ)
+{
+	float3 sceneRel = worldPosRel * (sceneZ / max(shellZ, 1e-3));
+	float2 sceneLocal = sceneRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
+	float2 tt = (GridToTerrainOffset + sceneLocal) / TerrainTexelSize;
+	bool inWindow = all(tt >= 0.0) && all(tt <= (float)(TerrainDim - 1));
+	float3 st = SampleTerrain(sceneLocal);
+	float above = (sceneRel.z + ShellCameraPosAdjust.z) - (st.x + max(st.y, 0.0));
+	return (inWindow && st.x > -50000.0) ? above : 0.0;
+}
+
 float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float sceneAbove)
 {
 	float depth = rasterZ;
@@ -2200,7 +2219,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
-	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, input.WorldPos.z * (sceneZ / max(shellZ, 1e-3)) - input.WorldPos.z);
+	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS
@@ -2998,7 +3017,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, input.WorldPos.z * (sceneZ / max(shellZ, 1e-3)) - input.WorldPos.z);
+	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
 #	endif
 
 	return psout;
