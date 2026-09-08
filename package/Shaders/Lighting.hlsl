@@ -1872,6 +1872,31 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// the snow fraction through the PBR evaluators (hue+brightness).
 			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowProjAlbedo) * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
 #			endif
+			// The albedo alone was never a snow surface. The game blends a
+			// projected NORMAL and RMAOS only on the textured branch above
+			// (ProjectedUVParams3.w > 0.5); on the flat branch, and wherever
+			// Snow Fill carries this weight past what the game itself paints,
+			// a recoloured pixel kept the object's own normal map, its
+			// crevice AO and its roughness. A snow albedo over rock relief
+			// reads as grey stone, which is what the shell was hiding.
+			// t103 is bound beside t102 and until now only the horizon path
+			// sampled it. Tangent frame from a world axis, as that path does:
+			// stable for any surface not parallel to +Y, and the z floor
+			// keeps a grazing perturbation from flipping the normal.
+			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+			{
+				float3 snowNrmTS = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+				float3 snowTan = normalize(cross(float3(0.0, 1.0, 0.0), worldNormal.xyz));
+				float3 snowBitan = cross(worldNormal.xyz, snowTan);
+				float3 snowNrmWS = normalize(snowNrmTS.x * snowTan + snowNrmTS.y * snowBitan + max(snowNrmTS.z, 0.05) * worldNormal.xyz);
+				worldNormal.xyz = normalize(lerp(worldNormal.xyz, snowNrmWS, projectedMaterialWeight));
+			}
+#			if defined(TRUE_PBR)
+			// Crevice occlusion belongs to the rock, not to snow lying over
+			// it; left in place it darkened every recoloured pixel toward
+			// the stone it replaced.
+			rawRMAOS.z = lerp(rawRMAOS.z, 1.0, projectedMaterialWeight);
+#			endif
 		}
 	}
 	// Recolor weight view (bit 32): projected draws the recolor does not
