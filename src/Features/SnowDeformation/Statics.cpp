@@ -2413,7 +2413,9 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
 	// Pixel-rate coat and edge lumps; the caster has no pixel stage, so its
 	// silhouette keeps the plain contour (as the lift-band cut always did).
-	a_scb.EdgeBreakupScale = std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f);
+	// Edge lumps are SHAPE, so they leave with the rise: drape mode is the
+	// flat coat and nothing else.
+	a_scb.EdgeBreakupScale = settings.ObjectSnow3D ? std::clamp(settings.SkinEdgeLumpSize, 0.0f, 3.0f) : 0.0f;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
@@ -3132,20 +3134,19 @@ void SnowDeformation::DrawCapturedStatics()
 		if (!layout)
 			continue;
 
-		// "3D Snow on Objects" OFF means NO shell on an object, not a shell
-		// with no rise: the draw is skipped, not run at depth zero. The
-		// recolor of the game's own projected snow is a Lighting-pass bit
-		// (Recolor Projected Snow) and is untouched by this, so an object
-		// keeps its painted snow matched to the shell's colour with no
-		// geometry of ours over it. Roads belong to Road Meshes Depth and
-		// keep their skin.
+		// Two toggles, two things. "3D Snow on Objects" owns the RISE and
+		// the shape; "Recolor Projected Snow" owns the DRAPE - the flat coat
+		// that repaints the game's own projected snow in the shell's
+		// material, which is geometry and so cannot come from the Lighting
+		// pass's recolor alone. Off, off: nothing of ours on an object.
+		// Roads belong to Road Meshes Depth and keep their skin either way.
 		//
 		// The layout above is created BEFORE this gate on purpose: the
 		// object height raster draws through that same cache, and the
 		// landscape shell's lift, the shelter mask and the trench patch all
 		// read the raster. Skipping the layout would silently drop objects
 		// out of the height field the moment the shell was switched off.
-		if (!settings.ObjectSnow3D && !cap.road)
+		if (!cap.road && !settings.ObjectSnow3D && !settings.ProjSnowMatch)
 			continue;
 
 		// Stride comes from the descriptor's low nibble (in dwords); the
