@@ -1895,15 +1895,25 @@ struct PS_PREPASS_OUTPUT
 // The depth the shell writes: the raster depth, pulled to just in front of
 // the scene inside the two clamp windows. Shared by the prepass and the
 // export tail so both agree bit for bit. FAR clamp: the z-fight/pinhole
-// class loses at the source without moving geometry; far field only, since
-// it cannot tell a legitimate occluder from a coincident terrain surface.
+// class loses at the source without moving geometry; far field only.
 // NEAR micro-clamp: the edge zone and carved floors ride within window error
 // of the mesh; 0.75 units is too thin to overdraw feet or props.
-float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve)
+//
+// sceneAbove tells a coincident terrain surface from an occluder: the scene
+// point on this pixel's ray, in world height over the shell's own. Terrain
+// the shell z-fights sits within the snow's thickness of it; a wall, a rock
+// or a roof edge with the shell BEHIND it in view depth stands well above.
+// Without this the far clamp pulled the ground behind a wall in front of the
+// wall, the object's skin drawn after lost the depth test, and the ground in
+// the wall's own shadow showed where the cap was - per object, past 4000
+// units, moving with the camera, deaf to every shading toggle, and tipped
+// into view by two units of bump octave (Josef, 2026-09-08).
+static const float kShellClampOccluderSlack = 8.0;
+float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float sceneAbove)
 {
 	float depth = rasterZ;
 	float clampWindow = min(8.0 + shellZ * 0.008, 48.0);
-	bool clampMode = (ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0;
+	bool clampMode = (ShellDebugData == 0 || ShellDebugData >= 4) && ShellLODDebug == 0 && sceneAbove < kShellClampOccluderSlack;
 	[branch] if (clampMode && shellZ > 4000.0 && shellZ > sceneZ && shellZ - sceneZ < clampWindow)
 		depth = min(rasterZ, rawSceneDepth - 1e-5);
 	else if (clampMode && (pixelEffDepth < 4.0 || pixelCarve > 0.5) && shellZ > sceneZ && shellZ - sceneZ < 0.75)
@@ -2190,7 +2200,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
-	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve);
+	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, input.WorldPos.z * (sceneZ / max(shellZ, 1e-3)) - input.WorldPos.z);
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS
@@ -2988,7 +2998,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve);
+	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, input.WorldPos.z * (sceneZ / max(shellZ, 1e-3)) - input.WorldPos.z);
 #	endif
 
 	return psout;

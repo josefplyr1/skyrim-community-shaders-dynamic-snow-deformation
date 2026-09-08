@@ -532,7 +532,7 @@ public:
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
 		float UndulationStrength = 8.0f;
 		/** @brief Multiplier on the dune field's wavelengths; larger = broader, calmer waves instead of a spike carpet. */
-		float UndulationSpacing = 1.0f;
+		float UndulationSpacing = 0.5f;
 		/** @brief Bump octave height in world units: one-sided mounds on the dunes, baked into the undulation field with them. 0 = off. */
 		float UndulationBumpHeight = 2.0f;
 		/** @brief Bump octave cell size in world units. The field texel is 16, so cells under ~32 alias. */
