@@ -3361,6 +3361,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// floored at ~100 ULPs for the skin's own bias.
 	[branch] if (LODBatch > 0.5)
 	{
+		// Inside the loaded cells the full model draws too, and a LOD that
+		// lies within the coincidence band of its own model wins the depth
+		// test along every plane cut - a band the width of the LOD triangle
+		// across the model's coat (Josef's zigzag streaks, RenderDoc frame
+		// 3907). The seam square is where the game stops drawing full
+		// models; SeamBounds carries the fade overlap, one ramp width.
+		[flatten] if (SeamRampInv > 0.0)
+		{
+			float band = 1.0 / SeamRampInv;
+			[flatten] if (all(worldXY > SeamBounds.xy + band) && all(worldXY < SeamBounds.zw - band))
+				discard;
+		}
 		float lodZ = input.CurrentClip.w;
 		float lodBand = (1.0 + 0.0005 * lodZ) * SharedData::CameraData.w / (SharedData::CameraData.z * lodZ * lodZ);
 		float lodSceneD = SceneDepth.Load(int3(input.Position.xy, 0));
