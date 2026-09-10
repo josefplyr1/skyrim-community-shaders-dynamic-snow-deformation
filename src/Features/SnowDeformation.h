@@ -1092,7 +1092,7 @@ public:
 		float4 CrustLook2;
 		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = trench floor as a fraction of the local uncarved depth (TrenchFloorFraction); zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
-		/** @brief x spare (was the compaction glint suppression, retired); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12). One constant serves both shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x = water cut (1 = the sheet ends at the drawn waterline, 0 = the runtime A/B); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12). One constant serves both shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
 		/** @brief Stage 3: x = P5 rim lip height (fraction of local depth), y = P5 rim teeth strength, z = P6 berm clod amplitude (world units), w spare. xy consumed inside CarveProfile; z at the berm sites. Appended LAST; mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 RimStyle;
@@ -1606,6 +1606,14 @@ public:
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
 	std::vector<CapturedSnowStatic> capturedStatics;
+	/** @brief Water geometry the game set up last frame (BSWaterShader::SetupGeometry): cell planes, placed rivers and Unified Water's meshes alike. Rasterised top-down into the water window at the next Prepass, then cleared there - the water pass runs after Prepass, so the list always carries the previous frame. */
+	struct CapturedWater
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiTransform world;
+	};
+	std::vector<CapturedWater> capturedWater;
+	void BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass);
 	std::unordered_set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
@@ -1627,6 +1635,7 @@ public:
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
+	void InstallWaterCaptureHook();
 
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
@@ -2032,6 +2041,16 @@ public:
 
 	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
+	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Persistent - cleared on cell crossing only, so a shore the camera turned away from keeps its cut. Bound at t27 for the landscape shell. */
+	Texture2D* waterHeightTexture = nullptr;
+	int waterWindowCellX = INT_MIN;
+	int waterWindowCellY = INT_MIN;
+	ID3D11VertexShader* waterCaptureVS = nullptr;
+	ID3D11PixelShader* waterCapturePS = nullptr;
+	winrt::com_ptr<ID3DBlob> waterCaptureVSBlob;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> waterILCache;
+	bool waterCaptureShadersFailed = false;
+	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
@@ -2633,6 +2652,8 @@ public:
 	bool debugActorContact = true;
 	/** @brief Runtime-only: the contact field as the carve pass reads it (ContactViewCS into an RGBA8 the menu shows with the player's bound overlaid). S1's debug view: the silhouette's shape, extent and placement in one image. */
 	bool debugContactView = false;
+	/** @brief Runtime A/B (ShellCB CompactLook.x): off = the landscape shell ends at the drawn waterline. */
+	bool debugWaterCutDisabled = false;
 	/** @brief Runtime-only: half-extent of the field view's crop around the player, world units (192 = a body, 1536 = the whole field). */
 	float debugContactViewHalf = 192.0f;
 	/** @brief Runtime-only A/B: when off, no living body counts as still and every rasterized actor draws every frame. */

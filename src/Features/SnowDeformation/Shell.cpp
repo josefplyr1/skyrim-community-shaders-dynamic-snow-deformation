@@ -1092,8 +1092,8 @@ void SnowDeformation::DrawShell()
 	// (cap clamped below 1000 so the integer part stays the mode).
 	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
 	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
-	// x is a layout keeper (compaction matte retired).
-	cbData.CompactLook = { 0.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
+	// x = the water cut (runtime A/B in Debugging Options).
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.
@@ -1202,6 +1202,7 @@ void SnowDeformation::DrawShell()
 	// otherwise compile its ten variants synchronously right here.
 	if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
+	RenderWaterCapture();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	// The main pass's depth range, not the decal viewport the deferred span
@@ -1322,6 +1323,8 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(0, 6, shellSRVs);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &fineSRV);
+	ID3D11ShaderResourceView* waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	context->VSSetShaderResources(27, 1, &waterSRV);
 	// The game's texture tracker rebinds a slot only when it believes the
 	// binding changed. t3 is the effect shaders' soft-particle depth, set
 	// once per frame, so the null the skin pass left there faded every mist
@@ -1332,6 +1335,7 @@ void SnowDeformation::DrawShell()
 		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
 	context->PSSetShaderResources(0, 9, shellSRVs);
 	context->PSSetShaderResources(13, 1, &fineSRV);
+	context->PSSetShaderResources(27, 1, &waterSRV);
 	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
 	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
@@ -1499,6 +1503,7 @@ void SnowDeformation::DrawShell()
 		context->CSSetConstantBuffers(4, 3, sharedBuffers);
 		context->CSSetShaderResources(0, 6, shellSRVs);
 		context->CSSetShaderResources(13, 1, &fineSRV);
+		context->CSSetShaderResources(27, 1, &waterSRV);
 		ID3D11ShaderResourceView* csHeightSRV = shellSnowHeightSRV.get();
 		context->CSSetShaderResources(8, 1, &csHeightSRV);
 		context->CSSetShaderResources(11, 2, objectCapSRVs);
@@ -1552,6 +1557,8 @@ void SnowDeformation::DrawShell()
 		context->DSSetShaderResources(0, 6, shellSRVs);
 		context->HSSetShaderResources(13, 1, &fineSRV);
 		context->DSSetShaderResources(13, 1, &fineSRV);
+		context->HSSetShaderResources(27, 1, &waterSRV);
+		context->DSSetShaderResources(27, 1, &waterSRV);
 		ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
 		context->HSSetShaderResources(9, 1, &hsBakeSRV);
 		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
@@ -1732,6 +1739,7 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
 	context->PSSetShaderResources(13, 1, nullFinePS);
+	context->PSSetShaderResources(27, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
 	ID3D11SamplerState* restoreSamplers[2] = { prevSamplers[0].get(), prevSamplers[1].get() };
@@ -1861,6 +1869,8 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(0, 6, csSRVs);
 			ID3D11ShaderResourceView* probeFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 			context->CSSetShaderResources(13, 1, &probeFineSRV);
+			ID3D11ShaderResourceView* probeWaterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+			context->CSSetShaderResources(27, 1, &probeWaterSRV);
 			ID3D11ShaderResourceView* csCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 			context->CSSetShaderResources(11, 2, csCapSRVs);
 			// ShellSurfaceZ's berm term reads the bake at t14.
@@ -1883,6 +1893,7 @@ void SnowDeformation::RunLODProbePass()
 			context->CSSetShaderResources(14, 1, nullSRVs);
 			context->CSSetShaderResources(15, 1, nullSRVs);
 			context->CSSetShaderResources(13, 1, nullSRVs);
+			context->CSSetShaderResources(27, 1, nullSRVs);
 			context->CSSetShaderResources(24, 1, &nullSRVs[0]);
 			context->CSSetShaderResources(26, 1, &nullSRVs[1]);
 			ID3D11Buffer* nullCB = nullptr;

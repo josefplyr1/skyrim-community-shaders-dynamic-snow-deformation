@@ -75,6 +75,41 @@ cbuffer StaticCB : register(b1)
 	float padLODCells;  // layout sync with SnowStaticsShell; unused here
 }
 
+#if defined(WATER)
+// Water planes top-down into the terrain window's frame (HeightWindowCenter /
+// HeightHalfExtent carry THAT window here), MAX-blended world z. The terrain
+// window's row index grows with +Y, so +Y runs DOWN the target - the reverse
+// of the object raster above.
+struct WATER_VS_OUTPUT
+{
+	float4 Position : SV_POSITION;
+	float WorldZ : TEXCOORD0;
+};
+
+#	if defined(VSHADER)
+WATER_VS_OUTPUT main(float4 position : POSITION0)
+{
+	float3 posMS = position.xyz;
+	float3 worldAbs = float3(
+		dot(WorldRow0.xyz, posMS) + WorldRow0.w,
+		dot(WorldRow1.xyz, posMS) + WorldRow1.w,
+		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
+	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
+	WATER_VS_OUTPUT vsout;
+	vsout.Position = float4(ndc.x, -ndc.y, 0.5, 1.0);
+	vsout.WorldZ = worldAbs.z;
+	return vsout;
+}
+#	endif
+
+#	if defined(PSHADER)
+float main(WATER_VS_OUTPUT input) : SV_Target0
+{
+	return input.WorldZ;
+}
+#	endif
+#else
+
 struct VS_INPUT
 {
 	float4 Position : POSITION0;
@@ -240,3 +275,4 @@ PS_OUTPUT main(VS_OUTPUT input)
 	return psout;
 }
 #endif
+#endif  // !WATER

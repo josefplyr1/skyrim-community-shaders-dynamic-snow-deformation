@@ -3627,6 +3627,162 @@ ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, co
 	return layout.get();
 }
 
+struct SD_BSWaterShader_SetupGeometry
+{
+	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
+	{
+		func(a_shader, a_pass, a_flags);
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.BSWaterShader_SetupGeometry(a_pass);
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void SnowDeformation::InstallWaterCaptureHook()
+{
+	logger::info("[SNOW DEFORMATION] Hooking BSWaterShader::SetupGeometry");
+	stl::write_vfunc<0x6, SD_BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
+}
+
+void SnowDeformation::BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass)
+{
+	if (!a_pass || !a_pass->geometry)
+		return;
+	// One entry per plane: the same geometry sets up once per water pass.
+	for (const auto& water : capturedWater)
+		if (water.geometry.get() == a_pass->geometry)
+			return;
+	if (capturedWater.size() >= 512)
+		return;
+	capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
+}
+
+// Last frame's water planes top-down into the terrain window's frame (128-unit
+// texels, MAX blend); the landscape shell ends where its ground lies under it.
+void SnowDeformation::RenderWaterCapture()
+{
+	auto context = globals::d3d::context;
+	if (waterCaptureShadersFailed || !staticsCB || !heightMaxBlendState) {
+		capturedWater.clear();
+		return;
+	}
+	if (!waterCaptureVS) {
+		const auto path = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
+		waterCaptureVSBlob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "WATER"));
+		winrt::com_ptr<ID3DBlob> psBlob;
+		psBlob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "WATER"));
+		if (!waterCaptureVSBlob || !psBlob ||
+			FAILED(globals::d3d::device->CreateVertexShader(waterCaptureVSBlob->GetBufferPointer(), waterCaptureVSBlob->GetBufferSize(), nullptr, &waterCaptureVS)) ||
+			FAILED(globals::d3d::device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &waterCapturePS))) {
+			logger::error("[SNOW DEFORMATION] Water capture shaders failed; the shell will not end at water");
+			waterCaptureShadersFailed = true;
+			capturedWater.clear();
+			return;
+		}
+		Util::SetResourceName(waterCaptureVS, "SnowDeformation::WaterCaptureVS");
+		Util::SetResourceName(waterCapturePS, "SnowDeformation::WaterCapturePS");
+	}
+	if (!waterHeightTexture) {
+		D3D11_TEXTURE2D_DESC desc = {
+			.Width = kShellWindowDim,
+			.Height = kShellWindowDim,
+			.MipLevels = 1,
+			.ArraySize = 1,
+			.Format = DXGI_FORMAT_R32_FLOAT,
+			.SampleDesc = { .Count = 1 },
+			.Usage = D3D11_USAGE_DEFAULT,
+			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
+		};
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+		};
+		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
+			.Format = desc.Format,
+			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+			.Texture2D = { .MipSlice = 0 }
+		};
+		waterHeightTexture = new Texture2D(desc, "SnowDeformation::WaterWindow");
+		waterHeightTexture->CreateSRV(srvDesc);
+		waterHeightTexture->CreateRTV(rtvDesc);
+		waterWindowCellX = INT_MIN;
+	}
+	// The terrain window's frame; cleared only when it moves.
+	if (waterWindowCellX != shellWindowCellX || waterWindowCellY != shellWindowCellY) {
+		const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
+		context->ClearRenderTargetView(waterHeightTexture->rtv.get(), clear);
+		waterWindowCellX = shellWindowCellX;
+		waterWindowCellY = shellWindowCellY;
+	}
+	if (capturedWater.empty())
+		return;
+
+	globals::profiler->BeginPass("SnowDeformation::WaterCapture");
+	ID3D11RenderTargetView* rtv = waterHeightTexture->rtv.get();
+	context->OMSetRenderTargets(1, &rtv, nullptr);
+	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
+	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kShellWindowDim), float(kShellWindowDim), 0.0f, 1.0f };
+	context->RSSetViewports(1, &viewport);
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	context->VSSetShader(waterCaptureVS, nullptr, 0);
+	context->PSSetShader(waterCapturePS, nullptr, 0);
+	ID3D11Buffer* cb1 = staticsCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+
+	const float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+	const float span = kShellVertexSpacing * kShellWindowDim;
+	StaticsCB rec{};
+	rec.HeightWindowCenter = { shellWindowCellX * cellSize + span * 0.5f, shellWindowCellY * cellSize + span * 0.5f };
+	rec.HeightHalfExtent = span * 0.5f;
+	for (const auto& water : capturedWater) {
+		auto* geometry = water.geometry.get();
+		auto rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
+		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+			continue;
+		auto triShape = geometry->AsTriShape();
+		if (!triShape)
+			continue;
+		const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		if (indexCount == 0)
+			continue;
+		auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
+			continue;
+		uint64_t descKey;
+		memcpy(&descKey, &desc, sizeof(descKey));
+		auto& layout = waterILCache[descKey];
+		if (!layout) {
+			const uint32_t positionBytes = SD_PositionBytes(descKey, desc);
+			D3D11_INPUT_ELEMENT_DESC element = { "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 };
+			globals::d3d::device->CreateInputLayout(&element, 1, waterCaptureVSBlob->GetBufferPointer(), waterCaptureVSBlob->GetBufferSize(), layout.put());
+		}
+		if (!layout)
+			continue;
+		context->IASetInputLayout(layout.get());
+		const UINT stride = uint32_t(descKey & 0xF) * 4;
+		if (stride == 0)
+			continue;
+		const UINT offset = 0;
+		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
+		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
+		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+		const auto& rot = water.world.rotate;
+		const float scale = water.world.scale;
+		rec.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, water.world.translate.x };
+		rec.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, water.world.translate.y };
+		rec.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, water.world.translate.z };
+		staticsCB->Update(rec);
+		context->DrawIndexed(indexCount, 0, 0);
+	}
+	ID3D11RenderTargetView* nullRTV = nullptr;
+	context->OMSetRenderTargets(1, &nullRTV, nullptr);
+	globals::profiler->EndPass();
+	capturedWater.clear();
+}
+
 bool SnowDeformation::EnsureContactResources()
 {
 	if (contactShadersFailed)

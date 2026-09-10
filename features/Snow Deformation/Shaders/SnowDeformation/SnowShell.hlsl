@@ -180,7 +180,7 @@ cbuffer ShellCB : register(b0)
 	// height; zw = sun cascades' REAL atlas slices (the shared atlas moves
 	// them with the active-light set).
 	float4 BorderStyle;
-	// x spare (compaction matte retired); y = shell-surface SSS
+	// x = water cut (1 = the sheet ends at the drawn waterline); y = shell-surface SSS
 	// re-march, packed: integer part 0 off / 1 on / 2 on + thickness
 	// streak fix, fraction * 1000 = caster height cap in units; zw =
 	// dynamic-resolution scale for its screen-space taps (FrameBuffer b12
@@ -227,6 +227,9 @@ cbuffer BowWaveCB : register(b1)
 }
 
 Texture2D<float4> TerrainWindow : register(t0);
+// Drawn water's height per terrain texel, MAX of the bodies touching it,
+// -100000 where none. Same frame and addressing as TerrainWindow.
+Texture2D<float> WaterWindow : register(t27);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
 // The land mesh is then flat between these points with a checkerboard
@@ -720,6 +723,9 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 			// Sentinel texels carry no data; leave them to the full evaluation.
 			[branch] if (t.x < -50000.0)
 				return false;
+			// Under water the texel is bare whatever its class.
+			[flatten] if (CompactLook.x > 0.5 && t.x < WaterWindow.Load(int3(x, y, 0)))
+				continue;
 			maxDepth = max(maxDepth, t.y + (-8.0) * saturate(1.0 - saturate(t.z)));
 		}
 	}
@@ -885,6 +891,18 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
+// Water level over the texels a point touches: the max, so a shore texel
+// answers with its body's level and the sentinel never blends in.
+float SampleWaterHeight(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	return max(max(WaterWindow.Load(int3(t0.x, t0.y, 0)), WaterWindow.Load(int3(t1.x, t0.y, 0))),
+	           max(WaterWindow.Load(int3(t0.x, t1.y, 0)), WaterWindow.Load(int3(t1.x, t1.y, 0))));
+}
+
 float3 SampleTerrainShaped(float2 gridLocal)
 {
 	float3 result = SampleTerrain(gridLocal);
@@ -918,6 +936,22 @@ float3 SampleTerrainShaped(float2 gridLocal)
 			depthCoverage *= 0.2;
 		}
 		result.yz = depthCoverage;
+	}
+	// Water: the sheet ends at the waterline. Tested at the TRUE position
+	// against the true height, and the noisy margin is only ever ADDED, so
+	// the ragged edge recedes onto the dry side and never grants snow over
+	// water. 12 units of height above the level: a metre of bank on a
+	// steep shore, longer where the ground runs flat into the water.
+	[branch] if (CompactLook.x > 0.5)
+	{
+		float water = SampleWaterHeight(gridLocal);
+		[flatten] if (water > -50000.0 && result.x > -50000.0)
+		{
+			float2 waterXY = GridOrigin + gridLocal;
+			float margin = 12.0 * (0.4 * ShapeNoise(waterXY / 37.0) + 0.6 * ShapeNoise(waterXY / 8.0));
+			[flatten] if (result.x - water < margin)
+				result.yz = float2(-8.0, 0.0);
+		}
 	}
 	return result;
 }

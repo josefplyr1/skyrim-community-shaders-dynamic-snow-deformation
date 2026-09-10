@@ -1378,6 +1378,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
 
 
+			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
+			if (auto _ttWater = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the landscape shell run on under the water again. Off, the sheet ends at the waterline - the water the game drew last frame, rasterised top-down into the terrain window; the ragged edge only ever recedes onto the dry side."));
+
 			ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Bilinear Terrain Height"), &shellBilinearHeight);
 			if (auto _ttBilin = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_bilinear_height_tooltip"), "Measurement aid: returns the shell's terrain height to plain bilinear. Bilinear is the average of a quad's two possible triangulations, so it sits BELOW whichever one the landscape mesh uses - by tens of units on a steep saddle, which is deeper than the snow layer. Turn this on and poke-through should reappear on steep ground; off, the height follows the mesh and cannot sink under it."));
