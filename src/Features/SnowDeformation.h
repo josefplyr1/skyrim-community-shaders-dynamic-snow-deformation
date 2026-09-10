@@ -2006,8 +2006,6 @@ public:
 	bool fineLevelDisabled = false;
 	/** @brief Debugging Options A/B: the landscape shell rises onto captured object tops again (the lift that met the retired object shell). Off, it keeps its own height through objects; the shelter mask and the buried-shadow discriminator still read the field. */
 	bool groundLiftDebug = false;
-	/** @brief Debugging Options A/B: run the drape (S4 draws) through the hull and domain shaders again. Off, they take the plain VS: a flat coat has nothing for tessellation to shape. */
-	bool drapeTessDebug = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.

@@ -1451,8 +1451,6 @@
     "feature.snow_deformation.description": "Maintains a persistent deformation map around the player so snow can be visibly compressed by actors moving through it, leaving lasting trails.",
     "feature.snow_deformation.distant_snow": "Distant Snow",
     "feature.snow_deformation.distant_snow_tooltip": "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead. The sliders here also set how far each snow system reaches; higher = more VRAM and GPU cost.",
-    "feature.snow_deformation.drape_tess_debug": "Tessellate the Drape (A/B)",
-    "feature.snow_deformation.drape_tess_debug_tooltip": "Measurement aid: runs the flat object snow coat through the hull and domain shaders again, as it did before the raised shell was retired. Off, those draws take the plain vertex shader; a flat coat has nothing for tessellation to shape.",
     "feature.snow_deformation.edge_lump_reach": "Edge Lump Reach",
     "feature.snow_deformation.edge_lump_reach_tooltip": "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part.",
     "feature.snow_deformation.enable": "Enable Snow Deformation",

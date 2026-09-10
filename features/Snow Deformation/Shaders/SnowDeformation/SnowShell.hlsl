@@ -2090,16 +2090,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// mild - a long or view-Z-proportional band reads as a translucent margin.
 	float objectFadeBand = 5.0 + shellZ * 0.004;
 	float proximityFade = saturate((sceneZ - shellZ) / objectFadeBand);
-	// The grain-driven descent lays the rim onto its own terrain, which this
-	// fade would read as hovering over geometry and crush to specks. So exempt
-	// pixels whose backdrop IS the terrain: reconstruct the scene surface's
-	// world height along the ray and fade only where something stands above the
-	// terrain data. Sentinel terrain (-50000) reads as objectness 1, so data
-	// gaps keep the plain fade. Distance-gated like the contest.
-	[branch] if (HasSnowHeight > 0.5 && shellZ < 2048.0)
+	// The fade softens where the shell CUTS THROUGH something standing above
+	// the snow; a backdrop lying below the snow surface is buried and the shell
+	// over it is opaque. Reconstruct the scene surface's world height along
+	// the ray and compare it with the shell's own surface here, not with the
+	// terrain: a rock top a few units under the shell is under the snow, and
+	// measured against the terrain it read as an object and dithered into a
+	// tint that never occluded it. Objects standing proud keep the soft
+	// contact; the rim's descent onto its own terrain is below the shell too.
+	[branch] if (shellZ < 8192.0)
 	{
 		float sceneSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z * (sceneZ / max(shellZ, 1e-3));
-		float objectness = smoothstep(1.5, 6.0, sceneSurfaceZ - pixelTerrain.x);
+		float shellSurfaceZ = ShellCameraPosAdjust.z + input.WorldPos.z;
+		float objectness = smoothstep(-1.0, 2.0, sceneSurfaceZ - shellSurfaceZ);
 		proximityFade = max(proximityFade, 1.0 - objectness);
 	}
 	// Two cases hug the geometry behind them and must override the fade, or

@@ -1636,9 +1636,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
-			ImGui::Checkbox(T(TKEY("drape_tess_debug"), "Tessellate the Drape (A/B)"), &drapeTessDebug);
-			if (auto _ttDrapeTess = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("drape_tess_debug_tooltip"), "Measurement aid: runs the flat object snow coat through the hull and domain shaders again, as it did before the raised shell was retired. Off, those draws take the plain vertex shader; a flat coat has nothing for tessellation to shape."));
 			{
 				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
 				ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));

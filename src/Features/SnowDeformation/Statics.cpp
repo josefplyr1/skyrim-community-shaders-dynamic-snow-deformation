@@ -626,14 +626,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
-	// DynDOLOD's large-reference LOD ("<shape>-LargeRef"): the mesh the game
-	// shows across the large-ref band in place of the real model. LOD-flagged,
-	// full textures, no owning reference, no projected snow - so it is not a
-	// merged sheet for the containment test, and the material gate is its
-	// only way in.
+	// DynDOLOD's large-reference LOD ("<shape>-LargeRef"): a segmented batch
+	// the game draws per reference, each segment off once that reference's
+	// real model is loaded. There is no draw hook to read those ranges, and a
+	// capture draws the whole buffer - every loaded large reference then wears
+	// a coarse hull of its own LOD, doorways sheeted over, wall tops slabbed
+	// (Josef's ghost shell, RenderDoc 2026-09-10: objSnowHD-LargeRef, the
+	// game's 900 indices of our 6372).
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
-	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
-	bool largeRefMountain = false;
+	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: large-reference LOD (segments of loaded references would draw)");
+		SampleLODDecision(a_pass->geometry, a_pass->geometry->worldBound.radius, true, false);
+		return;
+	}
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
@@ -669,7 +674,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			// world map the panning camera strobed the whole field on and
 			// off across sheet boundaries.
 			const bool iceSheet = rec.pathNatural;
-			if (!referenced && !iceSheet && !largeRefLOD) {
+			if (!referenced && !iceSheet) {
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -703,15 +708,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// vanilla projected-snow setup, while their LOD counterparts capture
 		// normally. LOD-only acceptance was the whole
 		// bare-glacier bug). The MATO veto stands.
-		// The real model behind a large-ref LOD arrives with the projected-snow
-		// flags when its cell loads; until then the ground under it says
-		// whether this is a snowy mountain. Josef's 2026-09-04 report: shell
-		// at LOD range (baked atlas snow), gone across the large-ref band,
-		// back inside the loaded grid.
-		[[maybe_unused]] const auto& wbCenter = a_pass->geometry->worldBound.center;
-		largeRefMountain = largeRefLOD && rec.pathMountain &&
-		                   GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
-		if (!(rec.pathBase || naturalFeature || largeRefMountain)) {
+		if (!(rec.pathBase || naturalFeature)) {
 			if (matoVetoed)
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: family matched but MATO vetoed (kNotSnow)");
 			else
@@ -830,7 +827,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// the mesh drapes with a rigid plate lifted the full flat depth - the
 	// hovering translucent film. Name match like the road class; a false
 	// positive forces rounded on something already rounded, a no-op.
-	const bool forceRounded = nameFacts.mountainCliff || largeRefMountain;
+	const bool forceRounded = nameFacts.mountainCliff;
 	if (forceRounded && !nameFacts.roundedLogged) {
 		nameFacts.roundedLogged = true;
 		logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", a_pass->geometry->name.c_str());
@@ -3261,7 +3258,7 @@ void SnowDeformation::DrawCapturedStatics()
 			const uint32_t recordIndex = drawIndex++;
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
 			context->VSSetShaderResources(10, 1, &skinSmoothSRV);
-			const bool wantTess = tessellateSkins && (!d.s4Shell || drapeTessDebug);
+			const bool wantTess = tessellateSkins && !d.s4Shell;
 			if (wantTess != skinStagesTess)
 				bindSkinStages(wantTess);
 			if (skinRecordsLive) {
