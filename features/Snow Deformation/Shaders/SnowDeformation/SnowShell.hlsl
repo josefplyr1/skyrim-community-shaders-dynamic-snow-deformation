@@ -892,6 +892,12 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
+// Water edge, in units of height above the level: bare at the margin, full
+// depth a ramp above it. 24 units of ramp is a metre and a half of bank on a
+// steep shore and a wide wet margin on a flat one, which is what shores do.
+static const float kWaterEdgeMargin = 2.0;
+static const float kWaterEdgeRamp = 24.0;
+
 // Water level over the texels a point touches: the max, so a shore texel
 // answers with its body's level and the sentinel never blends in.
 float SampleWaterHeight(float2 gridLocal)
@@ -940,20 +946,24 @@ float3 SampleTerrainShaped(float2 gridLocal)
 		}
 		result.yz = depthCoverage;
 	}
-	// Water: the sheet ends at the waterline. Tested at the TRUE position
-	// against the true height, and the noisy margin is only ever ADDED, so
-	// the ragged edge recedes onto the dry side and never grants snow over
-	// water. 12 units of height above the level: a metre of bank on a
-	// steep shore, longer where the ground runs flat into the water.
+	// Water: the sheet ramps down to the bare submerge over the last
+	// kWaterEdgeRamp units of HEIGHT above the level and reaches it
+	// kWaterEdgeMargin above the water, so the dip lands under the surface
+	// the way a class border's dip lands under the ground. A ramp, not a
+	// step: a per-sample step on a noisy threshold flipped neighbouring
+	// vertices independently and every flip was a 38-unit fin. The noise
+	// wobbles the ramp's position, a few units either way, so the edge
+	// wanders without ever standing over water.
 	[branch] if (CompactLook.x > 0.5)
 	{
 		float water = SampleWaterHeight(gridLocal);
 		[flatten] if (water > -50000.0 && result.x > -50000.0)
 		{
 			float2 waterXY = GridOrigin + gridLocal;
-			float margin = 12.0 * (0.4 * ShapeNoise(waterXY / 37.0) + 0.6 * ShapeNoise(waterXY / 8.0));
-			[flatten] if (result.x - water < margin)
-				result.yz = float2(-8.0, 0.0);
+			float wobble = 6.0 * (ShapeNoise(waterXY / 37.0) - 0.5) + 3.0 * (ShapeNoise(waterXY / 8.0) - 0.5);
+			float t = smoothstep(kWaterEdgeMargin, kWaterEdgeMargin + kWaterEdgeRamp, result.x - water + wobble);
+			result.y = lerp(-8.0, result.y, t);
+			result.z *= t;
 		}
 	}
 	return result;
