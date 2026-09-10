@@ -54,15 +54,15 @@ cbuffer StaticCB : register(b1)
 	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
 	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
 	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here
-	float ShellMinNz;         // layout sync with SnowStaticsShell; unused here
+	float padShellMinNz;
 	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
 	// z-band of a layer's top belong to that layer's plane. Mirror in
 	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
-	float OverheadIgnore;  // layout sync with SnowStaticsShell; unused here
+	float padOverhead;
 	float padMeldSk;       // layout sync with SnowStaticsShell
 
-	float PileHeightRatio;  // layout sync with SnowStaticsShell; unused here
+	float padPileHeight;
 	float padSkyExposure;
 	float padCorniceLip;
 	float padBreakup;
@@ -144,17 +144,12 @@ VS_OUTPUT main(VS_INPUT input)
 }
 #endif
 
-#if defined(PSHADER) && (defined(PEEL) || defined(PEEL2))
-// S4 phase 2 - layer peels (SKIN-PLACEMENT-PLAN): re-rasterize the
-// captures keeping only fragments a peel tolerance BELOW this frame's
-// accumulated layer-1 top (PEEL2: below layer 2 as well); MAX blending
-// then yields the next-highest surface per column. Every plank, tread
-// and beam below a roof or railing gets its own plane, its own rims,
-// its own roll.
+#if defined(PSHADER) && defined(PEEL)
+// The layer-2 peel: re-rasterize the captures keeping only fragments a
+// peel tolerance BELOW this frame's accumulated layer-1 top; MAX blending
+// then yields the next-highest surface per column. The layer-1 cone seed
+// reads it for its plane-continuation test.
 Texture2D<float> Layer1Top : register(t3);
-#	if defined(PEEL2)
-Texture2D<float> Layer2Top : register(t4);
-#	endif
 
 struct PEEL_OUTPUT
 {
@@ -178,12 +173,6 @@ PEEL_OUTPUT main(VS_OUTPUT input)
 	float top1 = Layer1Top.Load(int3(t, 0));
 	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - PeelTol)
 		discard;
-#	if defined(PEEL2)
-	// No third layer without a second, and only strictly below it.
-	float top2 = Layer2Top.Load(int3(t, 0));
-	[branch] if (top2 < -50000.0 || input.WorldZ > top2 - PeelTol)
-		discard;
-#	endif
 	PEEL_OUTPUT o;
 	o.Top = input.WorldZ;
 	return o;

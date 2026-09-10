@@ -265,25 +265,15 @@ cbuffer StaticCB : register(b1)
 	// game's own shaded normal (normal maps included), which is where the
 	// purple view's per-stone detail lives. Mirror in SnowDeformation.h.
 	float HasSkinNormalCopy;
-	// cos(max shell slope): minimum normal Z that grows the S4 shell -
-	// the up-facing gate, user-tunable. Mirror in SnowDeformation.h.
-	float ShellMinNz;
+	float padShellMinNz;
 	// Peel tolerance (kPeelTol; the slider was retired at its default):
 	// surfaces within this z-band of a layer's top belong to that layer's
 	// plane. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float PeelTol;
-	// "Ignore Cover Above" (user knob): cover more than this far above a
-	// vertex is a separate world - the plane keeps its full uniform
-	// height and clips through it instead of deferring to a peeled
-	// layer's narrow footprint. Mirror in SnowHeightCapture.hlsl /
-	// SnowDeformation.h.
-	float OverheadIgnore;
+	float padOverhead;
 	float padMeldSk;
 
-	// "Pile Height Ratio" (the width failsafe): a dome may stand at most
-	// this many times the repose height its footprint supports. Mirror in
-	// SnowHeightCapture.hlsl / SnowDeformation.h.
-	float PileHeightRatio;
+	float padPileHeight;
 	float padSkyExposure;
 	float padCorniceLip;
 	float padBreakup;
@@ -650,20 +640,9 @@ Texture2D<float> ObjectSnowCone : register(t13);
 // FineHalfExtent (0 = the level is off and every read below stays coarse).
 Texture2D<float> ObjectSnowConeFine : register(t33);
 Texture2D<float> ObjectTopFine : register(t34);
-// S4 phase 2 - the PEELED second layer: the highest up-facing surface
-// more than the peel tolerance below layer 1 per column, with its own
-// cone. A vertex whose height matches layer 2 takes its roll from here,
-// so a tread under a railing or a beam under a roof gets ITS OWN
-// plane's rims instead of borrowing the plane above (the beam-streak /
-// staircase-hole root).
-Texture2D<float> ObjectTop2Raw : register(t24);
 // P3: per-column sky openness (1 = open sky), baked by ObjectSkyOpenCS at
 // half the raster's resolution from the layer-1 tops.
 Texture2D<float> ObjectSkyOpen : register(t25);
-Texture2D<float> ObjectSnowCone2 : register(t26);
-// K=3: the third peeled layer for roof-over-beam-over-floor columns.
-Texture2D<float> ObjectTop3Raw : register(t27);
-Texture2D<float> ObjectSnowCone3 : register(t28);
 #endif
 // Bound to the patch's VS/HS/DS and, so the skin PS can run the SAME
 // ownership test the patch does, to the skin PS as well: the skin must step
@@ -849,123 +828,6 @@ float SampleSkyOpenness(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Layer-2 twins (S4 phase 2). HLSL SM5 cannot parameterize the texture,
-// so these mirror PatchTop / ObjectConeDepth verbatim on the peeled maps.
-float PatchTop2(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-
-	float2 dims;
-	ObjectTop2Raw.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	return max(max(ObjectTop2Raw.Load(int3(t0.x, t0.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t0.y, 0))),
-		max(ObjectTop2Raw.Load(int3(t0.x, t1.y, 0)), ObjectTop2Raw.Load(int3(t1.x, t1.y, 0))));
-}
-
-float ObjectConeDepth2(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return 1000000.0;
-
-	float2 dims;
-	ObjectSnowCone2.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = ObjectSnowCone2.Load(int3(t0.x, t0.y, 0));
-	float s10 = ObjectSnowCone2.Load(int3(t1.x, t0.y, 0));
-	float s01 = ObjectSnowCone2.Load(int3(t0.x, t1.y, 0));
-	float s11 = ObjectSnowCone2.Load(int3(t1.x, t1.y, 0));
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
-float PatchTop3(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-
-	float2 dims;
-	ObjectTop3Raw.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	return max(max(ObjectTop3Raw.Load(int3(t0.x, t0.y, 0)), ObjectTop3Raw.Load(int3(t1.x, t0.y, 0))),
-		max(ObjectTop3Raw.Load(int3(t0.x, t1.y, 0)), ObjectTop3Raw.Load(int3(t1.x, t1.y, 0))));
-}
-
-float ObjectConeDepth3(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return 1000000.0;
-
-	float2 dims;
-	ObjectSnowCone3.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = ObjectSnowCone3.Load(int3(t0.x, t0.y, 0));
-	float s10 = ObjectSnowCone3.Load(int3(t1.x, t0.y, 0));
-	float s01 = ObjectSnowCone3.Load(int3(t0.x, t1.y, 0));
-	float s11 = ObjectSnowCone3.Load(int3(t1.x, t1.y, 0));
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
-// NEAREST-texel layer tops, for the lift's layer select only. The
-// MAX-of-4 twins above spread a higher neighbour one texel outward,
-// which flipped every vertex within a texel of a stair riser onto the
-// UPPER tread's layer - a band of confused spikes along each seam.
-// The select wants the top of the vertex's own column, nothing wider.
-float PatchTopPoint(float2 worldXY)
-{
-	float result = FineTopPoint(worldXY);
-	[branch] if (result <= -50000.0)
-	{
-		float2 windowLocal = abs(worldXY - HeightWindowCenter);
-		[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		{
-			result = -1000000.0;
-		}
-		else
-		{
-			float2 dims;
-			ObjectTopRaw.GetDimensions(dims.x, dims.y);
-			int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
-			result = ObjectTopRaw.Load(int3(t, 0));
-		}
-	}
-	return result;
-}
-
-float PatchTop2Point(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-	float2 dims;
-	ObjectTop2Raw.GetDimensions(dims.x, dims.y);
-	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
-	return ObjectTop2Raw.Load(int3(t, 0));
-}
-
-float PatchTop3Point(float2 worldXY)
-{
-	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return -1000000.0;
-	float2 dims;
-	ObjectTop3Raw.GetDimensions(dims.x, dims.y);
-	int2 t = int2(PatchTexel(worldXY, dims) + 0.5);
-	return ObjectTop3Raw.Load(int3(t, 0));
-}
 #endif
 
 #if ((defined(VSHADER) || defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)) || defined(PSHADER)
@@ -1916,211 +1778,15 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		depth = max(depth, kMinSkinLift * upFacing);
 	}
 
-	// S4 phase 1 - the NEW 3D shell (Josef's 0/10/20/30 sketch): a
-	// ROLLING-BALL FILLET whose radius IS the height, grown VERTICALLY
-	// over the fill-covered ("cyan") slice of the projected footprint.
-	// Applied LAST because the classic depth pipeline (taper, shelter,
-	// collapse) belongs to the classic layer - the fillet IS this shell's
-	// taper. h(t) = H*sqrt(1-(1-t)^2) over the cone field's normalized
-	// distance-to-rim: the roll's run equals H, so the rounding lengthens
-	// with the slider by construction, flattening into the blanket
-	// interior; MoundSteepness naturally modulates roll tightness. The
-	// placement mask (vertex frequency; the PS refines it per pixel):
-	// inside the projected footprint, inside the fill's angular slice,
-	// and TOP-VISIBLE - only what the downward camera (the object-top
-	// raster) can see grows the shell; the recolored PD continues
-	// underneath everywhere else.
+	// The S4 draw is the drape: a flat coat at the minimum lift, shaded by
+	// the mesh normal, coverage decided per pixel by the coat block off the
+	// game's real paint.
 	[branch] if (ProjPixelEnable > 1.5)
 	{
-		float wLin = weldNz * vertexAlpha - max(ProjThreshold, 0.0) + 0.1;
-		// mask = the PD footprint and fill gates alone; the up-facing
-		// gate multiplies in below.
-		// The footprint is the game's SOLID paint (kCoatSolidW, the coat's
-		// own contour), not its first trace: the lifted shell used to run
-		// down into faint paint the coat would never cover.
-		// Snow Fill pushes the footprint to solid exactly as the recolor
-		// does (a boost, most up-facing first), not an angular gate: at 0
-		// the shell stands on the game's own solid paint at every depth.
-		float fillNzCut = 1.0 - 2.0 * ProjSnowFillSk;
-		float wLinEff = wLin > 0.003 ? max(wLin, 0.2 * smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, weldNz)) : wLin;
-		float mask = smoothstep(kCoatSolidW - 0.05, kCoatSolidW, wLinEff);
-		// Vertical growth is only meaningful on up-facing surfaces - a wall
-		// lifted along +Z slides along itself, and at fill 100% the +0.1
-		// bias floored whole walls into the mask (Josef's whitewashed
-		// boards). Steep faces are the RECOLOR's job; the shell's geometry
-		// is the tops', and the cutoff is Josef's slider (ShellMinNz =
-		// cos of the max slope).
-		mask *= smoothstep(ShellMinNz, ShellMinNz + 0.15, weldNz);
-		// NO top-visibility cut (Josef, 2026-08-29): comparing against the
-		// GLOBAL column top made anything under a roof or railing lose its
-		// shell with a hard mid-plank cliff - the walkway's red-outlined
-		// edges. Snow builds wherever the projected footprint says, roofs
-		// included; the proper sheltering ("no snow under tents") returns
-		// later as its own mechanism. Undersides stay harmless: their
-		// up-displaced faces land inside their own geometry.
 		debugLayer = 1.0;
-		float rollT = 1.0;
-		float heightScale = 1.0;
-		float3 domeNormal = nrmWS;
-		// Kept for P5's lip: the cone gradient points INWARD (the cone rises
-		// away from a rim), so its negation is the outward direction the rim
-		// has to bulge along.
-		float2 domeConeGrad = float2(0.0, 0.0);
-		// The drawn surface's DEPTH gradient (dd/dx, dd/dy), zero until the
-		// dome runs. Carried explicitly rather than decoded back out of
-		// domeNormal: that is SEEDED with nrmWS, so on any draw where the
-		// dome never ran a mesh normal would decode as a bogus gradient.
-		float2 domeHeightGrad = float2(0.0, 0.0);
-		[branch] if (HasObjectTop > 0.5)
-		{
-			float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
-			float cone = ObjectConeDepth(worldBase.xy);
-			// Layer select (S4 phase 2, K=3): a vertex belongs to the
-			// topmost PEELED plane whose height matches its own. Below
-			// a layer by more than the peel tolerance, the roll comes
-			// from the next layer's cone; below all three, no plane
-			// owns the surface and it gets NO roll data rather than a
-			// full-height interior borrowed from someone else's plane
-			// - which was the beam-streak and staircase-hole failure.
-			float top1 = PatchTopPoint(worldBase.xy);
-			[branch] if (top1 > -50000.0 && worldBase.z < top1 - PeelTol)
-			{
-				// "Ignore Cover Above" (Josef's rule): cover more than
-				// the clearance overhead is a separate world - a roof
-				// over a porch, a bench over its floor. The plane keeps
-				// its FULL uniform height and clips through, instead of
-				// deferring to a peeled layer's narrow tattered
-				// footprint - but ONLY where the plane actually EXISTS
-				// beneath the cover: a peeled layer top at the vertex's
-				// own height proves it. A tread edge whose nearest texel
-				// belongs to the wall has no plane of its own there -
-				// full height would run the dome off the end as a lifted
-				// open shelf (the left-rolls/right-floats stair bug), so
-				// it gets no roll data and rounds off instead. Cover
-				// WITHIN the clearance (a tread over a tread, a low
-				// ledge) descends the cascade as usual.
-				float coneDeep;
-				[branch] if (top1 - worldBase.z > OverheadIgnore)
-				{
-					float top2 = PatchTop2Point(worldBase.xy);
-					float top3 = PatchTop3Point(worldBase.xy);
-					bool planeHere = (top2 > -50000.0 && abs(worldBase.z - top2) <= PeelTol) ||
-					                 (top3 > -50000.0 && abs(worldBase.z - top3) <= PeelTol);
-					coneDeep = planeHere ? coneSeed : 0.0;
-					[flatten] if (!planeHere)
-						debugLayer = 4.0;
-				}
-				else
-				{
-					float top2 = PatchTop2Point(worldBase.xy);
-					float cone2v = ObjectConeDepth2(worldBase.xy);
-					coneDeep = cone2v;
-					debugLayer = 2.0;
-					[branch] if (top2 < -50000.0 || worldBase.z < top2 - PeelTol)
-					{
-						float top3 = PatchTop3Point(worldBase.xy);
-						float cone3v = ObjectConeDepth3(worldBase.xy);
-						debugLayer = 3.0;
-						[flatten] if (top3 < -50000.0 || worldBase.z < top3 - PeelTol)
-						{
-							cone3v = 0.0;
-							debugLayer = 4.0;
-						}
-						// Same smooth hand-off as below, one layer deeper.
-						float f2 = top2 > -50000.0 ? smoothstep(PeelTol, PeelTol * 2.0, top2 - worldBase.z) : 1.0;
-						coneDeep = lerp(cone2v, cone3v, f2);
-					}
-				}
-				// SMOOTH LAYER HAND-OFF (Josef's paper-sheet find): a
-				// binary per-vertex layer choice pleats the surface into
-				// an accordion of thin vertical sheets wherever the
-				// cover's raster boundary jitters texel to texel - under
-				// roofs, beside posts and benches, on deep shells. The
-				// deep result blends in over one peel tolerance instead
-				// of switching, so the shell stays one smooth surface
-				// through every hand-off.
-				cone = lerp(cone, coneDeep, smoothstep(PeelTol, PeelTol * 2.0, top1 - worldBase.z));
-			}
-			// WIDTH FAILSAFE, take 2 (Josef's "peak rounded shape" spec):
-			// the dome keeps the FILLET shape always, but its RADIUS
-			// freezes at the feature's own CREST - the moment the rolls
-			// from both edges meet in the middle, growth stops whatever
-			// the depth slider says; at ratio 1 the frozen shape is the
-			// perfect half-dome exactly filling the width. The crest is
-			// the feature's maximum cone, approximated by a tap ring at
-			// half the roll radius: features narrow enough to saturate
-			// have their crest within reach, wider ones read large values
-			// and pass unclamped (their classic fillet is untouched).
-			// Round 13's local-cone envelope warped the whole profile
-			// into a cone-follower - pyramids at strict ratio.
-			float crest = cone;
-			{
-				float tapR = 0.5 * coneSeed;
-				float tapD = tapR * 0.7071;
-				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapR, 0.0)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapR, 0.0)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(0.0, tapR)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(0.0, tapR)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapD, tapD)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, tapD)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy + float2(tapD, -tapD)));
-				crest = max(crest, ObjectConeDepth(worldBase.xy - float2(tapD, -tapD)));
-			}
-			float hEff = max(min(coneSeed, PileHeightRatio * crest), kMinSkinLift);
-			heightScale = hEff / coneSeed;
-			rollT = saturate(cone / hEff);
-			// DOME SHADING (Josef: lee flanks must go dark like the
-			// landscape shell's). Analytic surface normal from the cone
-			// gradient through the fillet's slope, clamped near the
-			// vertical rim; taps clamped to the seed so the window-edge
-			// sentinel cannot poison the gradient.
-			{
-				const float gs = 4.0;
-				float cXP = min(ObjectConeDepth(worldBase.xy + float2(gs, 0.0)), coneSeed);
-				float cXN = min(ObjectConeDepth(worldBase.xy - float2(gs, 0.0)), coneSeed);
-				float cYP = min(ObjectConeDepth(worldBase.xy + float2(0.0, gs)), coneSeed);
-				float cYN = min(ObjectConeDepth(worldBase.xy - float2(0.0, gs)), coneSeed);
-				float2 coneGrad = float2(cXP - cXN, cYP - cYN) / (2.0 * gs);
-				float rimIn0 = 1.0 - rollT;
-				float dhdc = rimIn0 / max(sqrt(saturate(1.0 - rimIn0 * rimIn0)), 0.2);
-				domeNormal = normalize(float3(-coneGrad * dhdc, 1.0));
-				domeConeGrad = coneGrad;
-				domeHeightGrad = coneGrad * dhdc;
-			}
-		}
-		float rimIn = 1.0 - rollT;
-		depth = depthBase * heightScale * sqrt(saturate(1.0 - rimIn * rimIn)) * mask;
+		depth = depthBase;
 		coverDepth = depth;
-		upFacing = mask;
-		// OPTION 1 (Josef, 2026-09-01): shade by the gradient of the surface
-		// this shell ACTUALLY DRAWS - which is what the landscape shell does,
-		// and the reason the two matched only at depth 0.
-		//
-		// The skin IS its source mesh displaced VERTICALLY by d(x,y). Under
-		// that map the surface normal shears exactly:
-		//     n' = (nx - nz*dd/dx, ny - nz*dd/dy, nz)
-		// (the inverse-transpose of the displacement Jacobian). No taps, no
-		// tuning - it is the true normal of the drawn geometry.
-		//
-		// This is the GENERAL form of the dome normal, not a swap for it:
-		//   - on a flat top (n = 0,0,1) it reduces EXACTLY to (-dx, -dy, 1),
-		//     the heightfield normal the landscape shell builds;
-		//   - on a vertical face (nz = 0) it leaves the mesh normal ALONE.
-		// That second degeneracy is why the earlier wholesale swap to
-		// domeNormal failed: domeNormal is up-hemisphere by construction, so
-		// it top-projected every steep rock-family shell and smeared its
-		// lighting grey at distance. The shear cannot do that - it tilts in
-		// proportion to nz, so it vanishes precisely where that swap broke.
-		//
-		// It also subsumes the roll-wall term the old domeTilt hacked in:
-		// dhdc rises toward the rim, so the fillet's own gradient tilts the
-		// normal outward there and the PS picks the side plane on its own.
-		//
-		// kSkinShadeSmooth (0) still selects the BASE this shears - the mesh
-		// normal at 0, the position-averaged one at 1 - so the dial survives.
-		float3 baseShade = normalize(lerp(nrmWS, smoothWS, saturate(depth / max(depthBase, 0.01)) * kSkinShadeSmooth));
-		float2 shadeGrad = domeHeightGrad * mask;
-		shadeNormal = normalize(float3(baseShade.xy - baseShade.z * shadeGrad, baseShade.z));
+		upFacing = 1.0;
 	}
 
 	// P3 (edge-research study): SKY EXPOSURE weights the depth - the
@@ -2406,8 +2072,7 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
-	// S4 draws shade by the analytic dome normal (the dome's shape lives
-	// in the cone field, invisible to the mesh normals).
+	// S4 draws shade by the mesh normal.
 	vsout.NormalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
 	// raw normal Z, interpolated; the PS runs the up-facing smoothstep per
 	// pixel. Thresholding here makes low-poly rocks flip whole FACES between
@@ -2574,7 +2239,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	SkinLift lift = ApplySkinLift(worldBase, normalWS, inflateWS, isFlat, vertexAlpha);
 	float3 worldAbs = lift.WorldAbs;
 	float2 gridLocal = worldAbs.xy - GridOrigin;
-	// Same S4 dome-normal selection as the untessellated VS.
+	// Same S4 normal selection as the untessellated VS.
 	normalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(normalWS, inflateWS, isFlat, lift.Depth, lift.RimT);
 
 	// Relief from the displacement map, same recipe as the landscape shell:

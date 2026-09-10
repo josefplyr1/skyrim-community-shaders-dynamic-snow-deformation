@@ -1770,16 +1770,13 @@ public:
 		float ProjPixelEnable;
 		/** @brief >0.5: preSkinNormalsCopySRV bound at skin PS t23 - the per-pixel nz for the authored-relief coverage cut comes from the scene's own shaded normal (normal maps included). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float HasSkinNormalCopy;
-		/** @brief kShellMinNz - minimum normal Z that grows the S4 dome (vertex-rate placement gate). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ShellMinNz;
+		float padShellMinNz;
 		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
-		/** @brief kOverheadIgnore - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float OverheadIgnore;
+		float padOverhead;
 		float padMeldSk;
 
-		/** @brief kPileHeightRatio - a dome may stand at most this many times the repose height its footprint supports. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float PileHeightRatio;
+		float padPileHeight;
 		float padSkyExposure;
 		float padCorniceLip;
 		float padBreakup;
@@ -1998,14 +1995,10 @@ public:
 	static constexpr float kObjectLiftCap = 150.0f;
 	/** @brief Peel tolerance: surfaces within this many units below a peeled layer's top belong to that layer's plane. Was the "Plane Merge Height" slider, retired 2026-09-06 at its default. */
 	static constexpr float kPeelTol = 8.0f;
-	/** @brief cos(65 deg): steepest slope the S4 dome grows on. Was the "3D Shell Max Slope" / "Rock & Cliff Max Slope" sliders, retired 2026-09-08 at their default. */
-	static constexpr float kShellMinNz = 0.42261826f;
 	/** @brief Cone seed rim threshold (world units). Was "Plane Split Step", retired 2026-09-10 at its default. */
 	static constexpr float kRimStep = 6.0f;
 	/** @brief Cover above a plane that neither splits it nor demotes it (world units). Was "Ignore Cover Above", retired 2026-09-10 at its default. */
 	static constexpr float kOverheadIgnore = 0.0f;
-	/** @brief Dome width failsafe: the fillet radius cap as a multiple of the crest height. Was "Pile Height Ratio", retired 2026-09-10 at its default. */
-	static constexpr float kPileHeightRatio = 1.0f;
 	/** @brief Cone settling, the 4-neighbour Jacobi lambda at its stability bound. Was "Snow Settling" at 100%, retired 2026-09-10. */
 	static constexpr float kDiffuseLambda = 0.5f;
 
@@ -2018,12 +2011,8 @@ public:
 	Texture2D* heightScratch = nullptr;
 	/** @brief Cone-transformed snow SURFACE height over the object top raster; the skin's edge taper reads it with one tap. */
 	Texture2D* objectSnowCone = nullptr;
-	/** @brief S4 phase 2 - the PEELED second layer: ping-pong accumulated raw top of the highest surface more than kPeelTol below layer 1 per column, plus its own repose cone. A vertex whose height matches layer 2 takes its roll from here (SKIN-PLACEMENT-PLAN, layered top peeling). Skin VS/DS t24 (top) and t26 (cone). */
+	/** @brief The peeled second layer: ping-pong accumulated raw top of the highest up-facing surface more than kPeelTol below layer 1 per column. The layer-1 cone seed reads it as the plane-continuation test behind every upward rim. */
 	Texture2D* heightTop2Raw[2] = { nullptr, nullptr };
-	Texture2D* objectSnowCone2 = nullptr;
-	/** @brief K=3: the third peeled layer (roof over beam over floor), same shape as layer 2. Skin VS/DS t27 (top) and t28 (cone). */
-	Texture2D* heightTop3Raw[2] = { nullptr, nullptr };
-	Texture2D* objectSnowCone3 = nullptr;
 	/** @brief P3: per-column sky openness (1 = open sky) baked from the layer-1 tops at half the raster's resolution. Skin VS/DS + caster t25. */
 	Texture2D* objectSkyOpen = nullptr;
 	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
@@ -2036,7 +2025,7 @@ public:
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
 	winrt::com_ptr<ID3D11Texture2D> probeStaging[2];
 	uint probeCursor = 0;
-	/** @brief Sampled values: 0 = L1 top, 1 = L2 top, 2 = L3 top, 3 = cone1, 4 = cone2, 5 = cone3. Sentinels pass through raw. */
+	/** @brief Sampled values: 0 = L1 top, 1 = L2 top, 2 = cone1. Sentinels pass through raw. */
 	float probeVals[6] = {};
 	bool probeValid = false;
 	float3 probeWorldPos = {};
@@ -2056,8 +2045,6 @@ public:
 	ID3D11PixelShader* heightPS = nullptr;
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
-	/** @brief K=3: the layer-3 peel PS (PEEL2 define) - additionally requires a known layer 2 and a height below it. */
-	ID3D11PixelShader* heightPeel2PS = nullptr;
 	/** @brief Depth-only skin caster VS (SHADOWCAST define): the full lift, clip position through the light matrix ShellCB carries during the cascade injection. Drawn by InjectShellShadowCasters so the object shells cast real sun shadows. */
 	ID3D11VertexShader* skinShadowVS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;

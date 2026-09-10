@@ -604,14 +604,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 			context->VSSetShaderResources(11, 1, &castTopSRV);
 			ID3D11ShaderResourceView* castConeSRV = objectSnowCone ? objectSnowCone->srv.get() : nullptr;
 			context->VSSetShaderResources(13, 1, &castConeSRV);
-			ID3D11ShaderResourceView* castTop2SRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
-			context->VSSetShaderResources(24, 1, &castTop2SRV);
-			ID3D11ShaderResourceView* castLayerSRVs[3] = {
-				objectSnowCone2 ? objectSnowCone2->srv.get() : nullptr,
-				heightTop3Raw[heightCurrent] ? heightTop3Raw[heightCurrent]->srv.get() : nullptr,
-				objectSnowCone3 ? objectSnowCone3->srv.get() : nullptr
-			};
-			context->VSSetShaderResources(26, 3, castLayerSRVs);
 			// The caster runs FillSkinDrawCB, so it carries FineHalfExtent and
 			// WILL read the near clipmap: unbound here it would sample zeros
 			// and cast a shadow off a surface the visible skin never had.

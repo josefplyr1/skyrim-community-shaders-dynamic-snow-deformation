@@ -1684,13 +1684,12 @@ void SnowDeformation::DrawSettings()
 						else
 							snprintf(out, n, "%.0f", v);
 					};
-					char l1[16], l2[16], l3[16];
+					char l1[16], l2[16];
 					fmtHeight(probeVals[0], l1, sizeof(l1));
 					fmtHeight(probeVals[1], l2, sizeof(l2));
-					fmtHeight(probeVals[2], l3, sizeof(l3));
 					char probeLine1[160], probeLine2[160];
-					snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s  L3 %s", probeWorldPos.z, l1, l2, l3);
-					snprintf(probeLine2, sizeof(probeLine2), "cone depths: L1 %.1f  L2 %.1f  L3 %.1f", probeVals[3], probeVals[4], probeVals[5]);
+					snprintf(probeLine1, sizeof(probeLine1), "Probe @ player z %.0f | layer tops: L1 %s  L2 %s", probeWorldPos.z, l1, l2);
+					snprintf(probeLine2, sizeof(probeLine2), "cone depth: L1 %.1f", probeVals[2]);
 					ImGui::TextUnformatted(probeLine1);
 					ImGui::TextUnformatted(probeLine2);
 				}
