@@ -2378,6 +2378,11 @@ struct SkinShadeInput
 	// 1 = parallax-occlusion relief. The volume passes 0: fresh snow's height
 	// variation is the field's own, and the glints stay regardless.
 	float pom;
+	// |z| of the facet's own normal (screen derivatives), or -1 where there
+	// is no facet (patch, volume). The texture plane trusts the interpolated
+	// normal only within 0.3 of it: smooth-shaded box meshes carry corner
+	// normals that read a vertical face as half up-facing.
+	float geoNz;
 };
 struct SkinShadeResult
 {
@@ -2424,7 +2429,15 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// smoothstep(0.55, 0.25): a deliberate tune, to hold the top projection
 	// longer across rock flanks at n.z 0.4-0.7. Revert this line first if
 	// flanks now read stretched.
-	float snowSteepness = smoothstep(0.75, 0.55, abs(normalWS.z));
+	// The interpolated normal within 0.3 of the facet's: a smooth-shaded wall
+	// mesh interpolates its cube-corner normals to nz ~0.7 across a vertical
+	// face and took the top plane (Josef's striated pillar, RenderDoc frame
+	// 2506); rock normals never stray that far from their facet, so they
+	// keep the smooth ramp and grow no facet seams.
+	float nzPlane = abs(normalWS.z);
+	[flatten] if (input.geoNz >= 0.0)
+		nzPlane = clamp(nzPlane, input.geoNz - 0.3, input.geoNz + 0.3);
+	float snowSteepness = smoothstep(0.75, 0.55, nzPlane);
 #endif
 	float snowWorldZAbs = input.WorldPos.z + ShellCameraPosAdjust.z;
 	// Captured, not recomputed: normalWS is perturbed further below (berm
@@ -3295,6 +3308,7 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	ssi.pixelDeform = 0.0;
 	ssi.screenNoise = noise;
 	ssi.selfShadowReject = 0.0;
+	ssi.geoNz = -1.0;
 	// Full material inside the detail distance, the range-invisible parts
 	// gone by one and a half times it.
 	ssi.detail = 1.0 - smoothstep(VoxInnerCentre.w, VoxInnerCentre.w * 1.5, tHit);
@@ -4093,6 +4107,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 #	endif
 	ssi.detail = 1.0;
 	ssi.pom = 1.0;
+#ifdef PATCH
+	ssi.geoNz = -1.0;
+#else
+	ssi.geoNz = abs(geoFacing.z);
+#endif
 	SkinShadeResult ssr = SkinShadeSurface(ssi, normalWS);
 	normalWS = ssr.normalWS;
 	float3 viewNormal = ssr.viewNormal;
