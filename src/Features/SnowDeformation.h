@@ -1602,7 +1602,7 @@ public:
 		bool projReal;
 		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
 		bool fullCoat;
-		/** @brief DynDOLOD large-reference LOD batch: the game draws only the segments of references whose real model is not loaded. Kept out of the height raster; the skin discards inside the loaded grid and wherever its hull stands off the scene depth (the segment the game did not draw). */
+		/** @brief DynDOLOD large-reference LOD batch: the game draws it one segment per reference, and which segments it draws is not a function of distance (the large-reference bug keeps segments on inside the loaded grid). Kept out of the height raster; the skin keeps a pixel only where its hull coincides with the scene depth, which is where the game drew that segment. */
 		bool lodBatch;
 		/** @brief The game rasterised this draw in its decal depth-bias mode (RendererShadowState::rasterStateDepthBiasMode != 0, or the Decal/DynamicDecal property flags): depth written through DepthBias -1, SlopeScaledDepthBias -0.65, viewport max depth 0.999972. Its skin draws through the same state plus the skin bias, or it loses the depth test at every grazing view (Windhelm's snow-overlay shapes, RenderDoc 2026-09-10). */
 		bool decalDepth;
@@ -1787,8 +1787,8 @@ public:
 		float FineHalfExtent;
 		/** @brief CapturedSnowStatic::lodBatch as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float LODBatch;
-		/** @brief (uGridsToLoad - 1) / 2: cells from the camera's cell within which every reference's real model is loaded and no LOD segment draws. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float LoadedHalfCells;
+		/** @brief Retired LoadedHalfCells slot (the loaded-grid LOD discard, `4ce62fd1` to its successor). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float padLODCells;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

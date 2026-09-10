@@ -2316,19 +2316,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 }
 
-// (uGridsToLoad - 1) / 2: the cells around the camera's cell in which every
-// reference's real model is loaded, so no LOD segment is drawn there.
-static int LoadedHalfCells()
-{
-	static const int half = [] {
-		if (auto* ini = RE::INISettingCollection::GetSingleton())
-			if (auto* setting = ini->GetSetting("uGridsToLoad:General"))
-				return std::max(((int)setting->GetInteger() - 1) / 2, 0);
-		return 2;
-	}();
-	return half;
-}
-
 void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const
 {
 	const auto& rot = a_cap.world.rotate;
@@ -2371,7 +2358,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
-	a_scb.LoadedHalfCells = float(LoadedHalfCells());
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()
