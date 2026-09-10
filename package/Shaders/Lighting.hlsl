@@ -2899,16 +2899,17 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// permutation never applied (PI-CONVENTION-SPIKE.md), and GetDirect-
 	// LightInput's Lambert cancels it back out. Mirrors the TRUE_PBR tail
 	// (:2735-2790): direct + Fresnel-weighted lobe × ambient, all
-	// × PBRLightingScale. Specular output stays deliberately absent at LOD
-	// distance; no vertex color — the shell has none.
+	// × PBRLightingScale, and the sun GGX and environment lobes the shell
+	// writes (without them the horizon read darker than the shell by the
+	// sun's angle, Josef 2026-09-10); no vertex color — the shell has none.
 	[branch] if (snowLodReplaceW > 0.003)
 	{
 		MaterialProperties snowMaterial = (MaterialProperties)0;
 		snowMaterial.BaseColor = snowLodAlbedo;
-		// The shell's material defaults (SnowShell.hlsl kSnowRoughness/kSnowF0
-		// order): scalar stand-ins for its RMAOS map, which mips flat at LOD
-		// range anyway.
-		snowMaterial.Roughness = SharedData::snowDeformationSettings.SnowRoughnessScale;
+		// The shell's material defaults (SnowShell.hlsl kSnowRoughness/kSnowF0)
+		// under the same roughness scale: scalar stand-ins for its RMAOS map,
+		// which mips flat at LOD range anyway.
+		snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
 		snowMaterial.F0 = 0.028;
 		snowMaterial.AO = 1.0;
 		DirectContext snowContext = dirLightContext;
@@ -2920,9 +2921,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
 		color.xyz = lerp(color.xyz, snowColor, snowLodReplaceW);
 		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, snowLodReplaceW);
-		specularColor = lerp(specularColor, 0.0, snowLodReplaceW);
-		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, snowLodReplaceW);
-		material.Roughness = lerp(material.Roughness, 1.0, snowLodReplaceW);
+		specularColor = lerp(specularColor, snowLit.specular * Color::PBRLightingScale, snowLodReplaceW);
+		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, snowLobes.specular, snowLodReplaceW);
+		material.Roughness = lerp(material.Roughness, snowMaterial.Roughness, snowLodReplaceW);
 	}
 #	endif
 
@@ -2940,7 +2941,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	{
 		MaterialProperties snowMaterial = (MaterialProperties)0;
 		snowMaterial.BaseColor = snowProjAlbedo;
-		snowMaterial.Roughness = SharedData::snowDeformationSettings.SnowRoughnessScale;
+		snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
 		snowMaterial.F0 = 0.028;
 		snowMaterial.AO = 1.0;
 		DirectContext snowContext = dirLightContext;
@@ -2954,8 +2955,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + pointLightShare * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
 		color.xyz = lerp(color.xyz, snowColor, projectedMaterialWeight);
 		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, projectedMaterialWeight);
-		specularColor = lerp(specularColor, 0.0, projectedMaterialWeight);
-		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, 0.0, projectedMaterialWeight);
+		specularColor = lerp(specularColor, snowLit.specular * Color::PBRLightingScale, projectedMaterialWeight);
+		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, snowLobes.specular, projectedMaterialWeight);
+		material.Roughness = lerp(material.Roughness, snowMaterial.Roughness, projectedMaterialWeight);
 	}
 #	endif
 

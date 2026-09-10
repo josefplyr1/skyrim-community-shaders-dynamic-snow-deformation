@@ -967,8 +967,8 @@ public:
 	ID3D11ComputeShader* terrainFineCS = nullptr;
 	ID3D11ComputeShader* GetTerrainFineCS();
 	void BuildTerrainFineWindow();
-	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. */
-	bool shellLandHeightDisabled = false;
+	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default ON since 2026-09-10 (Josef): the fine layer stood the shell on bulges over Alftand's glacier ground and cast them as shadows; see snow-open-issues. */
+	bool shellLandHeightDisabled = true;
 	/** @brief A/B: flips which corner rotation the tessellated patches use for a '/' land quad (bit 3). The tessellator's factor-1 diagonal is assumed to be domain (0,0)-(1,1); if the height-delta view shows a checkerboard of sag on the 32-unit band, this is the other guess. Runtime-only. */
 	bool shellTessDiagonalFlip = false;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
