@@ -2529,8 +2529,12 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// Pre-parallax derivatives for the glint grid (Lighting.hlsl's uvOriginal
 	// pattern; see SnowShell.hlsl): the POM offset is view-dependent and
 	// glints must not ride it. The uv itself is rebuilt world-anchored below.
-	const float2 glintDuvdx = snowTaps.duvdx;
-	const float2 glintDuvdy = snowTaps.duvdy;
+	// Steep pixels take the side plane, like the albedo: the top plane's
+	// footprint on a wall is a needle, and the glint NDF then resolves single
+	// microfacets per pixel - the sparkle storm on lit walls.
+	const bool glintSide = snowSteepness > 0.5;
+	const float2 glintDuvdx = glintSide ? snowTapsSide.duvdx : snowTaps.duvdx;
+	const float2 glintDuvdy = glintSide ? snowTapsSide.duvdy : snowTaps.duvdy;
 
 	// Parallax occlusion, same marcher the landscape shell uses (shared in
 	// SnowParallax.hlsli, so the two cannot drift). Object snow needs it in
@@ -2949,7 +2953,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// ground snow shade identically across the seam where they meet.
 	// World-anchored glint uv on a static 4096-unit fold; see SnowShell.hlsl
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
-	const float2 glintUV = fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
+	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
+	                                   fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);

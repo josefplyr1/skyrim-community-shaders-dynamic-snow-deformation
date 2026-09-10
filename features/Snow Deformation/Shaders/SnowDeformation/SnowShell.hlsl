@@ -2369,8 +2369,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Pre-parallax derivatives for the glint grid, mirroring Lighting.hlsl's
 	// uvOriginal: the POM offset below is view-dependent, and glints must not
 	// ride it. (The glint uv itself is rebuilt world-anchored at the call.)
-	const float2 glintDuvdx = snowTaps.duvdx;
-	const float2 glintDuvdy = snowTaps.duvdy;
+	// Steep pixels take the side plane, like the albedo: the top plane's
+	// footprint on a wall is a needle, and the glint NDF then resolves single
+	// microfacets per pixel.
+	const bool glintSide = snowSteepness > 0.5;
+	const float2 glintDuvdx = glintSide ? snowTapsSide.duvdx : snowTaps.duvdx;
+	const float2 glintDuvdy = glintSide ? snowTapsSide.duvdy : snowTaps.duvdy;
 
 	// Parallax occlusion: the depth the shell was missing. The normal map
 	// only tilts the lighting; this moves the texture itself, so grain
@@ -2773,7 +2777,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// tiles as the grid advances - a no-op for the periodic texture, but the
 	// glint hash is NOT tile-periodic, so it re-rolls the sparkle field every
 	// few metres. Fold on a STATIC 4096-unit block (an exact tile multiple).
-	const float2 glintUV = fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
+	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
+	                                   fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3).
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
