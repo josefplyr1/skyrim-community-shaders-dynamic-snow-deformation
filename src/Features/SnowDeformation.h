@@ -2050,6 +2050,10 @@ public:
 	winrt::com_ptr<ID3DBlob> waterCaptureVSBlob;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> waterILCache;
 	bool waterCaptureShadersFailed = false;
+	/** @brief Last consume: planes in the list, planes that drew, and whether the first plane's facts were logged (once). */
+	uint32_t statWaterCaptured = 0;
+	uint32_t statWaterDrawn = 0;
+	bool waterFirstLogged = false;
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;

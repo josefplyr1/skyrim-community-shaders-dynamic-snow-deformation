@@ -228,7 +228,8 @@ cbuffer BowWaveCB : register(b1)
 
 Texture2D<float4> TerrainWindow : register(t0);
 // Drawn water's height per terrain texel, MAX of the bodies touching it,
-// -100000 where none. Same frame and addressing as TerrainWindow.
+// -100000 where none. TerrainWindow's frame, but rasterised +Y-up like the
+// object maps, so its row is (TerrainDim - 1) - the terrain row.
 Texture2D<float> WaterWindow : register(t27);
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
@@ -724,7 +725,7 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 			[branch] if (t.x < -50000.0)
 				return false;
 			// Under water the texel is bare whatever its class.
-			[flatten] if (CompactLook.x > 0.5 && t.x < WaterWindow.Load(int3(x, y, 0)))
+			[flatten] if (CompactLook.x > 0.5 && t.x < WaterWindow.Load(int3(x, (int)TerrainDim - 1 - y, 0)))
 				continue;
 			maxDepth = max(maxDepth, t.y + (-8.0) * saturate(1.0 - saturate(t.z)));
 		}
@@ -899,8 +900,10 @@ float SampleWaterHeight(float2 gridLocal)
 	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
 	int2 t0 = (int2)t;
 	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-	return max(max(WaterWindow.Load(int3(t0.x, t0.y, 0)), WaterWindow.Load(int3(t1.x, t0.y, 0))),
-	           max(WaterWindow.Load(int3(t0.x, t1.y, 0)), WaterWindow.Load(int3(t1.x, t1.y, 0))));
+	int r0 = (int)TerrainDim - 1 - t0.y;
+	int r1 = (int)TerrainDim - 1 - t1.y;
+	return max(max(WaterWindow.Load(int3(t0.x, r0, 0)), WaterWindow.Load(int3(t1.x, r0, 0))),
+	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
 }
 
 float3 SampleTerrainShaped(float2 gridLocal)

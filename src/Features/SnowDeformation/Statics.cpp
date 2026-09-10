@@ -2283,6 +2283,17 @@ void SnowDeformation::RenderObjectHeightMap()
 			for (uint i = 0; i < 3; i++)
 				if (probeMaps[i] && probeMaps[i]->resource)
 					context->CopySubresourceRegion(probeStaging[probeCursor].get(), 0, i, 0, 0, probeMaps[i]->resource.get(), 0, &probeBox);
+			// Slot 3: the water window, in the TERRAIN window's frame (+Y-up
+			// raster, so the row counts down from the top).
+			if (waterHeightTexture && waterHeightTexture->resource && waterWindowCellX != INT_MIN) {
+				const float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+				const int wx = int(std::floor((pos.x - waterWindowCellX * cellSize) / kShellVertexSpacing));
+				const int wyUp = int(std::floor((pos.y - waterWindowCellY * cellSize) / kShellVertexSpacing));
+				const uint wtx = uint(std::clamp(wx, 0, kShellWindowDim - 1));
+				const uint wty = uint(std::clamp(kShellWindowDim - 1 - wyUp, 0, kShellWindowDim - 1));
+				D3D11_BOX waterBox{ wtx, wty, 0, wtx + 1, wty + 1, 1 };
+				context->CopySubresourceRegion(probeStaging[probeCursor].get(), 0, 3, 0, 0, waterHeightTexture->resource.get(), 0, &waterBox);
+			}
 			probeCursor ^= 1;
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			if (SUCCEEDED(context->Map(probeStaging[probeCursor].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
@@ -3716,6 +3727,8 @@ void SnowDeformation::RenderWaterCapture()
 		waterWindowCellX = shellWindowCellX;
 		waterWindowCellY = shellWindowCellY;
 	}
+	statWaterCaptured = (uint32_t)capturedWater.size();
+	statWaterDrawn = 0;
 	if (capturedWater.empty())
 		return;
 
@@ -3748,10 +3761,16 @@ void SnowDeformation::RenderWaterCapture()
 		if (indexCount == 0)
 			continue;
 		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
-			continue;
 		uint64_t descKey;
 		memcpy(&descKey, &desc, sizeof(descKey));
+		if (!waterFirstLogged) {
+			waterFirstLogged = true;
+			logger::info("[SNOW DEFORMATION] water capture: first plane '{}' desc {:#x} vertex {} tris {} at ({:.0f} {:.0f} {:.0f}) window origin cell ({}, {})",
+				geometry->name.c_str(), descKey, desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX), triShape->GetTrishapeRuntimeData().triangleCount,
+				water.world.translate.x, water.world.translate.y, water.world.translate.z, shellWindowCellX, shellWindowCellY);
+		}
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
+			continue;
 		auto& layout = waterILCache[descKey];
 		if (!layout) {
 			const uint32_t positionBytes = SD_PositionBytes(descKey, desc);
@@ -3776,6 +3795,7 @@ void SnowDeformation::RenderWaterCapture()
 		rec.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, water.world.translate.z };
 		staticsCB->Update(rec);
 		context->DrawIndexed(indexCount, 0, 0);
+		statWaterDrawn++;
 	}
 	ID3D11RenderTargetView* nullRTV = nullptr;
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);

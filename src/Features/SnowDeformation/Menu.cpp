@@ -1668,6 +1668,13 @@ void SnowDeformation::DrawSettings()
 					snprintf(probeLine2, sizeof(probeLine2), "cone depth: L1 %.1f", probeVals[2]);
 					ImGui::TextUnformatted(probeLine1);
 					ImGui::TextUnformatted(probeLine2);
+					// Water window under the player: '-' = no water drawn there since
+					// the last cell crossing. The cut fires where terrain z < water z.
+					char wz[16];
+					fmtHeight(probeVals[3], wz, sizeof(wz));
+					char probeLine3[160];
+					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | planes captured %u, drawn %u", wz, statWaterCaptured, statWaterDrawn);
+					ImGui::TextUnformatted(probeLine3);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("statics_debug_modes_tooltip"), "Object snow renders its decision data as colors with dithering disabled; missing pixels mean the geometry itself is absent. The trench patch always reads red = trample, green = skin depth (dim) plus the road-heightfield bit (bright green, above half, means this column is road-classified). The skins follow the selected mode. Edge taper: red = the height the taper allows, green = up-facing, blue = the raster returned no data. Coverage alpha: red = the opacity the dither sees, green = the facing gates, blue = the seam blends. Normals: red = smoothed normal z (0.5 = horizontal, 1 = straight up), green = the flat/rounded class. Self-shadow march (patch and skins alike): red = how much the march darkens the pixel, green = taps that rebuilt the road's carved surface, blue = taps that used the flat dusting, dim magenta = the march never ran here (already shadowed, or the sun too low). Projected mask (skins only, patch renders dim gray): red = the skin's own reconstruction of the game's projected-snow blend (hold it against Debug Recolor Weight with object snow off), green = how much snow the mesh's authored data wants - GRADED, so dim green means a dusting and bright green means full snow (zeroed when the draw has no projected-UV data). Yellow = agree, red-only = we place snow where the data says bare, blue = no projection data, magenta = no data but our mask fires. Shell layers (skins only): which peeled snow plane owns each pixel - green = layer 1, yellow = layer 2, red = layer 3, magenta = below all three; brightness = the depth it was granted, so a dim pure color is a plane that got no height."));

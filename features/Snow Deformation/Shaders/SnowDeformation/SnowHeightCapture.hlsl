@@ -77,9 +77,10 @@ cbuffer StaticCB : register(b1)
 
 #if defined(WATER)
 // Water planes top-down into the terrain window's frame (HeightWindowCenter /
-// HeightHalfExtent carry THAT window here), MAX-blended world z. The terrain
-// window's row index grows with +Y, so +Y runs DOWN the target - the reverse
-// of the object raster above.
+// HeightHalfExtent carry THAT window here), MAX-blended world z. Same +Y-up
+// mapping as the object raster, so the winding survives whatever cull state
+// the pass inherits; the shell flips the ROW when it reads (the terrain
+// window's rows grow with +Y).
 struct WATER_VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
@@ -96,7 +97,7 @@ WATER_VS_OUTPUT main(float4 position : POSITION0)
 		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
 	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
 	WATER_VS_OUTPUT vsout;
-	vsout.Position = float4(ndc.x, -ndc.y, 0.5, 1.0);
+	vsout.Position = float4(ndc.x, ndc.y, 0.5, 1.0);
 	vsout.WorldZ = worldAbs.z;
 	return vsout;
 }
