@@ -695,7 +695,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// the sand-shore rocks); requiring positive
 		// snow MATOs wrongly rejected glaciers, whose snow is baked and
 		// needs no projection record.
-		bool naturalFeature = rec.pathNatural || rec.iceName;
+		// The mountain/cliff family too, on snowy ground: a PBR retexture drops
+		// the Snow shader flag and the draw lands here with its projected snow
+		// intact - the recolor still runs on it, and without a capture the
+		// drape does not.
+		const auto& wbCenter = a_pass->geometry->worldBound.center;
+		const bool mountainFeature = (rec.pathMountain || nameFacts.mountainCliff) &&
+		                             GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
+		bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
 		bool matoVetoed = false;
 		if (naturalFeature && rec.mato == MatoClass::kNotSnow) {
 			naturalFeature = false;
