@@ -481,16 +481,8 @@ public:
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
-		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this - in either direction - becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
-		float PlaneSplitStep = 6.0f;
-		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
-		float OverheadClearance = 0.0f;
-		/** @brief The width failsafe (Josef's "peak rounded shape" spec): the dome's fillet radius freezes at this many times the feature's crest height - at 1 the frozen shape is the perfect half-dome exactly filling the feature's width; higher lets narrow features bulge taller before freezing. Wide interiors are unaffected. */
-		float PileHeightRatio = 1.0f;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.01f;
-		/** @brief P4 (edge-research study), 0-100%: diffusion ("settling") on the cone depth fields after the repose chains. Rounds dome rims, arches shells across slit gaps instead of black cracks, denoises the raster. 0 = off (pre-P4 behaviour). */
-		float SnowSettlingPct = 100.0f;
 		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
 		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
@@ -1782,11 +1774,11 @@ public:
 		float ShellMinNz;
 		/** @brief kPeelTol (the retired Plane Merge Height, fixed at its default) - surfaces within this many units below a peeled layer's top belong to that layer's plane (the peel tolerance, user-tunable). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PeelTol;
-		/** @brief Settings::OverheadClearance - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief kOverheadIgnore - cover more than this far above a vertex neither splits its plane nor demotes it to a peeled layer. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float OverheadIgnore;
 		float padMeldSk;
 
-		/** @brief Settings::PileHeightRatio - a dome may stand at most this many times the repose height its footprint supports (the cone value); thin features saturate early instead of stretching fins. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		/** @brief kPileHeightRatio - a dome may stand at most this many times the repose height its footprint supports. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float PileHeightRatio;
 		float padSkyExposure;
 		float padCorniceLip;
@@ -2008,6 +2000,14 @@ public:
 	static constexpr float kPeelTol = 8.0f;
 	/** @brief cos(65 deg): steepest slope the S4 dome grows on. Was the "3D Shell Max Slope" / "Rock & Cliff Max Slope" sliders, retired 2026-09-08 at their default. */
 	static constexpr float kShellMinNz = 0.42261826f;
+	/** @brief Cone seed rim threshold (world units). Was "Plane Split Step", retired 2026-09-10 at its default. */
+	static constexpr float kRimStep = 6.0f;
+	/** @brief Cover above a plane that neither splits it nor demotes it (world units). Was "Ignore Cover Above", retired 2026-09-10 at its default. */
+	static constexpr float kOverheadIgnore = 0.0f;
+	/** @brief Dome width failsafe: the fillet radius cap as a multiple of the crest height. Was "Pile Height Ratio", retired 2026-09-10 at its default. */
+	static constexpr float kPileHeightRatio = 1.0f;
+	/** @brief Cone settling, the 4-neighbour Jacobi lambda at its stability bound. Was "Snow Settling" at 100%, retired 2026-09-10. */
+	static constexpr float kDiffuseLambda = 0.5f;
 
 	/** @brief Ping-pong accumulated raw maps (scrolled each frame, captures rasterized on top): object TOP and BOTTOM surfaces. Persistence matters; the capture list is frustum-culled, and a map rebuilt from it alone loses every object behind the camera. */
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
@@ -2092,13 +2092,13 @@ public:
 		float GhostDecay;
 		/** @brief Rounded-class snow depth, seeding the object snow cone. */
 		float ObjectSnowDepth;
-		/** @brief Settings::PlaneSplitStep - the cone seed's slope-discontinuity rim threshold (user-tunable). */
+		/** @brief kRimStep - the cone seed's slope-discontinuity rim threshold. */
 		float RimStep;
-		/** @brief Settings::OverheadClearance - the seed's rise-rim upper bound: surfaces further above do not split the plane WHEN this plane continues beneath them (the next layer's top says); a silhouette edge against tall cover still rims. */
+		/** @brief kOverheadIgnore - the seed's rise-rim upper bound: surfaces further above do not split the plane when this plane continues beneath them (the next layer's top says). */
 		float OverheadIgnore;
 
 		float padMeld;
-		/** @brief P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields (Settings::SnowSettlingPct / 100 * 0.5; 0 = off). */
+		/** @brief kDiffuseLambda - per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields. */
 		float DiffuseLambda;
 		float padHeight[2];
 	};

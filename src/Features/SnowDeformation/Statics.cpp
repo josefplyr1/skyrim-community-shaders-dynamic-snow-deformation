@@ -1439,10 +1439,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
-	processData.RimStep = std::clamp(settings.PlaneSplitStep, 1.0f, 32.0f);
-	processData.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
-	// P4: lambda 0..0.5 - the stability bound for the 4-neighbour Jacobi.
-	processData.DiffuseLambda = std::clamp(settings.SnowSettlingPct, 0.0f, 100.0f) * 0.005f;
+	processData.RimStep = kRimStep;
+	processData.OverheadIgnore = kOverheadIgnore;
+	processData.DiffuseLambda = kDiffuseLambda;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
@@ -2177,7 +2176,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		// so the result lands back in the cone's own texture (the kConeSteps
 		// parity invariant).
 		auto settleCone = [&](Texture2D*& a_in, Texture2D*& a_out) {
-			if (!objectConeDiffuseCS || settings.SnowSettlingPct <= 0.5f)
+			if (!objectConeDiffuseCS)
 				return;
 			context->CSSetShader(objectConeDiffuseCS, nullptr, 0);
 			for (int settleI = 0; settleI < 2; settleI++) {
@@ -2404,8 +2403,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 	a_scb.ShellMinNz = kShellMinNz;
 	a_scb.PeelTol = kPeelTol;
-	a_scb.OverheadIgnore = std::clamp(settings.OverheadClearance, 0.0f, 200.0f);
-	a_scb.PileHeightRatio = std::clamp(settings.PileHeightRatio, 1.0f, 8.0f);
+	a_scb.OverheadIgnore = kOverheadIgnore;
+	a_scb.PileHeightRatio = kPileHeightRatio;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their

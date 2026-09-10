@@ -216,24 +216,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, 50%% covers everything facing upward, and 100%% covers every angle of the pattern - undersides included. At 0%% the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
 
-		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
-		if (auto _ttSplit = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("plane_split_step_tooltip"), "A ledge or step taller than this - in either direction, and regardless of snow depth - marks the boundary of a distinct snow plane, each wearing its own dome (stair treads, stacked stones). Lower = stricter splitting; higher merges small steps into one surface. Sloped roofs and rocks never self-split, and surfaces at the SAME height separated by a small horizontal gap meld into one."));
-
-		ImGui::SliderFloat(T(TKEY("overhead_clearance"), "Ignore Cover Above"), &settings.OverheadClearance, 0.0f, 96.0f, "%.0f units");
-		if (auto _ttOverhead = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("overhead_clearance_tooltip"), "Anything more than this far above a surface is a separate world: it neither splits the snow plane (no bare taper along walls and under railings) nor lowers it - the snow keeps one uniform height and simply clips through whatever hangs above, like real snowfall. Applies only where the surface actually continues beneath the cover; an edge ending against a wall still rounds off. Things WITHIN this clearance (stair treads, low ledges) still count as neighboring planes and get their own domes."));
-
 		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
-		ImGui::SliderFloat(T(TKEY("pile_height_ratio"), "Pile Height Ratio"), &settings.PileHeightRatio, 1.0f, 4.0f, "%.1fx");
-		if (auto _ttPile = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("pile_height_ratio_tooltip"), "Where a snow pile stops growing. Once a narrow feature's rounded dome reaches its peak shape - the rolls from both edges meeting in the middle - it freezes there no matter how high the depth slider goes. At 1.0 the frozen shape is the perfect dome exactly filling the feature's width; higher values let narrow things bulge taller before freezing. Wide surfaces are unaffected."));
-
-		ImGui::SliderFloat(T(TKEY("snow_settling"), "Snow Settling"), &settings.SnowSettlingPct, 0.0f, 100.0f, "%.0f%%");
-		if (auto _ttSettle = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_settling_tooltip"), "Lets the object snow relax under its own weight before it is drawn. Sharp dome rims soften, and where two shells almost touch - stones in a pile, boards a sliver apart - the snow arches partway across the gap instead of meeting in a hard black crack. Higher settles more; 0 turns it off and every shell keeps its raw shape."));
 
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -

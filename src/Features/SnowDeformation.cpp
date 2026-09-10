@@ -96,11 +96,7 @@
 	X(TextureDepths) \
 	X(ObjectRasterReachM) \
 	X(ProjSnowFillPct) \
-	X(PlaneSplitStep) \
-	X(OverheadClearance) \
-	X(PileHeightRatio) \
 	X(SkinEdgeFlankWidth) \
-	X(SnowSettlingPct) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \
