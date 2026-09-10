@@ -480,6 +480,14 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("border_fade_tooltip"), "How much of the snow's edge takes part in the height contest against the ground - higher values make the scattered dust past the edge broader and more visible. Border Dithering must be on for the dust itself."));
 
+			ImGui::SliderFloat(T(TKEY("water_edge_margin"), "Water Edge Margin"), &settings.WaterEdgeMargin, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttWm = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("water_edge_margin_tooltip"), "How far short of the waterline the snow is already gone, measured along the ground. 0 = the last of it ends right at the water."));
+
+			ImGui::SliderFloat(T(TKEY("water_edge_ramp"), "Water Edge Ramp"), &settings.WaterEdgeRamp, 1.0f, 128.0f, "%.0f units");
+			if (auto _ttWr = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("water_edge_ramp_tooltip"), "Width of the slope from full snow down to bare ground before the margin, measured along the ground. Border Noise wanders this edge inland, never over the water."));
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

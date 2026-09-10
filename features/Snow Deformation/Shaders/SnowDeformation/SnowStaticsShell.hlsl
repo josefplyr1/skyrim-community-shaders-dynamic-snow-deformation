@@ -138,9 +138,9 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	float ObjCrispScaleV;
+	float WaterEdgeMargin;
 
-	float ObjCrispStrengthV;
+	float WaterEdgeRamp;
 	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
 	uint ShellLODDebug;
 	float SeamRampInv;

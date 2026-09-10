@@ -135,9 +135,9 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	float ObjCrispScaleV;
+	float WaterEdgeMargin;
 
-	float ObjCrispStrengthV;
+	float WaterEdgeRamp;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
@@ -892,12 +892,6 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
-// Water edge, in units of height above the level: bare at the margin, full
-// depth a ramp above it. 24 units of ramp is a metre and a half of bank on a
-// steep shore and a wide wet margin on a flat one, which is what shores do.
-static const float kWaterEdgeMargin = 2.0;
-static const float kWaterEdgeRamp = 24.0;
-
 // Water level over the texels a point touches: the max, so a shore texel
 // answers with its body's level and the sentinel never blends in.
 float SampleWaterHeight(float2 gridLocal)
@@ -910,6 +904,45 @@ float SampleWaterHeight(float2 gridLocal)
 	int r1 = (int)TerrainDim - 1 - t1.y;
 	return max(max(WaterWindow.Load(int3(t0.x, r0, 0)), WaterWindow.Load(int3(t1.x, r0, 0))),
 	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
+}
+
+// Water cut, applied to a FINISHED terrain sample (after the data morph):
+// the sheet ramps to the bare submerge over WaterEdgeRamp units of ground
+// HORIZONTALLY and reaches it WaterEdgeMargin units short of the waterline.
+// Distance to the line is rise over slope, both from the 128-texel bilinear
+// height alone: the land-exact layer and the fine bands never key the cut,
+// so it lands in the same place from every range and the fine window's
+// square never shows through it. The slope floor keeps a flat shore's
+// distance finite (1 in 50 puts the cut within a unit of the level). The
+// border-noise wander only ever pulls the edge INLAND, so it wobbles
+// without standing over water.
+float3 ApplyWaterCut(float3 terrain, float2 gridLocal)
+{
+	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0)
+	{
+		float water = SampleWaterHeight(gridLocal);
+		[branch] if (water > -50000.0)
+		{
+			float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+			t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+			int2 t0 = (int2)t;
+			float2 f = t - t0;
+			int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+			float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
+			float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
+			float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
+			float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
+			float h = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+			float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
+			float dist = (h - water) / max(length(grad), 0.02);
+			float2 waterXY = GridOrigin + gridLocal;
+			float wander = saturate(ShapeNoise(waterXY / 37.0) * 0.7 + ShapeNoise(waterXY / 8.0) * 0.3) * BorderNoise;
+			float cut = smoothstep(WaterEdgeMargin, WaterEdgeMargin + max(WaterEdgeRamp, 1.0), dist - wander);
+			terrain.y = lerp(-8.0, terrain.y, cut);
+			terrain.z *= cut;
+		}
+	}
+	return terrain;
 }
 
 float3 SampleTerrainShaped(float2 gridLocal)
@@ -945,26 +978,6 @@ float3 SampleTerrainShaped(float2 gridLocal)
 			depthCoverage *= 0.2;
 		}
 		result.yz = depthCoverage;
-	}
-	// Water: the sheet ramps down to the bare submerge over the last
-	// kWaterEdgeRamp units of HEIGHT above the level and reaches it
-	// kWaterEdgeMargin above the water, so the dip lands under the surface
-	// the way a class border's dip lands under the ground. A ramp, not a
-	// step: a per-sample step on a noisy threshold flipped neighbouring
-	// vertices independently and every flip was a 38-unit fin. The noise
-	// wobbles the ramp's position, a few units either way, so the edge
-	// wanders without ever standing over water.
-	[branch] if (CompactLook.x > 0.5)
-	{
-		float water = SampleWaterHeight(gridLocal);
-		[flatten] if (water > -50000.0 && result.x > -50000.0)
-		{
-			float2 waterXY = GridOrigin + gridLocal;
-			float wobble = 6.0 * (ShapeNoise(waterXY / 37.0) - 0.5) + 3.0 * (ShapeNoise(waterXY / 8.0) - 0.5);
-			float t = smoothstep(kWaterEdgeMargin, kWaterEdgeMargin + kWaterEdgeRamp, result.x - water + wobble);
-			result.y = lerp(-8.0, result.y, t);
-			result.z *= t;
-		}
 	}
 	return result;
 }
@@ -1084,6 +1097,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// approaches. A weight constant within a band cannot.
 			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
 		}
+
+		// After the morph, so the coarse bands end at the water too.
+		terrain = ApplyWaterCut(terrain, gridLocal);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
@@ -2066,7 +2082,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 gridLocal = input.GridLocal;
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
-	float3 pixelTerrain = SampleTerrainShaped(gridLocal);
+	float3 pixelTerrain = ApplyWaterCut(SampleTerrainShaped(gridLocal), gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 

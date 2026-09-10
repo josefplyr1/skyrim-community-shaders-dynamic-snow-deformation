@@ -1068,8 +1068,9 @@ void SnowDeformation::DrawShell()
 	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
 	cbData.ObjChurnHeightAmp = cbData.ChurnHeightAmp;
 	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;
-	cbData.ObjCrispScaleV = 1.0f;
-	cbData.ObjCrispStrengthV = 0.0f;
+	// Water edge, in the two retired ObjCrisp rows (layout unchanged).
+	cbData.WaterEdgeMargin = std::clamp(settings.WaterEdgeMargin, 0.0f, 64.0f);
+	cbData.WaterEdgeRamp = std::clamp(settings.WaterEdgeRamp, 1.0f, 128.0f);
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
