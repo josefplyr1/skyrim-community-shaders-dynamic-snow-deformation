@@ -689,7 +689,12 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
 			SampleLODDecision(a_pass->geometry, wb.radius, false, cameraInside);
 	}
-	if (!(flags.all(Flag::kProjectedUV) && flags.all(Flag::kSnow))) {
+	// Projected snow paint is the drape's whole input and Lighting recolors
+	// on PROJECTED_UV alone; the Snow flag adds nothing, and a PBR retexture
+	// drops it (Dawnstar's cliff, Alftand's dome, loaded rocks - bare with
+	// the recolor on them). Only draws WITHOUT projection data face the
+	// family gate below.
+	if (!flags.all(Flag::kProjectedUV)) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
 			return;
@@ -703,10 +708,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// the sand-shore rocks); requiring positive
 		// snow MATOs wrongly rejected glaciers, whose snow is baked and
 		// needs no projection record.
-		// The mountain/cliff family too, on snowy ground: a PBR retexture drops
-		// the Snow shader flag and the draw lands here with its projected snow
-		// intact - the recolor still runs on it, and without a capture the
-		// drape does not.
+		// The mountain/cliff family too, on snowy ground: LOD batches carry
+		// the family's texture paths and no projection data.
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
 		const bool mountainFeature = (rec.pathMountain || nameFacts.mountainCliff) &&
 		                             GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
