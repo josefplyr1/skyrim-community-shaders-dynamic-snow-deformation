@@ -131,7 +131,6 @@
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
-	X(RangeSkinsGeometryM) \
 	X(SkinDepthBias) \
 	X(SkinSlopeDepthBias) \
 	X(SkinTessCapPx) \

@@ -97,7 +97,8 @@ cbuffer ShellCB : register(b0)
 	float SkinFadeStart;  // statics-skin distance dissolve band (units)
 
 	float SkinFadeEnd;
-	// Also the enable gate for the object height field (>0 = field bound).
+	// Object height field mode: 0 = unbound, 0.5 = bound with the ground
+	// lift off, >1 = lifting. A gate, never a magnitude.
 	float ObjectLiftCap;
 	float2 ObjectHeightCenter;
 
@@ -203,9 +204,7 @@ cbuffer StaticCB : register(b1)
 	// >0.5: the object top raster is bound at PS t11 this draw.
 	float HasObjectTop;
 
-	// Distance (world units) by which the geometric height has collapsed to
-	// zero at the deepest class; the material dissolve runs past it.
-	float SkinHeightFadeEnd;
+	float padSkinHeightFade;
 
 	// >0.5: keep the tuned pre-rework skin behaviour (road and bridge meshes).
 	float LegacySkin;
@@ -1570,10 +1569,6 @@ VS_OUTPUT main(TessFactorsPatch factors, float2 domainUV : SV_DomainLocation, co
 // Distance at which this class's geometric layer has fully collapsed. The
 // hull shader retires tessellation over the same range: once the layer has no
 // height there is no rim shape left to resolve.
-float SkinCollapseEnd(float depthBase)
-{
-	return max(SkinHeightFadeEnd, 1.0) * lerp(0.4, 1.0, saturate(depthBase / 25.0));
-}
 #endif
 
 #if (defined(VSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
@@ -1742,31 +1737,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	// The shape is settled here; everything past this point is distance LOD.
 	float coverDepth = depth;
-
-	// Geometry LOD: collapse the layer to nothing BEFORE the material dissolve
-	// (SkinFadeStart/End) begins, so the hand-off to the object's own projected
-	// snow has no silhouette left to pop. Range scales with class depth against
-	// the depth sliders' 25-unit maximum.
-	// Roads are exempt: their height must stay in step with the landscape
-	// shell they meet at the verge, and that shell does not collapse.
-	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5 && FullCoat < 0.5)
-	{
-		float collapseEnd = SkinCollapseEnd(depthBase);
-		// Horizontal, like the caster's: measured as a sphere, a cliff face
-		// close by but high above the camera collapsed while its neighbour
-		// at eye level did not (Josef's dome, 2026-09-06). The range is a
-		// column over the loaded grid.
-		float camDist = length(worldBase.xy - ShellCameraPosAdjust.xy);
-		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
-		// Floor at the minimum coat instead of zero. Collapsing all the way
-		// puts the skin vertex EXACTLY on its source vertex, where it z-fights
-		// its own mesh and rasterises nothing at all - so distant objects lost
-		// their snow outright instead of flattening into a painted layer. Same
-		// hazard kMinSkinLift guards depthBase against at line ~944; the
-		// collapse multiplies after it, so it needs its own floor. Scaled by
-		// upFacing so genuinely steep faces still stay bare.
-		depth = max(depth, kMinSkinLift * upFacing);
-	}
 
 	// The S4 draw is the drape: a flat coat at the minimum lift, shaded by
 	// the mesh normal, coverage decided per pixel by the coat block off the
@@ -2128,7 +2098,7 @@ struct TessFactors
 // distance rule would waste factors on tiny triangles and starve huge
 // ones. Shared mesh edges carry identical control points on both sides,
 // so the symmetric rule is crack-free.
-float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
+float EdgeTessFactor(float3 worldA, float3 worldB)
 {
 	float3 mid = 0.5 * (worldA + worldB);
 	float dist = length(mid - ShellCameraPosAdjust.xyz);
@@ -2152,24 +2122,16 @@ float EdgeTessFactor(float3 worldA, float3 worldB, float collapseEnd)
 	// Pixel floor: a segment is never shorter on screen than the cap. Zero
 	// off; below the base rule's ~20 px it only trims the rim term at range.
 	targetLen = max(targetLen, dist * SkinTessCapSlope);
-	// Retire subdivision over the geometry range, reaching no subdivision at
-	// the distance where the layer itself has collapsed.
-	// The collapse range is horizontal (see ApplySkinLift); the target
-	// edge length above stays on the true distance, which is screen size.
-	float rangeDist = length(mid.xy - ShellCameraPosAdjust.xy);
-	float rangeFade = FullCoat > 0.5 ? 1.0 : 1.0 - smoothstep(0.0, collapseEnd, rangeDist);
-	return clamp(length(worldA - worldB) / targetLen * rangeFade, 1.0, 16.0);
+	return clamp(length(worldA - worldB) / targetLen, 1.0, 16.0);
 }
 
 TessFactors PatchConstants(InputPatch<TessControlPoint, 3> patch)
 {
 	TessFactors f;
-	// Class is a per-mesh constant, so any control point answers for the patch.
-	float collapseEnd = SkinCollapseEnd(max(lerp(RoundedDepth, ObjectsDepth, patch[0].Flat), kMinSkinLift));
 	// Tri-domain edge order: edge i is opposite control point i.
-	f.Edge[0] = EdgeTessFactor(patch[1].WorldBase, patch[2].WorldBase, collapseEnd);
-	f.Edge[1] = EdgeTessFactor(patch[2].WorldBase, patch[0].WorldBase, collapseEnd);
-	f.Edge[2] = EdgeTessFactor(patch[0].WorldBase, patch[1].WorldBase, collapseEnd);
+	f.Edge[0] = EdgeTessFactor(patch[1].WorldBase, patch[2].WorldBase);
+	f.Edge[1] = EdgeTessFactor(patch[2].WorldBase, patch[0].WorldBase);
+	f.Edge[2] = EdgeTessFactor(patch[0].WorldBase, patch[1].WorldBase);
 	f.Inside = max(max(f.Edge[0], f.Edge[1]), f.Edge[2]);
 	return f;
 }
@@ -3917,8 +3879,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// capture range); distant objects keep their real look instead of
 	// turning blank white. Glacier/iceberg captures are exempt: their own
 	// baked snow never matches the shell, so the skin persists at every
-	// loaded distance (geometry still collapses to flat paint by
-	// SkinHeightFadeEnd).
+	// loaded distance.
 	// Held SEPARATE from the shape gates: the shape cut below is hard, and a
 	// hard cut on a fade that runs over hundreds of units pops every distant
 	// skin in one frame.

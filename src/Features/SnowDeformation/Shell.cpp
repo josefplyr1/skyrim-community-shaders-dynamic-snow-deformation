@@ -1102,7 +1102,7 @@ void SnowDeformation::DrawShell()
 	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
 	// Field enable gate + window addressing for the t4/t5 samplers; the
 	// center is re-uploaded below once the height pass has recentered.
-	cbData.ObjectLiftCap = kObjectLiftCap;
+	cbData.ObjectLiftCap = groundLiftDebug ? kObjectLiftCap : 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 

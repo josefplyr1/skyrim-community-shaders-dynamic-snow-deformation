@@ -17,10 +17,10 @@ void SnowDeformation::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
-	// The seven performance levers in one click (FPS-STABILISATION-PLAN.md
+	// The six performance levers in one click (FPS-STABILISATION-PLAN.md
 	// §7.2 vectors); nothing else is touched.
 	{
-		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, float a_skinsGeomM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow) {
+		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow) {
 			if (settings.DeformMapResolution != a_mapDim) {
 				settings.DeformMapResolution = a_mapDim;
 				deformMapDimDirty = true;
@@ -30,7 +30,6 @@ void SnowDeformation::DrawSettings()
 				trenchRangeDirty = true;
 			}
 			settings.RangeSkinsM = a_skinsM;
-			settings.RangeSkinsGeometryM = a_skinsGeomM;
 			settings.Tessellation = a_tess;
 			settings.ParallaxDepth = a_parallaxDepth;
 			settings.ParallaxShadowStrength = a_parallaxShadow;
@@ -38,19 +37,19 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the seven performance settings in one click: Deformation Map Resolution, the three Distant Snow ranges, Tessellate Trenches and the two Parallax dials. Everything else keeps its value, and any of the seven can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the six performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, Tessellate Trenches and the two Parallax dials. Everything else keeps its value, and any of the seven can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_low"), "Low")))
-			applyPreset(1024u, 60.0f, 100.0f, 50.0f, false, 0.0f, 0.0f);
+			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_medium"), "Medium")))
-			applyPreset(2048u, 80.0f, 150.0f, 60.0f, true, 0.33f, 0.15f);
+			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_high"), "High")))
-			applyPreset(2048u, 100.0f, 250.0f, 80.0f, true, 0.66f, 0.25f);
+			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(4096u, 125.0f, 750.0f, 100.0f, true, 1.0f, 0.5f);
+			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f);
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
@@ -90,111 +89,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttDs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead. The sliders here also set how far each snow system reaches; higher = more VRAM and GPU cost."));
-		bool distantChanged = false;
-
-		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
-		if (auto _ttHs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
-
-		ImGui::Checkbox(T(TKEY("lod_object_snow"), "Recolor Baked LOD Snow"), &settings.LODObjectSnow);
-		if (auto _ttLodObj = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("lod_object_snow_tooltip"), "Distant objects the game draws as LOD without its projected-snow flags - snow drifts, snowy roads, piles - keep their own baked snow texture, which reads far brighter than the shell. This applies the Horizon Snow recolor to those pixels too, with the same detection slider below."));
-		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
-		if (auto _ttLss = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. The same setting drives the Horizon Snow recolor, so it decides where snow sits on the far terrain as well as how the shell reads it."));
-
-		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
-		if (ImGui::IsItemDeactivatedAfterEdit())
-			trenchRangeDirty = true;
-		if (auto _ttRt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches. NOT a performance setting: cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach."));
-
-		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
-		if (auto _ttRk = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live."));
-
-		ImGui::SliderFloat(T(TKEY("range_skins_geometry"), "Object Snow Geometry Range"), &settings.RangeSkinsGeometryM, 10.0f, 200.0f, "%.0f m");
-		if (auto _ttRkg = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_skins_geometry_tooltip"), "Distance where raised snow on objects flattens back into a painted layer. The layer's height sinks to zero before the skins' own distance dissolve starts, so the switch has no silhouette to pop. Deep snow classes keep their height further out than thin ones. Higher values keep real snow depth further out at the cost of more geometry work."));
-
-		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Snow Shape Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
-		if (auto _ttOrr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far out object snow is SHAPED. Inside this radius the layer has rims, cornice rolls and shelter, all read from a top-down height map of the objects around you; outside it there is no map, so the layer is a uniform coat over the whole mesh - the same snow, but with none of its edges - and the switch is a circle at this distance that moves with you. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: 58 m puts a texel at 4 world units, 117 m at 8. The near detail level keeps one unit a texel close to you whatever this says. Costs nothing extra to raise; it coarsens the shape near you instead."));
-
-		if (distantChanged)
-			shellDataDirty.store(true, std::memory_order_release);
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers, and how deep the layer grows while it snows."));
-		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
-		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing, faster in denser snowfall. Trails and trenches persist through clear weather. Off: snow recovers at the baseline rate in any weather."));
-
-		ImGui::SliderFloat(T(TKEY("refill_rate"), "Snow Refill Rate"), &settings.RefillRateMultiplier, 0.0f, 10.0f, "%.1fx");
-		if (auto _ttRefill = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
-
-		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
-		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth."));
-
-		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
-		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two."));
-
-		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
-		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("persist_accumulation_tooltip"), "How deep the layer has grown is written to the save and comes back with it, so loading in the middle of a week-long winter finds the world as deep as you left it. Off, every load starts at the authored depth and the layer has to build again from whatever the sky is doing - which is also what to use when comparing, since the depth then depends only on the weather since the load."));
-
-		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
-		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("accumulation_peak_tooltip"), "How deep the snow gets after a long storm, as a multiple of its normal depth. Every kind of ground grows by the same proportion, so paths and roads stay lower than the fields around them - in fact the gap between them widens as it snows, which keeps a road readable. 1.00x means snowfall never deepens anything."));
-
-		ImGui::SliderFloat(T(TKEY("accumulation_hours"), "Accumulation Time"), &settings.AccumulationHours, 1.0f, 10.0f, "%.0f game hours");
-		if (auto _ttAccumHours = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("accumulation_hours_tooltip"), "How long heavy snowfall takes to build the layer from its normal depth up to the peak. Lighter snow takes proportionally longer, so a thin flurry barely moves it."));
-
-		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 1.0f, 10.0f, "%.0f game hours");
-		if (auto _ttAccumMelt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. Deliberately longer than the build-up: snow that took a day to fall should not be gone by lunchtime, and the imbalance is what lets a snowy stretch stay deep between storms."));
-
-		ImGui::SliderFloat(T(TKEY("accumulation_fade"), "Accumulated Snow Fade"), &settings.AccumulationFadeDays, 0.0f, 14.0f, "%.0f days");
-		if (auto _ttAccumFade = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("accumulation_fade_tooltip"), "A slow settling that runs in all weather, snowfall included, so the world always finds its way back to its normal depth instead of climbing for ever through an endless winter. Because it never stops, it also makes clear weather settle somewhat faster than Melt Time alone would. 0 turns it off and leaves clear weather as the only thing that brings the snow back down."));
-
-		ImGui::TreePop();
-	}
-
-	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Snow Undulation"), ImGuiTreeNodeFlags_Framed)) {
-		if (auto _ttUnd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
-		ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
-		if (auto _ttUs = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
-
-		ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
-		if (auto _ttUsp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
-
-
-		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
-		if (auto _ttPd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
-
-		ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
-		if (auto _ttPss = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
 
 		ImGui::TreePop();
 	}
@@ -374,6 +268,107 @@ void SnowDeformation::DrawSettings()
 				}
 			}
 		}
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("distant_snow"), "Distant Snow"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttDs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("distant_snow_tooltip"), "Snow on far terrain the game hasn't loaded: heights come from the worldspace heightmap (shipped with Community Shaders), and snow placement follows the game's own distant LOD textures — where the LOD is painted snowy, our snow appears. Loaded terrain always uses its real snow textures instead. The sliders here also set how far each snow system reaches; higher = more VRAM and GPU cost."));
+		bool distantChanged = false;
+
+		ImGui::Checkbox(T(TKEY("horizon_snow"), "Horizon Snow"), &settings.HorizonSnow);
+		if (auto _ttHs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("horizon_snow_tooltip"), "Recolors the game's distant LOD terrain with the shell's own snow material wherever its bake reads as snow, so snow appearance stays consistent from your feet to the horizon. The snow shell ends at the loaded-cell boundary and this takes over from there, out to the edge of the world."));
+
+		ImGui::Checkbox(T(TKEY("lod_object_snow"), "Recolor Baked LOD Snow"), &settings.LODObjectSnow);
+		if (auto _ttLodObj = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lod_object_snow_tooltip"), "Distant objects the game draws as LOD without its projected-snow flags - snow drifts, snowy roads, piles - keep their own baked snow texture, which reads far brighter than the shell. This applies the Horizon Snow recolor to those pixels too, with the same detection slider below."));
+		distantChanged |= ImGui::SliderFloat(T(TKEY("lod_snow_sensitivity"), "LOD Snow Detection"), &settings.LODSnowSensitivity, 0.0f, 1.0f, "%.2f");
+		if (auto _ttLss = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lod_snow_sensitivity_tooltip"), "How eagerly a distant LOD texture pixel counts as snow. The scale was widened: the old best-at-1.0 now sits near 0.5. Low = only bright white; high = pale gray rock starts counting too. The same setting drives the Horizon Snow recolor, so it decides where snow sits on the far terrain as well as how the shell reads it."));
+
+		ImGui::SliderFloat(T(TKEY("range_trenches"), "Trenches"), &settings.RangeTrenchesM, 29.0f, 200.0f, "%.0f m");
+		if (ImGui::IsItemDeactivatedAfterEdit())
+			trenchRangeDirty = true;
+		if (auto _ttRt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_trenches_tooltip"), "Deformation window radius (also the actor stamping cutoff). Applying a change CLEARS existing trenches. NOT a performance setting: cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach."));
+
+		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, 29.0f, 750.0f, "%.0f m");
+		if (auto _ttRk = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live."));
+
+		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Snow Shape Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
+		if (auto _ttOrr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far out object snow is SHAPED. Inside this radius the layer has rims, cornice rolls and shelter, all read from a top-down height map of the objects around you; outside it there is no map, so the layer is a uniform coat over the whole mesh - the same snow, but with none of its edges - and the switch is a circle at this distance that moves with you. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: 58 m puts a texel at 4 world units, 117 m at 8. The near detail level keeps one unit a texel close to you whatever this says. Costs nothing extra to raise; it coarsens the shape near you instead."));
+
+		if (distantChanged)
+			shellDataDirty.store(true, std::memory_order_release);
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_refill_tooltip"), "How compressed snow recovers, and how deep the layer grows while it snows."));
+		ImGui::Checkbox(T(TKEY("refill_only_snowing"), "Refill Only While Snowing"), &settings.RefillOnlyWhenSnowing);
+		if (auto _ttRefillSnow = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("refill_only_snowing_tooltip"), "Compressed snow only recovers while the current weather is snowing, faster in denser snowfall. Trails and trenches persist through clear weather. Off: snow recovers at the baseline rate in any weather."));
+
+		ImGui::SliderFloat(T(TKEY("refill_rate"), "Snow Refill Rate"), &settings.RefillRateMultiplier, 0.0f, 10.0f, "%.1fx");
+		if (auto _ttRefill = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("refill_rate_tooltip"), "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling."));
+
+		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
+		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth."));
+
+		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
+		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two."));
+
+		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
+		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("persist_accumulation_tooltip"), "How deep the layer has grown is written to the save and comes back with it, so loading in the middle of a week-long winter finds the world as deep as you left it. Off, every load starts at the authored depth and the layer has to build again from whatever the sky is doing - which is also what to use when comparing, since the depth then depends only on the weather since the load."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
+		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_peak_tooltip"), "How deep the snow gets after a long storm, as a multiple of its normal depth. Every kind of ground grows by the same proportion, so paths and roads stay lower than the fields around them - in fact the gap between them widens as it snows, which keeps a road readable. 1.00x means snowfall never deepens anything."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_hours"), "Accumulation Time"), &settings.AccumulationHours, 1.0f, 10.0f, "%.0f game hours");
+		if (auto _ttAccumHours = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_hours_tooltip"), "How long heavy snowfall takes to build the layer from its normal depth up to the peak. Lighter snow takes proportionally longer, so a thin flurry barely moves it."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_melt_hours"), "Melt Time"), &settings.AccumulationMeltHours, 1.0f, 10.0f, "%.0f game hours");
+		if (auto _ttAccumMelt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_melt_hours_tooltip"), "How long clear weather takes to settle the layer back down from the peak. Deliberately longer than the build-up: snow that took a day to fall should not be gone by lunchtime, and the imbalance is what lets a snowy stretch stay deep between storms."));
+
+		ImGui::SliderFloat(T(TKEY("accumulation_fade"), "Accumulated Snow Fade"), &settings.AccumulationFadeDays, 0.0f, 14.0f, "%.0f days");
+		if (auto _ttAccumFade = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("accumulation_fade_tooltip"), "A slow settling that runs in all weather, snowfall included, so the world always finds its way back to its normal depth instead of climbing for ever through an endless winter. Because it never stops, it also makes clear weather settle somewhat faster than Melt Time alone would. 0 turns it off and leaves clear weather as the only thing that brings the snow back down."));
+
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("undulation"), "Snow Undulation"), ImGuiTreeNodeFlags_Framed)) {
+		if (auto _ttUnd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_tooltip"), "Wind-worked waves in deep snow. They fade out automatically over thin cover, class borders and carved trench floors."));
+		ImGui::SliderFloat(T(TKEY("undulation_strength"), "Undulation Strength"), &settings.UndulationStrength, 0.0f, 8.0f, "%.1f units");
+		if (auto _ttUs = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_strength_tooltip"), "Wave height. 0 flattens deep snow into a smooth sheet."));
+
+		ImGui::SliderFloat(T(TKEY("undulation_spacing"), "Undulation Spacing"), &settings.UndulationSpacing, 0.5f, 4.0f, "%.1fx");
+		if (auto _ttUsp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("undulation_spacing_tooltip"), "Stretches the wave pattern: larger = broader, calmer dunes instead of a spike carpet."));
+
+
+		ImGui::SliderFloat(T(TKEY("parallax_depth"), "Parallax Depth"), &settings.ParallaxDepth, 0.0f, 2.0f, "%.2fx");
+		if (auto _ttPd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("parallax_depth_tooltip"), "Parallax occlusion mapping on the landscape shell: marches the view ray through the snow texture's displacement map and shades from where it hits, so grain occludes grain and the surface reads as thick instead of merely lit. It moves no vertices, and the depth it resolves is by construction the depth of the grain being drawn. A multiplier on the PBR config's displacementScale - 1.0 is exactly the slab depth PBR ground gets. 0 skips the march."));
+
+		ImGui::SliderFloat(T(TKEY("parallax_shadow_strength"), "Parallax Shadow"), &settings.ParallaxShadowStrength, 0.0f, 2.0f, "%.2fx");
+		if (auto _ttPss = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("parallax_shadow_strength_tooltip"), "Self-shadowing of the snow's own grain, the same term PBR ground receives from Extended Materials: four taps along the sun through the displacement map, so the micro-relief casts into itself under low sun instead of reading flat. Needs the PBR snow set's _p map. 0 skips the taps entirely (and is the A/B for their cost)."));
 
 		ImGui::TreePop();
 	}
@@ -1383,6 +1378,9 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell"), "Landscape Shell"))) {
+			ImGui::Checkbox(T(TKEY("ground_lift_debug"), "Ground Shell Lifts onto Objects (A/B)"), &groundLiftDebug);
+			if (auto _ttGroundLift = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("ground_lift_debug_tooltip"), "Measurement aid: the ground snow rises onto the tops of nearby objects again, the way it did to meet the retired raised object shell - the sheets across doorways and along wall tops. Off, the ground snow keeps its own height and objects stand in it; roofs and walkways still keep the ground beneath them bare."));
 			ImGui::Checkbox(T(TKEY("shell_march_bicubic"), "Bicubic March"), &shellMarchBicubicRestored);
 			if (auto _ttMarch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));

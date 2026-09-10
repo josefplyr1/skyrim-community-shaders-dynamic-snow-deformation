@@ -29,7 +29,7 @@ cbuffer StaticCB : register(b1)
 	float VertexCountF;
 	float HasObjectTop;  // layout sync with SnowStaticsShell; unused here
 
-	float SkinHeightFadeEnd;  // layout sync with SnowStaticsShell; unused here
+	float padSkinHeightFade;
 	float LegacySkin;         // layout sync with SnowStaticsShell; unused here
 	float MoundSteepness;     // layout sync with SnowStaticsShell; unused here
 	// >0.5: this object may be trenched. Zero skin depth makes the patch's

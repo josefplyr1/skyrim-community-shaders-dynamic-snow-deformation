@@ -94,7 +94,8 @@ cbuffer ShellCB : register(b0)
 	float SkinFadeStart;         // statics skin: distance dissolve start (units)
 
 	float SkinFadeEnd;
-	// Also the enable gate for the object height field (>0 = field bound).
+	// Object height field mode: 0 = unbound, 0.5 = bound with the ground
+	// lift off, >1 = lifting. A gate, never a magnitude.
 	float ObjectLiftCap;
 	float2 ObjectHeightCenter;
 
@@ -743,7 +744,7 @@ bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
 	[branch] if (!ShellTerrainAllBare(lo, hi))
 		return false;
 
-	[branch] if (ObjectLiftCap > 0.0)
+	[branch] if (ObjectLiftCap > 1.0)
 	{
 		float2 mid = 0.25 * (a + b + c + d);
 		if (ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) ||
@@ -1084,7 +1085,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// (terrain run through the angle-of-repose cone transform), t5 the
 		// shelter mask; 1 under floating structures, so walkways, roofs and
 		// bridges keep the ground beneath them bare.
-		[branch] if (ObjectLiftCap > 0.0)
+		[branch] if (ObjectLiftCap > 1.0)
 		{
 			float2 worldXY = GridOrigin + gridLocal;
 			float field = SampleObjectHeight(worldXY);
@@ -2027,7 +2028,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shell thins rather than plunging geometrically. Mirrors the VS
 	// object-depth cap so alpha agrees with the capped geometry.
 	float pixelClassDepth = pixelTerrain.y;
-	[branch] if (ObjectLiftCap > 0.0)
+	[branch] if (ObjectLiftCap > 1.0)
 	{
 		float2 capWorldXY = GridOrigin + gridLocal;
 		float capField = SampleObjectHeight(capWorldXY);
@@ -2108,7 +2109,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float pixelCarve = saturate(SampleDeformation(gridLocal));
 	float pixelLift = 0.0;
 	float2 pixelShelter = SampleExclusionMask(GridOrigin + gridLocal);
-	[branch] if (ObjectLiftCap > 0.0)
+	[branch] if (ObjectLiftCap > 1.0)
 	{
 		float fieldHeight = SampleObjectHeight(GridOrigin + gridLocal);
 		[flatten] if (fieldHeight > -50000.0)

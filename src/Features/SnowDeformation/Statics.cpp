@@ -2310,7 +2310,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	a_scb.HasSmoothedNormals = a_hasSmoothedNormals ? 1.0f : 0.0f;
 	a_scb.HasObjectTop = a_hasObjectTop ? 1.0f : 0.0f;
-	a_scb.SkinHeightFadeEnd = settings.RangeSkinsGeometryM * kUnitsPerMeter;
 	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;

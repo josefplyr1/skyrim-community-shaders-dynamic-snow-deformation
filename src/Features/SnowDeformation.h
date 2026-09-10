@@ -557,8 +557,6 @@ public:
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 125.0f;
 		float RangeSkinsM = 750.0f;
-		/** @brief Distance (m) by which the skin's GEOMETRIC height has collapsed to zero, at the deepest class; shallower classes collapse proportionally sooner. Past the object height window (kHeightMapHalfExtent / kUnitsPerMeter, ~58 m) the rim-wall gate has no data, but the remaining rim is sub-pixel at that range â€” measured clean out to 200 m. */
-		float RangeSkinsGeometryM = 100.0f;
 		/** @brief Reach (m) of the object height window - the radius inside which the skin has rim, cornice and shelter data at all. Outside it ObjectConeDepth and PatchTop return their sentinels and the skin is a uniform coat over the whole mesh, which is the coarse look. The window is a fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near clipmap stays a quarter of it, so the near field coarsens by the same factor. */
 		float ObjectRasterReachM = 58.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
@@ -1028,7 +1026,7 @@ public:
 		float SkinFadeStart;
 
 		float SkinFadeEnd;
-		/** @brief Also the enable gate for the object height field in the shader (>0 = field bound). */
+		/** @brief The object height field's mode: 0 = unbound, 0.5 = bound with the ground lift off (shelter and shadow reads only), kObjectLiftCap = bound and lifting. Never read as a magnitude. */
 		float ObjectLiftCap;
 		float2 ObjectHeightCenter;
 
@@ -1730,8 +1728,7 @@ public:
 		float VertexCountF;
 		/** @brief >0.5: the object top raster is bound at PS t11 for this draw (skin rim-wall gate). */
 		float HasObjectTop;
-		/** @brief World-unit distance by which the skin's geometric height has collapsed to zero at the deepest class; the material dissolve (SkinFadeStart/End) continues past it. */
-		float SkinHeightFadeEnd;
+		float padSkinHeightFade;
 		/** @brief >0.5: this draw keeps the tuned pre-rework skin behaviour (road and bridge meshes); set from the capture's road flag. */
 		float LegacySkin;
 		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
@@ -2007,6 +2004,8 @@ public:
 	Texture2D* objectSnowConeFine = nullptr;
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
+	/** @brief Debugging Options A/B: the landscape shell rises onto captured object tops again (the lift that met the retired object shell). Off, it keeps its own height through objects; the shelter mask and the buried-shadow discriminator still read the field. */
+	bool groundLiftDebug = false;
 	/** @brief Debugging Options A/B: run the drape (S4 draws) through the hull and domain shaders again. Off, they take the plain VS: a flat coat has nothing for tessellation to shape. */
 	bool drapeTessDebug = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read
