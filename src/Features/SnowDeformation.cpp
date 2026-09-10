@@ -125,7 +125,6 @@
 	X(ChurnSize) \
 	X(ShellSSSRemarch) \
 	X(ShellHorizonMarch) \
-	X(ObjectSnowShadows) \
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
 	X(ShellBareGroundCull) \

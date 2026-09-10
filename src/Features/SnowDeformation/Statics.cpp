@@ -1156,14 +1156,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
 		}
 	}
-	if (!skinShadowVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SHADOWCAST"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &skinShadowVS)))
-				Util::SetResourceName(skinShadowVS, "SnowDeformation::SkinShadowVS");
-		}
-	}
 	// Volume snow (VOXEL): brick VS + marching PS. Optional; the draw guards
 	// on the pointers.
 	if (!voxelShellVS) {
@@ -2805,9 +2797,14 @@ void SnowDeformation::DrawCapturedStatics()
 	// low-poly meshes have far too few. Relief stays gated inside the DS.
 	const bool tessellateSkins = staticsTessVS && staticsHS && staticsDS;
 	// A lambda because the depth prepass's fullscreen fills replace these
-	// stages mid-pass and have to put them back.
-	auto bindSkinStages = [&]() {
-		if (tessellateSkins) {
+	// stages mid-pass and have to put them back. The drape (S4 draws) takes
+	// the plain VS: a flat coat has nothing for tessellation to shape, and
+	// the rim term tessellates it to the cap everywhere (its cone is under
+	// the 4-unit "rim is near" threshold on every texel).
+	bool skinStagesTess = false;
+	auto bindSkinStages = [&](bool a_tess) {
+		skinStagesTess = a_tess;
+		if (a_tess) {
 			context->VSSetShader(staticsTessVS, nullptr, 0);
 			context->HSSetShader(staticsHS, nullptr, 0);
 			context->DSSetShader(staticsDS, nullptr, 0);
@@ -2833,9 +2830,12 @@ void SnowDeformation::DrawCapturedStatics()
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
 		} else {
 			context->VSSetShader(staticsVS, nullptr, 0);
+			context->HSSetShader(nullptr, nullptr, 0);
+			context->DSSetShader(nullptr, nullptr, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		}
 	};
-	bindSkinStages();
+	bindSkinStages(tessellateSkins);
 
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
@@ -3262,8 +3262,11 @@ void SnowDeformation::DrawCapturedStatics()
 			const uint32_t recordIndex = drawIndex++;
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
 			context->VSSetShaderResources(10, 1, &skinSmoothSRV);
+			const bool wantTess = tessellateSkins && (!d.s4Shell || drapeTessDebug);
+			if (wantTess != skinStagesTess)
+				bindSkinStages(wantTess);
 			if (skinRecordsLive) {
-				BindStaticsRecord(recordIndex, true, tessellateSkins, skinParity);
+				BindStaticsRecord(recordIndex, true, wantTess, skinParity);
 			} else {
 				staticsCB->Update(skinRecords[recordIndex]);
 				cpuCensus.skinLoopCBUpdates++;
@@ -3323,7 +3326,7 @@ void SnowDeformation::DrawCapturedStatics()
 				context->RSSetViewports(vpCount, vps);
 			if (auto* skinRaster = GetSkinRasterState())
 				context->RSSetState(skinRaster);
-			bindSkinStages();
+			bindSkinStages(skinStagesTess);
 		};
 
 		fill(shellTestDepthDSV.get(), mainDepthSRV);

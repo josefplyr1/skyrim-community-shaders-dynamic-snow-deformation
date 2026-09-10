@@ -442,19 +442,13 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		for (uint32_t i = 0; i < 6; i++)
 			prevVSSRVs[i].attach(srvs[i]);
 	}
-	// The skin casters bind the lift's map set (t10-t13 smoothed normals /
-	// top / skin depth / cone, t24-t28 the peeled layers).
+	// The patch caster binds t11-t13 (top / skin depth / cone).
 	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsSkin[4];
-	winrt::com_ptr<ID3D11ShaderResourceView> prevVSSRVsLayer[5];
 	{
 		ID3D11ShaderResourceView* srvs[4] = {};
 		context->VSGetShaderResources(10, 4, srvs);
 		for (uint32_t i = 0; i < 4; i++)
 			prevVSSRVsSkin[i].attach(srvs[i]);
-		ID3D11ShaderResourceView* srvs2[5] = {};
-		context->VSGetShaderResources(24, 5, srvs2);
-		for (uint32_t i = 0; i < 5; i++)
-			prevVSSRVsLayer[i].attach(srvs2[i]);
 	}
 	winrt::com_ptr<ID3D11Buffer> prevVB;
 	UINT prevVBStride = 0, prevVBOffset = 0;
@@ -522,11 +516,8 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// nesting and folds repeated names into per-call samples, hence the
 	// per-cascade names.
 	static const char* const kCasterGridRow[4] = { "SnowDeformation::CasterGrid0", "SnowDeformation::CasterGrid1", "SnowDeformation::CasterGrid2", "SnowDeformation::CasterGrid3" };
-	static const char* const kCasterSkinsRow[4] = { "SnowDeformation::CasterSkins0", "SnowDeformation::CasterSkins1", "SnowDeformation::CasterSkins2", "SnowDeformation::CasterSkins3" };
 	static const char* const kCasterPatchRow[4] = { "SnowDeformation::CasterPatch0", "SnowDeformation::CasterPatch1", "SnowDeformation::CasterPatch2", "SnowDeformation::CasterPatch3" };
 	const bool splitRow = shellCasterSplitDebug;
-	casterSkinsCulled = 0;
-	casterSkinsDrawn = 0;
 	if (!splitRow)
 		globals::profiler->BeginPass("SnowDeformation::ShellShadowCast");
 	for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
@@ -587,151 +578,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (splitRow)
 			globals::profiler->EndPass();
 
-		// The OBJECT shells cast too (Josef's cliff report: the shadow
-		// line came from the bare rock beneath the shell). Same captured
-		// list, same lift math, depth-only; the caster ShellCB already
-		// carries this cascade's light clip with the camera adjust
-		// zeroed, so the standard skin position chain lands in light
-		// space untouched. The list and the height maps are one frame
-		// stale - static geometry, invisible.
-		if (!SnowShadersPending(2) && skinShadowVS && !capturedStatics.empty()) {
-			if (splitRow)
-				globals::profiler->BeginPass(kCasterSkinsRow[cascade]);
-			context->VSSetShader(skinShadowVS, nullptr, 0);
-			ID3D11Buffer* skinCB1 = staticsCB->CB();
-			context->VSSetConstantBuffers(1, 1, &skinCB1);
-			ID3D11ShaderResourceView* castTopSRV = heightTopRaw[heightCurrent] ? heightTopRaw[heightCurrent]->srv.get() : nullptr;
-			context->VSSetShaderResources(11, 1, &castTopSRV);
-			ID3D11ShaderResourceView* castConeSRV = objectSnowCone ? objectSnowCone->srv.get() : nullptr;
-			context->VSSetShaderResources(13, 1, &castConeSRV);
-			// The caster runs FillSkinDrawCB, so it carries FineHalfExtent and
-			// WILL read the near clipmap: unbound here it would sample zeros
-			// and cast a shadow off a surface the visible skin never had.
-			ID3D11ShaderResourceView* castFineSRVs[2] = {
-				(!fineLevelDisabled && objectSnowConeFine) ? objectSnowConeFine->srv.get() : nullptr,
-				(!fineLevelDisabled && heightTopRawFine) ? heightTopRawFine->srv.get() : nullptr
-			};
-			context->VSSetShaderResources(33, 2, castFineSRVs);
-			// P3: the sky-openness field (t25) - the caster must carry the
-			// same exposure-weighted depth as the visible skin. Inside the
-			// saved t24-t28 range, so the restore set is untouched.
-			ID3D11ShaderResourceView* castSkyOpenSRV = objectSkyOpen && objectSkyOpen->srv ? objectSkyOpen->srv.get() : nullptr;
-			context->VSSetShaderResources(25, 1, &castSkyOpenSRV);
-
-			// Per-cascade caster cull. The clip matrix above maps absolute
-			// world into this cascade's [-1,1] x [-1,1] x [0,1] box, and the
-			// mesh carries a world bounding sphere, so a sphere-vs-box
-			// rejection skips draws that provably write no texel of THIS
-			// cascade. Conservative on both sides: the sphere is grown by
-			// kCasterCullMargin to cover the snow lift the caster VS adds
-			// above the mesh, and the extent per clip axis uses the matrix
-			// column length, which is exact for the affine transform a
-			// directional cascade uses. Output is therefore bit-identical -
-			// the skipped draws could not have changed a depth value.
-			constexpr float kCasterCullMargin = 128.0f;
-			const float clipExtentX = std::sqrt(
-				DirectX::XMVectorGetX(clip.r[0]) * DirectX::XMVectorGetX(clip.r[0]) +
-				DirectX::XMVectorGetX(clip.r[1]) * DirectX::XMVectorGetX(clip.r[1]) +
-				DirectX::XMVectorGetX(clip.r[2]) * DirectX::XMVectorGetX(clip.r[2]));
-			const float clipExtentY = std::sqrt(
-				DirectX::XMVectorGetY(clip.r[0]) * DirectX::XMVectorGetY(clip.r[0]) +
-				DirectX::XMVectorGetY(clip.r[1]) * DirectX::XMVectorGetY(clip.r[1]) +
-				DirectX::XMVectorGetY(clip.r[2]) * DirectX::XMVectorGetY(clip.r[2]));
-			const float clipExtentZ = std::sqrt(
-				DirectX::XMVectorGetZ(clip.r[0]) * DirectX::XMVectorGetZ(clip.r[0]) +
-				DirectX::XMVectorGetZ(clip.r[1]) * DirectX::XMVectorGetZ(clip.r[1]) +
-				DirectX::XMVectorGetZ(clip.r[2]) * DirectX::XMVectorGetZ(clip.r[2]));
-
-			cpuCensus.casterPasses++;
-			for (const auto& cap : capturedStatics) {
-				auto* geometry = cap.geometry.get();
-				if (!geometry)
-					continue;
-				// Same skip rules as the visible skin draw, minus the
-				// PS-only noise-map validity (the vertex mask carries no
-				// noise term). Roads do NOT cast: the road skin's step-aside
-				// is a per-pixel discard (RoadOwnsColumn in the PS), which a
-				// depth-only caster cannot run - the classic-lift sheet cast
-				// phantom blotches onto the patch, height riding the Road
-				// Meshes slider. The patch deliberately does not cast either
-				// (the retired stretch experiment); the self-shadow march
-				// owns trench-wall shading on roads.
-				const bool s4Shell = !cap.road && cap.projThreshold > -0.5f;
-				if (!s4Shell || !settings.ObjectSnowShadows)
-					continue;
-				if (!casterCullDisabled) {
-					const auto& bound = geometry->worldBound;
-					if (bound.radius > 0.0f) {
-						const float r = bound.radius + kCasterCullMargin;
-						auto centerClip = DirectX::XMVector3Transform(
-							DirectX::XMVectorSet(bound.center.x, bound.center.y, bound.center.z, 1.0f), clip);
-						const float cx = DirectX::XMVectorGetX(centerClip);
-						const float cy = DirectX::XMVectorGetY(centerClip);
-						const float cz = DirectX::XMVectorGetZ(centerClip);
-						const float ex = r * clipExtentX, ey = r * clipExtentY, ez = r * clipExtentZ;
-						if (cx + ex < -1.0f || cx - ex > 1.0f ||
-							cy + ey < -1.0f || cy - ey > 1.0f ||
-							cz + ez < 0.0f || cz - ez > 1.0f) {
-							casterSkinsCulled++;
-							continue;
-						}
-					}
-				}
-				casterSkinsDrawn++;
-				auto triShape = geometry->AsTriShape();
-				if (!triShape)
-					continue;
-				auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-				if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-					continue;
-				uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-				if (indexCount == 0)
-					continue;
-				auto desc = rendererData->vertexDesc;
-				if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-					continue;
-				uint64_t descKey;
-				memcpy(&descKey, &desc, sizeof(descKey));
-				auto layoutIt = staticsILCache.find(descKey);
-				if (layoutIt == staticsILCache.end() || !layoutIt->second)
-					continue;  // layouts are created by the skin pass; reuse only
-				context->IASetInputLayout(layoutIt->second.get());
-				UINT stride = uint32_t(descKey & 0xF) * 4;
-				if (stride == 0)
-					continue;
-				UINT offset = 0;
-				auto* skinVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-				auto* skinIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-				context->IASetVertexBuffers(0, 1, &skinVB, &stride, &offset);
-				context->IASetIndexBuffer(skinIB, DXGI_FORMAT_R16_UINT, 0);
-				// Cache LOOKUP only - building here would dispatch compute
-				// mid-shadow-pass through unsaved CS state; a mesh casts
-				// with raw normals until the skin pass builds its entry.
-				ID3D11ShaderResourceView* smoothSRV = nullptr;
-				if (auto smoothIt = smoothedNormalsCache.find(rendererData->vertexBuffer);
-					smoothIt != smoothedNormalsCache.end() && smoothIt->second.ready)
-					smoothSRV = smoothIt->second.srv.get();
-				context->VSSetShaderResources(10, 1, &smoothSRV);
-				StaticsCB scb{};
-				FillSkinDrawCB(cap, s4Shell, float(triShape->GetTrishapeRuntimeData().vertexCount),
-					smoothSRV != nullptr, castTopSRV != nullptr, false, scb);
-				// SkinHeightFadeEnd stays LIVE: the caster must collapse
-				// with the visible skin or it throws full-height shadows
-				// past the skin range (the distance streaks). The zeroed
-				// camera adjust cannot be the distance reference, so the
-				// SHADOWCAST lift measures from the height window's centre
-				// instead (ApplySkinLift's SHADOWCAST branch).
-				staticsCB->Update(scb);
-				cpuCensus.casterCBUpdates++;
-				cpuCensus.casterDraws++;
-				context->DrawIndexed(indexCount, 0, 0);
-			}
-			if (splitRow)
-				globals::profiler->EndPass();
-		} else if (splitRow) {
-			globals::profiler->MarkPassSkipped(kCasterSkinsRow[cascade]);
-		}
-
 		// The TRENCH PATCH casts too - attempt two of "road snow casts
 		// shadows" (Josef: trench walls throw no shadow onto their own
 		// floor). Attempt one stretched shadows across the surface because
@@ -777,8 +623,6 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	}
 	if (!splitRow)
 		globals::profiler->EndPass();
-	casterSkinsCulledLast = casterSkinsCulled;
-	casterSkinsDrawnLast = casterSkinsDrawn;
 
 	// ---- Restore everything.
 	// Including the CONSTANT BUFFER, not just pipeline state. The caster pass
@@ -819,22 +663,12 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		context->VSSetShaderResources(14, 1, &nullBermSRV);
 		context->VSSetShaderResources(15, 1, &nullBermSRV);
 		context->VSSetShaderResources(13, 1, &nullBermSRV);
-		ID3D11ShaderResourceView* nullCasterMax[2] = {};
-		context->VSSetShaderResources(24, 1, &nullCasterMax[0]);
-		context->VSSetShaderResources(26, 1, &nullCasterMax[1]);
 		context->VSSetShaderResources(29, 1, &nullBermSRV);
-		// The near clipmap pair; nothing else in the frame holds t33/t34.
-		ID3D11ShaderResourceView* nullFinePair[2] = {};
-		context->VSSetShaderResources(33, 2, nullFinePair);
-		// The skin casters' map set.
+		// The patch caster's map set.
 		ID3D11ShaderResourceView* skinSrvs[4];
 		for (uint32_t i = 0; i < 4; i++)
 			skinSrvs[i] = prevVSSRVsSkin[i].get();
 		context->VSSetShaderResources(10, 4, skinSrvs);
-		ID3D11ShaderResourceView* layerSrvs[5];
-		for (uint32_t i = 0; i < 5; i++)
-			layerSrvs[i] = prevVSSRVsLayer[i].get();
-		context->VSSetShaderResources(24, 5, layerSrvs);
 	}
 	{
 		ID3D11Buffer* vb = prevVB.get();

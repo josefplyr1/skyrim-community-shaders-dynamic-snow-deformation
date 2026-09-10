@@ -546,8 +546,6 @@ public:
 		bool ShellSSSRemarch = true;
 		/** @brief Heightfield self-shadow (the 5-tap horizon march) on both shells. Off = only the cascades, the SSS mask and the re-march shade the snow. A/B for dark blotches on open snow at a low sun. */
 		bool ShellHorizonMarch = true;
-		/** @brief Object snow casts shadows: the S4 skins' depth-only caster pass. Off = the raised object snow throws no shadow of its own (its object still does). A/B for shadows that seem to come from snow nothing can see. */
-		bool ObjectSnowShadows = false;
 		/** @brief Streak fix for the re-march: occluders are thin shells (Bend SSS SurfaceThickness, 48 units), so a character in front of the ray no longer paints their silhouette as a streak across the snow behind them. */
 		bool ShellSSSRemarchThickness = true;
 		/** @brief Caster height cap (units above the snow line) for the re-march. Taller casters already shadow via the cascades, so their re-march copy is doubled bleed (actors, rails). 20 accepts short grass only; 200 accepts everything. */
@@ -1176,14 +1174,6 @@ public:
 	ID3D11DomainShader* shellDS = nullptr;
 	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
 	bool shellCasterSplitDebug = false;
-
-	/** @brief A/B measurement: draws every captured skin into every cascade, as before the per-cascade sphere cull. Runtime-only. */
-	bool casterCullDisabled = false;
-	/** @brief Last frame's caster cull census (summed over cascades), for the debug readout. */
-	uint32_t casterSkinsCulled = 0;
-	uint32_t casterSkinsDrawn = 0;
-	uint32_t casterSkinsCulledLast = 0;
-	uint32_t casterSkinsDrawnLast = 0;
 
 	/** @brief A/B measurement: SNOW_DS_FLAT domain shader (terrain + class depth, no field work) bounds the geometry stages' share of the Shell row. Runtime-only. */
 	bool shellFlatDSDebug = false;
@@ -1876,9 +1866,6 @@ public:
 		uint32_t traverseCalls = 0;
 		uint32_t skinLoopDraws = 0;
 		uint32_t skinLoopCBUpdates = 0;
-		uint32_t casterDraws = 0;
-		uint32_t casterCBUpdates = 0;
-		uint32_t casterPasses = 0;
 		/** @brief FNV-1a of (StampCount, Stamps, StampEnds) as uploaded: the bit-identity check for every CPU lever. */
 		uint64_t stampHash = 0;
 		uint32_t stampHashStable = 0;
@@ -1895,7 +1882,7 @@ public:
 	{
 		float hookMs = 0.0f, hookCalls = 0.0f, actorMs = 0.0f, actors = 0.0f, landMs = 0.0f, landCalls = 0.0f;
 		float depthMs = 0.0f, depthCalls = 0.0f, traverseMs = 0.0f, traverseCalls = 0.0f;
-		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f, casterDraws = 0.0f, casterCBUpdates = 0.0f, casterPasses = 0.0f;
+		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f;
 	};
 	CpuCensusShown cpuShown;
 	// rdtsc, not QPC: two QPC reads are ~50 ns and the hook runs thousands of
@@ -2020,6 +2007,8 @@ public:
 	Texture2D* objectSnowConeFine = nullptr;
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
+	/** @brief Debugging Options A/B: run the drape (S4 draws) through the hull and domain shaders again. Off, they take the plain VS: a flat coat has nothing for tessellation to shape. */
+	bool drapeTessDebug = false;
 	// ---- Height-field probe (Debugging Options): the six object maps read
 	// back at the player's texel every frame, so a report carries numbers
 	// instead of guesses. Ping-pong staging; the value shown is one frame old.
@@ -2045,8 +2034,6 @@ public:
 	ID3D11PixelShader* heightPS = nullptr;
 	/** @brief S4 phase 2: the layer-2 peel PS (SnowHeightCapture.hlsl, PEEL define) - keeps only up-facing fragments below this frame's layer-1 top by the peel tolerance, MAX-blending the second-highest snow-bearing surface per column. */
 	ID3D11PixelShader* heightPeelPS = nullptr;
-	/** @brief Depth-only skin caster VS (SHADOWCAST define): the full lift, clip position through the light matrix ShellCB carries during the cascade injection. Drawn by InjectShellShadowCasters so the object shells cast real sun shadows. */
-	ID3D11VertexShader* skinShadowVS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;

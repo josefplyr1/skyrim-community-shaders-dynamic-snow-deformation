@@ -68,9 +68,6 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::Checkbox(T(TKEY("object_snow_shadows"), "Object Snow Casts Shadows"), &settings.ObjectSnowShadows);
-			if (auto _ttOss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_snow_shadows_tooltip"), "Object snow skins cast into the shadow maps. Turn it off to check whether a dark patch on a rock comes from the skin above it: if the patch vanishes, it was the skin's shadow."));
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow's own bumps, drifts, berms and the objects under it shade the snow behind them through a short march along the sun over the snow height field, on both the ground shell and object snow. Turn it off to check whether dark patches on open snow at a low sun come from this march rather than from the game's shadows."));
@@ -202,7 +199,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
-	if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Snow Depth by Model Class"), ImGuiTreeNodeFlags_Framed)) {
+	if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Object Snow"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttModels = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh."));
 
@@ -1077,8 +1074,7 @@ void SnowDeformation::DrawSettings()
 				const auto& s = cpuShown;
 				ImGui::Text("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
 					s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
-				ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates | caster %.0f draws, %.0f CB updates over %.0f passes",
-					s.skinLoopDraws, s.skinLoopCBUpdates, s.casterDraws, s.casterCBUpdates, s.casterPasses);
+				ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates", s.skinLoopDraws, s.skinLoopCBUpdates);
 				ImGui::Text("Capture hash %016llX over %u skins", (unsigned long long)cpuCensus.captureHash, cpuCensus.captureCount);
 				ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
 				ImGui::SameLine();
@@ -1417,17 +1413,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("shell_berm_bake_disabled_tooltip"), "Measurement aid: returns both shells to recomputing the berm field's 17 taps per call instead of reading the baked map, and skips the bake pass. The snow looks the same; Shell and Object Snow get slower and the BermField pass disappears. Hold the camera still and toggle to read the trade."));
 
 
-			ImGui::Checkbox(T(TKEY("caster_cull_disabled"), "Disable Caster Culling"), &casterCullDisabled);
-			if (auto _ttCasterCull = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("caster_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object into every shadow cascade, as it worked before. With culling on, an object whose bounding sphere lies entirely outside a cascade's box is skipped for that cascade only - it could not have darkened a single texel of it, so the shadow maps come out identical. The census below counts what was skipped."));
-
-			if (!casterCullDisabled) {
-				const uint32_t total = casterSkinsCulledLast + casterSkinsDrawnLast;
-				ImGui::Text("Caster skins: %u drawn, %u culled of %u across cascades (%.0f%% skipped)",
-					casterSkinsDrawnLast, casterSkinsCulledLast, total,
-					total ? 100.0 * double(casterSkinsCulledLast) / double(total) : 0.0);
-			}
-
 
 			ImGui::Checkbox(T(TKEY("shell_depth_clamp_disabled"), "Disable Depth Clamp"), &shellDepthClampDisabled);
 			if (auto _ttClampDbg = Util::HoverTooltipWrapper())
@@ -1653,6 +1638,9 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
+			ImGui::Checkbox(T(TKEY("drape_tess_debug"), "Tessellate the Drape (A/B)"), &drapeTessDebug);
+			if (auto _ttDrapeTess = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("drape_tess_debug_tooltip"), "Measurement aid: runs the flat object snow coat through the hull and domain shaders again, as it did before the raised shell was retired. Off, those draws take the plain vertex shader; a flat coat has nothing for tessellation to shape."));
 			{
 				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
 				ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));

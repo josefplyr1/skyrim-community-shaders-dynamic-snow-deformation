@@ -1907,12 +1907,9 @@ void SnowDeformation::RollCpuCensus()
 	ema(s.traverseCalls, float(c.traverseCalls));
 	ema(s.skinLoopDraws, float(c.skinLoopDraws));
 	ema(s.skinLoopCBUpdates, float(c.skinLoopCBUpdates));
-	ema(s.casterDraws, float(c.casterDraws));
-	ema(s.casterCBUpdates, float(c.casterCBUpdates));
-	ema(s.casterPasses, float(c.casterPasses));
 	c.hookTicks = c.actorTicks = c.landTicks = c.depthTicks = c.traverseTicks = 0;
 	c.hookCalls = c.hookBitCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
-	c.skinLoopDraws = c.skinLoopCBUpdates = c.casterDraws = c.casterCBUpdates = c.casterPasses = 0;
+	c.skinLoopDraws = c.skinLoopCBUpdates = 0;
 	if (c.stampHashDumpRequested) {
 		c.stampHashDumpRequested = false;
 		std::string line;

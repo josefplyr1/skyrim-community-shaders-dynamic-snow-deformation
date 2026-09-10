@@ -1752,21 +1752,11 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	[branch] if (SkinHeightFadeEnd > 1.0 && LegacySkin < 0.5 && FullCoat < 0.5)
 	{
 		float collapseEnd = SkinCollapseEnd(depthBase);
-#if defined(SHADOWCAST)
-		// Caster pass: ShellCameraPosAdjust is zeroed (absolute world), so
-		// measure from the height window's centre, which tracks the camera -
-		// the patch caster's own convention. The caster must collapse WITH
-		// the visible skin: with the collapse disabled CB-side it kept full
-		// height past the skin range and threw full shadows over shells the
-		// eye no longer sees (Josef's distance streaks).
-		float camDist = length(worldBase.xy - HeightWindowCenter);
-#else
 		// Horizontal, like the caster's: measured as a sphere, a cliff face
 		// close by but high above the camera collapsed while its neighbour
 		// at eye level did not (Josef's dome, 2026-09-06). The range is a
 		// column over the loaded grid.
 		float camDist = length(worldBase.xy - ShellCameraPosAdjust.xy);
-#endif
 		depth *= 1.0 - smoothstep(collapseEnd * 0.55, collapseEnd, camDist);
 		// Floor at the minimum coat instead of zero. Collapsing all the way
 		// puts the skin vertex EXACTLY on its source vertex, where it z-fights
@@ -2025,27 +2015,7 @@ SkinVertex BuildSkinVertex(VS_INPUT input)
 	return v;
 }
 
-#if defined(SHADOWCAST)
-// Depth-only shadow caster VS (sun cascade injection): the FULL lift
-// math - the caster must be the exact surface the visible shell renders
-// or the shadow offsets from its own snow - but none of the shading
-// interpolants. During the caster pass ShellCB carries the light's clip
-// matrix in CameraViewProj with ShellCameraPosAdjust zeroed (absolute-
-// world rendering, same contract as the landscape shell's caster), so
-// the standard position chain lands in light clip untouched. The
-// distance collapse RUNS here, measured from the height window's centre
-// (ApplySkinLift's SHADOWCAST branch): the zeroed camera adjust cannot
-// be the reference (it reads "80 km away" and flattens everything), but
-// skipping the collapse outright kept casters at full height past the
-// skin range - full shadows over shells the eye no longer sees.
-float4 main(VS_INPUT input) : SV_POSITION
-{
-	SkinVertex v = BuildSkinVertex(input);
-	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat, v.VertexAlpha);
-	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
-	return mul(CameraViewProj, float4(rel, 1.0));
-}
-#elif !defined(SNOW_TESS)
+#if !defined(SNOW_TESS)
 VS_OUTPUT main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);
@@ -2053,7 +2023,6 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = lift.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
-#ifndef SNOW_SHADOW_CAST
 	// S4 coat: the whole shell kEdgeFlankLift toward the eye, IN GEOMETRY,
 	// so it wins the depth test against its own object at grazing views.
 	// The PS push (edgeFlankLift / coatPush) reaches the depth buffer only
@@ -2065,7 +2034,6 @@ VS_OUTPUT main(VS_INPUT input)
 		rel -= toEye * kEdgeFlankLift;
 		prevRel -= toEye * kEdgeFlankLift;
 	}
-#endif
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
@@ -2266,7 +2234,6 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 
 	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
 	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
-#ifndef SNOW_SHADOW_CAST
 	// S4 coat: the whole shell kEdgeFlankLift toward the eye, IN GEOMETRY,
 	// so it wins the depth test against its own object at grazing views.
 	// The PS push (edgeFlankLift / coatPush) reaches the depth buffer only
@@ -2278,7 +2245,6 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 		rel -= toEye * kEdgeFlankLift;
 		prevRel -= toEye * kEdgeFlankLift;
 	}
-#endif
 
 	VS_OUTPUT vsout;
 	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
