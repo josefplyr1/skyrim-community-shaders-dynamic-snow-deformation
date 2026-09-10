@@ -506,7 +506,9 @@ public:
 		/** @brief Horizontal world units short of the waterline where the landscape shell is fully bare. */
 		float WaterEdgeMargin = 4.0f;
 		/** @brief Horizontal world units over which the shell ramps from full depth down to bare, ending at the margin. */
-		float WaterEdgeRamp = 16.0f;
+		float WaterEdgeRamp = 48.0f;
+		/** @brief Profile of that ramp: 0 = a straight slope with sharp corners, 1 = rounded shoulders top and bottom. */
+		float WaterEdgeRounding = 1.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -1616,6 +1618,7 @@ public:
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
+		uint32_t passEnum;
 	};
 	std::vector<CapturedWater> capturedWater;
 	void BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass);
@@ -2059,6 +2062,9 @@ public:
 	uint32_t statWaterCaptured = 0;
 	uint32_t statWaterDrawn = 0;
 	bool waterFirstLogged = false;
+	/** @brief Debugging Options: log every water plane the capture has not logged before (name, pass, transform, bounds) while on. */
+	bool debugLogWaterPlanes = false;
+	std::unordered_set<const RE::BSGeometry*> waterLoggedPlanes;
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;

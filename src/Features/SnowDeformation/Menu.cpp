@@ -488,6 +488,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttWr = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("water_edge_ramp_tooltip"), "Width of the slope from full snow down to bare ground before the margin, measured along the ground. Border Noise wanders this edge inland, never over the water."));
 
+			ImGui::SliderFloat(T(TKEY("water_edge_rounding"), "Water Edge Rounding"), &settings.WaterEdgeRounding, 0.0f, 1.0f, "%.2f");
+			if (auto _ttWro = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("water_edge_rounding_tooltip"), "Shape of that slope: 0 = a straight ramp with sharp corners, 1 = rounded shoulders at the top and the bottom."));
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -1385,6 +1389,11 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttMarch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_march_bicubic_tooltip"), "Measurement aid: restores the self-shadow march's old bicubic deformation sampler (16 loads per tap) in place of the shipped single bilinear tap (4). At the march's 28-1000 unit reach the two are visually identical; hold the camera still and toggle to read what the loads cost. Recompiles the shell PS on toggle (cached after the first)."));
 
+
+			if (ImGui::Checkbox(T(TKEY("debug_log_water_planes"), "Log Water Planes"), &debugLogWaterPlanes))
+				waterLoggedPlanes.clear();
+			if (auto _ttWlog = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_log_water_planes_tooltip"), "While on, every water plane the capture sees for the first time is written to CommunityShaders.log with its name, pass, position, scale and bounds. Look around the spot in question, then turn it off."));
 
 			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
 			if (auto _ttWater = Util::HoverTooltipWrapper())

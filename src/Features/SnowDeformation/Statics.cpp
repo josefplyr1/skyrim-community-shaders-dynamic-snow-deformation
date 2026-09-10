@@ -3666,7 +3666,7 @@ void SnowDeformation::BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			return;
 	if (capturedWater.size() >= 512)
 		return;
-	capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
+	capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, a_pass->passEnum });
 }
 
 // Last frame's water planes top-down into the terrain window's frame (128-unit
@@ -3768,6 +3768,13 @@ void SnowDeformation::RenderWaterCapture()
 			logger::info("[SNOW DEFORMATION] water capture: first plane '{}' desc {:#x} vertex {} tris {} at ({:.0f} {:.0f} {:.0f}) window origin cell ({}, {})",
 				geometry->name.c_str(), descKey, desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX), triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, shellWindowCellX, shellWindowCellY);
+		}
+		if (debugLogWaterPlanes && waterLoggedPlanes.insert(geometry).second) {
+			const auto& wb = geometry->worldBound;
+			logger::info("[SNOW DEFORMATION] water plane '{}' pass {:#x} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
+				geometry->name.c_str(), water.passEnum, triShape->GetTrishapeRuntimeData().triangleCount,
+				water.world.translate.x, water.world.translate.y, water.world.translate.z, water.world.scale,
+				wb.center.x, wb.center.y, wb.center.z, wb.radius);
 		}
 		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
 			continue;

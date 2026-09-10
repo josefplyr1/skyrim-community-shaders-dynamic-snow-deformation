@@ -107,6 +107,7 @@
 	X(SnowBorderFade) \
 	X(WaterEdgeMargin) \
 	X(WaterEdgeRamp) \
+	X(WaterEdgeRounding) \
 	X(SnowMoundSteepness) \
 	X(UndulationStrength) \
 	X(UndulationSpacing) \

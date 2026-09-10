@@ -1094,7 +1094,8 @@ void SnowDeformation::DrawShell()
 	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
 	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
 	// x = the water cut (runtime A/B in Debugging Options).
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
+	// .x packs the water cut: 0 off, else 1 + rounding.
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f + std::clamp(settings.WaterEdgeRounding, 0.0f, 1.0f), remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.

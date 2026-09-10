@@ -915,7 +915,9 @@ float SampleWaterHeight(float2 gridLocal)
 // square never shows through it. The slope floor keeps a flat shore's
 // distance finite (1 in 50 puts the cut within a unit of the level). The
 // border-noise wander only ever pulls the edge INLAND, so it wobbles
-// without standing over water.
+// without standing over water; no 8-unit octave here - on the 8-unit near
+// lattice it is at Nyquist and reads as sawteeth. CompactLook.x - 1 is the
+// profile: 0 a straight slope, 1 rounded shoulders.
 float3 ApplyWaterCut(float3 terrain, float2 gridLocal)
 {
 	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0)
@@ -936,8 +938,9 @@ float3 ApplyWaterCut(float3 terrain, float2 gridLocal)
 			float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
 			float dist = (h - water) / max(length(grad), 0.02);
 			float2 waterXY = GridOrigin + gridLocal;
-			float wander = saturate(ShapeNoise(waterXY / 37.0) * 0.7 + ShapeNoise(waterXY / 8.0) * 0.3) * BorderNoise;
-			float cut = smoothstep(WaterEdgeMargin, WaterEdgeMargin + max(WaterEdgeRamp, 1.0), dist - wander);
+			float wander = saturate(ShapeNoise(waterXY / 37.0) * 0.7 + ShapeNoise(waterXY / 23.0 + 71.3) * 0.3) * BorderNoise;
+			float x = saturate((dist - wander - WaterEdgeMargin) / max(WaterEdgeRamp, 1.0));
+			float cut = lerp(x, x * x * (3.0 - 2.0 * x), saturate(CompactLook.x - 1.0));
 			terrain.y = lerp(-8.0, terrain.y, cut);
 			terrain.z *= cut;
 		}
