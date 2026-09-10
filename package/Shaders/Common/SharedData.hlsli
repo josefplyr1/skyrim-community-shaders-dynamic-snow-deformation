@@ -375,10 +375,9 @@ namespace SharedData
 		float ProjSnowEnable;
 		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
 		float LODObjectEnable;
-		// Snow Fill, 0..1: fraction of the projected-snow footprint the
-		// recolor pushes to FULL shell-snow weight, most up-facing pixels
-		// first; 1 = every angle solid. Mirror in SnowDeformation.h.
-		float ProjSnowFill;
+		// was ProjSnowFill (Snow Fill, retired); slot kept for layout. Mirror
+		// in SnowDeformation.h.
+		float padProjFill;
 
 		// Toroidal deformation-map addressing: physical position of logical
 		// texel (0,0); every map Load adds this and masks by dim-1.

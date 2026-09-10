@@ -32,9 +32,7 @@ cbuffer StaticCB : register(b1)
 	float padSkinHeightFade;
 	float LegacySkin;         // layout sync with SnowStaticsShell; unused here
 	float MoundSteepness;     // layout sync with SnowStaticsShell; unused here
-	// >0.5: this object may be trenched. Zero skin depth makes the patch's
-	// texels dead for it, which is how a class is switched off.
-	float ObjectTrenches;
+	float padObjectTrenches;  // layout sync with SnowStaticsShell
 
 	float FullCoat;
 	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
@@ -50,7 +48,7 @@ cbuffer StaticCB : register(b1)
 	// SnowDeformation.h.
 	float ClassOverride;
 	float ProjNoiseScale;   // layout sync with SnowStaticsShell; unused here
-	float ProjSnowFillSk;   // layout sync with SnowStaticsShell; unused here
+	float padProjFill;      // layout sync with SnowStaticsShell
 	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
 	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
 	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here
@@ -125,8 +123,9 @@ VS_OUTPUT main(VS_INPUT input)
 	}
 	[flatten] if (ClassOverride > 1.5)
 		skinDepth = ObjectsDepth;
-	// Parked: only roads carve until object trenching is done properly.
-	[flatten] if (ObjectTrenches < 0.5 && LegacySkin < 0.5)
+	// Only roads carve: zero skin depth makes the patch's texels dead for
+	// everything else.
+	[flatten] if (LegacySkin < 0.5)
 		skinDepth = 0.0;
 
 	VS_OUTPUT vsout;

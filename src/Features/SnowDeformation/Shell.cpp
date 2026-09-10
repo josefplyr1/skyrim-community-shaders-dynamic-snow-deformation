@@ -1081,7 +1081,7 @@ void SnowDeformation::DrawShell()
 	cbData.BorderNoise = settings.SnowBorderNoise;
 	cbData.BorderSmooth = settings.SnowBorderSmoothness;
 	cbData.BorderStyle = { settings.SnowBorderDithering ? 1.0f : 0.0f,
-		std::clamp(settings.TrenchFloorHeight, 0.0f, 8.0f),
+		std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f),
 		(float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	// x compaction matte; y the shell-surface SSS re-march toggle; zw its
 	// dynamic-resolution scale - the shell pass does not bind FrameBuffer

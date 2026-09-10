@@ -840,8 +840,8 @@ float SampleObjectDepthCap(float2 worldXY)
 // depth, so thin snow, class boundaries and carved floors stay flat.
 // Undulation, CarveProfile and kFireMeltFloor live in SnowFields.hlsli, so the
 // surface, the shading gradient and both shells' self-shadow marches see one
-// shape. Trench floor minimum is live in BorderStyle.y; low values deliberately
-// let trampling wear through to the ground.
+// shape. The trench floor is a fraction of the local depth (BorderStyle.y);
+// 0 lets trampling wear through to the ground.
 
 // Edge berm: displaced snow piles along the trench rim, taller from a deeper
 // layer. Shape comes from the BLURRED deformation (BermField) - two rings
@@ -1139,13 +1139,13 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// the blanket's rim meets the ground at class borders instead of
 		// hanging a hovering lip over the bare side (visible under-gap at
 		// grazing angles). Deep trench floors pass unchanged; a floor set
-		// below ~5 (Trench Floor Height) compresses with the toe.
+		// below ~5 (a low Trench Floor fraction) compresses with the toe.
 		[flatten] if (depth > 0.0)
 			depth *= smoothstep(0.0, 5.0, depth);
 
 		// Carves only where the layer is raised; the negative-depth submerge at
-		// class edges is untouched. The floor holds at Trench Floor Height (or
-		// the uncarved depth when thinner) and tapers toward class borders,
+		// class edges is untouched. The floor holds at the Trench Floor
+		// fraction of the uncarved depth and tapers toward class borders,
 		// where a full floor would leave a hard-edged slab over bare ground.
 		// Undulation rides on top, scaled by remaining depth.
 		[flatten] if (depth > 0.0)
@@ -2169,14 +2169,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	// Trench-floor contest: trampled floors run the same geometric contest as
 	// the edge - remaining snow against the dirt's grain - so wear-through
-	// opens grain-shaped holes by design rather than by window error. Trench
-	// Floor Height is the dial: at 3+ the snow always beats the ~2-unit dirt
-	// grain; toward 0 trampling wears through. The tight carve gate keeps
-	// walls solid. Runs after the carve override, and is the one voice
-	// allowed to overrule it.
+	// opens grain-shaped holes by design rather than by window error. The
+	// Trench Floor fraction is the dial: at the default a third of any layer
+	// over ~6 units beats the ~2-unit dirt grain; toward 0 trampling wears
+	// through. The tight carve gate keeps walls solid. Runs after the carve
+	// override, and is the one voice allowed to overrule it.
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
-		float floorEff = min(pixelEffDepth, BorderStyle.y * smoothstep(0.5, 8.0, pixelEffDepth));
+		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
 		[branch] if (remaining < 4.0)
 		{

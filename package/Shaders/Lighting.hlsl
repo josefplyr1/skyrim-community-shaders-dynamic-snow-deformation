@@ -1821,38 +1821,24 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (snowProjMatch)
 	{
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
-		// Snow Fill (SKIN-PLACEMENT-PLAN round 11): sweep the projected
-		// footprint by facing - most up-facing pixels first - and push
-		// accepted pixels to FULL shell-snow weight. 0 leaves vanilla's own
-		// graded paint; 1 turns every projected-snow pixel solid, every
-		// angle included. This operates on the REAL weight in the object's
-		// own shader, so there is nothing to reconstruct and no geometry
-		// that could miss an angle - the round-4..10 skin-coat attempts
-		// are why this lives here.
-		float projSnowFill = SharedData::snowDeformationSettings.ProjSnowFill;
-		float projFillBoost = 0.0;
-		[flatten] if (projSnowFill > 0.001 && projectedMaterialWeight > 0.003)
-		{
-			float fillNzCut = 1.0 - 2.0 * projSnowFill;
-			projFillBoost = smoothstep(fillNzCut - 0.05, fillNzCut + 0.05, worldNormal.z);
-			projectedMaterialWeight = max(projectedMaterialWeight, projFillBoost);
-		}
+		// All or nothing: every pixel the game paints at all wears the shell's
+		// snow at full weight, in the object's own shader, so no angle is missed.
 		[branch] if (projectedMaterialWeight > 0.003)
 		{
-			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, triWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+			projectedMaterialWeight = 1.0;
+			// Plane weights from the smooth vertex normal. The derivative face
+			// normal behind triWeights goes through a hard step() mask and flips
+			// planes on the quads straddling mesh creases - a line of a different
+			// snow texel along the edge.
+			float3 snowTriWeights = Triplanar::GetWeights(tbnTr[2], tbnTr[2]);
+			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
 			snowProjAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
 			// Classification debug: everything this block replaces, in magenta.
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 				snowProjAlbedo = float3(1.0, 0.0, 1.0);
-			// Fill instrument: the slice Snow Fill covers turns CYAN, so
-			// raising the slider visibly converts the purple - the
-			// working-as-intended readout. Overrides the magenta where
-			// both views are on.
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 16) != 0 && projFillBoost > 0.5)
-				snowProjAlbedo = float3(0.0, 1.0, 1.0);
 			// Recolor weight view (bit 32): the weight the recolor really
-			// blends by, as a grey ramp, fill included.
+			// blends by, as a grey ramp.
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
 				snowProjAlbedo = projectedMaterialWeight.xxx;
 			// Sampled-albedo view (bit 64): the texture read above, raw. The

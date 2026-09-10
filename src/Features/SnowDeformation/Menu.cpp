@@ -101,11 +101,7 @@ void SnowDeformation::DrawSettings()
 		// drape the skin lays over it; nothing of ours stands above a mesh.
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint - and Snow Fill below pushes the pattern toward full coverage, most up-facing parts first. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
-
-		ImGui::SliderFloat(T(TKEY("proj_snow_fill"), "Snow Fill"), &settings.ProjSnowFillPct, 0.0f, 100.0f, "%.0f%%");
-		if (auto _ttFill = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, 50%% covers everything facing upward, and 100%% covers every angle of the pattern - undersides included. At 0%% the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints at all takes the full snow, all or nothing. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
 		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
@@ -581,10 +577,6 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
-			ImGui::Checkbox(T(TKEY("object_trenches"), "Trenches on Objects"), &settings.ObjectTrenches);
-			if (auto _ttOt = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_trenches_tooltip"), "Carve footprints into snow sitting on objects (rocks, logs, roofs). Off while the object trenching is being reworked; roads and bridges keep their trenches either way."));
-
 			ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
 			if (auto _ttStamp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("stamp_radius_tooltip"), "Scales the Havok collision-shape radii used for stamping (20 = the shapes' actual size). Stamps come from actors' real collision shapes — feet and legs carve individually."));
@@ -601,9 +593,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttSharp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trench_sharpness_tooltip"), "How steeply trench walls drop. Low = wide, soft banks; 100 = full depth held to the trail's very edge."));
 
-			ImGui::SliderFloat(T(TKEY("trench_floor_height"), "Trench Floor Height"), &settings.TrenchFloorHeight, 0.0f, 8.0f, "%.1f units");
-			if (auto _ttTfh = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_floor_height_tooltip"), "Minimum snow left on carved trench floors, in units above the terrain. Low values let deep trampling wear through to the real ground, like snow does; 5 restores the old always-solid floors."));
+			ImGui::SliderFloat(T(TKEY("trench_floor"), "Trench Floor"), &settings.TrenchFloorFraction, 0.0f, 1.0f, "%.2fx");
+			if (auto _ttTf = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("trench_floor_tooltip"), "Snow left under a fully trampled trench, as a fraction of the snow depth there: 0.33 keeps a third, so walking through 30 units of snow leaves 10 around your foot instead of a canyon to the ground, and road snow never wears through to the road. 0 carves to the terrain."));
 
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 			if (auto _ttSteep = Util::HoverTooltipWrapper())
@@ -1642,16 +1634,13 @@ void SnowDeformation::DrawSettings()
 				if (auto _ttDbgView = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports."));
 #if !SNOW_ALPHA_BUILD
-				ImGui::Checkbox(T(TKEY("debug_proj_fill"), "Snow Fill Coverage Tint"), &debugProjFillView);
-				if (auto _ttFillDbg = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("debug_proj_fill_tooltip"), "Tints the part of the projected snow that Snow Fill covers in bright cyan. With Debug Projected Snow Match also on, the purple visibly converts to cyan as the slider rises - purple at 0%%, fully cyan at 100%% means the fill is working."));
 				ImGui::Checkbox(T(TKEY("debug_proj_albedo"), "Recolor Sampled Albedo"), &debugProjAlbedoView);
 				if (auto _ttProjAlbedo = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_albedo_tooltip"), "Paints classified projected snow with the snow texture the recolor JUST SAMPLED, raw and unshaded, in place of blending it in. The magenta view cannot answer this: it replaces the sample with a constant, so it proves the block runs and its weight, and nothing about the texture. Snow here means the sample is good and the recolor is failing further on; the object's own rock or black means the shell snow texture is not reaching the draw."));
 
 				ImGui::Checkbox(T(TKEY("debug_proj_weight"), "Recolor Weight Tint"), &debugProjWeightView);
 				if (auto _ttWeightDbg = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid, Snow Fill included; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));
+					ImGui::Text("%s", T(TKEY("debug_proj_weight_tooltip"), "Paints the game's projected snow with the weight the recolor really blends by, black = none to white = solid; projected surfaces the recolor does not treat as snow turn red. Turn object snow off and compare with the Object Snow Debug View's Projected mask mode (its red channel is the skin's own reconstruction of the same weight): wherever the two disagree is where the shell or its coat paints what the game does not."));
 				ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Projected Snow Match Tint"), &debugProjSnowView);
 				if (auto _ttProjDbg = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));

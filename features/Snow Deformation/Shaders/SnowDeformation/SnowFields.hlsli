@@ -327,8 +327,9 @@ float2 UndulationGradSampled(float2 worldXY)
 	return result;
 }
 
-// Deformation carves the layer toward the trench floor; the floor rides the
-// live Trench Floor Height slider (BorderStyle.y).
+// Deformation carves the layer toward the trench floor: a FRACTION of the
+// uncarved depth (BorderStyle.y, the Trench Floor slider), so deep snow keeps
+// snow around the foot and a road's shallow layer never wears to the mesh.
 //
 // P7 (trench plan Stage 3): DEPTH PICKS THE PROFILE. The map's carve
 // gradient is depth-blind, so a bootprint in 5 units of cover wore the same
@@ -365,7 +366,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorDepth = min(uncarvedDepth, BorderStyle.y * smoothstep(0.5, 8.0, uncarvedDepth));
+	float floorDepth = min(uncarvedDepth, uncarvedDepth * saturate(BorderStyle.y));
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on

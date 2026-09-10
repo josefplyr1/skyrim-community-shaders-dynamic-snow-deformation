@@ -973,12 +973,6 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	a_scb.FineHalfExtent = 0.0f;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
-	// The REAL setting, not the forced 1.0 this used to carry: the patch VS
-	// needs it to tell a road-owned column from a rock that only inherited
-	// a carvable depth through the raster's MAX blend. The per-pixel gate
-	// that the 1.0 was suppressing is now a compile-time constant in the
-	// PATCH pixel shader instead.
-	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 	// Global gate here, not a per-draw class: the patch is one draw and
 	// reads the road bit per texel from the raster's G channel.
 	a_scb.RoadField = settings.RoadHeightfield ? 1.0f : 0.0f;
@@ -1062,10 +1056,10 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	// No-depth-export twin. Only the parallax carve needs SV_Depth, and it is
-	// gated on ObjectTrenches or the draw being a road, so at default settings
-	// every other captured static writes back the depth the rasteriser already
-	// had - paying the loss of early-Z across the whole pass for nothing.
+	// No-depth-export twin. Only the parallax carve needs SV_Depth, and only
+	// road draws carve, so every other captured static writes back the depth
+	// the rasteriser already had - paying the loss of early-Z across the whole
+	// pass for nothing.
 	// A compile failure here is not fatal: the draw falls back to staticsPS.
 	if (!staticsPSNoDepth) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1832,10 +1826,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
-		scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
-		scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 		{
 			// The S4 path no longer depends on the 3D toggle: that toggle is
 			// the RISE only. The coat and its edge lumps live in the S4 draw,
@@ -2322,7 +2314,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
 	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
-	a_scb.ObjectTrenches = settings.ObjectTrenches ? 1.0f : 0.0f;
 	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
@@ -2330,7 +2321,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
 	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
-	a_scb.ProjSnowFillSk = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 	a_scb.PeelTol = kPeelTol;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
 	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
@@ -3298,14 +3288,13 @@ void SnowDeformation::DrawCapturedStatics()
 			}
 
 			// Depth export only where the carve can fire: SnowStaticsShell's
-			// carveObject is ObjectTrenches || LegacySkin, and LegacySkin is
-			// cap.road. Everything else writes back the rasterised depth, so
-			// dropping the export leaves the same number in the buffer and hands
-			// early-Z rejection back to the whole pass. The debug spike forces the
-			// no-depth path on every draw, roads included. The prepass twins
-			// mirror the same split so the private depth holds exactly what the
-			// shipping shaders would have written.
-			const bool needsDepth = !staticsEarlyZSpike && (settings.ObjectTrenches || cap.road);
+			// carveObject is LegacySkin, i.e. cap.road. Everything else writes
+			// back the rasterised depth, so dropping the export leaves the same
+			// number in the buffer and hands early-Z rejection back to the whole
+			// pass. The debug spike forces the no-depth path on every draw, roads
+			// included. The prepass twins mirror the same split so the private
+			// depth holds exactly what the shipping shaders would have written.
+			const bool needsDepth = !staticsEarlyZSpike && cap.road;
 			if (a_prepass && needsDepth)
 				continue;
 			ID3D11PixelShader* wantPS = a_prepass ? staticsPSPrepassNoDepth :

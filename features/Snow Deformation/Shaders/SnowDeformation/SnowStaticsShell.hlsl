@@ -212,9 +212,9 @@ cbuffer StaticCB : register(b1)
 	// Angle of repose (1.0 = 45 degrees); sets the edge taper width.
 	float MoundSteepness;
 
-	// >0.5: trenches are carved on this draw. Roads always carve; other
-	// objects are gated by the setting until the object trench work lands.
-	float ObjectTrenches;
+	// was ObjectTrenches (Trenches on Objects, retired); roads carve through
+	// LegacySkin. Slot kept for layout.
+	float padObjectTrenches;
 
 	// Drift meshes: coat every facing, no collapse, dissolve or range retire.
 	float FullCoat;
@@ -243,11 +243,9 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	// Snow Fill, 0..1 (mirror of SettingsGPU::ProjSnowFill, carried here
-	// because b6 is not bound to the skin VS/DS): the S4 shell grows only
-	// on the fill's angular slice. Took the retired OpaqueCoverage slot.
-	// Mirror in SnowDeformation.h.
-	float ProjSnowFillSk;
+	// was ProjSnowFillSk (Snow Fill, retired); slot kept for layout. Mirror
+	// in SnowDeformation.h.
+	float padProjFill;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
@@ -1189,16 +1187,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 	// The DEPTH channel bleeds exactly as the road bit did: a road's footprint
 	// MAX-blends its class depth across every column it overlaps, so a rock or
 	// cairn standing on a road inherits a carvable depth it was never granted
-	// (its own capture writes zero while Trenches on Objects is off). Ownership
-	// fixed the untrampled case; without it here too, walking on such a rock
-	// still cut a trench into it.
+	// (its own capture writes zero). Ownership fixed the untrampled case;
+	// without it here too, walking on such a rock still cut a trench into it.
 	//
 	// So while the heightfield owns roads, a road is the only thing allowed to
-	// carve, and a trampled column no road owns is raster bleed. Trenches on
-	// Objects re-opens the old path deliberately - it is the experimental
-	// toggle this whole plan is the rework of - and turning the heightfield OFF
-	// restores the pre-heightfield behaviour exactly, so the A/B stays honest.
-	bool mayTrample = (RoadField < 0.5) || ObjectTrenches > 0.5 || owns;
+	// carve, and a trampled column no road owns is raster bleed. Turning the
+	// heightfield OFF restores the pre-heightfield behaviour exactly.
+	bool mayTrample = (RoadField < 0.5) || owns;
 	bool trampled = roadField || (aliveDeform >= 0.005 && mayTrample);
 	v.RoadBit = roadField ? 1.0 : 0.0;
 
@@ -1228,7 +1223,7 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 
 		// Carve through the SHARED profile, so object trenches and landscape
 		// trenches are one shape: the depth remap, the rim teeth and the lip all
-		// arrive, and the floor rides Trench Floor Height exactly as the ground's
+		// arrive, and the floor rides the Trench Floor fraction exactly as the ground's
 		// does instead of a bespoke constant. This shader's own self-shadow march
 		// already assumed this shape - it calls CarveProfile - while the geometry
 		// was cutting a raw linear ramp, so shape and shadow disagreed.
@@ -1668,7 +1663,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	// layer and the coat does not participate in it. The PS owns placement
 	// entirely: vanilla's weight rebuilt per pixel (G-buffer normal,
 	// authored alpha, noise term always in full - the footprint IS the
-	// purple), sliced by Snow Fill's angular knob. ProjLinear rides
+	// purple). ProjLinear rides
 	// TEXCOORD8 carrying the AUTHORED VERTEX ALPHA - the PS needs the raw
 	// authored term, not a pre-mixed weight. Vertical-lift history and why
 	// it could never cover every angle: SKIN-PLACEMENT-PLAN rounds 4-10.
@@ -3475,7 +3470,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// values the gates do, so their edge is the shell's.
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
-	float edgeFill = 0.0;
 	float edgeThr = kCoatSolidW;
 	[branch] if (pdMode)
 	{
@@ -3497,15 +3491,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// position differ slightly) and the purple view tints right at
 		// weight zero, so the cut sits a hair below - purple may only ever
 		// peek through a genuine reconstruction hole.
-		float3 triW = Triplanar::GetWeights(normalWS, geoFacing);
+		// Plane weights from the smooth normal, not geoFacing: the derivative
+		// facing's hard step() mask flips planes on the quads straddling mesh
+		// creases, and the noise jump drew a line along every edge.
+		float3 triW = Triplanar::GetWeights(normalWS, normalWS);
 		float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, projWorldPos, triW, ProjNoiseTiling, projGradX, projGradY).x;
 		float wpix = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1 - ProjNoiseScale * noise;
-		// Snow Fill = the ANGULAR slice of that footprint (Josef's
-		// percentage spec): nz runs 1 (up) to -1 (straight down), and the
-		// slider sweeps the acceptance threshold across that whole range -
-		// most up-facing parts first, the midpoint covers the up-facing
-		// hemisphere, the top covers every angle.
-		float nzCut = 1.0 - 2.0 * ProjSnowFillSk;
 		// Soft borders, take 2 (Josef: a GRADUAL fade, not dither steps).
 		// The widened noisy band failed because the noise term owned the
 		// fade: wpix oscillates inside the band, so alpha broke into
@@ -3514,10 +3505,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// excluded), descending monotonically across the border, while
 		// the noisy cut stays narrow and only keeps the edge ragged.
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		// Snow Fill as the recolor applies it: a boost to solid, not a gate.
-		edgeFill = smoothstep(nzCut - 0.05, nzCut + 0.05, nzPix);
-		float wFill = wpix > 0.003 ? max(wpix, 0.2 * edgeFill) : wpix;
-		float wSmoothFill = wSmooth > 0.003 ? max(wSmooth, 0.2 * edgeFill) : wSmooth;
+		// As the recolor applies it: everything the game paints at all is
+		// solid, so the footprint floors above the coat threshold.
+		float wFill = wpix > 0.003 ? max(wpix, 0.2) : wpix;
+		float wSmoothFill = wSmooth > 0.003 ? max(wSmooth, 0.2) : wSmooth;
 		pdCoverage = smoothstep(edgeThr - 0.03, edgeThr, wFill) * smoothstep(edgeThr - 0.18, edgeThr + 0.08, wSmoothFill);
 		edgeW = wFill;
 		// S4 roll edge: the fillet's geometry reaches h=0 at the rim, and
@@ -3626,16 +3617,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// feet and props z-test into the trench. PATCH pixels have real carved
 	// geometry and a VS gradient normal; neither applies there.
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
-	// Object trenching is parked until it can be done properly; roads keep
-	// theirs, since theirs is the tuned case.
+	// Only roads carve; object trenching returns with the volume snow.
 #ifdef PATCH
 	// The patch only has texels where the VS already permitted carving, so the
-	// per-pixel gate would only re-ask a settled question. Constant here so
-	// StaticsCB.ObjectTrenches can carry the REAL setting for the VS, which
-	// needs it to tell a road-owned column from raster bleed.
+	// per-pixel gate would only re-ask a settled question.
 	bool carveObject = true;
 #else
-	bool carveObject = ObjectTrenches > 0.5 || LegacySkin > 0.5;
+	bool carveObject = LegacySkin > 0.5;
 #endif
 	float2 trenchGridLocal = input.GridLocal;
 	float3 viewDirWS = normalize(input.WorldPos);
@@ -4234,7 +4222,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// = vanilla wants a dusting; bright green = vanilla wants full
 			// snow we do not place.
 			// R since round 10 = the RECONSTRUCTED game blend at this pixel
-			// (smoothstep(0,1,5w), fill boost included) - hold it against
+			// (smoothstep(0,1,5w), solid floor included) - hold it against
 			// the Lighting recolor's own weight view (Debug Recolor Weight,
 			// object snow off) to find where the two disagree.
 			bool noProjData = ProjThreshold < -0.5;

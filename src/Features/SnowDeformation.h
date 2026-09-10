@@ -483,12 +483,8 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.0f;
-		/** @brief "Snow Fill", 0-100%: how much of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 100 = every projected pixel solid (SKIN-PLACEMENT-PLAN round 13 - its own setting, decoupled from any depth). */
-		float ProjSnowFillPct = 100.0f;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
-		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
-		bool ObjectTrenches = false;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -499,8 +495,8 @@ public:
 		float TrampleZoneHeight = 50.0f;
 		/** @brief On = a whisker of stochastic snow dust scatters just beyond the committed edge onto the ground; off = a clean binary cut. */
 		bool SnowBorderDithering = true;
-		/** @brief Minimum snow left on carved trench floors, in units above the terrain. Values near 0 let trampling wear through to the ground, which needs shell shadow casting and two-sided height blending to read correctly; until then a low floor exposes a bright, unblended pit. */
-		float TrenchFloorHeight = 3.0f;
+		/** @brief Snow left under a fully trampled trench as a FRACTION of the local uncarved depth (0.33 = a third: 10 units in 30). Replaced the absolute-units floor 2026-09-10: deep snow keeps snow around the foot instead of a canyon to the ground, and a road's 10-unit layer can never wear through to the mesh. */
+		float TrenchFloorFraction = 0.33f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
 		float SnowBorderNoise = 16.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -571,7 +567,7 @@ public:
 		float LODSnowSensitivity = 0.5f;
 		/** @brief Horizon snow: recolor the game's LOD terrain with the shell's snow material wherever its bake classifies as snow. */
 		bool HorizonSnow = true;
-		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. "Snow Fill" (ProjSnowFillPct -> SettingsGPU::ProjSnowFill) pushes the footprint to full shell-snow weight, most up-facing pixels first; max = every projected pixel solid. The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
+		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. All or nothing: every pixel the game paints at all takes full shell-snow weight (Snow Fill retired 2026-09-10).The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
@@ -648,8 +644,8 @@ public:
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
 		float LODObjectEnable;
-		/** @brief Snow Fill, 0..1: fraction of the projected-snow footprint the Lighting recolor pushes to full shell-snow weight, most up-facing pixels first; 1 = every angle solid. Mirror in SharedData.hlsli. */
-		float ProjSnowFill;
+		/** @brief was ProjSnowFill (Snow Fill, retired 2026-09-10: the recolor is all or nothing); slot kept for layout. Mirror in SharedData.hlsli. */
+		float padProjFill;
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
@@ -1094,7 +1090,7 @@ public:
 		float4 CrustLook;
 		/** @brief x = blue of the crust colour cast. Mirror any change in SnowShell.hlsl. */
 		float4 CrustLook2;
-		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = minimum snow on carved trench floors in units above terrain; zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
+		/** @brief x > 0.5 = outward dust beyond the committed edge (0 = clean binary cut); y = trench floor as a fraction of the local uncarved depth (TrenchFloorFraction); zw = atlas slices of sun cascades 0/1 (the shared atlas moves the sun's slices with the active-light set, and the PS crisp path needs the real indices). Mirror any change in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 BorderStyle;
 		/** @brief x spare (was the compaction glint suppression, retired); y = shell-surface SSS re-march, PACKED: integer part 0 off / 1 on / 2 on + thickness streak fix, fraction * 1000 = caster height cap in units; zw = dynamic-resolution scale for its screen-space taps (the shell pass does not bind FrameBuffer b12). One constant serves both shells. Mirror in SnowShell.hlsl AND the SnowStaticsShell.hlsl ShellCB prefix. */
 		float4 CompactLook;
@@ -1740,8 +1736,8 @@ public:
 		float LegacySkin;
 		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
 		float MoundSteepness;
-		/** @brief >0.5: this draw may be trenched. Roads always may; other objects are gated by Settings::ObjectTrenches. */
-		float ObjectTrenches;
+		/** @brief was ObjectTrenches (Trenches on Objects, retired 2026-09-10; roads carve through LegacySkin); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float padObjectTrenches;
 		/** @brief Drift meshes (geometry name): the whole mesh is the snow, so the skin coats every facing and never collapses, dissolves or drops out of range. */
 		float FullCoat;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */
@@ -1756,8 +1752,8 @@ public:
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
-		/** @brief Snow Fill, 0..1 (ProjSnowFillPct / 100) - the S4 shell grows only on the fill's angular slice; carried in StaticsCB because b6 is not bound to the skin VS/DS. Took the retired OpaqueCoverage slot. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ProjSnowFillSk;
+		/** @brief was ProjSnowFillSk (Snow Fill, retired 2026-09-10); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float padProjFill;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
 		/** @brief 2 = the S4 shell owns this draw (SKIN-PLACEMENT-PLAN S4 phase 1): the rolling-ball fillet grown vertically over the fill-covered slice of the projected footprint, per-pixel coverage from the reconstructed vanilla weight. 0 = classic path (no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
@@ -2473,7 +2469,7 @@ public:
 
 	ID3D11VertexShader* staticsVS = nullptr;
 	ID3D11PixelShader* staticsPS = nullptr;
-	/** @brief Statics PS with the SV_Depth export compiled out, chosen per draw for captures that cannot carve. Only the parallax carve pushes depth, and it is gated on ObjectTrenches or the draw being a road. */
+	/** @brief Statics PS with the SV_Depth export compiled out, chosen per draw for captures that cannot carve. Only the parallax carve pushes depth, and only road draws carve. */
 	ID3D11PixelShader* staticsPSNoDepth = nullptr;
 	/** @brief Depth-prepass twin of the no-export shader (SNOW_STATICS_DEPTH_PREPASS): the alpha cut with no colour and no export. Non-carving skins draw once with it into a private copy of the scene depth, then once with the shipping shader under EQUAL against it, so hardware early-Z admits exactly the pixels the prepass wrote; carving draws keep their own export and LESS_EQUAL in the shading loop, since a shader-computed depth cannot be matched against a second compile of itself; the private depth is then written back. Bit-identical by construction: both passes run the same raster path. */
 	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
@@ -2727,8 +2723,6 @@ public:
 	bool debugTilingRuler = false;
 	/** @brief Tints classified projected-snow pixels magenta (DebugTerrainOverlay bit 4) so the SnowProjectedIsSnow bit is verifiable in-game without a capture. */
 	bool debugProjSnowView = false;
-	/** @brief Fill instrument (DebugTerrainOverlay bit 16): the slice Snow Fill covers renders cyan inside the projected-snow recolor, so raising the slider visibly converts the debug purple. Not serialized, like every debug view. */
-	bool debugProjFillView = false;
 	/** @brief DebugTerrainOverlay bit 32: the Lighting recolor paints its real blend weight as a grey ramp and projected draws it does not classify in red. Hold against the object snow debug view's Projected mask mode (R = the skin's reconstruction). */
 	bool debugProjWeightView = false;
 	/** @brief DebugTerrainOverlay bit 64: the recolor paints the SNOW TEXTURE IT JUST SAMPLED, raw and unshaded, instead of blending it. Answers the one question the magenta view cannot - whether HorizonSnowAlbedo is reaching the draw at all - since the magenta path bypasses the sample. Not serialized, like every debug view. */

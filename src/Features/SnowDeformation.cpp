@@ -95,14 +95,13 @@
 	X(SnowClassDepths) \
 	X(TextureDepths) \
 	X(ObjectRasterReachM) \
-	X(ProjSnowFillPct) \
 	X(SkinEdgeFlankWidth) \
 	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(TrampleZoneScale) \
 	X(TrampleZoneHeight) \
 	X(SnowBorderDithering) \
-	X(TrenchFloorHeight) \
+	X(TrenchFloorFraction) \
 	X(SnowBorderNoise) \
 	X(SnowBorderSmoothness) \
 	X(SnowBorderFade) \
@@ -135,7 +134,6 @@
 	X(SkinSlopeDepthBias) \
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
-	X(ObjectTrenches) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
@@ -599,7 +597,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjFillView ? 16u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u);
+	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u);
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
 	// (where the shell ends), so the recolor simply applies to all of it â€”
@@ -616,11 +614,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowHasNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.LODObjectEnable = (settings.EnableSnowDeformation && settings.LODObjectSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
-	// Snow Fill, 0..1 across the slider's span: how much of the projected
-	// footprint the recolor pushes to FULL shell-snow weight, most
-	// up-facing pixels first (SKIN-PLACEMENT-PLAN round 11 - the fill
-	// lives in Lighting's recolor, where the real weight is).
-	data.ProjSnowFill = std::clamp(settings.ProjSnowFillPct / 100.0f, 0.0f, 1.0f);
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.
