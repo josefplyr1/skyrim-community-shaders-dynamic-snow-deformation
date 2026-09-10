@@ -3357,16 +3357,19 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// A large-reference LOD batch is drawn by the game one segment per
 	// reference, and no distance rule says which (the large-reference bug
 	// keeps segments on inside the loaded grid). Its choice is read from the
-	// depth buffer: where it drew the segment the scene surface IS this hull
-	// (the same vertices; the skin sits kEdgeFlankLift in front, under a
-	// depth ULP past ~10 k units); where it did not, the hull stands off
-	// whatever is really there. The band covers the lift and the ULP growth
-	// with distance, and nothing else.
+	// depth buffer: where it drew the segment the scene depth IS this hull's
+	// (same vertices, same raster - bit-identical in the capture); where it
+	// did not, the hull stands off whatever is really there. Compared in
+	// depth-buffer units: a linearised read is off by the viewport range's
+	// 2e-6, a third of a percent of the distance at 20 k units. The band is
+	// 1 unit + 0.05% of the distance, converted with dd/dz = fn/((f-n) z^2),
+	// floored at ~100 ULPs for the skin's own bias.
 	[branch] if (LODBatch > 0.5)
 	{
-		float lodViewZ = input.CurrentClip.w;
-		float lodSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-		if (abs(lodSceneZ - lodViewZ) > 1.0 + 0.0005 * lodViewZ)
+		float lodZ = input.CurrentClip.w;
+		float lodBand = (1.0 + 0.0005 * lodZ) * SharedData::CameraData.w / (SharedData::CameraData.z * lodZ * lodZ);
+		float lodSceneD = SceneDepth.Load(int3(input.Position.xy, 0));
+		if (abs(lodSceneD - input.Position.z) > max(lodBand, 6e-6))
 			discard;
 	}
 
