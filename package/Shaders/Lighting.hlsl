@@ -3224,6 +3224,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[flatten] if (snowProjMatch)
 		psout.Masks.y = 2.0 + saturate(projectedMaterialWeight);
 #			endif
+#			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
+	// The LOD brightness recolor's weight, same encoding, for the same coat.
+	[flatten] if (snowLodReplaceW > 0.003)
+		psout.Masks.y = 2.0 + saturate(snowLodReplaceW);
+#			endif
 #		endif
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion

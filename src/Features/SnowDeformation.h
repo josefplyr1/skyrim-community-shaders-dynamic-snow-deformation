@@ -1602,7 +1602,7 @@ public:
 		bool projReal;
 		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
 		bool fullCoat;
-		/** @brief DynDOLOD large-reference LOD batch: the game draws it one segment per reference, and which segments it draws is not a function of distance (the large-reference bug keeps segments on inside the loaded grid). Kept out of the height raster; the skin keeps a pixel only where its hull coincides with the scene depth, which is where the game drew that segment. */
+		/** @brief Object LOD batch (kLODObjects / kHDLODObjects): the game draws a DynDOLOD BTO one segment per reference or cell, and which segments it draws is not a function of distance (the large-reference bug keeps segments on inside the loaded grid). Kept out of the height raster; the skin keeps a pixel only where its hull coincides with the scene depth, and coats only off the recolor's written weight (Lighting writes 2 + w for the LOD brightness recolor as for projected snow). */
 		bool lodBatch;
 		/** @brief The game rasterised this draw in its decal depth-bias mode (RendererShadowState::rasterStateDepthBiasMode != 0, or the Decal/DynamicDecal property flags): depth written through DepthBias -1, SlopeScaledDepthBias -0.65, viewport max depth 0.999972. Its skin draws through the same state plus the skin bias, or it loses the depth test at every grazing view (Windhelm's snow-overlay shapes, RenderDoc 2026-09-10). */
 		bool decalDepth;

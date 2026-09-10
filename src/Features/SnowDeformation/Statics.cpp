@@ -123,7 +123,6 @@ struct GeometryNameFacts
 {
 	uint32_t length = 0;
 	uint64_t head = 0;
-	bool largeRef = false;
 	bool bridge = false;
 	bool road = false;
 	bool mountainCliff = false;
@@ -154,7 +153,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f = {};
 		f.length = length;
 		f.head = head;
-		f.largeRef = ContainsNoCase(name, "largeref");
 		f.bridge = ContainsNoCase(name, "bridge");
 		f.road = f.bridge || ContainsNoCase(name, "road");
 		f.mountainCliff = ContainsNoCase(name, "mountain") || ContainsNoCase(name, "cliff");
@@ -165,20 +163,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 	}
 	return f;
-}
-
-static void SampleMaterialReject(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
-{
-	static std::unordered_set<std::string> seen;
-	if (seen.size() >= 12)
-		return;
-	auto* textureSet = a_material ? a_material->textureSet.get() : nullptr;
-	const char* path = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
-	if (!seen.insert(path ? path : "<no diffuse>").second)
-		return;
-	logger::info("[SNOW DEFORMATION] LOD dropped by material gate: '{}' ({})",
-		path ? path : "<no diffuse>",
-		a_geometry->name.empty() ? "<unnamed>" : a_geometry->name.c_str());
 }
 
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
@@ -627,17 +611,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
-	// DynDOLOD's large-reference LOD ("<shape>-LargeRef"): a segmented batch
-	// the game draws per reference, each segment off once that reference's
-	// real model is loaded. There is no draw hook to read those ranges, and a
-	// capture draws the whole buffer - every loaded large reference then wears
-	// a coarse hull of its own LOD, doorways sheeted over, wall tops slabbed
-	// (Josef's ghost shell, RenderDoc 2026-09-10: objSnowHD-LargeRef, the
-	// game's 900 indices of our 6372).
-	// Flagged rather than rejected: outside that grid the batch IS the
-	// object, and the skin PS discards the cells inside it.
+	// Object LOD batches: the game draws a DynDOLOD BTO one segment per
+	// reference or cell, segments off where the real model is loaded, and a
+	// capture draws the whole buffer (Josef's ghost shell, RenderDoc
+	// 2026-09-10: objSnowHD-LargeRef, the game's 900 indices of our 6372).
+	// Flagged, not rejected: the skin PS keeps a pixel only where the hull
+	// is the scene surface.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
-	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
+	const bool lodBatch = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 	// Read after SetupGeometry: the raster depth-bias mode this draw uses.
 	// Decal mode writes depth with a slope bias (-0.65/px) and a shorter
 	// viewport range, so at grazing views the mesh's own depth sits far
@@ -680,7 +661,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			// world map the panning camera strobed the whole field on and
 			// off across sheet boundaries.
 			const bool iceSheet = rec.pathNatural;
-			if (!referenced && !iceSheet && !largeRefLOD) {
+			if (!referenced && !iceSheet && !lodBatch) {
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -724,13 +705,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// vanilla projected-snow setup, while their LOD counterparts capture
 		// normally. LOD-only acceptance was the whole
 		// bare-glacier bug). The MATO veto stands.
-		if (!(rec.pathBase || naturalFeature)) {
+		// Plain object LOD passes whole: Lighting recolors every such batch by
+		// texel brightness (SetProjectedSnowBit) and writes the weight back,
+		// and the coat reads that weight and nothing else (the atlas holds
+		// ships and walls beside the mountains).
+		if (!(rec.pathBase || naturalFeature || isObjectLOD)) {
 			if (matoVetoed)
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: family matched but MATO vetoed (kNotSnow)");
 			else
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no family signal at material gate (name/texture both missed)");
-			if (isObjectLOD)
-				SampleMaterialReject(a_pass->geometry, material);
 			return;
 		}
 	}
@@ -861,7 +844,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, largeRefLOD, decalDepth });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -2354,7 +2337,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:
 	// the mesh-replacer default reconstructs a weight the game never paints.
-	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.projReal && a_cap.geometry &&
+	// LOD batches read the brightness recolor's written weight instead.
+	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch) && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent

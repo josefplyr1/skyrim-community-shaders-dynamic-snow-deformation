@@ -3984,7 +3984,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 			}
 			bool realKnown = realEnc >= 1.5;
-			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (edgeW >= edgeThr);
+			// LOD hulls coat off the written weight alone: the reconstruction
+			// would paint the atlas whole, ships and walls with the mountains.
+			bool painted = realKnown ? (saturate(realEnc - 2.0) >= kCoatSolidReal) : (LODBatch < 0.5 && edgeW >= edgeThr);
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
