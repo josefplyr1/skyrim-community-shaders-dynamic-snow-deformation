@@ -343,12 +343,12 @@ void SnowDeformation::ReadShellStatsQueries(ID3D11DeviceContext* a_context)
 		shellStatsIssued[ring] = false;
 }
 
-ID3D11RasterizerState* SnowDeformation::GetSkinRasterState()
+ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
 {
 	const float bias = settings.SkinDepthBias;
 	const float slope = settings.SkinSlopeDepthBias;
-	if (skinRasterState && bias == skinRasterBiasBuilt && slope == skinRasterSlopeBuilt)
-		return skinRasterState.get();
+	if (skinRasterState && skinDecalRasterState && bias == skinRasterBiasBuilt && slope == skinRasterSlopeBuilt)
+		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 
 	// Sliders read "toward the camera"; D3D's bias is added to depth and the
 	// shells test LESS_EQUAL, so nearer is negative. The clamp bounds the
@@ -364,13 +364,27 @@ ID3D11RasterizerState* SnowDeformation::GetSkinRasterState()
 	winrt::com_ptr<ID3D11RasterizerState> state;
 	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put()))) {
 		logger::error("SnowDeformation: skin raster state creation failed (bias {} slope {})", bias, slope);
-		return skinRasterState.get();
+		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 	}
 	Util::SetResourceName(state.get(), "SnowDeformation::SkinRasterState");
+	// Decal-mode draws: the game's own decal bias (measured: -1, -0.65,
+	// clamp -100) on top of the skin's, unclamped like the game's, or the
+	// slope term never reaches the mesh's written depth at a grazing view.
+	D3D11_RASTERIZER_DESC decalDesc = rasterDesc;
+	decalDesc.DepthBias -= 1;
+	decalDesc.SlopeScaledDepthBias -= 0.65f;
+	decalDesc.DepthBiasClamp = -100.0f;
+	winrt::com_ptr<ID3D11RasterizerState> decalState;
+	if (FAILED(globals::d3d::device->CreateRasterizerState(&decalDesc, decalState.put()))) {
+		logger::error("SnowDeformation: skin decal raster state creation failed (bias {} slope {})", bias, slope);
+		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
+	}
+	Util::SetResourceName(decalState.get(), "SnowDeformation::SkinDecalRasterState");
 	skinRasterState = state;
+	skinDecalRasterState = decalState;
 	skinRasterBiasBuilt = bias;
 	skinRasterSlopeBuilt = slope;
-	return skinRasterState.get();
+	return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 }
 
 bool SnowDeformation::EnsureShellGridIndexBuffers()

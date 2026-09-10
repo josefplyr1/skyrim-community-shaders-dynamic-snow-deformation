@@ -133,6 +133,7 @@ struct GeometryNameFacts
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
+	bool decalLogged = false;
 };
 
 static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
@@ -637,6 +638,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// object, and the skin PS discards the cells inside it.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
 	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
+	// Read after SetupGeometry: the raster depth-bias mode this draw uses.
+	// Decal mode writes depth with a slope bias (-0.65/px) and a shorter
+	// viewport range, so at grazing views the mesh's own depth sits far
+	// nearer than the geometry; the skin has to draw through the same state
+	// (Windhelm paving, RenderDoc 2026-09-10).
+	const uint32_t depthBiasMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode;
+	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
@@ -833,6 +841,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// hovering translucent film. Name match like the road class; a false
 	// positive forces rounded on something already rounded, a no-op.
 	const bool forceRounded = nameFacts.mountainCliff;
+	if (decalDepth && !nameFacts.decalLogged) {
+		nameFacts.decalLogged = true;
+		logger::info("[SNOW DEFORMATION] decal depth mode {} (decal flags {}): '{}'", depthBiasMode, flags.any(Flag::kDecal, Flag::kDynamicDecal) ? 1 : 0, a_pass->geometry->name.c_str());
+	}
 	if (forceRounded && !nameFacts.roundedLogged) {
 		nameFacts.roundedLogged = true;
 		logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", a_pass->geometry->name.c_str());
@@ -846,7 +858,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, largeRefLOD });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, largeRefLOD, decalDepth });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -2304,15 +2316,15 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 }
 
-// (uLargeRefLODGridSize - 1) / 2: the cells around the camera's cell in which
-// a large reference shows its real model instead of its LOD segment.
-static int LargeRefHalfCells()
+// (uGridsToLoad - 1) / 2: the cells around the camera's cell in which every
+// reference's real model is loaded, so no LOD segment is drawn there.
+static int LoadedHalfCells()
 {
 	static const int half = [] {
 		if (auto* ini = RE::INISettingCollection::GetSingleton())
-			if (auto* setting = ini->GetSetting("uLargeRefLODGridSize:General"))
+			if (auto* setting = ini->GetSetting("uGridsToLoad:General"))
 				return std::max(((int)setting->GetInteger() - 1) / 2, 0);
-		return 5;
+		return 2;
 	}();
 	return half;
 }
@@ -2359,7 +2371,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
-	a_scb.LargeRefHalfCells = float(LargeRefHalfCells());
+	a_scb.LoadedHalfCells = float(LoadedHalfCells());
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()
@@ -2985,6 +2997,14 @@ void SnowDeformation::DrawCapturedStatics()
 		fillVps[i].MinDepth = 0.0f;
 		fillVps[i].MaxDepth = 1.0f;
 	}
+	// The game's decal depth range (0.9999720 against the main pass's
+	// 0.9999980, RenderDoc 2026-09-10): skins of decal-mode draws rasterise
+	// through it so their depth lands where the mesh's own did.
+	D3D11_VIEWPORT decalVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
+	for (UINT i = 0; i < vpCount; i++) {
+		decalVps[i] = vps[i];
+		decalVps[i].MaxDepth = kDecalViewportMaxDepth;
+	}
 
 	// One filtered list of skin draws, walked by the cull and by both loops.
 	struct SkinDraw
@@ -3004,6 +3024,7 @@ void SnowDeformation::DrawCapturedStatics()
 		uint32_t clusterCount;
 		uint32_t indexPoolOffset;
 		uint32_t scratchBase;
+		bool decalDepth;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
@@ -3109,7 +3130,7 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? cacheIt->second.boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase });
+			cOffset, cCount, cPool, cBase, cap.decalDepth });
 	}
 
 	// Whole-skin occlusion cull: bounding spheres against a max-depth
@@ -3266,8 +3287,15 @@ void SnowDeformation::DrawCapturedStatics()
 	auto drawSkins = [&](bool a_prepass) {
 		boundStaticsPS = nullptr;
 		uint32_t drawIndex = 0;
+		bool boundDecal = false;
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
+			if (d.decalDepth != boundDecal) {
+				boundDecal = d.decalDepth;
+				context->RSSetState(GetSkinRasterState(boundDecal));
+				if (vpCount)
+					context->RSSetViewports(vpCount, boundDecal ? decalVps : vps);
+			}
 			[[maybe_unused]] auto* geometry = d.geometry;
 			context->IASetInputLayout(d.layout);
 			UINT stride = d.stride;
@@ -3326,6 +3354,11 @@ void SnowDeformation::DrawCapturedStatics()
 				context->DrawIndexedInstancedIndirect(skinCullArgs->resource.get(), d.slot * kSkinCullArgStride);
 			else
 				context->DrawIndexed(d.indexCount, 0, 0);
+		}
+		if (boundDecal) {
+			context->RSSetState(GetSkinRasterState());
+			if (vpCount)
+				context->RSSetViewports(vpCount, vps);
 		}
 	};
 

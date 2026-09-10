@@ -1332,11 +1332,14 @@ public:
 	/** @brief Draws the live arcs. Called AFTER the deferred composite - an emissive overlay lit by nothing, which is what a bolt is. */
 	void DrawLightningArcs();
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
-	/** @brief Skin draws' raster state: the shell's plus SkinDepthBias / SkinSlopeDepthBias, rebuilt when either slider moves. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11RasterizerState* GetSkinRasterState();
+	/** @brief Skin draws' raster state: the shell's plus SkinDepthBias / SkinSlopeDepthBias, rebuilt when either slider moves. The decal variant adds the game's decal depth bias (-1, slope -0.65, clamp -100) for skins of decal-mode draws (CapturedSnowStatic::decalDepth). Implemented in SnowDeformation/Shell.cpp. */
+	ID3D11RasterizerState* GetSkinRasterState(bool a_decal = false);
 	winrt::com_ptr<ID3D11RasterizerState> skinRasterState;
+	winrt::com_ptr<ID3D11RasterizerState> skinDecalRasterState;
 	float skinRasterBiasBuilt = 0.0f;
 	float skinRasterSlopeBuilt = 0.0f;
+	/** @brief Viewport max depth of the game's decal depth-bias mode, measured (RenderDoc 2026-09-10, Windhelm: 0.99997199 against the main pass's 0.99999797). */
+	static constexpr float kDecalViewportMaxDepth = 0.99997199f;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
 
 	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
@@ -1599,8 +1602,10 @@ public:
 		bool projReal;
 		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
 		bool fullCoat;
-		/** @brief DynDOLOD large-reference LOD batch: the game draws only the segments of references whose real model is not loaded. Kept out of the height raster; the skin discards inside the large-ref grid. */
+		/** @brief DynDOLOD large-reference LOD batch: the game draws only the segments of references whose real model is not loaded. Kept out of the height raster; the skin discards inside the loaded grid and wherever its hull stands off the scene depth (the segment the game did not draw). */
 		bool lodBatch;
+		/** @brief The game rasterised this draw in its decal depth-bias mode (RendererShadowState::rasterStateDepthBiasMode != 0, or the Decal/DynamicDecal property flags): depth written through DepthBias -1, SlopeScaledDepthBias -0.65, viewport max depth 0.999972. Its skin draws through the same state plus the skin bias, or it loses the depth test at every grazing view (Windhelm's snow-overlay shapes, RenderDoc 2026-09-10). */
+		bool decalDepth;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1782,8 +1787,8 @@ public:
 		float FineHalfExtent;
 		/** @brief CapturedSnowStatic::lodBatch as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float LODBatch;
-		/** @brief (uLargeRefLODGridSize - 1) / 2: cells from the camera's cell within which a large reference shows its real model. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float LargeRefHalfCells;
+		/** @brief (uGridsToLoad - 1) / 2: cells from the camera's cell within which every reference's real model is loaded and no LOD segment draws. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float LoadedHalfCells;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

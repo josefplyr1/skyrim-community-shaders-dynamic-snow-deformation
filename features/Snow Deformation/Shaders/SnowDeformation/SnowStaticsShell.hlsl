@@ -295,7 +295,7 @@ cbuffer StaticCB : register(b1)
 	// grid around the camera's cell inside which large references show their
 	// real model. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
 	float LODBatch;
-	float LargeRefHalfCells;
+	float LoadedHalfCells;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -3355,14 +3355,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// simply absent in-game).
 	bool pdMode = ProjPixelEnable > 1.5;
 	// A large-reference LOD batch is drawn by the game one segment per
-	// reference, and every segment inside the large-ref grid is off because
-	// that reference's real model is loaded - so here the LOD is a hull the
-	// game does not draw. Outside the grid the LOD is the object.
+	// reference, off once that reference's real model is loaded. Inside the
+	// loaded grid every model is loaded, so no segment draws. Beyond it the
+	// game's choice is read from the depth buffer: where it drew the segment
+	// the scene surface IS this hull (the skin sits kEdgeFlankLift in front
+	// of it); where it did not, the hull stands off whatever is really there.
 	[branch] if (LODBatch > 0.5)
 	{
 		float2 lodXY = input.WorldPos.xy + ShellCameraPosAdjust.xy;
 		int2 cellD = int2(floor(lodXY / 4096.0)) - int2(floor(ShellCameraPosAdjust.xy / 4096.0));
-		if (max(abs(cellD.x), abs(cellD.y)) <= int(LargeRefHalfCells))
+		if (max(abs(cellD.x), abs(cellD.y)) <= int(LoadedHalfCells))
+			discard;
+		float lodViewZ = mul(CameraView, float4(input.WorldPos, 1.0)).z;
+		float lodSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		if (abs(lodSceneZ - lodViewZ) > 2.0 + 0.004 * lodViewZ)
 			discard;
 	}
 
