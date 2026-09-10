@@ -633,12 +633,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// a coarse hull of its own LOD, doorways sheeted over, wall tops slabbed
 	// (Josef's ghost shell, RenderDoc 2026-09-10: objSnowHD-LargeRef, the
 	// game's 900 indices of our 6372).
+	// Flagged rather than rejected: outside that grid the batch IS the
+	// object, and the skin PS discards the cells inside it.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
-	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef) {
-		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: large-reference LOD (segments of loaded references would draw)");
-		SampleLODDecision(a_pass->geometry, a_pass->geometry->worldBound.radius, true, false);
-		return;
-	}
+	const bool largeRefLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects) && nameFacts.largeRef;
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
 	//
@@ -674,7 +672,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			// world map the panning camera strobed the whole field on and
 			// off across sheet boundaries.
 			const bool iceSheet = rec.pathNatural;
-			if (!referenced && !iceSheet) {
+			if (!referenced && !iceSheet && !largeRefLOD) {
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: containment (big, camera inside, no owning reference found)");
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -841,7 +839,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, largeRefLOD });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1789,6 +1787,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
+		if (cap.lodBatch)
+			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
 			continue;
@@ -1867,6 +1867,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
 			continue;
+		if (cap.lodBatch)
+			continue;
 		auto triShape = geometry->AsTriShape();
 		if (!triShape)
 			continue;
@@ -1929,6 +1931,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
+				continue;
+			if (cap.lodBatch)
 				continue;
 			// Everything outside the narrow window would rasterize to nothing;
 			// most of the capture list is, so the reject is most of the saving.
@@ -1997,6 +2001,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
 			if (!geometry)
+				continue;
+			if (cap.lodBatch)
 				continue;
 			auto triShape = geometry->AsTriShape();
 			if (!triShape)
@@ -2291,6 +2297,19 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 }
 
+// (uLargeRefLODGridSize - 1) / 2: the cells around the camera's cell in which
+// a large reference shows its real model instead of its LOD segment.
+static int LargeRefHalfCells()
+{
+	static const int half = [] {
+		if (auto* ini = RE::INISettingCollection::GetSingleton())
+			if (auto* setting = ini->GetSetting("uLargeRefLODGridSize:General"))
+				return std::max(((int)setting->GetInteger() - 1) / 2, 0);
+		return 5;
+	}();
+	return half;
+}
+
 void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, bool a_hasSkinNormalCopy, StaticsCB& a_scb) const
 {
 	const auto& rot = a_cap.world.rotate;
@@ -2332,6 +2351,8 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
+	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
+	a_scb.LargeRefHalfCells = float(LargeRefHalfCells());
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()

@@ -73,8 +73,8 @@ cbuffer StaticCB : register(b1)
 	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
 	float FineHalfExtent;  // layout sync with SnowStaticsShell; unused here
-	float padSheet;
-	float PadStatics2;
+	float LODBatch;  // layout sync with SnowStaticsShell; unused here
+	float LargeRefHalfCells;  // layout sync with SnowStaticsShell; unused here
 }
 
 struct VS_INPUT

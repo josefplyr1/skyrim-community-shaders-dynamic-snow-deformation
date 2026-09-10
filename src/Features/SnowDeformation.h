@@ -1599,6 +1599,8 @@ public:
 		bool projReal;
 		/** @brief Drift family by geometry name: coated at every angle and every loaded distance (StaticsCB::FullCoat); implies the range-cap and dissolve exemption. */
 		bool fullCoat;
+		/** @brief DynDOLOD large-reference LOD batch: the game draws only the segments of references whose real model is not loaded. Kept out of the height raster; the skin discards inside the large-ref grid. */
+		bool lodBatch;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1778,8 +1780,10 @@ public:
 		float EdgeCoat;
 		/** @brief Near clipmap: half-extent of the fine object window in world units, 0 when the level is off. Its centre is the coarse window's (the fine texel divides the coarse one, so one snap serves both). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float FineHalfExtent;
-		float padSheet;
-		float PadStatics2;
+		/** @brief CapturedSnowStatic::lodBatch as 0/1. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float LODBatch;
+		/** @brief (uLargeRefLODGridSize - 1) / 2: cells from the camera's cell within which a large reference shows its real model. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float LargeRefHalfCells;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 

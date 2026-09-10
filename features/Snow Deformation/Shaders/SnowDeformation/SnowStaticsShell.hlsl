@@ -291,8 +291,11 @@ cbuffer StaticCB : register(b1)
 	// Near clipmap: half-extent of the fine object window, 0 = off. Shares
 	// the coarse window's centre.
 	float FineHalfExtent;
-	float padSheet;
-	float PadStatics2;
+	// Large-reference LOD batch (0/1), and the half-width in cells of the
+	// grid around the camera's cell inside which large references show their
+	// real model. Mirror in SnowHeightCapture.hlsl / SnowDeformation.h.
+	float LODBatch;
+	float LargeRefHalfCells;
 }
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -456,12 +459,13 @@ static const float kEdgeReachUnits = 32.0;
 // The largest shortfall below the solid contour the lumps may hang from
 // (the game's own fade is 0.2 wide).
 static const float kEdgeMaxDrop = 0.12;
-// The coat's slope gate on the SMOOTH normal (~81 degrees): steep enough to
-// follow the paint down a rock's flank, still above any wall.
-static const float kCoatMinNz = 0.15;
-// The game's blend at which the read-back paint counts as solid (= the
-// kCoatSolidW point of the reconstruction).
-static const float kCoatSolidReal = 0.84;
+// The coat's facing gate: off. The read-back already proves the game painted
+// the pixel, and the recolor whitened it, wherever it faces.
+static const float kCoatMinNz = -1.0;
+// The game's projected weight at which the coat counts a pixel painted: the
+// recolor's half blend, so the coat's edge sits where the recolor reads as
+// snow rather than at its last trace.
+static const float kCoatSolidReal = 0.5;
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -3350,6 +3354,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// runtime compiler fails without a build error; the trench patch was
 	// simply absent in-game).
 	bool pdMode = ProjPixelEnable > 1.5;
+	// A large-reference LOD batch is drawn by the game one segment per
+	// reference, and every segment inside the large-ref grid is off because
+	// that reference's real model is loaded - so here the LOD is a hull the
+	// game does not draw. Outside the grid the LOD is the object.
+	[branch] if (LODBatch > 0.5)
+	{
+		float2 lodXY = input.WorldPos.xy + ShellCameraPosAdjust.xy;
+		int2 cellD = int2(floor(lodXY / 4096.0)) - int2(floor(ShellCameraPosAdjust.xy / 4096.0));
+		if (max(abs(cellD.x), abs(cellD.y)) <= int(LargeRefHalfCells))
+			discard;
+	}
 
 	// Rim wall: where a lifted cap reaches back down to the object's edge it is
 	// near-vertical at any depth, so the steepness gates below would erase it
