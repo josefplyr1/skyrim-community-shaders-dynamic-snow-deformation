@@ -94,7 +94,6 @@
 	X(AtronachShockDeathRadius) \
 	X(SnowClassDepths) \
 	X(TextureDepths) \
-	X(ObjectsSnowDepth) \
 	X(ObjectRasterReachM) \
 	X(ProjSnowFillPct) \
 	X(PlaneSplitStep) \
@@ -143,7 +142,6 @@
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(ObjectTrenches) \
-	X(ObjectSnow3D) \
 	X(RoadHeightfield) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \

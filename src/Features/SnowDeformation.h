@@ -481,8 +481,6 @@ public:
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
-		/** @brief Statics skin, flat class: layer height on flat split-normal meshes (walkways, roofs, planks); classified per mesh on the GPU by smoothed-vs-raw normal divergence. These get completely flat snow (straight-up offset, raw shading normal). Default 0: painted directly onto the surface; even 1 unit reads as a tiny hover. */
-		float ObjectsSnowDepth = 0.0f;
 		/** @brief S4 plane SPLIT knob (world units): a ledge whose slope discontinuity exceeds this - in either direction - becomes its own snow plane with its own rims and roll (stair treads separate). Lower = stricter splitting. Feeds HeightProcessCB::RimStep. */
 		float PlaneSplitStep = 6.0f;
 		/** @brief "Ignore Cover Above" (world units, Josef's crank): a surface more than this far ABOVE a plane is a separate world - it neither splits the plane (no taper ring under rails/walls) nor demotes its vertices to a peeled layer; the dome keeps full uniform height and clips through. Rises within [PlaneSplitStep, this] still separate (stair treads). Feeds HeightProcessCB::OverheadIgnore and StaticsCB::OverheadIgnore. */
@@ -499,8 +497,6 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief Carve trenches into snow on non-road objects. Parked off until object trenching is reworked; roads carve regardless. */
 		bool ObjectTrenches = false;
-		/** @brief Master toggle for the raised 3D object snow layer = the S4 shell (the rolling-ball fillet over the fill's cyan slice, PD-carrying draws only). The old object shell is RETIRED (2026-08-29): draws without projection data get no skin at all - the Lighting recolor still covers the technique-classified ones flat, and roads keep their own machinery regardless. Off skips only the skin draws - capture, height rasters and the road/trench patch keep running. */
-		bool ObjectSnow3D = true;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -1653,7 +1649,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
 
-	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Taken only while ObjectSnow3D is on with a nonzero depth; bound at skin PS t23. */
+	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
 
@@ -1806,8 +1802,7 @@ public:
 		float EdgeCoat;
 		/** @brief Near clipmap: half-extent of the fine object window in world units, 0 when the level is off. Its centre is the coarse window's (the fine texel divides the coarse one, so one snap serves both). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float FineHalfExtent;
-		/** @brief Settings::ObjectSnow3D as 0/1, and it is the SHEET: the skin's own facing-gated coverage, everything the coat did not claim from the game's paint. Zero leaves only what the coat claims - the drape. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float ShellCoverage;
+		float padSheet;
 		float PadStatics2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);

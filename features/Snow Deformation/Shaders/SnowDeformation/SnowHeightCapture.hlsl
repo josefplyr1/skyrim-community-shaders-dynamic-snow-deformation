@@ -73,7 +73,7 @@ cbuffer StaticCB : register(b1)
 	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
 	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
 	float FineHalfExtent;  // layout sync with SnowStaticsShell; unused here
-	float ShellCoverage;  // layout sync with SnowStaticsShell; unused here
+	float padSheet;
 	float PadStatics2;
 }
 

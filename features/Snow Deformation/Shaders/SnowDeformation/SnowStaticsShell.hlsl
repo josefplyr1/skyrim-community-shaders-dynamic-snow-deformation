@@ -302,9 +302,7 @@ cbuffer StaticCB : register(b1)
 	// Near clipmap: half-extent of the fine object window, 0 = off. Shares
 	// the coarse window's centre.
 	float FineHalfExtent;
-	// >0.5: the skin keeps its own coverage (the sheet). 0: only the coat's
-	// claim on the game's projected paint survives (the drape).
-	float ShellCoverage;
+	float padSheet;
 	float PadStatics2;
 }
 
@@ -4322,15 +4320,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Josef's shack roofs, bright with vanilla's snow rim light from one
 	// angle, correct straight down or close (2026-09-04).
 	float coatPush = 0.0;
-	// "3D Snow on Objects" is the SHEET - the skin's own facing-gated
-	// blanket, opaque and hole-free, that owns every pixel the coat did not
-	// claim. Off, it goes and the coat's claim on the game's own projected
-	// paint is all that is left: the torn pieces that fit the paint exactly,
-	// which is the drape. Zeroing here rather than at the draw is what keeps
-	// them separable - every pixel then reads as !inside below, so the coat
-	// block is the only thing that can raise coverage again, and Recolor
-	// Projected Snow still owns whether it does.
-	coverageAlpha *= ShellCoverage;
+	// S4 draws have no sheet of their own: every pdMode pixel reads as
+	// !inside below and only the coat block, off the game's real paint, can
+	// raise it again (the drape). Classic draws keep their own coverage.
+	[flatten] if (pdMode)
+		coverageAlpha = 0.0;
 	// Drifts carry no projected diffuse: nothing for the coat to read back,
 	// so with the sheet off nothing can raise coverage again. Whole mesh, any
 	// facing - the pixel-side twin of the lift's FullCoat gate.

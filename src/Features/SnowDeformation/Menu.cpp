@@ -70,7 +70,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("object_snow_shadows"), "Object Snow Casts Shadows"), &settings.ObjectSnowShadows);
 			if (auto _ttOss = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_snow_shadows_tooltip"), "Raised object snow throws its own shadow onto the object and the ground. Turn it off to check whether a dark patch on a rock comes from the snow above it: if the patch vanishes, it was the snow's shadow, thrown from the raised layer's full footprint even where the surface itself is not drawn."));
+				ImGui::Text("%s", T(TKEY("object_snow_shadows_tooltip"), "Object snow skins cast into the shadow maps. Turn it off to check whether a dark patch on a rock comes from the skin above it: if the patch vanishes, it was the skin's shadow."));
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow's own bumps, drifts, berms and the objects under it shade the snow behind them through a short march along the sun over the snow height field, on both the ground shell and object snow. Turn it off to check whether dark patches on open snow at a low sun come from this march rather than from the game's shadows."));
@@ -204,29 +204,17 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Snow Depth by Model Class"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttModels = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Snow layer height per OBJECT model class. Roads are matched by their road/bridge names and textures; flat vs round is classified automatically per mesh."));
+			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh."));
 
-		// The two kinds of object snow cover, each independently toggleable
-		// (Josef's round-9 ask, for the coming rework): the in-shader
-		// recolor of the game's own projected snow, and our raised 3D layer.
+		// Object snow is the recolor of the game's own projected snow and the
+		// drape the skin lays over it; nothing of ours stands above a mesh.
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint - and Snow Fill below pushes the pattern toward full coverage, most up-facing parts first. The drape stands on its own: with 3D Snow on Objects off it still draws, flat on the mesh with no rise. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint - and Snow Fill below pushes the pattern toward full coverage, most up-facing parts first. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
 		ImGui::SliderFloat(T(TKEY("proj_snow_fill"), "Snow Fill"), &settings.ProjSnowFillPct, 0.0f, 100.0f, "%.0f%%");
 		if (auto _ttFill = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_fill_tooltip"), "How much of the game's projected-snow area is pushed to solid shell snow: the most up-facing parts come first, 50%% covers everything facing upward, and 100%% covers every angle of the pattern - undersides included. At 0%% the recolored pattern keeps the game's own graded paint. Works inside each object's own shader, so nothing is missed."));
-
-		ImGui::Checkbox(T(TKEY("object_snow_3d"), "3D Snow on Objects"), &settings.ObjectSnow3D);
-		if (auto _tt3d = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_snow_3d_tooltip"), "The RISE, and only the rise: a rounded blanket grown over the Snow Fill area where the game paints projected snow, its edge rolling over like a real snow lip, the rounding lengthening as the depth rises. Off, nothing stands above the mesh - but the drape stays if Recolor Projected Snow is on, lying flat on the object with its lumps and reach intact, so you can have this mod's snow on a rock with none of its height. Turn BOTH off and nothing of ours is drawn on an object at all. Objects without projected-snow data carry no layer either way; roads and their trenches are separate machinery and stay on; and objects go on lifting and sheltering the ground shell around them however this is set."));
-
-		// One depth for the whole 3D layer (round 13): the flat/rounded
-		// class split kept its shading differences but no longer has two
-		// user knobs - the rebuilt shell will be one thing.
-		ImGui::SliderFloat(T(TKEY("objects_snow_depth"), "3D Snow Shell Depth"), &settings.ObjectsSnowDepth, 0.0f, 25.0f, "%.0f units");
-		if (auto _ttObj = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("objects_snow_depth_tooltip"), "Height of the raised 3D snow layer on objects, all model classes. Roads keep their own slider under Snow Depth by Texture Class."));
 
 		ImGui::SliderFloat(T(TKEY("plane_split_step"), "Plane Split Step"), &settings.PlaneSplitStep, 2.0f, 24.0f, "%.0f units");
 		if (auto _ttSplit = Util::HoverTooltipWrapper())

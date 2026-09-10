@@ -962,16 +962,15 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 		std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap,
 		std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap, 0.0f, 0.0f
 	};
-	a_scb.ObjectsDepth = settings.ObjectsSnowDepth;
-	a_scb.RoundedDepth = settings.ObjectsSnowDepth;
+	// Objects carry no depth; roads carry theirs per texel in the skin-depth raster.
+	a_scb.ObjectsDepth = 0.0f;
+	a_scb.RoundedDepth = 0.0f;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
 	// The patch stays on the coarse maps: its pass does not bind t33/t34, and
 	// a stale non-zero here would send PatchTop to an unbound texture, whose
 	// zero reads as an object top at world Z 0.
 	a_scb.FineHalfExtent = 0.0f;
-	// Roads are Road Meshes Depth's and keep their whole surface.
-	a_scb.ShellCoverage = 1.0f;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
 	// The REAL setting, not the forced 1.0 this used to carry: the patch VS
@@ -1845,10 +1844,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		// The rise only; with it off the raster and cones carry no lift.
-		const float captureDepth = settings.ObjectSnow3D ? settings.ObjectsSnowDepth : 0.0f;
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : captureDepth;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : captureDepth;
+		// Objects carry no lift into the raster and cones; roads keep theirs.
+		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
+		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		scb.VertexCountF = vertexCountF;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = halfExtent;
@@ -2153,9 +2151,9 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Seeded at full class depth over covered columns and at terrain height
 	// off them, so each object's layer slopes down to the ground at its rim.
 	if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
-		// One shared field for both classes: seed it with the deeper of the
-		// two and let each class normalize against it (see SkinLift.RimT).
-		processData.ObjectSnowDepth = std::max(settings.ObjectsSnowDepth, 0.1f);
+		// The seed floor: objects carry no depth, so their columns seed at the
+		// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
+		processData.ObjectSnowDepth = 0.1f;
 		heightProcessCB->Update(processData);
 		context->CSSetShader(objectConeSeedCS, nullptr, 0);
 		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
@@ -2381,12 +2379,10 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_cap.world.translate.x };
 	a_scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_cap.world.translate.y };
 	a_scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_cap.world.translate.z };
-	// "3D Snow on Objects" is the RISE: off, the S4 draw runs at depth 0,
-	// which is the coat and its edge lumps alone (the look at Josef's own
-	// depth-0 default). Roads are the patch's and keep theirs.
-	const float objectDepth = settings.ObjectSnow3D ? settings.ObjectsSnowDepth : 0.0f;
-	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : objectDepth;
-	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : objectDepth;
+	// Objects carry no rise: the S4 draw runs at depth 0, the coat and its
+	// lumps alone. Roads are the patch's and keep theirs.
+	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
+	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
 	a_scb.VertexCountF = a_vertexCount;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
@@ -2418,8 +2414,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.EdgeCoat = (settings.ProjSnowMatch && a_cap.projReal && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
-	// The sheet is the 3D toggle's; the drape below it is the recolor's.
-	a_scb.ShellCoverage = settings.ObjectSnow3D ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
@@ -3129,19 +3123,12 @@ void SnowDeformation::DrawCapturedStatics()
 		if (!layout)
 			continue;
 
-		// Two toggles, two things, and the skin draw serves both.
-		//
-		// "3D Snow on Objects" is the RISE: off, FillSkinDrawCB hands this
-		// draw zero depth and nothing stands above the mesh.
-		//
 		// "Recolor Projected Snow" is the DRAPE: the skin finds where the
 		// game's projected diffuse is and lays the shell's snow set over it,
-		// with Edge Lump Size and Edge Lump Reach shaping how far it spreads
-		// and how it breaks up. That is geometry - the Lighting-pass recolor
-		// can change the projected snow's COLOUR but cannot give it the
-		// shell's material or an edge - so the draw has to happen for it.
-		//
-		// Only with both off is nothing of ours drawn on an object. Roads
+		// Edge Lump Reach shaping how far it spreads. That is geometry - the
+		// Lighting-pass recolor can change the projected snow's COLOUR but
+		// cannot give it the shell's material or an edge - so the draw has
+		// to happen for it. Off, nothing of ours is drawn on an object. Roads
 		// belong to Road Meshes Depth and keep their skin either way.
 		//
 		// The layout above is created BEFORE this gate on purpose: the
@@ -3149,7 +3136,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// landscape shell's lift, the shelter mask and the trench patch all
 		// read the raster. Skipping the layout would silently drop objects
 		// out of the height field the moment the shell was switched off.
-		if (!cap.road && !settings.ObjectSnow3D && !settings.ProjSnowMatch)
+		if (!cap.road && !settings.ProjSnowMatch)
 			continue;
 
 		// Stride comes from the descriptor's low nibble (in dwords); the
@@ -3198,7 +3185,7 @@ void SnowDeformation::DrawCapturedStatics()
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
 	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV);
 	if (cullActive) {
-		const float liftMargin = std::max(settings.ObjectsSnowDepth, settings.RoadMeshesDepth) + kSkinCullMargin;
+		const float liftMargin = settings.RoadMeshesDepth + kSkinCullMargin;
 		uint32_t clusterSkins = 0, trisTotal = 0;
 		for (const auto& d : skinDraws) {
 			trisTotal += d.indexCount / 3;
@@ -3495,10 +3482,10 @@ void SnowDeformation::DrawCapturedStatics()
 	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
 	// Per-class trenching emerges from the raster: each captured object
 	// writes its own class depth into the skin-depth raster, so a class at
-	// 0 produces dead patch texels for its objects only. The pass gate just
-	// needs ANY class active (the old > 1 threshold silently disabled the
-	// whole patch at depth 1).
-	if (patchVS && patchPS && heightSkinDepth && (settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
+	// 0 produces dead patch texels for its objects only. Roads are the one
+	// class with depth, so the gate is theirs (the old > 1 threshold
+	// silently disabled the whole patch at depth 1).
+	if (patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as

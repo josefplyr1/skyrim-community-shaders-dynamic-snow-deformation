@@ -664,7 +664,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				// Meshes slider. The patch deliberately does not cast either
 				// (the retired stretch experiment); the self-shadow march
 				// owns trench-wall shading on roads.
-				const bool s4Shell = settings.ObjectSnow3D && !cap.road && cap.projThreshold > -0.5f;
+				const bool s4Shell = !cap.road && cap.projThreshold > -0.5f;
 				if (!s4Shell || !settings.ObjectSnowShadows)
 					continue;
 				if (!casterCullDisabled) {
@@ -757,7 +757,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		if (auto* patchCastVS = SnowShadersPending(2) ? nullptr : GetPatchShadowVS();
 			patchCastVS && heightSkinDepth && heightSkinDepth->srv &&
 			heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv &&
-			(settings.ObjectsSnowDepth > 0.5f || settings.RoadMeshesDepth > 0.5f)) {
+			settings.RoadMeshesDepth > 0.5f) {
 			if (splitRow)
 				globals::profiler->BeginPass(kCasterPatchRow[cascade]);
 			context->VSSetShader(patchCastVS, nullptr, 0);
