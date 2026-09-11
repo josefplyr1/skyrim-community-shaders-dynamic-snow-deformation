@@ -4011,7 +4011,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			solid = painted && input.Coverage >= kCoatMinNz;
 			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
-				float reachPx = clamp(kEdgeReachUnits * EdgeFlankWidth / max(footprint, 1e-3), 3.0, 96.0);
+				// No pixel floor: a 3 px minimum gave every fleck a ring at
+				// 0.01 that 0.00 did not have, the whole slider's step in
+				// one notch. Sub-pixel reach samples the fleck itself, so
+				// the halo shrinks to nothing as the slider does.
+				float reachPx = min(kEdgeReachUnits * EdgeFlankWidth / max(footprint, 1e-3), 96.0);
 				float hits = 0.0;
 				[unroll] for (int ring = 1; ring <= 3; ring++)
 				{
