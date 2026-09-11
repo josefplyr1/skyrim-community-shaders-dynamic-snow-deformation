@@ -422,27 +422,21 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// Air neighbours vote only where the voxel is small against the
 	// Rounding: on a ring whose voxel is the Rounding or more, dilution
 	// would take a whole voxel off every rim, so there they do not.
-	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
+	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 16.0f);
 	const float roundVox = roundU / voxelSize;
-	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
-	// THE FLOOR IS A VOXEL where air does not vote. A far ring re-samples
-	// the mesh at its own pitch, one point per column and nothing between
-	// - aliasing, which every voxel LOD averages away and this did not: a
-	// Rounding of 5 u is a third of a 16 u voxel, no kernel at all. The
-	// support-normalised average cannot inflate (it is a soft-max of the
-	// tops, under a fifth of a voxel of bias), so the one-voxel floor that
-	// grew 78 u lumps under the gaussian's dilution is safe here. Where air
-	// still votes the floor stays at a half: a wider kernel there is more
-	// dilution at every rim.
-	a_cb.RoundSigma = std::max(roundVox, airWeight > 0.0f ? 0.5f : 1.0f);
+	// THE FLOOR IS A VOXEL: a far ring re-samples the mesh at its own pitch,
+	// one point per column and nothing between - aliasing, which every voxel
+	// LOD averages away. Rounding 0 asks for blocks and gets them.
+	a_cb.RoundSigma = roundU > 0.0f ? std::max(roundVox, 1.0f) : 0.25f;
 	a_cb.EdgeParams[0] = 0.0f;
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
-	a_cb.LipParams[0] = airWeight;
+	a_cb.LipParams[0] = roundVox;
 	a_cb.LipParams[1] = settings.VolumeConservativeCapture ? 0.5f : 0.0f;
 	a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
-	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
+	// 15 + the one-voxel cut = the two bricks the field passes reach
+	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 15);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
@@ -469,15 +463,16 @@ uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
 	return settings.VolumeLazyRings ? (1u << a_level) : 1u;
 }
 
-float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
+float SnowDeformation::VoxelThresholdForLevel([[maybe_unused]] uint a_level) const
 {
 	// Where air votes, the lip's survival is the ratio k >= Coverage / gain
 	// of the field's saturation, so the gain stays 1; where it does not,
 	// nothing dilutes and the gain only buys R8 precision for a thin layer.
 	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
-	const float roundVox = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / VoxelSizeForLevel(a_level);
-	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
-	const float gain = std::min(1.0f + 7.0f * (1.0f - airWeight), 0.5f / coverage);
+	// Air no longer votes, so nothing dilutes the field: the gain only buys
+	// R8 precision, capped so the top keeps a half-life of headroom under
+	// saturation for the lip's roll-off.
+	const float gain = std::min(8.0f, 0.5f / coverage);
 	return coverage * gain;
 }
 
