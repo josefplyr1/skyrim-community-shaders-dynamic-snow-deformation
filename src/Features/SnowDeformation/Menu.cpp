@@ -65,6 +65,10 @@ void SnowDeformation::DrawSettings()
 			shellSnowTextureAttempted = false;
 		}
 
+		ImGui::Checkbox(T(TKEY("camera_above_snow"), "Keep Camera Above the Snow"), &settings.CameraAboveSnow);
+		if (auto _ttCam = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("camera_above_snow_tooltip"), "The game's camera collides with the ground, not with the snow, so a low third-person camera can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside."));
+
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);

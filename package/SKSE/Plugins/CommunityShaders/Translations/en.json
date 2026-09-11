@@ -1577,6 +1577,8 @@
     "feature.snow_deformation.refill_rate_tooltip": "Multiplier on the snowfall-driven refill rate. At 1.0x, typical snowfall recovers compressed snow in about 12 minutes. 0 disables refilling.",
     "feature.snow_deformation.reload_frost_texture": "Reload",
     "feature.snow_deformation.reload_texture": "Reload",
+    "feature.snow_deformation.camera_above_snow": "Keep Camera Above the Snow",
+    "feature.snow_deformation.camera_above_snow_tooltip": "The game's camera collides with the ground, not with the snow, so a low third-person camera can slip under the sheet and show its underside. On, the camera is pulled in toward you when that happens, the way it is against a hillside.",
     "feature.snow_deformation.rim_lip": "Rim Lip",
     "feature.snow_deformation.rim_lip_tooltip": "The trench rim rolls UP slightly before it drops - the cornice look of cut snow. Height as a fraction of local snow depth; deep snow only (shallow dimples stay smooth). 0 = off.",
     "feature.snow_deformation.rim_teeth": "Rim Teeth",

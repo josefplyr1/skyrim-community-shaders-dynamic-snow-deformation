@@ -131,6 +131,7 @@
 	X(ShellSSSRemarchThickness) \
 	X(ShellSSSRemarchCasterCap) \
 	X(ShellBareGroundCull) \
+	X(CameraAboveSnow) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \

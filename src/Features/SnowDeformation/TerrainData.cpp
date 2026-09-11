@@ -835,6 +835,7 @@ void SnowDeformation::PostPostLoad()
 	stl::write_vfunc<0x4, SD_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 	InstallStaticsCaptureHook();
+	InstallCameraHook();
 
 	// Claims the co-save records. Here rather than later because a save can be
 	// loaded straight from the main menu, and an unclaimed record is skipped.
@@ -1239,4 +1240,87 @@ void SnowDeformation::ProbeFineLayer(const ShellCB& a_cb)
 	context->Unmap(fineStage.get(), 0);
 	fineProbeResult = out;
 	logger::info("[SNOW DEFORMATION] {}", out);
+}
+
+bool SnowDeformation::SampleShellSurface(float a_x, float a_y, float& a_surface) const
+{
+	if (shellWindowCellX == INT_MIN || shellUploadScratch.size() < size_t(kShellWindowDim) * kShellWindowDim * 4)
+		return false;
+	const float cellSize = float(kShellVertexSpacing) * kShellTexelsPerCell;
+	float tx = (a_x - shellWindowCellX * cellSize) / kShellVertexSpacing;
+	float ty = (a_y - shellWindowCellY * cellSize) / kShellVertexSpacing;
+	if (tx < 0.0f || ty < 0.0f || tx >= kShellWindowDim - 1 || ty >= kShellWindowDim - 1)
+		return false;
+	const int x0 = int(tx), y0 = int(ty);
+	const float fx = tx - x0, fy = ty - y0;
+	float height = 0.0f, depth = 0.0f, coverage = 0.0f;
+	for (int j = 0; j < 2; ++j)
+		for (int i = 0; i < 2; ++i) {
+			const float* t = &shellUploadScratch[(size_t(y0 + j) * kShellWindowDim + (x0 + i)) * 4];
+			if (t[0] < -50000.0f)
+				return false;
+			const float w = (i ? fx : 1.0f - fx) * (j ? fy : 1.0f - fy);
+			height += w * t[0];
+			depth += w * std::max(t[1], 0.0f);
+			coverage += w * t[2];
+		}
+	if (coverage < 0.05f || depth <= 0.0f)
+		return false;
+	a_surface = height + depth * GetAccumulationDepthScale();
+	return true;
+}
+
+void SnowDeformation::ClampCameraAboveSnow()
+{
+	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !globals::state->inWorld)
+		return;
+	auto* camera = RE::PlayerCamera::GetSingleton();
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!camera || !player || !camera->cameraRoot || !camera->IsInThirdPerson())
+		return;
+	auto* root = camera->cameraRoot.get();
+	const RE::NiPoint3 cam = root->world.translate;
+	// Dunes ride above the class depth; the near plane needs a little more.
+	const float clearance = 24.0f + std::clamp(settings.UndulationStrength, 0.0f, 32.0f);
+	float surface;
+	if (!SampleShellSurface(cam.x, cam.y, surface) || cam.z >= surface + clearance)
+		return;
+	// Pull in along the line from the player's head, like a terrain hit:
+	// bisect for the farthest point on it that clears the snow.
+	const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
+	float anchorSurface;
+	if (SampleShellSurface(anchor.x, anchor.y, anchorSurface) && anchor.z < anchorSurface + clearance)
+		return;
+	float lo = 0.0f, hi = 1.0f;
+	for (int i = 0; i < 10; ++i) {
+		const float mid = (lo + hi) * 0.5f;
+		const RE::NiPoint3 p = anchor + (cam - anchor) * mid;
+		float s;
+		if (!SampleShellSurface(p.x, p.y, s) || p.z >= s + clearance)
+			lo = mid;
+		else
+			hi = mid;
+	}
+	const RE::NiPoint3 target = anchor + (cam - anchor) * lo;
+	root->local.translate += target - cam;
+	RE::NiUpdateData data{ 0.0f, RE::NiUpdateData::Flag::kNone };
+	root->Update(data);
+}
+
+struct SD_PlayerCamera_Update
+{
+	static void thunk(RE::PlayerCamera* a_camera)
+	{
+		func(a_camera);
+		auto& snowDeformation = globals::features::snowDeformation;
+		if (snowDeformation.loaded)
+			snowDeformation.ClampCameraAboveSnow();
+	}
+	static inline REL::Relocation<decltype(thunk)> func;
+};
+
+void SnowDeformation::InstallCameraHook()
+{
+	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update");
+	stl::write_vfunc<0x2, SD_PlayerCamera_Update>(RE::VTABLE_PlayerCamera[0]);
 }

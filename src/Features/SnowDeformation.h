@@ -556,6 +556,8 @@ public:
 		float ShellSSSRemarchCasterCap = 20.0f;
 		/** @brief Skip shell patches whose depth has reached the -8 floor everywhere - ground with no snow class under it at all, which sits below the terrain and cannot produce a pixel. Tests the floor rather than a threshold part-way up, so the ramp that climbs to a snow layer is never cut. */
 		bool ShellBareGroundCull = true;
+		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
+		bool CameraAboveSnow = true;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -1646,6 +1648,12 @@ public:
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
+	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
+	void InstallCameraHook();
+	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
+	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
+	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
+	void ClampCameraAboveSnow();
 
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
