@@ -1274,13 +1274,15 @@ void SnowDeformation::ClampCameraAboveSnow()
 {
 	cameraProbeFired++;
 	cameraProbeState = 5;
-	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !globals::state->inWorld)
-		return;
+	// Not State::inWorld: that is a render-scope flag, true only inside the
+	// world pass, and the camera updates outside it.
 	auto* camera = RE::PlayerCamera::GetSingleton();
 	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
+		return;
 	cameraProbeState = 4;
 	cameraProbeCamState = camera && camera->currentState ? uint32_t(camera->currentState->id) : 99u;
-	if (!camera || !player || !camera->cameraRoot || !camera->IsInThirdPerson())
+	if (!camera || !camera->cameraRoot || !camera->IsInThirdPerson())
 		return;
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;

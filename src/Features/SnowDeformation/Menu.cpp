@@ -1700,7 +1700,7 @@ void SnowDeformation::DrawSettings()
 					char probeLine3[160];
 					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | bodies listed %u, drawn %u", wz, statWaterCaptured, statWaterDrawn);
 					ImGui::TextUnformatted(probeLine3);
-					static const char* cameraStates[] = { "hook never ran", "no shell data under it", "clear", "pulled in", "not third person", "off / not in world" };
+					static const char* cameraStates[] = { "hook never ran", "no shell data under it", "clear", "pulled in", "not third person", "off / player not loaded" };
 					char probeLine4[160];
 					snprintf(probeLine4, sizeof(probeLine4), "camera: z %.0f | snow surface %.0f | %s | hook calls %u, camera state %u", cameraProbeZ, cameraProbeSurface, cameraStates[std::min<uint8_t>(cameraProbeState, 5)], cameraProbeFired, cameraProbeCamState);
 					ImGui::TextUnformatted(probeLine4);
