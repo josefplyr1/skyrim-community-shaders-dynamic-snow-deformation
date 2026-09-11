@@ -249,24 +249,25 @@ float3 LiftToPlane(float2 q, uint axis, float3 p0, float3 gn)
 
 #elif defined(PSHADER)
 RWTexture3D<float> Volume : register(u0);
-// The surface's height within its voxel (0 = bottom), so the field can put
-// the snow top at the true surface plus the depth, not at the voxel centre
-// - on a 32-unit ring that is the difference between a 12-unit layer and a
-// 78-unit lump (Josef's far rings, 2026-09-07).
-RWTexture3D<float> HeightOut : register(u1);
 // The topmost surface over each sub-pixel (four a voxel side), as the bits
 // of (world z + 32768): positive floats order as uints, so a max is a max.
+// The low four bits are the surface's up-ness (0..15 over -1..1, a 0.06 u
+// step of height given up): the max is deterministic, so the seed gate
+// reads the top surface's facing from here and not from the voxel's own
+// nibble, a plain store that whichever fragment landed last won (the
+// two-shape alternation, Josef, 2026-09-11).
 RWTexture2D<uint> HeightMap : register(u2);
 
 void main(GS_OUTPUT input)
 {
 	float3 vox = input.Vox;
+	uint nzq = (uint)round(saturate(input.Nz * 0.5 + 0.5) * 15.0);
 	[branch] if (input.Copy == 1)
 	{
 		int mask4 = Dims.x * 4 - 1;
 		int2 sub = ((int2)floor(vox.xy * 4.0) + OriginVox.xy * 4) & mask4;
 		float worldZ = (vox.z + (float)OriginVox.z) * VoxelSize;
-		InterlockedMax(HeightMap[(uint2)sub], asuint(worldZ + 32768.0));
+		InterlockedMax(HeightMap[(uint2)sub], (asuint(worldZ + 32768.0) & ~0xFu) | nzq);
 		return;
 	}
 	// Extent of the fragment along the projection axis, from the screen
@@ -279,18 +280,7 @@ void main(GS_OUTPUT input)
 	int3 mask = Dims.xyz - 1;
 	// Packed: high nibble = up-ness (-1..1 over 0..15), low nibble = life,
 	// 15 fresh. Any non-zero value is solid; the scroll counts life down.
-	uint nzq = (uint)round(saturate(input.Nz * 0.5 + 0.5) * 15.0);
 	float packed = (float)(nzq * 16u + 15u) / 255.0;
-	// THE SURFACE'S Z IN THE COLUMN, from the plane. A triangle projected
-	// along X or Y (any face over 45 degrees) rasterises on a grid whose z
-	// IS the pixel, so vox.z here is the pixel's centre and says nothing
-	// about the surface - and the spread then carries that voxel sideways
-	// into columns whose surface is tan(slope) voxels away: the terraces on
-	// every cliff and roof pitch (Josef's chevrons, 2026-09-07). The plane
-	// at a column's centre is exact on every axis. A near-vertical face has
-	// no column height worth reading; it keeps the fragment's own z.
-	float4 pl = input.Plane;
-	bool usePlane = abs(pl.z) > 0.2 * length(pl.xyz);
 	for (int k = lo; k <= hi; k++) {
 		int3 p = base;
 		if (input.Axis == 0)
@@ -303,14 +293,6 @@ void main(GS_OUTPUT input)
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
 		Volume[phys] = packed;
-		// The surface's height RELATIVE to this voxel's bottom, over [-4, 4]: a
-		// crack-closing voxel above the surface says "below me" rather than
-		// "at my bottom". The seed is the topmost solid voxel, which on a
-		// slope is that spread voxel for about half the columns, and reading
-		// its surface a voxel too high was the sawtooth of raised columns
-		// along every far roof (Josef's "triangles", 2026-09-07).
-		float zs = usePlane ? (pl.w - pl.x * ((float)p.x + 0.5) - pl.y * ((float)p.y + 0.5)) / pl.z : vox.z;
-		HeightOut[phys] = saturate((zs - (float)p.z + 4.0) * 0.125);
 	}
 }
 
@@ -323,10 +305,9 @@ Texture2D<float> SkyOpen : register(t2);
 Texture3D<float> FieldIn : register(t3);
 // The sideways blur's solid blocker: this frame's occupancy.
 Texture3D<float> OccupancyIn : register(t4);
-// The raster's surface height within each voxel (see the capture PS).
-Texture3D<float> HeightIn : register(t9);
 // The capture's heightmap: the topmost surface over each sub-pixel, four a
-// voxel side, as the bits of (world z + 32768); 0 = nothing captured.
+// voxel side, as the bits of (world z + 32768) with the surface's up-ness
+// in the low four bits (see the capture PS); 0 = nothing captured.
 Texture2D<uint> HeightMapIn : register(t10);
 RWTexture2D<uint> HeightMapOut : register(u8);
 RWTexture3D<float> VolumeOut : register(u0);
@@ -607,7 +588,10 @@ float2 ShelterAt(float2 worldXY)
 // The up-ness the raster stored with the voxel (see the capture PS).
 // Two rounds of reconstructing a facing from the shell's neighbours - the
 // empty-neighbour direction, then the seed layer's rise - were noise on a
-// rough wall and blind to an underside; the mesh knows both.
+// rough wall and blind to an underside; the mesh knows both. A plain
+// store, so where two faces share a voxel it is whichever landed last:
+// the seed gate reads it only for a voxel with something captured above
+// it (sheltered), where the heightmap cannot speak.
 float OccNz(float v)
 {
 	uint q = (uint)round(v * 255.0);
@@ -647,8 +631,40 @@ float OccNz(float v)
 	}
 	[branch] if (open)
 	{
-		// An underside is nz -1 and never seeds, at any setting.
-		float facing = smoothstep(SlopeMinNz - 0.05, SlopeMinNz + 0.05, OccNz(occ));
+		// THE FACING, from the heightmap where this voxel is the column's
+		// top: nothing captured above it, so the topmost samples are this
+		// surface, and their up-ness is a max's, the same every rebuild. A
+		// voxel with a surface over it (a sill under an eave) keeps the
+		// raster's own nibble. An underside is nz -1 and never seeds.
+		uint2 hb = p.xy * 4;
+		float hmax = -1.0e4;
+		uint keys[16];
+		[unroll] for (int i = 0; i < 16; i++)
+		{
+			keys[i] = HeightMapIn[hb + uint2(i & 3, i >> 2)];
+			[flatten] if (keys[i] != 0u)
+				hmax = max(hmax, (asfloat(keys[i] & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z);
+		}
+		float nz = OccNz(occ);
+		[branch] if (hmax > -1.0e3 && hmax < (float)logical.z + 1.25)
+		{
+			float nsum = 0.0;
+			float nn = 0.0;
+			[unroll] for (int j = 0; j < 16; j++)
+			{
+				[flatten] if (keys[j] != 0u)
+				{
+					float hz = (asfloat(keys[j] & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z;
+					[flatten] if (hz > hmax - 1.0)
+					{
+						nsum += (float)(keys[j] & 15u) / 15.0 * 2.0 - 1.0;
+						nn += 1.0;
+					}
+				}
+			}
+			nz = nsum / nn;
+		}
+		float facing = smoothstep(SlopeMinNz - 0.05, SlopeMinNz + 0.05, nz);
 		[branch] if (facing > 0.0)
 		{
 			float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
@@ -708,7 +724,7 @@ float OccNz(float v)
 	[unroll] for (int i = 0; i < 16; i++)
 	{
 		uint key = HeightMapIn[hb + uint2(i & 3, i >> 2)];
-		hs[i] = key != 0u ? (asfloat(key) - 32768.0) / VoxelSize - (float)OriginVox.z : -1.0e4;
+		hs[i] = key != 0u ? (asfloat(key & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z : -1.0e4;
 	}
 	// THE FIELD IS EXPONENTIAL IN HEIGHT: Coverage * exp(rate * (top - z)),
 	// so it crosses Coverage AT the top on every ring (near-linear over the
@@ -749,7 +765,10 @@ float OccNz(float v)
 					n += 1.0;
 				}
 			}
-			float surf = n > 0.0 ? sum / n : (float)z + (HeightIn[ph] * 8.0 - 4.0);
+			// No sub-sample in the run (a seed under an overhang, whose
+			// samples are the overhang's): the voxel's centre. The raster's
+			// per-voxel height was a plain store, racy, and is gone.
+			float surf = n > 0.0 ? sum / n : (float)z + 0.5;
 			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
 			// threshold beneath it, and only the run's own voxels may carry
 			// one - never the air under a thin member. So the top may sit
@@ -863,7 +882,7 @@ float ColumnTop(uint2 ph)
 		uint key = HeightMapIn[hb + uint2(i, i)];
 		[flatten] if (key != 0u)
 		{
-			sum += (asfloat(key) - 32768.0) / VoxelSize - (float)OriginVox.z;
+			sum += (asfloat(key & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z;
 			n += 1.0;
 		}
 	}

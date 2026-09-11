@@ -18,7 +18,7 @@ bool SnowDeformation::EnsureVoxelResources()
 	for (uint i = 0; i < levels; i++) {
 		const auto& lv = voxelLevels[i];
 		const auto want = VoxelDimsForLevel(i);
-		levelsReady = levelsReady && lv.dims.x == want.x && lv.dims.y == want.y && lv.dims.z == want.z && lv.volume[0] && lv.volume[1] && lv.field && lv.height && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
+		levelsReady = levelsReady && lv.dims.x == want.x && lv.dims.y == want.y && lv.dims.z == want.z && lv.volume[0] && lv.volume[1] && lv.field && lv.heightMap && lv.bricks && lv.drawArgs && lv.dirty && lv.flags && lv.lists;
 	}
 	const auto wantMax = VoxelDimsMax();
 	if (levelsReady && voxelSupport && voxelSupportDims.x == wantMax.x && voxelSupportDims.y == wantMax.y && voxelSupportDims.z == wantMax.z && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
@@ -74,8 +74,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			}
 			delete lv.field;
 			lv.field = nullptr;
-			delete lv.height;
-			lv.height = nullptr;
 			delete lv.heightMap;
 			lv.heightMap = nullptr;
 			delete lv.bricks;
@@ -96,8 +94,6 @@ bool SnowDeformation::EnsureVoxelResources()
 				lv.volume[p] = makeVolume(std::format("SnowDeformation::VoxelVolume{}{}", i, p), dim);
 		if (!lv.field)
 			lv.field = makeVolume(std::format("SnowDeformation::VoxelField{}", i), dim);
-		if (!lv.height)
-			lv.height = makeVolume(std::format("SnowDeformation::VoxelHeight{}", i), dim);
 		if (!lv.heightMap) {
 			const uint hdim = dim.x * 4;
 			D3D11_TEXTURE2D_DESC desc{
@@ -658,8 +654,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				{ 0.0f, 0.0f, float(lv.dims.x * 4), float(lv.dims.x * 4), 0.0f, 1.0f }
 			};
 			context->RSSetViewports(2, viewports);
-			// u0 occupancy, u1 the surface height within the voxel, u2 the heightmap.
-			ID3D11UnorderedAccessView* rasterUAVs[3] = { lv.volume[lv.current]->uav.get(), lv.height->uav.get(), lv.heightMap->uav.get() };
+			// u0 occupancy, u2 the heightmap (u1 was the per-voxel height, gone).
+			ID3D11UnorderedAccessView* rasterUAVs[3] = { lv.volume[lv.current]->uav.get(), nullptr, lv.heightMap->uav.get() };
 			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 3, rasterUAVs, nullptr);
 			// STAGGERED CAPTURE. A static already in the volume stays there on
 			// the memory nibble (a tick every 16 of this level's rebuilds, 15
@@ -801,7 +797,11 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// writes the mask. Unbound before the compaction reads it at t8.
 		context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 
-		// Seeds: occupancy + the shelter/sky maps -> scratch, on D0.
+		// Seeds: occupancy + the shelter/sky maps -> scratch, on D0; the
+		// raster's heightmap at t10 for the top surface's facing (Z and the
+		// sideways passes read it too).
+		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
+		context->CSSetShaderResources(10, 1, &heightMapSRV);
 		ID3D11ShaderResourceView* mapSRVs[2] = {
 			seedMaps ? heightBottomFiltered->srv.get() : nullptr,
 			seedMaps ? objectSkyOpen->srv.get() : nullptr
@@ -817,19 +817,12 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// Every field pass reads the occupancy at t4: Z stops at the first
 		// solid beneath, X and Y at the first solid beside.
 		context->CSSetShaderResources(4, 1, &occSRV);
-		// Z: scratch -> field, one thread per column, on D0; the raster's
-		// surface heights at t9, its heightmap at t10 (X and Y read it too,
-		// for the riser test).
-		ID3D11ShaderResourceView* heightSRV = lv.height->srv.get();
-		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
+		// Z: scratch -> field, one thread per column, on D0.
 		context->CSSetShaderResources(0, 1, &scratchSRV);
-		context->CSSetShaderResources(9, 1, &heightSRV);
-		context->CSSetShaderResources(10, 1, &heightMapSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->CSSetShader(voxelBlurZCS, nullptr, 0);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
-		context->CSSetShaderResources(9, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;

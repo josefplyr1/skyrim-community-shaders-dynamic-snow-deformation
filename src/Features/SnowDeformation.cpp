@@ -2218,7 +2218,7 @@ uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
 	};
 	uint64_t voxel = 0;
 	for (const auto& lv : voxelLevels)
-		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + tex3Bytes(lv.height) + heightMapBytes(lv.heightMap);
+		voxel += tex3Bytes(lv.volume[0]) + tex3Bytes(lv.volume[1]) + tex3Bytes(lv.field) + heightMapBytes(lv.heightMap);
 	voxel += tex3Bytes(voxelSupport);
 
 	const uint64_t total = deform + terrain + heights + shadowCopies + pointCopy + snowTex + voxel;
