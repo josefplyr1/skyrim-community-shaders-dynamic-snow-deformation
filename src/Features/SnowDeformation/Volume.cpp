@@ -818,7 +818,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// solid beneath, X and Y at the first solid beside.
 		context->CSSetShaderResources(4, 1, &occSRV);
 		// Z: scratch -> field, one thread per column, on D0; the raster's
-		// surface heights at t9.
+		// surface heights at t9, its heightmap at t10 (X and Y read it too,
+		// for the riser test).
 		ID3D11ShaderResourceView* heightSRV = lv.height->srv.get();
 		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
 		context->CSSetShaderResources(0, 1, &scratchSRV);
@@ -829,7 +830,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetShaderResources(9, 1, &nullSRV);
-		context->CSSetShaderResources(10, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;
@@ -852,6 +852,7 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetShaderResources(5, 1, &nullSRV);
 		context->CSSetShaderResources(4, 1, &nullSRV);
+		context->CSSetShaderResources(10, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// The brick flags on D3's bricks (kept between rebuilds)...
 		context->CSSetShaderResources(3, 1, &fieldSRV);

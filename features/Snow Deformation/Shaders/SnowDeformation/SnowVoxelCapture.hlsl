@@ -849,6 +849,27 @@ float EdgeNoise(float2 q)
 // ramp. So the shoulder's width and the reach past an edge are two
 // settings: deep, rounded snow that still stops at the step's edge.
 // Indirect: X over the D3 column list, Y over D2.
+// A column's top in logical voxels, from the capture's heightmap: the mean
+// of the four diagonal sub-samples that hold a key. No key at all reads as
+// infinitely high, so a solid with no top-down capture (an open-topped
+// board) still blocks.
+float ColumnTop(uint2 ph)
+{
+	uint2 hb = ph * 4;
+	float sum = 0.0;
+	float n = 0.0;
+	[unroll] for (int i = 0; i < 4; i++)
+	{
+		uint key = HeightMapIn[hb + uint2(i, i)];
+		[flatten] if (key != 0u)
+		{
+			sum += (asfloat(key) - 32768.0) / VoxelSize - (float)OriginVox.z;
+			n += 1.0;
+		}
+	}
+	return n > 0.0 ? sum / n : 1.0e4;
+}
+
 [numthreads(8, 8, 8)] void VoxelBlurCS(uint3 gid
 									   : SV_GroupID, uint3 tid
 									   : SV_GroupThreadID) {
@@ -908,6 +929,11 @@ float EdgeNoise(float2 q)
 	float wsum = v0 > 0.0 ? 1.0 : airWeight;
 	bool anySnow = v0 > 0.0;
 	float dist = alongY ? round(SupportIn[p] * 8.0) : (v0 > 0.0 ? 0.0 : (float)reach);
+	// A solid neighbour blocks only as a RISER: its column's top more than
+	// 1.5 voxels over this voxel's centre. A solid within that is the same
+	// slope one voxel on and is averaged through; stopping at every solid
+	// terraced a slope at each whole-voxel rise (2026-09-11).
+	float zc = (float)logical.z + 0.5;
 	[unroll] for (int dir = -1; dir <= 1; dir += 2)
 	{
 		[loop] for (int k = 1; k <= span; k++)
@@ -916,7 +942,7 @@ float EdgeNoise(float2 q)
 			if (any(l < 0) || any(l >= Dims.xyz))
 				break;
 			uint3 ph = Phys(l);
-			if (OccupancyIn[ph] > 0.0)
+			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > 1.5)
 				break;
 			float v = VolumeIn[ph];
 			float w = exp(-(float)(k * k) * invTwoS2);
