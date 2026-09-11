@@ -510,7 +510,7 @@ public:
 		/** @brief Profile of that ramp: 0 = a straight slope with sharp corners, 1 = rounded shoulders top and bottom. */
 		float WaterEdgeRounding = 1.0f;
 		/** @brief Water this many units deep or shallower over the ground does not end the shell: hides a placed plane skimming the land near its rectangle's edge, at the price of the sheet standing in that much water at real shores. */
-		float WaterEdgeDepth = 0.0f;
+		float WaterEdgeDepth = 1.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -2051,7 +2051,7 @@ public:
 
 	/** @brief RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth) in one raster pass: highest/lowest surfaces win per texel in any draw order; no depth buffer needed. */
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
-	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Persistent - cleared on cell crossing only, so a shore the camera turned away from keeps its cut. Bound at t27 for the landscape shell. */
+	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Rebuilt every frame from last frame's planes (a kept plane poisoned the area until the next cell crossing). Bound at t27 for the landscape shell. */
 	Texture2D* waterHeightTexture = nullptr;
 	int waterWindowCellX = INT_MIN;
 	int waterWindowCellY = INT_MIN;
@@ -2069,7 +2069,7 @@ public:
 	bool waterFirstLogged = false;
 	/** @brief Debugging Options: log every water plane the capture has not logged before (name, pass, transform, bounds) while on. */
 	bool debugLogWaterPlanes = false;
-	std::unordered_set<const RE::BSGeometry*> waterLoggedPlanes;
+	std::unordered_set<std::string> waterLoggedPlanes;
 	void RenderWaterCapture();
 	ID3D11VertexShader* heightVS = nullptr;
 	ID3D11PixelShader* heightPS = nullptr;

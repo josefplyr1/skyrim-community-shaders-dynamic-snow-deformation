@@ -3667,6 +3667,14 @@ void SnowDeformation::BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const auto& name = a_pass->geometry->name;
 	if (name.empty() || std::strstr(name.c_str(), "Skirt"))
 		return;
+	// The Underwater technique with the camera above the surface is the
+	// waterline-crossing effect (partiallyUnderwater), drawn at the camera's
+	// level over land, not a body of water.
+	if (((a_pass->passEnum >> 11) & 0xF) == 8) {
+		auto* waterSystem = RE::TESWaterSystem::GetSingleton();
+		if (!waterSystem || !waterSystem->playerUnderwater)
+			return;
+	}
 	// One entry per plane: the same geometry sets up once per water pass.
 	for (const auto& water : capturedWater)
 		if (water.geometry.get() == a_pass->geometry)
@@ -3729,8 +3737,12 @@ void SnowDeformation::RenderWaterCapture()
 		waterHeightTexture->CreateRTV(rtvDesc);
 		waterWindowCellX = INT_MIN;
 	}
-	// The terrain window's frame; cleared only when it moves.
-	if (waterWindowCellX != shellWindowCellX || waterWindowCellY != shellWindowCellY) {
+	// The terrain window's frame, rebuilt every frame: a plane kept from an
+	// earlier frame (the waterline effect at the camera's level, a plane
+	// seen once from a bad angle) poisoned the area until the next cell
+	// crossing. A body's plane is set up whenever the ground over it is in
+	// view, so per-frame loses nothing the camera can see.
+	{
 		const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
 		context->ClearRenderTargetView(waterHeightTexture->rtv.get(), clear);
 		waterWindowCellX = shellWindowCellX;
@@ -3780,10 +3792,12 @@ void SnowDeformation::RenderWaterCapture()
 				geometry->name.c_str(), descKey, desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX), triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, shellWindowCellX, shellWindowCellY);
 		}
-		if (debugLogWaterPlanes && waterLoggedPlanes.insert(geometry).second) {
+		// Keyed on geometry + pass + level, so a geometry reused at another
+		// height or through another technique logs again.
+		if (debugLogWaterPlanes && waterLoggedPlanes.insert(std::to_string(reinterpret_cast<uintptr_t>(geometry)) + ":" + std::to_string(water.passEnum) + ":" + std::to_string(int(water.world.translate.z))).second) {
 			const auto& wb = geometry->worldBound;
-			logger::info("[SNOW DEFORMATION] water plane '{}' pass {:#x} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
-				geometry->name.c_str(), water.passEnum, triShape->GetTrishapeRuntimeData().triangleCount,
+			logger::info("[SNOW DEFORMATION] water plane '{}' pass {:#x} technique {} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
+				geometry->name.c_str(), water.passEnum, (water.passEnum >> 11) & 0xF, triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, water.world.scale,
 				wb.center.x, wb.center.y, wb.center.z, wb.radius);
 		}
