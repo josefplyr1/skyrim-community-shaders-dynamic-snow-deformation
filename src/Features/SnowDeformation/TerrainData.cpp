@@ -1272,6 +1272,7 @@ bool SnowDeformation::SampleShellSurface(float a_x, float a_y, float& a_surface)
 
 void SnowDeformation::ClampCameraAboveSnow()
 {
+	cameraProbeState = 0;
 	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !globals::state->inWorld)
 		return;
 	auto* camera = RE::PlayerCamera::GetSingleton();
@@ -1280,11 +1281,20 @@ void SnowDeformation::ClampCameraAboveSnow()
 		return;
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;
+	cameraProbeZ = cam.z;
 	// Dunes ride above the class depth; the near plane needs a little more.
 	const float clearance = 24.0f + std::clamp(settings.UndulationStrength, 0.0f, 32.0f);
 	float surface;
-	if (!SampleShellSurface(cam.x, cam.y, surface) || cam.z >= surface + clearance)
+	if (!SampleShellSurface(cam.x, cam.y, surface)) {
+		cameraProbeState = 1;
 		return;
+	}
+	cameraProbeSurface = surface;
+	if (cam.z >= surface + clearance) {
+		cameraProbeState = 2;
+		return;
+	}
+	cameraProbeState = 3;
 	// Pull in along the line from the player's head, like a terrain hit:
 	// bisect for the farthest point on it that clears the snow.
 	const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
@@ -1321,6 +1331,8 @@ struct SD_PlayerCamera_Update
 
 void SnowDeformation::InstallCameraHook()
 {
+	// A detour, not the vfunc: the main loop calls PlayerCamera::Update by
+	// address, so the vtable slot never fired.
 	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update");
-	stl::write_vfunc<0x2, SD_PlayerCamera_Update>(RE::VTABLE_PlayerCamera[0]);
+	stl::detour_thunk<SD_PlayerCamera_Update>(REL::RelocationID(49852, 50784));
 }

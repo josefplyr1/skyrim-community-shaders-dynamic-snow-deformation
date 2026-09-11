@@ -510,7 +510,7 @@ public:
 		/** @brief Profile of that ramp: 0 = a straight slope with sharp corners, 1 = rounded shoulders top and bottom. */
 		float WaterEdgeRounding = 1.0f;
 		/** @brief Water this many units deep or shallower over the ground does not end the shell: hides a placed plane skimming the land near its rectangle's edge, at the price of the sheet standing in that much water at real shores. */
-		float WaterEdgeDepth = 1.0f;
+		float WaterEdgeDepth = 5.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -1654,6 +1654,10 @@ public:
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
 	void ClampCameraAboveSnow();
+	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
+	uint8_t cameraProbeState = 0;
+	float cameraProbeZ = 0.0f;
+	float cameraProbeSurface = 0.0f;
 
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
