@@ -1272,11 +1272,14 @@ bool SnowDeformation::SampleShellSurface(float a_x, float a_y, float& a_surface)
 
 void SnowDeformation::ClampCameraAboveSnow()
 {
-	cameraProbeState = 0;
+	cameraProbeFired++;
+	cameraProbeState = 5;
 	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !globals::state->inWorld)
 		return;
 	auto* camera = RE::PlayerCamera::GetSingleton();
 	auto* player = RE::PlayerCharacter::GetSingleton();
+	cameraProbeState = 4;
+	cameraProbeCamState = camera && camera->currentState ? uint32_t(camera->currentState->id) : 99u;
 	if (!camera || !player || !camera->cameraRoot || !camera->IsInThirdPerson())
 		return;
 	auto* root = camera->cameraRoot.get();
@@ -1331,8 +1334,11 @@ struct SD_PlayerCamera_Update
 
 void SnowDeformation::InstallCameraHook()
 {
-	// A detour, not the vfunc: the main loop calls PlayerCamera::Update by
-	// address, so the vtable slot never fired.
-	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update");
-	stl::detour_thunk<SD_PlayerCamera_Update>(REL::RelocationID(49852, 50784));
+	// Detour on the function itself; the vtable slot (0x2) alone never fired.
+	SD_PlayerCamera_Update::func = REL::RelocationID(49852, 50784).address();
+	DetourTransactionBegin();
+	DetourUpdateThread(GetCurrentThread());
+	const LONG attach = DetourAttach(reinterpret_cast<PVOID*>(&SD_PlayerCamera_Update::func), reinterpret_cast<PVOID>(SD_PlayerCamera_Update::thunk));
+	const LONG commit = DetourTransactionCommit();
+	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update at {:#x}: attach {}, commit {}", REL::RelocationID(49852, 50784).address(), attach, commit);
 }

@@ -1656,6 +1656,8 @@ public:
 	void ClampCameraAboveSnow();
 	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
 	uint8_t cameraProbeState = 0;
+	uint32_t cameraProbeFired = 0;
+	uint32_t cameraProbeCamState = 0;
 	float cameraProbeZ = 0.0f;
 	float cameraProbeSurface = 0.0f;
 
