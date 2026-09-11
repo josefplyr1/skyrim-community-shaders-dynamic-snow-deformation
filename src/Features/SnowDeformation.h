@@ -509,6 +509,8 @@ public:
 		float WaterEdgeRamp = 48.0f;
 		/** @brief Profile of that ramp: 0 = a straight slope with sharp corners, 1 = rounded shoulders top and bottom. */
 		float WaterEdgeRounding = 1.0f;
+		/** @brief Water this many units deep or shallower over the ground does not end the shell: hides a placed plane skimming the land near its rectangle's edge, at the price of the sheet standing in that much water at real shores. */
+		float WaterEdgeDepth = 0.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -1113,7 +1115,7 @@ public:
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
-		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30). */
+		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30), w = Settings::WaterEdgeDepth (took the spare). */
 		float4 SlopeDrape;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
@@ -2061,6 +2063,9 @@ public:
 	/** @brief Last consume: planes in the list, planes that drew, and whether the first plane's facts were logged (once). */
 	uint32_t statWaterCaptured = 0;
 	uint32_t statWaterDrawn = 0;
+	/** @brief Planes the hook refused because the list was full (previous list), and the running count for the current one. */
+	uint32_t statWaterDropped = 0;
+	uint32_t waterDropped = 0;
 	bool waterFirstLogged = false;
 	/** @brief Debugging Options: log every water plane the capture has not logged before (name, pass, transform, bounds) while on. */
 	bool debugLogWaterPlanes = false;

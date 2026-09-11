@@ -898,7 +898,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
-	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, 0.0f };
+	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, std::clamp(settings.WaterEdgeDepth, 0.0f, 64.0f) };
 	if (fineProbeArmed) {
 		fineProbeArmed = false;
 		ProbeFineLayer(a_cb);

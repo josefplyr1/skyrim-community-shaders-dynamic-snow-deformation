@@ -3660,12 +3660,21 @@ void SnowDeformation::BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->geometry)
 		return;
+	// Not the far LOD quadtree (nameless 2-triangle quads, one per unloaded
+	// cell block - beyond the loaded grid the shell parks under LOD terrain
+	// anyway) and not water skirts: together they were 2500 geometries a
+	// frame and filled the list before the real planes arrived.
+	const auto& name = a_pass->geometry->name;
+	if (name.empty() || std::strstr(name.c_str(), "Skirt"))
+		return;
 	// One entry per plane: the same geometry sets up once per water pass.
 	for (const auto& water : capturedWater)
 		if (water.geometry.get() == a_pass->geometry)
 			return;
-	if (capturedWater.size() >= 512)
+	if (capturedWater.size() >= 2048) {
+		waterDropped++;
 		return;
+	}
 	capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, a_pass->passEnum });
 }
 
@@ -3729,6 +3738,8 @@ void SnowDeformation::RenderWaterCapture()
 	}
 	statWaterCaptured = (uint32_t)capturedWater.size();
 	statWaterDrawn = 0;
+	statWaterDropped = waterDropped;
+	waterDropped = 0;
 	if (capturedWater.empty())
 		return;
 

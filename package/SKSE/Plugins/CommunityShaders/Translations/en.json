@@ -1371,6 +1371,8 @@
     "feature.snow_deformation.water_edge_ramp_tooltip": "Width of the slope from full snow down to bare ground before the margin, measured along the ground. Border Noise wanders this edge inland, never over the water.",
     "feature.snow_deformation.water_edge_rounding": "Water Edge Rounding",
     "feature.snow_deformation.water_edge_rounding_tooltip": "Shape of that slope: 0 = a straight ramp with sharp corners, 1 = rounded shoulders at the top and the bottom.",
+    "feature.snow_deformation.water_edge_depth": "Water Edge Depth",
+    "feature.snow_deformation.water_edge_depth_tooltip": "Water this shallow over the ground does not end the snow. The game's placed ponds are square planes that skim the land around their real shore, and that skim shows as a straight-edged bare patch at 0. Raising it hides the skim, but lets the snow stand in that much water at real shores.",
     "feature.snow_deformation.border_noise": "Border Noise",
     "feature.snow_deformation.border_noise_tooltip": "Wiggles WHERE the depth border between neighboring texture classes falls, so snow edges wander organically instead of tracing the texture seam.",
     "feature.snow_deformation.border_smoothness": "Border Smoothness",

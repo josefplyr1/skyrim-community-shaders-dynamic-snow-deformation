@@ -492,6 +492,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttWro = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("water_edge_rounding_tooltip"), "Shape of that slope: 0 = a straight ramp with sharp corners, 1 = rounded shoulders at the top and the bottom."));
 
+			ImGui::SliderFloat(T(TKEY("water_edge_depth"), "Water Edge Depth"), &settings.WaterEdgeDepth, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttWd = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("water_edge_depth_tooltip"), "Water this shallow over the ground does not end the snow. The game's placed ponds are square planes that skim the land around their real shore, and that skim shows as a straight-edged bare patch at 0. Raising it hides the skim, but lets the snow stand in that much water at real shores."));
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -1690,7 +1694,7 @@ void SnowDeformation::DrawSettings()
 					char wz[16];
 					fmtHeight(probeVals[3], wz, sizeof(wz));
 					char probeLine3[160];
-					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | planes captured %u, drawn %u", wz, statWaterCaptured, statWaterDrawn);
+					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | planes captured %u, drawn %u, dropped %u", wz, statWaterCaptured, statWaterDrawn, statWaterDropped);
 					ImGui::TextUnformatted(probeLine3);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())

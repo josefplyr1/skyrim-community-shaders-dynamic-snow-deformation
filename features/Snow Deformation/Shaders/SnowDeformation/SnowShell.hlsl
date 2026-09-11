@@ -936,7 +936,8 @@ float3 ApplyWaterCut(float3 terrain, float2 gridLocal)
 			float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
 			float h = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 			float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
-			float dist = (h - water) / max(length(grad), 0.02);
+			// SlopeDrape.w: water up to this deep over the ground is not water.
+			float dist = (h - water + SlopeDrape.w) / max(length(grad), 0.02);
 			float2 waterXY = GridOrigin + gridLocal;
 			float wander = saturate(ShapeNoise(waterXY / 37.0) * 0.7 + ShapeNoise(waterXY / 23.0 + 71.3) * 0.3) * BorderNoise;
 			float x = saturate((dist - wander - WaterEdgeMargin) / max(WaterEdgeRamp, 1.0));
