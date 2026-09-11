@@ -33,6 +33,7 @@
 	X(TrenchMemoryMB) \
 	X(EnableSnowAccumulation) \
 	X(PersistAccumulation) \
+	X(RecoloredSnowAccumulates) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
 	X(AccumulationMeltHours) \

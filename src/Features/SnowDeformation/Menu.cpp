@@ -107,7 +107,15 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints at all takes the full snow, all or nothing. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
-		ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &settings.SkinEdgeFlankWidth, 0.0f, 1.0f, "%.2f");
+		{
+			// Driven by the accumulation scalar while Recolored Snow Accumulates is on.
+			const bool reachDriven = settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates;
+			float reachShown = reachDriven ? snowAccumulation.load(std::memory_order_relaxed) : settings.SkinEdgeFlankWidth;
+			ImGui::BeginDisabled(reachDriven);
+			if (ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &reachShown, 0.0f, 1.0f, reachDriven ? "%.2f (snow accumulation)" : "%.2f") && !reachDriven)
+				settings.SkinEdgeFlankWidth = reachShown;
+			ImGui::EndDisabled();
+		}
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
 
@@ -326,6 +334,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
 		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two."));
+
+		ImGui::Checkbox(T(TKEY("recolored_snow_accumulates"), "Recolored Snow Accumulates"), &settings.RecoloredSnowAccumulates);
+		if (auto _ttAccumRecolor = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("recolored_snow_accumulates_tooltip"), "The snow on rocks and buildings grows out from its painted patches as it snows and draws back as it melts: Edge Lump Reach runs from 0 to 1 over Accumulation Time, back over Melt Time and Accumulated Snow Fade, whatever the Accumulation Peak. Off, the Edge Lump Reach slider is used as set."));
 
 		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
 		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())

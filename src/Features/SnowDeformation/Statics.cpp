@@ -2334,7 +2334,11 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
-	a_scb.EdgeFlankWidth = std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
+	// The accumulation scalar is already 0..1 over Accumulation Time, melt
+	// and fade, independent of the peak - exactly the reach's timeline.
+	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
+	                           snowAccumulation.load(std::memory_order_relaxed) :
+	                           std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:
 	// the mesh-replacer default reconstructs a weight the game never paints.

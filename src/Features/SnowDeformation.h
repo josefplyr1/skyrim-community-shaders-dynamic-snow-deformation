@@ -342,6 +342,8 @@ public:
 		bool EnableSnowAccumulation = true;
 		/** @brief Carry the accumulated layer through save/load on the 'SNAC' co-save record. Off, the record is written zeroed and every load starts at the authored depth. */
 		bool PersistAccumulation = true;
+		/** @brief Edge Lump Reach follows the accumulation scalar itself (0 at rest, 1 at the peak, over Accumulation Time / Melt Time / Fade regardless of the peak's height) instead of the slider. */
+		bool RecoloredSnowAccumulates = true;
 		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Tuned low so the change is visible within a session at typical timescales. */
 		float AccumulationHours = 1.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time rather than asymmetric, so the change stays watchable. */

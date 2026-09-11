@@ -1466,6 +1466,8 @@
     "feature.snow_deformation.enable": "Enable Snow Deformation",
     "feature.snow_deformation.enable_accumulation": "Snow Accumulation",
     "feature.snow_deformation.enable_accumulation_tooltip": "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two.",
+    "feature.snow_deformation.recolored_snow_accumulates": "Recolored Snow Accumulates",
+    "feature.snow_deformation.recolored_snow_accumulates_tooltip": "The snow on rocks and buildings grows out from its painted patches as it snows and draws back as it melts: Edge Lump Reach runs from 0 to 1 over Accumulation Time, back over Melt Time and Accumulated Snow Fade, whatever the Accumulation Peak. Off, the Edge Lump Reach slider is used as set.",
     "feature.snow_deformation.fine_probe": "Probe Land-Exact Layer",
     "feature.snow_deformation.fine_probe_tooltip": "Diagnostic: reads the land-exact height layer back from the GPU and checks it three ways - the terrain window against the baked cell data, the fine texture against a CPU copy of the pass that builds it, and the shader's own lookup along your line of sight against the same rule evaluated from the cells. Stand facing the ground you are asking about; the result appears here and in the log.",
     "feature.snow_deformation.floating_band": "Floating Actor Clearance",
