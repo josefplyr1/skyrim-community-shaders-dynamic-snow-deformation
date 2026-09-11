@@ -586,11 +586,9 @@ public:
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
 		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field crosses Coverage at it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
-		float VolumeSnowDepth = 15.0f;
+		float VolumeSnowDepth = 10.0f;
 		/** @brief "Volume Snow Coverage": the field's value at the snow top and its crossing, 0.02..0.5. Lower lets a lip survive more dilution (longer overhangs, thin things kept); it does not change the depth. Josef's tuned default. */
 		float VolumeSnowCoverage = 0.15f;
-		/** @brief "Volume Edge Noise", world units: how far the snow's edge wanders about the overhang cap, from a world-anchored noise, so a straight flat edge is not traced straight. */
-		float VolumeEdgeNoise = 0.0f;
 		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
 		float VolumeSnowOverhang = 5.0f;
 		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
@@ -610,7 +608,7 @@ public:
 		/** @brief "Volume Forward Bias": how far ahead of the eye each window sits, as a fraction of its extent (0 = centred). Half a cube behind you is air the capture never lists; ahead is where the reach is wanted. */
 		float VolumeForwardBias = 0.45f;
 		/** @brief "Ring Shape": 0 = cubic (256 voxels a side), 1 = wide (512 x 512 x 256: twice the reach sideways and ahead for twice the memory), 2 = wide and flat (512 x 512 x 128: the reach of wide at the memory of cubic, half the height). Every ring shares the shape, so each still doubles the one inside it in every axis. */
-		int VolumeRingShape = 0;
+		int VolumeRingShape = 1;
 		/** @brief "Volume Vertical Bias": how far BELOW the eye each window's centre sits, as a fraction of its extent. The third-person camera rises when it looks down, and a cube centred on it then puts the ground beside the player outside the nearest ring - which is why the ring colours changed with pitch (Josef, 2026-09-07). */
 		float VolumeVerticalBias = 0.0f;
 		/** @brief "Volume Max Distance", world units: past it the volume snow dithers out over a quarter of that distance and the object shell carries the object alone. The outermost rings sample a rock at 32 u a column; there is a range at which the shell simply looks better. */
@@ -624,7 +622,7 @@ public:
 		/** @brief "Lazy Far Rings": level L rebuilds its occupancy, field and bricks every 2^L frames, phased so no frame carries more than two levels. A step is a rounding error at a far ring's voxel; the draw still runs every frame off the last build. Six levels cost about two. */
 		bool VolumeLazyRings = true;
 		/** @brief "Volume Voxel Size", world units, of the finest level; each further level doubles it. Josef's tuned default. */
-		float VolumeVoxelSize = 2.0f;
+		float VolumeVoxelSize = 1.0f;
 		/** @brief "Volume Snow Max Slope": surfaces steeper than this grow no volume snow - the object's own normal, packed into the voxel at capture. Josef's tuned default. */
 		float VolumeSnowMaxSlopeDeg = 69.0f;
 		/** @brief "Volume Sky Exposure": strength of the sky-openness weighting on the seed, percent. Josef's tuned default: off. */
@@ -2159,7 +2157,7 @@ public:
 	/** @brief The window's extent in world units per axis: shape dims * base voxel * 2^L whatever the grid size. */
 	DirectX::XMFLOAT3 VoxelExtentForLevel(uint a_level) const;
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
-	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 2.0f, 24.0f); }
+	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 1.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
 
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
@@ -2203,7 +2201,7 @@ public:
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
-		/** @brief x = Settings::VolumeEdgeNoise (world units), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
+		/** @brief x = 0 (Edge Noise retired; the lip's end no longer wanders), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
 		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
 		float LipParams[4];
@@ -2339,7 +2337,7 @@ public:
 	/** @brief Slice plane offset from the camera, world units. */
 	float voxelSliceOffset = 0.0f;
 	/** @brief Seconds an unseen voxel takes to fade, at 60 fps. */
-	float voxelMemorySeconds = 4.0f;
+	float voxelMemorySeconds = 0.5f;
 	/** @brief Runtime-only: the slice flattens the whole cube along the view axis (silhouettes) instead of showing one plane. The readable first look. */
 	bool voxelSliceXray = true;
 	/** @brief Occupied-voxel count: a raw UAV summed by VoxelScrollCS (post-decay, pre-raster, so it describes LAST frame's volume), read back one frame late through a staging pair so it never stalls. */

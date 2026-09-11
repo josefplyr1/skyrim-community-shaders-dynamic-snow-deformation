@@ -147,7 +147,6 @@
 	X(LODObjectSnow) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
-	X(VolumeEdgeNoise) \
 	X(VolumeSnowCoverage) \
 	X(VolumeVoxelSize) \
 	X(VolumeSnowMaxSlopeDeg) \

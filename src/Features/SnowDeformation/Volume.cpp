@@ -435,7 +435,7 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// still votes the floor stays at a half: a wider kernel there is more
 	// dilution at every rim.
 	a_cb.RoundSigma = std::max(roundVox, airWeight > 0.0f ? 0.5f : 1.0f);
-	a_cb.EdgeParams[0] = std::clamp(settings.VolumeEdgeNoise, 0.0f, 16.0f);
+	a_cb.EdgeParams[0] = 0.0f;
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
