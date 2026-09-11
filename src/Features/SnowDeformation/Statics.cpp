@@ -3638,55 +3638,36 @@ ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, co
 	return layout.get();
 }
 
-struct SD_BSWaterShader_SetupGeometry
+// The engine's own list of live water bodies: every loaded cell's water and
+// every placed body, culled or not, each with its shape. What the water
+// SHADER draws is a superset - the LOD quadtree, a mod's skirts, the ripple
+// displacement mesh and the waterline-crossing effect at the camera's own
+// level - and capturing draws put every one of those into the raster.
+void SnowDeformation::GatherWaterObjects()
 {
-	static void thunk(RE::BSShader* a_shader, RE::BSRenderPass* a_pass, uint32_t a_flags)
-	{
-		func(a_shader, a_pass, a_flags);
-		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
-			snowDeformation.BSWaterShader_SetupGeometry(a_pass);
+	capturedWater.clear();
+	auto* waterSystem = RE::TESWaterSystem::GetSingleton();
+	if (!waterSystem || !waterSystem->enabled)
+		return;
+	for (const auto& object : waterSystem->waterObjects) {
+		if (!object || !object->shape)
+			continue;
+		auto* shape = object->shape.get();
+		if (shape->GetAppCulled())
+			continue;
+		bool seen = false;
+		for (const auto& water : capturedWater)
+			if (water.geometry.get() == shape) {
+				seen = true;
+				break;
+			}
+		if (seen)
+			continue;
+		capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(shape), shape->world, object->plane.constant });
 	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
-void SnowDeformation::InstallWaterCaptureHook()
-{
-	logger::info("[SNOW DEFORMATION] Hooking BSWaterShader::SetupGeometry");
-	stl::write_vfunc<0x6, SD_BSWaterShader_SetupGeometry>(RE::VTABLE_BSWaterShader[0]);
 }
 
-void SnowDeformation::BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass)
-{
-	if (!a_pass || !a_pass->geometry)
-		return;
-	// Not the far LOD quadtree (nameless 2-triangle quads, one per unloaded
-	// cell block - beyond the loaded grid the shell parks under LOD terrain
-	// anyway) and not water skirts: together they were 2500 geometries a
-	// frame and filled the list before the real planes arrived.
-	const auto& name = a_pass->geometry->name;
-	if (name.empty() || std::strstr(name.c_str(), "Skirt"))
-		return;
-	// The Underwater technique with the camera above the surface is the
-	// waterline-crossing effect (partiallyUnderwater), drawn at the camera's
-	// level over land, not a body of water.
-	if (((a_pass->passEnum >> 11) & 0xF) == 8) {
-		auto* waterSystem = RE::TESWaterSystem::GetSingleton();
-		if (!waterSystem || !waterSystem->playerUnderwater)
-			return;
-	}
-	// One entry per plane: the same geometry sets up once per water pass.
-	for (const auto& water : capturedWater)
-		if (water.geometry.get() == a_pass->geometry)
-			return;
-	if (capturedWater.size() >= 2048) {
-		waterDropped++;
-		return;
-	}
-	capturedWater.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, a_pass->passEnum });
-}
-
-// Last frame's water planes top-down into the terrain window's frame (128-unit
+// The engine's water bodies top-down into the terrain window's frame (128-unit
 // texels, MAX blend); the landscape shell ends where its ground lies under it.
 void SnowDeformation::RenderWaterCapture()
 {
@@ -3748,10 +3729,9 @@ void SnowDeformation::RenderWaterCapture()
 		waterWindowCellX = shellWindowCellX;
 		waterWindowCellY = shellWindowCellY;
 	}
+	GatherWaterObjects();
 	statWaterCaptured = (uint32_t)capturedWater.size();
 	statWaterDrawn = 0;
-	statWaterDropped = waterDropped;
-	waterDropped = 0;
 	if (capturedWater.empty())
 		return;
 
@@ -3792,12 +3772,11 @@ void SnowDeformation::RenderWaterCapture()
 				geometry->name.c_str(), descKey, desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX), triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, shellWindowCellX, shellWindowCellY);
 		}
-		// Keyed on geometry + pass + level, so a geometry reused at another
-		// height or through another technique logs again.
-		if (debugLogWaterPlanes && waterLoggedPlanes.insert(std::to_string(reinterpret_cast<uintptr_t>(geometry)) + ":" + std::to_string(water.passEnum) + ":" + std::to_string(int(water.world.translate.z))).second) {
+		// Keyed on geometry + level, so a shape moved to another height logs again.
+		if (debugLogWaterPlanes && waterLoggedPlanes.insert(std::to_string(reinterpret_cast<uintptr_t>(geometry)) + ":" + std::to_string(int(water.world.translate.z))).second) {
 			const auto& wb = geometry->worldBound;
-			logger::info("[SNOW DEFORMATION] water plane '{}' pass {:#x} technique {} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
-				geometry->name.c_str(), water.passEnum, (water.passEnum >> 11) & 0xF, triShape->GetTrishapeRuntimeData().triangleCount,
+			logger::info("[SNOW DEFORMATION] water body '{}' plane d {:.0f} tris {} at ({:.0f} {:.0f} {:.0f}) scale {:.2f} bound centre ({:.0f} {:.0f} {:.0f}) radius {:.0f}",
+				geometry->name.c_str(), water.planeConstant, triShape->GetTrishapeRuntimeData().triangleCount,
 				water.world.translate.x, water.world.translate.y, water.world.translate.z, water.world.scale,
 				wb.center.x, wb.center.y, wb.center.z, wb.radius);
 		}

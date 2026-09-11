@@ -1615,15 +1615,16 @@ public:
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
 	std::vector<CapturedSnowStatic> capturedStatics;
-	/** @brief Water geometry the game set up last frame (BSWaterShader::SetupGeometry): cell planes, placed rivers and Unified Water's meshes alike. Rasterised top-down into the water window at the next Prepass, then cleared there - the water pass runs after Prepass, so the list always carries the previous frame. */
+	/** @brief The engine's live water bodies (TESWaterSystem::waterObjects, gathered each Prepass by GatherWaterObjects): cell planes and placed bodies, culled or not. Rasterised top-down into the water window, then cleared. */
 	struct CapturedWater
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
-		uint32_t passEnum;
+		float planeConstant;
 	};
 	std::vector<CapturedWater> capturedWater;
-	void BSWaterShader_SetupGeometry(RE::BSRenderPass* a_pass);
+	/** @brief Fills capturedWater from TESWaterSystem::waterObjects (every live body's shape, culled or not); not from the water shader's draws, which also carry the LOD quadtree, skirts, the displacement mesh and the waterline-crossing effect. */
+	void GatherWaterObjects();
 	std::unordered_set<void*> capturedStaticsSet;
 	std::atomic<uint32_t> statCapturedStatics{ 0 };
 
@@ -1645,7 +1646,6 @@ public:
 	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
-	void InstallWaterCaptureHook();
 
 	/** @brief Pre-shell copy of the MASKS target: Masks.y carries the land's EM grain height (Lighting.hlsl LANDSCAPE; 0 = no data) for the shell's two-sided edge contest, readable only before the shell overwrites the G-buffer. Bound at t10 on the shell PS. */
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
@@ -2063,11 +2063,8 @@ public:
 	/** @brief Last consume: planes in the list, planes that drew, and whether the first plane's facts were logged (once). */
 	uint32_t statWaterCaptured = 0;
 	uint32_t statWaterDrawn = 0;
-	/** @brief Planes the hook refused because the list was full (previous list), and the running count for the current one. */
-	uint32_t statWaterDropped = 0;
-	uint32_t waterDropped = 0;
 	bool waterFirstLogged = false;
-	/** @brief Debugging Options: log every water plane the capture has not logged before (name, pass, transform, bounds) while on. */
+	/** @brief Debugging Options: log every water body the raster has not logged before (name, plane, transform, bounds) while on. */
 	bool debugLogWaterPlanes = false;
 	std::unordered_set<std::string> waterLoggedPlanes;
 	void RenderWaterCapture();

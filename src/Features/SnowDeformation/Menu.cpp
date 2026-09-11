@@ -1397,7 +1397,7 @@ void SnowDeformation::DrawSettings()
 			if (ImGui::Checkbox(T(TKEY("debug_log_water_planes"), "Log Water Planes"), &debugLogWaterPlanes))
 				waterLoggedPlanes.clear();
 			if (auto _ttWlog = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_log_water_planes_tooltip"), "While on, every water plane the capture sees for the first time is written to CommunityShaders.log with its name, pass, position, scale and bounds. Look around the spot in question, then turn it off."));
+				ImGui::Text("%s", T(TKEY("debug_log_water_planes_tooltip"), "While on, every water body the engine lists is written to CommunityShaders.log the first time it is seen, with its name, plane, position, scale and bounds. Look around the spot in question, then turn it off."));
 
 			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
 			if (auto _ttWater = Util::HoverTooltipWrapper())
@@ -1694,7 +1694,7 @@ void SnowDeformation::DrawSettings()
 					char wz[16];
 					fmtHeight(probeVals[3], wz, sizeof(wz));
 					char probeLine3[160];
-					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | planes captured %u, drawn %u, dropped %u", wz, statWaterCaptured, statWaterDrawn, statWaterDropped);
+					snprintf(probeLine3, sizeof(probeLine3), "water window: z %s | bodies listed %u, drawn %u", wz, statWaterCaptured, statWaterDrawn);
 					ImGui::TextUnformatted(probeLine3);
 				}
 				if (auto _ttSdv = Util::HoverTooltipWrapper())

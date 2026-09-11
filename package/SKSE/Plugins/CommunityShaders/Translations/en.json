@@ -1455,7 +1455,7 @@
     "feature.snow_deformation.debug_water_cut_disabled": "Disable Water Cut",
     "feature.snow_deformation.debug_water_cut_disabled_tooltip": "A/B: lets the landscape shell run on under the water again. Off, the sheet ends at the waterline - the water the game drew last frame, rasterised top-down into the terrain window; the ragged edge only ever recedes onto the dry side.",
     "feature.snow_deformation.debug_log_water_planes": "Log Water Planes",
-    "feature.snow_deformation.debug_log_water_planes_tooltip": "While on, every water plane the capture sees for the first time is written to CommunityShaders.log with its name, pass, position, scale and bounds. Look around the spot in question, then turn it off.",
+    "feature.snow_deformation.debug_log_water_planes_tooltip": "While on, every water body the engine lists is written to CommunityShaders.log the first time it is seen, with its name, plane, position, scale and bounds. Look around the spot in question, then turn it off.",
     "feature.snow_deformation.debug_tiling_ruler": "Tiling Ruler",
     "feature.snow_deformation.debug_tiling_ruler_tooltip": "Measurement aid: draws three gridlines on the landscape. Red = one landscape texture repeat, green = 256 world units (the snow shell's tile), blue = 4096 (cell boundary). Counting red lines per green cell gives the shell-to-landscape tiling ratio directly; the blue lines are the scale anchor. Look straight down at flat ground near the camera.",
     "feature.snow_deformation.description": "Maintains a persistent deformation map around the player so snow can be visibly compressed by actors moving through it, leaving lasting trails.",
