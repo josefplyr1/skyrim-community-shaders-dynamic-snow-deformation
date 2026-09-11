@@ -589,10 +589,10 @@ public:
 		float VolumeSnowDepth = 10.0f;
 		/** @brief "Volume Snow Coverage": the field's value at the snow top and its crossing, 0.02..0.5. Lower lets a lip survive more dilution (longer overhangs, thin things kept); it does not change the depth. Josef's tuned default. */
 		float VolumeSnowCoverage = 0.15f;
-		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow reaches sideways, whatever its depth or Rounding - a hard cap with a one-voxel ramp; past it the snow only grows up. Josef's tuned default. */
-		float VolumeSnowOverhang = 16.0f;
-		/** @brief "Volume Edge Rounding", world units, 0..16: the corner radius of the snow's cross-section (top corners, and a lip's underside), at most half the depth. Never moves the flat top or shortens the lip (Overhang alone sets the reach); 0 is square. Josef's tuned default. */
-		float VolumeSnowRounding = 8.0f;
+		/** @brief "Volume Snow Overhang", world units: how far past a snow column the snow may reach sideways, a hard cap with a one-voxel ramp - past it the snow only grows up. Josef's tuned default. */
+		float VolumeSnowOverhang = 5.0f;
+		/** @brief "Volume Edge Rounding", world units: the sideways averaging width - the shoulder over which the snow falls off toward an edge, independent of how far it may reach past it. Josef's tuned default. */
+		float VolumeSnowRounding = 5.0f;
 		/** @brief "Volume Levels": clipmap levels, each twice the voxel of the one inside it, 64 MB each. Reach doubles per level; detail stays the base voxel near the camera. Josef's tuned default. */
 		int VolumeLevels = 4;
 		/** @brief "Fine Levels": how many levels, from the camera out, keep the full 256^3 grid; the rest are 128^3 at twice the voxel - the same reach at an eighth of the work and memory, one octave less detail where it is too far to see. */
@@ -2187,7 +2187,7 @@ public:
 		float DepthVox;
 		/** @brief 0.5: the ramp's crossing. */
 		float FieldThreshold;
-		/** @brief Sideways anti-alias sigma in voxels among snow: 4 u, clamped to 1..2 voxels; 0.25 when Settings::VolumeSnowRounding is 0 (blocks). Not the Rounding. */
+		/** @brief Sideways averaging sigma in voxels, from Settings::VolumeSnowRounding: the shoulder at an edge. */
 		float RoundSigma;
 		/** @brief cos(Settings::VolumeSnowMaxSlopeDeg): the least up-ness a seed's surface may have, read from the normal the raster packed into the voxel. */
 		float SlopeMinNz;
@@ -2197,13 +2197,13 @@ public:
 		float SkyStrength;
 		/** @brief Bit 0: every brick column is rebuilt this time (the toggle off, the periodic refresh, or a level with nothing built). Bit 1: dense - the active-brick gates in every field pass say yes. */
 		float ForceDirty;
-		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded, 0..15: how far an air voxel copies the nearest snow (from the source's surface row up), and where the lip is cut. */
+		/** @brief Settings::VolumeSnowOverhang in this level's voxels, rounded: the cap's reach past a snow column. */
 		float OverhangVox;
 		/** @brief kVoxelHeadroomUnits in this level's voxels, at least 1: air a seed needs above it. */
 		float HeadroomVox;
-		/** @brief x = 0 (Edge Noise retired; the lip's end no longer wanders), y = kVoxelEdgeNoiseCell (unused; the edge noise is gone from the shader), z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
+		/** @brief x = 0 (Edge Noise retired; the lip's end no longer wanders), y = kVoxelEdgeNoiseCell, z = the field's exponential rate per voxel (ln 2 over the Rounding in voxels, the Rounding floored at two voxels so the crossing interpolates true), w = Settings::VolumeSnowOverhang (world units). */
 		float EdgeParams[4];
-		/** @brief x = the Rounding in this level's voxels, unfloored: the corner radius for VoxelFilletCS (air no longer votes in the sideways average). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
+		/** @brief x = an air neighbour's weight in the sideways average: 1 where the voxel is small against the Rounding (dilution shapes the dome and the lip), 0 on the far rings (a rim keeps its slab). y = the capture's conservative expansion in voxels (Settings::VolumeConservativeCapture ? 0.5 : 0). */
 		float LipParams[4];
 		/** @brief xyz = voxels a side per axis (pow2 each); w unused. */
 		int Dims[4];
@@ -2303,7 +2303,6 @@ public:
 	ID3D11ComputeShader* voxelSeedCS = nullptr;
 	ID3D11ComputeShader* voxelBlurZCS = nullptr;
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
-	ID3D11ComputeShader* voxelFilletCS = nullptr;
 	// ---- V1b: the draw ----
 	ConstantBuffer* voxelDrawCB = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;

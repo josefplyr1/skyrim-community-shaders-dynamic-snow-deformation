@@ -41,8 +41,7 @@ cbuffer VoxelCB : register(b0)
 	float DepthVox;
 	// Coverage: the field's value at the snow top, and its crossing
 	float FieldThreshold;
-	// Sideways sigma in voxels: the anti-alias smoothing among snow (4 u,
-	// a voxel at least; 0.25 when the Rounding is 0)
+	// Sideways sigma in voxels: the shoulder's width at an edge
 	float RoundSigma;
 	// cos(max slope): the least up-ness a seed's own surface may have
 	float SlopeMinNz;
@@ -62,8 +61,8 @@ cbuffer VoxelCB : register(b0)
 	// units, z = the field's exponential rate per voxel, w = the overhang in
 	// units
 	float4 EdgeParams;
-	// x = the Rounding in voxels, unfloored (the corner radius), y =
-	// the capture's conservative expansion in voxels (0 = off), the rest padding
+	// x = an air neighbour's weight in the sideways average, y = the capture's
+	// conservative expansion in voxels (0 = off), the rest padding
 	float4 LipParams;
 	// xyz = voxels a side, pow2 each; z may be shorter than x = y (a wide
 	// ring). Every torus mask is per axis.
@@ -750,11 +749,7 @@ float OccNz(float v)
 					n += 1.0;
 				}
 			}
-			// No sub-sample in the run (a seed under an overhang, whose
-			// samples are the overhang's): the voxel's centre. The raster's
-			// per-voxel height was a plain store, racy, and the height volume
-			// is the corner passes' scratch after the sweep.
-			float surf = n > 0.0 ? sum / n : (float)z + 0.5;
+			float surf = n > 0.0 ? sum / n : (float)z + (HeightIn[ph] * 8.0 - 4.0);
 			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
 			// threshold beneath it, and only the run's own voxels may carry
 			// one - never the air under a thin member. So the top may sit
@@ -812,25 +807,48 @@ float OccNz(float v)
 // Support for the overhang cap, built with the sideways passes.
 RWTexture3D<float> SupportOut : register(u4);
 Texture3D<float> SupportIn : register(t5);
-// SIDEWAYS: THE REACH IS THE OVERHANG, THE SHAPE IS THE CORNERS. A snow
-// voxel is the gaussian mean of the snow beside it over a fixed
-// anti-alias sigma - air casts no vote, so a slab keeps its height to its
-// edge; steps between columns blend, and by no more than their own height,
-// the mean of exponentials being a soft-max of tops. An air voxel copies
-// the nearest snow along the axis within OverhangVox, from the source's
-// surface row up: the lip goes exactly that far, whatever the Rounding,
-// and its underside is the source's top. Y cuts a voxel past the overhang.
-// The corners are VoxelFilletCS's, after. Air used to vote (diluting the
-// field by the Rounding at every rim): a bigger Rounding pulled the snow
-// back from the edge, and the Overhang cut was never reached (Josef,
-// 2026-09-11).
-//
-// A solid blocks only as a riser (ColumnTop below), so a step riser or a
-// wall still stops one plane's snow from melding into the next.
+// World-anchored value noise in [-1, 1] for the snow's edge.
+float EdgeHash(float2 c)
+{
+	return frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453);
+}
+
+float EdgeValueNoise(float2 q)
+{
+	float2 i = floor(q);
+	float2 f = frac(q);
+	f = f * f * (3.0 - 2.0 * f);
+	float a = EdgeHash(i);
+	float b = EdgeHash(i + float2(1.0, 0.0));
+	float c = EdgeHash(i + float2(0.0, 1.0));
+	float d = EdgeHash(i + float2(1.0, 1.0));
+	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 2.0 - 1.0;
+}
+
+// Two octaves, the second off-axis: one octave of value noise reads as a
+// grid of blobs (Josef, 2026-09-07: "too patterned").
+float EdgeNoise(float2 q)
+{
+	float2 q2 = float2(q.x * 2.3 + q.y * 1.1, q.y * 2.7 - q.x * 0.9) + 17.3;
+	return 0.65 * EdgeValueNoise(q) + 0.35 * EdgeValueNoise(q2);
+}
+
+// SIDEWAYS IS A NORMALISED AVERAGE THAT STOPS AT SOLID, with an overhang
+// cap on top. The average over RoundSigma is the shoulder: a slab's inside
+// stays at 1, its rim falls to a half, so the surface rounds off over the
+// kernel's width toward the edge, and a narrow member carries less - snow
+// on a post is a small cap, as it is. (A max kept every lone seed at full
+// height: the 20-u spikes and the fringe of teeth Josef saw.) Normalised
+// over what was reached, so snow piles against a wall instead of thinning
+// beside it; walking outward it stops at the first occupied voxel, so a
+// step riser or a wall blocks one plane's snow from melding into the next.
 //
 // THE CAP is the Chebyshev distance to the nearest column with snow, built
 // separably: X stores its 1D distance in Support, Y takes min over j of
-// max(dx, |j|). Indirect: X over the D3 column list, Y over D2.
+// max(dx, |j|), and the field is cut past OverhangVox with a one-voxel
+// ramp. So the shoulder's width and the reach past an edge are two
+// settings: deep, rounded snow that still stops at the step's edge.
+// Indirect: X over the D3 column list, Y over D2.
 // A column's top in logical voxels, from the capture's heightmap: the mean
 // of the four diagonal sub-samples that hold a key. No key at all reads as
 // infinitely high, so a solid with no top-down capture (an open-topped
@@ -896,16 +914,26 @@ float ColumnTop(uint2 ph)
 	float sigma = max(RoundSigma, 0.25);
 	float invTwoS2 = 0.5 / (sigma * sigma);
 	int reach = (int)OverhangVox + 1;
-	int span = min(max((int)ceil(sigma * 2.5), reach), 16);
-	float zc = (float)logical.z + 0.5;
+	int span = min(max((int)ceil(sigma * 2.5), reach), 9);
+	// DILUTION IS THE SHAPE. An air neighbour weighs AirWeight (1 on rings
+	// whose voxel is small against the Rounding, 0 on the far ones): where
+	// it votes, the field beside an edge is diluted and the exponential
+	// turns that into a smooth, log-shaped drop - the dome and the lip;
+	// where it does not, a far ring's rim keeps its full slab instead of
+	// eroding a whole voxel at every edge. Snow columns (the sweep's
+	// epsilon included) always vote, so a lone post keeps its cap. The
+	// weights run out to the overhang, so a lip can reach it.
+	float airWeight = LipParams.x;
 	float v0 = VolumeIn[p];
-	bool snow = v0 > 0.0;
 	float sum = v0;
-	float wsum = snow ? 1.0 : 0.0;
-	// An air voxel's source: the nearest snow along the axis (Chebyshev in Y)
-	float near = 0.0;
-	float nearD = 1.0e4;
-	float dist = alongY ? round(SupportIn[p] * 16.0) : (snow ? 0.0 : (float)reach);
+	float wsum = v0 > 0.0 ? 1.0 : airWeight;
+	bool anySnow = v0 > 0.0;
+	float dist = alongY ? round(SupportIn[p] * 8.0) : (v0 > 0.0 ? 0.0 : (float)reach);
+	// A solid neighbour blocks only as a RISER: its column's top more than
+	// 1.5 voxels over this voxel's centre. A solid within that is the same
+	// slope one voxel on and is averaged through; stopping at every solid
+	// terraced a slope at each whole-voxel rise (2026-09-11).
+	float zc = (float)logical.z + 0.5;
 	[unroll] for (int dir = -1; dir <= 1; dir += 2)
 	{
 		[loop] for (int k = 1; k <= span; k++)
@@ -914,136 +942,44 @@ float ColumnTop(uint2 ph)
 			if (any(l < 0) || any(l >= Dims.xyz))
 				break;
 			uint3 ph = Phys(l);
-			// A solid blocks only as a RISER: its column's top more than 1.5
-			// voxels over this voxel's centre - a solid within that is the same
-			// slope one voxel on and is averaged through (2026-09-11). An air
-			// voxel copies nothing from under a source's surface row, so a lip's
-			// underside is the surface it hangs from.
-			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > (snow ? 1.5 : 0.5))
+			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > 1.5)
 				break;
 			float v = VolumeIn[ph];
-			if (v <= 0.0)
-				continue;
-			float d = alongY ? max(round(SupportIn[ph] * 16.0), (float)k) : (float)k;
-			[flatten] if (snow)
+			float w = exp(-(float)(k * k) * invTwoS2);
+			[flatten] if (v > 0.0)
 			{
-				float w = exp(-(float)(k * k) * invTwoS2);
 				wsum += w;
 				sum += w * v;
+				anySnow = true;
 			}
-			else if (d < nearD)
-			{
-				near = v;
-				nearD = d;
-			}
-			else if (d == nearD)
-				near = 0.5 * (near + v);
-			dist = min(dist, d);
+			else
+				wsum += w * airWeight;
+			[flatten] if (alongY)
+				dist = min(dist, max(round(SupportIn[ph] * 8.0), (float)k));
+			else if (v > 0.0)
+				dist = min(dist, (float)k);
 		}
 	}
-	float avg = snow ? sum / max(wsum, 1e-6) : (nearD < (float)reach ? near : 0.0);
-	avg = avg > 0.0 ? max(avg, 1.0 / 255.0) : 0.0;
+	float avg = anySnow ? max(sum / max(wsum, 1e-6), 1.0 / 255.0) : 0.0;
 	[branch] if (alongY)
 	{
-		// THE LIP'S END: cut a voxel past the overhang.
-		float cut = dist > 0.5 ? saturate((EdgeParams.w + VoxelSize - dist * VoxelSize) / VoxelSize) : 1.0;
-		VolumeOut[p] = avg * cut;
+		// The overhang: cut one voxel past it, the cut wandering with a
+		// world-anchored noise that also raises and lowers the lip - and
+		// ONLY the lip: inside the edge (dist 0) neither term reaches.
+		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
+		float n = EdgeNoise(worldXY / max(EdgeParams.y, 1.0));
+		float dU = dist * VoxelSize - n * EdgeParams.x;
+		// A snow column (dist 0) is never cut: with an amplitude past the
+		// Overhang the noise reached inside the edge (Josef, 2026-09-07).
+		float cut = dist > 0.5 ? saturate((EdgeParams.w + VoxelSize - dU) / VoxelSize) : 1.0;
+		float wobble = 1.0 + 0.35 * n * saturate(dist);
+		VolumeOut[p] = avg * wobble * cut;
 	}
 	else
 	{
 		VolumeOut[p] = avg;
-		SupportOut[p] = min(dist, 16.0) / 16.0;
+		SupportOut[p] = min(dist, 8.0) / 8.0;
 	}
-}
-
-// THE CORNERS, two passes on D2 after Y (the Y pass writes the dilated
-// field into the height volume; these read it and write the field). The
-// snow body's cross-section is a rounded rectangle: Rounding is its corner
-// radius, at most half the depth, measured from the DILATED footprint's
-// edge - so the Overhang alone sets where the body ends and the Rounding
-// only what its corners do (Josef's sketch, 2026-09-11). X: each set
-// voxel's distance along x to the nearest voxel outside the set, into
-// Support (a riser is not an edge). Y: the Chebyshev inward distance from
-// the rows beside, then the top corner as an exact drop of the crossing
-// (the field is exponential in height: a drop of d voxels is a scale of
-// exp(-rate d), and the threshold keeps a half-life of headroom, at least
-// the Rounding) and a lip's bottom corner as a cut, the lip told from the
-// mesh's own snow by walking down to air with no solid on the way.
-[numthreads(8, 8, 8)] void VoxelFilletCS(uint3 gid
-										 : SV_GroupID, uint3 tid
-										 : SV_GroupThreadID) {
-	bool alongY = BlurAxis == 1;
-	uint2 col = ListColumn(LIST2_OFF, gid.x);
-	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
-	float v0 = VolumeIn[p];
-	[branch] if (v0 <= 0.0)
-	{
-		if (alongY)
-			VolumeOut[p] = 0.0;
-		else
-			SupportOut[p] = 0.0;
-		return;
-	}
-	int3 mask = Dims.xyz - 1;
-	int3 logical = ((int3)p - OriginVox.xyz) & mask;
-	float zc = (float)logical.z + 0.5;
-	float r = min(LipParams.x, 0.5 * DepthVox);
-	int fr = min((int)ceil(r) + 1, 16);
-	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
-	float dIn = alongY ? round(SupportIn[p] * 16.0) : 16.0;
-	[unroll] for (int dir = -1; dir <= 1; dir += 2)
-	{
-		[loop] for (int k = 1; k <= fr; k++)
-		{
-			int3 l = logical + step * (k * dir);
-			if (any(l < 0) || any(l >= Dims.xyz))
-				break;
-			uint3 ph = Phys(l);
-			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > 1.5)
-				break;
-			float v = VolumeIn[ph];
-			[branch] if (v <= 0.0)
-			{
-				dIn = min(dIn, (float)k);
-				break;
-			}
-			[flatten] if (alongY)
-				dIn = min(dIn, max(round(SupportIn[ph] * 16.0), (float)k));
-		}
-	}
-	[branch] if (!alongY)
-	{
-		SupportOut[p] = min(dIn, 16.0) / 16.0;
-		return;
-	}
-	float e = dIn - 0.5;
-	float drop = 0.0;
-	float cut = 1.0;
-	[branch] if (r > 0.0 && e < r)
-	{
-		drop = r - sqrt(saturate(r * r - (r - e) * (r - e)));
-		float h = 1.0e4;
-		[loop] for (int k = 1; k <= fr; k++)
-		{
-			int3 l = logical - int3(0, 0, k);
-			if (l.z < 0)
-				break;
-			uint3 ph = Phys(l);
-			if (OccupancyIn[ph] > 0.0)
-				break;
-			[branch] if (VolumeIn[ph] <= 0.0)
-			{
-				h = (float)(k - 1) + 0.5;
-				break;
-			}
-		}
-		[flatten] if (h < r)
-		{
-			float eMin = r - sqrt(saturate(r * r - (r - h) * (r - h)));
-			cut = saturate(e - eMin + 0.5);
-		}
-	}
-	VolumeOut[p] = v0 * exp(-EdgeParams.z * drop) * cut;
 }
 
 // V1b: the draw's brick list. One thread per 8^3 brick, listed when the

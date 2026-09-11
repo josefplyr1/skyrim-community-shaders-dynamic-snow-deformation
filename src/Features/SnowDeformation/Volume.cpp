@@ -22,7 +22,7 @@ bool SnowDeformation::EnsureVoxelResources()
 	}
 	const auto wantMax = VoxelDimsMax();
 	if (levelsReady && voxelSupport && voxelSupportDims.x == wantMax.x && voxelSupportDims.y == wantMax.y && voxelSupportDims.z == wantMax.z && voxelSliceTexture && voxelCB && voxelDrawCB && voxelRasterState && voxelWrapSampler &&
-		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelFilletCS && voxelBrickListCS &&
+		voxelVS && voxelGS && voxelPS && voxelScrollCS && voxelSliceCS && voxelSeedCS && voxelBlurZCS && voxelBlurCS && voxelBrickListCS &&
 		voxelDiffCS && voxelDirtyColsCS && voxelBrickFlagsCS)
 		return true;
 	if (voxelShadersFailed)
@@ -320,18 +320,17 @@ bool SnowDeformation::EnsureVoxelResources()
 	compileCS(voxelSeedCS, "VoxelSeedCS", "SnowDeformation::VoxelSeedCS");
 	compileCS(voxelBlurZCS, "VoxelBlurZCS", "SnowDeformation::VoxelBlurZCS");
 	compileCS(voxelBlurCS, "VoxelBlurCS", "SnowDeformation::VoxelBlurCS");
-	compileCS(voxelFilletCS, "VoxelFilletCS", "SnowDeformation::VoxelFilletCS");
 	compileCS(voxelBrickListCS, "VoxelBrickListCS", "SnowDeformation::VoxelBrickListCS");
 	compileCS(voxelDiffCS, "VoxelDiffCS", "SnowDeformation::VoxelDiffCS");
 	compileCS(voxelDirtyColsCS, "VoxelDirtyColsCS", "SnowDeformation::VoxelDirtyColsCS");
 	compileCS(voxelBrickFlagsCS, "VoxelBrickFlagsCS", "SnowDeformation::VoxelBrickFlagsCS");
-	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurZCS || !voxelBlurCS || !voxelFilletCS || !voxelBrickListCS ||
+	if (!voxelVS || !voxelGS || !voxelPS || !voxelScrollCS || !voxelSliceCS || !voxelSeedCS || !voxelBlurZCS || !voxelBlurCS || !voxelBrickListCS ||
 		!voxelDiffCS || !voxelDirtyColsCS || !voxelBrickFlagsCS) {
 		voxelShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurZCS {} BlurCS {} FilletCS {} BrickListCS {} DiffCS {} DirtyColsCS {} BrickFlagsCS {})",
+		logger::warn("[SNOW DEFORMATION] Voxel volume disabled (shader compilation failed: VS {} GS {} PS {} ScrollCS {} SliceCS {} SeedCS {} BlurZCS {} BlurCS {} BrickListCS {} DiffCS {} DirtyColsCS {} BrickFlagsCS {})",
 			voxelVS ? "ok" : "FAILED", voxelGS ? "ok" : "FAILED", voxelPS ? "ok" : "FAILED",
 			voxelScrollCS ? "ok" : "FAILED", voxelSliceCS ? "ok" : "FAILED",
-			voxelSeedCS ? "ok" : "FAILED", voxelBlurZCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelFilletCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED",
+			voxelSeedCS ? "ok" : "FAILED", voxelBlurZCS ? "ok" : "FAILED", voxelBlurCS ? "ok" : "FAILED", voxelBrickListCS ? "ok" : "FAILED",
 			voxelDiffCS ? "ok" : "FAILED", voxelDirtyColsCS ? "ok" : "FAILED", voxelBrickFlagsCS ? "ok" : "FAILED");
 		return false;
 	}
@@ -423,23 +422,27 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	// Air neighbours vote only where the voxel is small against the
 	// Rounding: on a ring whose voxel is the Rounding or more, dilution
 	// would take a whole voxel off every rim, so there they do not.
-	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 16.0f);
+	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
 	const float roundVox = roundU / voxelSize;
-	// The sideways smoothing is anti-aliasing, 4 u and a voxel at least: a
-	// far ring re-samples the mesh at its own pitch, one point per column
-	// and nothing between, which every voxel LOD averages away. Not the
-	// Rounding: that is the corners' radius, in the fillet passes. Rounding
-	// 0 asks for blocks and gets them.
-	a_cb.RoundSigma = roundU > 0.0f ? std::clamp(4.0f / voxelSize, 1.0f, 2.0f) : 0.25f;
+	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
+	// THE FLOOR IS A VOXEL where air does not vote. A far ring re-samples
+	// the mesh at its own pitch, one point per column and nothing between
+	// - aliasing, which every voxel LOD averages away and this did not: a
+	// Rounding of 5 u is a third of a 16 u voxel, no kernel at all. The
+	// support-normalised average cannot inflate (it is a soft-max of the
+	// tops, under a fifth of a voxel of bias), so the one-voxel floor that
+	// grew 78 u lumps under the gaussian's dilution is safe here. Where air
+	// still votes the floor stays at a half: a wider kernel there is more
+	// dilution at every rim.
+	a_cb.RoundSigma = std::max(roundVox, airWeight > 0.0f ? 0.5f : 1.0f);
 	a_cb.EdgeParams[0] = 0.0f;
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
 	a_cb.EdgeParams[2] = std::log(2.0f) / std::max(roundVox, 2.0f);
 	a_cb.EdgeParams[3] = std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f);
-	a_cb.LipParams[0] = roundVox;
+	a_cb.LipParams[0] = airWeight;
 	a_cb.LipParams[1] = settings.VolumeConservativeCapture ? 0.5f : 0.0f;
 	a_cb.LipParams[2] = a_cb.LipParams[3] = 0.0f;
-	// 15 + the one-voxel cut = the two bricks the field passes reach
-	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 15);
+	a_cb.OverhangVox = (float)std::clamp((int)std::lround(std::clamp(settings.VolumeSnowOverhang, 0.0f, 16.0f) / voxelSize), 0, 7);
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
@@ -466,16 +469,15 @@ uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
 	return settings.VolumeLazyRings ? (1u << a_level) : 1u;
 }
 
-float SnowDeformation::VoxelThresholdForLevel([[maybe_unused]] uint a_level) const
+float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
 {
 	// Where air votes, the lip's survival is the ratio k >= Coverage / gain
 	// of the field's saturation, so the gain stays 1; where it does not,
 	// nothing dilutes and the gain only buys R8 precision for a thin layer.
 	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
-	// Air no longer votes, so nothing dilutes the field: the gain only buys
-	// R8 precision, capped so the top keeps a half-life of headroom under
-	// saturation for the lip's roll-off.
-	const float gain = std::min(8.0f, 0.5f / coverage);
+	const float roundVox = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / VoxelSizeForLevel(a_level);
+	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
+	const float gain = std::min(1.0f + 7.0f * (1.0f - airWeight), 0.5f / coverage);
 	return coverage * gain;
 }
 
@@ -816,16 +818,18 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		// solid beneath, X and Y at the first solid beside.
 		context->CSSetShaderResources(4, 1, &occSRV);
 		// Z: scratch -> field, one thread per column, on D0; the raster's
-		// heightmap at t10 (the passes after read it too, for the riser test).
+		// surface heights at t9, its heightmap at t10 (X and Y read it too,
+		// for the riser test).
 		ID3D11ShaderResourceView* heightSRV = lv.height->srv.get();
-		ID3D11UnorderedAccessView* heightUAV = lv.height->uav.get();
 		ID3D11ShaderResourceView* heightMapSRV = lv.heightMap->srv.get();
 		context->CSSetShaderResources(0, 1, &scratchSRV);
+		context->CSSetShaderResources(9, 1, &heightSRV);
 		context->CSSetShaderResources(10, 1, &heightMapSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->CSSetShader(voxelBlurZCS, nullptr, 0);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
+		context->CSSetShaderResources(9, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;
@@ -838,28 +842,10 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		context->CSSetUnorderedAccessViews(4, 1, &nullUAV, nullptr);
-		// Y: scratch -> the height volume (free after Z), reading support
-		// (t5) for the cap, on D2.
+		// Y: scratch -> field, reading support (t5) for the cap, on D2.
 		cb.BlurAxis = 1;
 		voxelCB->Update(cb);
 		context->CSSetShaderResources(0, 1, &scratchSRV);
-		context->CSSetShaderResources(5, 1, &supportSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &heightUAV, nullptr);
-		context->DispatchIndirect(listsBuffer, kVoxelListArgsY);
-		context->CSSetShaderResources(0, 1, &nullSRV);
-		context->CSSetShaderResources(5, 1, &nullSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-		// The corners, on D2: X the set's inward 1D distance -> support, Y the
-		// Chebyshev distance and the fillets, height -> field.
-		cb.BlurAxis = 0;
-		voxelCB->Update(cb);
-		context->CSSetShaderResources(0, 1, &heightSRV);
-		context->CSSetUnorderedAccessViews(4, 1, &supportUAV, nullptr);
-		context->CSSetShader(voxelFilletCS, nullptr, 0);
-		context->DispatchIndirect(listsBuffer, kVoxelListArgsY);
-		context->CSSetUnorderedAccessViews(4, 1, &nullUAV, nullptr);
-		cb.BlurAxis = 1;
-		voxelCB->Update(cb);
 		context->CSSetShaderResources(5, 1, &supportSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsY);
