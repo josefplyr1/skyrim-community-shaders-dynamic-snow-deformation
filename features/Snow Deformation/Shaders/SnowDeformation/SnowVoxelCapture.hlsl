@@ -41,8 +41,8 @@ cbuffer VoxelCB : register(b0)
 	float DepthVox;
 	// Coverage: the field's value at the snow top, and its crossing
 	float FieldThreshold;
-	// Sideways sigma in voxels: the smoothing among snow (a voxel at least
-	// unless the Rounding is 0)
+	// Sideways sigma in voxels: the anti-alias smoothing among snow (4 u,
+	// a voxel at least; 0.25 when the Rounding is 0)
 	float RoundSigma;
 	// cos(max slope): the least up-ness a seed's own surface may have
 	float SlopeMinNz;
@@ -62,7 +62,7 @@ cbuffer VoxelCB : register(b0)
 	// units, z = the field's exponential rate per voxel, w = the overhang in
 	// units
 	float4 EdgeParams;
-	// x = the Rounding in voxels, unfloored (the lip's roll-off radius), y =
+	// x = the Rounding in voxels, unfloored (the corner radius), y =
 	// the capture's conservative expansion in voxels (0 = off), the rest padding
 	float4 LipParams;
 	// xyz = voxels a side, pow2 each; z may be shorter than x = y (a wide
@@ -750,7 +750,11 @@ float OccNz(float v)
 					n += 1.0;
 				}
 			}
-			float surf = n > 0.0 ? sum / n : (float)z + (HeightIn[ph] * 8.0 - 4.0);
+			// No sub-sample in the run (a seed under an overhang, whose
+			// samples are the overhang's): the voxel's centre. The raster's
+			// per-voxel height was a plain store, racy, and the height volume
+			// is the corner passes' scratch after the sweep.
+			float surf = n > 0.0 ? sum / n : (float)z + 0.5;
 			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
 			// threshold beneath it, and only the run's own voxels may carry
 			// one - never the air under a thin member. So the top may sit
@@ -808,17 +812,18 @@ float OccNz(float v)
 // Support for the overhang cap, built with the sideways passes.
 RWTexture3D<float> SupportOut : register(u4);
 Texture3D<float> SupportIn : register(t5);
-// SIDEWAYS: THE REACH AND THE SHAPE ARE TWO THINGS. A snow voxel is the
-// gaussian mean over RoundSigma of the snow beside it - air casts no vote,
-// so a slab keeps its height to its edge and steps between columns blend
-// over the kernel (the exponential field makes that mean a soft-max of
-// tops, so a step blends by no more than its own height). An air voxel
-// copies the nearest snow along the axis within OverhangVox: the lip goes
-// exactly that far, whatever the Rounding. Y then rolls the lip's last
-// Rounding voxels down by a quarter ellipse and cuts a voxel past the
-// overhang. Air used to vote (diluting the field by the Rounding at every
-// rim): a bigger Rounding pulled the snow back from the edge, and the
-// Overhang cut was never reached (Josef, 2026-09-11).
+// SIDEWAYS: THE REACH IS THE OVERHANG, THE SHAPE IS THE CORNERS. A snow
+// voxel is the gaussian mean of the snow beside it over a fixed
+// anti-alias sigma - air casts no vote, so a slab keeps its height to its
+// edge; steps between columns blend, and by no more than their own height,
+// the mean of exponentials being a soft-max of tops. An air voxel copies
+// the nearest snow along the axis within OverhangVox, from the source's
+// surface row up: the lip goes exactly that far, whatever the Rounding,
+// and its underside is the source's top. Y cuts a voxel past the overhang.
+// The corners are VoxelFilletCS's, after. Air used to vote (diluting the
+// field by the Rounding at every rim): a bigger Rounding pulled the snow
+// back from the edge, and the Overhang cut was never reached (Josef,
+// 2026-09-11).
 //
 // A solid blocks only as a riser (ColumnTop below), so a step riser or a
 // wall still stops one plane's snow from melding into the next.
@@ -910,9 +915,11 @@ float ColumnTop(uint2 ph)
 				break;
 			uint3 ph = Phys(l);
 			// A solid blocks only as a RISER: its column's top more than 1.5
-			// voxels over this voxel's centre. A solid within that is the same
-			// slope one voxel on and is averaged through (2026-09-11).
-			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > 1.5)
+			// voxels over this voxel's centre - a solid within that is the same
+			// slope one voxel on and is averaged through (2026-09-11). An air
+			// voxel copies nothing from under a source's surface row, so a lip's
+			// underside is the surface it hangs from.
+			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > (snow ? 1.5 : 0.5))
 				break;
 			float v = VolumeIn[ph];
 			if (v <= 0.0)
@@ -938,28 +945,105 @@ float ColumnTop(uint2 ph)
 	avg = avg > 0.0 ? max(avg, 1.0 / 255.0) : 0.0;
 	[branch] if (alongY)
 	{
-		// THE LIP'S END: its last Rounding voxels rolled down by a quarter
-		// ellipse, Rounding wide and the lesser of Rounding and the depth
-		// deep - round without getting shorter - then cut a voxel past the
-		// overhang. The field is exponential in height, so a drop of d voxels
-		// is a scale of exp(-rate d); the threshold keeps a half-life of
-		// headroom under saturation, which is at least the Rounding.
-		float o = OverhangVox;
-		float r = min(LipParams.x, o);
-		float drop = 0.0;
-		[flatten] if (r > 0.0 && dist > o - r)
-		{
-			float t = saturate((dist - (o - r)) / r);
-			drop = min(r, DepthVox) * (1.0 - sqrt(saturate(1.0 - t * t)));
-		}
+		// THE LIP'S END: cut a voxel past the overhang.
 		float cut = dist > 0.5 ? saturate((EdgeParams.w + VoxelSize - dist * VoxelSize) / VoxelSize) : 1.0;
-		VolumeOut[p] = avg * exp(-EdgeParams.z * drop) * cut;
+		VolumeOut[p] = avg * cut;
 	}
 	else
 	{
 		VolumeOut[p] = avg;
 		SupportOut[p] = min(dist, 16.0) / 16.0;
 	}
+}
+
+// THE CORNERS, two passes on D2 after Y (the Y pass writes the dilated
+// field into the height volume; these read it and write the field). The
+// snow body's cross-section is a rounded rectangle: Rounding is its corner
+// radius, at most half the depth, measured from the DILATED footprint's
+// edge - so the Overhang alone sets where the body ends and the Rounding
+// only what its corners do (Josef's sketch, 2026-09-11). X: each set
+// voxel's distance along x to the nearest voxel outside the set, into
+// Support (a riser is not an edge). Y: the Chebyshev inward distance from
+// the rows beside, then the top corner as an exact drop of the crossing
+// (the field is exponential in height: a drop of d voxels is a scale of
+// exp(-rate d), and the threshold keeps a half-life of headroom, at least
+// the Rounding) and a lip's bottom corner as a cut, the lip told from the
+// mesh's own snow by walking down to air with no solid on the way.
+[numthreads(8, 8, 8)] void VoxelFilletCS(uint3 gid
+										 : SV_GroupID, uint3 tid
+										 : SV_GroupThreadID) {
+	bool alongY = BlurAxis == 1;
+	uint2 col = ListColumn(LIST2_OFF, gid.x);
+	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
+	float v0 = VolumeIn[p];
+	[branch] if (v0 <= 0.0)
+	{
+		if (alongY)
+			VolumeOut[p] = 0.0;
+		else
+			SupportOut[p] = 0.0;
+		return;
+	}
+	int3 mask = Dims.xyz - 1;
+	int3 logical = ((int3)p - OriginVox.xyz) & mask;
+	float zc = (float)logical.z + 0.5;
+	float r = min(LipParams.x, 0.5 * DepthVox);
+	int fr = min((int)ceil(r) + 1, 16);
+	int3 step = alongY ? int3(0, 1, 0) : int3(1, 0, 0);
+	float dIn = alongY ? round(SupportIn[p] * 16.0) : 16.0;
+	[unroll] for (int dir = -1; dir <= 1; dir += 2)
+	{
+		[loop] for (int k = 1; k <= fr; k++)
+		{
+			int3 l = logical + step * (k * dir);
+			if (any(l < 0) || any(l >= Dims.xyz))
+				break;
+			uint3 ph = Phys(l);
+			if (OccupancyIn[ph] > 0.0 && ColumnTop(ph.xy) - zc > 1.5)
+				break;
+			float v = VolumeIn[ph];
+			[branch] if (v <= 0.0)
+			{
+				dIn = min(dIn, (float)k);
+				break;
+			}
+			[flatten] if (alongY)
+				dIn = min(dIn, max(round(SupportIn[ph] * 16.0), (float)k));
+		}
+	}
+	[branch] if (!alongY)
+	{
+		SupportOut[p] = min(dIn, 16.0) / 16.0;
+		return;
+	}
+	float e = dIn - 0.5;
+	float drop = 0.0;
+	float cut = 1.0;
+	[branch] if (r > 0.0 && e < r)
+	{
+		drop = r - sqrt(saturate(r * r - (r - e) * (r - e)));
+		float h = 1.0e4;
+		[loop] for (int k = 1; k <= fr; k++)
+		{
+			int3 l = logical - int3(0, 0, k);
+			if (l.z < 0)
+				break;
+			uint3 ph = Phys(l);
+			if (OccupancyIn[ph] > 0.0)
+				break;
+			[branch] if (VolumeIn[ph] <= 0.0)
+			{
+				h = (float)(k - 1) + 0.5;
+				break;
+			}
+		}
+		[flatten] if (h < r)
+		{
+			float eMin = r - sqrt(saturate(r * r - (r - h) * (r - h)));
+			cut = saturate(e - eMin + 0.5);
+		}
+	}
+	VolumeOut[p] = v0 * exp(-EdgeParams.z * drop) * cut;
 }
 
 // V1b: the draw's brick list. One thread per 8^3 brick, listed when the
