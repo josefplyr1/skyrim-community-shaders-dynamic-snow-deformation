@@ -4121,10 +4121,11 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		RE::NiTransform previous;
 		if (a_sweep) {
 			auto& state = contactSweepStates[a_geometry];
-			const bool fresh = state.frame + 1 != contactSweepFrame;
+			const bool fresh = state.frame + 1 != contactSweepFrame || state.buffer != rendererData->vertexBuffer;
 			previous = state.world;
 			state.world = world;
 			state.frame = contactSweepFrame;
+			state.buffer = rendererData->vertexBuffer;
 			if (!fresh) {
 				// How far the mesh's far edge travelled: the origin's own step plus
 				// the arc its radius swept. cos(angle) from the relative rotation.

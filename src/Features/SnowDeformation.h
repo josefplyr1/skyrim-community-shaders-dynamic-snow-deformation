@@ -2750,6 +2750,8 @@ public:
 	{
 		RE::NiTransform world;
 		uint32_t frame = 0;
+		/** @brief Identity witness: the geometry's vertex buffer. The map is keyed by a raw BSGeometry address, which the game recycles - a freed mesh's slot handed to a new one carries a previous pose belonging to something else, and the sweep then draws the new mesh at every step between the two. Mismatch means a new tenant, not a move. */
+		const void* buffer = nullptr;
 	};
 	std::unordered_map<const void*, ContactSweep> contactSweepStates;
 	uint32_t contactSweepFrame = 0;
