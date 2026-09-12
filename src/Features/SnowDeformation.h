@@ -1650,6 +1650,17 @@ public:
 	void InstallStaticsCaptureHook();
 	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
 	void InstallCameraHook();
+	// ---- Public API (SnowDeformation/API.cpp, SNOW-API.md): Papyrus globals on the SnowDeformation script + the exported SnowDeformation_GetAPI C struct. Read-only, any thread. ----
+	/** @brief Queues the Papyrus native registration. */
+	void InstallAPI();
+	/** @brief Loaded and switched on. */
+	bool APIIsActive() const;
+	/** @brief Untrampled terrain snow depth at a world XY, accumulation-scaled, clamped at 0; 0 when off or unbaked. Trenches are not subtracted. */
+	float APISnowDepthAt(float a_x, float a_y);
+	/** @brief APISnowDepthAt under a reference, 0 when it stands more than kElevatedStampCutoff above the land. */
+	float APISnowDepthAtRef(RE::TESObjectREFR* a_ref);
+	/** @brief The accumulation scalar 0..1, 0 when accumulation or the feature is off. */
+	float APISnowAccumulation() const;
 	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
