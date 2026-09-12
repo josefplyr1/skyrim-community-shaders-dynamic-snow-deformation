@@ -2646,8 +2646,6 @@
     "ui.dont_ask_again": "Don't ask me again",
     "ui.search": "Search...",
     "ui.search_features": "Search Features...",
-    "feature.snow_deformation.edge_reach_along_surface": "Edge Reach Along The Surface",
-    "feature.snow_deformation.edge_reach_along_surface_tooltip": "A/B. The reach is measured along the object's surface from how the painted weight changes across it, so it cannot move with the camera. Flat faces behind a hard crease have nothing to measure and get no reach; curved surfaces do. Off, the reach is a disc of screen neighbours read back from the painted snow, which shifts with the view and fails once the paint leaves the screen. Wins over the depth check below when both are on.",
     "feature.snow_deformation.edge_reach_taps_check_depth": "Edge Reach Taps Check Depth",
-    "feature.snow_deformation.edge_reach_taps_check_depth_tooltip": "A/B. Each screen neighbour the reach disc reads must be on screen and, by its depth, within reach of this point in 3D - taps on the ground behind a log or on the sky no longer count, and the score is taken over the taps that remain. Cannot see paint that is off screen, so the reach still fades as the painted top leaves the frame."
+    "feature.snow_deformation.edge_reach_taps_check_depth_tooltip": "Each screen neighbour the reach disc reads must be on screen and, by its depth, within reach of this point in 3D, so taps on the ground behind a log or on the sky do not count and the score is taken over the taps that remain. Keeps the lumps from shifting with the camera. Off is the old unchecked disc, for comparison."
 }

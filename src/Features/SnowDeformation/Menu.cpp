@@ -118,12 +118,9 @@ void SnowDeformation::DrawSettings()
 		}
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far past the edge of the solid snow the round lumps hang on, onto bare rock: up to about half a metre at 1, none at 0. Melded lumps right at the edge thin out to scattered cores toward the end. Only real edges count: a face frosted faintly all over has no edge and stays clean. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
-		ImGui::Checkbox(T(TKEY("edge_reach_along_surface"), "Edge Reach Along The Surface"), &settings.EdgeReachAlongSurface);
-		if (auto _ttEdgeRa = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("edge_reach_along_surface_tooltip"), "A/B. The reach is measured along the object's surface from how the painted weight changes across it, so it cannot move with the camera. Flat faces behind a hard crease have nothing to measure and get no reach; curved surfaces do. Off, the reach is a disc of screen neighbours read back from the painted snow, which shifts with the view and fails once the paint leaves the screen. Wins over the depth check below when both are on."));
 		ImGui::Checkbox(T(TKEY("edge_reach_taps_check_depth"), "Edge Reach Taps Check Depth"), &settings.EdgeReachTapsCheckDepth);
 		if (auto _ttEdgeRd = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("edge_reach_taps_check_depth_tooltip"), "A/B. Each screen neighbour the reach disc reads must be on screen and, by its depth, within reach of this point in 3D - taps on the ground behind a log or on the sky no longer count, and the score is taken over the taps that remain. Cannot see paint that is off screen, so the reach still fades as the painted top leaves the frame."));
+			ImGui::Text("%s", T(TKEY("edge_reach_taps_check_depth_tooltip"), "Each screen neighbour the reach disc reads must be on screen and, by its depth, within reach of this point in 3D, so taps on the ground behind a log or on the sky do not count and the score is taken over the taps that remain. Keeps the lumps from shifting with the camera. Off is the old unchecked disc, for comparison."));
 
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -

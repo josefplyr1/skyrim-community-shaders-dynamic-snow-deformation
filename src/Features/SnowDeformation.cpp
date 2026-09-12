@@ -34,7 +34,6 @@
 	X(EnableSnowAccumulation) \
 	X(PersistAccumulation) \
 	X(RecoloredSnowAccumulates) \
-	X(EdgeReachAlongSurface) \
 	X(EdgeReachTapsCheckDepth) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
