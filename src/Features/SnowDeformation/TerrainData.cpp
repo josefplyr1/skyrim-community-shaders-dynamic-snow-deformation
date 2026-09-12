@@ -102,6 +102,7 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 	const uint16_t index = (uint16_t)landTextures.size();
 	landTextures.push_back(entry);
 	landTextureByForm[a_landTexture->formID] = index;
+	snowDepthVersion.fetch_add(1, std::memory_order_release);
 
 	logger::info("[SNOW DEFORMATION] LTEX {:08X} [{}] {:.0f} units{} {}", a_landTexture->formID,
 		kSnowClasses[entry.classIndex].label, entry.depth, entry.overridden ? " (override)" : "", path);
@@ -122,6 +123,7 @@ void SnowDeformation::ResolveLandTextureDepthsLocked()
 {
 	for (auto& entry : landTextures)
 		ResolveLandTextureDepthLocked(entry);
+	snowDepthVersion.fetch_add(1, std::memory_order_release);
 }
 
 void SnowDeformation::RefreshLandTextureDepths()
@@ -325,8 +327,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		if (shellFillerCells.size() > 4096)
 			shellFillerCells.clear();
 		shellFillerCells[fillerKey] = data.worldspaceID;
+		snowDepthVersion.fetch_add(1, std::memory_order_release);
 		if (auto it = shellCells.find(fillerKey); it != shellCells.end() && it->second.worldspaceID == data.worldspaceID) {
 			shellCells.erase(it);
+			snowDepthVersion.fetch_add(1, std::memory_order_release);
 			shellDataDirty.store(true, std::memory_order_release);
 		}
 		return;
@@ -335,8 +339,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
 	{
 		const std::unique_lock lock(shellCellMutex);
-		if (shellCells.size() > 4096)
+		if (shellCells.size() > 4096) {
 			shellCells.clear();
+			snowDepthVersion.fetch_add(1, std::memory_order_release);
+		}
 		// Land material setup re-runs frequently; only mark the window dirty
 		// when the baked data actually changed.
 		auto it = shellCells.find(key);
@@ -345,6 +351,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO)
 			return;
 		shellCells[key] = data;
+		snowDepthVersion.fetch_add(1, std::memory_order_release);
 		// A real bake supersedes this worldspace's filler tombstone. Another
 		// worldspace's tombstone at the same coords (city vs its parent) stands.
 		if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == data.worldspaceID)
@@ -433,6 +440,7 @@ void SnowDeformation::UpdateActiveWorldspace()
 	const uint32_t id = worldspace->GetFormID();
 	if (id == activeWorldspace.exchange(id, std::memory_order_acq_rel))
 		return;
+	snowDepthVersion.fetch_add(1, std::memory_order_release);
 
 	// City worldspaces share their parent's cell coordinates AND world XY
 	// (WindhelmWorld sits on the same 28-36 / 6-12 block as the Tamriel
@@ -557,6 +565,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		const std::unique_lock snowLock(shellSnowyCellMutex);
 		shellSnowyCells = std::move(snowyCells);
 	}
+	// The snowy set only covers the window; a move changes every cell
+	// verdict near its edge.
+	snowDepthVersion.fetch_add(1, std::memory_order_release);
 	shellStatCellsInWindow = (uint32_t)statCells.size();
 	shellStatSnowTexels = statSnowTexels;
 	shellStatMinHeight = statMinH == FLT_MAX ? 0.0f : statMinH;
@@ -567,6 +578,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 
 	globals::d3d::context->UpdateSubresource(shellTerrainTexture->resource.get(), 0, nullptr,
 		shellUploadScratch.data(), kShellWindowDim * 4 * sizeof(float), 0);
+	shellTerrainVersion++;
 
 	FillShellWindowFromHeightmap();
 	BuildTerrainFineWindow();
@@ -750,6 +762,7 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	globals::profiler->BeginPass("SnowDeformation::WindowFill");
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 	globals::profiler->EndPass();
+	shellTerrainVersion++;
 
 	ID3D11Buffer* nullCB = nullptr;
 	ID3D11ShaderResourceView* nullSRVs[5] = {};
@@ -865,10 +878,21 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 	const float maxX = centreX + reach;
 	const float maxY = centreY + reach;
 
-	const int cellMinX = (int)std::floor(minX / kCellSize);
-	const int cellMaxX = (int)std::floor(maxX / kCellSize);
-	const int cellMinY = (int)std::floor(minY / kCellSize);
-	const int cellMaxY = (int)std::floor(maxY / kCellSize);
+	int cellMinX = (int)std::floor(minX / kCellSize);
+	int cellMaxX = (int)std::floor(maxX / kCellSize);
+	int cellMinY = (int)std::floor(minY / kCellSize);
+	int cellMaxY = (int)std::floor(maxY / kCellSize);
+	// Clipped to the loaded square: land past it never loads, so a reach
+	// that crosses it never settles, and nothing of ours stands out there.
+	{
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		if (LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY)) {
+			cellMinX = std::max(cellMinX, sqMinX);
+			cellMaxX = std::min(cellMaxX, sqMaxX);
+			cellMinY = std::max(cellMinY, sqMinY);
+			cellMaxY = std::min(cellMaxY, sqMaxY);
+		}
+	}
 
 	if (a_verdictOut)
 		*a_verdictOut = kSnowGateBare;
@@ -915,6 +939,102 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 		}
 	}
 	return false;
+}
+
+bool SnowDeformation::LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const
+{
+	auto* player = RE::PlayerCharacter::GetSingleton();
+	if (!player)
+		return false;
+	static const int uGrids = [] {
+		if (auto* ini = RE::INISettingCollection::GetSingleton())
+			if (auto* setting = ini->GetSetting("uGridsToLoad:General"))
+				return std::max((int)setting->GetInteger(), 3);
+		return 5;
+	}();
+	const auto pos = player->GetPosition();
+	const int cellX = (int)std::floor(pos.x / 4096.0f);
+	const int cellY = (int)std::floor(pos.y / 4096.0f);
+	const int half = (uGrids - 1) / 2;
+	a_minX = cellX - half;
+	a_maxX = cellX + half;
+	a_minY = cellY - half;
+	a_maxY = cellY + half;
+	return true;
+}
+
+uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY) const
+{
+	if (a_minX > a_maxX || a_minY > a_maxY)
+		return kSnowGateBare;
+	{
+		const std::shared_lock lock(shellSnowyCellMutex);
+		if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
+			return kSnowGateUnknown;
+		for (int cy = a_minY; cy <= a_maxY; ++cy) {
+			for (int cx = a_minX; cx <= a_maxX; ++cx) {
+				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				if (shellSnowyCells.find(key) != shellSnowyCells.end())
+					return kSnowGateSnowy;
+			}
+		}
+	}
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	const std::shared_lock lock(shellCellMutex);
+	for (int cy = a_minY; cy <= a_maxY; ++cy) {
+		for (int cx = a_minX; cx <= a_maxX; ++cx) {
+			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			if (auto it = shellCells.find(key); it != shellCells.end() && it->second.worldspaceID == worldspace)
+				continue;
+			if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == worldspace)
+				continue;
+			return kSnowGateUnknown;
+		}
+	}
+	return kSnowGateBare;
+}
+
+bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
+{
+	int sqMinX, sqMinY, sqMaxX, sqMaxY;
+	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
+		return true;
+	// Stamp read BEFORE the lookup: a write racing the compute leaves a
+	// stale stamp and one extra recompute, never a stale verdict.
+	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);
+	const bool squareMoved = sqMinX != groundSnowCacheSquare[0] || sqMinY != groundSnowCacheSquare[1] ||
+	                         sqMaxX != groundSnowCacheSquare[2] || sqMaxY != groundSnowCacheSquare[3];
+	if (groundSnowCellCacheVersion != stamp || squareMoved) {
+		groundSnowCellCache.clear();
+		groundSnowCellCacheVersion = stamp;
+		groundSnowCacheSquare[0] = sqMinX;
+		groundSnowCacheSquare[1] = sqMinY;
+		groundSnowCacheSquare[2] = sqMaxX;
+		groundSnowCacheSquare[3] = sqMaxY;
+		groundSnowSquareValid = false;
+	}
+	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
+	const int cellX = (int)std::floor(a_x / kCellSize);
+	const int cellY = (int)std::floor(a_y / kCellSize);
+	// Two cells of reach, clipped to the loaded square: land past it never
+	// bakes, so an unclipped block never settles. A block wholly outside
+	// (LOD batches) takes the square's own verdict.
+	const int minX = std::max(cellX - 2, sqMinX);
+	const int maxX = std::min(cellX + 2, sqMaxX);
+	const int minY = std::max(cellY - 2, sqMinY);
+	const int maxY = std::min(cellY + 2, sqMaxY);
+	if (minX > maxX || minY > maxY) {
+		if (!groundSnowSquareValid) {
+			groundSnowSquareVerdict = (uint8_t)CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY);
+			groundSnowSquareValid = true;
+		}
+		return groundSnowSquareVerdict != kSnowGateBare;
+	}
+	const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+	auto [it, inserted] = groundSnowCellCache.try_emplace(key, uint8_t(kSnowGateUnknown));
+	if (inserted)
+		it->second = (uint8_t)CellRangeSnowVerdict(minX, minY, maxX, maxY);
+	return it->second != kSnowGateBare;
 }
 
 // Fine-layer readback probe (see the header). Blocking maps: one shot, on

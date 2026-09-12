@@ -139,11 +139,19 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 {
 	static std::unordered_map<const char*, GeometryNameFacts> cache;
 	static GeometryNameFacts empty;
+	// Same one-entry memo as RecordOf: the hook asks 2-3 times per draw.
+	static const void* lastGeometry = nullptr;
+	static const char* lastName = nullptr;
+	static GeometryNameFacts* lastFacts = nullptr;
 	const char* name = a_geometry ? a_geometry->name.c_str() : nullptr;
 	if (!name || !*name)
 		return empty;
-	if (cache.size() > 16384)
+	if (lastFacts && lastGeometry == a_geometry && lastName == name)
+		return *lastFacts;
+	if (cache.size() > 16384) {
 		cache.clear();
+		lastFacts = nullptr;
+	}
 	const uint32_t length = (uint32_t)strlen(name);
 	uint64_t head = 0;
 	memcpy(&head, name, std::min<size_t>(length, sizeof(head)));
@@ -162,8 +170,59 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 	}
+	lastGeometry = a_geometry;
+	lastName = name;
+	lastFacts = &f;
 	return f;
 }
+
+// Per-loop filter for the IA slots and VS t10, which instances of one mesh
+// repeat. Device state on entry is unknown, so the first call binds; the
+// loops never pass a null layout or buffer, so null reads as "not yet bound".
+struct SD_DrawBinds
+{
+	ID3D11InputLayout* layout = nullptr;
+	ID3D11Buffer* vb = nullptr;
+	UINT stride = 0;
+	ID3D11Buffer* ib = nullptr;
+	DXGI_FORMAT ibFormat = DXGI_FORMAT_UNKNOWN;
+	bool smoothBound = false;
+	ID3D11ShaderResourceView* smooth = nullptr;
+
+	void Layout(ID3D11DeviceContext* a_context, ID3D11InputLayout* a_layout)
+	{
+		if (layout == a_layout)
+			return;
+		a_context->IASetInputLayout(a_layout);
+		layout = a_layout;
+	}
+	void Vertex(ID3D11DeviceContext* a_context, ID3D11Buffer* a_vb, UINT a_stride)
+	{
+		if (vb == a_vb && stride == a_stride)
+			return;
+		UINT offset = 0;
+		a_context->IASetVertexBuffers(0, 1, &a_vb, &a_stride, &offset);
+		vb = a_vb;
+		stride = a_stride;
+	}
+	void Index(ID3D11DeviceContext* a_context, ID3D11Buffer* a_ib, DXGI_FORMAT a_format)
+	{
+		if (ib == a_ib && ibFormat == a_format)
+			return;
+		a_context->IASetIndexBuffer(a_ib, a_format, 0);
+		ib = a_ib;
+		ibFormat = a_format;
+	}
+	// t10 may legitimately be null (no smoothed normals), hence the flag.
+	void Smooth(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
+	{
+		if (smoothBound && smooth == a_srv)
+			return;
+		a_context->VSSetShaderResources(10, 1, &a_srv);
+		smooth = a_srv;
+		smoothBound = true;
+	}
+};
 
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
 {
@@ -442,6 +501,11 @@ struct GeometryRecord
 	bool shard = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
 	MatoClass mato = MatoClass::kNoReference;
+	// Nominal snow depth at the bound centre, valid while snowDepthVersion holds.
+	float depthX = 0.0f;
+	float depthY = 0.0f;
+	float depth = 0.0f;
+	uint32_t depthVersion = 0;
 };
 
 static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShaderMaterialBase* a_material)
@@ -692,8 +756,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// The mountain/cliff family too, on snowy ground: LOD batches carry
 		// the family's texture paths and no projection data.
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
-		const bool mountainFeature = (rec.pathMountain || nameFacts.mountainCliff) &&
-		                             GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f) > 0.5f;
+		bool mountainFeature = rec.pathMountain || nameFacts.mountainCliff;
+		if (mountainFeature) {
+			// Two shared locks per call; a static's answer only moves with the
+			// cell data, so it is kept on the record and stamped.
+			const uint32_t depthVersion = snowDepthVersion.load(std::memory_order_acquire);
+			if (rec.depthVersion != depthVersion || rec.depthX != wbCenter.x || rec.depthY != wbCenter.y) {
+				rec.depth = GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f);
+				rec.depthVersion = depthVersion;
+				rec.depthX = wbCenter.x;
+				rec.depthY = wbCenter.y;
+			}
+			mountainFeature = rec.depth > 0.5f;
+		}
 		bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
 		bool matoVetoed = false;
 		if (naturalFeature && rec.mato == MatoClass::kNotSnow) {
@@ -746,6 +821,14 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
 	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
+		return;
+	}
+
+	// Object snow needs snow-capable ground near it, unless the object IS
+	// the snow (ice family, drifts). Two cells of reach clipped to the
+	// loaded square; a still-baking cell counts as snow.
+	if (!fadeExempt && !fullCoat && !GroundNearHasSnow(translate.x, translate.y)) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no snow ground within two loaded cells");
 		return;
 	}
 
@@ -1683,11 +1766,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		exclusionData.ExclusionCount = exclusionCount;
 		statExclusionCount = exclusionCount;
 		doorsCB->Update(exclusionData);
+		// Every frame, never on a cadence (the window follows the camera);
+		// the bake itself skips while its inputs match.
+		RenderExclusionField(exclusionData);
 	}
-
-	// Rebaked every frame: the window follows the camera, so a cadence-gated
-	// bake would drag the clearings behind it.
-	RenderExclusionField();
 
 	uint previous = heightCurrent;
 	heightCurrent ^= 1;
@@ -1860,6 +1942,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	uint32_t captureParity = 0;
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
+	SD_DrawBinds binds;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
@@ -1886,19 +1969,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto layoutIt = staticsILCache.find(descKey);
 		if (layoutIt == staticsILCache.end() || !layoutIt->second)
 			continue;  // layouts are created by the skin pass; reuse only
-		context->IASetInputLayout(layoutIt->second.get());
+		binds.Layout(context, layoutIt->second.get());
 
 		UINT stride = uint32_t(descKey & 0xF) * 4;
 		if (stride == 0)
 			continue;
-		UINT offset = 0;
-		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+		binds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
+		binds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
 
-		ID3D11ShaderResourceView* captureSmoothSRV = captureSmoothSRVs[ci].get();
-		context->VSSetShaderResources(10, 1, &captureSmoothSRV);
+		binds.Smooth(context, captureSmoothSRVs[ci].get());
 		if (captureRecordsLive)
 			BindStaticsRecord(ci, true, false, captureParity);
 		else
@@ -1925,6 +2004,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11RenderTargetView* fineRTVs[1] = { heightTopRawFine->rtv.get() };
 		context->OMSetRenderTargets(1, fineRTVs, nullptr);
 		globals::profiler->BeginPass("SnowDeformation::ObjectHeightMapFine");
+		SD_DrawBinds fineBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
@@ -1959,14 +2039,10 @@ void SnowDeformation::RenderObjectHeightMap()
 			UINT stride = uint32_t(descKey & 0xF) * 4;
 			if (stride == 0)
 				continue;
-			context->IASetInputLayout(layoutIt->second.get());
-			UINT offset = 0;
-			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-			ID3D11ShaderResourceView* fineSmoothSRV = captureSmoothSRVs[ci].get();
-			context->VSSetShaderResources(10, 1, &fineSmoothSRV);
+			fineBinds.Layout(context, layoutIt->second.get());
+			fineBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
+			fineBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
+			fineBinds.Smooth(context, captureSmoothSRVs[ci].get());
 			if (captureRecordsLive)
 				BindStaticsRecord(captureCount * 2 + ci, true, false, captureParity);
 			else
@@ -1995,6 +2071,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
 		globals::profiler->BeginPass("SnowDeformation::ObjectHeightPeel");
+		SD_DrawBinds peelBinds;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
 			const auto& cap = capturedStatics[ci];
 			auto* geometry = cap.geometry.get();
@@ -2019,18 +2096,14 @@ void SnowDeformation::RenderObjectHeightMap()
 			auto layoutIt = staticsILCache.find(descKey);
 			if (layoutIt == staticsILCache.end() || !layoutIt->second)
 				continue;
-			context->IASetInputLayout(layoutIt->second.get());
+			peelBinds.Layout(context, layoutIt->second.get());
 			UINT stride = uint32_t(descKey & 0xF) * 4;
 			if (stride == 0)
 				continue;
-			UINT offset = 0;
-			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+			peelBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
+			peelBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
 
-			ID3D11ShaderResourceView* peelSmoothSRV = captureSmoothSRVs[ci].get();
-			context->VSSetShaderResources(10, 1, &peelSmoothSRV);
+			peelBinds.Smooth(context, captureSmoothSRVs[ci].get());
 			if (captureRecordsLive)
 				BindStaticsRecord(captureCount + ci, true, false, captureParity);
 			else
@@ -3267,6 +3340,7 @@ void SnowDeformation::DrawCapturedStatics()
 		boundStaticsPS = nullptr;
 		uint32_t drawIndex = 0;
 		bool boundDecal = false;
+		SD_DrawBinds binds;
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
 			if (d.decalDepth != boundDecal) {
@@ -3276,23 +3350,20 @@ void SnowDeformation::DrawCapturedStatics()
 					context->RSSetViewports(vpCount, boundDecal ? decalVps : vps);
 			}
 			[[maybe_unused]] auto* geometry = d.geometry;
-			context->IASetInputLayout(d.layout);
-			UINT stride = d.stride;
-			UINT offset = 0;
-			ID3D11Buffer* vb = d.vb;
-			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+			binds.Layout(context, d.layout);
+			binds.Vertex(context, d.vb, d.stride);
 			// Cluster skins draw the compacted stream; everything else draws
 			// the mesh's own indices, as before.
 			if (cullActive && d.clusterCount != 0)
-				context->IASetIndexBuffer(clusterScratchIB->resource.get(), DXGI_FORMAT_R32_UINT, 0);
+				binds.Index(context, clusterScratchIB->resource.get(), DXGI_FORMAT_R32_UINT);
 			else
-				context->IASetIndexBuffer(d.ib, DXGI_FORMAT_R16_UINT, 0);
+				binds.Index(context, d.ib, DXGI_FORMAT_R16_UINT);
 
 			// Smoothed normals (built once per unique mesh): pillow inflation
 			// for flat split-normal surfaces; planks, roofs, pole caps.
 			const uint32_t recordIndex = drawIndex++;
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex].get();
-			context->VSSetShaderResources(10, 1, &skinSmoothSRV);
+			binds.Smooth(context, skinSmoothSRV);
 			const bool wantTess = tessellateSkins && !d.s4Shell;
 			if (wantTess != skinStagesTess)
 				bindSkinStages(wantTess);
@@ -3526,15 +3597,18 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetConstantBuffers(1, 1, &nullCB);
 }
 
-void SnowDeformation::RenderExclusionField()
+void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 {
 	LoadTraceScope _loadTrace(this, "Statics: RenderExclusionField");
-	exclusionFieldValid = false;
-	if (!exclusionFieldTexture || !exclusionFieldCB || !shellTerrainTexture)
+	if (!exclusionFieldTexture || !exclusionFieldCB || !shellTerrainTexture) {
+		exclusionFieldValid = false;
 		return;
+	}
 	auto* cs = GetExclusionFieldCS();
-	if (!cs)
+	if (!cs) {
+		exclusionFieldValid = false;
 		return;
+	}
 
 	auto context = globals::d3d::context;
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -3543,10 +3617,24 @@ void SnowDeformation::RenderExclusionField()
 	// of world as the camera moves; an unsnapped window resamples the bowls
 	// every frame and their noisy rims crawl.
 	constexpr float texelSize = kExclusionFieldHalfExtent * 2.0f / kExclusionFieldDim;
-	exclusionFieldCenter = {
+	const float2 center = {
 		std::floor(eye.x / texelSize) * texelSize,
 		std::floor(eye.y / texelSize) * texelSize
 	};
+	// Everything the CS reads: cb0 (centre, window origin), cb1 (the list),
+	// t0 (the terrain window). All unchanged = the texture already holds
+	// the same bits.
+	const bool same = exclusionFieldValid && exclusionBakeList &&
+	                  center.x == exclusionFieldCenter.x && center.y == exclusionFieldCenter.y &&
+	                  shellWindowCellX == exclusionBakeCellX && shellWindowCellY == exclusionBakeCellY &&
+	                  shellTerrainVersion == exclusionBakeTerrainVersion &&
+	                  memcmp(&a_list, exclusionBakeList.get(), sizeof(ExclusionsCB)) == 0;
+	if (same) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::ExclusionField");
+		return;
+	}
+	exclusionFieldValid = false;
+	exclusionFieldCenter = center;
 
 	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	ExclusionFieldCB cbData{};
@@ -3579,6 +3667,12 @@ void SnowDeformation::RenderExclusionField()
 	context->CSSetShader(nullptr, nullptr, 0);
 
 	exclusionFieldValid = true;
+	exclusionBakeCellX = shellWindowCellX;
+	exclusionBakeCellY = shellWindowCellY;
+	exclusionBakeTerrainVersion = shellTerrainVersion;
+	if (!exclusionBakeList)
+		exclusionBakeList = std::make_unique<ExclusionsCB>();
+	memcpy(exclusionBakeList.get(), &a_list, sizeof(ExclusionsCB));
 }
 
 // Position size = distance to the first following attribute (the descriptor's
@@ -3722,20 +3816,52 @@ void SnowDeformation::RenderWaterCapture()
 		waterHeightTexture->CreateSRV(srvDesc);
 		waterHeightTexture->CreateRTV(rtvDesc);
 		waterWindowCellX = INT_MIN;
+		waterBakeValid = false;
 	}
-	// The terrain window's frame, rebuilt every frame: a plane kept from an
-	// earlier frame (the waterline effect at the camera's level, a plane
-	// seen once from a bad angle) poisoned the area until the next cell
-	// crossing. A body's plane is set up whenever the ground over it is in
-	// view, so per-frame loses nothing the camera can see.
+	GatherWaterObjects();
+	statWaterCaptured = (uint32_t)capturedWater.size();
+	// The draw list exactly as the loop below consumes it. Same list at the
+	// same window cell = the texture already holds the same bits.
+	waterBakeScratch.clear();
+	waterBakeScratch.reserve(capturedWater.size());
+	for (const auto& water : capturedWater) {
+		WaterBakeKey key;
+		memset(&key, 0, sizeof(key));
+		auto* geometry = water.geometry.get();
+		auto rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
+		if (rendererData) {
+			key.vb = rendererData->vertexBuffer;
+			key.ib = rendererData->indexBuffer;
+			memcpy(&key.descKey, &rendererData->vertexDesc, sizeof(key.descKey));
+		}
+		if (auto triShape = geometry ? geometry->AsTriShape() : nullptr)
+			key.indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+		key.world = water.world;
+		key.planeConstant = water.planeConstant;
+		waterBakeScratch.push_back(key);
+	}
+	const bool same = waterBakeValid && waterWindowCellX == shellWindowCellX && waterWindowCellY == shellWindowCellY &&
+	                  waterBakeKeys.size() == waterBakeScratch.size() &&
+	                  (waterBakeScratch.empty() || memcmp(waterBakeKeys.data(), waterBakeScratch.data(), waterBakeScratch.size() * sizeof(WaterBakeKey)) == 0);
+	if (same) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::WaterCapture");
+		capturedWater.clear();
+		return;
+	}
+	waterBakeKeys.swap(waterBakeScratch);
+	waterBakeValid = true;
+	// The terrain window's frame, rebuilt whenever the list or the cell
+	// moves (never kept across a change: a plane from an earlier frame - the
+	// waterline effect at the camera's level, a plane seen once from a bad
+	// angle - poisoned the area until the next cell crossing). A body's plane
+	// is set up whenever the ground over it is in view, so nothing the
+	// camera can see is lost.
 	{
 		const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
 		context->ClearRenderTargetView(waterHeightTexture->rtv.get(), clear);
 		waterWindowCellX = shellWindowCellX;
 		waterWindowCellY = shellWindowCellY;
 	}
-	GatherWaterObjects();
-	statWaterCaptured = (uint32_t)capturedWater.size();
 	statWaterDrawn = 0;
 	if (capturedWater.empty())
 		return;

@@ -1812,7 +1812,8 @@ void SnowDeformation::DrawSettings()
 					"running (unbaked ground in reach, assumed snow)",
 					"suspended (all ground in reach known bare)"
 				};
-				ImGui::Text("Snow presence gate: %s", kSnowGateNames[std::min(deformSnowVerdict, 2u)]);
+				ImGui::Text("Snow presence gate (loaded square): %s, bare for %u/%u frames%s", kSnowGateNames[std::min(deformSnowVerdict, 2u)], deformGateBareFrames, kShellGateBareFrames, deformSuspended ? " - SUSPENDED" : "");
+				ImGui::Text("Shell gate (loaded square): %s, bare for %u/%u frames", kSnowGateNames[std::min(shellSnowVerdict, 2u)], shellGateBareFrames, kShellGateBareFrames);
 			}
 
 

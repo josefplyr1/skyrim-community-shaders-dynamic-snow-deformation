@@ -2069,6 +2069,19 @@ public:
 	Texture2D* waterHeightTexture = nullptr;
 	int waterWindowCellX = INT_MIN;
 	int waterWindowCellY = INT_MIN;
+	/** @brief One water body as the capture loop draws it. The bake skips while the fresh gather matches the last one at the same window cell - the texture already holds the same bits. */
+	struct WaterBakeKey
+	{
+		const void* vb;
+		const void* ib;
+		uint64_t descKey;
+		uint32_t indexCount;
+		RE::NiTransform world;
+		float planeConstant;
+	};
+	std::vector<WaterBakeKey> waterBakeKeys;
+	std::vector<WaterBakeKey> waterBakeScratch;
+	bool waterBakeValid = false;
 	ID3D11VertexShader* waterCaptureVS = nullptr;
 	ID3D11PixelShader* waterCapturePS = nullptr;
 	winrt::com_ptr<ID3DBlob> waterCaptureVSBlob;
@@ -2486,8 +2499,6 @@ public:
 	/** @brief Returns the exclusion field bake compute shader, compiling it on first use. */
 	ID3D11ComputeShader* GetExclusionFieldCS();
 	ID3D11ComputeShader* exclusionFieldCS = nullptr;
-	/** @brief Bakes the wide exclusion field from the gathered exclusion list. Implemented in SnowDeformation/Statics.cpp. */
-	void RenderExclusionField();
 	/** @brief SRV of the wide exclusion field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetExclusionFieldSRV() const { return exclusionFieldTexture ? exclusionFieldTexture->srv.get() : nullptr; }
 
@@ -2501,6 +2512,14 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
 	ConstantBuffer* doorsCB = nullptr;
+	/** @brief Inputs of the last exclusion-field bake: terrain window cell, terrain texture version, the list as uploaded. The bake skips while all match and the snapped centre is unchanged - the texture already holds the same bits. */
+	int exclusionBakeCellX = INT_MIN;
+	int exclusionBakeCellY = INT_MIN;
+	uint32_t exclusionBakeTerrainVersion = 0;
+	// Heap-held: an alignas(16) member would pad the class (C4324 is an error here).
+	std::unique_ptr<ExclusionsCB> exclusionBakeList;
+	/** @brief Bakes the wide exclusion field from the gathered exclusion list, or skips when nothing it reads has changed. Implemented in SnowDeformation/Statics.cpp. */
+	void RenderExclusionField(const ExclusionsCB& a_list);
 	uint32_t doorRefreshCounter = 0;
 	/** @brief Cadence-gathered exclusions (doors, campfires, heat sources, dropped burning torches). */
 	std::vector<std::pair<float4, float4>> staticExclusions;
@@ -2815,16 +2834,38 @@ protected:
 	 * Implemented in SnowDeformation/TerrainData.cpp.
 	 */
 	bool WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy = false, uint32_t* a_verdictOut = nullptr) const;
+	/** @brief The loaded-cell square around the player (uGridsToLoad), inclusive cell coordinates; the landscape shell ends at its seam and land past it never loads. False before the player exists. Implemented in TerrainData.cpp. */
+	bool LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const;
+	/** @brief Three-way verdict over an inclusive cell range, by WindowHasSnow's rules: snowy if any cell carries positive depth, unknown if any cell has never been looked at, else bare (an empty range is bare). Implemented in TerrainData.cpp. */
+	uint32_t CellRangeSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY) const;
+	/** @brief Whether ground within two cells of a world XY, clipped to the loaded square, can carry snow (snowy or still baking). An object wholly outside the square (LOD batches) takes the square's own verdict. The capture hook's per-object gate; cached per cell on the render thread, dropped when snowDepthVersion moves or the square does. */
+	bool GroundNearHasSnow(float a_x, float a_y);
+	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
+	uint32_t groundSnowCellCacheVersion = 0;
+	int groundSnowCacheSquare[4] = { INT_MIN, INT_MIN, INT_MIN, INT_MIN };
+	uint8_t groundSnowSquareVerdict = kSnowGateUnknown;
+	bool groundSnowSquareValid = false;
 	/** @brief WindowHasSnow over the deformation window. False means nothing can read the map here, so its passes are skipped. Never-baked ground counts as possibly snowy, and the verdict lands in deformSnowVerdict for the debug readout. */
 	bool DeformationWindowHasSnow() const { return WindowHasSnow(deformWorldSize * 0.5f, true, &deformSnowVerdict); }
 	/** @brief WindowHasSnow over the shell's own footprint, which reaches far past the deformation window. False means no shell geometry can stand above ground, so nothing casts. */
 	bool ShellFootprintHasSnow() const { return WindowHasSnow(ShellWarpedHalfSpan()); }
 	/** @brief Last verdict from DeformationWindowHasSnow, for the debug menu. */
 	mutable uint32_t deformSnowVerdict = kSnowGateUnknown;
+	/** @brief Last verdict of the landscape shell's gate (DrawShell, over the loaded square), for the debug menu. */
+	mutable uint32_t shellSnowVerdict = kSnowGateUnknown;
+	/** @brief Consecutive frames the loaded square has read bare. The grid draw, its bake and the depth sync are skipped once this reaches kShellGateBareFrames; a snowy or still-baking cell resets it, so the surface returns the frame snow enters the square. */
+	uint32_t shellGateBareFrames = 0;
+	static constexpr uint32_t kShellGateBareFrames = 30;
 	/** @brief Set while the deformation passes are being skipped, so resuming can force a clear instead of trusting an accumulated scroll delta. */
 	bool deformSuspended = false;
+	/** @brief Consecutive frames the deformation window (clipped to the loaded square) has read bare; the passes suspend once this reaches kShellGateBareFrames. */
+	uint32_t deformGateBareFrames = 0;
 	mutable std::shared_mutex shellCellMutex;
 	std::atomic<bool> shellDataDirty{ true };
+	/** @brief Bumped on every write to shellTerrainTexture (window upload, heightmap fill); render thread only. Bakes that read the window key on it. */
+	uint32_t shellTerrainVersion = 0;
+	/** @brief Bumped on every write that can change GetNominalSnowDepthAt's answer: shellCells, landTextures, their depths, activeWorldspace. The capture hook's per-record depth memo is valid while its stamp matches. */
+	std::atomic<uint32_t> snowDepthVersion{ 1 };
 	/** @brief Landscape textures discovered by the bake; indices are stable for the session and are what the baked cells store. */
 	std::vector<LandTextureEntry> landTextures;
 	/** @brief Substring filter for the texture list. Runtime UI state, not persisted. */

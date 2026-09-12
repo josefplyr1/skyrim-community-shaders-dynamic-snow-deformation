@@ -971,27 +971,20 @@ void SnowDeformation::DrawShell()
 	// The shell's edge fade anchors here so it hands off to the horizon
 	// recolor exactly where the game swaps terrain for LOD meshes.
 	cbData.SeamRampInv = 0.0f;
-	if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-		static const int uGrids = [] {
-			if (auto* ini = RE::INISettingCollection::GetSingleton())
-				if (auto* setting = ini->GetSetting("uGridsToLoad:General"))
-					return std::max((int)setting->GetInteger(), 3);
-			return 5;
-		}();
-		const auto playerPos = player->GetPosition();
-		const int cellX = (int)std::floor(playerPos.x / 4096.0f);
-		const int cellY = (int)std::floor(playerPos.y / 4096.0f);
-		const int halfCells = (uGrids - 1) / 2;
+	int seamMinX, seamMinY, seamMaxX, seamMaxY;
+	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY)) {
 		// The fade band sits ~29 m OUTSIDE the true boundary, over the
 		// recolored LOD terrain: full-height shell up to the seam, melting
 		// into same-material ground beyond it. Ending the fade AT the seam
 		// left a visible unshelled strip of full terrain just inside it.
 		constexpr float kSeamOverlap = 2048.0f;
-		cbData.SeamBounds = { (cellX - halfCells) * 4096.0f - kSeamOverlap, (cellY - halfCells) * 4096.0f - kSeamOverlap,
-			(cellX + halfCells + 1) * 4096.0f + kSeamOverlap, (cellY + halfCells + 1) * 4096.0f + kSeamOverlap };
+		cbData.SeamBounds = { seamMinX * 4096.0f - kSeamOverlap, seamMinY * 4096.0f - kSeamOverlap,
+			(seamMaxX + 1) * 4096.0f + kSeamOverlap, (seamMaxY + 1) * 4096.0f + kSeamOverlap };
 		cbData.SeamRampInv = 1.0f / 2048.0f;
 		// C3 mechanism 3: the square snaps to the player's cell, so every
 		// crossing rewrites the whole far field's edge fade in one frame.
+		const int cellX = (seamMinX + seamMaxX) / 2;
+		const int cellY = (seamMinY + seamMaxY) / 2;
 		static int lastSeamCellX = INT_MIN, lastSeamCellY = INT_MIN;
 		if (cellX != lastSeamCellX || cellY != lastSeamCellY) {
 			if (lastSeamCellX != INT_MIN)
@@ -1497,7 +1490,23 @@ void SnowDeformation::DrawShell()
 			tessHS = GetShellHS(false);
 	}
 	const bool tessellate = tessVS && tessHS && tessDS;
-	if (tessellate && bake) {
+	// Only the loaded square is asked: the shell ends at its seam, and land
+	// past it never loads, so a test over the whole span never settles. A
+	// loaded cell still baking opens the gate at once; bare must hold for
+	// kShellGateBareFrames before the grid draw and its dependents (bake,
+	// stats, depth sync) are skipped. The CB upload above stays - the
+	// statics and the caster read it.
+	{
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		shellSnowVerdict = LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY) ?
+		                       CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) :
+		                       kSnowGateUnknown;
+		shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
+	}
+	const bool shellGround = shellGateBareFrames < kShellGateBareFrames;
+	if (!shellGround)
+		globals::profiler->MarkPassSkipped("SnowDeformation::ShellVertexBake");
+	if (shellGround && tessellate && bake) {
 		globals::profiler->BeginPass("SnowDeformation::ShellVertexBake");
 		context->CSSetConstantBuffers(0, 1, cbs);
 		ID3D11Buffer* bakeWaveCB[1] = { bowWaveCB ? bowWaveCB->CB() : nullptr };
@@ -1534,135 +1543,141 @@ void SnowDeformation::DrawShell()
 		context->CSSetShaderResources(29, 1, nullCSSRVs);
 		globals::profiler->EndPass();
 	}
-	const bool shellStats = shellPipelineStatsEnabled && EnsureShellStatsQueries();
+	// The stats ring pairs the shell and statics queries per slot, so a
+	// gated frame issues neither.
+	const bool shellStats = shellGround && shellPipelineStatsEnabled && EnsureShellStatsQueries();
 	if (shellStats) {
 		ReadShellStatsQueries(context);
 		context->Begin(shellStatsQuery[shellStatsRing][0].get());
 		context->Begin(shellStatsQuery[shellStatsRing][1].get());
 	}
-	globals::profiler->BeginPass("SnowDeformation::Shell");
-	if (tessellate) {
-		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
-		context->VSSetShader(tessVS, nullptr, 0);
-		context->HSSetShader(tessHS, nullptr, 0);
-		context->DSSetShader(tessDS, nullptr, 0);
-		context->HSSetConstantBuffers(0, 1, cbs);
-		context->DSSetConstantBuffers(0, 1, cbs);
-		// SharedData (b5): the skirt descent reads the EM height-blending
-		// gate; bind the b4-b6 triple exactly as the PS gets it above.
-		context->DSSetConstantBuffers(4, 3, sharedBuffers);
-		// t0-t5, not just the deformation map at t1: the bare-ground cull reads
-		// the terrain window (t0) and the object height field (t4), and an
-		// unbound t0 samples as zeros - which reads as fully bare and would
-		// cull the entire shell.
-		context->HSSetShaderResources(0, 6, shellSRVs);
-		context->DSSetShaderResources(0, 6, shellSRVs);
-		context->HSSetShaderResources(13, 1, &fineSRV);
-		context->DSSetShaderResources(13, 1, &fineSRV);
-		context->HSSetShaderResources(27, 1, &waterSRV);
-		context->DSSetShaderResources(27, 1, &waterSRV);
-		ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
-		context->HSSetShaderResources(9, 1, &hsBakeSRV);
-		ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
-		context->DSSetShaderResources(8, 1, &dsHeightSRV);
-		context->DSSetShaderResources(11, 2, objectCapSRVs);
-		context->DSSetShaderResources(14, 1, &bermSRV);
-		context->DSSetShaderResources(15, 1, &exclusionSRV);
-		context->DSSetShaderResources(29, 1, &undulationSRV);
-		ID3D11ShaderResourceView* dsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
-		context->DSSetShaderResources(9, 1, &dsBakeSRV);
-		ID3D11ShaderResourceView* dsBakeSlopeSRV = bake ? shellVertexBakeSlope->srv.get() : nullptr;
-		context->DSSetShaderResources(23, 1, &dsBakeSlopeSRV);
-		ID3D11SamplerState* dsSampler = shellSnowSampler.get();
-		context->DSSetSamplers(0, 1, &dsSampler);
-
-		// Split draw: only the far field needs the depth clamp, so draw the
-		// near half with the export compiled out and get early-Z rejection
-		// back for the pixels that actually have occluders in front of them.
-		// Skipped when the clamp is already off (one pass, nothing to keep) or
-		// when the LOD heatmap owns the PS, and it falls back to the single
-		// draw if either variant failed to compile.
-		// Depth prepass, three draws: (1) the whole grid with a cheap PS that
-		// runs the alpha cut and writes the clamped depth into the main
-		// buffer as before, plus every winning fragment's RASTER depth into
-		// shellRasterDepth (cleared to 0); (2) a fullscreen fill that turns
-		// that into shellTestDepth, a private depth buffer; (3) the shading
-		// draw against shellTestDepth under EQUAL with writes off. Raster
-		// depth is bit-identical between draws of the same geometry, and 0
-		// matches no fragment, so the EQUAL test is a hardware early-Z that
-		// admits exactly the pixels the prepass wrote - occluded, self-hidden
-		// and alpha-cut fragments never launch the shader. A test against the
-		// main buffer cannot do this: the clamps write a depth that is not
-		// the rasterised one, and a GREATER_EQUAL variant that let a software
-		// test decide launched the full shader on every occluded fragment and
-		// measured slower than no prepass at all.
-		auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-		const bool prepassWanted = !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
-		auto* psPrepass = prepassWanted ? GetShellPSPrepass() : nullptr;
-		auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
-		auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
-		auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
-		const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
-		const bool splitWanted = !prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled;
-		auto* hsNear = splitWanted ? GetShellHSNear(bake) : nullptr;
-		auto* hsFar = hsNear ? GetShellHSFar(bake) : nullptr;
-		if (splitWanted && bake && !hsFar) {
-			hsNear = GetShellHSNear(false);
-			hsFar = hsNear ? GetShellHSFar(false) : nullptr;
-		}
-		auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
-		if (prepass) {
-			const float rasterClear[4] = {};
-			context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
-			ID3D11RenderTargetView* prepassRTV = shellRasterDepth->rtv.get();
-			context->OMSetRenderTargets(1, &prepassRTV, dsv);
-			context->PSSetShader(psPrepass, nullptr, 0);
-			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
-
-			context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
-			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			context->VSSetShader(fillVS, nullptr, 0);
-			context->HSSetShader(nullptr, nullptr, 0);
-			context->DSSetShader(nullptr, nullptr, 0);
-			ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
-			context->PSSetShaderResources(9, 1, &rasterSRV);
-			context->PSSetShader(fillPS, nullptr, 0);
-			context->Draw(3, 0);
-			ID3D11ShaderResourceView* nullRasterSRV = nullptr;
-			context->PSSetShaderResources(9, 1, &nullRasterSRV);
-
-			context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
-			context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
+	if (!shellGround) {
+		globals::profiler->MarkPassSkipped("SnowDeformation::Shell");
+	} else {
+		globals::profiler->BeginPass("SnowDeformation::Shell");
+		if (tessellate) {
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 			context->VSSetShader(tessVS, nullptr, 0);
 			context->HSSetShader(tessHS, nullptr, 0);
 			context->DSSetShader(tessDS, nullptr, 0);
-			context->PSSetShader(psPrepassMain, nullptr, 0);
-			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+			context->HSSetConstantBuffers(0, 1, cbs);
+			context->DSSetConstantBuffers(0, 1, cbs);
+			// SharedData (b5): the skirt descent reads the EM height-blending
+			// gate; bind the b4-b6 triple exactly as the PS gets it above.
+			context->DSSetConstantBuffers(4, 3, sharedBuffers);
+			// t0-t5, not just the deformation map at t1: the bare-ground cull reads
+			// the terrain window (t0) and the object height field (t4), and an
+			// unbound t0 samples as zeros - which reads as fully bare and would
+			// cull the entire shell.
+			context->HSSetShaderResources(0, 6, shellSRVs);
+			context->DSSetShaderResources(0, 6, shellSRVs);
+			context->HSSetShaderResources(13, 1, &fineSRV);
+			context->DSSetShaderResources(13, 1, &fineSRV);
+			context->HSSetShaderResources(27, 1, &waterSRV);
+			context->DSSetShaderResources(27, 1, &waterSRV);
+			ID3D11ShaderResourceView* hsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
+			context->HSSetShaderResources(9, 1, &hsBakeSRV);
+			ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
+			context->DSSetShaderResources(8, 1, &dsHeightSRV);
+			context->DSSetShaderResources(11, 2, objectCapSRVs);
+			context->DSSetShaderResources(14, 1, &bermSRV);
+			context->DSSetShaderResources(15, 1, &exclusionSRV);
+			context->DSSetShaderResources(29, 1, &undulationSRV);
+			ID3D11ShaderResourceView* dsBakeSRV = bake ? shellVertexBake->srv.get() : nullptr;
+			context->DSSetShaderResources(9, 1, &dsBakeSRV);
+			ID3D11ShaderResourceView* dsBakeSlopeSRV = bake ? shellVertexBakeSlope->srv.get() : nullptr;
+			context->DSSetShaderResources(23, 1, &dsBakeSlopeSRV);
+			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
+			context->DSSetSamplers(0, 1, &dsSampler);
 
-			context->OMSetRenderTargets(8, rtvs, dsv);
-			context->OMSetDepthStencilState(shellDepthState.get(), 0);
-		} else if (hsNear && hsFar && psNear) {
-			context->HSSetShader(hsNear, nullptr, 0);
-			context->PSSetShader(psNear, nullptr, 0);
-			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+			// Split draw: only the far field needs the depth clamp, so draw the
+			// near half with the export compiled out and get early-Z rejection
+			// back for the pixels that actually have occluders in front of them.
+			// Skipped when the clamp is already off (one pass, nothing to keep) or
+			// when the LOD heatmap owns the PS, and it falls back to the single
+			// draw if either variant failed to compile.
+			// Depth prepass, three draws: (1) the whole grid with a cheap PS that
+			// runs the alpha cut and writes the clamped depth into the main
+			// buffer as before, plus every winning fragment's RASTER depth into
+			// shellRasterDepth (cleared to 0); (2) a fullscreen fill that turns
+			// that into shellTestDepth, a private depth buffer; (3) the shading
+			// draw against shellTestDepth under EQUAL with writes off. Raster
+			// depth is bit-identical between draws of the same geometry, and 0
+			// matches no fragment, so the EQUAL test is a hardware early-Z that
+			// admits exactly the pixels the prepass wrote - occluded, self-hidden
+			// and alpha-cut fragments never launch the shader. A test against the
+			// main buffer cannot do this: the clamps write a depth that is not
+			// the rasterised one, and a GREATER_EQUAL variant that let a software
+			// test decide launched the full shader on every occluded fragment and
+			// measured slower than no prepass at all.
+			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+			const bool prepassWanted = !shellDepthPrepassDisabled && !shellDepthClampDisabled && !lodHeatmap;
+			auto* psPrepass = prepassWanted ? GetShellPSPrepass() : nullptr;
+			auto* psPrepassMain = psPrepass ? GetShellPSNoDepth() : nullptr;
+			auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
+			auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
+			const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
+			const bool splitWanted = !prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled;
+			auto* hsNear = splitWanted ? GetShellHSNear(bake) : nullptr;
+			auto* hsFar = hsNear ? GetShellHSFar(bake) : nullptr;
+			if (splitWanted && bake && !hsFar) {
+				hsNear = GetShellHSNear(false);
+				hsFar = hsNear ? GetShellHSFar(false) : nullptr;
+			}
+			auto* psNear = hsFar ? GetShellPSNoDepth() : nullptr;
+			if (prepass) {
+				const float rasterClear[4] = {};
+				context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
+				ID3D11RenderTargetView* prepassRTV = shellRasterDepth->rtv.get();
+				context->OMSetRenderTargets(1, &prepassRTV, dsv);
+				context->PSSetShader(psPrepass, nullptr, 0);
+				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
 
-			context->HSSetShader(hsFar, nullptr, 0);
-			context->PSSetShader(ps, nullptr, 0);
-			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+				context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
+				context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
+				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+				context->VSSetShader(fillVS, nullptr, 0);
+				context->HSSetShader(nullptr, nullptr, 0);
+				context->DSSetShader(nullptr, nullptr, 0);
+				ID3D11ShaderResourceView* rasterSRV = shellRasterDepth->srv.get();
+				context->PSSetShaderResources(9, 1, &rasterSRV);
+				context->PSSetShader(fillPS, nullptr, 0);
+				context->Draw(3, 0);
+				ID3D11ShaderResourceView* nullRasterSRV = nullptr;
+				context->PSSetShaderResources(9, 1, &nullRasterSRV);
+
+				context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
+				context->OMSetDepthStencilState(shellPrepassMainDepthState.get(), 0);
+				context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
+				context->VSSetShader(tessVS, nullptr, 0);
+				context->HSSetShader(tessHS, nullptr, 0);
+				context->DSSetShader(tessDS, nullptr, 0);
+				context->PSSetShader(psPrepassMain, nullptr, 0);
+				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+
+				context->OMSetRenderTargets(8, rtvs, dsv);
+				context->OMSetDepthStencilState(shellDepthState.get(), 0);
+			} else if (hsNear && hsFar && psNear) {
+				context->HSSetShader(hsNear, nullptr, 0);
+				context->PSSetShader(psNear, nullptr, 0);
+				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+
+				context->HSSetShader(hsFar, nullptr, 0);
+				context->PSSetShader(ps, nullptr, 0);
+				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+			} else {
+				context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+			}
+			// The statics pass and everything after run the normal pipeline.
+			context->HSSetShader(nullptr, nullptr, 0);
+			context->DSSetShader(nullptr, nullptr, 0);
+			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		} else {
-			context->Draw(kShellGridDim * kShellGridDim * 4, 0);
+			context->VSSetShader(vs, nullptr, 0);
+			DrawShellGrid(context, cbData);
 		}
-		// The statics pass and everything after run the normal pipeline.
-		context->HSSetShader(nullptr, nullptr, 0);
-		context->DSSetShader(nullptr, nullptr, 0);
-		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	} else {
-		context->VSSetShader(vs, nullptr, 0);
-		DrawShellGrid(context, cbData);
+		globals::profiler->EndPass();
 	}
-	globals::profiler->EndPass();
 	if (shellStats) {
 		context->End(shellStatsQuery[shellStatsRing][1].get());
 		context->End(shellStatsQuery[shellStatsRing][0].get());
@@ -1766,7 +1781,9 @@ void SnowDeformation::DrawShell()
 	// onto the shell. min() the shell's fresh depth into both blended copies
 	// (DSV is unbound again at this point).
 	auto& tb = globals::features::terrainBlending;
-	if (tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
+	if (!shellGround)
+		globals::profiler->MarkPassSkipped("SnowDeformation::DepthSync");
+	if (shellGround && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS()) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };

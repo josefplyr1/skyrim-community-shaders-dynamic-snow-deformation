@@ -901,7 +901,15 @@ void SnowDeformation::Prepass()
 	// Resuming forces a clear instead of trusting a delta that may now exceed
 	// the map. Trenches come back through the tile store's re-inject, the same
 	// path a worldspace change already uses.
-	if (!DeformationWindowHasSnow()) {
+	//
+	// Arcs age above the suspend: one left behind on leaving snow must still
+	// expire while the passes below sleep.
+	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
+
+	// Bare must hold kShellGateBareFrames before suspending: the resume clears
+	// the map, so a cell flickering at the square's edge must not cost it.
+	deformGateBareFrames = DeformationWindowHasSnow() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
+	if (deformGateBareFrames >= kShellGateBareFrames) {
 		if (!deformSuspended) {
 			deformSuspended = true;
 			logger::debug("[SNOW DEFORMATION] Deformation passes suspended: no snow depth in window");
@@ -1028,8 +1036,6 @@ void SnowDeformation::Prepass()
 	// half that grew: the spell branch walks the projectile manager, resolves
 	// records and queries land height per source, all on the render thread.
 	// Sequential rather than nested - the profiler tracks one current pass.
-	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
-
 	globals::profiler->BeginPass("SnowDeformation::GatherSpells");
 	GatherSpellEmitters();
 	globals::profiler->EndPass();
