@@ -485,6 +485,10 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.0f;
+		/** @brief A/B: the edge lumps' reach measured along the surface from the reconstructed weight's gradient (view-independent by construction) instead of a screen-space disc of read-back taps. Wins over EdgeReachTapsCheckDepth when both are on. */
+		bool EdgeReachAlongSurface = false;
+		/** @brief A/B: the screen-space reach disc keeps only taps that are on screen and within the reach of this point by scene depth, scoring over the taps kept. */
+		bool EdgeReachTapsCheckDepth = false;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
@@ -1783,8 +1787,8 @@ public:
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
-		/** @brief was ProjSnowFillSk (Snow Fill, retired 2026-09-10); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float padProjFill;
+		/** @brief Edge-reach A/B bits (was ProjSnowFillSk): 1 = Settings::EdgeReachAlongSurface, 2 = Settings::EdgeReachTapsCheckDepth; both = along the surface. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float EdgeReachMode;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
 		/** @brief 2 = the S4 shell owns this draw (SKIN-PLACEMENT-PLAN S4 phase 1): the rolling-ball fillet grown vertically over the fill-covered slice of the projected footprint, per-pixel coverage from the reconstructed vanilla weight. 0 = classic path (no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

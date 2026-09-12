@@ -243,9 +243,11 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	// was ProjSnowFillSk (Snow Fill, retired); slot kept for layout. Mirror
-	// in SnowDeformation.h.
-	float padProjFill;
+	// Edge-reach A/B bits (was ProjSnowFillSk): 1 = reach measured along
+	// the surface from the reconstruction's gradient, 2 = the screen taps
+	// each checked against scene depth. Both set = along the surface.
+	// Mirror in SnowDeformation.h.
+	float EdgeReachMode;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
@@ -3451,6 +3453,27 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// World units spanned by this pixel. Every LOD term below keys off it
 	// rather than off camera distance, so they track resolution and FOV.
 	float footprint = length(abs(dPosX) + abs(dPosY));
+	// Reach along the surface (EdgeReachMode 1): the smooth reconstructed
+	// weight's gradient ON THE SURFACE, taken here in uniform flow, turns
+	// the weight's deficit below the paint contour into world units - a
+	// property of the mesh, not of the view. Least-norm g with
+	// g.dPosX = dw.x and g.dPosY = dw.y (the screen axes are not orthonormal
+	// on the surface). Flat faces behind a hard crease have no gradient and
+	// so no measurable distance; curved surfaces do.
+	float edgeDistU = 1e6;
+	{
+		float wSmoothU = normalWS.z * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
+		float2 dwS = float2(ddx(wSmoothU), ddy(wSmoothU));
+		float gxx = dot(dPosX, dPosX), gxy = dot(dPosX, dPosY), gyy = dot(dPosY, dPosY);
+		float det = max(gxx * gyy - gxy * gxy, 1e-8);
+		float2 c = float2(gyy * dwS.x - gxy * dwS.y, gxx * dwS.y - gxy * dwS.x) / det;
+		float gradMag = sqrt(max(dot(dwS, c), 0.0));
+		// The game paints where vanilla's weight clears 0 after its noise
+		// term: the reconstruction carries +0.1 and the noise averages half
+		// its scale, so the mean contour sits at this threshold.
+		float thrU = 0.1 + 0.5 * ProjNoiseScale;
+		edgeDistU = max(thrU - wSmoothU, 0.0) / max(gradMag, 1e-4);
+	}
 	// Screen derivatives of the SMOOTH projected weight (vertex normal, no
 	// noise, no normal map) and of the vertex normal z: the edge lumps turn
 	// "how far below the solid weight" into world units past the solid
@@ -4015,21 +4038,55 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// 0.01 that 0.00 did not have, the whole slider's step in
 				// one notch. Sub-pixel reach samples the fleck itself, so
 				// the halo shrinks to nothing as the slider does.
-				float reachPx = min(kEdgeReachUnits * EdgeFlankWidth / max(footprint, 1e-3), 96.0);
-				float hits = 0.0;
-				[unroll] for (int ring = 1; ring <= 3; ring++)
+				const float reachU = kEdgeReachUnits * EdgeFlankWidth;
+				const bool reachAlongSurface = EdgeReachMode > 0.5 && (EdgeReachMode < 1.5 || EdgeReachMode > 2.5);
+				[branch] if (reachAlongSurface)
 				{
-					float r = reachPx * float(ring) / 3.0;
-					[unroll] for (int k = 0; k < 8; k++)
-					{
-						float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
-						float2 sp = input.Position.xy + float2(cos(a), sin(a)) * r;
-						float ee = PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y;
-						// Soft: a tap on the paint's edge counts by how far it is in.
-						hits += saturate((ee - (2.0 + kCoatSolidReal)) * 8.0 + 0.5);
-					}
+					// The disc's own score for a straight contour at this
+					// distance (the circular segment), so the slider reads as
+					// before: half on the contour, nothing at the reach.
+					float x = saturate(edgeDistU / max(reachU, 1e-3));
+					nearPaint = (acos(x) - x * sqrt(1.0 - x * x)) / 3.14159265;
 				}
-				nearPaint = hits / 24.0;
+				else
+				{
+					// The disc in screen space. Its taps are screen neighbours,
+					// not surface neighbours: EdgeReachMode 2 keeps only taps
+					// that are on screen and, by their scene depth, within the
+					// reach of this point in 3D, and scores over those.
+					const bool tapsCheckDepth = EdgeReachMode > 1.5;
+					float reachPx = min(reachU / max(footprint, 1e-3), 96.0);
+					float pixZ = input.CurrentClip.w;
+					float hits = 0.0;
+					float valid = 0.0;
+					[unroll] for (int ring = 1; ring <= 3; ring++)
+					{
+						float r = reachPx * float(ring) / 3.0;
+						[unroll] for (int k = 0; k < 8; k++)
+						{
+							float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
+							float2 sp = input.Position.xy + float2(cos(a), sin(a)) * r;
+							float ok = 1.0;
+							[flatten] if (tapsCheckDepth)
+							{
+								bool onScreen = all(sp >= 0.0) && all(sp < masksDim);
+								float tapZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(clamp(sp, 0.0, masksDim - 1.0), 0)));
+								// Lateral gap scaled to the tap's own depth, plus the depth gap.
+								float lateral = r * footprint * tapZ / max(pixZ, 1e-3);
+								float dz = tapZ - pixZ;
+								float dist3 = sqrt(lateral * lateral + dz * dz);
+								ok = (onScreen && dist3 < 1.25 * reachU) ? 1.0 : 0.0;
+							}
+							float ee = PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y;
+							// Soft: a tap on the paint's edge counts by how far it is in.
+							hits += ok * saturate((ee - (2.0 + kCoatSolidReal)) * 8.0 + 0.5);
+							valid += ok;
+						}
+					}
+					// A third of the disc at least: a lone surviving tap must
+					// not score as a whole painted disc.
+					nearPaint = hits / max(valid, 8.0);
+				}
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}
