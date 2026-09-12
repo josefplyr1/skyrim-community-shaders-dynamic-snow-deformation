@@ -671,11 +671,12 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				if (rasterPeriod > 1 && ((ci + lv.rebuilds) % rasterPeriod) != 0)
 					continue;
 				const auto& cap = capturedStatics[ci];
-				// Roads and bridges belong to the trench patch, which drapes the
-				// road heightfield itself; the S4 skin excludes them for the same
+				// Roads belong to the trench patch, which drapes the road
+				// heightfield itself; the S4 skin excludes them for the same
 				// reason. Voxelising them put volume snow over every RoadChunk
-				// (Josef, 2026-09-06).
-				if (cap.road || cap.bridge)
+				// (Josef, 2026-09-06). Bridges are not roads: the volume is
+				// what gives their deck its snow.
+				if (cap.road)
 					continue;
 				auto* geometry = cap.geometry.get();
 				if (!geometry)

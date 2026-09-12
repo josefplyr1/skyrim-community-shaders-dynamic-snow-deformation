@@ -388,11 +388,11 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
 		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now, and bridges are left on the old path."));
+			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now."));
 
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttRoad = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road and bridge meshes. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
+			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road meshes; bridges are ordinary objects. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
 
 		ImGui::SeparatorText(T(TKEY("landscape_class_group"), "Landscape Texture Class"));
 		bool classDepthsChanged = false;

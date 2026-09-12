@@ -154,7 +154,7 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f.length = length;
 		f.head = head;
 		f.bridge = ContainsNoCase(name, "bridge");
-		f.road = f.bridge || ContainsNoCase(name, "road");
+		f.road = ContainsNoCase(name, "road");
 		f.mountainCliff = ContainsNoCase(name, "mountain") || ContainsNoCase(name, "cliff");
 		f.plank = ContainsNoCase(name, "plank") || ContainsNoCase(name, "walkway") || ContainsNoCase(name, "catwalk");
 		f.iceFamily = (std::tolower((unsigned char)name[0]) == 'i' && std::tolower((unsigned char)name[1]) == 'c' && std::tolower((unsigned char)name[2]) == 'e') ||
@@ -440,7 +440,7 @@ struct GeometryRecord
 	bool iceName = false;
 	bool ice = false;
 	bool shard = false;
-	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge
+	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
 	MatoClass mato = MatoClass::kNoReference;
 };
 
@@ -759,15 +759,16 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// ('RoadChunk...:0', ':2'), and only some wear road textures; matching
 	// textures alone splits one road across two depth settings, stacking a
 	// second hovering shell.
-	// `bridge` is tracked apart from `road` for the road heightfield only:
-	// both classes share RoadMeshesDepth exactly as before.
-	bool bridge = nameFacts.bridge;
-	bool road = nameFacts.road;
+	// "bridge" (name or diffuse) EXCLUDES the road class: a bridge mesh does
+	// not split its road stones from its walls, so the road skin sheeted
+	// the whole thing (Josef, 2026-09-12). Bridges are ordinary objects;
+	// the RoadChunks laid over a deck keep their own road class.
+	const bool bridge = nameFacts.bridge || rec.roadTex == 2;
+	bool road = !bridge && nameFacts.road;
 	// Which signal decided it, for the road-classification log below.
-	const char* roadVia = road ? "name" : "no";
-	if (!road && rec.roadTex != 0) {
+	const char* roadVia = road ? "name" : (bridge ? "bridge excluded" : "no");
+	if (!road && !bridge && rec.roadTex == 1) {
 		road = true;
-		bridge = rec.roadTex == 2;
 		roadVia = "texture";
 	}
 
@@ -784,9 +785,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			if (auto textureSet = logMaterial->textureSet.get())
 				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
 					diffusePath = path;
-		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}){} heightfield={} tex='{}'",
-			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, bridge ? " (BRIDGE)" : "",
-			(road && !bridge && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
+		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}) heightfield={} tex='{}'",
+			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia,
+			(road && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
 	}
 
 	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
@@ -844,7 +845,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, bridge, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -1826,7 +1827,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
 		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
 		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
-		scb.RoadField = (settings.RoadHeightfield && cap.road && !cap.bridge) ? 1.0f : 0.0f;
+		scb.RoadField = (settings.RoadHeightfield && cap.road) ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		{
 			// The S4 path no longer depends on the 3D toggle: that toggle is
@@ -2325,7 +2326,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
 	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
 	a_scb.MoundSteepness = std::clamp(settings.SnowMoundSteepness, 0.5f, 3.0f);
-	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road && !a_cap.bridge) ? 1.0f : 0.0f;
+	a_scb.RoadField = (settings.RoadHeightfield && a_cap.road) ? 1.0f : 0.0f;
 	a_scb.ProjThreshold = a_cap.projThreshold;
 	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
 	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
@@ -2736,7 +2737,6 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&g, sizeof(g));
 			mix(&cap.world.translate, sizeof(cap.world.translate));
 			mix(&cap.road, sizeof(cap.road));
-			mix(&cap.bridge, sizeof(cap.bridge));
 			mix(&cap.fadeExempt, sizeof(cap.fadeExempt));
 			mix(&cap.projThreshold, sizeof(cap.projThreshold));
 			mix(&cap.projNoiseScale, sizeof(cap.projNoiseScale));

@@ -485,9 +485,9 @@ public:
 		std::map<std::string, float> TextureDepths;
 		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.0f;
-		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road/bridge texture path). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
+		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
-		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges excluded pending #9e. */
+		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
 		bool RoadHeightfield = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
@@ -1589,10 +1589,8 @@ public:
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
-		/** @brief Road/bridge match: this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
+		/** @brief Road match (name or texture, never a bridge): this capture uses RoadMeshesDepth, so the model class cannot be split across a road model's trishapes. */
 		bool road;
-		/** @brief Matched on "bridge" rather than "road". Held apart from `road` only to keep bridges out of the road heightfield (S0): their deck is elevated, and the stamp map has no z channel to tell a deck trail from the ground below it (#9e). */
-		bool bridge;
 		/** @brief Glacier/iceberg family: captured past the Object Snow range cap and exempt from the SkinFade distance dissolve — their own baked snow never matches the shell, so the skin must persist at every loaded distance. */
 		bool fadeExempt;
 		/** @brief projectedUVParams.w from the draw's property, -1 without kProjectedUV; see StaticsCB::ProjThreshold. */
