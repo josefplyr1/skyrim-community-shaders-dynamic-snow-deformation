@@ -934,8 +934,11 @@ void SnowDeformation::DrawSettings()
 			if (debugContactView) {
 				ImGui::SliderFloat("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
 				ImGui::Checkbox("Still bodies skip the draw (A/B; off = every rasterized actor draws every frame)", &debugContactStillGate);
-				const float viewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-				ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
+				// The half-extent the view CS ran with, not the live slider: dragging
+				// it rebuilds the image next frame, and drawing this frame's box at
+				// next frame's scale is what makes a correct silhouette look misplaced.
+				const float viewHalf = contactViewHalfUsed > 0.0f ? contactViewHalfUsed : std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
+				ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
 					2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
 				if (contactViewSRV) {
 					const float scale = 512.0f / (2.0f * viewHalf);
@@ -946,13 +949,18 @@ void SnowDeformation::DrawSettings()
 						ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 0.5f, a_v1 });
 						if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 							if (auto* root = player->Get3D(false)) {
-								const auto& bound = root->worldBound;
 								auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
 								auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
-								ImGui::GetWindowDrawList()->AddRect(
-									{ toX(bound.center.x - bound.radius), toY(bound.center.y + bound.radius) },
-									{ toX(bound.center.x + bound.radius), toY(bound.center.y - bound.radius) },
-									IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
+								// The bound the crop was BUILT from, so the box is a
+								// statement about the image rather than about the
+								// moment the menu happened to read the scene graph.
+								const float2 boundCenter = contactViewBoundCenter;
+								const float boundRadius = contactViewBoundRadius;
+								if (boundRadius > 0.0f)
+									ImGui::GetWindowDrawList()->AddRect(
+										{ toX(boundCenter.x - boundRadius), toY(boundCenter.y + boundRadius) },
+										{ toX(boundCenter.x + boundRadius), toY(boundCenter.y - boundRadius) },
+										IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
 								// Bone positions over the silhouette: feet white, hands cyan,
 								// head/spine magenta. A mesh stretched against its own bones
 								// shows as a silhouette reaching past them.
@@ -974,8 +982,15 @@ void SnowDeformation::DrawSettings()
 					drawHalf(0.5f, 1.0f);
 					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 						if (auto* root = player->Get3D(false))
-							ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
-								root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(), contactCenter.x, contactCenter.y,
+							// Crop centre beside the live bound: the box is drawn from the
+							// crop, so a gap between these two is the only way the box can
+							// sit off a centred silhouette. Named here so one screenshot
+							// separates a misplaced overlay from a misplaced raster.
+							ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | crop centre (%.0f, %.0f) half %.0f, live bound drifts (%.0f, %.0f) | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
+								root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(),
+								contactViewCenter.x, contactViewCenter.y, contactViewHalfUsed,
+								root->worldBound.center.x - contactViewCenter.x, root->worldBound.center.y - contactViewCenter.y,
+								contactCenter.x, contactCenter.y,
 								contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
 					}
 					// Heights against the baked ground: what the carve's (contact - ground) / layer

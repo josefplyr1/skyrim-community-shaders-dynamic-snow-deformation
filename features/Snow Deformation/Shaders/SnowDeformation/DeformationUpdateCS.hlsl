@@ -1250,7 +1250,13 @@ bool StampTexel(uint2 phys)
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
 				float above = ContactAbove(worldPos, contact);
-				color = float4(saturate(1.0 - above), saturate(above), 0.0, 1.0);
+				// A surface UNDER the ground it is measured against is not a
+				// press: nothing a body carries can be there. The carve cannot
+				// tell it from a boot standing on the ground - both saturate to
+				// full depth - so the view says it, blue rising with the burial.
+				// Magenta beside a silhouette means that column's ground read
+				// high, not that something touched it.
+				color = float4(saturate(1.0 - above), saturate(above), saturate(-above), 1.0);
 			}
 		}
 	}

@@ -2766,6 +2766,19 @@ public:
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */
 	float2 contactViewCenter{};
 	float contactViewTexelSize = 0.0f;
+	/**
+	 * @brief The crop half-extent and the player bound the view CS was actually dispatched with.
+	 *
+	 * The overlay must be drawn from the SAME numbers the pixels under it were
+	 * built from. Reading the live slider or a fresh worldBound in the menu
+	 * instead puts the box somewhere the image never claimed - the menu runs
+	 * after the pass, so a slider dragged this frame, or a bound that moved
+	 * between the two reads, shifts the box off a silhouette that is exactly
+	 * where it should be. A wrong box then reads as a wrong rasterizer.
+	 */
+	float contactViewHalfUsed = 0.0f;
+	float2 contactViewBoundCenter{};
+	float contactViewBoundRadius = 0.0f;
 	bool EnsureContactResources();
 	void DrawContactCapture(ID3D11DeviceContext* a_context);
 

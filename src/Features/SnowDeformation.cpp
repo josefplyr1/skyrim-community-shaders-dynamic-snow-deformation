@@ -1064,13 +1064,20 @@ void SnowDeformation::Prepass()
 	}
 	perFrameData.ViewCenter = contactCenter;
 	perFrameData.ViewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
+	contactViewBoundRadius = 0.0f;
 	if (debugContactView) {
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {
-			if (auto* root = player->Get3D(false))
+			if (auto* root = player->Get3D(false)) {
 				perFrameData.ViewCenter = { root->worldBound.center.x, root->worldBound.center.y };
+				// Held for the overlay: the box has to be the bound this crop was
+				// centred on, not one re-read after the pass.
+				contactViewBoundCenter = perFrameData.ViewCenter;
+				contactViewBoundRadius = root->worldBound.radius;
+			}
 		}
 	}
 	contactViewCenter = perFrameData.ViewCenter;
+	contactViewHalfUsed = perFrameData.ViewHalf;
 	contactViewTexelSize = perFrameData.TexelSize;
 
 	// Marked here, consumed by NEXT frame's roll: the map these stamps are
