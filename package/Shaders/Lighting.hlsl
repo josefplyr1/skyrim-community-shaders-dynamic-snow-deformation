@@ -3232,6 +3232,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// shell's coat and edge lumps. Landscape keeps (0, 1] for its grain.
 	[flatten] if (snowProjMatch)
 		psout.Masks.y = 2.0 + saturate(projectedMaterialWeight);
+#			elif defined(SNOW_DEFORMATION)
+	// A Seasons of Skyrim multipass object's base pass: no projection, so
+	// nothing above writes the weight and the skin's read-back saw 0
+	// ("unknown") and reconstructed a coat over every face. 2 = known and
+	// unpainted; the sparkle pass writes 2 + w over it where it paints.
+	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
+		psout.Masks.y = 2.0;
 #			endif
 #			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// The LOD brightness recolor's weight, same encoding, for the same coat.

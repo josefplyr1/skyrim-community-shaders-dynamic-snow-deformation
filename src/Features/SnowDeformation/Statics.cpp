@@ -590,19 +590,23 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	bool bindSnowSet = false;
 	if (settings.ProjSnowMatch) {
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
-		if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
+		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
+		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
+		// Seasons of Skyrim's runtime projection: flagged on EVERY pass of the
+		// object. A multipass object's base pass carries no projection, and
+		// without this bit Lighting wrote no mask there, so the skin read
+		// "unknown" and reconstructed a coat over every face; with it the base
+		// pass writes "known, unpainted" and only the sparkle pass raises it.
+		if (rec.seasonsProj && !treeAnim)
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
+		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
+		} else if (rec.mato == MatoClass::kNotSnow) {
+			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
 		} else {
-			const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
-			if (rec.mato == MatoClass::kNotSnow) {
-				statProjVetoed.fetch_add(1, std::memory_order_relaxed);
-			} else {
-				statProjMatched.fetch_add(1, std::memory_order_relaxed);
-				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-				if (rec.seasonsProj)
-					extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
-				bindSnowSet = true;
-			}
+			statProjMatched.fetch_add(1, std::memory_order_relaxed);
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+			bindSnowSet = true;
 		}
 	}
 	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles

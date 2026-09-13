@@ -109,7 +109,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("seasons_snow_max_angle"), "Seasons Snow Max Angle"), &settings.SeasonsSnowMaxAngle, 0.0f, 90.0f, "%.0f deg");
 		if (auto _ttSeasons = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask, so the game covers every face short of an overhang; this supplies the missing angle for them only. Authored snow objects keep their own angle and mask. 90 leaves Seasons' coverage as it is."));
+			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask; 90 keeps Seasons' own coverage, which the recolor and the drape then follow exactly, and lower cuts the snow off steeper faces for them only. Authored snow objects keep their own angle and mask."));
 
 		{
 			// Driven by the accumulation scalar while Recolored Snow Accumulates is on.
