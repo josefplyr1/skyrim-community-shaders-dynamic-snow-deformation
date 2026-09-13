@@ -375,9 +375,9 @@ namespace SharedData
 		float ProjSnowEnable;
 		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
 		float LODObjectEnable;
-		// cos(max angle) subtracted from the projected weight of draws flagged
-		// SnowProjectedUnauthored (runtime-applied projections carry cos 0 and
-		// no alpha mask). Mirror in SnowDeformation.h.
+		// cos(max angle): the slope cut applied to the vertex alpha of draws
+		// flagged SnowProjectedUnauthored (runtime-applied projections carry
+		// cos 0 and no alpha mask). Mirror in SnowDeformation.h.
 		float ProjUnauthoredThreshold;
 
 		// Toroidal deformation-map addressing: physical position of logical

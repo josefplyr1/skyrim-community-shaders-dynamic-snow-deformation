@@ -662,7 +662,7 @@ public:
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
 		float LODObjectEnable;
-		/** @brief cos(SeasonsSnowMaxAngle): subtracted from the projected weight of SnowProjectedUnauthored draws. Mirror in SharedData.hlsli. */
+		/** @brief cos(SeasonsSnowMaxAngle): the slope cut Lighting applies to the vertex alpha of SnowProjectedUnauthored draws, in place of the mask the record lacks. Mirror in SharedData.hlsli. */
 		float ProjUnauthoredThreshold;
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */

@@ -910,6 +910,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim)) {
 			const auto& projParams = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams;
 			projThreshold = projParams.alpha;
+			// Runtime projection (Seasons of Skyrim): the record's 0 stands
+			// for "no angle"; the skin reconstructs with the angle Lighting
+			// masks by, so the drape and the recolor agree.
+			if (rec.seasonsProj)
+				projThreshold = std::max(projThreshold, std::cos(std::clamp(settings.SeasonsSnowMaxAngle, 0.0f, 90.0f) * (DirectX::XM_PI / 180.0f)));
 			projNoiseScale = projParams.red;
 			projNoiseTiling = projParams.blue;
 			projReal = true;

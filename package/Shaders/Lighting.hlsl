@@ -1757,18 +1757,23 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		else
 	float vertexAlpha = input.Color.w;
 #		endif  // defined (TREE_ANIM) || defined (LODOBJECTSHD)
-	projWeight = -ProjectedUVParams.x * projNoise + (dot(worldNormal.xyz, texProj) * vertexAlpha - ProjectedUVParams.w);
-#		if defined(LODOBJECTSHD)
-	projWeight += (-0.5 + input.Color.w) * 2.5;
-#		endif  // LODOBJECTSHD
+	float projDot = dot(worldNormal.xyz, texProj);
 #		if defined(SNOW_DEFORMATION)
 	// Runtime-applied projections (Seasons of Skyrim) carry the record
 	// default max angle (cos 0) and no vertex-alpha mask, so every face short
-	// of an overhang paints; the threshold the record lacks goes in here, so
-	// the game's own paint, the sparkle discard and the recolor all follow it.
+	// of an overhang paints. Stand in for the mask an author would have
+	// painted: a slope cut at the max angle, applied to the alpha so tops
+	// keep the projection's own full weight and noise (a threshold
+	// subtracted from the weight left only patches) and steeper faces go
+	// bare. The game's own paint, the sparkle discard and the recolor all
+	// follow it.
 	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
-		projWeight -= SharedData::snowDeformationSettings.ProjUnauthoredThreshold;
+		vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
 #		endif
+	projWeight = -ProjectedUVParams.x * projNoise + (projDot * vertexAlpha - ProjectedUVParams.w);
+#		if defined(LODOBJECTSHD)
+	projWeight += (-0.5 + input.Color.w) * 2.5;
+#		endif  // LODOBJECTSHD
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;
