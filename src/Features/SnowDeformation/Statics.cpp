@@ -247,6 +247,9 @@ namespace
 		kNoReference,
 		kNoMato,
 		kSnow,
+		// Seasons of Skyrim's multipass snow MATO, swapped onto the base at
+		// clone time: snow, but with no authored max angle.
+		kSnowSeasons,
 		kNotSnow
 	};
 
@@ -254,7 +257,8 @@ namespace
 	// projections. Negative keywords only: requiring "snow" in the path
 	// vetoed every MATO whose replacer names it differently.
 	// Sand/moss/ash keep their veto; an
-	// unrecognized path passes. Cached per base form; each new entry is
+	// unrecognized path passes. Cached per MATO form (Seasons of Skyrim
+	// swaps the MATO under the same base each season); each new entry is
 	// logged so the modlist's actual MATO names are in CommunityShaders.log.
 	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
 	{
@@ -266,12 +270,14 @@ namespace
 		auto* base = refr->GetBaseObject();
 		if (!base)
 			return MatoClass::kNoReference;
+		auto* stat = base->As<RE::TESObjectSTAT>();
+		auto* mato = stat ? stat->data.materialObj : nullptr;
 		static std::unordered_map<RE::FormID, MatoClass> matoClassCache;
 		if (matoClassCache.size() > 4096)
 			matoClassCache.clear();
-		auto [it, inserted] = matoClassCache.try_emplace(base->GetFormID(), MatoClass::kNoMato);
+		auto [it, inserted] = matoClassCache.try_emplace(mato ? mato->GetFormID() : 0, MatoClass::kNoMato);
 		if (inserted) {
-			if (auto* stat = base->As<RE::TESObjectSTAT>(); stat && stat->data.materialObj) {
+			if (mato) {
 				// The MODL path is junk on vanilla MATO records (Bethesda left
 				// 'shadertests\shaderbox.nif' in most of them — the whole
 				// modlist logged that one path), so the editor ID carries the
@@ -279,13 +285,15 @@ namespace
 				// ...). Runtime editor IDs need po3 Tweaks; when absent the
 				// signal degrades to the path alone.
 				std::string matoPath;
-				if (const char* edid = stat->data.materialObj->GetFormEditorID())
+				if (const char* edid = mato->GetFormEditorID())
 					matoPath = edid;
 				matoPath += '|';
-				matoPath += stat->data.materialObj->GetModel();
+				matoPath += mato->GetModel();
 				std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
 					[](unsigned char c) { return (char)std::tolower(c); });
-				if (matoPath.find("snow") != std::string::npos) {
+				if (matoPath.starts_with("sos_win_snowmaterialobject")) {
+					it->second = MatoClass::kSnowSeasons;
+				} else if (matoPath.find("snow") != std::string::npos) {
 					it->second = MatoClass::kSnow;
 				} else {
 					static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
@@ -297,8 +305,8 @@ namespace
 						}
 					}
 				}
-				logger::info("[SNOW DEFORMATION] Projected MATO on base {:08X}: '{}' -> {}", base->GetFormID(), matoPath,
-					it->second == MatoClass::kSnow ? "snow" : (it->second == MatoClass::kNotSnow ? "NOT snow (vetoed)" : "neutral"));
+				logger::info("[SNOW DEFORMATION] Projected MATO {:08X} (base {:08X}): '{}' -> {}", mato->GetFormID(), base->GetFormID(), matoPath,
+					it->second == MatoClass::kSnow ? "snow" : (it->second == MatoClass::kSnowSeasons ? "snow (Seasons, unauthored)" : (it->second == MatoClass::kNotSnow ? "NOT snow (vetoed)" : "neutral")));
 			} else {
 				logger::info("[SNOW DEFORMATION] Projected base {:08X}: no STAT MATO -> neutral", base->GetFormID());
 			}
@@ -501,6 +509,9 @@ struct GeometryRecord
 	bool shard = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
 	MatoClass mato = MatoClass::kNoReference;
+	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
+	// or its single-pass marker (SOS_SNOW_SHADER extra data on the root).
+	bool seasonsProj = false;
 	// Nominal snow depth at the bound centre, valid while snowDepthVersion holds.
 	float depthX = 0.0f;
 	float depthY = 0.0f;
@@ -542,6 +553,12 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		// The texture half of IceFamilySignal is the natural-feature test.
 		r.ice = r.iceName || r.pathNatural;
 		r.mato = ClassifyProjectedMato(a_geometry);
+		r.seasonsProj = r.mato == MatoClass::kSnowSeasons;
+		if (!r.seasonsProj) {
+			static const RE::BSFixedString seasonsMarker("SOS_SNOW_SHADER");
+			for (RE::NiAVObject* node = a_geometry; node && !r.seasonsProj; node = node->parent)
+				r.seasonsProj = node->GetExtraData(seasonsMarker) != nullptr;
+		}
 	}
 	lastGeometry = a_geometry;
 	lastRecord = &r;
@@ -563,7 +580,8 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// game's SetupGeometry (the ExtendedTranslucency pattern): the
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
-	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow));
+	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow) |
+						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -574,12 +592,17 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 		if (!passProjected || a_pass->shaderProperty->flags.all(Flag::kTreeAnim)) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
-		} else if (RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)).mato == MatoClass::kNotSnow) {
-			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
 		} else {
-			statProjMatched.fetch_add(1, std::memory_order_relaxed);
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-			bindSnowSet = true;
+			const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
+			if (rec.mato == MatoClass::kNotSnow) {
+				statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+			} else {
+				statProjMatched.fetch_add(1, std::memory_order_relaxed);
+				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+				if (rec.seasonsProj)
+					extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
+				bindSnowSet = true;
+			}
 		}
 	}
 	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles

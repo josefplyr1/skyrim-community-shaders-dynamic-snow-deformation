@@ -1761,6 +1761,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODOBJECTSHD)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
+#		if defined(SNOW_DEFORMATION)
+	// Runtime-applied projections (Seasons of Skyrim) carry the record
+	// default max angle (cos 0) and no vertex-alpha mask, so every face short
+	// of an overhang paints; the threshold the record lacks goes in here, so
+	// the game's own paint, the sparkle discard and the recolor all follow it.
+	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
+		projWeight -= SharedData::snowDeformationSettings.ProjUnauthoredThreshold;
+#		endif
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;
@@ -1807,7 +1815,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		}
 	}
 
-#		if defined(SNOW_DEFORMATION)
+#			if defined(SPECULAR)
+	useSnowSpecular = useSnowDecalSpecular;
+#			endif  // SPECULAR
+#		endif      // SPARKLE
+
+#		if defined(SNOW_DEFORMATION) && !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
 	// picks texture vs flat-color projection above; when the CPU classified
 	// this draw's projected material as snow, both paths converge here onto
@@ -1815,7 +1828,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// is the only story consistent with every frame7075 measurement
 	// (RGBScale = 0 blacks the texture path, yet the fence rails render
 	// blue-white), and it samples no texture, which is why the in-branch
-	// swap of rounds 1-4 could never change it.
+	// swap of rounds 1-4 could never change it. Sits after the SPARKLE
+	// branch so the multipass snow pass (technique 14, every surviving pixel
+	// already snow) takes the same set.
 	snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
 	                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 	[branch] if (snowProjMatch)
@@ -1831,7 +1846,13 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			// planes on the quads straddling mesh creases - a line of a different
 			// snow texel along the edge.
 			float3 snowTriWeights = Triplanar::GetWeights(tbnTr[2], tbnTr[2]);
+			// The sparkle pass declares no projected-diffuse sampler (s3 is
+			// its own texture there); its colour sampler is the same wrap state.
+#			if defined(SPARKLE)
+			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+#			else
 			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+#			endif
 			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
 			snowProjAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
 			// Classification debug: everything this block replaces, in magenta.
@@ -1865,11 +1886,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !snowProjMatch)
 		baseColor.xyz = float3(1.0, 0.0, 0.0);
 #		endif
-
-#			if defined(SPECULAR)
-	useSnowSpecular = useSnowDecalSpecular;
-#			endif  // SPECULAR
-#		endif      // SPARKLE
 
 #	endif  // SNOW
 

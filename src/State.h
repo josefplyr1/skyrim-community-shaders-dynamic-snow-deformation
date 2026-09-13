@@ -292,7 +292,11 @@ public:
 		SnowProjectedIsSnow = 1 << 16,
 		// Set per pass by the same hook: a plain object-LOD batch (no snow
 		// flags), whose baked snow texels the horizon recolor may take.
-		SnowLODBakedIsSnow = 1 << 17
+		SnowLODBakedIsSnow = 1 << 17,
+		// Set with SnowProjectedIsSnow when the projection was applied at
+		// runtime (Seasons of Skyrim): no authored max angle or alpha mask, so
+		// Lighting supplies the threshold the record lacks.
+		SnowProjectedUnauthored = 1 << 18
 	};
 
 	bool inWorld = false;

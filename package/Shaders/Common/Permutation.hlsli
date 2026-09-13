@@ -93,6 +93,7 @@ namespace Permutation
 		static const uint SnowLandIsSnowMask = (0x3F << 10);
 		static const uint SnowProjectedIsSnow = (1 << 16);
 		static const uint SnowLODBakedIsSnow = (1 << 17);
+		static const uint SnowProjectedUnauthored = (1 << 18);
 	}
 
 	cbuffer PerShader : register(b4)

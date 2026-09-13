@@ -587,6 +587,8 @@ public:
 		bool HorizonSnow = true;
 		/** @brief "Recolor Projected Snow" (SKIN-PLACEMENT-PLAN S3, round 11): projected snow wears the shell's snow set (albedo + PBR response) inside the object's own Lighting draw, on draws whose projected material is snow - every angle by construction. All or nothing: every pixel the game paints at all takes full shell-snow weight (Snow Fill retired 2026-09-10).The flat-shell GEOMETRY experiments (rounds 4-10) are retired - the recolor has the real weight, nothing to reconstruct, no geometry to miss. */
 		bool ProjSnowMatch = true;
+		/** @brief "Seasons Snow Max Angle" (degrees): runtime-applied projections (Seasons of Skyrim) carry the record default of 90 and no vertex-alpha mask, so the game paints every non-overhanging face; this is the max slope such snow rests on, applied in Lighting to those draws only. */
+		float SeasonsSnowMaxAngle = 60.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
@@ -660,8 +662,8 @@ public:
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
 		float LODObjectEnable;
-		/** @brief was ProjSnowFill (Snow Fill, retired 2026-09-10: the recolor is all or nothing); slot kept for layout. Mirror in SharedData.hlsli. */
-		float padProjFill;
+		/** @brief cos(SeasonsSnowMaxAngle): subtracted from the projected weight of SnowProjectedUnauthored draws. Mirror in SharedData.hlsli. */
+		float ProjUnauthoredThreshold;
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
