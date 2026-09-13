@@ -2,6 +2,9 @@
 
 #include "Feature.h"
 
+/** @brief The engine's default land texture: what a quad with no base record, and any layer slot naming form 0, is built from. */
+RE::TESLandTexture* GetDefaultLandTexture();
+
 struct GlintParameters
 {
 	bool enabled = false;

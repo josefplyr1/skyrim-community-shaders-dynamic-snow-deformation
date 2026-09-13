@@ -9,24 +9,37 @@
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
 #include "State.h"
+#include "TruePBR.h"
 #include "Utils/D3D.h"
+#include "Utils/Game.h"
 
-/** @brief Lowercased diffuse path of a land texture, empty when it has none. */
-static std::string LandTexturePath(RE::TESLandTexture* a_landTexture)
+/** @brief Lowercased diffuse path of a texture set, empty when it has none. */
+static std::string LandTexturePath(RE::BGSTextureSet* a_textureSet)
 {
-	if (auto textureSet = a_landTexture->textureSet) {
-		if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-			std::string lowered(path);
-			std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-				[](unsigned char c) { return (char)std::tolower(c); });
-			return lowered;
-		}
+	if (auto path = a_textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+		std::string lowered(path);
+		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+			[](unsigned char c) { return (char)std::tolower(c); });
+		return lowered;
 	}
 	return {};
 }
 
+/** @brief The engine's own land-texture material accessor (TESLandTexture::GetHavokMaterialType). Seasons of Skyrim replaces it to answer for the season's swap texture, so it agrees with the texture set the land was built from. */
+static RE::MATERIAL_ID LandHavokMaterial(const RE::TESLandTexture* a_landTexture)
+{
+	static const REL::Relocation<RE::MATERIAL_ID (*)(const RE::TESLandTexture*)> func{ RELOCATION_ID(18418, 18849) };
+	return func(a_landTexture);
+}
+
+/** @brief A quad's base land texture; the engine builds a quad that names none from its default. */
+static RE::TESLandTexture* QuadBaseTexture(RE::TESLandTexture* a_base)
+{
+	return a_base ? a_base : GetDefaultLandTexture();
+}
+
 /** @brief Classifies a land texture into a kSnowClasses index by diffuse filename substring (first match wins), falling back on the snow material check. Only supplies the DEFAULT depth now; per-texture overrides win. */
-static int ClassifySnowClass(RE::TESLandTexture* a_landTexture, const std::string& a_path)
+static int ClassifySnowClass(const RE::TESLandTexture* a_landTexture, const std::string& a_path)
 {
 	for (uint32_t classI = 0; classI < SnowDeformation::kSnowClassCount; ++classI) {
 		const char* match = SnowDeformation::kSnowClasses[classI].match;
@@ -34,9 +47,8 @@ static int ClassifySnowClass(RE::TESLandTexture* a_landTexture, const std::strin
 			return (int)classI;
 	}
 
-	bool snowMaterial = a_landTexture->materialType &&
-	                    (a_landTexture->materialType->materialID == RE::MATERIAL_ID::kSnow ||
-							a_landTexture->materialType->materialID == RE::MATERIAL_ID::kSnowStairs);
+	const auto material = LandHavokMaterial(a_landTexture);
+	const bool snowMaterial = material == RE::MATERIAL_ID::kSnow || material == RE::MATERIAL_ID::kSnowStairs;
 	return snowMaterial ? 3 /* Snow 01 */ : (int)SnowDeformation::kSnowClassCount - 1 /* Other */;
 }
 
@@ -53,28 +65,39 @@ static std::string LandTextureLabel(const std::string& a_path)
 
 uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 {
-	if (!a_landTexture || a_landTexture->formID == 0)
+	if (!a_landTexture)
 		return kNoLandTexture;
+
+	// Seasons of Skyrim never edits the record: it hands SetupMaterial the
+	// season's texture set and marks the record's own set with that form ID,
+	// which GetSeasonalSwap follows. The registry is keyed by the set the
+	// land is drawn with, so a season change resolves to a different entry
+	// with no flush. The engine default (form 0) stays unregistered unless a
+	// season swaps it: unpainted ground keeps its coverage gap.
+	auto* textureSet = Util::GetSeasonalSwap(a_landTexture->textureSet);
+	if (!textureSet || (a_landTexture->formID == 0 && textureSet == a_landTexture->textureSet))
+		return kNoLandTexture;
+	const uint32_t key = textureSet->formID;
 
 	{
 		const std::shared_lock lock(landTextureMutex);
-		if (auto it = landTextureByForm.find(a_landTexture->formID); it != landTextureByForm.end())
+		if (auto it = landTextureByTextureSet.find(key); it != landTextureByTextureSet.end())
 			return it->second;
 	}
 
 	// Two LTEX forms can share one diffuse (vanilla does it), and the settings
 	// key is the path, so both forms must land on the same registry entry.
-	const std::string path = LandTexturePath(a_landTexture);
+	const std::string path = LandTexturePath(textureSet);
 	if (path.empty())
 		return kNoLandTexture;
 
 	const std::unique_lock lock(landTextureMutex);
-	if (auto it = landTextureByForm.find(a_landTexture->formID); it != landTextureByForm.end())
+	if (auto it = landTextureByTextureSet.find(key); it != landTextureByTextureSet.end())
 		return it->second;
 
 	for (size_t i = 0; i < landTextures.size(); ++i) {
 		if (landTextures[i].path == path) {
-			landTextureByForm[a_landTexture->formID] = (uint16_t)i;
+			landTextureByTextureSet[key] = (uint16_t)i;
 			return (uint16_t)i;
 		}
 	}
@@ -101,10 +124,10 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 
 	const uint16_t index = (uint16_t)landTextures.size();
 	landTextures.push_back(entry);
-	landTextureByForm[a_landTexture->formID] = index;
+	landTextureByTextureSet[key] = index;
 	snowDepthVersion.fetch_add(1, std::memory_order_release);
 
-	logger::info("[SNOW DEFORMATION] LTEX {:08X} [{}] {:.0f} units{} {}", a_landTexture->formID,
+	logger::info("[SNOW DEFORMATION] LTEX {:08X} TXST {:08X} [{}] {:.0f} units{} {}", a_landTexture->formID, key,
 		kSnowClasses[entry.classIndex].label, entry.depth, entry.overridden ? " (override)" : "", path);
 	return index;
 }
@@ -181,7 +204,7 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 			continue;
 
 		// Bit 0 = base texture, bits 1-5 = the quad's layer textures.
-		uint16_t quadTextures[6] = { RegisterLandTexture(land->loadedData->defQuadTextures[quadI]) };
+		uint16_t quadTextures[6] = { RegisterLandTexture(QuadBaseTexture(land->loadedData->defQuadTextures[quadI])) };
 		for (uint32_t textureI = 0; textureI < 5; ++textureI)
 			quadTextures[textureI + 1] = RegisterLandTexture(land->loadedData->quadTextures[quadI][textureI]);
 
@@ -242,7 +265,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		uint32_t quadX = quadI & 1;
 		uint32_t quadY = quadI >> 1;
 
-		uint16_t baseTexture = RegisterLandTexture(loadedData->defQuadTextures[quadI]);
+		uint16_t baseTexture = RegisterLandTexture(QuadBaseTexture(loadedData->defQuadTextures[quadI]));
 		uint16_t layerTexture[6];
 		for (uint32_t layerI = 0; layerI < 6; ++layerI)
 			layerTexture[layerI] = RegisterLandTexture(loadedData->quadTextures[quadI][layerI]);

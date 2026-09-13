@@ -1512,7 +1512,7 @@ public:
 	/** @brief Tracks the camera's worldspace and invalidates the world-anchored caches on a change. Called from Prepass. Implemented in SnowDeformation/TerrainData.cpp. */
 	void UpdateActiveWorldspace();
 
-	/** @brief Registers a land texture and returns its registry index, or kNoLandTexture for an absent one. Implemented in SnowDeformation/TerrainData.cpp. */
+	/** @brief Registers the texture set a land texture is drawn with (the season's swap when one is active) and returns its registry index, or kNoLandTexture for an absent one. Implemented in SnowDeformation/TerrainData.cpp. */
 	uint16_t RegisterLandTexture(RE::TESLandTexture* a_landTexture);
 
 	/** @brief Re-resolves every non-overridden texture against the current class depths. Call after the class sliders or the whole settings block move. Implemented in SnowDeformation/TerrainData.cpp. */
@@ -2910,7 +2910,8 @@ protected:
 	std::vector<LandTextureEntry> landTextures;
 	/** @brief Substring filter for the texture list. Runtime UI state, not persisted. */
 	std::string textureFilter;
-	std::unordered_map<uint32_t, uint16_t> landTextureByForm;
+	/** @brief Registry index by the form ID of the texture set the land is drawn with, not the LTEX: a seasonal swap changes the set under the same record. */
+	std::unordered_map<uint32_t, uint16_t> landTextureByTextureSet;
 	std::shared_mutex landTextureMutex;
 
 	/** @brief Form ID of the worldspace the camera is in; 0 until the first exterior. Interiors keep the last exterior's value. */
