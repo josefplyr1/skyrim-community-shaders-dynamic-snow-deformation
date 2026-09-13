@@ -697,7 +697,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// stay for the far field, and a raster candidate walks past them. The
 		// incorporeal gate is different: a ghost is solid geometry, and only
 		// its alpha says so, so it still refuses before the enqueue.
-		const bool rasterCandidate = debugActorContact && !contactShadersFailed &&
+		// A living body whose last contact draw printed nothing stamps by bones
+		// for a while: whatever refused its meshes, the actor must still carve.
+		bool contactStarved = false;
+		if (!isDead)
+			if (auto it = stampBoneCache.find(formID); it != stampBoneCache.end())
+				contactStarved = it->second.contactStarved > 0;
+		const bool rasterCandidate = debugActorContact && !contactShadersFailed && !contactStarved &&
 		                             (isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID)) &&
 		                             root->worldBound.radius > 0.0f &&
 		                             std::abs(root->worldBound.center.x - contactCenter.x) + root->worldBound.radius < kContactHalfExtent &&
@@ -838,6 +844,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			cache.hasPrevPos = false;
 			cache.dryRecollected = false;
 			cache.collisionFallback = false;
+			cache.contactStarved = 0;
+			cache.contactStarveLogged = false;
+			cache.hasContactPrev = false;
+		} else if (cache.contactStarved > 0) {
+			cache.contactStarved--;
 		}
 
 		// Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor)
@@ -1047,7 +1058,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// on the same rest state the bone corpse path uses; a latched corpse
 		// takes NO path - its print is already in the map - until the body
 		// moves off its resting place again.
-		if (debugActorContact && !contactShadersFailed) {
+		if (debugActorContact && !contactShadersFailed && !contactStarved) {
 			const auto& bound = root->worldBound;
 			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
 			if (budget && bound.radius > 0.0f &&

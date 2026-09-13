@@ -4213,6 +4213,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
+		const auto* playerCamera = RE::PlayerCamera::GetSingleton();
+		const bool firstPerson = playerCamera && playerCamera->IsInFirstPerson();
 		for (const auto& actor : contactActors) {
 			auto ref = actor.ref.get();
 			auto* root = ref ? ref->Get3D(false) : nullptr;
@@ -4221,6 +4223,13 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			if (actor.still)
 				contactStillLast++;
 			const uint drawsBeforeActor = contactSkinDrawsLast;
+			// First person hides the player's third-person root, but that skeleton
+			// still animates: the body under the camera is what walks in the snow.
+			const bool firstPersonPlayer = firstPerson && ref->IsPlayerRef();
+			struct
+			{
+				uint hidden = 0, unlit = 0, proxy = 0, above = 0, skinned = 0;
+			} tally;
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
 			RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
@@ -4253,7 +4262,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				{
 					bool hidden = false;
 					for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
-						hidden = n->GetAppCulled();
+						hidden = n->GetAppCulled() && !(firstPersonPlayer && n == root);
 					// Effect art - glows, light rays, runes, blood decals, an ENB light's
 					// 500-unit billboard - is drawn with an effect shader, never a
 					// lighting one. It is not a surface and must not carve snow.
@@ -4265,6 +4274,15 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 								a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(),
 								hidden ? "hidden by the game" : (property ? "effect art, not a surface" : "without a shader"),
 								a_geometry->worldBound.radius);
+						++(hidden ? tally.hidden : tally.unlit);
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+					// Physics proxies drawn by nothing: HDT-SMP collision shapes ship
+					// inside outfit meshes under 'Virtual*' names (VirtualGround is a
+					// floor plane at the feet), and a material faded to zero shows none.
+					const char* name = a_geometry->name.c_str();
+					if ((name && _strnicmp(name, "Virtual", 7) == 0) || property->alpha < 0.01f) {
+						tally.proxy++;
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
@@ -4274,8 +4292,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// a swing brings it down. Corpses lie low and keep everything.
 				{
 					const auto& gb = a_geometry->worldBound;
-					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin)
+					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin) {
+						tally.above++;
 						return RE::BSVisit::BSVisitControl::kContinue;
+					}
 				}
 				// Carried gear - weapons, shields, torches - is rigid, hung off a
 				// bone. It prints by its own world transform when it dips into the
@@ -4292,6 +4312,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// A still body's print is already in the map: its skin is not drawn.
 				if (actor.still)
 					return RE::BSVisit::BSVisitControl::kContinue;
+				tally.skinned++;
 				if (!skinnedVSBound) {
 					context->VSSetShader(contactSkinVS, nullptr, 0);
 					skinnedVSBound = true;
@@ -4337,8 +4358,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// vertex copy; a skin that ever indexes past a partition's count is
 				// drawn from a whole-skin palette.
 				uint8_t indexing = 0;
-				if (auto it = contactSkinIndexing.find(skin); it != contactSkinIndexing.end()) {
-					indexing = it->second;
+				if (auto it = contactSkinIndexing.find(skin); it != contactSkinIndexing.end() && it->second.partition == skinPartition) {
+					indexing = it->second.indexing;
 				} else {
 					indexing = 1;
 					std::string audit;
@@ -4376,7 +4397,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							indexing = 2;
 						audit += std::format("[p{}: {} bones, max index {}, {} of {} verts past the partition] ", p, part.numBones, maxIndex, over, part.vertices);
 					}
-					contactSkinIndexing[skin] = indexing;
+					contactSkinIndexing[skin] = { skinPartition, indexing };
 					if (indexing == 2 || contactSkinIndexing.size() <= 24)
 						logger::info("[SNOW DEFORMATION] index audit '{}' on '{}': {} bones in the skin -> {} {}",
 							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(), boneCount,
@@ -4564,6 +4585,22 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			// went into the field. Recorded only on a real draw, so a spawned
 			// body whose buffers arrive late is not marked still before it
 			// has ever printed.
+			// Nothing printed from a body the game draws: hand the actor to the bone
+			// stamps for a while rather than leave it carving nothing at all.
+			const bool rootHidden = root->GetAppCulled() && !firstPersonPlayer;
+			if (!actor.still && !actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
+				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
+					auto& cache = it->second;
+					cache.contactStarved = kContactStarveFrames;
+					if (!cache.contactStarveLogged && contactStarveLines < 32) {
+						cache.contactStarveLogged = true;
+						contactStarveLines++;
+						logger::info("[SNOW DEFORMATION] contact draw printed nothing for '{}' ({:08X}){}; stamping by bones. skinned drawn-eligible {}, hidden {}, unshaded/effect {}, proxy {}, above the layer {}",
+							ref->GetDisplayFullName(), ref->GetFormID(), firstPersonPlayer ? " in first person" : "",
+							tally.skinned, tally.hidden, tally.unlit, tally.proxy, tally.above);
+					}
+				}
+			}
 			if (!actor.still && !actor.corpse && contactSkinDrawsLast > drawsBeforeActor) {
 				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
 					auto& cache = it->second;

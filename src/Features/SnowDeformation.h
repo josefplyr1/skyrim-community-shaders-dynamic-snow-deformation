@@ -312,6 +312,10 @@ public:
 		/** @brief Where the body stood when the contact pass last drew it: stillness is measured against the last DRAWN pose, so slow motion accumulates into a redraw. */
 		RE::NiPoint3 contactPrev;
 		bool hasContactPrev = false;
+		/** @brief Frames this actor prints by bones because its last contact draw put nothing into the field. Counts down; at zero the mesh route is tried again. */
+		uint16_t contactStarved = 0;
+		/** @brief The starvation line for this 3D has been logged. */
+		bool contactStarveLogged = false;
 	};
 
 	struct Settings
@@ -2738,7 +2742,13 @@ public:
 	/** @brief Skin partitions the actor contact pass declined this frame: dismember partitions the game hides, or partitions whose bones resolve to nothing. */
 	uint contactHiddenPartsLast = 0;
 	/** @brief Per skin instance, how its vertices index bones: 1 = each partition's own list, 2 = the skin's full list. Audited once from the raw vertex copy. Identity key only, never dereferenced. */
-	std::unordered_map<const void*, uint8_t> contactSkinIndexing;
+	struct ContactSkinAudit
+	{
+		/** @brief Identity witness: the skin's partition object. The map is keyed by a raw skin address, which a reload recycles. */
+		const void* partition = nullptr;
+		uint8_t indexing = 0;
+	};
+	std::unordered_map<const void*, ContactSkinAudit> contactSkinIndexing;
 	/** @brief Skinned partitions drawn this frame from a whole-skin palette because their vertices index the skin's full bone list. */
 	uint contactGlobalPartsLast = 0;
 	/** @brief A foot or body that moved less than this since last frame counts as still. */
@@ -2763,6 +2773,10 @@ public:
 	std::unordered_set<const void*> contactSkinHiddenLogged;
 	/** @brief Margin over the layer depth before a part is refused as unreachable: the terrain window's bilinear ground can sit this far off the actor's feet on a slope. */
 	static constexpr float kContactSkipMargin = 16.0f;
+	/** @brief Frames a living actor whose contact draw printed nothing stamps by bones before the mesh route is retried. */
+	static constexpr uint16_t kContactStarveFrames = 60;
+	/** @brief Starvation lines written to the log this session, capped. */
+	uint contactStarveLines = 0;
 	/** @brief Debug view crop centre and the map texel size the last update used, for the menu's overlay. */
 	float2 contactViewCenter{};
 	float contactViewTexelSize = 0.0f;
