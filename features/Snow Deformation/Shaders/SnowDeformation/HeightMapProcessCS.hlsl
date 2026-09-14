@@ -54,7 +54,8 @@ cbuffer HeightProcessCB : register(b0)
 	// P4 "Snow Settling": per-iteration Jacobi blend toward the 4-neighbour
 	// average, applied to the finished cone depth fields (0 = off).
 	float DiffuseLambda;
-	float2 padHeight;
+	float ShelterMaxHeight;  // underside height above ground past which a structure stops sheltering
+	float padHeight;
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -199,7 +200,11 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	[branch] if (top > -50000.0)
 	{
 		float bottom = InB[p];
-		result = smoothstep(20.0, 60.0, bottom - terrain) * smoothstep(40.0, 80.0, top - terrain);
+		// Too high to shelter: a wide archway or a tall bridge leaves the
+		// ground under it open to the sky.
+		float clearance = bottom - terrain;
+		result = smoothstep(20.0, 60.0, clearance) * smoothstep(40.0, 80.0, top - terrain) *
+		         (1.0 - smoothstep(ShelterMaxHeight, ShelterMaxHeight + 100.0, clearance));
 	}
 	return result;
 }
