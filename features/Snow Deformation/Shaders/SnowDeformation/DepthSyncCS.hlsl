@@ -198,6 +198,48 @@ uint TestProjectedBox(float2 lo, float2 hi, float zn)
 	return depthNear > occluder ? 5 : 0;
 }
 
+// Exact screen bounds of the bounding sphere from the view-projection rows.
+// Row 3 is the eye plane: w = dot(row3, p) is view depth times |row3.xyz|.
+// Per axis, the tangents from the eye to the sphere's cross-section in the
+// plane spanned by the axis' lateral direction and the depth direction (Mara
+// & McGuire); the axis row is split into its part across the depth axis
+// (scales with 1/w) and its part along it (a constant offset), so a jittered
+// or skewed projection is handled exactly. Returns false (reason 6) when the
+// sphere reaches the eye plane.
+bool ProjectSphere(float3 center, float r, out float2 lo, out float2 hi, out float zn)
+{
+	lo = 1e9;
+	hi = -1e9;
+	zn = 0.0;
+	float3 rel = center - CullCameraPosAdjust.xyz;
+	float4 rowW = CullViewProj[3];
+	float fLen = max(length(rowW.xyz), 1e-6);
+	float3 fh = rowW.xyz / fLen;
+	float wC = dot(rowW.xyz, rel) + rowW.w;
+	float wNear = wC - r * fLen;
+	if (wNear <= 1e-3)
+		return false;
+	float z = wC / fLen;
+	[unroll] for (uint axis = 0; axis < 2; axis++)
+	{
+		float4 row = CullViewProj[axis];
+		float uf = dot(row.xyz, fh);
+		float3 up = row.xyz - uf * fh;
+		float upLen = max(length(up), 1e-6);
+		float a = (dot(up, rel) + row.w - uf * rowW.w / fLen) / upLen;
+		float t = sqrt(max(a * a + z * z - r * r, 0.0));
+		float k = upLen / fLen;
+		float c = uf / fLen;
+		float b0 = k * (a * t - z * r) / max(z * t + a * r, 1e-6) + c;
+		float b1 = k * (a * t + z * r) / max(z * t - a * r, 1e-6) + c;
+		lo[axis] = min(b0, b1);
+		hi[axis] = max(b0, b1);
+	}
+	float4 rowZ = CullViewProj[2];
+	zn = (dot(rowZ.xyz, rel - r * fh) + rowZ.w) / wNear;
+	return true;
+}
+
 [numthreads(64, 1, 1)] void SkinCullCS(uint3 id : SV_DispatchThreadID)
 {
 	if (id.x >= CullSkinCount)
@@ -209,6 +251,7 @@ uint TestProjectedBox(float2 lo, float2 hi, float zn)
 	float2 hi = -1e9;
 	float zn = 0.0;
 	bool bounded = false;
+	bool boxed = false;
 
 	[branch] if (b.HasBounds != 0)
 	{
@@ -221,58 +264,39 @@ uint TestProjectedBox(float2 lo, float2 hi, float zn)
 		bmin -= grow;
 		bmax += grow;
 		if (ProjectLocalBox(bmin, bmax, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn))
-			bounded = true;
+			bounded = boxed = true;
 		else
 			reason = length((bmax - bmin) * length(b.WorldRow0.xyz)) > 2000.0 ? 7 : 1;
 	}
 	else
 	{
-		// Sphere path (no box yet): exact screen bounds of the sphere from
-		// the view-projection rows. Row 3 is the eye plane: w = dot(row3, p)
-		// is view depth times |row3.xyz|. Per axis, the tangents from the eye
-		// to the sphere's cross-section in the plane spanned by the axis'
-		// lateral direction and the depth direction (Mara & McGuire); the
-		// axis row is split into its part across the depth axis (scales with
-		// 1/w) and its part along it (a constant offset), so a jittered or
-		// skewed projection is handled exactly.
-		float3 rel = b.Center - CullCameraPosAdjust.xyz;
-		float r = b.Radius;
-		float4 rowW = CullViewProj[3];
-		float fLen = max(length(rowW.xyz), 1e-6);
-		float3 fh = rowW.xyz / fLen;
-		float wC = dot(rowW.xyz, rel) + rowW.w;
-		float wNear = wC - r * fLen;
-		[branch] if (wNear <= 1e-3)
-		{
-			reason = 6;
-		}
-		else
-		{
-			float z = wC / fLen;
-			[unroll] for (uint axis = 0; axis < 2; axis++)
-			{
-				float4 row = CullViewProj[axis];
-				float uf = dot(row.xyz, fh);
-				float3 up = row.xyz - uf * fh;
-				float upLen = max(length(up), 1e-6);
-				float a = (dot(up, rel) + row.w - uf * rowW.w / fLen) / upLen;
-				float t = sqrt(max(a * a + z * z - r * r, 0.0));
-				float k = upLen / fLen;
-				float c = uf / fLen;
-				float b0 = k * (a * t - z * r) / max(z * t + a * r, 1e-6) + c;
-				float b1 = k * (a * t + z * r) / max(z * t - a * r, 1e-6) + c;
-				lo[axis] = min(b0, b1);
-				hi[axis] = max(b0, b1);
-			}
-			float4 rowZ = CullViewProj[2];
-			zn = (dot(rowZ.xyz, rel - r * fh) + rowZ.w) / wNear;
+		if (ProjectSphere(b.Center, b.Radius, lo, hi, zn))
 			bounded = true;
-		}
+		else
+			reason = 6;
 	}
 
 	[branch] if (bounded)
 	{
 		uint verdict = TestProjectedBox(lo, hi, zn);
+		// A box verdict that culls is checked against the engine's own
+		// bounding sphere before it counts: a decal overlay's local box
+		// projected off-screen and "occluded" while its draw was writing
+		// pixels mid-frame, and its skin was the one thing that could cover
+		// it. The sphere is looser, so this only ever draws more.
+		[branch] if (verdict >= 3 && boxed)
+		{
+			float2 slo, shi;
+			float szn;
+			if (ProjectSphere(b.Center, b.Radius, slo, shi, szn))
+			{
+				uint sphereVerdict = TestProjectedBox(slo, shi, szn);
+				if (sphereVerdict < 3)
+					verdict = sphereVerdict;
+			}
+			else
+				verdict = 6;
+		}
 		reason = verdict;
 		if (verdict >= 3)
 			draw = 0;
