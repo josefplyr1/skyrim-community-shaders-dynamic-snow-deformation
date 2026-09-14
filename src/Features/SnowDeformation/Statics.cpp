@@ -3050,8 +3050,8 @@ void SnowDeformation::DrawCapturedStatics()
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
 	// the "why is THIS rock bare" cases; name the reason in the log.
 	static std::unordered_set<std::string> loggedSkips;
-	auto logSkip = [](RE::BSGeometry* a_geometry, const char* a_reason) {
-		if (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second)
+	auto logSkip = [this](RE::BSGeometry* a_geometry, const char* a_reason) {
+		if (skinCullLogArmed || (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second))
 			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
 	};
 
@@ -3220,8 +3220,11 @@ void SnowDeformation::DrawCapturedStatics()
 		// (fence family) flat. The classic shader path survives only
 		// because roads run through it.
 		const bool s4Shell = !cap.road && cap.projThreshold > -0.5f && projNoiseSRV;
-		if (!cap.road && !s4Shell)
+		if (!cap.road && !s4Shell) {
+			if (skinCullLogArmed)
+				logger::info("[SNOW DEFORMATION] skin list skip (no projection data, threshold {:.2f}): '{}'", cap.projThreshold, geometry->name.c_str());
 			continue;
+		}
 		auto triShape = geometry->AsTriShape();
 		if (!triShape) {
 			logSkip(geometry, "not a BSTriShape");
@@ -3656,6 +3659,8 @@ void SnowDeformation::DrawCapturedStatics()
 		if (savedPSCB3)
 			savedPSCB3->Release();
 	}
+	// With the cull off the census never ran to disarm the one-shot.
+	skinCullLogArmed = false;
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through
