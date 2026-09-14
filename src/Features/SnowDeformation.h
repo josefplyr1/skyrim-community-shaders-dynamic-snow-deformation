@@ -2344,6 +2344,8 @@ public:
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
 	// ---- V1b: the draw ----
 	ConstantBuffer* voxelDrawCB = nullptr;
+	/** @brief Debug view 10 (volume seed): level 0's VoxelVolumeCB for the skin PS at b3. */
+	ConstantBuffer* voxelDebugCB = nullptr;
 	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;
 	ID3D11ComputeShader* voxelBrickListCS = nullptr;
 	/** @brief The VOXEL variant of SnowStaticsShell: brick AABB VS + marching PS through SkinShadeSurface. Compiled with the other statics variants; optional. */

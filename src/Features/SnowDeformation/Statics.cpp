@@ -3012,6 +3012,34 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	bindSkinStages(tessellateSkins);
 
+	// Volume seed debug view: level 0's occupancy, field, heightmap and the
+	// seed maps for the skin PS, the level's constants at b3.
+	ID3D11Buffer* savedPSCB3 = nullptr;
+	const bool volumeSeedView = staticsDebugView == 10 && settings.VolumeSnow && voxelLevels[0].valid &&
+	                            voxelLevels[0].volume[voxelLevels[0].current] && voxelLevels[0].field && voxelLevels[0].heightMap;
+	if (volumeSeedView) {
+		if (!voxelDebugCB) {
+			D3D11_BUFFER_DESC cbDesc{};
+			cbDesc.ByteWidth = sizeof(VoxelVolumeCB);
+			cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+			cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			voxelDebugCB = new ConstantBuffer(cbDesc, "SnowDeformation::VoxelSeedDebugCB");
+		}
+		VoxelVolumeCB vcb{};
+		FillVoxelCB(0, vcb);
+		voxelDebugCB->Update(vcb);
+		context->PSGetConstantBuffers(3, 1, &savedPSCB3);
+		ID3D11Buffer* cb3 = voxelDebugCB->CB();
+		context->PSSetConstantBuffers(3, 1, &cb3);
+		auto& lv = voxelLevels[0];
+		ID3D11ShaderResourceView* seedSRVs[4] = { lv.volume[lv.current]->srv.get(), lv.field->srv.get(), lv.heightMap->srv.get(),
+			(heightBottomFiltered && heightBottomFiltered->srv) ? heightBottomFiltered->srv.get() : nullptr };
+		context->PSSetShaderResources(46, 4, seedSRVs);
+		ID3D11ShaderResourceView* skySRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
+		context->PSSetShaderResources(51, 1, &skySRV);
+	}
+
 	globals::profiler->BeginPass("SnowDeformation::StaticsShell");
 	// One-shot skip diagnostics: geometries that capture but cannot draw are
 	// the "why is THIS rock bare" cases; name the reason in the log.
@@ -3615,6 +3643,13 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(25, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(25, 1, &nullSmoothSRV);
+	if (volumeSeedView) {
+		ID3D11ShaderResourceView* nullSeedSRVs[6] = {};
+		context->PSSetShaderResources(46, 6, nullSeedSRVs);
+		context->PSSetConstantBuffers(3, 1, &savedPSCB3);
+		if (savedPSCB3)
+			savedPSCB3->Release();
+	}
 
 	// trench PATCH: the landscape shell's dense-grid carve applied to object
 	// tops; real carved geometry drawn after the skins so it shows through

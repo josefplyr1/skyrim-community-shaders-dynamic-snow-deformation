@@ -2318,6 +2318,42 @@ Texture2D<float> SceneDepth : register(t3);
 Texture2D<float> DebugMainDepth : register(t43);
 Texture2D<float> DebugPrepassDepth : register(t44);
 
+// Debug view 10 only: volume level 0 (mirror of VoxelVolumeCB, Dbg-prefixed
+// so the names stay clear of StaticCB's height window).
+cbuffer VoxelSeedDebugCB : register(b3)
+{
+	int4 DbgOriginVox;
+	int4 DbgScrollDelta;
+	float DbgVoxelSize;
+	float DbgDecay;
+	int DbgDimLegacy;
+	int DbgSliceAxis;
+	int DbgSliceIndex;
+	int DbgSliceXray;
+	int DbgSliceSource;
+	int DbgBlurAxis;
+	float2 DbgHeightWindowCenter;
+	float DbgHeightHalfExtent;
+	float DbgShelterDust;
+	float DbgDepthVox;
+	float DbgFieldThreshold;
+	float DbgRoundSigma;
+	float DbgSlopeMinNz;
+	float4 DbgCentreVox;
+	float DbgSkyStrength;
+	float DbgForceDirty;
+	float DbgOverhangVox;
+	float DbgHeadroomVox;
+	float4 DbgEdgeParams;
+	float4 DbgLipParams;
+	int4 DbgDims;
+}
+Texture3D<float> DbgVoxOcc : register(t46);
+Texture3D<float> DbgVoxField : register(t47);
+Texture2D<uint> DbgVoxHeight : register(t48);
+Texture2D<float2> DbgShelter : register(t49);
+Texture2D<float> DbgSky : register(t51);
+
 // SHELL-SURFACE SSS RE-MARCH, ported verbatim from SnowShell.hlsl (Josef
 // 2026-09-01: both shells must run the same shadow configuration). The only
 // change is SampleTerrainStatics for SampleTerrain - the same window, the same
@@ -4206,7 +4242,109 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 8.5)
+		[branch] if (StaticsDebugView > 9.5)
+		{
+			// Volume seed: the seed pass's verdict at this surface, level 0,
+			// re-evaluated the way VoxelSeedCS does. Green = the field holds
+			// snow here; red = headroom blocked; blue = facing; yellow = seeded
+			// but weak (doors, shelter, sky); magenta = seeded, no field (the
+			// sweep or threshold took it); grey = not in the occupancy at all.
+			float3 absPos = input.WorldPos + ShellCameraPosAdjust.xyz;
+			int3 logical = (int3)floor(absPos / max(DbgVoxelSize, 1e-3)) - DbgOriginVox.xyz;
+			int3 dmask = DbgDims.xyz - 1;
+			float3 dbgCol = float3(0.12, 0.12, 0.12);
+			[branch] if (DbgVoxelSize > 0.0 && all(logical >= 0) && all(logical < DbgDims.xyz))
+			{
+				uint3 ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
+				float occ = DbgVoxOcc[ph];
+				[flatten] if (occ <= 0.0 && logical.z > 0)
+				{
+					logical.z -= 1;
+					ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
+					occ = DbgVoxOcc[ph];
+				}
+				[branch] if (occ <= 0.0)
+					dbgCol = float3(0.35, 0.35, 0.35);
+				else
+				{
+					int3 above = logical + int3(0, 0, 1);
+					float f = DbgVoxField[ph];
+					[flatten] if (above.z < DbgDims.z)
+						f = max(f, DbgVoxField[(uint3)((above + DbgOriginVox.xyz) & dmask)]);
+					[branch] if (f >= DbgFieldThreshold)
+						dbgCol = float3(0.1, 1.0, 0.1) * (0.4 + 0.6 * saturate(f));
+					else
+					{
+						bool open = true;
+						int headroom = (int)DbgHeadroomVox;
+						[loop] for (int k = 1; k <= headroom && open; k++)
+						{
+							int3 a = logical + int3(0, 0, k);
+							open = a.z >= DbgDims.z || DbgVoxOcc[(uint3)((a + DbgOriginVox.xyz) & dmask)] <= 0.0;
+						}
+						[branch] if (!open)
+							dbgCol = float3(1.0, 0.1, 0.1);
+						else
+						{
+							uint2 hb = ph.xy * 4;
+							float hmax = -1.0e4;
+							uint keys[16];
+							[unroll] for (int i = 0; i < 16; i++)
+							{
+								keys[i] = DbgVoxHeight[hb + uint2(i & 3, i >> 2)];
+								[flatten] if (keys[i] != 0u)
+									hmax = max(hmax, (asfloat(keys[i] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z);
+							}
+							uint q = (uint)round(occ * 255.0);
+							float nz = (float)(q >> 4) / 15.0 * 2.0 - 1.0;
+							[branch] if (hmax > -1.0e3 && hmax < (float)logical.z + 1.25)
+							{
+								float nsum = 0.0;
+								float nn = 0.0;
+								[unroll] for (int j = 0; j < 16; j++)
+								{
+									[flatten] if (keys[j] != 0u)
+									{
+										float hz = (asfloat(keys[j] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z;
+										[flatten] if (hz > hmax - 1.0)
+										{
+											nsum += (float)(keys[j] & 15u) / 15.0 * 2.0 - 1.0;
+											nn += 1.0;
+										}
+									}
+								}
+								nz = nsum / max(nn, 1.0);
+							}
+							float facing = smoothstep(DbgSlopeMinNz - 0.05, DbgSlopeMinNz + 0.05, nz);
+							[branch] if (facing <= 0.0)
+								dbgCol = float3(0.2, 0.3, 1.0);
+							else
+							{
+								float2 wxy = ((float2)(logical.xy + DbgOriginVox.xy) + 0.5) * DbgVoxelSize;
+								float2 shelter = 0.0;
+								float sky = 1.0;
+								[branch] if (DbgHeightHalfExtent > 0.0 && max(abs(wxy.x - DbgHeightWindowCenter.x), abs(wxy.y - DbgHeightWindowCenter.y)) < DbgHeightHalfExtent)
+								{
+									float2 local = (wxy - DbgHeightWindowCenter) / DbgHeightHalfExtent;
+									float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+									float2 sd;
+									DbgShelter.GetDimensions(sd.x, sd.y);
+									shelter = DbgShelter.Load(int3((int2)clamp(uv * sd, 0.0, sd - 1.0), 0));
+									float2 kd;
+									DbgSky.GetDimensions(kd.x, kd.y);
+									sky = DbgSky.Load(int3((int2)clamp(uv * kd, 0.0, kd - 1.0), 0));
+								}
+								float exposure = lerp(1.0, min(sky, 1.0 - shelter.y), DbgSkyStrength);
+								float seed = lerp(DbgShelterDust, 1.0, exposure) * (1.0 - shelter.x) * facing;
+								dbgCol = seed < 0.15 ? float3(1.0, 0.85, 0.1) * (0.4 + 4.0 * seed) : float3(1.0, 0.1, 1.0);
+							}
+						}
+					}
+				}
+			}
+			preLit = dbgCol;
+		}
+		else [branch] if (StaticsDebugView > 8.5)
 		{
 			// Depth fight. The prepass decided the pixel: private depth below
 			// the main depth = a skin won it. The D3D bias formula on the raw
