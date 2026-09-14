@@ -457,12 +457,15 @@ namespace
 		RE::TESObjectREFR* refr = nullptr;
 		for (RE::NiAVObject* node = geometry; node && !refr; node = node->parent)
 			refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
-		logger::info("[SNOW DEFORMATION] ice journey '{}' r={:.0f} proj={} snow={} lodObj={} hdLod={} lodLand={} ref={:08X} tex='{}' -> {}",
+		auto* alpha = geometry->GetGeometryRuntimeData().alphaProperty.get();
+		logger::info("[SNOW DEFORMATION] ice journey '{}' r={:.0f} proj={} snow={} lodObj={} hdLod={} lodLand={} decalMode={} alphaTest={} alphaBlend={} ref={:08X} tex='{}' -> {}",
 			geometry->name.empty() ? "<unnamed>" : geometry->name.c_str(),
 			geometry->worldBound.radius,
 			flags.all(Flag::kProjectedUV) ? 1 : 0, flags.all(Flag::kSnow) ? 1 : 0,
 			flags.all(Flag::kLODObjects) ? 1 : 0, flags.all(Flag::kHDLODObjects) ? 1 : 0,
 			flags.all(Flag::kLODLandscape) ? 1 : 0,
+			RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode,
+			alpha && alpha->GetAlphaTesting() ? 1 : 0, alpha && alpha->GetAlphaBlending() ? 1 : 0,
 			refr && refr->GetBaseObject() ? refr->GetBaseObject()->GetFormID() : 0u,
 			texPath, a_outcome);
 	}
@@ -834,12 +837,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// over a card is a translucent plane wherever the card is transparent.
 	// Seasons projects onto every geometry of a model, and season packs swap
 	// in variants whose MATO projects onto their cards too, so the gate is on
-	// the geometry, not on who projected. Blended-only geometry keeps its
-	// skin: a rock skirt is a soft decal overlay lying ON its trim, drawn in
-	// the game's decal depth mode, and its skin in that same mode is what
-	// covers it wherever the trim's own skin loses the depth fight to it.
-	// LOD atlases keep their coat; it reads the recolor's own weight.
-	if (!lodBatch) {
+	// the geometry, not on who projected. Decal-mode geometry keeps its
+	// skin whatever its alpha: a rock skirt (test + blend) is a soft overlay
+	// lying ON its trim, drawn in the game's decal depth mode, and its skin
+	// in that same mode is what covers it wherever the trim's own skin loses
+	// the depth fight to it. Cards stand off the surface and never draw as
+	// decals. LOD atlases keep their coat; it reads the recolor's own weight.
+	if (!lodBatch && !decalDepth) {
 		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get(); alpha && alpha->GetAlphaTesting()) {
 			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha-tested card");
 			return;
