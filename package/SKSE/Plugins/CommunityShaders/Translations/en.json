@@ -1685,6 +1685,8 @@
     "feature.snow_deformation.snow_slumping_tooltip": "Snow dug away on BOTH sides loses its support and settles about halfway into a low uneven bump, so heavy traffic reads as one churned channel instead of a comb of full-height fins. Trench walls and open snow never move. 0 = off; higher = faster settling.",
     "feature.snow_deformation.snow_texture_path": "Shell Snow Texture",
     "feature.snow_deformation.snow_texture_path_tooltip": "DDS path (relative to Data) for the shell's snow diffuse. Point it at the modlist's snow texture, then press Reload.",
+    "feature.snow_deformation.snow_textured_recolor": "Recolor Snow-Textured Meshes (A/B)",
+    "feature.snow_deformation.snow_textured_recolor_tooltip": "Some meshes wear snow as a plain texture rather than the game's projected paint - a season mod's swapped-in winter variants (tundra rocks, houses, cliffs with a snow01 top), and the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This flags every shape whose texture is a landscape snow texture and gives it the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow.",
     "feature.snow_deformation.snow_trenches": "Snow Trenches",
     "feature.snow_deformation.snow_trenches_tooltip": "Everything about the ground being walked through: how long a trench is remembered, how wide and how sharply it cuts, and the look of the disturbed snow around it. Untouched snow is never affected.",
     "feature.snow_deformation.spell_cat_fire": "Fire",

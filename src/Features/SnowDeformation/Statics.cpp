@@ -624,6 +624,17 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 		bindSnowSet = true;
 	}
+	// Snow-textured shapes without projection (a season swap's snow01 top,
+	// drifts): the baked recipe, so the weight is written like projected snow.
+	if (settings.SnowTexturedRecolor && settings.ProjSnowMatch && !bindSnowSet &&
+		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kTreeAnim) &&
+		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
+		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
+		if (rec.pathBase && rec.mato != MatoClass::kNotSnow) {
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
+			bindSnowSet = true;
+		}
+	}
 	if (bindSnowSet) {
 		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
 		// draws (frame7075: null at every player-view draw — stomped around
@@ -980,7 +991,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth });
+	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathBase && rec.mato != MatoClass::kNotSnow;
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, snowTex });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -2471,7 +2483,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// look), and only where the property really carries projection data:
 	// the mesh-replacer default reconstructs a weight the game never paints.
 	// LOD batches read the brightness recolor's written weight instead.
-	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch) && a_cap.geometry &&
+	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;
 	// The near clipmap shares the coarse window's centre, so its half-extent
@@ -2872,6 +2884,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
 			mix(&cap.fullCoat, sizeof(cap.fullCoat));
+			mix(&cap.snowTex, sizeof(cap.snowTex));
 			h += e;
 		}
 		cpuCensus.captureHash = h;

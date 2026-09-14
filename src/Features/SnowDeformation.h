@@ -593,6 +593,8 @@ public:
 		float ShelterMaxHeight = 320.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
+		/** @brief "Recolor Snow-Textured Meshes" (A/B, Seasons S6): shapes whose diffuse is a landscape snow texture but carry no projection (a season swap's alternate-texture tops, drifts) take the baked-snow recolor in Lighting, their skins take the coat, and the written weight reaches the volume. */
+		bool SnowTexturedRecolor = false;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
 		bool VolumeSnow = false;
 		/** @brief "Volume Snow Depth", world units: the snow top over a surface, the same on every ring - the field crosses Coverage at it, so a coarse ring's voxel size no longer sets a floor. Josef's tuned default. */
@@ -658,8 +660,8 @@ public:
 		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
 		float SnowHasNormal;
 
-		/** @brief was LODReplaceLegacy; the legacy recolor A/B is retired, slot kept for layout. */
-		float padLegacy;
+		/** @brief Snow-textured mesh recolor (Settings::SnowTexturedRecolor) enabled and the snow set is bound; took the retired LODReplaceLegacy slot. Mirror in SharedData.hlsli. */
+		float SnowTexturedEnable;
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
@@ -1623,6 +1625,8 @@ public:
 		bool lodBatch;
 		/** @brief The game rasterised this draw in its decal depth-bias mode (RendererShadowState::rasterStateDepthBiasMode != 0, or the Decal/DynamicDecal property flags): depth written through DepthBias -1, SlopeScaledDepthBias -0.65, viewport max depth 0.999972. Its skin draws through the same state plus the skin bias, or it loses the depth test at every grazing view (Windhelm's snow-overlay shapes, RenderDoc 2026-09-10). */
 		bool decalDepth;
+		/** @brief Snow-textured shape without projection data (Settings::SnowTexturedRecolor): Lighting recolors it by texel and writes the weight, so its skin coats off that read-back like an LOD batch. */
+		bool snowTex;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
