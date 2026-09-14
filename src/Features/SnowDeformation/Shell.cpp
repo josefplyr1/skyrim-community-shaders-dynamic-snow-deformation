@@ -898,7 +898,7 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb)
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
-	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, std::clamp(settings.WaterEdgeDepth, 0.0f, 64.0f) };
+	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, 0.0f };
 	if (fineProbeArmed) {
 		fineProbeArmed = false;
 		ProbeFineLayer(a_cb);
@@ -1062,9 +1062,6 @@ void SnowDeformation::DrawShell()
 	cbData.ObjBermHeightAmp = cbData.BermHeightAmp;
 	cbData.ObjChurnHeightAmp = cbData.ChurnHeightAmp;
 	cbData.ObjChurnSizeScale = cbData.ChurnSizeScale;
-	// Water edge, in the two retired ObjCrisp rows (layout unchanged).
-	cbData.WaterEdgeMargin = std::clamp(settings.WaterEdgeMargin, 0.0f, 64.0f);
-	cbData.WaterEdgeRamp = std::clamp(settings.WaterEdgeRamp, 1.0f, 128.0f);
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -1088,8 +1085,7 @@ void SnowDeformation::DrawShell()
 	const float remarchMode = settings.ShellSSSRemarch ? (settings.ShellSSSRemarchThickness ? 2.0f : 1.0f) : 0.0f;
 	const float remarchCap = std::clamp(settings.ShellSSSRemarchCasterCap, 10.0f, 999.0f);
 	// x = the water cut (runtime A/B in Debugging Options).
-	// .x packs the water cut: 0 off, else 1 + rounding.
-	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f + std::clamp(settings.WaterEdgeRounding, 0.0f, 1.0f), remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
+	cbData.CompactLook = { debugWaterCutDisabled ? 0.0f : 1.0f, remarchMode + remarchCap / 1000.0f, dynRes.x, dynRes.y };
 	// Border Fade is a percent in the UI; the shader band stays 2..64.
 	cbData.BorderUntrampledFade = std::lerp(2.0f, 64.0f, std::clamp(settings.SnowBorderFade, 0.0f, 100.0f) / 100.0f);
 	// Layout keeper; the shader hard-codes its old default-0 resolution.

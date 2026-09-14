@@ -513,14 +513,6 @@ public:
 		float SnowBorderSmoothness = 32.0f;
 		/** @brief Border Fade, as a percent. Remapped to the internal 2..64 contact-term band on upload; it mainly sets how visible the outward dust is. */
 		float SnowBorderFade = 100.0f;
-		/** @brief Horizontal world units short of the waterline where the landscape shell is fully bare. */
-		float WaterEdgeMargin = 4.0f;
-		/** @brief Horizontal world units over which the shell ramps from full depth down to bare, ending at the margin. */
-		float WaterEdgeRamp = 48.0f;
-		/** @brief Profile of that ramp: 0 = a straight slope with sharp corners, 1 = rounded shoulders top and bottom. */
-		float WaterEdgeRounding = 1.0f;
-		/** @brief Water this many units deep or shallower over the ground does not end the shell: hides a placed plane skimming the land near its rectangle's edge, at the price of the sheet standing in that much water at real shores. */
-		float WaterEdgeDepth = 5.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
 		float SnowMoundSteepness = 1.0f;
 		/** @brief Dune-field amplitude in world units; 0 flattens deep snow into a mathematically smooth sheet. */
@@ -1089,10 +1081,10 @@ public:
 		float ObjBermHeightAmp;
 		float ObjChurnHeightAmp;
 		float ObjChurnSizeScale;
-		/** @brief Water edge (Settings::WaterEdgeMargin/Ramp, horizontal units); took the two retired ObjCrisp rows. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
-		float WaterEdgeMargin;
+		/** @brief Retired water-edge rows (before that ObjCrisp); layout keepers. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float Spare0;
 
-		float WaterEdgeRamp;
+		float Spare1;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
 		uint ShellLODDebug;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */
@@ -1131,7 +1123,7 @@ public:
 		DirectX::XMINT2 ShellFlags;
 		/** @brief Land-exact height layer: xy = GridOrigin - fine window origin, z = fine dim (0 = none), w = fine texel size. */
 		float4 FineWindow;
-		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30), w = Settings::WaterEdgeDepth (took the spare). */
+		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30), w = spare. */
 		float4 SlopeDrape;
 		/** @brief Debug view 9 (depth fight): x = Settings::SkinDepthBias, y = Settings::SkinSlopeDepthBias. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float4 DebugSkinDepth;

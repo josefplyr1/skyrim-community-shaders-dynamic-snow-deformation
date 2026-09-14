@@ -507,22 +507,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("border_fade_tooltip"), "How much of the snow's edge takes part in the height contest against the ground - higher values make the scattered dust past the edge broader and more visible. Border Dithering must be on for the dust itself."));
 
-			ImGui::SliderFloat(T(TKEY("water_edge_margin"), "Water Edge Margin"), &settings.WaterEdgeMargin, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttWm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("water_edge_margin_tooltip"), "How far short of the waterline the snow is already gone, measured along the ground. 0 = the last of it ends right at the water."));
-
-			ImGui::SliderFloat(T(TKEY("water_edge_ramp"), "Water Edge Ramp"), &settings.WaterEdgeRamp, 1.0f, 128.0f, "%.0f units");
-			if (auto _ttWr = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("water_edge_ramp_tooltip"), "Width of the slope from full snow down to bare ground before the margin, measured along the ground. Border Noise wanders this edge inland, never over the water."));
-
-			ImGui::SliderFloat(T(TKEY("water_edge_rounding"), "Water Edge Rounding"), &settings.WaterEdgeRounding, 0.0f, 1.0f, "%.2f");
-			if (auto _ttWro = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("water_edge_rounding_tooltip"), "Shape of that slope: 0 = a straight ramp with sharp corners, 1 = rounded shoulders at the top and the bottom."));
-
-			ImGui::SliderFloat(T(TKEY("water_edge_depth"), "Water Edge Depth"), &settings.WaterEdgeDepth, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttWd = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("water_edge_depth_tooltip"), "Water this shallow over the ground does not end the snow. The game's placed ponds are square planes that skim the land around their real shore, and that skim shows as a straight-edged bare patch at 0. Raising it hides the skim, but lets the snow stand in that much water at real shores."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -1443,7 +1427,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("debug_water_cut_disabled"), "Disable Water Cut"), &debugWaterCutDisabled);
 			if (auto _ttWater = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the landscape shell run on under the water again. Off, the sheet ends at the waterline - the water the game drew last frame, rasterised top-down into the terrain window; the ragged edge only ever recedes onto the dry side."));
+				ImGui::Text("%s", T(TKEY("debug_water_cut_disabled_tooltip"), "A/B: lets the landscape shell run on under the water again. Off, ground under a body of water counts as a non-snow texture class, so the shore gets the same border as any texture seam (Border Noise, Border Smoothness, dithering)."));
 
 			ImGui::Checkbox(T(TKEY("shell_bilinear_height"), "Bilinear Terrain Height"), &shellBilinearHeight);
 			if (auto _ttBilin = Util::HoverTooltipWrapper())

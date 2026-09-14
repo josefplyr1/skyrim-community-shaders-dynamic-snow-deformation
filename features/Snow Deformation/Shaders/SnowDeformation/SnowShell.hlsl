@@ -135,9 +135,10 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	float WaterEdgeMargin;
+	// Retired water-edge rows; layout keepers.
+	float Spare0;
 
-	float WaterEdgeRamp;
+	float Spare1;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
@@ -232,6 +233,19 @@ Texture2D<float4> TerrainWindow : register(t0);
 // -100000 where none. TerrainWindow's frame, but rasterised +Y-up like the
 // object maps, so its row is (TerrainDim - 1) - the terrain row.
 Texture2D<float> WaterWindow : register(t27);
+// Water this shallow over the ground is not water: a placed pond plane's
+// rectangle skims the land around its shore.
+static const float kWaterSkimDepth = 5.0;
+
+// A texel whose ground lies under drawn water reads as a non-snow class
+// (-8), so the shoreline is a class border: same noise, smoothing, dither
+// and rim as any texture seam. Callers gate on CompactLook.x.
+float3 WaterBareTexel(float3 texel, int2 t)
+{
+	[flatten] if (texel.x < WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) - kWaterSkimDepth)
+		texel.y = min(texel.y, -8.0);
+	return texel;
+}
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
 // heightmap at 32-unit texels, cell edges extrapolated (TerrainFineCS).
 // The land mesh is then flat between these points with a checkerboard
@@ -461,6 +475,13 @@ float3 SampleTerrain(float2 gridLocal)
 	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).xyz;
 	float3 s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).xyz;
 	float3 s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).xyz;
+	[branch] if (CompactLook.x > 0.5)
+	{
+		s00 = WaterBareTexel(s00, t0);
+		s10 = WaterBareTexel(s10, int2(t1.x, t0.y));
+		s01 = WaterBareTexel(s01, int2(t0.x, t1.y));
+		s11 = WaterBareTexel(s11, t1);
+	}
 
 	float3 result = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 	// Height follows the mesh's triangulation; depth and coverage stay bilinear,
@@ -725,9 +746,8 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 			// Sentinel texels carry no data; leave them to the full evaluation.
 			[branch] if (t.x < -50000.0)
 				return false;
-			// Under water the texel is bare whatever its class.
-			[flatten] if (CompactLook.x > 0.5 && t.x < WaterWindow.Load(int3(x, (int)TerrainDim - 1 - y, 0)))
-				continue;
+			[flatten] if (CompactLook.x > 0.5)
+				t = WaterBareTexel(t, int2(x, y));
 			maxDepth = max(maxDepth, t.y + (-8.0) * saturate(1.0 - saturate(t.z)));
 		}
 	}
@@ -893,63 +913,6 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
-// Water level over the texels a point touches: the max, so a shore texel
-// answers with its body's level and the sentinel never blends in.
-float SampleWaterHeight(float2 gridLocal)
-{
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-	int r0 = (int)TerrainDim - 1 - t0.y;
-	int r1 = (int)TerrainDim - 1 - t1.y;
-	return max(max(WaterWindow.Load(int3(t0.x, r0, 0)), WaterWindow.Load(int3(t1.x, r0, 0))),
-	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
-}
-
-// Water cut, applied to a FINISHED terrain sample (after the data morph):
-// the sheet ramps to the bare submerge over WaterEdgeRamp units of ground
-// HORIZONTALLY and reaches it WaterEdgeMargin units short of the waterline.
-// Distance to the line is rise over slope, both from the 128-texel bilinear
-// height alone: the land-exact layer and the fine bands never key the cut,
-// so it lands in the same place from every range and the fine window's
-// square never shows through it. The slope floor keeps a flat shore's
-// distance finite (1 in 50 puts the cut within a unit of the level). The
-// border-noise wander only ever pulls the edge INLAND, so it wobbles
-// without standing over water; no 8-unit octave here - on the 8-unit near
-// lattice it is at Nyquist and reads as sawteeth. CompactLook.x - 1 is the
-// profile: 0 a straight slope, 1 rounded shoulders.
-float3 ApplyWaterCut(float3 terrain, float2 gridLocal)
-{
-	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0)
-	{
-		float water = SampleWaterHeight(gridLocal);
-		[branch] if (water > -50000.0)
-		{
-			float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-			t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-			int2 t0 = (int2)t;
-			float2 f = t - t0;
-			int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-			float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
-			float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
-			float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
-			float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
-			float h = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-			float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
-			// SlopeDrape.w: water up to this deep over the ground is not water.
-			float dist = (h - water + SlopeDrape.w) / max(length(grad), 0.02);
-			float2 waterXY = GridOrigin + gridLocal;
-			float wander = saturate(ShapeNoise(waterXY / 37.0) * 0.7 + ShapeNoise(waterXY / 23.0 + 71.3) * 0.3) * BorderNoise;
-			float x = saturate((dist - wander - WaterEdgeMargin) / max(WaterEdgeRamp, 1.0));
-			float cut = lerp(x, x * x * (3.0 - 2.0 * x), saturate(CompactLook.x - 1.0));
-			terrain.y = lerp(-8.0, terrain.y, cut);
-			terrain.z *= cut;
-		}
-	}
-	return terrain;
-}
-
 float3 SampleTerrainShaped(float2 gridLocal)
 {
 	float3 result = SampleTerrain(gridLocal);
@@ -1102,9 +1065,6 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// approaches. A weight constant within a band cannot.
 			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
 		}
-
-		// After the morph, so the coarse bands end at the water too.
-		terrain = ApplyWaterCut(terrain, gridLocal);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
@@ -2087,7 +2047,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 gridLocal = input.GridLocal;
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
-	float3 pixelTerrain = ApplyWaterCut(SampleTerrainShaped(gridLocal), gridLocal);
+	float3 pixelTerrain = SampleTerrainShaped(gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 
