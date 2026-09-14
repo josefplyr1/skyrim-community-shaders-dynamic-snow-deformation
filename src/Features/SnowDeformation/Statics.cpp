@@ -624,6 +624,11 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			statProjMatched.fetch_add(1, std::memory_order_relaxed);
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 			bindSnowSet = true;
+			// A projected pass whose diffuse is itself a snow texture (a
+			// season swap's alternate set on a snow-MATO static): the paint
+			// weight can be zero there, so Lighting also takes the texel.
+			if (settings.SnowTexturedRecolor && rec.pathSnowNamed)
+				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 		}
 	}
 	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles

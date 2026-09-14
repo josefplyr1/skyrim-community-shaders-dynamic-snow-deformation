@@ -1844,6 +1844,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (snowProjMatch)
 	{
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
+		// Snow-textured shape under projection (season swaps): the texel
+		// counts as paint where the projection's own weight is zero.
+		[flatten] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 &&
+		              (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
+			projectedMaterialWeight = max(projectedMaterialWeight, SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, worldNormal.z));
 		// All or nothing: every pixel the game paints at all wears the shell's
 		// snow at full weight, in the object's own shader, so no angle is missed.
 		[branch] if (projectedMaterialWeight > 0.003)
