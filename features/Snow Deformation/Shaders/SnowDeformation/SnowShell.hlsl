@@ -2978,6 +2978,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// shell here (feature off / inactive).
 		preLit = sssDebug;
 	}
+	else if (ShellDebugData == 6)
+	{
+		// Edge height view, on the REAL surface with real discards: how far
+		// the rendered sheet stands above the terrain data at this pixel.
+		// Black < 0.5, green to 2, yellow to 4, orange to 8, red beyond;
+		// white = 1.5, the height the alpha keeps a pixel at.
+		float dbgAbove = input.WorldPos.z + ShellCameraPosAdjust.z - pixelTerrain.x;
+		preLit = dbgAbove < 0.5 ? float3(0.0, 0.0, 0.0) :
+		         dbgAbove < 2.0 ? float3(0.1, 0.8, 0.2) :
+		         dbgAbove < 4.0 ? float3(0.9, 0.9, 0.1) :
+		         dbgAbove < 8.0 ? float3(1.0, 0.5, 0.05) :
+		                          float3(0.9, 0.05, 0.05);
+		[flatten] if (abs(dbgAbove - 1.5) < 0.1)
+			preLit = float3(1.0, 1.0, 1.0);
+	}
 	else if (ShellDebugData == 3)
 	{
 		// Border-field debug: hue bands the shaped class depth (the field

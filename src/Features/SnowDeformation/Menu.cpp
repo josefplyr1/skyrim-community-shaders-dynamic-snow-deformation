@@ -1594,6 +1594,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttWallDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_wall_debug_tooltip"), "Renders the shell's raw snow texture unlit, on the real geometry - no sun, shadows, glints or marches; red wash = how much the side projection owns the pixel. Strafe past a trench wall in this view: if the wall still shifts HERE the texture path is guilty; if this view is rock-solid, a lighting term is."));
 
+			ImGui::Checkbox(T(TKEY("shell_edge_height_debug"), "Edge Height Debug"), &shellEdgeHeightDebug);
+			if (auto _ttEdgeDbg = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_edge_height_debug_tooltip"), "Landscape shell only, on the real geometry with the real edge cut: how far the drawn sheet stands above the ground under it. Black under 0.5 units, green to 2, yellow to 4, orange to 8, red beyond; the white line is 1.5 units, where the edge is meant to commit. Read the colour of the LAST pixels at a border: green means the edge sits on the ground, orange or red means it hovers."));
+
 			ImGui::Text("Exclusion zones: %u, workspace clearings: %u, sealed containers: %u (Survival heat list %s)",
 				statExclusionCount, statTrampleCount, statSealedCount, survivalHeatSources ? "found" : "absent");
 

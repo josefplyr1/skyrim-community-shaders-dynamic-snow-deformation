@@ -962,7 +962,7 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
 	RefreshShellGridPlacement(cbData);
-	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : 0u))));
+	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : (shellEdgeHeightDebug ? 6u : 0u)))));
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };

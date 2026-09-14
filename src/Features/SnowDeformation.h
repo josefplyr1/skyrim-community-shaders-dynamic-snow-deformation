@@ -1369,6 +1369,8 @@ public:
 	bool shellSSSDebug = false;
 	/** @brief Wall material view (ShellDebugData 5): raw two-plane albedo, unlit, red wash = side-projection weight. The strafe test for the wall-shift hunt. */
 	bool shellWallDebug = false;
+	/** @brief Edge height view (ShellDebugData 6): rendered sheet height above the terrain data, banded black/green/yellow/orange/red at 0.5/2/4/8 units, white = 1.5 (the alpha's keep height). Real surface, real discards. */
+	bool shellEdgeHeightDebug = false;
 	/** @brief Debug plane mode 2: paints the exclusion channels (R = drift lift, G = melt, B = suppression). */
 	bool shellExclusionDebug = false;
 
