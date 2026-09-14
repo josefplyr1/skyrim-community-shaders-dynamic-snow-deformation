@@ -715,30 +715,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// viewport range, so at grazing views the mesh's own depth sits far
 	// nearer than the geometry; the skin has to draw through the same state
 	// (Windhelm paving, RenderDoc 2026-09-10).
-	auto& shadowRuntime = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData();
-	uint32_t depthBiasMode = shadowRuntime.rasterStateDepthBiasMode;
-	// A material-object pass (multipass snow: the sparkle technique on the
-	// MATO's own property) sets up in the plain mode even when the mesh's own
-	// pass drew in decal mode, and then depth-fights it triangle by triangle
-	// (Seasons of Skyrim makes every mountain trim multipass). Remember the
-	// mode the mesh's own pass used and hand it to its material passes; the
-	// engine flushes the raster state at the draw.
-	{
-		static std::unordered_map<const void*, uint32_t> decalModeByGeometry;
-		if (decalModeByGeometry.size() > 4096)
-			decalModeByGeometry.clear();
-		auto* ownProperty = a_pass->geometry->GetGeometryRuntimeData().shaderProperty.get();
-		const bool materialPass = ownProperty && a_pass->shaderProperty != ownProperty;
-		if (!materialPass && depthBiasMode != 0) {
-			decalModeByGeometry[a_pass->geometry] = depthBiasMode;
-		} else if (materialPass && depthBiasMode == 0) {
-			if (auto it = decalModeByGeometry.find(a_pass->geometry); it != decalModeByGeometry.end()) {
-				shadowRuntime.rasterStateDepthBiasMode = it->second;
-				shadowRuntime.stateUpdateFlags.set(RE::BSGraphics::ShaderFlags::DIRTY_RASTER_DEPTH_BIAS);
-				depthBiasMode = it->second;
-			}
-		}
-	}
+	const uint32_t depthBiasMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
 
 	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
@@ -852,16 +829,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: twig-card shape class");
 		return;
 	}
-	// Alpha-tested and blended cards (grass, roots, leaves) never take a
-	// skin: the coat over a card is a translucent plane wherever the card is
-	// transparent. Seasons projects onto every geometry of a model, and
-	// season packs swap in variants whose MATO projects onto their cards too,
-	// so the gate is on the geometry, not on who projected. LOD atlases keep
-	// their coat; it reads the recolor's own weight.
+	// Alpha-TESTED cards (grass, roots, leaves) never take a skin: the coat
+	// over a card is a translucent plane wherever the card is transparent.
+	// Seasons projects onto every geometry of a model, and season packs swap
+	// in variants whose MATO projects onto their cards too, so the gate is on
+	// the geometry, not on who projected. Blended-only geometry keeps its
+	// skin: a rock skirt is a soft decal overlay lying ON its trim, drawn in
+	// the game's decal depth mode, and its skin in that same mode is what
+	// covers it wherever the trim's own skin loses the depth fight to it.
+	// LOD atlases keep their coat; it reads the recolor's own weight.
 	if (!lodBatch) {
-		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
-			alpha && (alpha->GetAlphaTesting() || alpha->GetAlphaBlending())) {
-			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha card");
+		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get(); alpha && alpha->GetAlphaTesting()) {
+			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha-tested card");
 			return;
 		}
 	}
