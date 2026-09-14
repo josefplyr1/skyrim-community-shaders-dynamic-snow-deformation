@@ -234,10 +234,9 @@ Texture2D<float4> TerrainWindow : register(t0);
 // object maps, so its row is (TerrainDim - 1) - the terrain row.
 Texture2D<float> WaterWindow : register(t27);
 // Water this shallow over the ground is not water: a placed pond plane's
-// rectangle skims the land around its shore.
-static const float kWaterSkimDepth = 5.0;
-// Vertical band over which the snow surface sinks out as it meets the level.
-static const float kWaterToe = 8.0;
+// rectangle skims the land around its shore. Also where the shore cap's
+// zero lands, so keep it small or the toe ends under the surface.
+static const float kWaterSkimDepth = 2.0;
 
 // A texel whose ground lies under drawn water reads as a non-snow class
 // (-8), so the shoreline is a class border: same noise, smoothing, dither
@@ -929,19 +928,44 @@ float SampleWaterHeight(float2 gridLocal)
 	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
 }
 
-// The snow ends where its own surface meets the water level. The class ramp
-// (wet texels at -8) shapes the edge; this only stops the toe running on
-// under the level between a dry vertex and a wet one. Applied once, to a
-// FINISHED sample: the lerp is not idempotent.
+// The snow ends AT the waterline with the class border's own slope. The wet
+// texels (-8) give the shore a class ramp, but that ramp is anchored to the
+// land lattice, so its zero can fall either side of the line; this caps the
+// depth by slope x horizontal distance to the line, zero at the line and
+// negative past it. Distance is rise over slope from the 128-texel bilinear
+// alone, so it is the same from every range; the slope floor keeps a flat
+// shore's distance finite. The wander pulls the edge inland only. Rounded
+// knee where the cap meets the class ramp. Once per consumer.
 float3 EndSnowAtWater(float3 terrain, float2 gridLocal)
 {
-	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > 0.0)
+	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > -7.9)
 	{
 		float water = SampleWaterHeight(gridLocal);
-		[flatten] if (water > -50000.0)
+		[branch] if (water > -50000.0)
 		{
-			float cut = smoothstep(0.0, kWaterToe, terrain.x + terrain.y - water);
-			terrain.y = lerp(-8.0, terrain.y, cut);
+			float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+			t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+			int2 t0 = (int2)t;
+			float2 f = t - t0;
+			int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+			float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
+			float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
+			float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
+			float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
+			[branch] if (min(min(s00, s10), min(s01, s11)) > -50000.0)
+			{
+				float h = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+				float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
+				float dist = (h - water + kWaterSkimDepth) / max(length(grad), 0.02);
+				float2 worldXY = GridOrigin + gridLocal;
+				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
+				// A class ramp runs +30 to -8 across one texel plus the smoothing cross.
+				float cap = (dist - wander) * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth));
+				float e = terrain.y - cap;
+				const float k = 4.0;
+				float knee = e > k ? e : (e < -k ? 0.0 : (e + k) * (e + k) / (4.0 * k));
+				terrain.y = max(terrain.y - knee, -8.0);
+			}
 		}
 	}
 	return terrain;
