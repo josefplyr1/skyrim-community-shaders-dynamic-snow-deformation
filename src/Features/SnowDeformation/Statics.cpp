@@ -629,7 +629,8 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow) |
-						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored) | uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha));
+						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored) | uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha) |
+						 uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -649,6 +650,14 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
 		if (rec.seasonsStatic && !treeAnim)
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha);
+		// An authored multipass snow MATO draws the same way Seasons' does: a
+		// base pass with no projection that leaves the read-back mask at 0,
+		// which the skin took for "unknown" and coated every face of
+		// (baldpatch79's Nordic walls, 2026-09-14). The authored angle and
+		// alpha stay: only the base-pass mask write is borrowed.
+		if (settings.MultipassSnowFollowsPaint && !rec.seasonsProj && !treeAnim && rec.mato != MatoClass::kNotSnow &&
+			a_pass->shaderProperty->flags.all(Flag::kMultiIndexSnow))
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
 		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (rec.mato == MatoClass::kNotSnow || NameFactsOf(a_pass->geometry).floe) {

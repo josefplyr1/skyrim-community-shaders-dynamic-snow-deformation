@@ -146,6 +146,7 @@
 	X(HorizonSnow) \
 	X(ProjSnowMatch) \
 	X(SeasonsSnowMaxAngle) \
+	X(MultipassSnowFollowsPaint) \
 	X(ShelterMaxHeight) \
 	X(LODObjectSnow) \
 	X(VolumeSnow) \

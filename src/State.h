@@ -300,7 +300,11 @@ public:
 		// With SnowProjectedUnauthored: the mesh's vertex alpha was never
 		// authored for its projection (Seasons' own snow statics read 0), so
 		// Lighting's slope mask replaces it instead of scaling it.
-		SnowProjectedNoAlpha = 1 << 19
+		SnowProjectedNoAlpha = 1 << 19,
+		// Every pass of an object whose snow MATO is multipass (property
+		// kMultiIndexSnow): the base pass writes the skin's read-back mask as
+		// "known, unpainted" so only the snow pass's real paint takes a coat.
+		SnowMultipassBase = 1 << 20
 	};
 
 	bool inWorld = false;

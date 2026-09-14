@@ -110,6 +110,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints at all takes the full snow, all or nothing. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
+		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
+		if (auto _ttMultipass = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow or Stretched Snow Begone) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));
+
 		ImGui::SliderFloat(T(TKEY("seasons_snow_max_angle"), "Seasons Snow Max Angle"), &settings.SeasonsSnowMaxAngle, 0.0f, 90.0f, "%.0f deg");
 		if (auto _ttSeasons = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask; 90 keeps Seasons' own coverage, which the recolor and the drape then follow exactly, and lower cuts the snow off steeper faces for them only. Authored snow objects keep their own angle and mask."));

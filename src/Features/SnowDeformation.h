@@ -591,6 +591,8 @@ public:
 		bool ProjSnowMatch = true;
 		/** @brief "Seasons Snow Max Angle" (degrees): runtime-applied projections (Seasons of Skyrim) carry the record default of 90 and no vertex-alpha mask; this is the max slope such snow rests on, applied in Lighting to those draws only. 90 = Seasons' own coverage, which matches rocks exactly (Josef's default). */
 		float SeasonsSnowMaxAngle = 87.0f;
+		/** @brief "Multipass Snow Follows Paint": objects whose snow material is multipass (vanilla glaciers and ice, Simplicity of Snow, Stretched Snow Begone) get their base pass marked "known, unpainted" for the skin's read-back, so the drape follows only the snow the game's own snow pass paints. Off = the skin reconstructs a coat over every face of them (Alpha Test 2 behaviour). */
+		bool MultipassSnowFollowsPaint = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 320.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */

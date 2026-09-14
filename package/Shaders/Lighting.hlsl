@@ -3244,7 +3244,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// nothing above writes the weight and the skin's read-back saw 0
 	// ("unknown") and reconstructed a coat over every face. 2 = known and
 	// unpainted; the sparkle pass writes 2 + w over it where it paints.
-	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
+	// Same for any multipass snow MATO (vanilla glaciers and ice, Simplicity
+	// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
+	[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase)) != 0)
 		psout.Masks.y = 2.0;
 #			endif
 #			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
