@@ -112,7 +112,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow or Stretched Snow Begone) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));
+			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));
 
 		ImGui::SliderFloat(T(TKEY("seasons_snow_max_angle"), "Seasons Snow Max Angle"), &settings.SeasonsSnowMaxAngle, 0.0f, 90.0f, "%.0f deg");
 		if (auto _ttSeasons = Util::HoverTooltipWrapper())
