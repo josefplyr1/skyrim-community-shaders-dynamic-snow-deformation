@@ -106,9 +106,6 @@ void SnowDeformation::DrawSettings()
 
 		// Object snow is the recolor of the game's own projected snow and the
 		// drape the skin lays over it; nothing of ours stands above a mesh.
-		ImGui::Checkbox(T(TKEY("snow_textured_recolor"), "Recolor Snow-Textured Meshes (A/B)"), &settings.SnowTexturedRecolor);
-		if (auto _ttStr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint - a season mod's swapped-in winter variants (tundra rocks, houses, cliffs with a snow01 top), and the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This flags every shape whose texture is a landscape snow texture and gives it the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow."));
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints at all takes the full snow, all or nothing. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));

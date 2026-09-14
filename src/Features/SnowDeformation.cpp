@@ -148,7 +148,6 @@
 	X(SeasonsSnowMaxAngle) \
 	X(ShelterMaxHeight) \
 	X(LODObjectSnow) \
-	X(SnowTexturedRecolor) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
 	X(VolumeSnowCoverage) \
@@ -624,7 +623,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.ProjSnowEnable = (settings.EnableSnowDeformation && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	data.ProjUnauthoredThreshold = std::cos(std::clamp(settings.SeasonsSnowMaxAngle, 0.0f, 90.0f) * (DirectX::XM_PI / 180.0f));
 	data.LODObjectEnable = (settings.EnableSnowDeformation && settings.LODObjectSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
-	data.SnowTexturedEnable = (settings.EnableSnowDeformation && settings.SnowTexturedRecolor && settings.ProjSnowMatch && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
 	// The world map renders the LOD world without the shell, so a shell-
 	// matched recolor there mismatches everything else the map shows
 	// skins are gated the same way in DrawCapturedStatics.
@@ -632,7 +630,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
 		data.LODObjectEnable = 0.0f;
-		data.SnowTexturedEnable = 0.0f;
 	}
 	return data;
 }

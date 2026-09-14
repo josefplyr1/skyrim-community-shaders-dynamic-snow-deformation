@@ -366,10 +366,9 @@ namespace SharedData
 		float LODReplaceEnable;
 		// Snow normal map bound at t103 (0 = legacy set without one).
 		float SnowHasNormal;
-		// Snow-textured mesh recolor (statics hook flags unprojected snow01
-		// shapes as SnowLODBakedIsSnow); took the retired LODReplaceLegacy
-		// slot. Mirror in SnowDeformation.h.
-		float SnowTexturedEnable;
+		// was LODReplaceLegacy, then the retired snow-textured recolor A/B;
+		// slot kept for layout. Mirror in SnowDeformation.h.
+		float padLegacy;
 		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
 		// snow set is bound at t102.
 		float ProjSnowEnable;
