@@ -337,6 +337,9 @@ namespace
 		// Mountain/cliff diffuse. Not a capture family on its own (see above);
 		// read only for large-reference LOD, which has no other snow signal.
 		bool mountain = false;
+		// Architecture diffuse that is not foliage: an alpha-tested roof or
+		// plank end is a surface, not a card.
+		bool architecture = false;
 	};
 
 	// Pointer-identity ownership: does any loaded reference's 3D subtree
@@ -501,6 +504,11 @@ namespace
 					                            lowered.find("iceberg") != std::string::npos;
 					it->second.mountain = lowered.find("mountain") != std::string::npos ||
 					                      lowered.find("cliff") != std::string::npos;
+					it->second.architecture = lowered.find("architecture") != std::string::npos &&
+					                          lowered.find("ivy") == std::string::npos && lowered.find("vine") == std::string::npos &&
+					                          lowered.find("leaf") == std::string::npos && lowered.find("leaves") == std::string::npos &&
+					                          lowered.find("grass") == std::string::npos && lowered.find("branch") == std::string::npos &&
+					                          lowered.find("moss") == std::string::npos;
 				}
 			}
 		}
@@ -521,6 +529,7 @@ struct GeometryRecord
 	bool pathBase = false;
 	bool pathNatural = false;
 	bool pathMountain = false;
+	bool pathArchitecture = false;
 	bool iceName = false;
 	bool ice = false;
 	bool shard = false;
@@ -563,6 +572,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			r.pathBase = path.base;
 			r.pathNatural = path.naturalFeature;
 			r.pathMountain = path.mountain;
+			r.pathArchitecture = path.architecture;
 			if (auto textureSet = a_material->textureSet.get()) {
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
@@ -880,7 +890,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// in that same mode is what covers it wherever the trim's own skin loses
 	// the depth fight to it. Cards stand off the surface and never draw as
 	// decals. LOD atlases keep their coat; it reads the recolor's own weight.
-	if (!lodBatch && !decalDepth) {
+	// Architecture surfaces (a thatch roof's fringe, plank ends) test alpha
+	// too and are not cards; foliage textures under architecture still are.
+	if (!lodBatch && !decalDepth && !rec.pathArchitecture) {
 		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get(); alpha && alpha->GetAlphaTesting()) {
 			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha-tested card");
 			return;
