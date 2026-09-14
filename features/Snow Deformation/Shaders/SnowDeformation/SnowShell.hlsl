@@ -928,6 +928,15 @@ float SampleWaterHeight(float2 gridLocal)
 	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
 }
 
+// min(a, b) through a quadratic knee of radius k, so a cap meeting a ramp
+// leaves no crease.
+float KneeMin(float a, float b, float k)
+{
+	float e = a - b;
+	float knee = e > k ? e : (e < -k ? 0.0 : (e + k) * (e + k) / (4.0 * k));
+	return a - knee;
+}
+
 // The snow ends AT the waterline with the class border's own slope. The wet
 // texels (-8) give the shore a class ramp, but that ramp is anchored to the
 // land lattice, so its zero can fall either side of the line; this caps the
@@ -935,9 +944,12 @@ float SampleWaterHeight(float2 gridLocal)
 // negative past it. Distance is rise over slope from the 128-texel bilinear
 // alone, so it is the same from every range; the slope floor keeps a flat
 // shore's distance finite. The wander pulls the edge inland only. Rounded
-// knee where the cap meets the class ramp. Once per consumer.
-float3 EndSnowAtWater(float3 terrain, float2 gridLocal)
+// knee where the cap meets the class ramp. Once per consumer. waterCap is
+// the height the sheet may stand above the ground here (1e9 = no water),
+// so the object lift can be held to it as well.
+float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 {
+	waterCap = 1e9;
 	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > -7.9)
 	{
 		float water = SampleWaterHeight(gridLocal);
@@ -961,10 +973,8 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal)
 				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
 				// A class ramp runs +30 to -8 across one texel plus the smoothing cross.
 				float cap = (dist - wander) * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth));
-				float e = terrain.y - cap;
-				const float k = 4.0;
-				float knee = e > k ? e : (e < -k ? 0.0 : (e + k) * (e + k) / (4.0 * k));
-				terrain.y = max(terrain.y - knee, -8.0);
+				waterCap = cap;
+				terrain.y = max(KneeMin(terrain.y, cap, 4.0), -8.0);
 			}
 		}
 	}
@@ -1125,7 +1135,8 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		}
 
 		// After the morph, so the coarse bands end at the water too.
-		terrain = EndSnowAtWater(terrain, gridLocal);
+		float waterCap;
+		terrain = EndSnowAtWater(terrain, gridLocal, waterCap);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
@@ -1192,6 +1203,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 				// error, and max(exact, bilinear) is an envelope creased along
 				// the 128-unit lattice (stripes, lifted hollows, forced snow).
 				float lift = max(field - SampleTerrainBilinearHeight(gridLocal), 0.0) * groundSnow;
+				// A drift bank ends at the water like the sheet does: lift plus
+				// depth stays under the shore cap.
+				lift = max(KneeMin(lift, max(waterCap - max(rampDepth, 0.0), 0.0), 4.0), 0.0);
 				// Where a captured object defines the surface, the layer wears
 				// the object's own skin depth instead of the landscape class
 				// depth (a thin-skinned rock must not carry a deep landscape
@@ -2108,7 +2122,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 gridLocal = input.GridLocal;
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
-	float3 pixelTerrain = EndSnowAtWater(SampleTerrainShaped(gridLocal), gridLocal);
+	float pixelWaterCap;
+	float3 pixelTerrain = EndSnowAtWater(SampleTerrainShaped(gridLocal), gridLocal, pixelWaterCap);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 
@@ -2127,6 +2142,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float capGround = smoothstep(0.1, 0.45, pixelCoverage) * (1.0 - saturate(SampleExclusionMask(capWorldXY).x));
 			capField = lerp(min(capField, pixelTerrain.x), capField, capGround);
 			float capLift = capField - pixelTerrain.x;
+			capLift = max(KneeMin(capLift, max(pixelWaterCap - max(pixelClassDepth, 0.0), 0.0), 4.0), 0.0);
 			float capT = smoothstep(0.25, 1.0, capLift / max(pixelClassDepth, 1.0));
 			pixelClassDepth = lerp(pixelClassDepth, min(pixelClassDepth, SampleObjectDepthCap(capWorldXY)), capT);
 			// Drift failsafe, mirroring ShellSurfaceZ: raised banks are snow
@@ -2210,7 +2226,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// longer takes must not hold the alpha override either.
 			float liftGround = smoothstep(0.1, 0.45, saturate(pixelTerrain.z)) * (1.0 - saturate(pixelShelter.x));
 			fieldHeight = lerp(min(fieldHeight, pixelTerrain.x), fieldHeight, liftGround);
-			pixelLift = fieldHeight - pixelTerrain.x;
+			pixelLift = max(KneeMin(fieldHeight - pixelTerrain.x, max(pixelWaterCap - max(pixelTerrain.y, 0.0), 0.0), 4.0), 0.0);
 		}
 	}
 	// Fire-melted floors hug the terrain BY DESIGN (kFireMeltFloor above it);
