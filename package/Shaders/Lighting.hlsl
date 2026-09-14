@@ -1906,11 +1906,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 &&
 	             (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 	{
-		snowTexWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, normal.z);
+		snowTexWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, worldNormal.z);
 		[branch] if (snowTexWeight > 0.003)
 		{
 			float3 snowTexWorld = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-			float3 snowTexWeights = Triplanar::GetWeights(normal.xyz, normal.xyz);
+			float3 snowTexWeights = Triplanar::GetWeights(worldNormal, worldNormal);
 			float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 			float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowTexSample) : snowTexSample;
 			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)

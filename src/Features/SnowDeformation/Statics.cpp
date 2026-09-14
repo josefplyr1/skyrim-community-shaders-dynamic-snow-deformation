@@ -335,6 +335,8 @@ namespace
 		// Mountain/cliff diffuse. Not a capture family on its own (see above);
 		// read only for large-reference LOD, which has no other snow signal.
 		bool mountain = false;
+		// "snow" in the diffuse FILE name, any folder (season swaps' alternate sets).
+		bool snowNamed = false;
 	};
 
 	// Pointer-identity ownership: does any loaded reference's 3D subtree
@@ -488,6 +490,15 @@ namespace
 					                            lowered.find("iceberg") != std::string::npos;
 					it->second.mountain = lowered.find("mountain") != std::string::npos ||
 					                      lowered.find("cliff") != std::string::npos;
+					// Snow by FILE NAME, any folder: a season swap's alternate
+					// textures (snow01, snowrocks01, snow01landscape, the
+					// architecture sets). Berries and the no-snow variants are
+					// the known false friends.
+					const size_t slash = lowered.find_last_of("\\/");
+					const std::string file = slash == std::string::npos ? lowered : lowered.substr(slash + 1);
+					it->second.snowNamed = file.find("snow") != std::string::npos &&
+					                       file.find("snowberr") == std::string::npos &&
+					                       file.find("nosnow") == std::string::npos;
 				}
 			}
 		}
@@ -508,6 +519,7 @@ struct GeometryRecord
 	bool pathBase = false;
 	bool pathNatural = false;
 	bool pathMountain = false;
+	bool pathSnowNamed = false;
 	bool iceName = false;
 	bool ice = false;
 	bool shard = false;
@@ -547,6 +559,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			r.pathBase = path.base;
 			r.pathNatural = path.naturalFeature;
 			r.pathMountain = path.mountain;
+			r.pathSnowNamed = path.snowNamed;
 			if (auto textureSet = a_material->textureSet.get()) {
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
@@ -630,7 +643,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kTreeAnim) &&
 		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
 		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
-		if (rec.pathBase && rec.mato != MatoClass::kNotSnow) {
+		if (rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow) {
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 			bindSnowSet = true;
 		}
@@ -826,7 +839,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// texel brightness (SetProjectedSnowBit) and writes the weight back,
 		// and the coat reads that weight and nothing else (the atlas holds
 		// ships and walls beside the mountains).
-		if (!(rec.pathBase || naturalFeature || isObjectLOD)) {
+		// Snow-named textures (a season swap's alternate sets) capture under
+		// the A/B: their skin coats off the recolor's written weight.
+		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow;
+		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture)) {
 			if (matoVetoed)
 				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: family matched but MATO vetoed (kNotSnow)");
 			else
@@ -991,7 +1007,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathBase && rec.mato != MatoClass::kNotSnow;
+	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow;
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, snowTex });
 }
 
