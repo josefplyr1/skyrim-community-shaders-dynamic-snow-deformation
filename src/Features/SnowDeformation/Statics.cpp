@@ -2009,7 +2009,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			// the RISE only. The coat and its edge lumps live in the S4 draw,
 			// so gating the draw on it took the border Josef keeps along with
 			// the shell (his test, 2026-09-06).
-			const bool s4Shell = !cap.road && cap.projThreshold > -0.5f && SD_ProjNoiseMapSRV();
+			const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		}
 		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
@@ -3219,7 +3219,9 @@ void SnowDeformation::DrawCapturedStatics()
 		// Lighting recolor still covers the technique-classified ones
 		// (fence family) flat. The classic shader path survives only
 		// because roads run through it.
-		const bool s4Shell = !cap.road && cap.projThreshold > -0.5f && projNoiseSRV;
+		// The sentinel is -1; an authored bias can sit at exactly -0.5 (the
+		// farmhouse snow material), which the old > -0.5 read as no data.
+		const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && projNoiseSRV;
 		if (!cap.road && !s4Shell) {
 			if (skinCullLogArmed)
 				logger::info("[SNOW DEFORMATION] skin list skip (no projection data, threshold {:.2f}): '{}'", cap.projThreshold, geometry->name.c_str());

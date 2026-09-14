@@ -1675,7 +1675,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 		projLinear = vertexAlpha;
 		upFacing = 0.0;
 	}
-	else [branch] if (ProjThreshold > -0.5)
+	else [branch] if (ProjThreshold > -0.9)
 	{
 		float projWeight = nrmWS.z * vertexAlpha - max(ProjThreshold, 0.0);
 		projFactor = saturate(projWeight) * smoothstep(0.06, 0.16, projWeight);
@@ -3634,7 +3634,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 										smoothstep(0.5, 0.85, liftFrac),
 										smoothstep(1.5 * coatRef, 4.0 * coatRef, input.Lift)));
 	}
-	else [flatten] if (ProjThreshold > -0.5)
+	else [flatten] if (ProjThreshold > -0.9)
 		pixelCoverage *= smoothstep(0.06, 0.14, input.ProjFactor);
 	// Drifts: whole mesh coated, no projection weight or vertex alpha cut.
 	[flatten] if (FullCoat > 0.5)
