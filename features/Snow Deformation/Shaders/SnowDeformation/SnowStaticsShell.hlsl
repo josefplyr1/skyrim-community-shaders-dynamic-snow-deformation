@@ -4256,6 +4256,15 @@ PS_OUTPUT main(VS_OUTPUT input)
 			[branch] if (DbgVoxelSize > 0.0 && all(logical >= 0) && all(logical < DbgDims.xyz))
 			{
 				uint3 ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
+				// The field first, this voxel and two above: the ground truth for
+				// "snow here", whatever the occupancy read says.
+				float f = 0.0;
+				[unroll] for (int fz = 0; fz <= 2; fz++)
+				{
+					int3 fv = logical + int3(0, 0, fz);
+					[flatten] if (fv.z < DbgDims.z)
+						f = max(f, DbgVoxField[(uint3)((fv + DbgOriginVox.xyz) & dmask)]);
+				}
 				float occ = DbgVoxOcc[ph];
 				[flatten] if (occ <= 0.0 && logical.z > 0)
 				{
@@ -4263,17 +4272,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 					ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
 					occ = DbgVoxOcc[ph];
 				}
-				[branch] if (occ <= 0.0)
-					dbgCol = float3(0.35, 0.35, 0.35);
+				[branch] if (f >= DbgFieldThreshold)
+					dbgCol = float3(0.1, 1.0, 0.1) * (0.4 + 0.6 * saturate(f));
+				else [branch] if (occ <= 0.0)
+				{
+					// Nothing at this voxel: cyan if the occupancy holds something
+					// within a voxel of it (an addressing offset), light grey if not.
+					float near = 0.0;
+					[unroll] for (int nz = -1; nz <= 1; nz++)
+						[unroll] for (int ny = -1; ny <= 1; ny++)
+							[unroll] for (int nx = -1; nx <= 1; nx++)
+								near = max(near, DbgVoxOcc[(uint3)((logical + int3(nx, ny, nz) + DbgOriginVox.xyz) & dmask)]);
+					dbgCol = near > 0.0 ? float3(0.1, 0.9, 0.9) : float3(0.35, 0.35, 0.35);
+				}
 				else
 				{
-					int3 above = logical + int3(0, 0, 1);
-					float f = DbgVoxField[ph];
-					[flatten] if (above.z < DbgDims.z)
-						f = max(f, DbgVoxField[(uint3)((above + DbgOriginVox.xyz) & dmask)]);
-					[branch] if (f >= DbgFieldThreshold)
-						dbgCol = float3(0.1, 1.0, 0.1) * (0.4 + 0.6 * saturate(f));
-					else
 					{
 						bool open = true;
 						int headroom = (int)DbgHeadroomVox;
