@@ -70,6 +70,10 @@ static constexpr float kFootDryFallback = 300.0f;
 static constexpr float kFootDryTeleport = 200.0f;
 // Cadence for re-verifying cached feet are still attached to the root.
 static constexpr uint16_t kFootAttachRecheckFrames = 60;
+// Frames a fresh 3D gets before its bones are walked: gear and holsters attach
+// in the frames after the skeleton loads, and the walk must not race that.
+static constexpr uint16_t kBoneCollectSettleFrames = 15;
+static constexpr int kBoneWalkMaxDepth = 32;
 // Trail keys for foot/limb stamps set these bits so they never collide with
 // Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
@@ -211,15 +215,29 @@ static bool GearNodeName(const RE::BSFixedString& a_name)
 	       NameContains(a_name, "magicnode") || NameContains(a_name, "animobject");
 }
 
-static RE::NiAVObject* FindToeBone(RE::NiNode* a_node)
+// A children slot read while another plugin re-parents gear can hold anything.
+static bool PlausibleNode(const RE::NiAVObject* a_obj)
 {
-	for (auto& child : a_node->GetChildren()) {
-		auto* node = child.get() ? child.get()->AsNode() : nullptr;
+	const auto p = reinterpret_cast<uintptr_t>(a_obj);
+	return p >= 0x10000 && (p & 7) == 0;
+}
+
+// Children are walked to the engine's own bound (free_idx), not CommonLib's
+// end() = capacity.
+static RE::NiAVObject* FindToeBone(RE::NiNode* a_node, int a_depth = 0)
+{
+	if (a_depth > kBoneWalkMaxDepth)
+		return nullptr;
+	auto& children = a_node->GetChildren();
+	const auto count = children.free_idx();
+	for (uint16_t i = 0; i < count; ++i) {
+		auto* child = children[i].get();
+		auto* node = PlausibleNode(child) ? child->AsNode() : nullptr;
 		if (!node)
 			continue;
 		if (NameContains(node->name, "toe"))
 			return node;
-		if (auto* deeper = FindToeBone(node))
+		if (auto* deeper = FindToeBone(node, a_depth + 1))
 			return deeper;
 	}
 	return nullptr;
@@ -261,11 +279,11 @@ static const LimbSpec* MatchLimb(const RE::BSFixedString& a_name)
 // CME/MOV prefixes are XPMSSE control nodes mirroring bone names, and gear
 // holster nodes carry body-part substrings; both fail the match but stay on
 // the recursion path (XPMSSE inserts control nodes as parents of real bones).
-static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor, float a_ancestorRadius,
-	SnowDeformation::StampBones& a_out)
+static __declspec(noinline) void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor, float a_ancestorRadius,
+	SnowDeformation::StampBones& a_out, int a_depth)
 {
-	auto* node = a_obj ? a_obj->AsNode() : nullptr;
-	if (!node)
+	auto* node = PlausibleNode(a_obj) ? a_obj->AsNode() : nullptr;
+	if (!node || a_depth > kBoneWalkMaxDepth)
 		return;
 	const auto& name = node->name;
 	const bool controlNode = NameStartsWith(name, "CME ") || NameStartsWith(name, "MOV ") ||
@@ -288,14 +306,33 @@ static void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor,
 			if ((spec->terminal || !a_ancestor) && a_out.limbs.size() < kMaxCachedLimbs)
 				a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(node),
 					spec->radius });
-			for (auto& child : node->GetChildren())
-				CollectStampBones(child.get(), node, spec->radius, a_out);
+			auto& children = node->GetChildren();
+			const auto count = children.free_idx();
+			for (uint16_t i = 0; i < count; ++i)
+				CollectStampBones(children[i].get(), node, spec->radius, a_out, a_depth + 1);
 			return;
 		}
 	}
-	for (auto& child : node->GetChildren())
-		CollectStampBones(child.get(), a_ancestor, a_ancestorRadius, a_out);
+	auto& children = node->GetChildren();
+	const auto count = children.free_idx();
+	for (uint16_t i = 0; i < count; ++i)
+		CollectStampBones(children[i].get(), a_ancestor, a_ancestorRadius, a_out, a_depth + 1);
 }
+
+// The tree is the game's, and other plugins re-parent gear on it from their own
+// threads; a slot freed under the walk faults instead of misprinting. Same
+// net as FidelityFX's dispatch. No C++ objects may live in this frame (C2712).
+static bool TryCollectStampBones(RE::NiAVObject* a_root, SnowDeformation::StampBones* a_out)
+{
+	__try {
+		CollectStampBones(a_root, nullptr, 0.0f, *a_out, 0);
+		return true;
+	} __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {
+		return false;
+	}
+}
+
+static uint32_t boneWalkFaultsLogged = 0;
 
 // Full-tree dump for the skeleton probe: every node with its match
 // classification, so a tester's log shows exactly what the stamper saw.
@@ -832,14 +869,25 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			stampBoneCache.clear();
 		auto& cache = stampBoneCache[formID];
 		auto recollectBones = [&] {
+			cache.feet.clear();
+			cache.limbs.clear();
+			cache.attachRecheck = kFootAttachRecheckFrames;
+			if (TryCollectStampBones(root, &cache))
+				return;
+			cache.feet.clear();
+			cache.limbs.clear();
+			cache.collisionFallback = true;
+			if (boneWalkFaultsLogged < 8) {
+				boneWalkFaultsLogged++;
+				logger::warn("[SNOW DEFORMATION] skeleton walk faulted on '{}' ({:08X}); collision stamping until its 3D reloads",
+					actor->GetName() ? actor->GetName() : "", formID);
+			}
+		};
+		if (cache.root.get() != root) {
 			cache.root = RE::NiPointer<RE::NiAVObject>(root);
 			cache.feet.clear();
 			cache.limbs.clear();
-			CollectStampBones(root, nullptr, 0.0f, cache);
-			cache.attachRecheck = kFootAttachRecheckFrames;
-		};
-		if (cache.root.get() != root) {
-			recollectBones();
+			cache.collectDelay = kBoneCollectSettleFrames;
 			cache.dryTravel = 0.0f;
 			cache.hasPrevPos = false;
 			cache.dryRecollected = false;
@@ -850,6 +898,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		} else if (cache.contactStarved > 0) {
 			cache.contactStarved--;
 		}
+		if (cache.collectDelay > 0 && --cache.collectDelay == 0)
+			recollectBones();
 
 		// Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor)
 		// edit the live tree without swapping the root, so the root key alone

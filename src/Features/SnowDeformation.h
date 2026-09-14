@@ -300,6 +300,8 @@ public:
 		uint16_t alphaSettle = 0;
 		/** @brief Frames until cached feet are re-verified as still attached to the root. Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor) edit the live tree without swapping the root, so the root key alone cannot vouch for a cached node: a detached foot's world transform freezes and it never plants again. */
 		uint16_t attachRecheck = 0;
+		/** @brief Frames left before a freshly seen 3D has its bones walked; gear is still attaching in the frames after a skeleton loads. */
+		uint16_t collectDelay = 0;
 		/** @brief XY units walked on the ground with zero foot prints. A healthy walker plants each foot every ~60 units, so a growing figure here means the cached feet no longer speak for the skeleton, whatever edited them. */
 		float dryTravel = 0.0f;
 		float prevPosX = 0.0f;
