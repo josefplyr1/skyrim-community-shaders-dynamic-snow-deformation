@@ -29,7 +29,7 @@ cbuffer StaticCB : register(b1)
 	float VertexCountF;
 	float HasObjectTop;  // layout sync with SnowStaticsShell; unused here
 
-	float padSkinHeightFade;
+	float DebugSkinId;        // layout sync with SnowStaticsShell; unused here
 	float LegacySkin;         // layout sync with SnowStaticsShell; unused here
 	float MoundSteepness;     // layout sync with SnowStaticsShell; unused here
 	float padObjectTrenches;  // layout sync with SnowStaticsShell

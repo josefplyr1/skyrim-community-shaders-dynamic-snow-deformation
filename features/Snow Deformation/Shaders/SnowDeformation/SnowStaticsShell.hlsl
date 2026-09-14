@@ -182,6 +182,8 @@ cbuffer ShellCB : register(b0)
 
 	float4 FineWindow;  // landscape shell only (SnowShell.hlsl)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
+	// Debug view 9: x = SkinDepthBias (ULPs), y = SkinSlopeDepthBias.
+	float4 DebugSkinDepth;
 }
 
 cbuffer StaticCB : register(b1)
@@ -204,7 +206,8 @@ cbuffer StaticCB : register(b1)
 	// >0.5: the object top raster is bound at PS t11 this draw.
 	float HasObjectTop;
 
-	float padSkinHeightFade;
+	// Debug views 8/9: skin draw ordinal + 1, negated for a decal-state skin.
+	float DebugSkinId;
 
 	// >0.5: keep the tuned pre-rework skin behaviour (road and bridge meshes).
 	float LegacySkin;
@@ -2310,6 +2313,10 @@ float CoverageNoise(float2 worldXY)
 // helper the terrain shell binds at t3. Never the bound DSV, so sampling it
 // while writing depth is legal.
 Texture2D<float> SceneDepth : register(t3);
+// Debug view 9 only: the main depth the prepass copied from, and the private
+// copy after the prepass.
+Texture2D<float> DebugMainDepth : register(t43);
+Texture2D<float> DebugPrepassDepth : register(t44);
 
 // SHELL-SURFACE SSS RE-MARCH, ported verbatim from SnowShell.hlsl (Josef
 // 2026-09-01: both shells must run the same shadow configuration). The only
@@ -4159,7 +4166,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (StaticsDebugView != 0.0)
 	{
 #ifdef PATCH
-		[branch] if (StaticsDebugView > 6.5)
+		[branch] if (StaticsDebugView > 7.5)
+		{
+			// Skin identity / depth fight: skins only. Dim gray.
+			preLit = float3(0.1, 0.1, 0.1);
+		}
+		else [branch] if (StaticsDebugView > 6.5)
 		{
 			// Lift Gradient mode. The patch is a lattice whose Lift is a
 			// constant, so its gradient is zero BY CONSTRUCTION - it cannot
@@ -4194,7 +4206,43 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 6.5)
+		[branch] if (StaticsDebugView > 8.5)
+		{
+			// Depth fight. The prepass decided the pixel: private depth below
+			// the main depth = a skin won it. The D3D bias formula on the raw
+			// SV_Position z says whether it was this skin, and the margin in
+			// ULPs how close the fight was. Decal-state skins striped.
+			float z = input.Position.z;
+			float slope = max(abs(ddx(z)), abs(ddy(z)));
+			float ulp = exp2(floor(log2(max(z, 1e-30))) - 23.0);
+			bool decal = DebugSkinId < 0.0;
+			float bias = decal ? max((-DebugSkinDepth.x - 1.0) * ulp - (DebugSkinDepth.y + 0.65) * slope, -100.0) :
+			                     max(-DebugSkinDepth.x * ulp - DebugSkinDepth.y * slope, -1e-5);
+			float own = z + bias;
+			float mainZ = DebugMainDepth.Load(int3(input.Position.xy, 0));
+			float wonZ = DebugPrepassDepth.Load(int3(input.Position.xy, 0));
+			float margin = mainZ - own;
+			bool won = wonZ < mainZ;
+			bool mine = abs(own - wonZ) < 4.0 * ulp;
+			if (won && !mine)
+				discard;
+			if (!won && margin < -4e-4)
+				discard;
+			float bright = 0.25 + 0.75 * saturate(log2(1.0 + abs(margin) / ulp) / 10.0);
+			preLit = (won ? float3(0.1, 1.0, 0.1) : float3(1.0, 0.1, 0.1)) * bright;
+			if (decal)
+				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
+		}
+		else [branch] if (StaticsDebugView > 7.5)
+		{
+			// Skin identity: hue from the draw ordinal, decal-state skins
+			// striped. Bare object under snow = no skin won that pixel.
+			float h = frac(abs(DebugSkinId) * 0.618034);
+			preLit = saturate(abs(frac(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+			if (DebugSkinId < 0.0)
+				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
+		}
+		else [branch] if (StaticsDebugView > 6.5)
 		{
 			// Lift Gradient mode (S-A Tier 0): how far this pixel's LIFT
 			// disagrees with its neighbours, as a fraction of the class depth.

@@ -1692,10 +1692,10 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
 			{
-				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient" };
+				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Shell layers", "Lift gradient", "Skin identity", "Depth fight" };
 				ImGui::Combo(T(TKEY("statics_debug_view"), "Debug View"), &staticsDebugView, staticsDebugModes, IM_ARRAYSIZE(staticsDebugModes));
 				if (auto _ttDbgView = Util::HoverTooltipWrapper())
-					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports."));
+					ImGui::Text("%s", T(TKEY("statics_debug_view_tooltip"), "Paints the object snow with the decision data behind it instead of its material.\n\nEVERY mode shows the whole snow shell, including the parts normally hidden - an object reading as one solid colour is the view working, not a problem with the snow.\n\nLift gradient: how far each pixel's snow height disagrees with its neighbours. Green means they agree; amber is a genuine slope; RED is a tear - the sliver-triangle fences, the rifts under cover, the lifted edges. Brightness says whether the snow is actually drawn there: bright red is a tear you can see in-game, dark red is one in geometry that is currently hidden. The flat road/trench surface is dim gray because it cannot tear at all. Nothing consumes this view; it only reports.\n\nSkin identity: every snow skin in its own colour, striped where the skin is drawn in the game's decal depth mode (the overlay meshes on rocks and trims). The object's own material showing through where snow should be means NO skin won that pixel's depth test - the skin is either drawn and losing, or not drawn at all (see the culling census).\n\nDepth fight: the same test, scored. Green = a skin won the pixel, red = this skin lost it; brightness = by how many depth ULPs (dim = a hair, bright = a lot), striped as above. Needs the depth prepass on. Green here must coincide with colour in Skin identity; a pixel coloured there but bare here means the view's bias formula is off - report it."));
 #if !SNOW_ALPHA_BUILD
 				ImGui::Checkbox(T(TKEY("debug_proj_albedo"), "Recolor Sampled Albedo"), &debugProjAlbedoView);
 				if (auto _ttProjAlbedo = Util::HoverTooltipWrapper())
@@ -1779,6 +1779,10 @@ void SnowDeformation::DrawSettings()
 					skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
 					skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
 					skinCullHiZTopLast);
+				if (ImGui::Button(T(TKEY("skin_cull_log"), "Log Skin Cull Verdicts")))
+					skinCullLogArmed = true;
+				if (auto _ttCullLog = Util::HoverTooltipWrapper())
+					ImGui::Text("%s", T(TKEY("skin_cull_log_tooltip"), "Writes one frame's culling verdicts to CommunityShaders.log: every skin the cull skipped, and every skin drawn in the game's decal depth mode, with its mesh name, reason and index count. Use it when the Skin identity view shows an object with no skin at all."));
 			}
 
 

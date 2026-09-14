@@ -3333,6 +3333,14 @@ void SnowDeformation::DrawCapturedStatics()
 			context->CopySubresourceRegion(skinCullHiZTopStaging[skinCullRing].get(), 0, 0, 0, 0, skinCullHiZ->resource.get(), skinCullLevels - 1, nullptr);
 		skinCullStagingIssued[skinCullRing] = true;
 		skinCullStagingCount[skinCullRing] = uint32_t(skinDraws.size());
+		if (skinCullLogArmed) {
+			auto& names = skinCullLogNames[skinCullRing];
+			names.assign(skinDraws.size(), {});
+			for (const auto& d : skinDraws)
+				if (d.slot < names.size())
+					names[d.slot] = std::format("{}{}", d.decalDepth ? "[decal] " : "", d.geometry ? d.geometry->name.c_str() : "?");
+			skinCullLogArmed = false;
+		}
 		const int readRing = (skinCullRing + 1) % kSkinCullRing;
 		if (skinCullStagingIssued[readRing]) {
 			D3D11_MAPPED_SUBRESOURCE rd{};
@@ -3348,6 +3356,14 @@ void SnowDeformation::DrawCapturedStatics()
 					} else
 						culled++;
 					reasons[std::min(args[i * 5 + 4], 7u)]++;
+				}
+				auto& names = skinCullLogNames[readRing];
+				if (!names.empty()) {
+					static constexpr const char* kReason[8] = { "visible", "unprojectable", "no occluder", "outside view", "past far", "occluded", "eye plane", "huge" };
+					for (uint32_t i = 0; i < skinCullStagingCount[readRing] && i < names.size(); i++)
+						if (args[i * 5 + 1] == 0 || names[i].starts_with("[decal]"))
+							logger::info("[SNOW DEFORMATION] skin cull slot {} inst {} idx {} reason {} ({}): '{}'", i, args[i * 5 + 1], args[i * 5], args[i * 5 + 4], kReason[std::min(args[i * 5 + 4], 7u)], names[i]);
+					names.clear();
 				}
 				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
 				skinCullStagingIssued[readRing] = false;
@@ -3380,6 +3396,7 @@ void SnowDeformation::DrawCapturedStatics()
 		skinSmoothSRVs[si].copy_from(EnsureSmoothedNormals(d.geometry));
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
+		skinRecords[si].DebugSkinId = (d.decalDepth ? -1.0f : 1.0f) * float(si + 1);
 	}
 	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
 	uint32_t skinParity = 0;
@@ -3488,9 +3505,22 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		drawSkins(true);
 
-		context->OMSetRenderTargets(8, rtvPtrs, shellTestDepthDSV.get());
-		boundDepthState = nullptr;
-		drawSkins(false);
+		if (staticsDebugView == 9) {
+			// Depth fight view: no depth test; every skin paints its verdict
+			// against the main depth it was tested on (t43) and the prepass
+			// result (t44).
+			context->OMSetRenderTargets(8, rtvPtrs, nullptr);
+			ID3D11ShaderResourceView* fightSRVs[2] = { mainDepthSRV, shellTestDepthSRV.get() };
+			context->PSSetShaderResources(43, 2, fightSRVs);
+			boundDepthState = nullptr;
+			drawSkins(false);
+			ID3D11ShaderResourceView* nullFightSRVs[2] = {};
+			context->PSSetShaderResources(43, 2, nullFightSRVs);
+		} else {
+			context->OMSetRenderTargets(8, rtvPtrs, shellTestDepthDSV.get());
+			boundDepthState = nullptr;
+			drawSkins(false);
+		}
 
 		fill(dsv.get(), shellTestDepthSRV.get());
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());

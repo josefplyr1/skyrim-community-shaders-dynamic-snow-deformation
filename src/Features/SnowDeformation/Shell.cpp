@@ -965,6 +965,7 @@ void SnowDeformation::DrawShell()
 	cbData.ShellDebugData = shellDataDebug ? 1u : (shellExclusionDebug ? 2u : (shellBorderDebug ? 3u : (shellSSSDebug ? 4u : (shellWallDebug ? 5u : 0u))));
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
+	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 
 	// Loaded-cell boundary square around the PLAYER's cell (cell attachment
 	// follows the player, not the camera): full terrain inside, LOD outside.

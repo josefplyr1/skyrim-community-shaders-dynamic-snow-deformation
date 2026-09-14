@@ -1129,6 +1129,8 @@ public:
 		float4 FineWindow;
 		/** @brief x = Settings::SlopeDrape, y = normal.z at full tilt (cos 60), z = normal.z where the tilt starts (cos 30), w = Settings::WaterEdgeDepth (took the spare). */
 		float4 SlopeDrape;
+		/** @brief Debug view 9 (depth fight): x = Settings::SkinDepthBias, y = Settings::SkinSlopeDepthBias. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float4 DebugSkinDepth;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 
@@ -1783,7 +1785,8 @@ public:
 		float VertexCountF;
 		/** @brief >0.5: the object top raster is bound at PS t11 for this draw (skin rim-wall gate). */
 		float HasObjectTop;
-		float padSkinHeightFade;
+		/** @brief Debug views 8/9: skin draw ordinal + 1, negated for a skin drawn in the game's decal depth mode. */
+		float DebugSkinId;
 		/** @brief >0.5: this draw keeps the tuned pre-rework skin behaviour (road and bridge meshes); set from the capture's road flag. */
 		float LegacySkin;
 		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
@@ -2604,6 +2607,9 @@ public:
 	winrt::com_ptr<ID3D11Buffer> skinCullArgsStaging[kSkinCullRing];
 	bool skinCullStagingIssued[kSkinCullRing] = {};
 	uint32_t skinCullStagingCount[kSkinCullRing] = {};
+	/** @brief One-shot: name every skin submitted this frame, and log the culled and decal-state ones with their verdict when the census reads back. */
+	bool skinCullLogArmed = false;
+	std::vector<std::string> skinCullLogNames[kSkinCullRing];
 	int skinCullRing = 0;
 	Texture2D* skinCullHiZ = nullptr;
 	/** @brief One single-mip scratch per level: the build reads level k-1 of the chain and writes scratch k, then copies it into the chain. A texture cannot be an input and an output of the same dispatch, mips included. */

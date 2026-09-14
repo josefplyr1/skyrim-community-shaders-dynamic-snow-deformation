@@ -207,6 +207,7 @@ cbuffer ShellCB : register(b0)
 	// z = fine dim in texels (0 = none), w = fine texel size (32).
 	float4 FineWindow;
 	float4 SlopeDrape;
+	float4 DebugSkinDepth;  // object skins only (SnowStaticsShell.hlsl)
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
