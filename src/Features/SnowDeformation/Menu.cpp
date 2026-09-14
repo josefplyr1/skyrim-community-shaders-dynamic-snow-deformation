@@ -1767,6 +1767,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("skin_cull_disabled_tooltip"), "Measurement aid: draws every snow-covered object the game rendered, as before. With culling on, a small compute pass folds the scene depth into a coarse far-depth map and checks each object's bounding sphere against it; an object that is entirely hidden behind the scene, or entirely outside the view, is skipped - it could not have drawn a single pixel, so the image is unchanged. Skipped objects also skip the depth prepass. The census below counts what was skipped."));
 
 
+			ImGui::Checkbox(T(TKEY("debug_log_all_journeys"), "Log All Capture Verdicts"), &debugLogAllJourneys);
+			if (auto _ttJourneys = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("debug_log_all_journeys_tooltip"), "Writes every object's capture verdict to CommunityShaders.log as 'ice journey' lines - mesh name, flags, texture path and which gate accepted or rejected it - once per object and outcome, for every object rather than only the ice and drift families. Tick, look at the object in question, untick; then search the log for its mesh name. An object with no line at all never reached the capture."));
+
 			if (!skinCullDisabled) {
 				const uint32_t total = skinCullDrawnLast + skinCullCulledLast;
 				ImGui::Text("Skins: %u drawn, %u culled of %u (%.0f%% skipped)",

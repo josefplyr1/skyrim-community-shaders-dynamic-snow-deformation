@@ -435,12 +435,13 @@ namespace
 	// like the other caches.
 	void LogIceJourney(RE::BSRenderPass* a_pass, bool a_ice, const char* a_outcome)
 	{
-		if (!a_ice)
+		const bool logAll = globals::features::snowDeformation.debugLogAllJourneys;
+		if (!a_ice && !logAll)
 			return;
 		auto* geometry = a_pass->geometry;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		static std::unordered_set<uint64_t> logged;
-		if (logged.size() > 512)
+		if (logged.size() > (logAll ? 8192u : 512u))
 			return;
 		if (!logged.insert((uint64_t)(uintptr_t)geometry ^ ((uint64_t)(uintptr_t)a_outcome << 1)).second)
 			return;
@@ -3396,7 +3397,11 @@ void SnowDeformation::DrawCapturedStatics()
 		skinSmoothSRVs[si].copy_from(EnsureSmoothedNormals(d.geometry));
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinNormalsSRV != nullptr, skinRecords[si]);
-		skinRecords[si].DebugSkinId = (d.decalDepth ? -1.0f : 1.0f) * float(si + 1);
+		// Stable per object: the submission order moves with the camera.
+		const auto& tr = d.cap->world.translate;
+		uint32_t idHash = uint32_t(std::hash<std::string_view>{}(d.geometry ? std::string_view(d.geometry->name.c_str()) : std::string_view{}));
+		idHash ^= std::bit_cast<uint32_t>(tr.x) * 0x9E3779B1u ^ std::bit_cast<uint32_t>(tr.y) * 0x85EBCA77u ^ std::bit_cast<uint32_t>(tr.z);
+		skinRecords[si].DebugSkinId = (d.decalDepth ? -1.0f : 1.0f) * float(1 + idHash % 4093u);
 	}
 	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
 	uint32_t skinParity = 0;
@@ -3446,7 +3451,8 @@ void SnowDeformation::DrawCapturedStatics()
 			// pass. The debug spike forces the no-depth path on every draw, roads
 			// included. The prepass twins mirror the same split so the private
 			// depth holds exactly what the shipping shaders would have written.
-			const bool needsDepth = !staticsEarlyZSpike && cap.road;
+			// Depth fight view: every skin through the prepass, roads too.
+			const bool needsDepth = !staticsEarlyZSpike && staticsDebugView != 9 && cap.road;
 			if (a_prepass && needsDepth)
 				continue;
 			ID3D11PixelShader* wantPS = a_prepass ? staticsPSPrepassNoDepth :

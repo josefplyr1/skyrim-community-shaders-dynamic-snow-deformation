@@ -4223,13 +4223,17 @@ PS_OUTPUT main(VS_OUTPUT input)
 			float wonZ = DebugPrepassDepth.Load(int3(input.Position.xy, 0));
 			float margin = mainZ - own;
 			bool won = wonZ < mainZ;
-			bool mine = abs(own - wonZ) < 4.0 * ulp;
-			if (won && !mine)
+			// Two readings of "this skin wrote the prepass": z + bias, or z
+			// alone (the PS already sees the biased z). Green / cyan says
+			// which one the hardware agrees with.
+			bool mineBiased = abs(own - wonZ) < 4.0 * ulp;
+			bool mineRaw = abs(z - wonZ) < 4.0 * ulp;
+			if (won && !mineBiased && !mineRaw)
 				discard;
 			if (!won && margin < -4e-4)
 				discard;
 			float bright = 0.25 + 0.75 * saturate(log2(1.0 + abs(margin) / ulp) / 10.0);
-			preLit = (won ? float3(0.1, 1.0, 0.1) : float3(1.0, 0.1, 0.1)) * bright;
+			preLit = (won ? (mineBiased ? float3(0.1, 1.0, 0.1) : float3(0.1, 0.8, 1.0)) : float3(1.0, 0.1, 0.1)) * bright;
 			if (decal)
 				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
 		}

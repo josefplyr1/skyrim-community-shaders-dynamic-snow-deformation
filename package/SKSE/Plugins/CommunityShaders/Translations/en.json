@@ -1439,6 +1439,8 @@
     "feature.snow_deformation.debug_force_update": "Force Update",
     "feature.snow_deformation.debug_hint": "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m.",
     "feature.snow_deformation.debug_inject_hint": "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window.",
+    "feature.snow_deformation.debug_log_all_journeys": "Log All Capture Verdicts",
+    "feature.snow_deformation.debug_log_all_journeys_tooltip": "Writes every object's capture verdict to CommunityShaders.log as 'ice journey' lines - mesh name, flags, texture path and which gate accepted or rejected it - once per object and outcome, for every object rather than only the ice and drift families. Tick, look at the object in question, untick; then search the log for its mesh name. An object with no line at all never reached the capture.",
     "feature.snow_deformation.debug_log_water_planes": "Log Water Planes",
     "feature.snow_deformation.debug_log_water_planes_tooltip": "While on, every water body the engine lists is written to CommunityShaders.log the first time it is seen, with its name, plane, position, scale and bounds. Look around the spot in question, then turn it off.",
     "feature.snow_deformation.debug_options": "Debugging Options",

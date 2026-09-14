@@ -2609,6 +2609,8 @@ public:
 	uint32_t skinCullStagingCount[kSkinCullRing] = {};
 	/** @brief One-shot: name every skin submitted this frame, and log the culled and decal-state ones with their verdict when the census reads back. */
 	bool skinCullLogArmed = false;
+	/** @brief Debug: LogIceJourney logs every geometry's capture verdict (once per geometry and outcome), not only the ice/drift families. */
+	bool debugLogAllJourneys = false;
 	std::vector<std::string> skinCullLogNames[kSkinCullRing];
 	int skinCullRing = 0;
 	Texture2D* skinCullHiZ = nullptr;
