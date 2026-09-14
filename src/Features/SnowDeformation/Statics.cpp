@@ -829,6 +829,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: twig-card shape class");
 		return;
 	}
+	// A runtime projection (Seasons of Skyrim) lands on every geometry of a
+	// model, alpha-tested grass, root and leaf cards included; the skin's
+	// coat over a card is a translucent plane where the card is transparent.
+	// Authored snow is never projected onto cards, so only these draws face
+	// the gate.
+	if (rec.seasonsProj) {
+		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+			alpha && (alpha->GetAlphaTesting() || alpha->GetAlphaBlending())) {
+			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha card under a runtime projection");
+			return;
+		}
+	}
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
 	// everywhere in Skyrim; the skin only matters within the chosen range.
