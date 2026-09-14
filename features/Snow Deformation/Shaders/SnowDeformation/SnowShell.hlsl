@@ -236,6 +236,8 @@ Texture2D<float> WaterWindow : register(t27);
 // Water this shallow over the ground is not water: a placed pond plane's
 // rectangle skims the land around its shore.
 static const float kWaterSkimDepth = 5.0;
+// Vertical band over which the snow surface sinks out as it meets the level.
+static const float kWaterToe = 8.0;
 
 // A texel whose ground lies under drawn water reads as a non-snow class
 // (-8), so the shoreline is a class border: same noise, smoothing, dither
@@ -913,6 +915,38 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
+// Water level over the texels a point touches: the max, so a shore texel
+// answers with its body's level and the sentinel never blends in.
+float SampleWaterHeight(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	int r0 = (int)TerrainDim - 1 - t0.y;
+	int r1 = (int)TerrainDim - 1 - t1.y;
+	return max(max(WaterWindow.Load(int3(t0.x, r0, 0)), WaterWindow.Load(int3(t1.x, r0, 0))),
+	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
+}
+
+// The snow ends where its own surface meets the water level. The class ramp
+// (wet texels at -8) shapes the edge; this only stops the toe running on
+// under the level between a dry vertex and a wet one. Applied once, to a
+// FINISHED sample: the lerp is not idempotent.
+float3 EndSnowAtWater(float3 terrain, float2 gridLocal)
+{
+	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > 0.0)
+	{
+		float water = SampleWaterHeight(gridLocal);
+		[flatten] if (water > -50000.0)
+		{
+			float cut = smoothstep(0.0, kWaterToe, terrain.x + terrain.y - water);
+			terrain.y = lerp(-8.0, terrain.y, cut);
+		}
+	}
+	return terrain;
+}
+
 float3 SampleTerrainShaped(float2 gridLocal)
 {
 	float3 result = SampleTerrain(gridLocal);
@@ -1065,6 +1099,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// approaches. A weight constant within a band cannot.
 			padWeight = saturate((max(ringStepM.x, ringStepM.y) - TerrainTexelSize) / TerrainTexelSize);
 		}
+
+		// After the morph, so the coarse bands end at the water too.
+		terrain = EndSnowAtWater(terrain, gridLocal);
 
 		terrainHeight = terrain.x;
 		float rampDepth = terrain.y;
@@ -2047,7 +2084,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 gridLocal = input.GridLocal;
 	// Shaped (border-noised/smoothed) so the per-pixel coverage and ramp
 	// dither agree with the shaped geometry.
-	float3 pixelTerrain = SampleTerrainShaped(gridLocal);
+	float3 pixelTerrain = EndSnowAtWater(SampleTerrainShaped(gridLocal), gridLocal);
 	float pixelCoverage = saturate(pixelTerrain.z);
 	float psEdgeFade = ShellEdgeFade(gridLocal);
 
