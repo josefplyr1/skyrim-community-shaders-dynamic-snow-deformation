@@ -2721,7 +2721,13 @@ public:
 	/** @brief Input layouts for SKINNED vertex descriptors (POSITION + BLENDWEIGHT + BLENDINDICES); separate cache because the formats differ from the rigid layout. */
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> contactSkinILCache;
 	winrt::com_ptr<ID3DBlob> contactSkinVSBlob;
-	ID3D11InputLayout* ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+	/** @brief a_dynamicPositionBytes 0 = positions in the game's vertex buffer; 16 or 8 = a second stream of float4/half4 positions copied from a BSDynamicTriShape's dynamicData (RaceMenu BodyMorph, OBody, facegen). */
+	ID3D11InputLayout* ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc, uint32_t a_dynamicPositionBytes);
+	/** @brief Positions of the dynamic tri shape being drawn, re-uploaded per geometry (WRITE_DISCARD). */
+	winrt::com_ptr<ID3D11Buffer> contactDynamicVB;
+	uint32_t contactDynamicVBBytes = 0;
+	/** @brief Dynamic tri shapes whose measured layout has been logged once (capped). */
+	std::unordered_set<const void*> contactDynamicLogged;
 	/** @brief This frame's actors drawn by their skinned meshes; their bone stamps are skipped so the A/B compares like for like. */
 	std::vector<ContactProp> contactActors;
 	/** @brief This frame's living and corpse entries in contactActors, against their separate caps. */

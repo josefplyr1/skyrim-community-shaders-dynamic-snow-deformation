@@ -3886,16 +3886,19 @@ static uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::Verte
 	return positionBytes;
 }
 
-ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc, uint32_t a_dynamicPositionBytes)
 {
-	auto& layout = contactSkinILCache[a_descKey];
+	// Flag bits sit at 44..53; the dynamic variants key above them.
+	const uint64_t cacheKey = a_descKey | (a_dynamicPositionBytes ? (uint64_t(a_dynamicPositionBytes) << 56) : 0);
+	auto& layout = contactSkinILCache[cacheKey];
 	if (!layout && contactSkinVSBlob) {
 		// SSE skinning block: four float16 weights then four UNORM byte
 		// indices, 12 bytes, at the descriptor's own skinning offset.
 		const uint32_t skinOffset = a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
-		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
+		const uint32_t positionBytes = a_dynamicPositionBytes ? a_dynamicPositionBytes : SD_PositionBytes(a_descKey, a_desc);
+		const UINT positionSlot = a_dynamicPositionBytes ? 1 : 0;
 		D3D11_INPUT_ELEMENT_DESC elements[3] = {
-			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, positionSlot, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, skinOffset, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, skinOffset + 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		};
@@ -4412,7 +4415,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			const bool firstPersonPlayer = firstPerson && ref->IsPlayerRef();
 			struct
 			{
-				uint hidden = 0, unlit = 0, proxy = 0, above = 0, skinned = 0;
+				uint hidden = 0, unlit = 0, proxy = 0, above = 0, skinned = 0, dynamic = 0, dynamicUnread = 0;
 			} tally;
 			int geometryIndex = -1;
 			bool skinnedVSBound = true;
@@ -4517,6 +4520,75 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// rebuild can carry a count with no array.
 				if (!skinData || !skinPartition || !skin->bones || !skinPartition->partitions.data())
 					return RE::BSVisit::BSVisitControl::kContinue;
+				// A BSDynamicTriShape (RaceMenu BodyMorph / OBody bodies, facegen
+				// heads) keeps its positions CPU-side in dynamicData and the game
+				// streams them per draw; its static buffer has none at offset 0.
+				// Drawn from the static buffer alone the body lands nowhere, the
+				// draw still counts, and the actor carves nothing. Positions go
+				// up as a second stream; a size that does not read as one
+				// position per vertex is logged and the geometry left undrawn, so
+				// the bone fallback below takes it.
+				uint32_t dynamicPositionBytes = 0;
+				if (auto* dynamicShape = a_geometry->AsDynamicTriShape()) {
+					tally.dynamic++;
+					auto& dd = dynamicShape->GetDynamicTrishapeRuntimeData();
+					const uint32_t vertexCount = dynamicShape->GetTrishapeRuntimeData().vertexCount;
+					const uint32_t perVertex = vertexCount ? dd.dataSize / vertexCount : 0;
+					const bool readable = dd.dynamicData && vertexCount > 0 && dd.dataSize == vertexCount * perVertex && (perVertex == 16 || perVertex == 8);
+					if (contactDynamicLogged.size() < 16 && contactDynamicLogged.insert(a_geometry).second) {
+						std::string firstPart = "no partition buffer";
+						if (skinPartition->numPartitions > 0)
+							if (auto* buff = skinPartition->partitions[0].buffData) {
+								uint64_t key;
+								memcpy(&key, &buff->vertexDesc, sizeof(key));
+								uint32_t vbBytes = 0;
+								if (auto* vb = reinterpret_cast<ID3D11Buffer*>(buff->vertexBuffer)) {
+									D3D11_BUFFER_DESC bd{};
+									vb->GetDesc(&bd);
+									vbBytes = bd.ByteWidth;
+								}
+								firstPart = std::format("desc {:016X} size nibble {} dynamic nibble {} skin offset {} flags{}{} | static VB {} bytes = {:.1f}/vertex, raw copy {}",
+									key, uint32_t(key & 0xF) * 4, uint32_t((key >> 4) & 0xF) * 4,
+									buff->vertexDesc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING),
+									buff->vertexDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) ? " VERTEX" : "",
+									buff->vertexDesc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC) ? " FULLPREC" : "",
+									vbBytes, vertexCount ? float(vbBytes) / vertexCount : 0.0f, buff->rawVertexData ? "yes" : "no");
+							}
+						logger::info("[SNOW DEFORMATION] dynamic tri shape '{}' on '{}': {} vertices, dynamicData {} bytes = {}/vertex -> {} | {}",
+							a_geometry->name.c_str() ? a_geometry->name.c_str() : "", ref->GetDisplayFullName(),
+							vertexCount, dd.dataSize, perVertex, readable ? "drawn from dynamic positions" : "NOT drawn (size does not read as positions)", firstPart);
+					}
+					if (!readable) {
+						tally.dynamicUnread++;
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+					if (contactDynamicVBBytes < dd.dataSize) {
+						contactDynamicVB = nullptr;
+						D3D11_BUFFER_DESC vbDesc{};
+						vbDesc.ByteWidth = std::max(dd.dataSize, 64u * 1024u);
+						vbDesc.Usage = D3D11_USAGE_DYNAMIC;
+						vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+						vbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+						if (FAILED(globals::d3d::device->CreateBuffer(&vbDesc, nullptr, contactDynamicVB.put()))) {
+							contactDynamicVBBytes = 0;
+							tally.dynamicUnread++;
+							return RE::BSVisit::BSVisitControl::kContinue;
+						}
+						Util::SetResourceName(contactDynamicVB.get(), "SnowDeformation::ContactDynamicPositions");
+						contactDynamicVBBytes = vbDesc.ByteWidth;
+					}
+					D3D11_MAPPED_SUBRESOURCE mapped{};
+					if (FAILED(context->Map(contactDynamicVB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+						tally.dynamicUnread++;
+						return RE::BSVisit::BSVisitControl::kContinue;
+					}
+					{
+						RE::BSSpinLockGuard guard(dd.lock);
+						std::memcpy(mapped.pData, dd.dynamicData, dd.dataSize);
+					}
+					context->Unmap(contactDynamicVB.get(), 0);
+					dynamicPositionBytes = perVertex;
+				}
 				const uint32_t boneCount = skinData->GetBoneCount();
 				// Dismember partitions carry the game's own visibility: a creature
 				// keeps alternate or severable parts in partitions it hides by
@@ -4707,12 +4779,12 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						}
 					}
 					auto partDesc = buff->vertexDesc;
-					if (!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) ||
+					if ((!dynamicPositionBytes && !partDesc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX)) ||
 						!partDesc.HasFlag(RE::BSGraphics::Vertex::VF_SKINNED))
 						continue;
 					uint64_t descKey;
 					memcpy(&descKey, &partDesc, sizeof(descKey));
-					auto* layout = ContactSkinInputLayoutFor(descKey, partDesc);
+					auto* layout = ContactSkinInputLayoutFor(descKey, partDesc, dynamicPositionBytes);
 					if (!layout)
 						continue;
 					const UINT stride = uint32_t(descKey & 0xF) * 4;
@@ -4759,6 +4831,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					auto* ib = reinterpret_cast<ID3D11Buffer*>(buff->indexBuffer);
 					context->IASetInputLayout(layout);
 					context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+					if (dynamicPositionBytes) {
+						auto* dynamicVB = contactDynamicVB.get();
+						context->IASetVertexBuffers(1, 1, &dynamicVB, &dynamicPositionBytes, &offset);
+					}
 					context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 					context->DrawIndexed(indexCount, thisStart, 0);
 					contactSkinDrawsLast++;
@@ -4779,9 +4855,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 					if (!cache.contactStarveLogged && contactStarveLines < 32) {
 						cache.contactStarveLogged = true;
 						contactStarveLines++;
-						logger::info("[SNOW DEFORMATION] contact draw printed nothing for '{}' ({:08X}){}; stamping by bones. skinned drawn-eligible {}, hidden {}, unshaded/effect {}, proxy {}, above the layer {}",
+						logger::info("[SNOW DEFORMATION] contact draw printed nothing for '{}' ({:08X}){}; stamping by bones. skinned drawn-eligible {}, hidden {}, unshaded/effect {}, proxy {}, above the layer {}, dynamic {} (unreadable {})",
 							ref->GetDisplayFullName(), ref->GetFormID(), firstPersonPlayer ? " in first person" : "",
-							tally.skinned, tally.hidden, tally.unlit, tally.proxy, tally.above);
+							tally.skinned, tally.hidden, tally.unlit, tally.proxy, tally.above, tally.dynamic, tally.dynamicUnread);
 					}
 				}
 			}
