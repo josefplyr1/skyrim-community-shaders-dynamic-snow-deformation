@@ -892,11 +892,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// decals. LOD atlases keep their coat; it reads the recolor's own weight.
 	// Architecture surfaces (a thatch roof's fringe, plank ends) test alpha
 	// too and are not cards; foliage textures under architecture still are.
-	if (!lodBatch && !decalDepth && !rec.pathArchitecture) {
-		if (auto* alpha = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get(); alpha && alpha->GetAlphaTesting()) {
-			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha-tested card");
-			return;
-		}
+	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
+	const bool alphaTested = alphaProperty && alphaProperty->GetAlphaTesting();
+	if (!lodBatch && !decalDepth && !rec.pathArchitecture && alphaTested) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: alpha-tested card");
+		return;
 	}
 
 	// Range cap (Object Snow slider): distant mountains are snow-projected
@@ -1032,7 +1032,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth });
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -2530,6 +2530,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
+	a_scb.AlphaTested = a_cap.alphaTested ? 1.0f : 0.0f;
 }
 
 bool SnowDeformation::EnsureSmoothNormalsCS()
@@ -2924,6 +2925,7 @@ void SnowDeformation::DrawCapturedStatics()
 			mix(&cap.plankFamily, sizeof(cap.plankFamily));
 			mix(&cap.projReal, sizeof(cap.projReal));
 			mix(&cap.fullCoat, sizeof(cap.fullCoat));
+			mix(&cap.alphaTested, sizeof(cap.alphaTested));
 			h += e;
 		}
 		cpuCensus.captureHash = h;

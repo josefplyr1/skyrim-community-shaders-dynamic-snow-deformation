@@ -1623,6 +1623,8 @@ public:
 		bool lodBatch;
 		/** @brief The game rasterised this draw in its decal depth-bias mode (RendererShadowState::rasterStateDepthBiasMode != 0, or the Decal/DynamicDecal property flags): depth written through DepthBias -1, SlopeScaledDepthBias -0.65, viewport max depth 0.999972. Its skin draws through the same state plus the skin bias, or it loses the depth test at every grazing view (Windhelm's snow-overlay shapes, RenderDoc 2026-09-10). */
 		bool decalDepth;
+		/** @brief The mesh alpha-tests: StaticsCB::AlphaTested. */
+		bool alphaTested;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
@@ -1792,7 +1794,8 @@ public:
 		/** @brief Angle of repose (1.0 = 45 degrees) from SnowMoundSteepness; sets how far inside the silhouette the lift tapers out. */
 		float MoundSteepness;
 		/** @brief was ObjectTrenches (Trenches on Objects, retired 2026-09-10; roads carve through LegacySkin); slot kept for layout. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float padObjectTrenches;
+		/** @brief >0.5: the mesh alpha-tests (a thatch fringe, a plank end); the skin keeps only pixels coincident with the scene surface, so it never spans the texels the game discarded. Took the retired ObjectTrenches row. */
+		float AlphaTested;
 		/** @brief Drift meshes (geometry name): the whole mesh is the snow, so the skin coats every facing and never collapses, dissolves or drops out of range. */
 		float FullCoat;
 		/** @brief >0.5: skip the SkinFadeStart/End distance dissolve (glacier/iceberg captures). Mirror in SnowStaticsShell.hlsl. */

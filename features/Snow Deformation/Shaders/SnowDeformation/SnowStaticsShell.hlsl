@@ -217,7 +217,8 @@ cbuffer StaticCB : register(b1)
 
 	// was ObjectTrenches (Trenches on Objects, retired); roads carve through
 	// LegacySkin. Slot kept for layout.
-	float padObjectTrenches;
+	// >0.5: the mesh alpha-tests; only pixels on the scene surface survive.
+	float AlphaTested;
 
 	// Drift meshes: coat every facing, no collapse, dissolve or range retire.
 	float FullCoat;
@@ -3439,6 +3440,18 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float lodBand = (1.0 + 0.0005 * lodZ) * SharedData::CameraData.w / (SharedData::CameraData.z * lodZ * lodZ);
 		float lodSceneD = SceneDepth.Load(int3(input.Position.xy, 0));
 		if (abs(lodSceneD - input.Position.z) > max(lodBand, 6e-6))
+			discard;
+	}
+	// Alpha-tested meshes (thatch fringes): the game discarded the
+	// transparent texels, so the scene surface there is whatever lies
+	// behind; a skin pixel standing off it by more than its own lift is a
+	// sheet in the air.
+	else [branch] if (AlphaTested > 0.5)
+	{
+		float atSceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+		float3 atView = normalize(input.WorldPos);
+		float atGrazing = max(abs(dot(atView, normalize(input.NormalWS))), 0.25);
+		if (atSceneZ - input.CurrentClip.w > (max(input.Lift, 0.0) + 6.0) / atGrazing)
 			discard;
 	}
 
