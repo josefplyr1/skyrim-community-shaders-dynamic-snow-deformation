@@ -296,7 +296,11 @@ public:
 		// Set with SnowProjectedIsSnow when the projection was applied at
 		// runtime (Seasons of Skyrim): no authored max angle or alpha mask, so
 		// Lighting supplies the threshold the record lacks.
-		SnowProjectedUnauthored = 1 << 18
+		SnowProjectedUnauthored = 1 << 18,
+		// With SnowProjectedUnauthored: the mesh's vertex alpha was never
+		// authored for its projection (Seasons' own snow statics read 0), so
+		// Lighting's slope mask replaces it instead of scaling it.
+		SnowProjectedNoAlpha = 1 << 19
 	};
 
 	bool inWorld = false;

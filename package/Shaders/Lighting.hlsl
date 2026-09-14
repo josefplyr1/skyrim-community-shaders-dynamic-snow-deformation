@@ -1770,6 +1770,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// subtracted from the weight left only patches) and steeper faces go
 	// bare. The game's own paint, the sparkle discard and the recolor all
 	// follow it.
+	// Seasons' own snow statics carry no authored alpha at all (it reads 0):
+	// the mask stands in for it rather than scaling it.
+	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedNoAlpha) != 0)
+		vertexAlpha = 1.0;
 	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
 		vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
 #		endif

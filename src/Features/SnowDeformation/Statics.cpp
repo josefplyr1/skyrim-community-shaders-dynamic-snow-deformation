@@ -443,7 +443,18 @@ namespace
 		auto* geometry = a_pass->geometry;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		static std::unordered_set<uint64_t> logged;
-		if (logged.size() > (logAll ? 8192u : 512u))
+		// All-mode: flora and LOD are the spam that ate the budget before the
+		// buildings were reached; a fresh tick starts a fresh budget.
+		static bool lastLogAll = false;
+		if (logAll && !lastLogAll)
+			logged.clear();
+		lastLogAll = logAll;
+		if (logAll && !a_ice) {
+			using LFlag = RE::BSShaderProperty::EShaderPropertyFlag;
+			if (a_pass->shaderProperty->flags.any(LFlag::kTreeAnim, LFlag::kLODObjects, LFlag::kHDLODObjects, LFlag::kLODLandscape))
+				return;
+		}
+		if (logged.size() > (logAll ? 65536u : 512u))
 			return;
 		if (!logged.insert((uint64_t)(uintptr_t)geometry ^ ((uint64_t)(uintptr_t)a_outcome << 1)).second)
 			return;
@@ -528,6 +539,9 @@ struct GeometryRecord
 	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
 	// or its single-pass marker (SOS_SNOW_SHADER extra data on the root).
 	bool seasonsProj = false;
+	// The reference's base is one of Seasons' own snow statics: a snow MATO
+	// on a mesh with no authored vertex alpha (the alpha reads 0, not 1).
+	bool seasonsStatic = false;
 	// Nominal snow depth at the bound centre, valid while snowDepthVersion holds.
 	float depthX = 0.0f;
 	float depthY = 0.0f;
@@ -576,6 +590,24 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			for (RE::NiAVObject* node = a_geometry; node && !r.seasonsProj; node = node->parent)
 				r.seasonsProj = node->GetExtraData(seasonsMarker) != nullptr;
 		}
+		// Seasons' own snow statics (SnowOverSkyrim.esp): a vanilla snow MATO
+		// on a mesh whose vertex alpha was never authored for it, so the
+		// projection paints nothing; same mask as the runtime projection.
+		if (!r.seasonsProj) {
+			static std::unordered_map<uint32_t, bool> sosBase;
+			RE::TESObjectREFR* refr = nullptr;
+			for (RE::NiAVObject* node = a_geometry; node && !refr; node = node->parent)
+				refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+			if (auto* base = refr ? refr->GetBaseObject() : nullptr) {
+				auto [sosIt, sosInserted] = sosBase.try_emplace(base->GetFormID(), false);
+				if (sosInserted) {
+					if (auto* file = base->GetFile(0); file && file->fileName)
+						sosIt->second = ContainsNoCase(file->fileName, "snowoverskyrim.esp");
+				}
+				r.seasonsStatic = sosIt->second;
+				r.seasonsProj = sosIt->second;
+			}
+		}
 	}
 	lastGeometry = a_geometry;
 	lastRecord = &r;
@@ -598,7 +630,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow) |
-						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored));
+						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored) | uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha));
 	if (!a_shader || !a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
 	if (!settings.EnableSnowDeformation || !shellSnowDiffuseSRV)
@@ -616,6 +648,8 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		// pass writes "known, unpainted" and only the sparkle pass raises it.
 		if (rec.seasonsProj && !treeAnim)
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
+		if (rec.seasonsStatic && !treeAnim)
+			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha);
 		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (rec.mato == MatoClass::kNotSnow) {
@@ -894,10 +928,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// far brighter than the shell (Josef, 2026-09-06). Coated whole at every
 	// loaded distance; the projection default below still applies.
 	const bool fullCoat = nameFacts.drift;
+	// Measured to the bound's nearest point, not the origin: a long wall or
+	// a building's shape can sit inside the range with its origin outside it.
 	const auto& translate = a_pass->geometry->world.translate;
-	float dx = translate.x - eye.x;
-	float dy = translate.y - eye.y;
-	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter;
+	const auto& rangeBound = a_pass->geometry->worldBound;
+	float dx = rangeBound.center.x - eye.x;
+	float dy = rangeBound.center.y - eye.y;
+	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter + std::max(rangeBound.radius, 0.0f);
 	if (!fadeExempt && !fullCoat && dx * dx + dy * dy > captureRange * captureRange) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
