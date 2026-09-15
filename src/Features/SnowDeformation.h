@@ -508,9 +508,9 @@ public:
 		/** @brief Snow left under a fully trampled trench as a FRACTION of the local uncarved depth (0.33 = a third: 10 units in 30). Replaced the absolute-units floor 2026-09-10: deep snow keeps snow around the foot instead of a canyon to the ground, and a road's 10-unit layer can never wear through to the mesh. */
 		float TrenchFloorFraction = 0.50f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
-		float SnowBorderNoise = 16.0f;
+		float SnowBorderNoise = 8.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
-		float SnowBorderSmoothness = 32.0f;
+		float SnowBorderSmoothness = 16.0f;
 		/** @brief Border Fade, as a percent. Remapped to the internal 2..64 contact-term band on upload; it mainly sets how visible the outward dust is. */
 		float SnowBorderFade = 100.0f;
 		/** @brief Angle-of-repose slope for the snow-height field (rise per world unit; 1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds. */
@@ -979,8 +979,8 @@ public:
 	ID3D11ComputeShader* terrainFineCS = nullptr;
 	ID3D11ComputeShader* GetTerrainFineCS();
 	void BuildTerrainFineWindow();
-	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default ON since 2026-09-10 (Josef): the fine layer stood the shell on bulges over Alftand's glacier ground and cast them as shadows; see snow-open-issues. */
-	bool shellLandHeightDisabled = true;
+	/** @brief A/B: height from the 128-texel window as before (bit 2 of ShellFlags.x). Runtime-only. Default OFF since 2026-09-15 (Josef): the bilinear height left the shell's edge standing off the land mesh; it was ON 2026-09-10..15 for the Alftand glacier bulges, see snow-open-issues. */
+	bool shellLandHeightDisabled = false;
 	/** @brief A/B: flips which corner rotation the tessellated patches use for a '/' land quad (bit 3). The tessellator's factor-1 diagonal is assumed to be domain (0,0)-(1,1); if the height-delta view shows a checkerboard of sag on the 32-unit band, this is the other guess. Runtime-only. */
 	bool shellTessDiagonalFlip = false;
 	/** @brief A/B: the legacy grid draws with the old camera-phased union-jack index buffer instead of the land-matched one. Runtime-only. */
