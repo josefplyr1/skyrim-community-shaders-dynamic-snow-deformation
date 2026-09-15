@@ -928,6 +928,17 @@ float SampleWaterHeight(float2 gridLocal)
 	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
 }
 
+// Touch-down toe: positive depth reaches the ground where the alpha's class
+// gate turns opaque (class depth 3, smoothstep(1, 3) in the PS), tangent
+// there, and is itself again by 9. The edge then commits ON the ground
+// instead of 1-2 units up as a lip; the dust tail below 3 lies on the
+// ground too. Applied to geometry, the PS effective depth and the shading
+// depth alike.
+float TouchDownToe(float depth)
+{
+	return depth > 0.0 ? depth * smoothstep(3.0, 9.0, depth) : depth;
+}
+
 // min(a, b) through a quadratic knee of radius k, so a cap meeting a ramp
 // leaves no crease.
 float KneeMin(float a, float b, float k)
@@ -1238,13 +1249,9 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		float depth = rampDepth + (-8.0) * bare;
 		depth = lerp(-8.0, depth, edgeFade);
 
-		// Touch-down toe: compress the last few units of positive depth so
-		// the blanket's rim meets the ground at class borders instead of
-		// hanging a hovering lip over the bare side (visible under-gap at
-		// grazing angles). Deep trench floors pass unchanged; a floor set
-		// below ~5 (a low Trench Floor fraction) compresses with the toe.
-		[flatten] if (depth > 0.0)
-			depth *= smoothstep(0.0, 5.0, depth);
+		// Deep trench floors pass unchanged; a floor set below ~9 (a low
+		// Trench Floor fraction) compresses with the toe.
+		depth = TouchDownToe(depth);
 
 		// Carves only where the layer is raised; the negative-depth submerge at
 		// class edges is untouched. The floor holds at the Trench Floor
@@ -2169,7 +2176,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// ACTUAL height above ground: without it the alpha cut lands while the
 	// geometry still has height left, and the committed edge dies in
 	// mid-air as a floating rim.
-	float pixelEffDepth = pixelRampDepth > 0.0 ? pixelRampDepth * smoothstep(0.0, 5.0, pixelRampDepth) : pixelRampDepth;
+	float pixelEffDepth = TouchDownToe(pixelRampDepth);
 	// Two factors, two jobs. The CLASS GATE enforces the assigned-depth design:
 	// blended class depth must exceed ~2 units, so negative-depth classes and
 	// their blend plateaus never carry shell, independent of the band slider.
@@ -2344,7 +2351,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// kFireMeltFloor, then the touch-down toe. Every relief gradient below
 	// scales by it, so a print in a melt basin shades as flat as it is built.
 	float pixelDepth = lerp(pixelRampDepth, min(pixelRampDepth, kFireMeltFloor), pixelMelt);
-	pixelDepth = pixelDepth > 0.0 ? pixelDepth * smoothstep(0.0, 5.0, pixelDepth) : 0.0;
+	pixelDepth = max(TouchDownToe(pixelDepth), 0.0);
 	float2 profileGrad = float2(
 		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
 		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
