@@ -968,6 +968,10 @@ public:
 	std::deque<uint64_t> shellFineOrder;
 	/** @brief Fills a_data.fine from the land's quad meshes; false (and fine empty) when any quad had no readable vertex copy or its lattice did not line up with heights[]. */
 	bool ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data);
+	/** @brief Each frame: loaded cells whose bake ran before the engine subdivided their land mesh (289 vertices at hook time, 4225 later) get their fine data once the meshes have grown; a hard refusal is remembered so the cell is not re-tried. Sets shellFineDirty. */
+	void RefreshLandMeshHeights();
+	std::atomic<bool> shellFineDirty{ false };
+	std::unordered_set<uint64_t> shellFineRefused;
 	Texture2D* shellTerrainFine = nullptr;
 	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
 	bool shellFarTessDisabled = false;

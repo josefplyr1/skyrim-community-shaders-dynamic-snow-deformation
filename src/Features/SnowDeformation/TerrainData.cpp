@@ -270,8 +270,12 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 		const uint32_t posOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
 		const bool fullPrec = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
 		const uint32_t vertexCount = geometry->AsTriShape() ? geometry->AsTriShape()->GetTrishapeRuntimeData().vertexCount : 0;
-		if (stride == 0 || vertexCount < 65 * 65)
-			return refuse(quadI, std::format("stride {} vertices {} (desc {:016X})", stride, vertexCount, descBits));
+		// 289 vertices = the base mesh before the engine subdivides it; the
+		// per-frame refresh comes back for it. Not a refusal.
+		if (vertexCount < 65 * 65)
+			return false;
+		if (stride == 0)
+			return refuse(quadI, std::format("stride 0 (desc {:016X})", descBits));
 		const uint32_t quadX = quadI & 1;
 		const uint32_t quadY = quadI >> 1;
 		// Base z from the lattice vertices: the mesh's convention is not
@@ -336,6 +340,62 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 	}
 	a_data.fine = std::move(fine);
 	return true;
+}
+
+void SnowDeformation::RefreshLandMeshHeights()
+{
+	auto* tes = RE::TES::GetSingleton();
+	auto* grid = tes ? tes->gridCells : nullptr;
+	if (!grid)
+		return;
+	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+	const uint32_t length = grid->length;
+	for (uint32_t x = 0; x < length; x++) {
+		for (uint32_t y = 0; y < length; y++) {
+			auto* cell = grid->GetCell(x, y);
+			if (!cell || !cell->IsAttached())
+				continue;
+			auto* land = cell->GetRuntimeData().cellLand;
+			auto* coords = cell->GetCoordinates();
+			if (!land || !land->loadedData || !coords)
+				continue;
+			const uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+			bool ready = true;
+			for (uint32_t quadI = 0; quadI < 4 && ready; ++quadI) {
+				auto* geometry = land->loadedData->geom[quadI].get();
+				ready = geometry && geometry->GetTrishapeRuntimeData().vertexCount >= 65 * 65;
+			}
+			if (!ready)
+				continue;
+			ShellCellData work;
+			{
+				const std::shared_lock lock(shellCellMutex);
+				auto it = shellCells.find(key);
+				if (it == shellCells.end() || it->second.worldspaceID != worldspace || !it->second.fine.empty() || shellFineRefused.contains(key))
+					continue;
+				work = it->second;
+			}
+			const bool ok = ReadLandMeshHeights(land, work);
+			const std::unique_lock lock(shellCellMutex);
+			if (!ok) {
+				if (shellFineRefused.size() > 4096)
+					shellFineRefused.clear();
+				shellFineRefused.insert(key);
+				continue;
+			}
+			auto it = shellCells.find(key);
+			if (it == shellCells.end() || it->second.worldspaceID != worldspace)
+				continue;
+			it->second.fine = std::move(work.fine);
+			shellFineOrder.push_back(key);
+			while (shellFineOrder.size() > kShellFineCacheCells) {
+				if (auto old = shellCells.find(shellFineOrder.front()); old != shellCells.end())
+					old->second.fine.clear();
+				shellFineOrder.pop_front();
+			}
+			shellFineDirty.store(true, std::memory_order_release);
+		}
+	}
 }
 
 void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
@@ -476,6 +536,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		if (shellCells.size() > 4096) {
 			shellCells.clear();
 			shellFineOrder.clear();
+			shellFineRefused.clear();
 			snowDepthVersion.fetch_add(1, std::memory_order_release);
 		}
 		// Land material setup re-runs frequently; only mark the window dirty
@@ -620,8 +681,14 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	// would stay resident.
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	bool worldspaceChanged = worldspace != shellWindowWorldspace;
-	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel))
+	RefreshLandMeshHeights();
+	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel)) {
+		// Mesh data that arrived after the last build: the fine layer alone.
+		if (shellFineDirty.exchange(false, std::memory_order_acq_rel) && shellTerrainTexture)
+			BuildTerrainFineWindow();
 		return;
+	}
+	shellFineDirty.store(false, std::memory_order_release);
 
 	lodWindowRebuilds++;  // C3 event counter: whole-window height re-upload.
 	shellWindowCellX = desiredOriginX;
