@@ -866,7 +866,7 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 #		include "Common/LightingLandscape.hlsli"
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && (defined(LANDSCAPE) || defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(TRUE_PBR))
+#	if defined(SNOW_DEFORMATION)
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #	endif
 
@@ -1900,6 +1900,36 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #	endif  // SNOW
+
+#	if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
+	// Snow-textured shapes without projection (a dirt cliff's snow01 top, a
+	// season swap's alternate set, drifts), flagged by the statics hook: the
+	// shell's snow set at the texel's own brightness, in the object's own
+	// shader. The weight is written back like projected snow for the coat.
+	float snowTexWeight = 0.0;
+	[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 &&
+	             (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
+	{
+		snowTexWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, worldNormal.z);
+		[branch] if (snowTexWeight > 0.003)
+		{
+			float3 snowTexWorld = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
+			float3 snowTexWeights = Triplanar::GetWeights(worldNormal, worldNormal);
+			float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+			float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowTexSample) : snowTexSample;
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
+				snowTexAlbedo = float3(1.0, 0.0, 1.0);
+			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
+				snowTexAlbedo = snowTexWeight.xxx;
+#		if defined(TRUE_PBR)
+			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowTexAlbedo), snowTexWeight);
+			rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), snowTexWeight);
+#		else
+			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowTexAlbedo) * Color::VanillaDiffuseColorMult(), snowTexWeight);
+#		endif
+		}
+	}
+#	endif
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
@@ -3248,6 +3278,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
 	[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase)) != 0)
 		psout.Masks.y = 2.0;
+#			endif
+#			if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
+	// The snow-textured recolor's weight, same encoding, for the same coat.
+	[flatten] if (snowTexWeight > 0.003)
+		psout.Masks.y = 2.0 + saturate(snowTexWeight);
 #			endif
 #			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// The LOD brightness recolor's weight, same encoding, for the same coat.

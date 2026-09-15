@@ -110,6 +110,14 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints at all takes the full snow, all or nothing. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
+		ImGui::Checkbox(T(TKEY("ice_floe_snow"), "Recolor Ice Floes"), &settings.IceFloeSnow);
+		if (auto _ttFloe = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("ice_floe_snow_tooltip"), "Ice floes (any mesh with 'floe' in its name) take the projected-snow recolor and the drape like every other object. Off, they keep the game's own snow and get no drape and no volume snow."));
+
+		ImGui::Checkbox(T(TKEY("snow_textured_recolor"), "Recolor Snow-Textured Meshes"), &settings.SnowTexturedRecolor);
+		if (auto _ttStr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, a season mod's swapped-in winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives every unprojected shape whose texture is a snow texture the same treatment: the shell's snow in the object's own shader, the drape's coat, and the written weight the volume snow reads. Needs Recolor Projected Snow."));
+
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));

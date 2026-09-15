@@ -590,6 +590,10 @@ public:
 		float SeasonsSnowMaxAngle = 87.0f;
 		/** @brief "Multipass Snow Follows Paint": objects whose snow material is multipass (vanilla glaciers and ice, Simplicity of Snow, Stretched Snow Begone) get their base pass marked "known, unpainted" for the skin's read-back, so the drape follows only the snow the game's own snow pass paints. Off = the skin reconstructs a coat over every face of them (Alpha Test 2 behaviour). */
 		bool MultipassSnowFollowsPaint = true;
+		/** @brief "Recolor Ice Floes": ice floes take the projected-snow recolor and the drape like any other object. Off (default, Josef 2026-09-14) they keep their own look: no recolor, no skin, no volume seed. */
+		bool IceFloeSnow = false;
+		/** @brief "Recolor Snow-Textured Meshes": shapes whose diffuse is a snow texture but which carry no projection (dirt cliffs' snow01 tops, a season swap's alternate sets, drifts) take the baked-snow recolor in Lighting by texel, their skins take the coat, and the written weight reaches the volume. Unprojected shapes only; the projected-pass texel floor that shipped with the 2026-09-14 A/B is not part of it. */
+		bool SnowTexturedRecolor = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
@@ -659,8 +663,8 @@ public:
 		/** @brief Snow normal map bound at t103 (0 = legacy set without one). */
 		float SnowHasNormal;
 
-		/** @brief was LODReplaceLegacy, then the retired snow-textured recolor A/B (2026-09-14); slot kept for layout. */
-		float padLegacy;
+		/** @brief Snow-textured mesh recolor (Settings::SnowTexturedRecolor) enabled and the snow set is bound; the old LODReplaceLegacy slot. Mirror in SharedData.hlsli. */
+		float SnowTexturedEnable;
 		/** @brief Projected-snow material match enabled and the snow set is bound. */
 		float ProjSnowEnable;
 		/** @brief Baked-snow (glacier) material match enabled and the snow set is bound. */
@@ -1646,6 +1650,8 @@ public:
 		bool decalDepth;
 		/** @brief The mesh alpha-tests: StaticsCB::AlphaTested. */
 		bool alphaTested;
+		/** @brief Snow-textured shape without projection data (Settings::SnowTexturedRecolor): Lighting recolors it by texel and writes the weight, so its skin coats off that read-back like an LOD batch. */
+		bool snowTex;
 	};
 
 	/** @brief Render-thread only: filled during opaque rendering by the SetupGeometry hook, consumed and cleared each frame. */
