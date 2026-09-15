@@ -590,8 +590,8 @@ public:
 		float SeasonsSnowMaxAngle = 87.0f;
 		/** @brief "Multipass Snow Follows Paint": objects whose snow material is multipass (vanilla glaciers and ice, Simplicity of Snow, Stretched Snow Begone) get their base pass marked "known, unpainted" for the skin's read-back, so the drape follows only the snow the game's own snow pass paints. Off = the skin reconstructs a coat over every face of them (Alpha Test 2 behaviour). */
 		bool MultipassSnowFollowsPaint = true;
-		/** @brief "Recolor Ice Floes": ice floes take the projected-snow recolor and the drape like any other object. Off (default, Josef 2026-09-14) they keep their own look: no recolor, no skin, no volume seed. */
-		bool IceFloeSnow = false;
+		/** @brief "Recolor PD on Ice Floes": the projected diffuse (painted snow) on ice floes takes the recolor, and floes get the drape and volume seed like any other object. Default ON (Josef, 2026-09-15); off keeps the game's own paint with no skin and no volume seed. */
+		bool IceFloeSnow = true;
 		/** @brief "Recolor Snow-Textured Meshes": shapes whose diffuse is a snow texture but which carry no projection (dirt cliffs' snow01 tops, a season swap's alternate sets, drifts) take the baked-snow recolor in Lighting by texel, their skins take the coat, and the written weight reaches the volume. Unprojected shapes only; the projected-pass texel floor that shipped with the 2026-09-14 A/B is not part of it. */
 		bool SnowTexturedRecolor = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
