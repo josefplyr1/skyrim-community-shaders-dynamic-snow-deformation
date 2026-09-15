@@ -229,16 +229,27 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 	BakeShellCell(land);
 }
 
-// The land mesh the engine draws is 65 x 65 vertices per quad (32-unit
-// spacing) built from the 17 x 17 heights by a rule that is Catmull-Rom on
-// gentle ground and something else at cliffs; the mesh is the ground truth,
-// so read it instead of guessing the rule. Positions are relative to the
-// CELL CENTRE in XY (quad 0 spans -2048..0 on both axes); z is relative to a
-// per-quad base measured against heights[] at the lattice vertices, and any
-// mismatch drops the quad. A refusal is logged once, with its reason.
+// The land mesh the engine draws is built per quad at 17 x 17, 33 x 33 or
+// 65 x 65 vertices by distance (128 / 64 / 32-unit spacing), from the 17 x 17
+// heights by a rule that is Catmull-Rom on gentle ground and something else
+// at cliffs; the mesh is the ground truth, so read it instead of guessing
+// the rule, at whatever level it currently has, and re-read when the level
+// changes. Positions are relative to the CELL CENTRE in XY (quad 0 spans
+// -2048..0 on both axes) and are float32 even though the descriptor does
+// not carry FULLPREC - the decode is chosen by which one lands on the
+// lattice. z is relative to a per-quad base measured against heights[] at
+// the lattice vertices; any mismatch drops the cell. A refusal is logged
+// once, with its reason.
+uint32_t SnowDeformation::LandQuadLevel(RE::BSTriShape* a_geometry)
+{
+	const uint32_t n = a_geometry ? a_geometry->GetTrishapeRuntimeData().vertexCount : 0;
+	return n >= 65 * 65 ? 4 : n >= 33 * 33 ? 2 : n >= 17 * 17 ? 1 : 0;
+}
+
 bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data)
 {
 	a_data.fine.clear();
+	a_data.fineLevel = { 0, 0, 0, 0 };
 	auto loadedData = a_land->loadedData;
 	if (!loadedData)
 		return false;
@@ -249,7 +260,7 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 	};
 	std::vector<float> fine(size_t(129) * 129, kShellMissingHeight);
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
-		RE::BSGeometry* geometry = LandQuadGeometry(loadedData, quadI);
+		RE::BSTriShape* geometry = LandQuadGeometry(loadedData, quadI);
 		if (!geometry)
 			return refuse(quadI, "no geometry");
 		auto* rendererData = geometry->GetGeometryRuntimeData().rendererData;
@@ -264,75 +275,97 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 			return refuse(quadI, std::format("no position attribute (desc {:016X})", descBits));
 		const uint32_t stride = uint32_t(descBits & 0xF) * 4;
 		const uint32_t posOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
-		const bool fullPrec = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
-		const uint32_t vertexCount = geometry->AsTriShape() ? geometry->AsTriShape()->GetTrishapeRuntimeData().vertexCount : 0;
-		// 289 vertices = the base mesh before the engine subdivides it; the
-		// per-frame refresh comes back for it. Not a refusal.
-		if (vertexCount < 65 * 65)
-			return false;
-		if (stride == 0)
-			return refuse(quadI, std::format("stride 0 (desc {:016X})", descBits));
+		const uint32_t level = LandQuadLevel(geometry);
+		const uint32_t vertexCount = geometry->GetTrishapeRuntimeData().vertexCount;
+		if (stride == 0 || level == 0)
+			return refuse(quadI, std::format("stride {} vertices {} (desc {:016X})", stride, vertexCount, descBits));
 		const uint32_t quadX = quadI & 1;
 		const uint32_t quadY = quadI >> 1;
-		// Base z from the lattice vertices: the mesh's convention is not
-		// assumed, it is measured against heights[] and must agree.
+		const uint32_t side = 16 * level;  // mesh steps per quad edge
+		const float spacing = 128.0f / float(level);
+		std::vector<float> quad;
 		double baseSum = 0.0;
 		uint32_t baseCount = 0, offGrid = 0, outside = 0;
 		float firstX = 0.0f, firstY = 0.0f;
-		std::vector<float> quad(size_t(65) * 65, kShellMissingHeight);
-		for (uint32_t v = 0; v < vertexCount; ++v) {
-			const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride + posOffset;
-			float px, py, pz;
-			if (fullPrec) {
-				float p[3];
-				memcpy(p, base, sizeof(p));
-				px = p[0]; py = p[1]; pz = p[2];
-			} else {
-				uint16_t h[3];
-				memcpy(h, base, sizeof(h));
-				px = DirectX::PackedVector::XMConvertHalfToFloat(h[0]);
-				py = DirectX::PackedVector::XMConvertHalfToFloat(h[1]);
-				pz = DirectX::PackedVector::XMConvertHalfToFloat(h[2]);
-			}
-			if (v == 0) {
-				firstX = px;
-				firstY = py;
-			}
-			// Cell-centre relative: this quad's vertices index 0..64 after
-			// removing its own half-cell offset.
-			const float kx = px / kShellFineTexel + 64.0f - float(quadX) * 64.0f;
-			const float ky = py / kShellFineTexel + 64.0f - float(quadY) * 64.0f;
-			const int ix = int(std::lround(kx)), iy = int(std::lround(ky));
-			if (std::abs(kx - ix) > 0.01f || std::abs(ky - iy) > 0.01f) {
-				offGrid++;
-				continue;
-			}
-			if (ix < 0 || ix > 64 || iy < 0 || iy > 64) {
-				outside++;
-				continue;
-			}
-			quad[size_t(iy) * 65 + ix] = pz;
-			if ((ix & 3) == 0 && (iy & 3) == 0) {
-				baseSum += double(loadedData->heights[quadI][(iy / 4) * 17 + ix / 4]) - pz;
-				baseCount++;
+		// Float32 first, half on a miss: the descriptor's FULLPREC bit is not
+		// set on land although its positions are float.
+		bool usedHalf = false;
+		for (int pass = 0; pass < 2 && baseCount < 289; ++pass) {
+			const bool half = pass == 1;
+			usedHalf = half;
+			quad.assign(size_t(side + 1) * (side + 1), kShellMissingHeight);
+			baseSum = 0.0;
+			baseCount = offGrid = outside = 0;
+			for (uint32_t v = 0; v < vertexCount; ++v) {
+				const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride + posOffset;
+				float px, py, pz;
+				if (!half) {
+					float p[3];
+					memcpy(p, base, sizeof(p));
+					px = p[0]; py = p[1]; pz = p[2];
+				} else {
+					uint16_t h[3];
+					memcpy(h, base, sizeof(h));
+					px = DirectX::PackedVector::XMConvertHalfToFloat(h[0]);
+					py = DirectX::PackedVector::XMConvertHalfToFloat(h[1]);
+					pz = DirectX::PackedVector::XMConvertHalfToFloat(h[2]);
+				}
+				if (v == 0) {
+					firstX = px;
+					firstY = py;
+				}
+				// Cell-centre relative: this quad's vertices index 0..side after
+				// removing its own half-cell offset.
+				const float kx = px / spacing + float(side) - float(quadX) * float(side);
+				const float ky = py / spacing + float(side) - float(quadY) * float(side);
+				if (!std::isfinite(kx) || !std::isfinite(ky) || std::abs(kx) > 1e6f || std::abs(ky) > 1e6f) {
+					offGrid++;
+					continue;
+				}
+				const int ix = int(std::lround(kx)), iy = int(std::lround(ky));
+				if (std::abs(kx - ix) > 0.01f || std::abs(ky - iy) > 0.01f) {
+					offGrid++;
+					continue;
+				}
+				if (ix < 0 || ix > int(side) || iy < 0 || iy > int(side)) {
+					outside++;
+					continue;
+				}
+				quad[size_t(iy) * (side + 1) + ix] = pz;
+				if (ix % level == 0 && iy % level == 0) {
+					baseSum += double(loadedData->heights[quadI][(iy / level) * 17 + ix / level]) - pz;
+					baseCount++;
+				}
 			}
 		}
 		if (baseCount < 289)
-			return refuse(quadI, std::format("{} of 289 lattice vertices found ({} off-grid, {} outside; {} vertices, first at {:.1f}, {:.1f}, stride {}, pos offset {}, {})",
-				baseCount, offGrid, outside, vertexCount, firstX, firstY, stride, posOffset, fullPrec ? "float" : "half"));
+			return refuse(quadI, std::format("{} of 289 lattice vertices found ({} off-grid, {} outside; {} vertices, level {}, first at {:.1f}, {:.1f}, stride {}, pos offset {}, {})",
+				baseCount, offGrid, outside, vertexCount, level, firstX, firstY, stride, posOffset, usedHalf ? "half" : "float"));
 		const float baseZ = float(baseSum / baseCount) + (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
-		for (uint32_t iy = 0; iy < 65; ++iy)
-			for (uint32_t ix = 0; ix < 65; ++ix) {
-				const float z = quad[size_t(iy) * 65 + ix];
+		// Verify, then resample to the 32-unit cell grid: a coarser level is
+		// drawn flat between its vertices, so it lands as the linear blend.
+		for (uint32_t iy = 0; iy <= side; ++iy)
+			for (uint32_t ix = 0; ix <= side; ++ix) {
+				const float z = quad[size_t(iy) * (side + 1) + ix];
 				if (z < -50000.0f)
-					return refuse(quadI, std::format("vertex ({}, {}) missing", ix, iy));
-				if ((ix & 3) == 0 && (iy & 3) == 0) {
-					const float d = z + baseZ - a_data.height[(quadY * 16 + iy / 4) * 33 + quadX * 16 + ix / 4];
+					return refuse(quadI, std::format("vertex ({}, {}) missing at level {}", ix, iy, level));
+				if (ix % level == 0 && iy % level == 0) {
+					const float d = z + baseZ - a_data.height[(quadY * 16 + iy / level) * 33 + quadX * 16 + ix / level];
 					if (std::abs(d) > 0.5f)
 						return refuse(quadI, std::format("lattice vertex ({}, {}) off by {:.2f} after the base", ix, iy, d));
 				}
-				fine[size_t(quadY * 64 + iy) * 129 + quadX * 64 + ix] = z + baseZ;
 			}
+		const uint32_t up = 4 / level;  // 32-unit texels per mesh step
+		for (uint32_t fy = 0; fy < 65; ++fy)
+			for (uint32_t fx = 0; fx < 65; ++fx) {
+				const uint32_t ix0 = std::min(fx / up, side - 1), iy0 = std::min(fy / up, side - 1);
+				const float tx = float(fx) / float(up) - float(ix0), ty = float(fy) / float(up) - float(iy0);
+				const float z00 = quad[size_t(iy0) * (side + 1) + ix0], z10 = quad[size_t(iy0) * (side + 1) + ix0 + 1];
+				const float z01 = quad[size_t(iy0 + 1) * (side + 1) + ix0], z11 = quad[size_t(iy0 + 1) * (side + 1) + ix0 + 1];
+				const float z = (z00 * (1.0f - tx) + z10 * tx) * (1.0f - ty) + (z01 * (1.0f - tx) + z11 * tx) * ty;
+				fine[size_t(quadY * 64 + fy) * 129 + quadX * 64 + fx] = z + baseZ;
+			}
+		a_data.fineLevel[quadI] = uint8_t(level);
 	}
 	a_data.fine = std::move(fine);
 	return true;
@@ -392,11 +425,13 @@ void SnowDeformation::RefreshLandMeshHeights()
 				continue;
 			nLand++;
 			const uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+			std::array<uint8_t, 4> levels{};
 			bool ready = true;
-			for (uint32_t quadI = 0; quadI < 4 && ready; ++quadI) {
-				auto* geometry = LandQuadGeometry(land->loadedData, quadI);
-				ready = geometry && geometry->GetTrishapeRuntimeData().vertexCount >= 65 * 65;
+			for (uint32_t quadI = 0; quadI < 4; ++quadI) {
+				levels[quadI] = uint8_t(LandQuadLevel(LandQuadGeometry(land->loadedData, quadI)));
+				ready = ready && levels[quadI] != 0;
 			}
+			const uint32_t signature = uint32_t(levels[0]) | uint32_t(levels[1]) << 8 | uint32_t(levels[2]) << 16 | uint32_t(levels[3]) << 24;
 			if (report && first.empty()) {
 				first = std::format("cell ({}, {}) quads:", coords->cellX, coords->cellY);
 				for (uint32_t quadI = 0; quadI < 4; ++quadI) {
@@ -420,11 +455,11 @@ void SnowDeformation::RefreshLandMeshHeights()
 					nWorldspace++;
 					continue;
 				}
-				if (!it->second.fine.empty()) {
+				if (!it->second.fine.empty() && it->second.fineLevel == levels) {
 					nHave++;
 					continue;
 				}
-				if (shellFineRefused.contains(key)) {
+				if (auto r = shellFineRefused.find(key); r != shellFineRefused.end() && r->second == signature) {
 					nRefused++;
 					continue;
 				}
@@ -435,14 +470,17 @@ void SnowDeformation::RefreshLandMeshHeights()
 			if (!ok) {
 				if (shellFineRefused.size() > 4096)
 					shellFineRefused.clear();
-				shellFineRefused.insert(key);
+				shellFineRefused[key] = signature;
 				continue;
 			}
 			auto it = shellCells.find(key);
 			if (it == shellCells.end() || it->second.worldspaceID != worldspace)
 				continue;
+			const bool hadFine = !it->second.fine.empty();
 			it->second.fine = std::move(work.fine);
-			shellFineOrder.push_back(key);
+			it->second.fineLevel = work.fineLevel;
+			if (!hadFine)
+				shellFineOrder.push_back(key);
 			while (shellFineOrder.size() > kShellFineCacheCells) {
 				if (auto old = shellCells.find(shellFineOrder.front()); old != shellCells.end())
 					old->second.fine.clear();
@@ -603,7 +641,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
 			it->second.height == data.height && it->second.layerTexture == data.layerTexture &&
 			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO &&
-			it->second.fine == data.fine)
+			it->second.fine == data.fine && it->second.fineLevel == data.fineLevel)
 			return;
 		if (!data.fine.empty()) {
 			shellFineOrder.push_back(key);

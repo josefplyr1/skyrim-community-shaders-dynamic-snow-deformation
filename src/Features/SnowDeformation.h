@@ -210,6 +210,8 @@ public:
 		std::array<uint8_t, 33 * 33> vertexAO;
 		/** @brief The engine's own land mesh heights at 32-unit spacing (129 x 129, x-fastest), read from the four quad BSTriShapes at bake time; empty when a quad's vertex data was not readable. The fine layer copies these in verbatim, so the shell stands on the mesh the game draws rather than on a cubic guess at it. Kept for at most kShellFineCacheCells cells. */
 		std::vector<float> fine;
+		/** @brief Mesh level per quad the fine data was read at: 1 = 17x17, 2 = 33x33, 4 = 65x65 (the engine picks by distance); re-read when it changes. */
+		std::array<uint8_t, 4> fineLevel{};
 		// City worldspaces reuse their Tamriel cell coordinates (WindhelmWorld
 		// spans the same 28-36 / 6-12 block as the terrain outside its gate),
 		// so the coordinate key alone matches cells from a worldspace we left.
@@ -974,7 +976,10 @@ public:
 	static RE::BSTriShape* LandQuadGeometry(RE::TESObjectLAND::LoadedLandData* a_loaded, uint32_t a_quad);
 	uint32_t fineRefreshFrame = 0;
 	std::atomic<bool> shellFineDirty{ false };
-	std::unordered_set<uint64_t> shellFineRefused;
+	/** @brief Cells whose mesh read was refused, with the quad-level signature it was refused at; retried when the levels change. */
+	std::unordered_map<uint64_t, uint32_t> shellFineRefused;
+	/** @brief 0 none, 1 = 17x17, 2 = 33x33, 4 = 65x65 vertices per quad. */
+	static uint32_t LandQuadLevel(RE::BSTriShape* a_geometry);
 	Texture2D* shellTerrainFine = nullptr;
 	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
 	bool shellFarTessDisabled = false;
