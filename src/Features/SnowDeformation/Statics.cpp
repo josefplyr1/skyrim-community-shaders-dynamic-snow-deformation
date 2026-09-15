@@ -128,7 +128,6 @@ struct GeometryNameFacts
 	bool mountainCliff = false;
 	bool plank = false;
 	bool iceFamily = false;
-	bool floe = false;  // ice floes: no recolor
 	bool drift = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
@@ -170,7 +169,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
-		f.floe = ContainsNoCase(name, "floe");
 	}
 	lastGeometry = a_geometry;
 	lastName = name;
@@ -670,7 +668,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
 		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
-		} else if (rec.mato == MatoClass::kNotSnow || (!settings.IceFloeSnow && NameFactsOf(a_pass->geometry).floe)) {
+		} else if (rec.mato == MatoClass::kNotSnow) {
 			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
 		} else {
 			statProjMatched.fetch_add(1, std::memory_order_relaxed);
@@ -766,11 +764,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// otherwise capture and drag a static skin behind a moving creature.
 	if (a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: skinned geometry");
-		return;
-	}
-	// Ice floes keep their own look: no skin and no volume seed.
-	if (!settings.IceFloeSnow && NameFactsOf(a_pass->geometry).floe) {
-		LogIceJourney(a_pass, true, "rejected: ice floe");
 		return;
 	}
 	// Ice-family meshes keep their skins at every range: the always-covered

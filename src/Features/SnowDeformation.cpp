@@ -145,7 +145,6 @@
 	X(MultipassSnowFollowsPaint) \
 	X(ShelterMaxHeight) \
 	X(LODObjectSnow) \
-	X(IceFloeSnow) \
 	X(SnowTexturedRecolor) \
 	X(VolumeSnow) \
 	X(VolumeSnowDepth) \
