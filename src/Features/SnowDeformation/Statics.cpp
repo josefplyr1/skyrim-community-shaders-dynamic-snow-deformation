@@ -747,6 +747,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: skinned geometry");
 		return;
 	}
+	// Ice floes keep their own look: no skin and no volume seed.
+	if (NameFactsOf(a_pass->geometry).floe) {
+		LogIceJourney(a_pass, true, "rejected: ice floe");
+		return;
+	}
 	// Ice-family meshes keep their skins at every range: the always-covered
 	// LOD family look is the acceptance criterion, and a skinless loaded
 	// glacier reads as having no snow even with the baked-snow recolor

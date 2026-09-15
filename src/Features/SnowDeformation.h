@@ -591,7 +591,7 @@ public:
 		/** @brief "Multipass Snow Follows Paint": objects whose snow material is multipass (vanilla glaciers and ice, Simplicity of Snow, Stretched Snow Begone) get their base pass marked "known, unpainted" for the skin's read-back, so the drape follows only the snow the game's own snow pass paints. Off = the skin reconstructs a coat over every face of them (Alpha Test 2 behaviour). */
 		bool MultipassSnowFollowsPaint = true;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
-		float ShelterMaxHeight = 320.0f;
+		float ShelterMaxHeight = 150.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
