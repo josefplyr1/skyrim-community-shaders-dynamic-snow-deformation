@@ -232,15 +232,21 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 // The land mesh the engine draws is 65 x 65 vertices per quad (32-unit
 // spacing) built from the 17 x 17 heights by a rule that is Catmull-Rom on
 // gentle ground and something else at cliffs; the mesh is the ground truth,
-// so read it instead of guessing the rule. Positions are quad-local in XY;
-// z is relative to the same base as heights[], verified per quad against
-// the lattice vertices (any mismatch drops the quad).
+// so read it instead of guessing the rule. Positions are relative to the
+// CELL CENTRE in XY (quad 0 spans -2048..0 on both axes); z is relative to a
+// per-quad base measured against heights[] at the lattice vertices, and any
+// mismatch drops the quad. A refusal is logged once, with its reason.
 bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data)
 {
 	a_data.fine.clear();
 	auto loadedData = a_land->loadedData;
 	if (!loadedData)
 		return false;
+	auto refuse = [&](uint32_t quadI, const std::string& why) {
+		if (!fineMeshWarned.exchange(true))
+			logger::info("[SNOW DEFORMATION] Land mesh not used for the fine layer (quad {}): {}", quadI, why);
+		return false;
+	};
 	std::vector<float> fine(size_t(129) * 129, kShellMissingHeight);
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
 		RE::BSGeometry* geometry = loadedData->geom[quadI].get();
@@ -248,29 +254,31 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 			const auto& children = loadedData->mesh[quadI]->GetChildren();
 			geometry = children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
 		}
-		auto* rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
-		if (!rendererData || !rendererData->rawVertexData) {
-			if (!fineMeshWarned.exchange(true))
-				logger::info("[SNOW DEFORMATION] Land quad mesh has no CPU vertex copy; the fine terrain layer stays cubic");
-			return false;
-		}
+		if (!geometry)
+			return refuse(quadI, "no geometry");
+		auto* rendererData = geometry->GetGeometryRuntimeData().rendererData;
+		if (!rendererData)
+			return refuse(quadI, "no renderer data");
+		if (!rendererData->rawVertexData)
+			return refuse(quadI, "no CPU vertex copy");
 		const auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
-			return false;
 		uint64_t descBits;
 		memcpy(&descBits, &desc, sizeof(descBits));
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
+			return refuse(quadI, std::format("no position attribute (desc {:016X})", descBits));
 		const uint32_t stride = uint32_t(descBits & 0xF) * 4;
 		const uint32_t posOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
 		const bool fullPrec = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
 		const uint32_t vertexCount = geometry->AsTriShape() ? geometry->AsTriShape()->GetTrishapeRuntimeData().vertexCount : 0;
 		if (stride == 0 || vertexCount < 65 * 65)
-			return false;
+			return refuse(quadI, std::format("stride {} vertices {} (desc {:016X})", stride, vertexCount, descBits));
 		const uint32_t quadX = quadI & 1;
 		const uint32_t quadY = quadI >> 1;
 		// Base z from the lattice vertices: the mesh's convention is not
 		// assumed, it is measured against heights[] and must agree.
 		double baseSum = 0.0;
-		uint32_t baseCount = 0;
+		uint32_t baseCount = 0, offGrid = 0, outside = 0;
+		float firstX = 0.0f, firstY = 0.0f;
 		std::vector<float> quad(size_t(65) * 65, kShellMissingHeight);
 		for (uint32_t v = 0; v < vertexCount; ++v) {
 			const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride + posOffset;
@@ -286,10 +294,23 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 				py = DirectX::PackedVector::XMConvertHalfToFloat(h[1]);
 				pz = DirectX::PackedVector::XMConvertHalfToFloat(h[2]);
 			}
-			const float kx = px / kShellFineTexel, ky = py / kShellFineTexel;
+			if (v == 0) {
+				firstX = px;
+				firstY = py;
+			}
+			// Cell-centre relative: this quad's vertices index 0..64 after
+			// removing its own half-cell offset.
+			const float kx = px / kShellFineTexel + 64.0f - float(quadX) * 64.0f;
+			const float ky = py / kShellFineTexel + 64.0f - float(quadY) * 64.0f;
 			const int ix = int(std::lround(kx)), iy = int(std::lround(ky));
-			if (ix < 0 || ix > 64 || iy < 0 || iy > 64 || std::abs(kx - ix) > 0.01f || std::abs(ky - iy) > 0.01f)
+			if (std::abs(kx - ix) > 0.01f || std::abs(ky - iy) > 0.01f) {
+				offGrid++;
 				continue;
+			}
+			if (ix < 0 || ix > 64 || iy < 0 || iy > 64) {
+				outside++;
+				continue;
+			}
 			quad[size_t(iy) * 65 + ix] = pz;
 			if ((ix & 3) == 0 && (iy & 3) == 0) {
 				baseSum += double(loadedData->heights[quadI][(iy / 4) * 17 + ix / 4]) - pz;
@@ -297,16 +318,19 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 			}
 		}
 		if (baseCount < 289)
-			return false;
+			return refuse(quadI, std::format("{} of 289 lattice vertices found ({} off-grid, {} outside; {} vertices, first at {:.1f}, {:.1f}, stride {}, pos offset {}, {})",
+				baseCount, offGrid, outside, vertexCount, firstX, firstY, stride, posOffset, fullPrec ? "float" : "half"));
 		const float baseZ = float(baseSum / baseCount) + (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
 		for (uint32_t iy = 0; iy < 65; ++iy)
 			for (uint32_t ix = 0; ix < 65; ++ix) {
 				const float z = quad[size_t(iy) * 65 + ix];
 				if (z < -50000.0f)
-					return false;
-				if ((ix & 3) == 0 && (iy & 3) == 0 &&
-					std::abs(z + baseZ - a_data.height[(quadY * 16 + iy / 4) * 33 + quadX * 16 + ix / 4]) > 0.5f)
-					return false;
+					return refuse(quadI, std::format("vertex ({}, {}) missing", ix, iy));
+				if ((ix & 3) == 0 && (iy & 3) == 0) {
+					const float d = z + baseZ - a_data.height[(quadY * 16 + iy / 4) * 33 + quadX * 16 + ix / 4];
+					if (std::abs(d) > 0.5f)
+						return refuse(quadI, std::format("lattice vertex ({}, {}) off by {:.2f} after the base", ix, iy, d));
+				}
 				fine[size_t(quadY * 64 + iy) * 129 + quadX * 64 + ix] = z + baseZ;
 			}
 	}
