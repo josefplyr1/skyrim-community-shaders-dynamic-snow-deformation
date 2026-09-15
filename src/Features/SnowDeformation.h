@@ -970,6 +970,9 @@ public:
 	bool ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data);
 	/** @brief Each frame: loaded cells whose bake ran before the engine subdivided their land mesh (289 vertices at hook time, 4225 later) get their fine data once the meshes have grown; a hard refusal is remembered so the cell is not re-tried. Sets shellFineDirty. */
 	void RefreshLandMeshHeights();
+	/** @brief The quad's drawn geometry: geom[q] when it holds the subdivided mesh, else the largest BSTriShape under mesh[q]. */
+	static RE::BSTriShape* LandQuadGeometry(RE::TESObjectLAND::LoadedLandData* a_loaded, uint32_t a_quad);
+	uint32_t fineRefreshFrame = 0;
 	std::atomic<bool> shellFineDirty{ false };
 	std::unordered_set<uint64_t> shellFineRefused;
 	Texture2D* shellTerrainFine = nullptr;

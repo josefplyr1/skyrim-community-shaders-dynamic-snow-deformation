@@ -249,11 +249,7 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 	};
 	std::vector<float> fine(size_t(129) * 129, kShellMissingHeight);
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
-		RE::BSGeometry* geometry = loadedData->geom[quadI].get();
-		if (!geometry && loadedData->mesh[quadI]) {
-			const auto& children = loadedData->mesh[quadI]->GetChildren();
-			geometry = children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
-		}
+		RE::BSGeometry* geometry = LandQuadGeometry(loadedData, quadI);
 		if (!geometry)
 			return refuse(quadI, "no geometry");
 		auto* rendererData = geometry->GetGeometryRuntimeData().rendererData;
@@ -342,6 +338,36 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 	return true;
 }
 
+static RE::BSTriShape* LargestTriShapeUnder(RE::NiAVObject* a_object, std::string* a_names)
+{
+	if (!a_object)
+		return nullptr;
+	RE::BSTriShape* best = nullptr;
+	if (auto* node = a_object->AsNode()) {
+		for (const auto& child : node->GetChildren()) {
+			auto* c = LargestTriShapeUnder(child.get(), a_names);
+			if (c && (!best || c->GetTrishapeRuntimeData().vertexCount > best->GetTrishapeRuntimeData().vertexCount))
+				best = c;
+		}
+	} else if (auto* geometry = a_object->AsGeometry()) {
+		if (auto* tri = geometry->AsTriShape()) {
+			if (a_names)
+				*a_names += std::format("{}:{} ", tri->name.c_str() ? tri->name.c_str() : "?", tri->GetTrishapeRuntimeData().vertexCount);
+			best = tri;
+		}
+	}
+	return best;
+}
+
+RE::BSTriShape* SnowDeformation::LandQuadGeometry(RE::TESObjectLAND::LoadedLandData* a_loaded, uint32_t a_quad)
+{
+	auto* geometry = a_loaded->geom[a_quad].get();
+	if (geometry && geometry->GetTrishapeRuntimeData().vertexCount >= 65 * 65)
+		return geometry;
+	auto* under = LargestTriShapeUnder(a_loaded->mesh[a_quad], nullptr);
+	return under ? under : geometry;
+}
+
 void SnowDeformation::RefreshLandMeshHeights()
 {
 	auto* tes = RE::TES::GetSingleton();
@@ -350,29 +376,58 @@ void SnowDeformation::RefreshLandMeshHeights()
 		return;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	const uint32_t length = grid->length;
+	// Summary every ~5 s while nothing has been read, so a zero names its cause.
+	const bool report = shellFineMeshCells == 0 && (++fineRefreshFrame % 300) == 1;
+	uint32_t nAttached = 0, nLand = 0, nReady = 0, nCached = 0, nWorldspace = 0, nRefused = 0, nHave = 0;
+	std::string first;
 	for (uint32_t x = 0; x < length; x++) {
 		for (uint32_t y = 0; y < length; y++) {
 			auto* cell = grid->GetCell(x, y);
 			if (!cell || !cell->IsAttached())
 				continue;
+			nAttached++;
 			auto* land = cell->GetRuntimeData().cellLand;
 			auto* coords = cell->GetCoordinates();
 			if (!land || !land->loadedData || !coords)
 				continue;
+			nLand++;
 			const uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
 			bool ready = true;
 			for (uint32_t quadI = 0; quadI < 4 && ready; ++quadI) {
-				auto* geometry = land->loadedData->geom[quadI].get();
+				auto* geometry = LandQuadGeometry(land->loadedData, quadI);
 				ready = geometry && geometry->GetTrishapeRuntimeData().vertexCount >= 65 * 65;
+			}
+			if (report && first.empty()) {
+				first = std::format("cell ({}, {}) quads:", coords->cellX, coords->cellY);
+				for (uint32_t quadI = 0; quadI < 4; ++quadI) {
+					auto* g = land->loadedData->geom[quadI].get();
+					std::string names;
+					LargestTriShapeUnder(land->loadedData->mesh[quadI], &names);
+					first += std::format(" [geom {} | under mesh: {}]", g ? int(g->GetTrishapeRuntimeData().vertexCount) : -1, names.empty() ? "none" : names);
+				}
 			}
 			if (!ready)
 				continue;
+			nReady++;
 			ShellCellData work;
 			{
 				const std::shared_lock lock(shellCellMutex);
 				auto it = shellCells.find(key);
-				if (it == shellCells.end() || it->second.worldspaceID != worldspace || !it->second.fine.empty() || shellFineRefused.contains(key))
+				if (it == shellCells.end())
 					continue;
+				nCached++;
+				if (it->second.worldspaceID != worldspace) {
+					nWorldspace++;
+					continue;
+				}
+				if (!it->second.fine.empty()) {
+					nHave++;
+					continue;
+				}
+				if (shellFineRefused.contains(key)) {
+					nRefused++;
+					continue;
+				}
 				work = it->second;
 			}
 			const bool ok = ReadLandMeshHeights(land, work);
@@ -396,6 +451,9 @@ void SnowDeformation::RefreshLandMeshHeights()
 			shellFineDirty.store(true, std::memory_order_release);
 		}
 	}
+	if (report)
+		logger::info("[SNOW DEFORMATION] land mesh refresh: {} attached, {} with land, {} ready, {} cached, {} other worldspace ({}), {} already have, {} refused; {}",
+			nAttached, nLand, nReady, nCached, nWorldspace, worldspace, nHave, nRefused, first.empty() ? "no land cell" : first);
 }
 
 void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
