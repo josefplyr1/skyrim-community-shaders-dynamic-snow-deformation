@@ -1651,6 +1651,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
 				ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
 				shellStatMinHeight, shellStatMaxHeight);
+			ImGui::Text("Land-exact layer: %u of %d cells from the land mesh, the rest cubic", shellFineMeshCells, kShellFineCells * kShellFineCells);
 
 			ImGui::TreePop();
 		}

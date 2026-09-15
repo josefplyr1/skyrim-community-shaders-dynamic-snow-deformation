@@ -7,6 +7,7 @@
 #include "Buffer.h"
 
 #include <d3d11_1.h>
+#include <deque>
 #include <intrin.h>
 
 struct SnowDeformation : Feature
@@ -207,6 +208,8 @@ public:
 		std::array<std::array<uint8_t, kShellVertexLayers>, 33 * 33> layerWeight;
 		/** @brief Max component of the land vertex color per vertex (0-255): the baked AO ground's skylighting is applied relative to. Packed into the terrain window's w channel as [0, 0.499). */
 		std::array<uint8_t, 33 * 33> vertexAO;
+		/** @brief The engine's own land mesh heights at 32-unit spacing (129 x 129, x-fastest), read from the four quad BSTriShapes at bake time; empty when a quad's vertex data was not readable. The fine layer copies these in verbatim, so the shell stands on the mesh the game draws rather than on a cubic guess at it. Kept for at most kShellFineCacheCells cells. */
+		std::vector<float> fine;
 		// City worldspaces reuse their Tamriel cell coordinates (WindhelmWorld
 		// spans the same 28-36 / 6-12 block as the terrain outside its gate),
 		// so the coordinate key alone matches cells from a worldspace we left.
@@ -960,12 +963,20 @@ public:
 	static constexpr int kShellFineCells = 9;
 	static constexpr float kShellFineTexel = 32.0f;
 	static constexpr int kShellFineDim = kShellFineCells * 128;
+	static constexpr size_t kShellFineCacheCells = 128;
+	/** @brief Bake order of cells holding fine mesh data; the oldest lose theirs past kShellFineCacheCells (66 KB each). */
+	std::deque<uint64_t> shellFineOrder;
+	/** @brief Fills a_data.fine from the land's quad meshes; false (and fine empty) when any quad had no readable vertex copy or its lattice did not line up with heights[]. */
+	bool ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data);
 	Texture2D* shellTerrainFine = nullptr;
 	/** @brief A/B: stops the hull's far relief tessellation (bit 5), so the 64/128-unit bands chord across the land again and the distant holes return. Runtime-only. */
 	bool shellFarTessDisabled = false;
 	float shellFineOriginX = 0.0f;
 	float shellFineOriginY = 0.0f;
 	bool shellFineValid = false;
+	/** @brief Cells in the current fine window whose texels came from the land mesh rather than the cubic (menu readout). */
+	uint32_t shellFineMeshCells = 0;
+	std::atomic<bool> fineMeshWarned{ false };
 	struct alignas(16) TerrainFineCB
 	{
 		float2 FineOriginWorld;

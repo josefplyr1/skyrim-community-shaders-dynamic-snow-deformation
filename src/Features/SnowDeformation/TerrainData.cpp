@@ -5,6 +5,7 @@
 #include "Features/SnowDeformation.h"
 
 #include <DDSTextureLoader.h>
+#include <DirectXPackedVector.h>
 
 #include "Features/TerrainShadows.h"
 #include "Globals.h"
@@ -228,6 +229,91 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 	BakeShellCell(land);
 }
 
+// The land mesh the engine draws is 65 x 65 vertices per quad (32-unit
+// spacing) built from the 17 x 17 heights by a rule that is Catmull-Rom on
+// gentle ground and something else at cliffs; the mesh is the ground truth,
+// so read it instead of guessing the rule. Positions are quad-local in XY;
+// z is relative to the same base as heights[], verified per quad against
+// the lattice vertices (any mismatch drops the quad).
+bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellData& a_data)
+{
+	a_data.fine.clear();
+	auto loadedData = a_land->loadedData;
+	if (!loadedData)
+		return false;
+	std::vector<float> fine(size_t(129) * 129, kShellMissingHeight);
+	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
+		RE::BSGeometry* geometry = loadedData->geom[quadI].get();
+		if (!geometry && loadedData->mesh[quadI]) {
+			const auto& children = loadedData->mesh[quadI]->GetChildren();
+			geometry = children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
+		}
+		auto* rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
+		if (!rendererData || !rendererData->rawVertexData) {
+			if (!fineMeshWarned.exchange(true))
+				logger::info("[SNOW DEFORMATION] Land quad mesh has no CPU vertex copy; the fine terrain layer stays cubic");
+			return false;
+		}
+		const auto desc = rendererData->vertexDesc;
+		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX))
+			return false;
+		uint64_t descBits;
+		memcpy(&descBits, &desc, sizeof(descBits));
+		const uint32_t stride = uint32_t(descBits & 0xF) * 4;
+		const uint32_t posOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_POSITION);
+		const bool fullPrec = desc.HasFlag(RE::BSGraphics::Vertex::VF_FULLPREC);
+		const uint32_t vertexCount = geometry->AsTriShape() ? geometry->AsTriShape()->GetTrishapeRuntimeData().vertexCount : 0;
+		if (stride == 0 || vertexCount < 65 * 65)
+			return false;
+		const uint32_t quadX = quadI & 1;
+		const uint32_t quadY = quadI >> 1;
+		// Base z from the lattice vertices: the mesh's convention is not
+		// assumed, it is measured against heights[] and must agree.
+		double baseSum = 0.0;
+		uint32_t baseCount = 0;
+		std::vector<float> quad(size_t(65) * 65, kShellMissingHeight);
+		for (uint32_t v = 0; v < vertexCount; ++v) {
+			const uint8_t* base = rendererData->rawVertexData + size_t(v) * stride + posOffset;
+			float px, py, pz;
+			if (fullPrec) {
+				float p[3];
+				memcpy(p, base, sizeof(p));
+				px = p[0]; py = p[1]; pz = p[2];
+			} else {
+				uint16_t h[3];
+				memcpy(h, base, sizeof(h));
+				px = DirectX::PackedVector::XMConvertHalfToFloat(h[0]);
+				py = DirectX::PackedVector::XMConvertHalfToFloat(h[1]);
+				pz = DirectX::PackedVector::XMConvertHalfToFloat(h[2]);
+			}
+			const float kx = px / kShellFineTexel, ky = py / kShellFineTexel;
+			const int ix = int(std::lround(kx)), iy = int(std::lround(ky));
+			if (ix < 0 || ix > 64 || iy < 0 || iy > 64 || std::abs(kx - ix) > 0.01f || std::abs(ky - iy) > 0.01f)
+				continue;
+			quad[size_t(iy) * 65 + ix] = pz;
+			if ((ix & 3) == 0 && (iy & 3) == 0) {
+				baseSum += double(loadedData->heights[quadI][(iy / 4) * 17 + ix / 4]) - pz;
+				baseCount++;
+			}
+		}
+		if (baseCount < 289)
+			return false;
+		const float baseZ = float(baseSum / baseCount) + (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
+		for (uint32_t iy = 0; iy < 65; ++iy)
+			for (uint32_t ix = 0; ix < 65; ++ix) {
+				const float z = quad[size_t(iy) * 65 + ix];
+				if (z < -50000.0f)
+					return false;
+				if ((ix & 3) == 0 && (iy & 3) == 0 &&
+					std::abs(z + baseZ - a_data.height[(quadY * 16 + iy / 4) * 33 + quadX * 16 + ix / 4]) > 0.5f)
+					return false;
+				fine[size_t(quadY * 64 + iy) * 129 + quadX * 64 + ix] = z + baseZ;
+			}
+	}
+	a_data.fine = std::move(fine);
+	return true;
+}
+
 void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BakeShellCell");
@@ -360,10 +446,12 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 	}
 
 	uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+	ReadLandMeshHeights(land, data);
 	{
 		const std::unique_lock lock(shellCellMutex);
 		if (shellCells.size() > 4096) {
 			shellCells.clear();
+			shellFineOrder.clear();
 			snowDepthVersion.fetch_add(1, std::memory_order_release);
 		}
 		// Land material setup re-runs frequently; only mark the window dirty
@@ -371,8 +459,17 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		auto it = shellCells.find(key);
 		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
 			it->second.height == data.height && it->second.layerTexture == data.layerTexture &&
-			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO)
+			it->second.layerWeight == data.layerWeight && it->second.vertexAO == data.vertexAO &&
+			it->second.fine == data.fine)
 			return;
+		if (!data.fine.empty()) {
+			shellFineOrder.push_back(key);
+			while (shellFineOrder.size() > kShellFineCacheCells) {
+				if (auto old = shellCells.find(shellFineOrder.front()); old != shellCells.end())
+					old->second.fine.clear();
+				shellFineOrder.pop_front();
+			}
+		}
 		shellCells[key] = data;
 		snowDepthVersion.fetch_add(1, std::memory_order_release);
 		// A real bake supersedes this worldspace's filler tombstone. Another
@@ -689,6 +786,29 @@ void SnowDeformation::BuildTerrainFineWindow()
 	context->CSSetUnorderedAccessViews(5, 1, &nullUAV, nullptr);
 
 	context->CSSetShader(nullptr, nullptr, 0);
+
+	// Cells whose land mesh was read replace the cubic with the engine's own
+	// vertices. Shared edges carry the same values from either cell.
+	{
+		const int cell0X = camCellX - kShellFineCells / 2;
+		const int cell0Y = camCellY - kShellFineCells / 2;
+		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+		uint32_t meshCells = 0;
+		const std::shared_lock lock(shellCellMutex);
+		for (int cy = 0; cy < kShellFineCells; ++cy)
+			for (int cx = 0; cx < kShellFineCells; ++cx) {
+				const uint64_t key = (uint64_t(uint32_t(cell0X + cx)) << 32) | uint32_t(cell0Y + cy);
+				auto it = shellCells.find(key);
+				if (it == shellCells.end() || it->second.worldspaceID != worldspace || it->second.fine.empty())
+					continue;
+				const uint32_t x0 = uint32_t(cx) * 128, y0 = uint32_t(cy) * 128;
+				const uint32_t w = std::min<uint32_t>(129, kShellFineDim - x0), h = std::min<uint32_t>(129, kShellFineDim - y0);
+				D3D11_BOX box{ x0, y0, 0, x0 + w, y0 + h, 1 };
+				context->UpdateSubresource(shellTerrainFine->resource.get(), 0, &box, it->second.fine.data(), 129 * sizeof(float), 0);
+				meshCells++;
+			}
+		shellFineMeshCells = meshCells;
+	}
 	shellFineValid = true;
 }
 
