@@ -782,14 +782,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Blood decals go to the blood map, never to the statics list. Skinned
 	// blood is a wound decal on a body unless it is a pool framework quad.
-	if (rec.bloodTex && (RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
-							flags.any(Flag::kDecal, Flag::kDynamicDecal))) {
-		if (settings.BloodOnSnow) {
-			const bool skinnedBlood = a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr;
-			if (!skinnedBlood || NameFactsOf(a_pass->geometry).bloodPool)
-				CaptureBloodDraw(a_pass, skinnedBlood);
+	if (rec.bloodTex) {
+		const bool poolQuad = NameFactsOf(a_pass->geometry).bloodPool;
+		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
+		if (decalMode || poolQuad) {
+			if (settings.BloodOnSnow) {
+				const bool skinnedBlood = a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr;
+				if (!skinnedBlood || poolQuad)
+					CaptureBloodDraw(a_pass, skinnedBlood);
+			}
+			return;
 		}
-		return;
 	}
 	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim)) {

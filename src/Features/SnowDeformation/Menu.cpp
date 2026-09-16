@@ -218,6 +218,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("blood_sheen"), "Wet Sheen"), &settings.BloodSheen, 0.0f, 1.0f, "%.2f");
 			if (auto _ttBloodS = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
+			ImGui::SliderFloat(T(TKEY("blood_drip_seconds"), "Weapon Drip Time"), &settings.BloodDripSeconds, 0.0f, 10.0f, "%.1f s");
+			if (auto _ttBloodD = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blood_drip_seconds_tooltip"), "Blood mods keep dripping from a bloodied weapon for as long as they like; a real blade runs dry in seconds. A trail of drips marks the snow as small round drops for this long after it starts, then the rest of that trail is ignored until it stops. 0 = drips never mark the snow."));
 			if (bloodShadersFailed)
 				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
 			else

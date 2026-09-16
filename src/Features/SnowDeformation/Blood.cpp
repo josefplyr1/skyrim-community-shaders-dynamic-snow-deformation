@@ -7,6 +7,9 @@
 #include "Globals.h"
 #include "State.h"
 
+#include <algorithm>
+#include <cctype>
+
 // Blood on snow (BLOOD-DESIGN.md). The blood mods stay the simulation; the
 // shells become the surface. Every decal-mode Lighting draw with a blood
 // diffuse that the capture hook sees is re-rasterised from above into a
@@ -172,15 +175,17 @@ bool SnowDeformation::EnsureBloodResources()
 		bloodSkinCB = new ConstantBuffer(cbDesc, "SnowDeformation::BloodSkinCB");
 	}
 	if (!bloodBlendState) {
-		// Pigment composites over what is there; concentration keeps its
-		// high-water mark, so a pool that grows over frames only grows. The
-		// clock target overwrites: the newest deposit dates the texel.
+		// The pigment is the texture's colour, written as is: blending it by
+		// alpha over the map's black darkened every faint mark to soot.
+		// Concentration keeps its high-water mark, so a pool that grows over
+		// frames only grows. The clock target overwrites: the newest deposit
+		// dates the texel.
 		D3D11_BLEND_DESC blendDesc{};
 		blendDesc.IndependentBlendEnable = TRUE;
 		auto& rt = blendDesc.RenderTarget[0];
 		rt.BlendEnable = TRUE;
-		rt.SrcBlend = D3D11_BLEND_SRC_ALPHA;
-		rt.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		rt.SrcBlend = D3D11_BLEND_ONE;
+		rt.DestBlend = D3D11_BLEND_ZERO;
 		rt.BlendOp = D3D11_BLEND_OP_ADD;
 		rt.SrcBlendAlpha = D3D11_BLEND_ONE;
 		rt.DestBlendAlpha = D3D11_BLEND_ONE;
@@ -268,6 +273,50 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		if (same)
 			return;
 	}
+	const char* diffusePath = "";
+	if (auto textureSet = material->textureSet.get())
+		if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
+			diffusePath = path;
+	const float radius = geometry->worldBound.radius;
+	std::string pathLower(diffusePath);
+	std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+	// Weapon drips: tiny decals a blood mod scatters under a bloodied blade
+	// for as long as it likes. At map resolution they are a texel each, so
+	// they go in as small round drops, and only for the first seconds of a
+	// trail - a blade runs dry.
+	const bool drip = !a_skinned && (radius < 16.0f || pathLower.find("drop") != std::string::npos);
+	if (bloodPathsLogged.size() < 64 && bloodPathsLogged.insert(pathLower).second)
+		logger::info("[SNOW DEFORMATION] blood mark '{}' tex='{}' radius {:.1f} skinned={} drip={}",
+			geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, radius, a_skinned ? 1 : 0, drip ? 1 : 0);
+	if (drip) {
+		const double now = bloodRenderSeconds;
+		const auto& centre = geometry->worldBound.center;
+		BloodDripCluster* cluster = nullptr;
+		for (auto& k : bloodDripClusters) {
+			const float dx = k.x - centre.x, dy = k.y - centre.y;
+			if (now - k.lastSeen < 2.0 && dx * dx + dy * dy < 300.0f * 300.0f) {
+				cluster = &k;
+				break;
+			}
+		}
+		if (!cluster) {
+			if (bloodDripClusters.size() >= 8)
+				bloodDripClusters.erase(bloodDripClusters.begin());
+			bloodDripClusters.push_back({ centre.x, centre.y, now, now, -1.0 });
+			cluster = &bloodDripClusters.back();
+		}
+		cluster->x = centre.x;
+		cluster->y = centre.y;
+		cluster->lastSeen = now;
+		const bool live = settings.BloodDripSeconds > 0.0f && now - cluster->firstSeen <= settings.BloodDripSeconds && now - cluster->lastDeposit >= 0.25;
+		if (!live)
+			return;
+		cluster->lastDeposit = now;
+		std::scoped_lock lock(bloodDiscMutex);
+		if (bloodDiscQueue.size() < kBloodMaxDiscs)
+			bloodDiscQueue.push_back({ centre.x, centre.y, centre.z, std::clamp(radius * 0.45f, 2.5f, 8.0f), 0.28f, 0.015f, 0.01f, 0.5f });
+		return;
+	}
 	if (bloodCaptures.size() >= 512)
 		return;
 	float threshold = -1.0f;
@@ -298,6 +347,7 @@ void SnowDeformation::RenderBloodCapture()
 {
 	bloodDepositsLast = 0;
 	bloodDiscsLast = 0;
+	bloodRenderSeconds += double(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 	const uint32_t frame = globals::state->frameCount;
 	// A decal unseen for ten seconds is gone; forget it.
 	if ((frame & 63) == 0 || bloodSeen.size() > 4096)

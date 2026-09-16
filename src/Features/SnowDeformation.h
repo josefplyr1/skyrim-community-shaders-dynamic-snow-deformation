@@ -576,6 +576,8 @@ public:
 		float BloodAgeHours = 3.0f;
 		/** @brief Gloss of fresh blood on the shells, 0..1 (0 = matte like the snow). */
 		float BloodSheen = 0.6f;
+		/** @brief Seconds a trail of weapon drips keeps marking the snow after it starts; the same trail is then ignored until it stops. 0 = drips never mark. */
+		float BloodDripSeconds = 3.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -865,6 +867,15 @@ public:
 	};
 	std::vector<BloodDisc> bloodDiscQueue;
 	std::mutex bloodDiscMutex;
+	/** @brief One bleeding source's trail of drip decals: marks for BloodDripSeconds after its first drip, then swallows the rest of the same trail. */
+	struct BloodDripCluster
+	{
+		float x, y;
+		double firstSeen, lastSeen, lastDeposit;
+	};
+	std::vector<BloodDripCluster> bloodDripClusters;
+	double bloodRenderSeconds = 0.0;
+	std::unordered_set<std::string> bloodPathsLogged;
 	struct alignas(16) BloodCB
 	{
 		float4 WorldRow0;
