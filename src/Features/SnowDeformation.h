@@ -502,6 +502,8 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
 		bool RoadHeightfield = true;
+		/** @brief The road patch past the object raster: a road-only top map over the loaded-cell square (heightTopRawFar), read by PatchTop and RoadOwnsColumn outside the coarse window, so the road surface runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
+		bool RoadPatchFarLevel = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		/** @brief Radius multiplier for the workspace clearings (workstations, stalls, wells, shrines). */
@@ -1849,10 +1851,11 @@ public:
 		float padOverhead;
 		float padMeldSk;
 
-		float padPileHeight;
-		float padSkyExposure;
-		float padCorniceLip;
-		float padBreakup;
+		/** @brief Far road level: window centre (snapped to its texel), half-extent in world units (0 = off), and the one class depth roads carry there (Settings::RoadMeshesDepth). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
+		float FarWindowCenterX;
+		float FarWindowCenterY;
+		float FarHalfExtent;
+		float FarRoadDepth;
 		float padWeld;
 
 		/** @brief >0.5: landMasksCopySRV is bound at the skin PS (the recolor's real projected weight, Masks.y = 2 + w on classified statics). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
@@ -2090,6 +2093,11 @@ public:
 	/** @brief Near clipmap level 0: the layer-1 top at one world unit per texel (t34), and its repose cone (t33). Single, not ping-pong - rebuilt from this frame's captures with no ghost, because the coarse level owns the history and every reader falls back to it outside FineRasterHalfExtent(). */
 	Texture2D* heightTopRawFine = nullptr;
 	Texture2D* objectSnowConeFine = nullptr;
+	/** @brief Far road level (t40): the road captures alone, MAX-rasterized over the loaded-cell square every frame. Single, no ghost - roads never move, and an off-screen road needs no patch. Window in farWindowCenter / farHalfExtentLive (0 = off this frame). */
+	Texture2D* heightTopRawFar = nullptr;
+	float2 farWindowCenter = { 0, 0 };
+	float farHalfExtentLive = 0.0f;
+	bool FarLevelActive() const { return settings.RoadHeightfield && settings.RoadPatchFarLevel && heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
 	/** @brief Debugging Options A/B: skip the fine level entirely, so every reader falls back to the 4-unit maps. */
 	bool fineLevelDisabled = false;
 	/** @brief Debugging Options A/B: the landscape shell rises onto captured object tops again (the lift that met the retired object shell). Off, it keeps its own height through objects; the shelter mask and the buried-shadow discriminator still read the field. */
@@ -2436,10 +2444,12 @@ public:
 	/** @brief Sentinel in the skin-depth raster's G channel (road top): no road drew in this column. Mirrored as kNoRoadTop in SnowHeightCapture.hlsl and SnowStaticsShell.hlsl. */
 	static constexpr float kNoRoadTop = -1000000.0f;
 
-	/** @brief Trench-patch grid quads per axis. Mirrors kPatchGridDim in SnowStaticsShell.hlsl, whose band table it is derived from: 2 x (128 + 8 + 8 + 8 + 18). */
-	static constexpr uint32_t kPatchGridDim = 340;
-	/** @brief World-unit snap for the patch centre. MUST be the coarsest band step in use (kPatchBandMul's last entry x kPatchStep = 16 x 8), or vertices stop landing on their band's lattice and quad widths flip as the camera moves - the invariant SnowGrid.hlsli warns about. */
-	static constexpr float kPatchSnap = 128.0f;
+	/** @brief Trench-patch grid quads per axis. Mirrors kPatchGridDim in SnowStaticsShell.hlsl, whose band table it is derived from: 2 x (128 + 16 + 8 + 4 + 57). */
+	static constexpr uint32_t kPatchGridDim = 426;
+	/** @brief World-unit snap for the patch centre. MUST be the coarsest band step in use (kPatchBandMul's last entry x kPatchStep = 32 x 8), or vertices stop landing on their band's lattice and quad widths flip as the camera moves - the invariant SnowGrid.hlsli warns about. */
+	static constexpr float kPatchSnap = 256.0f;
+	/** @brief The patch grid's outer reach in world units (the band table's last edge). The far road window is capped here: a wider window would hold roads the grid can never drape. */
+	static constexpr float kFarPatchReach = 16384.0f;
 	/** @brief Clamp band for heat-source melt radii derived from object bounds (braziers, sconces, forges). */
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;

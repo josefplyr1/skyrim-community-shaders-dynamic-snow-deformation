@@ -406,7 +406,10 @@ void SnowDeformation::DrawSettings()
 		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
 		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it. Nearby roads only for now."));
+			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it."));
+		ImGui::Checkbox(T(TKEY("road_patch_far_level"), "Road Snow To The Loaded Grid"), &settings.RoadPatchFarLevel);
+		if (auto _ttRoadFar = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("road_patch_far_level_tooltip"), "Carries the road surface past the Object Snow Shape Range to the edge of the loaded cells, from a coarser road-only height map (a texel is 12-16 units out there). Off, road snow beyond that range is the flat road skin, and the line where one hands to the other moves with you. The far quads follow the road edge through tessellation, so with Tessellate off they cover only where a whole quad sits on the road."));
 
 		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
 		if (auto _ttRoad = Util::HoverTooltipWrapper())

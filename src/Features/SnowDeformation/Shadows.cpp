@@ -607,6 +607,10 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 				objectSnowCone ? objectSnowCone->srv.get() : nullptr
 			};
 			context->VSSetShaderResources(11, 3, patchCastSRVs);
+			// Far road level (t40): the same fallback the visible patch takes
+			// past the coarse window, so caster and surface stay one recipe.
+			ID3D11ShaderResourceView* patchCastFarSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
+			context->VSSetShaderResources(40, 1, &patchCastFarSRV);
 			context->IASetInputLayout(nullptr);
 			ID3D11Buffer* patchNullVB = nullptr;
 			UINT vbZero = 0;

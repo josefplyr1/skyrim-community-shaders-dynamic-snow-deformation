@@ -138,6 +138,7 @@
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(RoadHeightfield) \
+	X(RoadPatchFarLevel) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
 	X(ProjSnowMatch) \

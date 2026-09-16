@@ -1191,6 +1191,11 @@ void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 	// a stale non-zero here would send PatchTop to an unbound texture, whose
 	// zero reads as an object top at world Z 0.
 	a_scb.FineHalfExtent = 0.0f;
+	// The far road level (t40) IS bound by the patch pass and the caster.
+	a_scb.FarWindowCenterX = farWindowCenter.x;
+	a_scb.FarWindowCenterY = farWindowCenter.y;
+	a_scb.FarHalfExtent = farHalfExtentLive;
+	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
 	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
 	// Global gate here, not a per-draw class: the patch is one draw and
@@ -1479,6 +1484,9 @@ void SnowDeformation::CreateHeightFieldResources()
 	// borrows heightScratch (the passes are sequential and same-sized).
 	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
 	objectSnowConeFine = makeHeightTexture("SnowDeformation::ObjectSnowConeFine");
+	// Far road level: the road captures alone over the loaded-cell square.
+	// Same grid, so a texel is 12 units at uGridsToLoad 5 and 16 at 7.
+	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
 	// P3: the sky-openness field at half the raster's resolution - a soft
 	// field, and half res quarters the bake cost. No RTV: compute-written.
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
@@ -1996,7 +2004,30 @@ void SnowDeformation::RenderObjectHeightMap()
 	// clipmap's raster (the same draw against a quarter-width window).
 	const bool fineLevel = !fineLevelDisabled && heightTopRawFine && objectSnowConeFine;
 	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
-	std::vector<StaticsCB> captureRecords(size_t(captureCount) * recordBlocks);
+	// Far road level: the road captures alone against the loaded-cell square,
+	// one block each, appended after the per-capture blocks. The window snaps
+	// to its own texel; one cell of slack past the square's half-width reaches
+	// its far edge from anywhere in the camera's cell.
+	const bool farLevel = FarLevelActive();
+	farHalfExtentLive = 0.0f;
+	std::vector<uint32_t> farRecordIndex(captureCount, ~0u);
+	uint32_t farCount = 0;
+	if (farLevel) {
+		int sqMinX, sqMinY, sqMaxX, sqMaxY;
+		float halfCells = 2.0f;
+		if (LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
+			halfCells = float(sqMaxX - sqMinX) * 0.5f;
+		const float farHalf = std::min((halfCells + 1.0f) * 4096.0f, kFarPatchReach);
+		const float farTexel = farHalf * 2.0f / kHeightMapDim;
+		const auto farEye = globals::game::frameBufferCached.GetCameraPosAdjust();
+		farWindowCenter = { std::floor(farEye.x / farTexel) * farTexel, std::floor(farEye.y / farTexel) * farTexel };
+		farHalfExtentLive = farHalf;
+		for (uint32_t ci = 0; ci < captureCount; ci++)
+			if (capturedStatics[ci].road && !capturedStatics[ci].lodBatch)
+				farRecordIndex[ci] = farCount++;
+	}
+	const uint32_t farRecordBase = captureCount * recordBlocks;
+	std::vector<StaticsCB> captureRecords(size_t(farRecordBase) + farCount);
 	// Owning references: the cache clears itself past 1,024 entries, and a
 	// raw pointer taken before that clear is a freed view by the time the
 	// loops bind it (Josef's driver-thread CTD, 2026-09-06).
@@ -2074,8 +2105,15 @@ void SnowDeformation::RenderObjectHeightMap()
 			fine = scb;
 			fine.HeightHalfExtent = FineRasterHalfExtent();
 		}
+		if (farRecordIndex[ci] != ~0u) {
+			// Same draw against the far window.
+			StaticsCB& farBlock = captureRecords[size_t(farRecordBase) + farRecordIndex[ci]];
+			farBlock = scb;
+			farBlock.HeightWindowCenter = farWindowCenter;
+			farBlock.HeightHalfExtent = farHalfExtentLive;
+		}
 	}
-	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), captureCount * recordBlocks);
+	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()));
 	uint32_t captureParity = 0;
 
 	globals::profiler->BeginPass("SnowDeformation::ObjectHeightMap");
@@ -2188,6 +2226,59 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		globals::profiler->EndPass();
 		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	}
+
+	// Far road level: the road captures alone, MAX-rasterized over the
+	// loaded-cell square into one top map. Rebuilt from this frame's list -
+	// roads never move, and an off-screen road needs no patch - so no ghost
+	// and no scroll. RT1/RT2 stay unbound; the PS's writes to them drop.
+	if (farLevel) {
+		context->ClearRenderTargetView(heightTopRawFar->rtv.get(), topClear);
+		ID3D11RenderTargetView* farRTVs[1] = { heightTopRawFar->rtv.get() };
+		context->OMSetRenderTargets(1, farRTVs, nullptr);
+		globals::profiler->BeginPass("SnowDeformation::ObjectHeightMapFar");
+		SD_DrawBinds farBinds;
+		for (uint32_t ci = 0; ci < captureCount; ci++) {
+			if (farRecordIndex[ci] == ~0u)
+				continue;
+			const auto& cap = capturedStatics[ci];
+			auto* geometry = cap.geometry.get();
+			if (!geometry)
+				continue;
+			auto triShape = geometry->AsTriShape();
+			if (!triShape)
+				continue;
+			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
+			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+				continue;
+			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+			if (indexCount == 0)
+				continue;
+			auto desc = rendererData->vertexDesc;
+			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+				continue;
+			uint64_t descKey;
+			memcpy(&descKey, &desc, sizeof(descKey));
+			auto layoutIt = staticsILCache.find(descKey);
+			if (layoutIt == staticsILCache.end() || !layoutIt->second)
+				continue;
+			UINT stride = uint32_t(descKey & 0xF) * 4;
+			if (stride == 0)
+				continue;
+			farBinds.Layout(context, layoutIt->second.get());
+			farBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
+			farBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
+			farBinds.Smooth(context, captureSmoothSRVs[ci].get());
+			if (captureRecordsLive)
+				BindStaticsRecord(farRecordBase + farRecordIndex[ci], true, false, captureParity);
+			else
+				staticsCB->Update(captureRecords[size_t(farRecordBase) + farRecordIndex[ci]]);
+			context->DrawIndexed(indexCount, 0, 0);
+		}
+		globals::profiler->EndPass();
+		context->OMSetRenderTargets(3, nullRTVs, nullptr);
+	} else {
+		globals::profiler->MarkPassSkipped("SnowDeformation::ObjectHeightMapFar");
 	}
 
 	// The layer-2 PEEL: re-rasterize the captures against the finished
@@ -2561,6 +2652,12 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// The near clipmap shares the coarse window's centre, so its half-extent
 	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (!fineLevelDisabled && heightTopRawFine && objectSnowConeFine) ? FineRasterHalfExtent() : 0.0f;
+	// Far road level (t40, bound by the skin pass): the road skin's
+	// RoadOwnsColumn steps aside on far roads through it.
+	a_scb.FarWindowCenterX = farWindowCenter.x;
+	a_scb.FarWindowCenterY = farWindowCenter.y;
+	a_scb.FarHalfExtent = farHalfExtentLive;
+	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
 	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
 	a_scb.AlphaTested = a_cap.alphaTested ? 1.0f : 0.0f;
 }
@@ -3149,6 +3246,13 @@ void SnowDeformation::DrawCapturedStatics()
 	context->DSSetShaderResources(33, 2, fineSRVs);
 	context->PSSetShaderResources(33, 2, fineSRVs);
 	context->HSSetShaderResources(33, 2, fineSRVs);
+	// Far road level (t40): PatchTop's fallback past the coarse window. Null
+	// when the level is off; FarHalfExtent is 0 then, so nothing reads it.
+	ID3D11ShaderResourceView* farTopSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
+	context->VSSetShaderResources(40, 1, &farTopSRV);
+	context->DSSetShaderResources(40, 1, &farTopSRV);
+	context->PSSetShaderResources(40, 1, &farTopSRV);
+	context->HSSetShaderResources(40, 1, &farTopSRV);
 	// P3: the sky-openness field (t25), the lift's depth weighting.
 	ID3D11ShaderResourceView* skyOpenSRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
 	context->VSSetShaderResources(25, 1, &skyOpenSRV);
@@ -3744,6 +3848,8 @@ void SnowDeformation::DrawCapturedStatics()
 			ID3D11ShaderResourceView* patchStageSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 			context->HSSetShaderResources(11, 2, patchStageSRVs);
 			context->DSSetShaderResources(11, 2, patchStageSRVs);
+			context->HSSetShaderResources(40, 1, &farTopSRV);
+			context->DSSetShaderResources(40, 1, &farTopSRV);
 			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 			context->DSSetSamplers(0, 1, &dsSampler);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
@@ -3756,6 +3862,7 @@ void SnowDeformation::DrawCapturedStatics()
 		// surface is the object top, not the terrain window's class ramp.
 		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
+		context->PSSetShaderResources(40, 1, &farTopSRV);
 		// Scene depth copy (PS t3), as for the skins: the skin pass unbinds it
 		// before this block, so it has to be bound again here.
 		ID3D11ShaderResourceView* patchDepthSRV = Util::GetCurrentSceneDepthSRV(false);
@@ -3777,6 +3884,8 @@ void SnowDeformation::DrawCapturedStatics()
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
+		// Far road level (t40): the outer bands drape on it.
+		context->VSSetShaderResources(40, 1, &farTopSRV);
 		// Terrain window (t0) + object snow cone (t13) for the road-verge
 		// depth blend, in whichever stage evaluates BuildPatchVertex (the VS
 		// on the legacy grid, the DS when tessellating). Explicit binds: both

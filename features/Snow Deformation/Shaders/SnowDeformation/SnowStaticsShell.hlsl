@@ -275,10 +275,13 @@ cbuffer StaticCB : register(b1)
 	float padOverhead;
 	float padMeldSk;
 
-	float padPileHeight;
-	float padSkyExposure;
-	float padCorniceLip;
-	float padBreakup;
+	// Far road level (t40): the road-only top raster over the loaded-cell
+	// square, with its own window. FarHalfExtent 0 = off. Roads write one
+	// class depth, so the level stores none; FarRoadDepth stands in for it.
+	float FarWindowCenterX;
+	float FarWindowCenterY;
+	float FarHalfExtent;
+	float FarRoadDepth;
 	float padWeld;
 
 	// >0.5: PreSkinMasks is bound. Mirror in SnowHeightCapture.hlsl /
@@ -390,22 +393,21 @@ SamplerState SnowSampler : register(s0);
 #include "SnowDeformation/SnowGrid.hlsli"
 
 // The patch's own band table, run through the shell's walk (WarpAxisT).
-// Sized to the OBJECT RASTER, not to the horizon: past HeightHalfExtent there
-// is no top surface to drape on, so reach beyond it buys nothing.
-//
-// 8-unit core out to 1024 - unchanged from the flat grid it replaces, and
-// already at the 4-unit raster's resolution - then power-of-two steps out to
-// 4224, which covers the raster's 4096 with slack for the centre snap:
-//   1024 (128 x 8) | 1152 | 1408 | 1920 | 4224 (18 x 128)
+// 8-unit core out to 1024 - already at the 4-unit raster's resolution - then
+// power-of-two steps to the far road level's reach, 16384 (the far edge of a
+// uGridsToLoad 7 square from the camera). Past the coarse raster only roads
+// have data, so the outer band is coarse and the hull shader tessellates
+// live road quads back to ~16-unit vertices.
+//   1024 (128 x 8) | 1280 (16 x 16) | 1536 (8 x 32) | 1792 (4 x 64) | 16384 (57 x 256)
 // INVARIANT (see SnowGrid.hlsli): every band start is a multiple of its own
-// step and of the origin snap. 1024/16, 1152/32, 1408/64, 1920/128 are all
-// exact, and the CPU snaps the patch centre to kPatchSnap.
-static const float kPatchBandVerts[kWarpBands] = { 128.0, 8.0, 8.0, 8.0, 18.0 };
-static const float kPatchBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };
+// step and of the origin snap (kPatchSnap = 256): 1024, 1280, 1536 and 1792
+// all are.
+static const float kPatchBandVerts[kWarpBands] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
+static const float kPatchBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
 static const float kPatchStep = 8.0;
 // Quads per axis; mirrored as kPatchGridDim in SnowDeformation.h, which sizes
-// the draw. 2 x (128 + 8 + 8 + 8 + 18).
-#define kPatchGridDim 340
+// the draw. 2 x (128 + 16 + 8 + 4 + 57).
+#define kPatchGridDim 426
 
 float2 PatchWarpXY(float2 u)
 {
@@ -646,6 +648,11 @@ Texture2D<float> ObjectSnowCone : register(t13);
 // FineHalfExtent (0 = the level is off and every read below stays coarse).
 Texture2D<float> ObjectSnowConeFine : register(t33);
 Texture2D<float> ObjectTopFine : register(t34);
+// Far road level: the road captures alone, rasterized over the loaded-cell
+// square into one top map, with its own window (FarWindowCenterX/Y,
+// FarHalfExtent). Readers take it only OUTSIDE the coarse window, so the two
+// never disagree where both have data.
+Texture2D<float> ObjectTopFar : register(t40);
 // P3: per-column sky openness (1 = open sky), baked by ObjectSkyOpenCS at
 // half the raster's resolution from the layer-1 tops.
 Texture2D<float> ObjectSkyOpen : register(t25);
@@ -738,21 +745,67 @@ float FineTopPoint(float2 worldXY)
 	return result;
 }
 
+// Texel of the FAR window, which has its own centre.
+float2 FarTexel(float2 worldXY, float2 dims)
+{
+	float2 local = (worldXY - float2(FarWindowCenterX, FarWindowCenterY)) / FarHalfExtent;
+	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
+	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+}
+
+// Far road top, MAX of four like PatchTop; the empty sentinel outside the far
+// window or with the level off. PatchTop routes here only past the coarse
+// window, so a column the coarse raster answers never reads this.
+float FarTop(float2 worldXY)
+{
+	float result = -1000000.0;
+	float2 d = abs(worldXY - float2(FarWindowCenterX, FarWindowCenterY));
+	[branch] if (FarHalfExtent > 0.0 && max(d.x, d.y) <= FarHalfExtent)
+	{
+		float2 dims;
+		ObjectTopFar.GetDimensions(dims.x, dims.y);
+		float2 tf = FarTexel(worldXY, dims);
+		int2 t0 = (int2)tf;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		result = max(max(ObjectTopFar.Load(int3(t0.x, t0.y, 0)), ObjectTopFar.Load(int3(t1.x, t0.y, 0))),
+			max(ObjectTopFar.Load(int3(t0.x, t1.y, 0)), ObjectTopFar.Load(int3(t1.x, t1.y, 0))));
+	}
+	return result;
+}
+
+// MIN of the same four: the road interior at the far level's resolution.
+float FarTopMin(float2 worldXY)
+{
+	float result = -1000000.0;
+	float2 d = abs(worldXY - float2(FarWindowCenterX, FarWindowCenterY));
+	[branch] if (FarHalfExtent > 0.0 && max(d.x, d.y) <= FarHalfExtent)
+	{
+		float2 dims;
+		ObjectTopFar.GetDimensions(dims.x, dims.y);
+		float2 tf = FarTexel(worldXY, dims);
+		int2 t0 = (int2)tf;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		result = min(min(ObjectTopFar.Load(int3(t0.x, t0.y, 0)), ObjectTopFar.Load(int3(t1.x, t0.y, 0))),
+			min(ObjectTopFar.Load(int3(t0.x, t1.y, 0)), ObjectTopFar.Load(int3(t1.x, t1.y, 0))));
+	}
+	return result;
+}
+
 float PatchTop(float2 worldXY)
 {
 	// The fine level first where it has this column; it rasterizes the same
 	// captures, so the two agree to within a texel and the switch needs no
 	// blend. Empty there (a ghost the fine level carries none of) falls back.
-	// Outside the coarse window: sentinel, never the clamped edge texel. The
-	// patch grid never leaves the window, but skin draws reach the full
-	// capture range, where a clamped read returns an unrelated object's top.
+	// Outside the coarse window: the far road level, or its sentinel - never
+	// the clamped edge texel, which would hand the skin draws that reach the
+	// full capture range an unrelated object's top.
 	float result = FineTop(worldXY);
 	[branch] if (result <= -50000.0)
 	{
 		float2 windowLocal = abs(worldXY - HeightWindowCenter);
 		[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
 		{
-			result = -1000000.0;
+			result = FarTop(worldXY);
 		}
 		else
 		{
@@ -842,20 +895,29 @@ float SampleSkyOpenness(float2 worldXY)
 // sentinel neighbour must not drag the column off the road.
 float2 PatchSkinDepth(float2 worldXY)
 {
-	// Outside the window, sentinel - PatchTexel CLAMPS, so without this the
-	// read returns an unrelated edge texel. PatchTop guards itself the same
-	// way; the two must agree or a comparison between them is meaningless.
+	// Outside the window: the far road level (roads only, one class depth),
+	// else sentinel - PatchTexel CLAMPS, so without this the read returns an
+	// unrelated edge texel. PatchTop takes the same turn; the two must agree
+	// or a comparison between them is meaningless.
+	float2 result = float2(0.0, kNoRoadTop);
 	float2 windowLocal = abs(worldXY - HeightWindowCenter);
-	if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
-		return float2(0.0, kNoRoadTop);
-
-	float2 dims;
-	ObjectSkinDepth.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 t0 = (int2)t;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	return max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
-		max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
+	[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+	{
+		float farTop = FarTop(worldXY);
+		[flatten] if (farTop > -50000.0)
+			result = float2(FarRoadDepth, farTop);
+	}
+	else
+	{
+		float2 dims;
+		ObjectSkinDepth.GetDimensions(dims.x, dims.y);
+		float2 t = PatchTexel(worldXY, dims);
+		int2 t0 = (int2)t;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		result = max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
+			max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
+	}
+	return result;
 }
 
 // The top the patch stands on at this column: the road's own top where
@@ -908,36 +970,45 @@ float PatchSilhouetteDrop(float2 worldXY)
 	// boundary is. Jittering them separately is how the holes came back twice.
 	worldXY += BorderJitter(worldXY) * 0.25;
 
-	float2 dims;
-	ObjectTopRaw.GetDimensions(dims.x, dims.y);
-	float2 t = PatchTexel(worldXY, dims);
-	int2 c0 = (int2)t;
-	float2 cf = t - c0;
-	int2 c1 = min(c0 + 1, int2(dims) - 1);
-	float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
-	float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
-	float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
-	float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
-	// On a road column the silhouette is the ROAD's, not that of whatever
-	// stands over it: a wall's top would clip the patch running under it.
-	float2 sdims;
-	ObjectSkinDepth.GetDimensions(sdims.x, sdims.y);
-	float2 st = PatchTexel(worldXY, sdims);
-	int2 s0 = (int2)st;
-	int2 s1 = min(s0 + 1, int2(sdims) - 1);
-	float4 roadTops = float4(ObjectSkinDepth.Load(int3(s0.x, s0.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s0.y, 0)).y,
-		ObjectSkinDepth.Load(int3(s0.x, s1.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s1.y, 0)).y);
-	bool4 onRoad = roadTops > kNoRoadTop * 0.5;
-	[flatten] if (any(onRoad))
+	// The far road level has no silhouette to clip: one road top per texel
+	// and nothing standing over it. Past the coarse window the per-vertex
+	// kill is the edge, and the skin's step-aside reads the same level.
+	float result = 0.0;
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	[branch] if (max(windowLocal.x, windowLocal.y) <= HeightHalfExtent)
 	{
-		top00 = onRoad.x ? roadTops.x : top00;
-		top10 = onRoad.y ? roadTops.y : top10;
-		top01 = onRoad.z ? roadTops.z : top01;
-		top11 = onRoad.w ? roadTops.w : top11;
+		float2 dims;
+		ObjectTopRaw.GetDimensions(dims.x, dims.y);
+		float2 t = PatchTexel(worldXY, dims);
+		int2 c0 = (int2)t;
+		float2 cf = t - c0;
+		int2 c1 = min(c0 + 1, int2(dims) - 1);
+		float top00 = ObjectTopRaw.Load(int3(c0.x, c0.y, 0));
+		float top10 = ObjectTopRaw.Load(int3(c1.x, c0.y, 0));
+		float top01 = ObjectTopRaw.Load(int3(c0.x, c1.y, 0));
+		float top11 = ObjectTopRaw.Load(int3(c1.x, c1.y, 0));
+		// On a road column the silhouette is the ROAD's, not that of whatever
+		// stands over it: a wall's top would clip the patch running under it.
+		float2 sdims;
+		ObjectSkinDepth.GetDimensions(sdims.x, sdims.y);
+		float2 st = PatchTexel(worldXY, sdims);
+		int2 s0 = (int2)st;
+		int2 s1 = min(s0 + 1, int2(sdims) - 1);
+		float4 roadTops = float4(ObjectSkinDepth.Load(int3(s0.x, s0.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s0.y, 0)).y,
+			ObjectSkinDepth.Load(int3(s0.x, s1.y, 0)).y, ObjectSkinDepth.Load(int3(s1.x, s1.y, 0)).y);
+		bool4 onRoad = roadTops > kNoRoadTop * 0.5;
+		[flatten] if (any(onRoad))
+		{
+			top00 = onRoad.x ? roadTops.x : top00;
+			top10 = onRoad.y ? roadTops.y : top10;
+			top01 = onRoad.z ? roadTops.z : top01;
+			top11 = onRoad.w ? roadTops.w : top11;
+		}
+		float maxTop = max(max(top00, top10), max(top01, top11));
+		float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
+		result = lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
 	}
-	float maxTop = max(max(top00, top10), max(top01, top11));
-	float4 drops = min(maxTop - float4(top00, top10, top01, top11), 200.0);
-	return lerp(lerp(drops.x, drops.y, cf.x), lerp(drops.z, drops.w, cf.x), cf.y);
+	return result;
 }
 
 // Does the road own this column? The single predicate the patch's carve gate
@@ -945,27 +1016,37 @@ float PatchSilhouetteDrop(float2 worldXY)
 // column the patch declined.
 bool RoadOwnsColumn(float2 worldXY)
 {
-	// The top MUST be real. A sentinel top (outside the window, or no object
-	// captured here) makes top - roadTop hugely negative, which passes the
-	// height test for free - and the skin then steps aside for a patch that
-	// cannot draw, stripping distant roads of snow entirely.
-	float top = PatchTop(worldXY);
-	if (top < -50000.0)
-		return false;
-	// A road owns every column it overlaps, whatever stands on or over it:
-	// the road's snow runs on under walls, houses and rocks (Josef, 2026-09-04)
-	// rather than stopping in a hard edge at their footprint.
-	float roadTop = PatchSkinDepth(worldXY).y;
-	if (roadTop <= kNoRoadTop * 0.5)
-		return false;
-	// The silhouette clip is the other way the patch declines a column it
-	// otherwise owns, and it fires on the road's own edge texels - where the
-	// road IS the supporting top, so the ownership test above passes happily.
-	// Stepping aside there left a hole straight through to the road mesh.
-	// 8.0 is where the clip's smoothstep starts biting; below it the patch is
-	// at full coverage. In the 8-24 band both draw and the patch wins on top,
-	// which is a thin double layer rather than a hole.
-	return PatchSilhouetteDrop(worldXY) < 8.0;
+	bool result = false;
+	float2 windowLocal = abs(worldXY - HeightWindowCenter);
+	[branch] if (max(windowLocal.x, windowLocal.y) > HeightHalfExtent)
+	{
+		// Far road level: MIN of the four texels, so the skin steps aside only
+		// where every texel around the pixel is road. The patch draws on the
+		// MAX (its vertices die per texel), so along a far road edge the two
+		// overlap rather than leave a strip of bare mesh between them.
+		result = FarTopMin(worldXY) > -50000.0;
+	}
+	else
+	{
+		// The top MUST be real. A sentinel top (no object captured here) makes
+		// top - roadTop hugely negative, which passes the height test for free
+		// - and the skin then steps aside for a patch that cannot draw,
+		// stripping the road of snow entirely.
+		float top = PatchTop(worldXY);
+		// A road owns every column it overlaps, whatever stands on or over it:
+		// the road's snow runs on under walls, houses and rocks (Josef, 2026-09-04)
+		// rather than stopping in a hard edge at their footprint.
+		float roadTop = PatchSkinDepth(worldXY).y;
+		// The silhouette clip is the other way the patch declines a column it
+		// otherwise owns, and it fires on the road's own edge texels - where the
+		// road IS the supporting top, so the ownership test above passes happily.
+		// Stepping aside there left a hole straight through to the road mesh.
+		// 8.0 is where the clip's smoothstep starts biting; below it the patch is
+		// at full coverage. In the 8-24 band both draw and the patch wins on top,
+		// which is a thin double layer rather than a hole.
+		result = top > -50000.0 && roadTop > kNoRoadTop * 0.5 && PatchSilhouetteDrop(worldXY) < 8.0;
+	}
+	return result;
 }
 #endif
 
@@ -1498,7 +1579,13 @@ float PatchEdgeTessFactor(float2 worldA, float2 worldB)
 	// EdgeTessFactor in SnowShell.hlsl. Still edge-derived only, so crack-free.
 	float reliefBase = SnowReliefDepth > 0.01 ? 1.0 : 0.0;
 	float reach = 1600.0 * lerp(reliefBase, 3.0, smoothstep(0.02, 0.25, deform));
-	return clamp(reach / max(dist, 32.0), 1.0, 8.0);
+	float factor = clamp(reach / max(dist, 32.0), 1.0, 8.0);
+	// Outer bands: quads are 32-256 units and a vertex lives or dies per
+	// raster texel, so a coarse quad straddling a road edge loses its whole
+	// triangle fan. Subdivide live quads back to ~16-unit vertices; the
+	// constant function has already culled the quads with no road under them.
+	float quadFactor = clamp(length(worldA - worldB) / 16.0, 1.0, 16.0);
+	return max(factor, quadFactor);
 }
 
 TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
@@ -1513,6 +1600,12 @@ TessFactorsPatch PatchConstants(InputPatch<TessControlPointPatch, 4> patch)
 		if (PatchTop(w) > -50000.0 && PatchSkinDepth(w).x >= 1.0)
 			anyLive = true;
 	}
+	// A road narrower than a coarse quad's diagonal can cross it between all
+	// four corners; the centre catches that (any road wider than ~180 units
+	// hits a corner or the centre of a 256-unit quad).
+	float2 centre = 0.25 * (patch[0].WorldXY + patch[1].WorldXY + patch[2].WorldXY + patch[3].WorldXY);
+	if (PatchTop(centre) > -50000.0 && PatchSkinDepth(centre).x >= 1.0)
+		anyLive = true;
 	if (!anyLive) {
 		f.Edge[0] = f.Edge[1] = f.Edge[2] = f.Edge[3] = 0.0;
 		f.Inside[0] = f.Inside[1] = 0.0;
