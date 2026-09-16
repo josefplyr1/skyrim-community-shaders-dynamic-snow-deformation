@@ -782,12 +782,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Blood decals go to the blood map, never to the statics list. Skinned
 	// blood is a wound decal on a body unless it is a pool framework quad.
-	if (rec.bloodTex) {
+	if (rec.bloodTex && (RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+							flags.any(Flag::kDecal, Flag::kDynamicDecal))) {
 		if (settings.BloodOnSnow) {
 			const bool skinnedBlood = a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr;
-			const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
-			                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
-			if (decalMode && (!skinnedBlood || NameFactsOf(a_pass->geometry).bloodPool))
+			if (!skinnedBlood || NameFactsOf(a_pass->geometry).bloodPool)
 				CaptureBloodDraw(a_pass, skinnedBlood);
 		}
 		return;
