@@ -114,6 +114,10 @@ static bool ContainsNoCase(const char* a_text, const char* a_needle)
 	return false;
 }
 
+// Non-snow projected materials, matched on MATO editor IDs and on DynDOLOD's
+// LOD batch names (objAsh on Solstheim).
+static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
+
 // Every name-derived fact the capture hook needs, computed once per interned
 // geometry name (BSFixedString: equal content, equal pointer). Validated by
 // length and the first eight bytes against pointer reuse. The logged flags
@@ -129,10 +133,14 @@ struct GeometryNameFacts
 	bool plank = false;
 	bool iceFamily = false;
 	bool drift = false;
+	// DynDOLOD batch (obj<Material>[HD][-LargeRef]) of a non-snow projected
+	// material: no reference behind it, so the name is the only MATO signal.
+	bool lodNotSnow = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
 	bool decalLogged = false;
+	bool lodVetoLogged = false;
 };
 
 static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
@@ -169,6 +177,11 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
+		f.lodNotSnow = false;
+		if (length > 3 && std::tolower((unsigned char)name[0]) == 'o' && std::tolower((unsigned char)name[1]) == 'b' && std::tolower((unsigned char)name[2]) == 'j') {
+			for (const auto* keyword : kNotSnowKeywords)
+				f.lodNotSnow = f.lodNotSnow || ContainsNoCase(name, keyword);
+		}
 	}
 	lastGeometry = a_geometry;
 	lastName = name;
@@ -296,7 +309,6 @@ namespace
 				} else if (matoPath.find("snow") != std::string::npos) {
 					it->second = MatoClass::kSnow;
 				} else {
-					static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
 					it->second = MatoClass::kNoMato;
 					for (const auto* keyword : kNotSnowKeywords) {
 						if (matoPath.find(keyword) != std::string::npos) {
@@ -573,7 +585,8 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		r = {};
 		r.material = a_material;
 		r.name = name;
-		r.iceName = NameFactsOf(a_geometry).iceFamily;
+		auto& nameFacts = NameFactsOf(a_geometry);
+		r.iceName = nameFacts.iceFamily;
 		if (a_material) {
 			const SnowPathMatch& path = ClassifySnowPath(a_material);
 			r.pathBase = path.base;
@@ -591,6 +604,13 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		// The texture half of IceFamilySignal is the natural-feature test.
 		r.ice = r.iceName || r.pathNatural;
 		r.mato = ClassifyProjectedMato(a_geometry);
+		if (r.mato == MatoClass::kNoReference && nameFacts.lodNotSnow) {
+			r.mato = MatoClass::kNotSnow;
+			if (!nameFacts.lodVetoLogged) {
+				nameFacts.lodVetoLogged = true;
+				logger::info("[SNOW DEFORMATION] LOD batch '{}' -> NOT snow (vetoed by name)", name);
+			}
+		}
 		r.seasonsProj = r.mato == MatoClass::kSnowSeasons;
 		if (!r.seasonsProj) {
 			static const RE::BSFixedString seasonsMarker("SOS_SNOW_SHADER");
@@ -789,6 +809,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// is the scene surface.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
 	const bool lodBatch = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+	// objAsh and kin: the recolor bit is off (RecordOf's name veto) and the
+	// skin would coat off a weight Lighting never writes.
+	if (lodBatch && rec.mato == MatoClass::kNotSnow)
+		return;
 	// Read after SetupGeometry: the raster depth-bias mode this draw uses.
 	// Decal mode writes depth with a slope bias (-0.65/px) and a shorter
 	// viewport range, so at grazing views the mesh's own depth sits far
