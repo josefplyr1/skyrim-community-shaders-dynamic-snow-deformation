@@ -1847,12 +1847,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 	[branch] if (snowProjMatch)
 	{
-		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
-		// All or nothing: every pixel the game paints at all wears the shell's
-		// snow at full weight, in the object's own shader, so no angle is missed.
+		// All or nothing at the game's own half blend (projWeight 0, where
+		// vanilla's flat-colour path starts painting), in the object's own
+		// shader so no angle is missed. The old cut at the last trace of
+		// paint turned a faint dusting into full snow (interior floors,
+		// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
+		projectedMaterialWeight = smoothstep(-0.01, 0.01, projWeight);
 		[branch] if (projectedMaterialWeight > 0.003)
 		{
-			projectedMaterialWeight = 1.0;
 			// Plane weights from the smooth vertex normal. The derivative face
 			// normal behind triWeights goes through a hard step() mask and flips
 			// planes on the quads straddling mesh creases - a line of a different
