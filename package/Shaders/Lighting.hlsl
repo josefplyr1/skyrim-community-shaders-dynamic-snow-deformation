@@ -17,6 +17,14 @@
 #	define SKIN
 #endif
 
+// The skin path assigns members only the vanilla branch of
+// MaterialProperties declares (RoughnessSecondary, Glossiness), so a PBR
+// skin permutation cannot compile it: FacegenRGBTint + TRUE_PBR failed at
+// every cache clear (2026-09-16). PBR faces take the PBR path instead.
+#if defined(TRUE_PBR) && defined(SKIN) && defined(CS_SKIN)
+#	undef CS_SKIN
+#endif
+
 #if !defined(DYNAMIC_CUBEMAPS) && defined(IBL)
 #	undef IBL
 #endif
