@@ -894,7 +894,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			cache.collisionFallback = false;
 			cache.contactStarved = 0;
 			cache.contactStarveLogged = false;
-			cache.hasContactPrev = false;
 		} else if (cache.contactStarved > 0) {
 			cache.contactStarved--;
 		}
@@ -920,21 +919,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// actor with none usable must not take the bone path, or the collision
 		// fallback its skeleton needs is unreachable.
 		uint usableFeet = 0;
-		// Stillness for the contact pass: a living body whose usable feet all
-		// stood where they stood last frame has nothing new to press into the
-		// snow. Feet, not the pelvis: an idle shifts weight and turns the
-		// head while the boots stay planted, and it is the boots that print.
-		bool feetStill = true;
-		for (auto& foot : cache.feet) {
+		for (const auto& foot : cache.feet) {
 			auto* n = foot.node.get();
 			if (!n || n->world.scale < 0.01f)
 				continue;
 			usableFeet++;
-			// Against the pose last DRAWN, not last frame: a body turning a few
-			// degrees a second never moves a unit in one frame, but it moves far
-			// in a hundred, and its print has to follow.
-			if (!foot.hasPrev || n->world.translate.GetDistance(foot.prev) > kContactStillStep)
-				feetStill = false;
 		}
 		if (!cache.feet.empty() || !cache.limbs.empty())
 			bones = &cache;
@@ -1107,7 +1096,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		// body translates and for the settle window after, then latched out
 		// on the same rest state the bone corpse path uses; a latched corpse
 		// takes NO path - its print is already in the map - until the body
-		// moves off its resting place again.
+		// moves off its resting place again. The living draw every frame.
 		if (debugActorContact && !contactShadersFailed && !contactStarved) {
 			const auto& bound = root->worldBound;
 			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
@@ -1138,25 +1127,15 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					}
 					rest->prevCenter = center;
 					rest->hasPrevCenter = true;
-					draw = !rest->settled;
+					draw = !(debugContactStillGate && rest->settled);
+					if (!draw)
+						stampStats.corpsesLatched++;
 				}
 				if (draw) {
-					// The living latch is per frame, not per settle window: the body
-					// is still when it has not translated and every usable foot is
-					// planted (or, footless, the body itself has not moved). Its print
-					// is in the map already; skipping the draw is what lets the field
-					// go empty and the update pass sleep beside an idling NPC.
-					const bool bodyStill = cache.hasContactPrev && position.GetDistance(cache.contactPrev) < kContactStillStep &&
-					                       position.GetDistance(cache.contactPrev) < kFootDryTeleport;
-					const bool still = debugActorContact && debugContactStillGate && !isDead && bodyStill && (usableFeet > 0 ? feetStill : true);
-					// The reference pose is recorded by the DRAW (DrawContactCapture),
-					// once a partition has actually gone into the field: a freshly
-					// spawned body's first frames have no buffers yet, and a reference
-					// taken then would leave it "still" forever, unprinted.
 					contactActors.push_back({ actor->CreateRefHandle(),
 						bound.center.x - bound.radius, bound.center.y - bound.radius,
 						bound.center.x + bound.radius, bound.center.y + bound.radius, isDead,
-						groundZ, nominalDepth, still });
+						groundZ, nominalDepth });
 					if (isDead) {
 						contactCorpseCount++;
 						stampStats.corpsesRasterized++;

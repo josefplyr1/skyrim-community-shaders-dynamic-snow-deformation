@@ -4528,7 +4528,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactCarriedLast = 0;
 	contactOverlaysLast = 0;
 	contactShellsLast = 0;
-	contactStillLast = 0;
 	contactHiddenPartsLast = 0;
 	contactGlobalPartsLast = 0;
 	if (contactSkinIndexing.size() > 1024)
@@ -4549,8 +4548,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
 				continue;
-			if (actor.still)
-				contactStillLast++;
 			const uint drawsBeforeActor = contactSkinDrawsLast;
 			// First person hides the player's third-person root, but that skeleton
 			// still animates: the body under the camera is what walks in the snow.
@@ -4638,9 +4635,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 						contactCarriedLast++;
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
-				// A still body's print is already in the map: its skin is not drawn.
-				if (actor.still)
-					return RE::BSVisit::BSVisitControl::kContinue;
 				tally.skinned++;
 				if (!skinnedVSBound) {
 					context->VSSetShader(contactSkinVS, nullptr, 0);
@@ -4983,14 +4977,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
-			// The stillness reference: where the body stood when its skin last
-			// went into the field. Recorded only on a real draw, so a spawned
-			// body whose buffers arrive late is not marked still before it
-			// has ever printed.
 			// Nothing printed from a body the game draws: hand the actor to the bone
 			// stamps for a while rather than leave it carving nothing at all.
 			const bool rootHidden = root->GetAppCulled() && !firstPersonPlayer;
-			if (!actor.still && !actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
+			if (!actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
 				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
 					auto& cache = it->second;
 					cache.contactStarved = kContactStarveFrames;
@@ -5001,18 +4991,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 							ref->GetDisplayFullName(), ref->GetFormID(), firstPersonPlayer ? " in first person" : "",
 							tally.skinned, tally.hidden, tally.unlit, tally.proxy, tally.above, tally.dynamic, tally.dynamicUnread);
 					}
-				}
-			}
-			if (!actor.still && !actor.corpse && contactSkinDrawsLast > drawsBeforeActor) {
-				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
-					auto& cache = it->second;
-					cache.contactPrev = ref->GetPosition();
-					cache.hasContactPrev = true;
-					for (auto& foot : cache.feet)
-						if (auto* n = foot.node.get()) {
-							foot.prev = n->world.translate;
-							foot.hasPrev = true;
-						}
 				}
 			}
 		}

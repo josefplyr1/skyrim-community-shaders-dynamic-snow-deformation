@@ -283,9 +283,6 @@ public:
 		{
 			RE::NiPointer<RE::NiAVObject> node;
 			RE::NiPointer<RE::NiAVObject> toe;
-			/** @brief Where the foot stood last frame, for the contact stillness gate. */
-			RE::NiPoint3 prev;
-			bool hasPrev = false;
 		};
 		std::vector<Foot> feet;
 		struct Limb
@@ -316,9 +313,6 @@ public:
 		bool dryRecollected = false;
 		/** @brief Latched demotion to collision-shape stamping (and collision-measured floating), cleared when the 3D root changes. The failsafe for skeletons whose feet exist but never plant. */
 		bool collisionFallback = false;
-		/** @brief Where the body stood when the contact pass last drew it: stillness is measured against the last DRAWN pose, so slow motion accumulates into a redraw. */
-		RE::NiPoint3 contactPrev;
-		bool hasContactPrev = false;
 		/** @brief Frames this actor prints by bones because its last contact draw put nothing into the field. Counts down; at zero the mesh route is tried again. */
 		uint16_t contactStarved = 0;
 		/** @brief The starvation line for this 3D has been logged. */
@@ -2728,8 +2722,6 @@ public:
 		/** @brief Actors only: the ground under the feet and the layer depth there, so the draw can refuse parts that cannot reach the snow. */
 		float groundZ = 0.0f;
 		float layer = 0.0f;
-		/** @brief Living actor whose feet and body have not moved since last frame: its print is already in the map, so its skin is not drawn (carried gear still is, when it moves). */
-		bool still = false;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;
@@ -2779,11 +2771,13 @@ public:
 	bool debugWaterCutDisabled = false;
 	/** @brief Runtime-only: half-extent of the field view's crop around the player, world units (192 = a body, 1536 = the whole field). */
 	float debugContactViewHalf = 192.0f;
-	/** @brief Runtime-only A/B: when off, no living body counts as still and every rasterized actor draws every frame. */
+	/** @brief Runtime-only A/B: a settled corpse is latched out of the contact draw, its print already in the map. Off draws every rasterized corpse every frame. The living always draw. */
 	bool debugContactStillGate = true;
 	/** @brief Runtime-only: index of the one skinned geometry the actor contact pass draws (-1 = all), and its name. */
 	int debugContactSolo = -1;
 	std::string contactSoloName;
+	/** @brief Field view texels per side. The map view sits under the field, so the texture is kContactViewPx x 2*kContactViewPx. Mirrors VIEW_PX in DeformationUpdateCS.hlsl. */
+	static constexpr uint kContactViewPx = 512;
 	winrt::com_ptr<ID3D11Texture2D> contactViewTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> contactViewSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;
@@ -2797,8 +2791,6 @@ public:
 	uint contactOverlaysLast = 0;
 	/** @brief Creature fur shells the actor contact pass declined this frame. */
 	uint contactShellsLast = 0;
-	/** @brief Rasterized living actors that stood still this frame and were not drawn. */
-	uint contactStillLast = 0;
 	/** @brief Skin partitions the actor contact pass declined this frame: dismember partitions the game hides, or partitions whose bones resolve to nothing. */
 	uint contactHiddenPartsLast = 0;
 	/** @brief Per skin instance, how its vertices index bones: 1 = each partition's own list, 2 = the skin's full list. Audited once from the raw vertex copy. Identity key only, never dereferenced. */
@@ -2811,8 +2803,6 @@ public:
 	std::unordered_map<const void*, ContactSkinAudit> contactSkinIndexing;
 	/** @brief Skinned partitions drawn this frame from a whole-skin palette because their vertices index the skin's full bone list. */
 	uint contactGlobalPartsLast = 0;
-	/** @brief A foot or body that moved less than this since last frame counts as still. */
-	static constexpr float kContactStillStep = 1.0f;
 	/** @brief Extra sub-step draws issued this frame so fast gear sweeps instead of printing at intervals. */
 	uint contactSweepLast = 0;
 	/** @brief Previous frame's world transform per carried mesh, keyed by geometry, for the sweep. Identity only - never dereferenced. */
@@ -4034,6 +4024,8 @@ protected:
 		uint actorsRasterized = 0;
 		/** @brief Corpses drawn by the contact pass this frame (still settling, or woken). */
 		uint corpsesRasterized = 0;
+		/** @brief Settled corpses the still-corpse gate latched out of the contact draw this frame. */
+		uint corpsesLatched = 0;
 		uint spells = 0;
 		/** @brief Stamps taken by actors and props, read before any emitter is. Against kMaxStamps - kSpellStampReserve this says whether the fight is running into the budget or nowhere near it. */
 		uint beforeSpells = 0;

@@ -8,6 +8,41 @@
 
 #define I18N_KEY_PREFIX "feature.snow_deformation."
 
+namespace
+{
+	// Wraps at the window edge; continuation lines hang one indent in.
+	void WrapText(const char* a_text, const char* a_end)
+	{
+		const float wrapWidth = ImGui::GetContentRegionAvail().x;
+		const char* lineEnd = ImGui::GetFont()->CalcWordWrapPosition(ImGui::GetFontSize(), a_text, a_end, wrapWidth);
+		if (lineEnd <= a_text || lineEnd >= a_end) {
+			ImGui::TextUnformatted(a_text, a_end);
+			return;
+		}
+		ImGui::TextUnformatted(a_text, lineEnd);
+		while (lineEnd < a_end && (*lineEnd == ' ' || *lineEnd == '\n'))
+			lineEnd++;
+		const float indent = ImGui::GetFontSize() * 1.5f;
+		ImGui::Indent(indent);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextUnformatted(lineEnd, a_end);
+		ImGui::PopTextWrapPos();
+		ImGui::Unindent(indent);
+	}
+
+	void WrapTextF(const char* a_fmt, ...)
+	{
+		char buffer[4096];
+		va_list args;
+		va_start(args, a_fmt);
+		const int n = vsnprintf(buffer, sizeof(buffer), a_fmt, args);
+		va_end(args);
+		if (n < 0)
+			return;
+		WrapText(buffer, buffer + std::min<size_t>(n, sizeof(buffer) - 1));
+	}
+}
+
 void SnowDeformation::DrawSettings()
 {
 	ImGui::TextDisabled("%s", T(TKEY("credit"), "Snow Deformation - by josefplyr1"));
@@ -204,7 +239,7 @@ void SnowDeformation::DrawSettings()
 				const double fineMB = (4.0 * dims.x * dims.y * dims.z + 4.0 * 16.0 * dims.x * dims.x) / 1048576.0;
 				const double farMB = (4.0 * dims.x * dims.y * dims.z / 8.0 + 4.0 * 16.0 * dims.x * dims.x / 4.0) / 1048576.0;
 				const double supportMB = double(dims.x) * dims.y * dims.z / 1048576.0;
-				ImGui::Text("Finest level %.0f m across, %.0f m tall; outermost %.0f m across (%.0f m around you); %.0f MB", nearAcross, nearTall, farAcross, farAcross * 0.5f, fine * fineMB + (levels - fine) * farMB + supportMB);
+				WrapTextF("Finest level %.0f m across, %.0f m tall; outermost %.0f m across (%.0f m around you); %.0f MB", nearAcross, nearTall, farAcross, farAcross * 0.5f, fine * fineMB + (levels - fine) * farMB + supportMB);
 			}
 			ImGui::SliderFloat(T(TKEY("volume_march_step"), "March Step"), &settings.VolumeMarchStep, 0.25f, 2.0f, "%.2f voxels");
 			if (auto _ttVoxStep = Util::HoverTooltipWrapper())
@@ -928,27 +963,28 @@ void SnowDeformation::DrawSettings()
 			ImGui::Checkbox("Actor mesh contact (actors and corpses carve by their render mesh; off = bones)", &debugActorContact);
 
 			if (debugActorContact)
-				ImGui::Text("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u standing still (not drawn), %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
-					stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, contactStillLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
+				WrapTextF("  actors: %u living + %u corpses rasterized (caps %u / %u), %u partition draws + %u carried meshes (+%u sweep sub-steps; bone stamps skipped for these), %u overlays + %u fur shells declined, %u settled corpses latched out, %u hidden/orphan partitions declined, %u whole-skin-indexed, %u missing-bone stand-ins",
+					stampStats.actorsRasterized, stampStats.corpsesRasterized, kContactMaxActors, kContactMaxCorpses, contactSkinDrawsLast, contactCarriedLast, contactSweepLast, contactOverlaysLast, contactShellsLast, stampStats.corpsesLatched, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast);
 
 			ImGui::Checkbox("Contact field view (what the rasterizer wrote this frame)", &debugContactView);
 
 			if (debugContactView) {
 				ImGui::SliderFloat("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
-				ImGui::Checkbox("Still bodies skip the draw (A/B; off = every rasterized actor draws every frame)", &debugContactStillGate);
+				ImGui::Checkbox("Still corpses skip the draw (A/B; off = every rasterized corpse draws every frame; the living always draw)", &debugContactStillGate);
 				// The half-extent the view CS ran with, not the live slider: dragging
 				// it rebuilds the image next frame, and drawing this frame's box at
 				// next frame's scale is what makes a correct silhouette look misplaced.
 				const float viewHalf = contactViewHalfUsed > 0.0f ? contactViewHalfUsed : std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-				ImGui::Text("Crop of %.0f x %.0f units around the player, %g units per pixel, +Y up. TOP: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). BOTTOM: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
-					2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / 512.0f);
+				WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: the contact field as the carve pass samples it (red = carve fraction, green = hovering, MAGENTA = the surface reads below that column's ground, which carves full depth without touching anything, black = nothing drawn). RIGHT: the deformation map over the SAME ground (red = carve depth, faint blue = map texel edges). Yellow box = the player's world bound on both.",
+					2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
 				if (contactViewSRV) {
-					const float scale = 512.0f / (2.0f * viewHalf);
+					// Two squares side by side, sized to the window.
+					const float box = std::max(128.0f, std::floor((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f));
+					const float scale = box / (2.0f * viewHalf);
 					const float2 center = contactViewCenter;
 					auto drawHalf = [&](float a_v0, float a_v1) {
 						const ImVec2 topLeft = ImGui::GetCursorScreenPos();
-						// The crop is the left 512 texels of the 1024-wide view.
-						ImGui::Image(contactViewSRV.get(), { 512.0f, 512.0f }, { 0.0f, a_v0 }, { 0.5f, a_v1 });
+						ImGui::Image(contactViewSRV.get(), { box, box }, { 0.0f, a_v0 }, { 1.0f, a_v1 });
 						if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 							if (auto* root = player->Get3D(false)) {
 								auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
@@ -981,6 +1017,7 @@ void SnowDeformation::DrawSettings()
 						}
 					};
 					drawHalf(0.0f, 0.5f);
+					ImGui::SameLine();
 					drawHalf(0.5f, 1.0f);
 					if (auto* player = RE::PlayerCharacter::GetSingleton()) {
 						if (auto* root = player->Get3D(false))
@@ -988,7 +1025,7 @@ void SnowDeformation::DrawSettings()
 							// crop, so a gap between these two is the only way the box can
 							// sit off a centred silhouette. Named here so one screenshot
 							// separates a misplaced overlay from a misplaced raster.
-							ImGui::Text("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | crop centre (%.0f, %.0f) half %.0f, live bound drifts (%.0f, %.0f) | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
+							WrapTextF("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | crop centre (%.0f, %.0f) half %.0f, live bound drifts (%.0f, %.0f) | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
 								root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(),
 								contactViewCenter.x, contactViewCenter.y, contactViewHalfUsed,
 								root->worldBound.center.x - contactViewCenter.x, root->worldBound.center.y - contactViewCenter.y,
@@ -1019,7 +1056,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox("Prop mesh contact (moving props carve by their render mesh)", &debugContactCapture);
 
-			ImGui::Text("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
+			WrapTextF("  contact: %u props rasterized, %u draws, window %.0f m", stampStats.propsRasterized, contactDrawsLast, kContactHalfExtent / kUnitsPerMeter);
 
 			ImGui::Checkbox("Shape footprints (collision shapes stamp their silhouette, not a sphere)", &debugShapeFootprint);
 
@@ -1108,11 +1145,11 @@ void SnowDeformation::DrawSettings()
 			// is the one cost no profiler row carries.
 			{
 				const auto& s = cpuShown;
-				ImGui::Text("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
+				WrapTextF("CPU: capture hook %.3f ms over %.0f draws | gather: %.0f actors %.3f ms, land %.0f calls %.3f ms, depth %.0f calls %.3f ms, collision walks %.0f in %.3f ms",
 					s.hookMs, s.hookCalls, s.actors, s.actorMs, s.landCalls, s.landMs, s.depthCalls, s.depthMs, s.traverseCalls, s.traverseMs);
 				ImGui::Text("Submission: skin loop %.0f draws, %.0f CB updates", s.skinLoopDraws, s.skinLoopCBUpdates);
 				ImGui::Text("Capture hash %016llX over %u skins", (unsigned long long)cpuCensus.captureHash, cpuCensus.captureCount);
-				ImGui::Text("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
+				WrapTextF("Stamp hash %016llX, unchanged for %u frames", (unsigned long long)cpuCensus.stampHash, cpuCensus.stampHashStable);
 				ImGui::SameLine();
 				if (ImGui::Button("Dump Stamp Hash Ring"))
 					cpuCensus.stampHashDumpRequested = true;
@@ -1163,7 +1200,7 @@ void SnowDeformation::DrawSettings()
 				// The map's own depth, copied to a single channel so ImGui cannot
 				// draw it through the bow wave's deposit alpha. This is the image
 				// that answers "did the trench reach the map".
-				ImGui::Text("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
+				WrapTextF("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 				if (trenchDebugSRV)
 					ImGui::Image(trenchDebugSRV.get(), { 512.0f, 512.0f });
@@ -1189,7 +1226,7 @@ void SnowDeformation::DrawSettings()
 				// can be trusted. It is the store's own answer to "what does the
 				// window look like", which is exactly the question a reload raises.
 				if (trenchInjectSRV) {
-					ImGui::Text("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
+					WrapTextF("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
 					ImGui::Image(trenchInjectSRV.get(), { 512.0f, 512.0f });
 				}
 			}
@@ -1200,7 +1237,7 @@ void SnowDeformation::DrawSettings()
 			// verdict, so it lags the dispatch by the readback ring.
 			ImGui::Checkbox(T(TKEY("debug_activity_view"), "Update Activity View"), &debugActivityView);
 			if (debugActivityView) {
-				ImGui::Text("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
+				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or deposit. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
 				const ImVec2 activityTopLeft = ImGui::GetCursorScreenPos();
 				if (activityViewSRV)
 					ImGui::Image(activityViewSRV.get(), { 512.0f, 512.0f });
@@ -1410,7 +1447,7 @@ void SnowDeformation::DrawSettings()
 						ImGui::PlotLines(plotId, lodShimmerHistoryBuf[bandI], kLODShimmerHistory, lodShimmerHistoryIdx,
 							overlay, 0.0f, 25.0f, ImVec2(0.0f, 40.0f));
 					}
-					ImGui::Text("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
+					WrapTextF("PEAK/mean/hops accumulate since Reset - screenshot THOSE, not 'now'. Pause frames publish nothing now, so an all-zero row means a still camera, never a stable shell.");
 					ImGui::Text("Discrete events since reset: seam square %u, terrain window rebuilds %u", lodSeamChanges, lodWindowRebuilds);
 				}
 			}
@@ -1658,7 +1695,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("Terrain data: %zu cells baked, %u in window, %u snow texels, height range [%.0f, %.0f]",
 				ShellCellCountForUI(), shellStatCellsInWindow, shellStatSnowTexels,
 				shellStatMinHeight, shellStatMaxHeight);
-			ImGui::Text("Land-exact layer: %u of %d cells from the land mesh, the rest cubic", shellFineMeshCells, kShellFineCells * kShellFineCells);
+			WrapTextF("Land-exact layer: %u of %d cells from the land mesh, the rest cubic", shellFineMeshCells, kShellFineCells * kShellFineCells);
 
 			ImGui::TreePop();
 		}
@@ -1778,7 +1815,7 @@ void SnowDeformation::DrawSettings()
 					total ? 100.0 * skinCullCulledLast / total : 0.0);
 				ImGui::Text("  clusters: %u skins cut, %.2f M of %.2f M triangles drawn, scratch %.2f M indices",
 					clusterSkinsLast, skinCullTrisDrawnLast / 1e6, skinCullTrisTotalLast / 1e6, clusterScratchUsedLast / 1e6);
-				ImGui::Text("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
+				WrapTextF("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
 					skinCullReasonLast[0], skinCullReasonLast[1] + skinCullReasonLast[6] + skinCullReasonLast[7],
 					skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
 					skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
@@ -1842,8 +1879,8 @@ void SnowDeformation::DrawSettings()
 					"running (unbaked ground in reach, assumed snow)",
 					"suspended (all ground in reach known bare)"
 				};
-				ImGui::Text("Snow presence gate (loaded square): %s, bare for %u/%u frames%s", kSnowGateNames[std::min(deformSnowVerdict, 2u)], deformGateBareFrames, kShellGateBareFrames, deformSuspended ? " - SUSPENDED" : "");
-				ImGui::Text("Shell gate (loaded square): %s, bare for %u/%u frames", kSnowGateNames[std::min(shellSnowVerdict, 2u)], shellGateBareFrames, kShellGateBareFrames);
+				WrapTextF("Snow presence gate (loaded square): %s, bare for %u/%u frames%s", kSnowGateNames[std::min(deformSnowVerdict, 2u)], deformGateBareFrames, kShellGateBareFrames, deformSuspended ? " - SUSPENDED" : "");
+				WrapTextF("Shell gate (loaded square): %s, bare for %u/%u frames", kSnowGateNames[std::min(shellSnowVerdict, 2u)], shellGateBareFrames, kShellGateBareFrames);
 			}
 
 
@@ -1885,7 +1922,7 @@ void SnowDeformation::DrawSettings()
 						stampStats.nearestFloating ? "FLOATING" : "touching",
 						stampStats.nearestGapToRoot, stampStats.nearestGapToLand,
 						state < IM_ARRAYSIZE(kStateNames) ? kStateNames[state] : "none");
-					ImGui::Text("             bones: feet %u usable %u%s | dry travel %.0f | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u | failsafe actors %u)",
+					WrapTextF("             bones: feet %u usable %u%s | dry travel %.0f | limbs %u        (frame totals: feet %u | limbs %u | shapes %u | props %u | failsafe actors %u)",
 						stampStats.nearestFeet, stampStats.nearestUsableFeet,
 						stampStats.nearestFallback ? " FAILSAFE" : "",
 						stampStats.nearestDryTravel, stampStats.nearestLimbs,

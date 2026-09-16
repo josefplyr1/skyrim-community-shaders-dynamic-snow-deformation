@@ -1435,7 +1435,7 @@ void SnowDeformation::Prepass()
 					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
 					context->CSSetUnorderedAccessViews(2, 1, &viewUAV, nullptr);
 					context->CSSetShader(viewCS, nullptr, 0);
-					context->Dispatch(kContactDim / 8, kContactDim / 8, 1);
+					context->Dispatch(kContactViewPx / 8, 2 * kContactViewPx / 8, 1);
 					ID3D11UnorderedAccessView* nullView = nullptr;
 					context->CSSetUnorderedAccessViews(2, 1, &nullView, nullptr);
 				}
@@ -1624,8 +1624,8 @@ void SnowDeformation::EnsureContactViewTexture()
 	if (!device)
 		return;
 	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = kContactDim;
-	desc.Height = kContactDim;
+	desc.Width = kContactViewPx;
+	desc.Height = 2 * kContactViewPx;
 	desc.MipLevels = 1;
 	desc.ArraySize = 1;
 	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;

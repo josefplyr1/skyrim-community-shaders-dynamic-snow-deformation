@@ -1221,7 +1221,7 @@ bool StampTexel(uint2 phys)
 // SAME ground (red = carve depth, faint blue = map texel edges). The two
 // crops share one world mapping, so a trench wider than its silhouette is
 // visible as such. Own dispatch; the RGBA8 view rides the ActivityView slot.
-#define VIEW_PX 512
+#define VIEW_PX 512  // mirrors kContactViewPx
 [numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
 										 : SV_DispatchThreadID) {
 	const uint dim = (uint)ContactDim;
