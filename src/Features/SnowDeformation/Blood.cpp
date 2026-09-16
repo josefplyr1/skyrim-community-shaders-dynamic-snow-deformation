@@ -25,6 +25,9 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 	bloodMapTexture = nullptr;
 	delete bloodClockTexture;
 	bloodClockTexture = nullptr;
+	// The wrappers throw on a failed create; blood is optional, so a failure
+	// (RenderDoc's wrapper rejecting a view, say) disables it and says why.
+	try {
 
 	D3D11_TEXTURE2D_DESC desc = a_mapDesc;
 	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
@@ -78,6 +81,14 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 	context->ClearRenderTargetView(bloodMapTexture->rtv.get(), zero);
 	context->ClearRenderTargetView(bloodClockTexture->rtv.get(), zero);
 	bloodSeen.clear();
+	logger::info("[SNOW DEFORMATION] blood map {}x{} created", desc.Width, desc.Height);
+	} catch (const std::exception& e) {
+		logger::error("[SNOW DEFORMATION] blood map creation failed: {} - blood on snow is off", e.what());
+		delete bloodMapTexture;
+		bloodMapTexture = nullptr;
+		delete bloodClockTexture;
+		bloodClockTexture = nullptr;
+	}
 }
 
 ID3D11ComputeShader* SnowDeformation::GetBloodRingCS()
@@ -127,6 +138,17 @@ bool SnowDeformation::EnsureBloodResources()
 {
 	if (bloodShadersFailed)
 		return false;
+	try {
+		return EnsureBloodResourcesImpl();
+	} catch (const std::exception& e) {
+		logger::error("[SNOW DEFORMATION] blood resources failed: {} - blood on snow is off", e.what());
+		bloodShadersFailed = true;
+		return false;
+	}
+}
+
+bool SnowDeformation::EnsureBloodResourcesImpl()
+{
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
 	if (!bloodVS) {
@@ -213,6 +235,7 @@ bool SnowDeformation::EnsureBloodResources()
 			rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
 		}
 		if (FAILED(device->CreateBlendState(&blendDesc, bloodOverlayBlendState.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: overlay blend state failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -223,6 +246,7 @@ bool SnowDeformation::EnsureBloodResources()
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
 		dsDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		if (FAILED(device->CreateDepthStencilState(&dsDesc, bloodOverlayDepthState.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: overlay depth state failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -263,6 +287,7 @@ bool SnowDeformation::EnsureBloodResources()
 		blendDesc.RenderTarget[1].BlendEnable = FALSE;
 		blendDesc.RenderTarget[1].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 		if (FAILED(device->CreateBlendState(&blendDesc, bloodBlendState.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: deposit blend state failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -274,6 +299,7 @@ bool SnowDeformation::EnsureBloodResources()
 		rasterDesc.CullMode = D3D11_CULL_NONE;
 		rasterDesc.DepthClipEnable = TRUE;
 		if (FAILED(device->CreateRasterizerState(&rasterDesc, bloodRasterState.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: raster state failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -286,6 +312,7 @@ bool SnowDeformation::EnsureBloodResources()
 		sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
 		sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
 		if (FAILED(device->CreateSamplerState(&sampDesc, bloodSampler.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: sampler failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -299,6 +326,7 @@ bool SnowDeformation::EnsureBloodResources()
 		bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		bufDesc.StructureByteStride = sizeof(float4);
 		if (FAILED(device->CreateBuffer(&bufDesc, nullptr, bloodDiscBuffer.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: disc buffer failed");
 			bloodShadersFailed = true;
 			return false;
 		}
@@ -309,9 +337,14 @@ bool SnowDeformation::EnsureBloodResources()
 		srvDesc.Buffer.FirstElement = 0;
 		srvDesc.Buffer.NumElements = 2 * kBloodMaxDiscs;
 		if (FAILED(device->CreateShaderResourceView(bloodDiscBuffer.get(), &srvDesc, bloodDiscSRV.put()))) {
+			logger::error("[SNOW DEFORMATION] blood: disc view failed");
 			bloodShadersFailed = true;
 			return false;
 		}
+	}
+	if (!bloodResourcesLogged) {
+		bloodResourcesLogged = true;
+		logger::info("[SNOW DEFORMATION] blood shaders and states ready");
 	}
 	return true;
 }
@@ -339,7 +372,7 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
 	// Weapon drips: tiny decals a blood mod scatters under a bloodied blade
 	// for as long as it likes. Not ours: particle blood owns them.
-	const bool drip = !a_skinned && (radius < 16.0f || pathLower.find("drop") != std::string::npos);
+	const bool drip = !a_skinned && (radius < 16.0f || pathLower.find("drop") != std::string::npos || pathLower.find("drip") != std::string::npos || pathLower.find("smallsplatter") != std::string::npos);
 	if (bloodPathsLogged.size() < 64 && bloodPathsLogged.insert(pathLower).second)
 		logger::info("[SNOW DEFORMATION] blood mark '{}' tex='{}' radius {:.1f} skinned={} drip={}",
 			geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, radius, a_skinned ? 1 : 0, drip ? 1 : 0);
@@ -616,6 +649,10 @@ void SnowDeformation::RenderBloodCapture()
 
 	context->PSSetShader(bloodPS, nullptr, 0);
 	bloodDepositsLast = DrawBloodList(context, bloodCaptures, false, cb);
+	if (bloodDepositsLast && !bloodDepositLogged) {
+		bloodDepositLogged = true;
+		logger::info("[SNOW DEFORMATION] blood map: first frame deposited {} of {} decals", bloodDepositsLast, bloodCaptures.size());
+	}
 	bloodCaptures.clear();
 
 	if (!discs.empty()) {
@@ -705,6 +742,10 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context)
 	cb.MapDim = 1.0f;
 	cb.Intensity = 1.0f;
 	bloodOverlaysLast = DrawBloodList(context, bloodOverlays, true, cb);
+	if (bloodOverlaysLast && !bloodOverlayLogged) {
+		bloodOverlayLogged = true;
+		logger::info("[SNOW DEFORMATION] blood overlay: first frame drew {} of {} decals over object snow", bloodOverlaysLast, bloodOverlays.size());
+	}
 	bloodOverlays.clear();
 
 	ID3D11ShaderResourceView* nullSRV = nullptr;

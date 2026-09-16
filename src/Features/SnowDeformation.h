@@ -924,6 +924,10 @@ public:
 	ID3D11ComputeShader* bloodRingCS = nullptr;
 	ID3D11ComputeShader* GetBloodRingCS();
 	bool bloodShadersFailed = false;
+	bool bloodResourcesLogged = false;
+	bool bloodDepositLogged = false;
+	bool bloodOverlayLogged = false;
+	bool EnsureBloodResourcesImpl();
 	std::vector<RE::NiTransform> bloodPaletteScratch;
 	uint32_t bloodDepositsLast = 0;
 	uint32_t bloodDiscsLast = 0;
