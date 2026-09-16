@@ -209,6 +209,11 @@ cbuffer ShellCB : register(b0)
 	float4 FineWindow;
 	float4 SlopeDrape;
 	float4 DebugSkinDepth;  // object skins only (SnowStaticsShell.hlsl)
+	// Blood: x = intensity, y = burial clock now, z = game hours now,
+	// w = snowfall that buries a mark (fraction of a refill).
+	float4 BloodLook;
+	// x = hours a mark takes to dry, y = wet sheen, z > 0.5 = map live.
+	float4 BloodLook2;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -303,6 +308,9 @@ Texture2D<float3> LandMasksCopy : register(t10);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
+// Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
+Texture2D<float4> BloodMap : register(t30);
+Texture2D<float2> BloodClock : register(t31);
 // Wide exclusion field (ExclusionFieldCS): x = door suppression, y = melt, over
 // a window that reaches the shell's own extent. The near mask at t5 still owns
 // the SHELTER term, which needs geometry and so cannot travel this far.
@@ -2577,6 +2585,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
+	// Blood soaks in rather than sitting on top: extinction by the pigment's
+	// hue, then its darkness, so a thin fringe reads pink and a pool near
+	// black-red. Drying turns the hue maroon.
+	float bloodFresh = 0.0;
+	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
+	[branch] if (blood.a > 0.002)
+	{
+		float3 pigment = Color::LinearToSrgb(blood.rgb);
+		float pigmentMax = max(max(pigment.r, pigment.g), max(pigment.b, 1e-3));
+		float3 hue = pigment / pigmentMax;
+		hue = lerp(hue, hue * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
+		float k = saturate(blood.a * BloodLook.x);
+		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
+	}
 	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
 	// has no wall to light, so it reads by material - pressed wet, darker and
 	// smoother. Gone by ~6 units of cover, where relief takes over.
@@ -2631,6 +2653,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
 	snowRoughness = lerp(snowRoughness, snowRoughness * 0.76, wetPrint);
+	// Fresh blood is wet and glossy; dried blood is matte like the snow.
+	snowRoughness = lerp(snowRoughness, 0.22, saturate(blood.a * 2.0) * bloodFresh * BloodLook2.y);
 
 	// The crystal has to be the part that shines. A normal map alone tilts
 	// facets away from the light and puts the highlight in the gaps between
@@ -2891,9 +2915,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// few metres. Fold on a STATIC 4096-unit block (an exact tile multiple).
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
 	                                   fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
-	// Built once, shared by the sun and every point light (M3).
+	// Built once, shared by the sun and every point light (M3). Soaked snow
+	// does not sparkle.
+	const float glintsHere = EnableGlints * (1.0 - saturate(blood.a * 3.0));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

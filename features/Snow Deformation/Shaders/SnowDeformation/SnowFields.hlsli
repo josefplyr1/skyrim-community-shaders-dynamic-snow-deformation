@@ -224,6 +224,54 @@ float SampleCrust(float2 gridLocal)
 	return saturate(lerp(lerp(c00, c10, f.x), lerp(c01, c11, f.x), f.y));
 }
 
+// Blood at a point (BloodMap t30 / BloodClock t31, the deformation map's
+// torus): rgb = pigment (linear), a = concentration after burial. Each texel
+// is dated by the snowfall clock and the game hour it was deposited; the
+// fade is computed per tap and the faded taps are interpolated, so a never-
+// written neighbour (clock 0) reads as nothing rather than as ancient blood.
+// fresh: 1 just spilled, 0 once BloodLook2.x hours have passed.
+float4 SampleBlood(float2 gridLocal, out float fresh)
+{
+	// No early return inside a [branch]: fxc reads it as an uninitialised
+	// out (X4000), the trap CLAUDE.md records.
+	fresh = 0.0;
+	float4 acc = 0.0;
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	const bool live = BloodLook2.z > 0.5 && all(uv >= 0.0) && all(uv <= 1.0);
+	[branch] if (live)
+	{
+		float2 dims;
+		BloodMap.GetDimensions(dims.x, dims.y);
+		float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+		int2 t0 = (int2)t;
+		float2 f = t - t0;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+		const int2 taps[4] = { int2(t0.x, t0.y), int2(t1.x, t0.y), int2(t0.x, t1.y), int2(t1.x, t1.y) };
+		const float weights[4] = { (1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y };
+		float freshAcc = 0.0;
+		[unroll] for (int i = 0; i < 4; i++)
+		{
+			float4 b = BloodMap.Load(DeformTexel(taps[i], int2(dims)));
+			[branch] if (b.a > 0.002)
+			{
+				float2 clock = BloodClock.Load(DeformTexel(taps[i], int2(dims)));
+				float buried = saturate((BloodLook.y - clock.x) / BloodLook.w);
+				float age = saturate((BloodLook.z - clock.y) / BloodLook2.x);
+				float conc = b.a * (1.0 - buried) * weights[i];
+				acc += float4(b.rgb * conc, conc);
+				freshAcc += (1.0 - age) * conc;
+			}
+		}
+		[branch] if (acc.a > 1e-4)
+		{
+			acc.rgb /= acc.a;
+			fresh = freshAcc / acc.a;
+		}
+	}
+	return acc;
+}
+
 // Wide exclusion field, bilinear: x = door suppression, y = melt. Returns 0
 // outside the window (nothing claimed where nothing was baked). The
 // landscape unions this with its near object-bottoms mask; the skin reads

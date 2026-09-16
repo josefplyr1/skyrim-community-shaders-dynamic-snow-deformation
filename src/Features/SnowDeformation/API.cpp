@@ -61,13 +61,25 @@ namespace
 	float CAPI_GetSnowDepthAt(float a_x, float a_y) { return Snow().APISnowDepthAt(a_x, a_y); }
 	float CAPI_GetSnowDepthAtRef(void* a_ref) { return Snow().APISnowDepthAtRef(static_cast<RE::TESObjectREFR*>(a_ref)); }
 	float CAPI_GetSnowAccumulation() { return Snow().APISnowAccumulation(); }
+	void CAPI_DepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount)
+	{
+		Snow().APIDepositBlood(a_x, a_y, a_z, a_radius, a_r, a_g, a_b, a_amount);
+	}
 
 	constexpr SnowDeformationAPI_V1 kAPIv1{
-		SNOWDEFORMATION_API_VERSION,
+		1u,
 		CAPI_IsActive,
 		CAPI_GetSnowDepthAt,
 		CAPI_GetSnowDepthAtRef,
 		CAPI_GetSnowAccumulation
+	};
+	constexpr SnowDeformationAPI_V2 kAPIv2{
+		2u,
+		CAPI_IsActive,
+		CAPI_GetSnowDepthAt,
+		CAPI_GetSnowDepthAtRef,
+		CAPI_GetSnowAccumulation,
+		CAPI_DepositBlood
 	};
 
 	// ---- Papyrus ----
@@ -76,6 +88,10 @@ namespace
 	float Papyrus_GetSnowDepthAt(RE::StaticFunctionTag*, float a_x, float a_y) { return Snow().APISnowDepthAt(a_x, a_y); }
 	float Papyrus_GetSnowDepthAtRef(RE::StaticFunctionTag*, RE::TESObjectREFR* a_ref) { return Snow().APISnowDepthAtRef(a_ref); }
 	float Papyrus_GetSnowAccumulation(RE::StaticFunctionTag*) { return Snow().APISnowAccumulation(); }
+	void Papyrus_DepositBlood(RE::StaticFunctionTag*, float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount)
+	{
+		Snow().APIDepositBlood(a_x, a_y, a_z, a_radius, a_r, a_g, a_b, a_amount);
+	}
 
 	bool RegisterPapyrus(RE::BSScript::IVirtualMachine* a_vm)
 	{
@@ -85,6 +101,7 @@ namespace
 		a_vm->RegisterFunction("GetSnowDepthAt", kScript, Papyrus_GetSnowDepthAt);
 		a_vm->RegisterFunction("GetSnowDepthAtRef", kScript, Papyrus_GetSnowDepthAtRef);
 		a_vm->RegisterFunction("GetSnowAccumulation", kScript, Papyrus_GetSnowAccumulation);
+		a_vm->RegisterFunction("DepositBlood", kScript, Papyrus_DepositBlood);
 		logger::info("[SNOW DEFORMATION] Papyrus API v{} registered on script '{}'", SNOWDEFORMATION_API_VERSION, kScript);
 		return true;
 	}
@@ -94,7 +111,14 @@ namespace
 // "SnowDeformation_GetAPI"); null for a version this build does not serve.
 extern "C" __declspec(dllexport) const void* SnowDeformation_GetAPI(uint32_t a_version)
 {
-	return a_version == SNOWDEFORMATION_API_VERSION ? static_cast<const void*>(&kAPIv1) : nullptr;
+	switch (a_version) {
+	case 1u:
+		return &kAPIv1;
+	case 2u:
+		return &kAPIv2;
+	default:
+		return nullptr;
+	}
 }
 
 void SnowDeformation::InstallAPI()

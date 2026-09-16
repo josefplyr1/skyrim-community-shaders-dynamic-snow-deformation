@@ -130,6 +130,11 @@
 	X(ShellSSSRemarchCasterCap) \
 	X(ShellBareGroundCull) \
 	X(CameraAboveSnow) \
+	X(BloodOnSnow) \
+	X(BloodIntensity) \
+	X(BloodBurial) \
+	X(BloodAgeHours) \
+	X(BloodSheen) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
@@ -247,6 +252,8 @@ void SnowDeformation::CreateDeformationTextures()
 	bermFieldTexture = new Texture2D(texDesc, "SnowDeformation::BermField");
 	bermFieldTexture->CreateSRV(srvDesc);
 	bermFieldTexture->CreateUAV(uavDesc);
+
+	CreateBloodTextures(texDesc);
 
 	// Tile-dispatch state, sized to the map's tile grid (dim/8 per axis).
 	{
@@ -964,6 +971,8 @@ void SnowDeformation::Prepass()
 	                                gameClock.elapsedHours * 3600.0f / std::max(gameClock.timescale, 1.0f) :
 	                                deltaTime;
 	perFrameData.RefillAmount = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
+	// Blood is dated by the snowfall that has fallen since; nothing evolves it.
+	bloodBurialClock += perFrameData.RefillAmount;
 	// The same span, for the world's other self-driven clocks: the glaze thaw
 	// (which runs under a clear sky, so waiting skipped it entirely) and the
 	// unsupported-snow settle. NOT for stamp application - a fire must not
@@ -1324,6 +1333,17 @@ void SnowDeformation::Prepass()
 				globals::profiler->BeginPass("SnowDeformation::DeformationRing");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
+				// The blood map shares the origin, so the same ring is cleared.
+				if (bloodMapTexture && bloodClockTexture) {
+					if (auto* bloodRing = GetBloodRingCS()) {
+						ID3D11UnorderedAccessView* bloodUavs[2] = { bloodMapTexture->uav.get(), bloodClockTexture->uav.get() };
+						context->CSSetUnorderedAccessViews(8, 2, bloodUavs, nullptr);
+						context->CSSetShader(bloodRing, nullptr, 0);
+						context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
+						ID3D11UnorderedAccessView* bloodNulls[2] = { nullptr, nullptr };
+						context->CSSetUnorderedAccessViews(8, 2, bloodNulls, nullptr);
+					}
+				}
 			} else {
 				globals::profiler->MarkPassSkipped("SnowDeformation::DeformationRing");
 			}
@@ -1861,6 +1881,7 @@ void SnowDeformation::ClearShaderCache()
 	if (deformationRingCS)
 		deformationRingCS->Release();
 	deformationRingCS = nullptr;
+	ReleaseBloodShaders();
 	if (deformationEvolveCS)
 		deformationEvolveCS->Release();
 	deformationEvolveCS = nullptr;

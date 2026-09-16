@@ -185,6 +185,11 @@ cbuffer ShellCB : register(b0)
 	float4 SlopeDrape;  // landscape shell only (SnowShell.hlsl)
 	// Debug view 9: x = SkinDepthBias (ULPs), y = SkinSlopeDepthBias.
 	float4 DebugSkinDepth;
+	// Blood (see SnowShell.hlsl): x = intensity, y = burial clock now,
+	// z = game hours now, w = burial snowfall; BloodLook2 x = drying hours,
+	// y = wet sheen, z > 0.5 = map live.
+	float4 BloodLook;
+	float4 BloodLook2;
 }
 
 cbuffer StaticCB : register(b1)
@@ -317,6 +322,9 @@ int3 DeformTexel(int2 t, int2 dims)
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
+// Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
+Texture2D<float4> BloodMap : register(t30);
+Texture2D<float2> BloodClock : register(t31);
 // Wide exclusion field + frost crystal patterns; the landscape shell's slots
 // (t15-t17) and readers, bound by the skin draw.
 Texture2D<float2> ExclusionFieldMap : register(t15);
@@ -2785,6 +2793,18 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
+	// Blood: the landscape recipe verbatim (SnowShell.hlsl).
+	float bloodFresh = 0.0;
+	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
+	[branch] if (blood.a > 0.002)
+	{
+		float3 pigment = Color::LinearToSrgb(blood.rgb);
+		float pigmentMax = max(max(pigment.r, pigment.g), max(pigment.b, 1e-3));
+		float3 hue = pigment / pigmentMax;
+		hue = lerp(hue, hue * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
+		float k = saturate(blood.a * BloodLook.x);
+		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
+	}
 	[branch] if (crustAmount > 0.001)
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
 	[branch] if (frost.valid)
@@ -2812,6 +2832,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
+	snowRoughness = lerp(snowRoughness, 0.22, saturate(blood.a * 2.0) * bloodFresh * BloodLook2.y);
 	[branch] if (frost.valid)
 	{
 		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
@@ -3106,9 +3127,11 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
 	                                   fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
-	// Built once, shared by the sun and every point light (M3).
+	// Built once, shared by the sun and every point light (M3). Soaked snow
+	// does not sparkle.
+	const float glintsHere = EnableGlints * (1.0 - saturate(blood.a * 3.0));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
-		SnowGlintParams, EnableGlints, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
+		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy);
 	float3 specularLobe = sunLit.specularLobe;

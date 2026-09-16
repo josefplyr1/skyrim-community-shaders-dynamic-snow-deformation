@@ -1002,6 +1002,10 @@ void SnowDeformation::DrawShell()
 	cbData.ShellLODDebug = (uint32_t)std::clamp(lodDebugView, 0, 4);
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
+	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
+		gameClockHours.load(std::memory_order_relaxed), std::max(settings.BloodBurial, 0.01f) };
+	cbData.BloodLook2 = { std::max(settings.BloodAgeHours, 0.1f), std::clamp(settings.BloodSheen, 0.0f, 1.0f),
+		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, 0.0f };
 
 	// Loaded-cell boundary square around the PLAYER's cell (cell attachment
 	// follows the player, not the camera): full terrain inside, LOD outside.
@@ -1231,6 +1235,7 @@ void SnowDeformation::DrawShell()
 	if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
 	RenderWaterCapture();
+	RenderBloodCapture();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	// The main pass's depth range, not the decal viewport the deferred span
@@ -1380,6 +1385,8 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
+	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
+	context->PSSetShaderResources(30, 2, bloodSRVs);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);

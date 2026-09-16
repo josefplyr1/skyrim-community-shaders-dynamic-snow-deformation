@@ -13,11 +13,11 @@
 // while the feature is off or no land is baked.
 #include <stdint.h>
 
-#define SNOWDEFORMATION_API_VERSION 1u
+#define SNOWDEFORMATION_API_VERSION 2u
 
 struct SnowDeformationAPI_V1
 {
-	uint32_t version;  // SNOWDEFORMATION_API_VERSION of the struct returned
+	uint32_t version;  // version of the struct returned (1 for this layout)
 	// True when Snow Deformation is loaded and switched on.
 	bool (*IsActive)();
 	// Untrampled terrain snow depth at a world XY in world units, scaled by
@@ -30,6 +30,25 @@ struct SnowDeformationAPI_V1
 	float (*GetSnowDepthAtRef)(void* tesObjectREFR);
 	// The accumulation scalar, 0..1 (0 when accumulation is off).
 	float (*GetSnowAccumulation)();
+};
+
+// Version 2 = version 1 plus a blood deposit. Request 2; request 1 for the
+// prefix alone.
+struct SnowDeformationAPI_V2
+{
+	uint32_t version;  // 2
+	bool (*IsActive)();
+	float (*GetSnowDepthAt)(float worldX, float worldY);
+	float (*GetSnowDepthAtRef)(void* tesObjectREFR);
+	float (*GetSnowAccumulation)();
+	// Stains the snow with a soft disc of blood: world centre, radius in
+	// world units, pigment as linear rgb 0..1 (blood is about 0.3, 0.02,
+	// 0.01), amount 0..1 = concentration at the centre. Queued from any
+	// thread, deposited on the next frame; a no-op when the feature or its
+	// Blood on Snow setting is off, or the point is outside the trench
+	// window. Fades with snowfall and dries over game hours like the game's
+	// own decals do on the snow.
+	void (*DepositBlood)(float worldX, float worldY, float worldZ, float radius, float r, float g, float b, float amount);
 };
 
 typedef const void* (*SnowDeformation_GetAPI_t)(uint32_t requestedVersion);

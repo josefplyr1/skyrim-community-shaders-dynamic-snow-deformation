@@ -520,6 +520,30 @@ float SlumpTap(int2 p, int2 dims)
 	BermDirty[phys >> 3] = 1u;
 }
 
+// The blood map and its clocks share the origin; the same ring is cleared.
+// Slots above u7 need the 11.1 context, which this feature already requires.
+RWTexture2D<float4> BloodMapRing : register(u8);
+RWTexture2D<float2> BloodClockRing : register(u9);
+
+[numthreads(64, 1, 1)] void BloodRingCS(uint3 DTid
+										: SV_DispatchThreadID) {
+	uint id = DTid.x;
+	if (id >= RingTotalTexels || RingRectCount == 0)
+		return;
+	uint2 dims;
+	BloodMapRing.GetDimensions(dims.x, dims.y);
+	int4 rect = RingRects[0];
+	const uint rect0Texels = (uint)(rect.z * rect.w);
+	if (id >= rect0Texels) {
+		id -= rect0Texels;
+		rect = RingRects[1];
+	}
+	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
+	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
+	BloodMapRing[phys] = float4(0.0, 0.0, 0.0, 0.0);
+	BloodClockRing[phys] = float2(0.0, 0.0);
+}
+
 // The world acting on the map: refill, decay, slump. The neighbour reads
 // (slump support, upwind refill supply) all go to the previous-frame
 // snapshot, so tile edges cannot see half-updated texels. No scroll: texels

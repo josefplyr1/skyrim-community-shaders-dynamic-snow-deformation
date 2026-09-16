@@ -136,6 +136,8 @@ struct GeometryNameFacts
 	// DynDOLOD batch (obj<Material>[HD][-LargeRef]) of a non-snow projected
 	// material: no reference behind it, so the name is the only MATO signal.
 	bool lodNotSnow = false;
+	// Dynamic Bloodpool Framework's skinned pool quads (Decal:NN / DecalExt:NN).
+	bool bloodPool = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
@@ -177,6 +179,7 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
+		f.bloodPool = _strnicmp(name, "Decal:", 6) == 0 || _strnicmp(name, "DecalExt:", 9) == 0;
 		f.lodNotSnow = false;
 		if (length > 3 && std::tolower((unsigned char)name[0]) == 'o' && std::tolower((unsigned char)name[1]) == 'b' && std::tolower((unsigned char)name[2]) == 'j') {
 			for (const auto* keyword : kNotSnowKeywords)
@@ -552,6 +555,8 @@ struct GeometryRecord
 	bool iceName = false;
 	bool ice = false;
 	bool shard = false;
+	// Diffuse path names blood: a decal-mode draw of it is a blood mark.
+	bool bloodTex = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
 	MatoClass mato = MatoClass::kNoReference;
 	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
@@ -598,6 +603,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
 					r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
+					r.bloodTex = ContainsNoCase(diffuse, "blood");
 				}
 			}
 		}
@@ -774,6 +780,18 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const bool driftJourney = NameFactsOf(a_pass->geometry).drift;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
+	// Blood decals go to the blood map, never to the statics list. Skinned
+	// blood is a wound decal on a body unless it is a pool framework quad.
+	if (rec.bloodTex) {
+		if (settings.BloodOnSnow) {
+			const bool skinnedBlood = a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr;
+			const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+			                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
+			if (decalMode && (!skinnedBlood || NameFactsOf(a_pass->geometry).bloodPool))
+				CaptureBloodDraw(a_pass, skinnedBlood);
+		}
+		return;
+	}
 	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim)) {
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: tree-anim flag");
@@ -1111,7 +1129,7 @@ void SnowDeformation::InstallStaticsCaptureHook()
 // input layouts must be created against the VS bytecode, which
 // Util::CompileShader discards. Include resolution matches CompileShader's
 // convention (everything relative to Data\Shaders).
-static ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr)
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4)
 {
 	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
 	// of the "sdblob" env token, and the full key round-trips through the
@@ -3280,6 +3298,8 @@ void SnowDeformation::DrawCapturedStatics()
 	// shell's slots; the skins draw standalone, so bind explicitly here.
 	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
 	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
+	ID3D11ShaderResourceView* skinBloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
+	context->PSSetShaderResources(30, 2, skinBloodSRVs);
 	EnsureFrostPatternTextures();
 	ID3D11ShaderResourceView* skinFrostSRVs[2] = { frostPatternNormalSRV.get(), frostPatternDiffuseSRV.get() };
 	context->PSSetShaderResources(16, 2, skinFrostSRVs);
@@ -4023,7 +4043,7 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 // offset table is authoritative). The VF_FULLPREC flag is NOT reliable: logged
 // runtime buffers carry 16-byte float4 positions with the flag clear, and
 // reading them as halfs shreds geometry into screen-wide streaks.
-static uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
+uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
 {
 	uint32_t positionBytes = uint32_t(a_descKey & 0xF) * 4;
 	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kAttrs[] = {

@@ -10,6 +10,11 @@
 #include <deque>
 #include <intrin.h>
 
+// Statics.cpp: runtime shader compile returning the bytecode (input layouts
+// need it), and the vertex position size a vertex descriptor implies.
+ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr);
+uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+
 struct SnowDeformation : Feature
 {
 public:
@@ -561,6 +566,16 @@ public:
 		bool ShellBareGroundCull = true;
 		/** @brief The third-person camera is pulled in along its own line when the game places it under the landscape shell (Havok has no snow to collide with). */
 		bool CameraAboveSnow = true;
+		/** @brief Blood on snow (BLOOD-DESIGN.md): the game's blood decals and pool quads are re-rasterised into a blood map the shells tint by. Off = the map is neither written nor read. */
+		bool BloodOnSnow = true;
+		/** @brief Concentration multiplier on every deposit and on the shells' extinction, 0..2. */
+		float BloodIntensity = 1.0f;
+		/** @brief Snowfall that buries a mark completely, as a fraction of one full trench refill (the same clock that refills prints). */
+		float BloodBurial = 0.15f;
+		/** @brief Game hours over which a mark dries: the wet sheen goes and the hue turns maroon. */
+		float BloodAgeHours = 3.0f;
+		/** @brief Gloss of fresh blood on the shells, 0..1 (0 = matte like the snow). */
+		float BloodSheen = 0.6f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -812,6 +827,100 @@ public:
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0]->srv.get(); }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
+
+	// ---- Blood on snow (Blood.cpp; BLOOD-DESIGN.md) ----
+	/** @brief Blood map beside the deformation map: same dim, same toroidal origin. R8G8B8A8 sRGB: rgb = pigment, a = concentration. */
+	Texture2D* bloodMapTexture = nullptr;
+	/** @brief Per-texel deposit clocks, R32G32: x = bloodBurialClock, y = game hours at deposit. The shells fade by both; nothing evolves the map. */
+	Texture2D* bloodClockTexture = nullptr;
+	ID3D11ShaderResourceView* GetBloodMapSRV() const { return bloodMapTexture ? bloodMapTexture->srv.get() : nullptr; }
+	ID3D11ShaderResourceView* GetBloodClockSRV() const { return bloodClockTexture ? bloodClockTexture->srv.get() : nullptr; }
+	/** @brief Sum of RefillAmount over the session: the snowfall clock a deposit is dated by. */
+	float bloodBurialClock = 0.0f;
+	/** @brief A blood draw seen by the capture hook this frame, drawn into the map after the object height raster. */
+	struct BloodCapture
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiTransform world;
+		winrt::com_ptr<ID3D11ShaderResourceView> diffuse;
+		float4 texcoord;
+		float alpha;
+		float alphaThreshold;
+		bool skinned;
+	};
+	std::vector<BloodCapture> bloodCaptures;
+	/** @brief Engine decals are baked geometry: one deposit per decal. Keyed by geometry, validated by its buffer and position. */
+	struct BloodSeen
+	{
+		uint32_t frame = 0;
+		const void* vb = nullptr;
+		RE::NiPoint3 position;
+	};
+	std::unordered_map<const void*, BloodSeen> bloodSeen;
+	/** @brief API disc deposits queued from any thread, drawn once. */
+	struct BloodDisc
+	{
+		float x, y, z, radius;
+		float r, g, b, amount;
+	};
+	std::vector<BloodDisc> bloodDiscQueue;
+	std::mutex bloodDiscMutex;
+	struct alignas(16) BloodCB
+	{
+		float4 WorldRow0;
+		float4 WorldRow1;
+		float4 WorldRow2;
+		float2 WindowOrigin;
+		float TexelSize;
+		float MapDim;
+		DirectX::XMINT2 MapOrigin;
+		float2 ClockNow;
+		float4 TexcoordOffset;
+		float Intensity;
+		float AlphaThreshold;
+		float MaterialAlpha;
+		float NormalZMin;
+	};
+	STATIC_ASSERT_ALIGNAS_16(BloodCB);
+	struct alignas(16) BloodSkinCB
+	{
+		float4 BoneRows[240];
+		float SkinBoneCount;
+		float pad[3];
+	};
+	STATIC_ASSERT_ALIGNAS_16(BloodSkinCB);
+	ConstantBuffer* bloodCB = nullptr;
+	ConstantBuffer* bloodSkinCB = nullptr;
+	ID3D11VertexShader* bloodVS = nullptr;
+	ID3D11VertexShader* bloodSkinVS = nullptr;
+	ID3D11VertexShader* bloodDiscVS = nullptr;
+	ID3D11PixelShader* bloodPS = nullptr;
+	ID3D11PixelShader* bloodDiscPS = nullptr;
+	winrt::com_ptr<ID3DBlob> bloodVSBlob;
+	winrt::com_ptr<ID3DBlob> bloodSkinVSBlob;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodILCache;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodSkinILCache;
+	winrt::com_ptr<ID3D11BlendState> bloodBlendState;
+	winrt::com_ptr<ID3D11RasterizerState> bloodRasterState;
+	winrt::com_ptr<ID3D11SamplerState> bloodSampler;
+	winrt::com_ptr<ID3D11Buffer> bloodDiscBuffer;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodDiscSRV;
+	static constexpr uint32_t kBloodMaxDiscs = 256;
+	ID3D11ComputeShader* bloodRingCS = nullptr;
+	ID3D11ComputeShader* GetBloodRingCS();
+	bool bloodShadersFailed = false;
+	std::vector<RE::NiTransform> bloodPaletteScratch;
+	uint32_t bloodDepositsLast = 0;
+	uint32_t bloodDiscsLast = 0;
+	uint32_t bloodSeenLive = 0;
+	void CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc);
+	bool EnsureBloodResources();
+	void ReleaseBloodShaders();
+	/** @brief From the capture hook: a decal-mode Lighting draw whose diffuse is a blood texture. */
+	void CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned);
+	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
+	void RenderBloodCapture();
+	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
 
 	// ---- Baked undulation field ----
 	// The dune field is a pure function of world XY and the Spacing slider,
@@ -1148,6 +1257,10 @@ public:
 		float4 SlopeDrape;
 		/** @brief Debug view 9 (depth fight): x = Settings::SkinDepthBias, y = Settings::SkinSlopeDepthBias. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float4 DebugSkinDepth;
+		/** @brief Blood: x = Settings::BloodIntensity, y = the burial clock now (bloodBurialClock), z = game hours now, w = Settings::BloodBurial. Appended last; mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float4 BloodLook;
+		/** @brief Blood: x = Settings::BloodAgeHours, y = Settings::BloodSheen, z > 0.5 = the map is live, w spare. Mirror in both shells. */
+		float4 BloodLook2;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

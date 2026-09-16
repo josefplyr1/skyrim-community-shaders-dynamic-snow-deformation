@@ -242,6 +242,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetBermFieldCS(); },
 		[&] { GetBermFieldTiledCS(); },
 		[&] { GetDeformationRingCS(); },
+		[&] { GetBloodRingCS(); },
 		[&] { GetDeformationEvolveCS(); },
 		[&] { GetDeformationStampCS(); },
 		[&] { GetDeformationStampAllCS(); },
@@ -253,6 +254,7 @@ void SnowDeformation::RunShaderPrime()
 	};
 	const std::function<void()> objectSteps[] = {
 		[&] { EnsureStaticsShaders(); },
+		[&] { EnsureBloodResources(); },
 		[&] { GetPatchShadowVS(); },
 		[&] { EnsureSmoothNormalsCS(); },
 	};
