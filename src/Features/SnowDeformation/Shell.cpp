@@ -1614,6 +1614,7 @@ void SnowDeformation::DrawShell()
 			auto* fillVS = psPrepassMain ? GetShellFillVS() : nullptr;
 			auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 			const bool prepass = fillPS && EnsurePrepassResources(mainDepthSRV);
+			shellPrepassThisFrame = prepass;
 			const bool splitWanted = !prepass && !shellDepthClampDisabled && !lodHeatmap && !shellSplitDisabled;
 			auto* hsNear = splitWanted ? GetShellHSNear(bake) : nullptr;
 			auto* hsFar = hsNear ? GetShellHSFar(bake) : nullptr;
@@ -1776,15 +1777,18 @@ void SnowDeformation::DrawShell()
 	// blended depth, finalized during opaque rendering; without a sync they
 	// see buried geometry poking through the snow and paint occlusion halos
 	// onto the shell. min() the shell's fresh depth into both blended copies
-	// (DSV is unbound again at this point).
+	// (DSV is unbound again at this point), on the shell's own pixels only:
+	// shellRasterDepth marks them, so the prepass is required.
 	auto& tb = globals::features::terrainBlending;
-	if (!shellGround)
+	const bool syncable = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
+	if (!syncable)
 		globals::profiler->MarkPassSkipped("SnowDeformation::DepthSync");
-	if (shellGround && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
+	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS()) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
-			context->CSSetShaderResources(0, 1, &mainDepthSRV);
+			ID3D11ShaderResourceView* syncSRVs[2] = { mainDepthSRV, shellRasterDepth->srv.get() };
+			context->CSSetShaderResources(0, 2, syncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, syncUAVs, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
 			const auto& depthDesc = tb.blendedDepthTexture->desc;
@@ -1792,9 +1796,9 @@ void SnowDeformation::DrawShell()
 			context->Dispatch((depthDesc.Width + 7) / 8, (depthDesc.Height + 7) / 8, 1);
 			globals::profiler->EndPass();
 
-			ID3D11ShaderResourceView* nullSyncSRV = nullptr;
+			ID3D11ShaderResourceView* nullSyncSRVs[2] = { nullptr, nullptr };
 			ID3D11UnorderedAccessView* nullSyncUAVs[2] = { nullptr, nullptr };
-			context->CSSetShaderResources(0, 1, &nullSyncSRV);
+			context->CSSetShaderResources(0, 2, nullSyncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, nullSyncUAVs, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 		}

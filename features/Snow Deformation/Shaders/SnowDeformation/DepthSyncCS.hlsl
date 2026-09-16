@@ -8,12 +8,15 @@
 // without this sync they still see buried geometry poking up through the
 // snow and paint occlusion halos onto the shell surface.
 //
-// min() only takes effect where the shell drew closer than the pre-shell
-// scene, so Terrain Blending's soft-blend depth values survive everywhere
-// the shell is absent. The 16-bit copy is written from the 32-bit one's
-// value (typed UAV loads are only guaranteed for R32).
+// Only pixels the shell's prepass won are synced (ShellRasterDepth is 0
+// elsewhere): the main depth also holds main-pass-only geometry the prepass
+// never drew - decal-mode skirts and roofs sit ~1% nearer than the blended
+// depth - and a whole-screen min() handed SSGI those as occluders (Ashfall's
+// Tear, 2026-09-16). The 16-bit copy is written from the 32-bit one's value
+// (typed UAV loads are only guaranteed for R32).
 
 Texture2D<float> MainDepth : register(t0);
+Texture2D<float> ShellRasterDepth : register(t1);
 RWTexture2D<float> BlendedDepth : register(u0);
 RWTexture2D<float> BlendedDepth16 : register(u1);
 
@@ -25,6 +28,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	if (any(dtid.xy >= dims))
 		return;
 
+	if (ShellRasterDepth[dtid.xy] <= 0.0)
+		return;
 	float src = MainDepth[dtid.xy];
 	float blended = min(BlendedDepth[dtid.xy], src);
 	BlendedDepth[dtid.xy] = blended;

@@ -1273,6 +1273,8 @@ public:
 	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
+	/** @brief The prepass ran this frame, so shellRasterDepth marks the shell's pixels; DepthSync is skipped otherwise. */
+	bool shellPrepassThisFrame = false;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	/** @brief Read view of shellTestDepth for the object-snow prepass's write-back into the main depth. */
