@@ -46,6 +46,28 @@ cbuffer BloodSkinCB : register(b2)
 }
 #endif
 
+#ifdef OVERLAY
+// OVERLAY: the decal drawn again after the object-snow pass, pushed toward
+// the camera past the coat's lift so it sits ON the recolored snow, and
+// only where the game painted solid snow (the coat's own test on the
+// pre-shell Masks copy). Writes a multiplicative tint into the lit diffuse
+// and the albedo, so the deferred light on the coat lights the blood.
+// ShellCB prefix (SnowDeformation.h): the bound buffer is larger.
+cbuffer ShellCB : register(b0)
+{
+	row_major float4x4 CameraViewProj;
+	row_major float4x4 CameraViewProjUnjittered;
+	row_major float4x4 CameraPreviousViewProjUnjittered;
+	row_major float4x4 CameraView;
+	float4 ShellCameraPosAdjust;
+}
+Texture2D<float3> PreSkinMasks : register(t32);
+// Lift past the coat (kEdgeFlankLift 0.4 in SnowStaticsShell.hlsl) but
+// under anything lying on the snow.
+static const float kOverlayLift = 1.5;
+static const float kCoatSolidReal = 0.5;
+#endif
+
 #ifdef DISC
 // [2i] = xyz world centre, w radius; [2i+1] = rgb pigment, w amount.
 StructuredBuffer<float4> Discs : register(t1);
@@ -68,6 +90,20 @@ float4 MapClip(float2 worldXY, uint seam, out float2 logical)
 	logical = (worldXY - WindowOrigin) / TexelSize;
 	float2 phys = logical + float2(MapOrigin) - float2(seam & 1u, seam >> 1u) * MapDim;
 	return float4(phys.x / MapDim * 2.0 - 1.0, 1.0 - phys.y / MapDim * 2.0, 0.5, 1.0);
+}
+
+// Overlay: world -> clip, pushed toward the camera. Logical is unused (the
+// PS window test is skipped); MapDim keeps it inside the window trivially.
+float4 PlaceVertex(float3 world, uint seam, out float2 logical)
+{
+#ifdef OVERLAY
+	logical = float2(0.0, 0.0);
+	float3 rel = world - ShellCameraPosAdjust.xyz;
+	rel -= normalize(rel) * kOverlayLift;
+	return mul(CameraViewProj, float4(rel, 1.0));
+#else
+	return MapClip(world.xy, seam, logical);
+#endif
 }
 
 #ifdef VSHADER
@@ -109,7 +145,7 @@ VS_OUTPUT main(VS_INPUT_SKIN input, uint inst : SV_InstanceID)
 		mul(float3x4(BoneRows[rows.z], BoneRows[rows.z + 1], BoneRows[rows.z + 2]), posMS) * w.z +
 		mul(float3x4(BoneRows[rows.w], BoneRows[rows.w + 1], BoneRows[rows.w + 2]), posMS) * w.w;
 	VS_OUTPUT o;
-	o.Position = MapClip(world.xy, inst & 3u, o.Logical);
+	o.Position = PlaceVertex(world, inst & 3u, o.Logical);
 	o.UV = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 	// Pool quads lie on the ground by construction.
 	o.NormalZ = 1.0;
@@ -137,7 +173,7 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS));
 	VS_OUTPUT o;
-	o.Position = MapClip(world.xy, inst & 3u, o.Logical);
+	o.Position = PlaceVertex(world, inst & 3u, o.Logical);
 	o.UV = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 	o.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
 	o.Tint = float4(1, 1, 1, 1);
@@ -146,7 +182,34 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 #	endif
 #endif
 
-#ifdef PSHADER
+#if defined(PSHADER) && defined(OVERLAY)
+struct OVERLAY_OUTPUT
+{
+	float4 Diffuse : SV_Target0;
+	float4 Albedo : SV_Target3;
+};
+
+OVERLAY_OUTPUT main(VS_OUTPUT input)
+{
+	// The coat's own test: solid paint only. Elsewhere the game's decal is
+	// already the visible surface and drawing it twice would thicken it.
+	float realEnc = PreSkinMasks.Load(int3(input.Position.xy, 0)).y;
+	if (saturate(realEnc - 2.0) < kCoatSolidReal)
+		discard;
+	float4 c = Diffuse.Sample(LinearSampler, input.UV);
+	float a = c.a * MaterialAlpha;
+	[flatten] if (AlphaThreshold >= 0.0)
+		a = a >= AlphaThreshold ? 1.0 : 0.0;
+	if (a < 0.01)
+		discard;
+	// Multiplicative: lit snow times the decal's colour relative to snow.
+	float3 tint = lerp(float3(1.0, 1.0, 1.0), saturate(c.rgb / 0.85), saturate(a));
+	OVERLAY_OUTPUT o;
+	o.Diffuse = float4(tint, 1.0);
+	o.Albedo = float4(tint, 1.0);
+	return o;
+}
+#elif defined(PSHADER)
 struct PS_OUTPUT
 {
 	float4 Blood : SV_Target0;

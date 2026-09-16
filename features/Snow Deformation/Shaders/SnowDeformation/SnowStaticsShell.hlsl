@@ -4136,20 +4136,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// facing - the pixel-side twin of the lift's FullCoat gate.
 	[flatten] if (FullCoat > 0.5)
 		coverageAlpha = 1.0;
-	// A blood mark on the game's paint keeps the game's own decal: it is
-	// already composited under the coat, so the coat steps aside where the
-	// mark is solid and its lumps never reach over one. The smear around it
-	// stays the shading's extinction.
-	float bloodHere = 0.0;
-	[branch] if (pdMode && BloodLook2.z > 0.5)
-	{
-		float bloodFreshHere;
-		bloodHere = SampleBlood(input.GridLocal, bloodFreshHere).a;
-	}
-	if (bloodHere > 0.35)
-		discard;
 	bool coatOn = pdMode && EdgeCoat > 0.5;
-	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001 && bloodHere < 0.05;
+	bool lumpsOn = coatOn && EdgeFlankWidth > 0.001;
 	[branch] if (LegacySkin < 0.5 && (coatOn || fadeAlpha < 0.5))
 	{
 		const float fadeIn = fadeAlpha;

@@ -202,31 +202,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		ImGui::PushID("general_settings");
-		if (ImGui::TreeNodeEx(T(TKEY("menu_blood_splatter"), "Blood Splatter"))) {
-			ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
-			if (auto _ttBlood = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
-			ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
-			if (auto _ttBloodI = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains. 1 takes the textures as authored; 2 doubles the soak."));
-			ImGui::SliderFloat(T(TKEY("blood_burial"), "Snowfall Burial"), &settings.BloodBurial, 0.02f, 1.0f, "%.2f refills");
-			if (auto _ttBloodB = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_burial_tooltip"), "How much snowfall hides a mark for good, measured in trench refills: the same clock that fills a footprint back in. 0.15 = buried by a seventh of the snow that fills a trench, so a blizzard scrubs a battlefield in minutes while clear cold weather keeps it all session."));
-			ImGui::SliderFloat(T(TKEY("blood_age_hours"), "Drying Time"), &settings.BloodAgeHours, 0.25f, 24.0f, "%.1f h");
-			if (auto _ttBloodA = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_age_hours_tooltip"), "Game hours over which a fresh mark dries: the wet gloss goes and the red turns maroon."));
-			ImGui::SliderFloat(T(TKEY("blood_sheen"), "Wet Sheen"), &settings.BloodSheen, 0.0f, 1.0f, "%.2f");
-			if (auto _ttBloodS = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
-			ImGui::SliderFloat(T(TKEY("blood_drip_seconds"), "Weapon Drip Time"), &settings.BloodDripSeconds, 0.0f, 10.0f, "%.1f s");
-			if (auto _ttBloodD = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_drip_seconds_tooltip"), "Blood mods keep dripping from a bloodied weapon for as long as they like; a real blade runs dry in seconds. A trail of drips marks the snow as small round drops for this long after it starts, then the rest of that trail is ignored until it stops. 0 = drips never mark the snow."));
-			if (bloodShadersFailed)
-				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
-			else
-				WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast).c_str());
-			ImGui::TreePop();
-		}
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::Checkbox(T(TKEY("camera_above_snow"), "Keep Camera Above the Snow"), &settings.CameraAboveSnow);
 			if (auto _ttCam = Util::HoverTooltipWrapper())
@@ -489,6 +464,29 @@ void SnowDeformation::DrawSettings()
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
 
+		ImGui::TreePop();
+	}
+
+	if (ImGui::TreeNodeEx(T(TKEY("menu_blood_splatter"), "Blood Splatter"), ImGuiTreeNodeFlags_Framed)) {
+		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
+		if (auto _ttBlood = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
+		ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
+		if (auto _ttBloodI = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains. 1 takes the textures as authored; 2 doubles the soak."));
+		ImGui::SliderFloat(T(TKEY("blood_burial"), "Snowfall Burial"), &settings.BloodBurial, 0.02f, 1.0f, "%.2f refills");
+		if (auto _ttBloodB = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_burial_tooltip"), "How much snowfall hides a mark for good, measured in trench refills: the same clock that fills a footprint back in. 0.15 = buried by a seventh of the snow that fills a trench, so a blizzard scrubs a battlefield in minutes while clear cold weather keeps it all session."));
+		ImGui::SliderFloat(T(TKEY("blood_age_hours"), "Drying Time"), &settings.BloodAgeHours, 0.25f, 24.0f, "%.1f h");
+		if (auto _ttBloodA = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_age_hours_tooltip"), "Game hours over which a fresh mark dries: the wet gloss goes and the red turns maroon."));
+		ImGui::SliderFloat(T(TKEY("blood_sheen"), "Wet Sheen"), &settings.BloodSheen, 0.0f, 1.0f, "%.2f");
+		if (auto _ttBloodS = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
+		if (bloodShadersFailed)
+			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
+		else
+			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
 		ImGui::TreePop();
 	}
 

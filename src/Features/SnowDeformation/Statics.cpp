@@ -3804,6 +3804,7 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(false);
 	}
 	globals::profiler->EndPass();
+	DrawBloodOverlay(context);
 
 	// Everything after inherits b1 rather than binding it: put staticsCB
 	// back on every stage the offset path rebound, or the trench patch

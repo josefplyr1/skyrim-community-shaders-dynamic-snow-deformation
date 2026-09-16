@@ -576,8 +576,6 @@ public:
 		float BloodAgeHours = 3.0f;
 		/** @brief Gloss of fresh blood on the shells, 0..1 (0 = matte like the snow). */
 		float BloodSheen = 0.6f;
-		/** @brief Seconds a trail of weapon drips keeps marking the snow after it starts; the same trail is then ignored until it stops. 0 = drips never mark. */
-		float BloodDripSeconds = 3.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -867,15 +865,21 @@ public:
 	};
 	std::vector<BloodDisc> bloodDiscQueue;
 	std::mutex bloodDiscMutex;
-	/** @brief One bleeding source's trail of drip decals: marks for BloodDripSeconds after its first drip, then swallows the rest of the same trail. */
-	struct BloodDripCluster
-	{
-		float x, y;
-		double firstSeen, lastSeen, lastDeposit;
-	};
-	std::vector<BloodDripCluster> bloodDripClusters;
-	double bloodRenderSeconds = 0.0;
 	std::unordered_set<std::string> bloodPathsLogged;
+	/** @brief Every blood decal drawn this frame, for the overlay that redraws it on top of the object-snow coat. */
+	std::vector<BloodCapture> bloodOverlays;
+	ID3D11VertexShader* bloodOverlayVS = nullptr;
+	ID3D11VertexShader* bloodOverlaySkinVS = nullptr;
+	ID3D11PixelShader* bloodOverlayPS = nullptr;
+	winrt::com_ptr<ID3DBlob> bloodOverlayVSBlob;
+	winrt::com_ptr<ID3DBlob> bloodOverlaySkinVSBlob;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodOverlayILCache;
+	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodOverlaySkinILCache;
+	winrt::com_ptr<ID3D11BlendState> bloodOverlayBlendState;
+	winrt::com_ptr<ID3D11DepthStencilState> bloodOverlayDepthState;
+	uint32_t bloodOverlaysLast = 0;
+	/** @brief Draws this frame's blood decals over the object-snow coat, into the skin pass's targets. Called at the end of the skin pass. */
+	void DrawBloodOverlay(ID3D11DeviceContext* a_context);
 	struct alignas(16) BloodCB
 	{
 		float4 WorldRow0;
@@ -931,6 +935,8 @@ public:
 	void CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned);
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
+	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
+	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, bool a_overlay, BloodCB& a_cb);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
 
 	// ---- Baked undulation field ----
