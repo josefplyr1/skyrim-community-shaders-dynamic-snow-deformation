@@ -116,3 +116,29 @@ float ClassifyLODSnow(float3 color)
 
 	TerrainWindow[id.xy] = float4(z, coverage * SnowDepthUnits, coverage, provenance);
 }
+
+// SSGI seam shield mask (composite t16): the contact-fringe band of the
+// window's depth channel, kept within kSeamReach texels of real snow. Bare
+// ground far from any border reads exactly 0 and passed the band on its own,
+// so a snowless road lifted the AO off the player and the grass (2026-09-16).
+Texture2D<float4> SeamWindow : register(t5);
+RWTexture2D<float> SeamMask : register(u1);
+
+static const int kSeamReach = 4;
+
+[numthreads(8, 8, 1)] void SeamShieldCS(uint3 id : SV_DispatchThreadID) {
+	uint2 dims;
+	SeamWindow.GetDimensions(dims.x, dims.y);
+	if (any(id.xy >= dims))
+		return;
+	float4 texel = SeamWindow[id.xy];
+	float band = smoothstep(-6.0, -1.0, texel.y) * (1.0 - smoothstep(4.0, 10.0, texel.y));
+	float nearSnow = 0.0;
+	[unroll] for (int oy = -kSeamReach; oy <= kSeamReach; oy += 2) {
+		[unroll] for (int ox = -kSeamReach; ox <= kSeamReach; ox += 2) {
+			int2 p = clamp(int2(id.xy) + int2(ox, oy), int2(0, 0), int2(dims) - 1);
+			nearSnow = max(nearSnow, SeamWindow[p].y);
+		}
+	}
+	SeamMask[id.xy] = (texel.x > -50000.0) ? band * smoothstep(4.0, 10.0, nearSnow) : 0.0;
+}

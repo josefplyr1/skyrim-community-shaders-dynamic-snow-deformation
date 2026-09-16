@@ -1385,6 +1385,12 @@ public:
 	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11ComputeShader* GetDepthSyncCS();
 	ID3D11ComputeShader* depthSyncCS = nullptr;
+	/** @brief SSGI seam shield mask (SeamShieldCS in TerrainWindowFillCS.hlsl): the window's contact-fringe band gated to real snow nearby, R8 at the window's resolution. The composite reads it at t16; seamMaskFrame says which frame wrote it. */
+	ID3D11ComputeShader* GetSeamShieldCS();
+	ID3D11ComputeShader* seamShieldCS = nullptr;
+	Texture2D* seamMaskTexture = nullptr;
+	uint32_t seamMaskFrame = ~0u;
+	bool EnsureSeamMask();
 
 	/** @brief Renders the shell as an always-visible plane colored by the sampled terrain data (red=height, green=coverage, blue=ramp depth). Runtime-only diagnostic. */
 	bool shellDataDebug = false;

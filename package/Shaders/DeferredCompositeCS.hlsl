@@ -81,8 +81,10 @@ void SampleSSGISpecular(uint2 pixCoord, sh2 lobe, inout float ao, out float3 il,
 // an occluder and prints a dark AO ring on the ground just beyond the snow
 // border, which makes the shell read as hovering. The shell cannot shield
 // those pixels itself (it discarded there), so the AO is lifted inside the
-// shell's analytic contact fringe, read from the shell's terrain window.
-Texture2D<float4> SnowTerrainWindow : register(t16);
+// shell's analytic contact fringe. The mask (SeamShieldCS) is the window's
+// fringe band gated to real snow nearby: bare ground far from any border is
+// not fringe.
+Texture2D<float> SnowSeamMask : register(t16);
 
 cbuffer SnowSeamCB : register(b7)
 {
@@ -98,14 +100,11 @@ float SnowSeamShield(float2 worldXY)
 	int2 tBase = (int2)t;
 	float2 f = t - float2(tBase);
 	int2 tNext = min(tBase + 1, int2((int)SnowSeamDim - 1, (int)SnowSeamDim - 1));
-	float y00 = SnowTerrainWindow.Load(int3(tBase.x, tBase.y, 0)).y;
-	float y10 = SnowTerrainWindow.Load(int3(tNext.x, tBase.y, 0)).y;
-	float y01 = SnowTerrainWindow.Load(int3(tBase.x, tNext.y, 0)).y;
-	float y11 = SnowTerrainWindow.Load(int3(tNext.x, tNext.y, 0)).y;
-	float ramp = lerp(lerp(y00, y10, f.x), lerp(y01, y11, f.x), f.y);
-	// Nonzero across the contact fringe only: deep snow keeps its own AO,
-	// deep bare ground (and sentinel texels, far negative) is untouched.
-	return smoothstep(-6.0, -1.0, ramp) * (1.0 - smoothstep(4.0, 10.0, ramp));
+	float m00 = SnowSeamMask.Load(int3(tBase.x, tBase.y, 0));
+	float m10 = SnowSeamMask.Load(int3(tNext.x, tBase.y, 0));
+	float m01 = SnowSeamMask.Load(int3(tBase.x, tNext.y, 0));
+	float m11 = SnowSeamMask.Load(int3(tNext.x, tNext.y, 0));
+	return lerp(lerp(m00, m10, f.x), lerp(m01, m11, f.x), f.y);
 }
 #	endif
 #endif
