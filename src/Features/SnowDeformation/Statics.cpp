@@ -786,6 +786,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: skinned geometry");
 		return;
 	}
+	// Ash, sand, moss: not snow to the recolor, so no skin, no caster and no
+	// height-map entry either (Solstheim's ash rocks were shadowed by an
+	// invisible skin).
+	if (rec.mato == MatoClass::kNotSnow) {
+		LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: MATO not snow");
+		return;
+	}
 	// Ice-family meshes keep their skins at every range: the always-covered
 	// LOD family look is the acceptance criterion, and a skinless loaded
 	// glacier reads as having no snow even with the baked-snow recolor
@@ -809,10 +816,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// is the scene surface.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
 	const bool lodBatch = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
-	// objAsh and kin: the recolor bit is off (RecordOf's name veto) and the
-	// skin would coat off a weight Lighting never writes.
-	if (lodBatch && rec.mato == MatoClass::kNotSnow)
-		return;
 	// Read after SetupGeometry: the raster depth-bias mode this draw uses.
 	// Decal mode writes depth with a slope bias (-0.65/px) and a shorter
 	// viewport range, so at grazing views the mesh's own depth sits far
@@ -879,10 +882,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 
 		// Texture family OR mesh-name family: several glacier/ice meshes
-		// carry non-family texture paths. The MATO only vetoes (kNotSnow,
-		// the sand-shore rocks); requiring positive
-		// snow MATOs wrongly rejected glaciers, whose snow is baked and
-		// needs no projection record.
+		// carry non-family texture paths. The MATO only vetoes (above);
+		// requiring positive snow MATOs wrongly rejected glaciers, whose
+		// snow is baked and needs no projection record.
 		// The mountain/cliff family too, on snowy ground: LOD batches carry
 		// the family's texture paths and no projection data.
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
@@ -899,12 +901,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			}
 			mountainFeature = rec.depth > 0.5f;
 		}
-		bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
-		bool matoVetoed = false;
-		if (naturalFeature && rec.mato == MatoClass::kNotSnow) {
-			naturalFeature = false;
-			matoVetoed = true;
-		}
+		const bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
 		// Family accepts at any range, not just LOD: loaded glacier/ice meshes
 		// carry no proj/snow flags when PBR glacier textures replace the
 		// vanilla projected-snow setup, while their LOD counterparts capture
@@ -916,12 +913,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		// ships and walls beside the mountains).
 		// Snow-named textures capture under the toggle: their skin coats off
 		// the recolor's written weight.
-		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow;
+		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed;
 		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture)) {
-			if (matoVetoed)
-				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: family matched but MATO vetoed (kNotSnow)");
-			else
-				LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no family signal at material gate (name/texture both missed)");
+			LogIceJourney(a_pass, rec.ice || driftJourney, "rejected: no family signal at material gate (name/texture both missed)");
 			return;
 		}
 	}
@@ -1087,7 +1081,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
 	}
 
-	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow;
+	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed;
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat, projThreshold, projNoiseScale, projNoiseTiling, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex });
 }
 
