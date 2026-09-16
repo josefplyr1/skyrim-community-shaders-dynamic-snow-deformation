@@ -1208,6 +1208,8 @@ public:
 	ID3D11DomainShader* shellDS = nullptr;
 	/** @brief Measurement: replaces the ShellShadowCast profiler row with per-cascade CasterGrid/CasterSkins/CasterPatch rows. Runtime-only. */
 	bool shellCasterSplitDebug = false;
+	/** @brief A/B: skips the shell's sun-cascade injection (InjectShellShadowCasters) for the frame, everything else unchanged. Runtime-only. */
+	bool shellShadowCastDebugOff = false;
 
 	/** @brief A/B measurement: SNOW_DS_FLAT domain shader (terrain + class depth, no field work) bounds the geometry stages' share of the Shell row. Runtime-only. */
 	bool shellFlatDSDebug = false;

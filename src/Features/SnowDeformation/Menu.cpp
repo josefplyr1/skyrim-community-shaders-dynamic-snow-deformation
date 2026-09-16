@@ -1715,6 +1715,9 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttSssDbg = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_sss_debug_tooltip"), "Paints the Screen-Space Shadows gate on the shell. RED = how dark the mask (marched on the ground BENEATH the snow) wants this pixel. GREEN = how much the vertical hug gate trusts it. BLUE = the buried-caster probe found a captured object sunward and killed it. A shadow print = red + green with no blue. All black = the mask never reaches the shell here."));
 
+			ImGui::Checkbox(T(TKEY("shell_shadow_cast_off"), "Skip Shell Sun Shadows (A/B)"), &shellShadowCastDebugOff);
+			if (auto _ttCastOff = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shell_shadow_cast_off_tooltip"), "A/B: the snow shell is not drawn into the sun shadow cascades this frame. Nothing else changes. If a shadow on an object vanishes with this on, the shell cast it."));
 			ImGui::Checkbox(T(TKEY("shell_caster_split"), "Split Caster Row"), &shellCasterSplitDebug);
 			if (auto _ttCasterSplit = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_caster_split_tooltip"), "Measurement aid: the ShellShadowCast profiler row becomes one row per cascade and stage - CasterGrid, CasterSkins, CasterPatch - so the shell grid, the object-snow casters and the road patch can be read apart. Their sum is the old row. The profiler cannot nest passes, which is why the single row goes away while this is on."));

@@ -39,7 +39,8 @@ void SnowDeformation::CaptureShadowAtlas()
 		// own banks' shadows; acne stays off because the caster and the
 		// visible shell run the SAME surface math and the caster carries a
 		// depth push away from the light (kCasterDepthPush).
-		InjectShellShadowCasters(liveAtlasSRV.get());
+		if (!shellShadowCastDebugOff)
+			InjectShellShadowCasters(liveAtlasSRV.get());
 
 		CopySRVResource(liveAtlasSRV.get(), "SnowDeformation::ShadowAtlasCopy", shadowAtlasCopyTex, shadowAtlasCopySRV);
 		// Diagnostics: how many slices the copy carries (settings UI line).
