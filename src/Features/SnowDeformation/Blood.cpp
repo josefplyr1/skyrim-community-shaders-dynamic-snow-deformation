@@ -394,33 +394,43 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		RECT rect{};
 		UINT viewports = 1;
 		globals::d3d::context->RSGetViewports(&viewports, &bloodViewport);
-		if (viewports >= 1 && BloodScreenRect(geometry, rect)) {
-			auto unite = [](RECT& a, const RECT& b) {
-				a.left = std::min(a.left, b.left);
-				a.top = std::min(a.top, b.top);
-				a.right = std::max(a.right, b.right);
-				a.bottom = std::max(a.bottom, b.bottom);
-			};
+		const bool haveRect = viewports >= 1 && BloodScreenRect(geometry, rect);
+		auto unite = [](RECT& a, const RECT& b) {
+			a.left = std::min(a.left, b.left);
+			a.top = std::min(a.top, b.top);
+			a.right = std::max(a.right, b.right);
+			a.bottom = std::max(a.bottom, b.bottom);
+		};
+		if (haveRect) {
 			if (bloodRectFrameValid)
 				unite(bloodRectFrame, rect);
 			else
 				bloodRectFrame = rect;
 			bloodRectFrameValid = true;
-			if (bloodOverlays.empty() && settings.ProjSnowMatch) {
-				// Last frame's rectangle grown a little plus this decal.
-				bloodCopyRect = rect;
-				if (bloodRectPrevValid) {
-					RECT prev = bloodRectPrev;
-					const LONG gx = (prev.right - prev.left) / 12 + 8;
-					const LONG gy = (prev.bottom - prev.top) / 12 + 8;
-					prev.left = std::max(prev.left - gx, 0L);
-					prev.top = std::max(prev.top - gy, 0L);
-					prev.right = std::min(prev.right + gx, LONG(bloodViewport.Width));
-					prev.bottom = std::min(prev.bottom + gy, LONG(bloodViewport.Height));
+		}
+		if (bloodOverlays.empty() && settings.ProjSnowMatch) {
+			// Last frame's rectangle grown a little plus this decal; with
+			// neither, the whole viewport. A missing copy loses every decal
+			// of the frame, a large one costs a copy.
+			bool any = haveRect;
+			bloodCopyRect = rect;
+			if (bloodRectPrevValid) {
+				RECT prev = bloodRectPrev;
+				const LONG gx = (prev.right - prev.left) / 12 + 8;
+				const LONG gy = (prev.bottom - prev.top) / 12 + 8;
+				prev.left = std::max(prev.left - gx, 0L);
+				prev.top = std::max(prev.top - gy, 0L);
+				prev.right = std::min(prev.right + gx, LONG(bloodViewport.Width));
+				prev.bottom = std::min(prev.bottom + gy, LONG(bloodViewport.Height));
+				if (any)
 					unite(bloodCopyRect, prev);
-				}
-				CopyBloodTargets(true);
+				else
+					bloodCopyRect = prev;
+				any = true;
 			}
+			if (!any)
+				bloodCopyRect = { 0, 0, LONG(bloodViewport.Width), LONG(bloodViewport.Height) };
+			CopyBloodTargets(true);
 		}
 		bloodOverlays.push_back(capture);
 	}
@@ -447,8 +457,9 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 }
 
 // The decal's world bound projected with the game's current camera into the
-// bound viewport, in render-resolution pixels; false when it crosses the
-// near plane or is off screen.
+// bound viewport, in render-resolution pixels. A bound crossing the near
+// plane takes the whole viewport (the decal can be anywhere on screen);
+// false only when it is off screen.
 bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const
 {
 	const auto& fb = globals::game::frameBufferCached;
@@ -461,8 +472,10 @@ bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_
 	for (int c = 0; c < 8; ++c) {
 		const float x = cx + ((c & 1) ? r : -r), y = cy + ((c & 2) ? r : -r), z = cz + ((c & 4) ? r : -r);
 		const float w = m.m[3][0] * x + m.m[3][1] * y + m.m[3][2] * z + m.m[3][3];
-		if (w < 0.1f)
-			return false;
+		if (w < 0.1f) {
+			a_rect = { 0, 0, LONG(bloodViewport.Width), LONG(bloodViewport.Height) };
+			return a_rect.right > 0 && a_rect.bottom > 0;
+		}
 		const float nx = (m.m[0][0] * x + m.m[0][1] * y + m.m[0][2] * z + m.m[0][3]) / w;
 		const float ny = (m.m[1][0] * x + m.m[1][1] * y + m.m[1][2] * z + m.m[1][3]) / w;
 		minX = std::min(minX, nx);
