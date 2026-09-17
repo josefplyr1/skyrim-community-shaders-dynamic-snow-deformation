@@ -686,6 +686,11 @@ public:
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
 		DirectX::XMINT2 DeformTorusPad;
+
+		/** @brief Water raster (t104) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
+		float2 WaterWindowOrigin;
+		float WaterWindowTexel;
+		float WaterWindowDim;
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
@@ -1438,6 +1443,10 @@ public:
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	/** @brief Read view of shellTestDepth for the object-snow prepass's write-back into the main depth. */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellTestDepthSRV;
+	/** @brief Main depth before any snow draw this frame: DepthSync syncs the pixels the snow passes (shell, skins, patch) moved nearer. */
+	winrt::com_ptr<ID3D11Texture2D> preSnowDepth;
+	winrt::com_ptr<ID3D11ShaderResourceView> preSnowDepthSRV;
+	bool preSnowDepthThisFrame = false;
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
 	/** @brief A/B measurement: returns the shell to the near/far split draws without the depth prepass. Runtime-only. */

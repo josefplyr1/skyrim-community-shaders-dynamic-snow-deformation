@@ -8,15 +8,19 @@
 // without this sync they still see buried geometry poking up through the
 // snow and paint occlusion halos onto the shell surface.
 //
-// Only pixels the shell's prepass won are synced (ShellRasterDepth is 0
-// elsewhere): the main depth also holds main-pass-only geometry the prepass
-// never drew - decal-mode skirts and roofs sit ~1% nearer than the blended
-// depth - and a whole-screen min() handed SSGI those as occluders (Ashfall's
-// Tear, 2026-09-16). The 16-bit copy is written from the 32-bit one's value
-// (typed UAV loads are only guaranteed for R32).
+// Only the module's own pixels are synced: the shell prepass's mark
+// (ShellRasterDepth is 0 elsewhere), or a main depth the snow passes moved
+// nearer than the pre-snow copy (skins, patch). The main depth also holds
+// main-pass-only geometry the module never drew - decal-mode skirts and
+// roofs sit ~1% nearer than the blended depth - and a whole-screen min()
+// handed SSGI those as occluders (Ashfall's Tear, 2026-09-16). A null
+// PreSnowDepth loads 0, which disables that half. The 16-bit copy is
+// written from the 32-bit one's value (typed UAV loads are only guaranteed
+// for R32).
 
 Texture2D<float> MainDepth : register(t0);
 Texture2D<float> ShellRasterDepth : register(t1);
+Texture2D<float> PreSnowDepth : register(t2);
 RWTexture2D<float> BlendedDepth : register(u0);
 RWTexture2D<float> BlendedDepth16 : register(u1);
 
@@ -28,9 +32,9 @@ void main(uint3 dtid : SV_DispatchThreadID)
 	if (any(dtid.xy >= dims))
 		return;
 
-	if (ShellRasterDepth[dtid.xy] <= 0.0)
-		return;
 	float src = MainDepth[dtid.xy];
+	if (ShellRasterDepth[dtid.xy] <= 0.0 && src >= PreSnowDepth[dtid.xy])
+		return;
 	float blended = min(BlendedDepth[dtid.xy], src);
 	BlendedDepth[dtid.xy] = blended;
 	BlendedDepth16[dtid.xy] = blended;

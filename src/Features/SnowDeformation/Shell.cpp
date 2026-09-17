@@ -695,6 +695,25 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		if (FAILED(device->CreateShaderResourceView(shellTestDepth.get(), &testSrvDesc, shellTestDepthSRV.put())))
 			return false;
 		Util::SetResourceName(shellTestDepthSRV.get(), "SnowDeformation::ShellTestDepth SRV");
+
+		// Pre-snow copy of the main depth (CopyResource: same format as the
+		// source, read through the game's own SRV format).
+		preSnowDepth = nullptr;
+		preSnowDepthSRV = nullptr;
+		D3D11_TEXTURE2D_DESC preDesc = depthDesc;
+		preDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		preDesc.MiscFlags = 0;
+		preDesc.CPUAccessFlags = 0;
+		preDesc.Usage = D3D11_USAGE_DEFAULT;
+		D3D11_SHADER_RESOURCE_VIEW_DESC mainSrvDesc{};
+		a_mainDepthSRV->GetDesc(&mainSrvDesc);
+		if (SUCCEEDED(device->CreateTexture2D(&preDesc, nullptr, preSnowDepth.put()))) {
+			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
+			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &mainSrvDesc, preSnowDepthSRV.put())))
+				preSnowDepth = nullptr;
+			else
+				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
+		}
 	}
 	if (!shellPrepassMainDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
@@ -1307,6 +1326,22 @@ void SnowDeformation::DrawShell()
 		preSkinNormalsCopySRV = nullptr;
 	}
 
+	// Main depth before any snow draw: DepthSync syncs the pixels the snow
+	// passes (shell, skins, patch) move nearer than this copy. Targets are
+	// unbound around the copy like the masks copy above.
+	shellPrepassThisFrame = false;
+	preSnowDepthThisFrame = false;
+	{
+		auto preDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
+		if (preDepthSRV && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV) {
+			winrt::com_ptr<ID3D11Resource> depthRes;
+			preDepthSRV->GetResource(depthRes.put());
+			context->OMSetRenderTargets(0, nullptr, nullptr);
+			context->CopyResource(preSnowDepth.get(), depthRes.get());
+			preSnowDepthThisFrame = true;
+		}
+	}
+
 	// Bind the deferred G-buffer exactly as StartDeferred configures it,
 	// plus the main depth buffer for correct intersection with the world.
 	auto& rtData = renderer->GetRuntimeData();
@@ -1852,22 +1887,26 @@ void SnowDeformation::DrawShell()
 		}
 	}
 
-	// Screen-space passes running after us (SSGI) read Terrain Blending's
-	// blended depth, finalized during opaque rendering; without a sync they
-	// see buried geometry poking through the snow and paint occlusion halos
-	// onto the shell. min() the shell's fresh depth into both blended copies
-	// (DSV is unbound again at this point), on the shell's own pixels only:
-	// shellRasterDepth marks them, so the prepass is required.
+	// Screen-space passes running after us (SSGI, SSS, the shadow mask) read
+	// Terrain Blending's blended depth, finalized during opaque rendering;
+	// without a sync they see buried geometry poking through the snow and
+	// paint occlusion, shadow and GI from under the sheet. min() the fresh
+	// depth into both blended copies (DSV is unbound again at this point),
+	// on the module's own pixels only: the shell prepass's mark, or a depth
+	// the snow passes moved nearer than the pre-snow copy (skins, patch).
 	auto& tb = globals::features::terrainBlending;
-	const bool syncable = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
+	const bool rasterMarks = shellGround && shellPrepassThisFrame && shellRasterDepth && shellRasterDepth->srv;
+	const bool syncable = rasterMarks || preSnowDepthThisFrame;
 	if (!syncable)
 		globals::profiler->MarkPassSkipped("SnowDeformation::DepthSync");
 	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
 		if (auto cs = GetDepthSyncCS()) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
-			ID3D11ShaderResourceView* syncSRVs[2] = { mainDepthSRV, shellRasterDepth->srv.get() };
-			context->CSSetShaderResources(0, 2, syncSRVs);
+			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
+				rasterMarks ? shellRasterDepth->srv.get() : nullptr,
+				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
+			context->CSSetShaderResources(0, 3, syncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, syncUAVs, nullptr);
 			context->CSSetShader(cs, nullptr, 0);
 			const auto& depthDesc = tb.blendedDepthTexture->desc;
@@ -1875,9 +1914,9 @@ void SnowDeformation::DrawShell()
 			context->Dispatch((depthDesc.Width + 7) / 8, (depthDesc.Height + 7) / 8, 1);
 			globals::profiler->EndPass();
 
-			ID3D11ShaderResourceView* nullSyncSRVs[2] = { nullptr, nullptr };
+			ID3D11ShaderResourceView* nullSyncSRVs[3] = { nullptr, nullptr, nullptr };
 			ID3D11UnorderedAccessView* nullSyncUAVs[2] = { nullptr, nullptr };
-			context->CSSetShaderResources(0, 2, nullSyncSRVs);
+			context->CSSetShaderResources(0, 3, nullSyncSRVs);
 			context->CSSetUnorderedAccessViews(0, 2, nullSyncUAVs, nullptr);
 			context->CSSetShader(nullptr, nullptr, 0);
 		}

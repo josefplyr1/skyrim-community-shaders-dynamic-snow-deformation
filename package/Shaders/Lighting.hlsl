@@ -1755,6 +1755,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// tail, which re-lights the projected-snow fraction of non-PBR pixels.
 	bool snowProjMatch = false;
 	float3 snowProjAlbedo = 0.0;
+	// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
+	bool snowUnderWater = false;
+	[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
+		snowUnderWater = SnowDeformation::UnderWater(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz);
 #	endif
 
 #	if defined(PROJECTED_UV)
@@ -1851,7 +1855,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// swap of rounds 1-4 could never change it. Sits after the SPARKLE
 	// branch so the multipass snow pass (technique 14, every surviving pixel
 	// already snow) takes the same set.
-	snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+	snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !snowUnderWater &&
 	                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 	[branch] if (snowProjMatch)
 	{
@@ -1917,7 +1921,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// shell's snow set at the texel's own brightness, in the object's own
 	// shader. The weight is written back like projected snow for the coat.
 	float snowTexWeight = 0.0;
-	[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 &&
+	[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 && !snowUnderWater &&
 	             (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 	{
 		snowTexWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, worldNormal.z);
@@ -3298,6 +3302,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// The LOD brightness recolor's weight, same encoding, for the same coat.
 	[flatten] if (snowLodReplaceW > 0.003)
 		psout.Masks.y = 2.0 + saturate(snowLodReplaceW);
+#			endif
+#			if defined(SNOW_DEFORMATION)
+	// Under drawn water: 2 = known, unpainted, so the coat stays off too.
+	[flatten] if (snowUnderWater)
+		psout.Masks.y = 2.0;
 #			endif
 #		endif
 

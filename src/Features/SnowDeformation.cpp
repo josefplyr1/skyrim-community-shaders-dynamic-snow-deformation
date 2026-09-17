@@ -613,6 +613,14 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.EnableSnowDeformation = settings.EnableSnowDeformation;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u);
+	// Water raster frame (t104): the window's min corner, texel size, dim.
+	data.WaterWindowDim = 0.0f;
+	if (settings.EnableSnowDeformation && waterHeightTexture && waterHeightTexture->srv && waterWindowCellX != INT_MIN) {
+		const float waterCell = kShellVertexSpacing * kShellTexelsPerCell;
+		data.WaterWindowOrigin = { float(waterWindowCellX) * waterCell, float(waterWindowCellY) * waterCell };
+		data.WaterWindowTexel = kShellVertexSpacing;
+		data.WaterWindowDim = float(kShellWindowDim);
+	}
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
 	// (where the shell ends), so the recolor simply applies to all of it â€”
@@ -857,6 +865,9 @@ void SnowDeformation::Prepass()
 	// EnableSnowDeformation from FeatureData).
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+	// Water raster (t104) for Lighting's underwater veto; null until captured.
+	ID3D11ShaderResourceView* waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	context->PSSetShaderResources(104, 1, &waterSRV);
 	// Horizon snow albedo (t102) + normals (t103) for the LOD terrain
 	// recolor; the shader gates on LODReplaceEnable/SnowHasNormal, which
 	// require these SRVs to exist.
@@ -1582,6 +1593,8 @@ void SnowDeformation::Prepass()
 	// Rebind: the dispatch block nulled t101 while the map was a UAV target.
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
+	waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	context->PSSetShaderResources(104, 1, &waterSRV);
 }
 
 ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()

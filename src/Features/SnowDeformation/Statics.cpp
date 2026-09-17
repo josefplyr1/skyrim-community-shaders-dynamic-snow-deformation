@@ -558,6 +558,8 @@ struct GeometryRecord
 	// Diffuse path names blood: a decal-mode draw of it is a blood mark.
 	bool bloodTex = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
+	// Diffuse under a landscape folder: the road-name signal needs it.
+	bool landscapeTex = false;
 	MatoClass mato = MatoClass::kNoReference;
 	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
 	// or its single-pass marker (SOS_SNOW_SHADER extra data on the root).
@@ -603,6 +605,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
 					r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
+					r.landscapeTex = ContainsNoCase(diffuse, "landscape");
 					r.bloodTex = ContainsNoCase(diffuse, "blood");
 				}
 			}
@@ -729,9 +732,11 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		// The Prepass-time t102/t103 bind does NOT survive to the Lighting
 		// draws (frame7075: null at every player-view draw — stomped around
 		// the cubemap pass; t101 only survives via its later re-bind).
-		// Re-bind per classified draw, where it is actually sampled.
-		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
-		globals::d3d::context->PSSetShaderResources(102, 2, horizonSnowSRVs);
+		// Re-bind per classified draw, where it is actually sampled. t104 =
+		// the water raster for the underwater veto, same fate.
+		ID3D11ShaderResourceView* horizonSnowSRVs[3] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
+			waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
+		globals::d3d::context->PSSetShaderResources(102, 3, horizonSnowSRVs);
 	}
 }
 
@@ -1015,8 +1020,12 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// not split its road stones from its walls, so the road skin sheeted
 	// the whole thing (Josef, 2026-09-12). Bridges are ordinary objects;
 	// the RoadChunks laid over a deck keep their own road class.
+	// The name alone is not enough: Whiterun's district meshes are named
+	// WRMainRoad* and carry walls, roofs, stalls and the stream bed, so the
+	// name counts only on a landscape-textured trishape (the road kit's
+	// road01 / snow01 pieces), never on architecture textures.
 	const bool bridge = nameFacts.bridge || rec.roadTex == 2;
-	bool road = !bridge && nameFacts.road;
+	bool road = !bridge && nameFacts.road && rec.landscapeTex;
 	// Which signal decided it, for the road-classification log below.
 	const char* roadVia = road ? "name" : (bridge ? "bridge excluded" : "no");
 	if (!road && !bridge && rec.roadTex == 1) {
@@ -4239,6 +4248,9 @@ void SnowDeformation::RenderWaterCapture()
 		return;
 
 	globals::profiler->BeginPass("SnowDeformation::WaterCapture");
+	// The raster is Lighting's t104; off the PS before it becomes a target.
+	ID3D11ShaderResourceView* nullWaterSRV = nullptr;
+	context->PSSetShaderResources(104, 1, &nullWaterSRV);
 	ID3D11RenderTargetView* rtv = waterHeightTexture->rtv.get();
 	context->OMSetRenderTargets(1, &rtv, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);

@@ -14,6 +14,22 @@ namespace SnowDeformation
 	// Shell snow albedo + tangent normals for the horizon LOD-terrain recolor.
 	Texture2D<float4> HorizonSnowAlbedo : register(t102);
 	Texture2D<float4> HorizonSnowNormal : register(t103);
+	// Drawn water top-down in the terrain window's frame (RenderWaterCapture),
+	// kShellMissingHeight where none drew; rows grow with -Y.
+	Texture2D<float> WaterWindow : register(t104);
+
+	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
+	// No early return: fxc flags one inside a [branch] as X4000.
+	bool UnderWater(float3 absWorld)
+	{
+		float dim = SharedData::snowDeformationSettings.WaterWindowDim;
+		float2 t = floor((absWorld.xy - SharedData::snowDeformationSettings.WaterWindowOrigin) / max(SharedData::snowDeformationSettings.WaterWindowTexel, 1.0));
+		bool inside = dim > 0.5 && all(t >= 0.0) && all(t < dim);
+		float level = -100000.0;
+		[branch] if (inside)
+			level = WaterWindow.Load(int3(int(t.x), int(dim) - 1 - int(t.y), 0));
+		return inside && absWorld.z < level - 2.0;
+	}
 
 	// Must match kSnowUVTile in SnowShell.hlsl: identical world tiling on the
 	// shell and the recolored LOD is what makes the handoff invisible.

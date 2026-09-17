@@ -384,6 +384,12 @@ namespace SharedData
 		// texel (0,0); every map Load adds this and masks by dim-1.
 		int2 DeformMapOrigin;
 		int2 DeformTorusPad;
+
+		// Water raster (t104) frame: world xy of texel (0,0), texel size;
+		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.
+		float2 WaterWindowOrigin;
+		float WaterWindowTexel;
+		float WaterWindowDim;
 	};
 
 	cbuffer FeatureData : register(b6)
