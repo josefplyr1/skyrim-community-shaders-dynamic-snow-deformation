@@ -1334,14 +1334,15 @@ void SnowDeformation::Prepass()
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
 				// The blood map shares the origin, so the same ring is cleared.
+				// Its targets take u0/u1 for this dispatch; the map table goes
+				// back afterwards for the passes that inherit it.
 				if (bloodMapTexture && bloodClockTexture) {
 					if (auto* bloodRing = GetBloodRingCS()) {
 						ID3D11UnorderedAccessView* bloodUavs[2] = { bloodMapTexture->uav.get(), bloodClockTexture->uav.get() };
-						context->CSSetUnorderedAccessViews(8, 2, bloodUavs, nullptr);
+						context->CSSetUnorderedAccessViews(0, 2, bloodUavs, nullptr);
 						context->CSSetShader(bloodRing, nullptr, 0);
 						context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
-						ID3D11UnorderedAccessView* bloodNulls[2] = { nullptr, nullptr };
-						context->CSSetUnorderedAccessViews(8, 2, bloodNulls, nullptr);
+						context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 					}
 				}
 			} else {

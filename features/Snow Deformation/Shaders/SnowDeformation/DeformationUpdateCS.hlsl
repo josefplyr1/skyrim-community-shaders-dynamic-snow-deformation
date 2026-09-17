@@ -521,9 +521,11 @@ float SlumpTap(int2 p, int2 dims)
 }
 
 // The blood map and its clocks share the origin; the same ring is cleared.
-// Slots above u7 need the 11.1 context, which this feature already requires.
-RWTexture2D<float4> BloodMapRing : register(u8);
-RWTexture2D<float2> BloodClockRing : register(u9);
+// Own entry point, own binding: u0/u1 here are the blood targets, bound in
+// place of the map table for this dispatch alone. Slots past u7 made
+// RenderDoc's device reject the create, which threw on the prime worker.
+RWTexture2D<float4> BloodMapRing : register(u0);
+RWTexture2D<float2> BloodClockRing : register(u1);
 
 [numthreads(64, 1, 1)] void BloodRingCS(uint3 DTid
 										: SV_DispatchThreadID) {
