@@ -981,26 +981,24 @@ float TerrainHeightAt(float2 gridLocal)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Steepest shore slope the cap converts rise into distance with: a bank
-// steeper than this ends its snow by height above the water (full at
-// ~kShoreMaxSlope * ramp length) instead of within the class ramp's
-// horizontal width up the bank.
-static const float kShoreMaxSlope = 0.2;
+// Rise above the waterline over which the cap runs the class ramp's 38
+// units (-8 to +30): the snow is full about 8 units above the water on any
+// bank. Keyed on height alone so it is monotone away from the water; a
+// horizontal-distance estimate (rise / local slope) fell again wherever a
+// bank steepened inland, a trough on a straight texel edge.
+static const float kShoreRise = 10.0;
+// The wander is a horizontal pull inland; this nominal slope turns it into
+// rise.
+static const float kShoreWanderSlope = 0.2;
 
-// The snow ends AT the waterline with the class border's own slope. The wet
-// texels (-8) give the shore a class ramp, but that ramp is anchored to the
-// land lattice, so its zero can fall either side of the line; this caps the
-// depth by slope x horizontal distance to the line, zero at the line and
-// negative past it. Distance is rise over slope from the 128-texel bilinear
-// alone, so it is the same from every range; the slope is a one-texel
-// central difference, continuous across texel edges (the bilinear's own
-// gradient jumps there, and a cliff texel's jump capped the flat texel
-// beside it in a square), floored so a flat shore's distance stays finite
-// and ceilinged so a cliff does not cap the ledge above it. The wander
-// pulls the edge inland only. Rounded knee where the cap meets the class
-// ramp. Once per consumer. waterCap is the height the sheet may stand above
-// the ground here (1e9 = no water), so the object lift can be held to it
-// as well.
+// The snow ends AT the waterline with the class border's own depth ramp.
+// The wet texels (-8) give the shore a class ramp, but that ramp is anchored
+// to the land lattice, so its zero can fall either side of the line; this
+// caps the depth by rise above the line from the 128-texel bilinear alone
+// (the same from every range), zero at the line, negative past it. Rounded
+// knee where the cap meets the class ramp. Once per consumer. waterCap is
+// the height the sheet may stand above the ground here (1e9 = no water),
+// so the object lift can be held to it as well.
 float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 {
 	waterCap = 1e9;
@@ -1014,21 +1012,11 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 			float h = TerrainHeightAt(gridLocal);
 			[branch] if (h > -50000.0)
 			{
-				float hx0 = TerrainHeightAt(gridLocal - float2(TerrainTexelSize, 0.0));
-				float hx1 = TerrainHeightAt(gridLocal + float2(TerrainTexelSize, 0.0));
-				float hy0 = TerrainHeightAt(gridLocal - float2(0.0, TerrainTexelSize));
-				float hy1 = TerrainHeightAt(gridLocal + float2(0.0, TerrainTexelSize));
-				hx0 = hx0 > -50000.0 ? hx0 : h;
-				hx1 = hx1 > -50000.0 ? hx1 : h;
-				hy0 = hy0 > -50000.0 ? hy0 : h;
-				hy1 = hy1 > -50000.0 ? hy1 : h;
-				float2 grad = float2(hx1 - hx0, hy1 - hy0) / (2.0 * TerrainTexelSize);
-				float dist = (h - water + kWaterSkimDepth) / clamp(length(grad), 0.02, kShoreMaxSlope);
 				float2 worldXY = GridOrigin + gridLocal;
 				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
-				// A class ramp runs +30 to -8 across one texel plus the smoothing cross.
+				float rise = h - water + kWaterSkimDepth - wander * kShoreWanderSlope;
 				// Past the raster's last texel the cap lifts clear of the ramp.
-				float cap = (dist - wander) * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth)) + (1.0 - waterWeight) * 60.0;
+				float cap = rise * (38.0 / kShoreRise) + (1.0 - waterWeight) * 60.0;
 				waterCap = cap;
 				terrain.y = max(KneeMin(terrain.y, cap, 4.0), -8.0);
 			}
