@@ -218,8 +218,8 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		return false;
 	}
 	if (!bloodOverlayBlendState) {
-		// Lit diffuse (RT0) and albedo (RT3) times the decal's tint; nothing
-		// else in the G-buffer is touched.
+		// Lit diffuse (RT0) and albedo (RT3) take the pre-snow pixel back at
+		// the decal's alpha; nothing else in the G-buffer is touched.
 		D3D11_BLEND_DESC blendDesc{};
 		blendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 8; i++)
@@ -227,8 +227,8 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		for (int i : { 0, 3 }) {
 			auto& rt = blendDesc.RenderTarget[i];
 			rt.BlendEnable = TRUE;
-			rt.SrcBlend = D3D11_BLEND_DEST_COLOR;
-			rt.DestBlend = D3D11_BLEND_ZERO;
+			rt.SrcBlend = D3D11_BLEND_SRC_ALPHA;
+			rt.DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
 			rt.BlendOp = D3D11_BLEND_OP_ADD;
 			rt.SrcBlendAlpha = D3D11_BLEND_ZERO;
 			rt.DestBlendAlpha = D3D11_BLEND_ONE;
@@ -726,11 +726,14 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 {
 	bloodOverlaysLast = 0;
 	bloodOverlaySet.clear();
+	const bool preSnow = bloodPreSnowValid;
+	bloodPreSnowValid = false;
 	if (bloodOverlays.empty())
 		return;
-	// Without the prepass there is no post-skin depth to read the lift from;
-	// the decals stay under the snow that frame rather than double on rock.
-	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !a_postSkinDepth || !EnsureBloodResources()) {
+	// Without the prepass there is no post-skin depth to read the lift from,
+	// and without this frame's pre-snow copy nothing to put back; the decals
+	// stay under the snow that frame rather than double on rock.
+	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !a_postSkinDepth || !preSnow || !EnsureBloodResources()) {
 		bloodOverlays.clear();
 		return;
 	}
@@ -760,8 +763,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->PSSetConstantBuffers(1, 1, &cb1);
 	ID3D11SamplerState* sampler = bloodSampler.get();
 	context->PSSetSamplers(0, 1, &sampler);
-	ID3D11ShaderResourceView* depthSRVs[2] = { Util::GetCurrentSceneDepthSRV(false), a_postSkinDepth };
-	context->PSSetShaderResources(3, 2, depthSRVs);
+	ID3D11ShaderResourceView* readSRVs[4] = { Util::GetCurrentSceneDepthSRV(false), a_postSkinDepth, bloodPreSnowColorSRV.get(), bloodPreSnowAlbedoSRV.get() };
+	context->PSSetShaderResources(3, 4, readSRVs);
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
@@ -777,9 +780,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	}
 	bloodOverlays.clear();
 
-	ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+	ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(0, 1, nullSRVs);
-	context->PSSetShaderResources(4, 1, nullSRVs);
+	context->PSSetShaderResources(4, 3, nullSRVs);
 	context->OMSetBlendState(savedBlend.get(), savedBlendFactor, savedSampleMask);
 	context->OMSetDepthStencilState(savedDepth.get(), savedStencilRef);
 	context->RSSetState(savedRaster.get());

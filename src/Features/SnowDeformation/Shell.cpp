@@ -1280,6 +1280,20 @@ void SnowDeformation::DrawShell()
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
 		}
+		// The game's lit diffuse and albedo before any snow: the blood overlay
+		// puts these pixels back over thin snow (Blood.cpp). Copied only
+		// while blood decals are in view.
+		bloodPreSnowValid = false;
+		if (!bloodOverlays.empty() && settings.BloodOnSnow) {
+			auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
+			auto& albedoRT = renderer->GetRuntimeData().renderTargets[ALBEDO];
+			if (mainRT.SRV && albedoRT.SRV) {
+				context->OMSetRenderTargets(0, nullptr, nullptr);
+				CopySRVResource(mainRT.SRV, "SnowDeformation::BloodPreSnowColor", bloodPreSnowColorTex, bloodPreSnowColorSRV);
+				CopySRVResource(albedoRT.SRV, "SnowDeformation::BloodPreSnowAlbedo", bloodPreSnowAlbedoTex, bloodPreSnowAlbedoSRV);
+				bloodPreSnowValid = bloodPreSnowColorSRV && bloodPreSnowAlbedoSRV;
+			}
+		}
 		// Pre-shell normals for the S4 shell's per-pixel footprint cut
 		// (per-pixel nz, normal maps included). Gated on the 3D toggle so
 		// the off-cost is zero; the null SRV keeps HasSkinNormalCopy off.

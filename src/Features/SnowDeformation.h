@@ -874,6 +874,12 @@ public:
 	/** @brief Every blood decal drawn this frame, once each, for the overlay that redraws it on the snow that covered it. */
 	std::vector<BloodCapture> bloodOverlays;
 	std::unordered_set<const void*> bloodOverlaySet;
+	/** @brief The lit diffuse and the albedo as the game left them before any snow drew (Shell.cpp, frames with overlays pending only); the overlay blends these pixels back over the snow. Valid for one frame. */
+	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowColorTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowColorSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowAlbedoTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowAlbedoSRV;
+	bool bloodPreSnowValid = false;
 	ID3D11VertexShader* bloodOverlayVS = nullptr;
 	ID3D11VertexShader* bloodOverlaySkinVS = nullptr;
 	ID3D11PixelShader* bloodOverlayPS = nullptr;
