@@ -402,8 +402,9 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	capture.alphaThreshold = threshold;
 	capture.reveal = 1.0f;
 	capture.skinned = a_skinned;
-	// Every frame: the overlay redraws it over the coat.
-	if (bloodOverlays.size() < 512)
+	// Every frame, once per geometry (the hook sees a decal once per pass
+	// that draws it): the overlay redraws it over the snow.
+	if (bloodOverlays.size() < 512 && bloodOverlaySet.insert(geometry).second)
 		bloodOverlays.push_back(capture);
 	if (!a_skinned) {
 		// Baked geometry: deposited while it spreads, then left alone. A
@@ -721,12 +722,15 @@ void SnowDeformation::RenderBloodCapture()
 // the decal lies on, so the decal loses the depth test to it and vanishes
 // under the recolored snow. Pushed past the coat's lift, tested against
 // everything else, and confined by the PS to pixels the game painted solid.
-void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context)
+void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth)
 {
 	bloodOverlaysLast = 0;
+	bloodOverlaySet.clear();
 	if (bloodOverlays.empty())
 		return;
-	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !EnsureBloodResources()) {
+	// Without the prepass there is no post-skin depth to read the lift from;
+	// the decals stay under the snow that frame rather than double on rock.
+	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !a_postSkinDepth || !EnsureBloodResources()) {
 		bloodOverlays.clear();
 		return;
 	}
@@ -756,10 +760,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context)
 	context->PSSetConstantBuffers(1, 1, &cb1);
 	ID3D11SamplerState* sampler = bloodSampler.get();
 	context->PSSetSamplers(0, 1, &sampler);
-	ID3D11ShaderResourceView* masksSRV = landMasksCopySRV.get();
-	context->PSSetShaderResources(32, 1, &masksSRV);
-	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
-	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
+	ID3D11ShaderResourceView* depthSRVs[2] = { Util::GetCurrentSceneDepthSRV(false), a_postSkinDepth };
+	context->PSSetShaderResources(3, 2, depthSRVs);
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
@@ -775,8 +777,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context)
 	}
 	bloodOverlays.clear();
 
-	ID3D11ShaderResourceView* nullSRV = nullptr;
-	context->PSSetShaderResources(0, 1, &nullSRV);
+	ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+	context->PSSetShaderResources(0, 1, nullSRVs);
+	context->PSSetShaderResources(4, 1, nullSRVs);
 	context->OMSetBlendState(savedBlend.get(), savedBlendFactor, savedSampleMask);
 	context->OMSetDepthStencilState(savedDepth.get(), savedStencilRef);
 	context->RSSetState(savedRaster.get());

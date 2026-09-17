@@ -3804,7 +3804,8 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(false);
 	}
 	globals::profiler->EndPass();
-	DrawBloodOverlay(context);
+	// The private test depth holds the skins only after the prepass path.
+	DrawBloodOverlay(context, prepass ? shellTestDepthSRV.get() : nullptr);
 
 	// Everything after inherits b1 rather than binding it: put staticsCB
 	// back on every stage the offset path rebound, or the trench patch

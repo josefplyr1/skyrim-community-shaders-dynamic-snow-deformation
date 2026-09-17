@@ -51,11 +51,16 @@ cbuffer BloodSkinCB : register(b2)
 #endif
 
 #ifdef OVERLAY
-// OVERLAY: the decal drawn again after the object-snow pass, pushed toward
-// the camera past the coat's lift so it sits ON the recolored snow, and
-// only where the game painted solid snow (the coat's own test on the
-// pre-shell Masks copy). Writes a multiplicative tint into the lit diffuse
-// and the albedo, so the deferred light on the coat lights the blood.
+// OVERLAY: the decal drawn again after the object-snow pass, on the snow
+// that covered it. No hardware depth test; the PS keeps a fragment where
+// (a) the decal's own surface was the visible one before any snow drew
+// (the pre-snow depth copy: bodies and props above still hide it) and
+// (b) the depth after the skin pass sits a little nearer than that - a
+// thin snow layer drew here. Bare rock has no lift and stays single; the
+// deep landscape shell and a lifted rise exceed the lift cap and keep
+// their extinction smear. The game's own decal draw zeroes Masks.y under
+// itself, so the coat's paint test cannot be used here. Writes a
+// multiplicative tint into the lit diffuse and the albedo.
 // ShellCB prefix (SnowDeformation.h): the bound buffer is larger.
 cbuffer ShellCB : register(b0)
 {
@@ -65,16 +70,16 @@ cbuffer ShellCB : register(b0)
 	row_major float4x4 CameraView;
 	float4 ShellCameraPosAdjust;
 }
-Texture2D<float3> PreSkinMasks : register(t32);
 #	ifdef PSHADER
-// The pre-snow depth copy: the decal shows where the surface it lies on
-// was the visible one before the snow drew, so bodies and props above it
-// still hide it while every snow layer is ignored.
 #		include "Common/SharedData.hlsli"
+// Pre-snow depth (TerrainBlending's copy) and the skin pass's own depth.
 Texture2D<float> SceneDepth : register(t3);
+Texture2D<float> SkinDepth : register(t4);
 #	endif
 static const float kOverlayLift = 0.0;
-static const float kCoatSolidReal = 0.5;
+// View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
+static const float kOverlayMinLift = 0.05;
+static const float kOverlayMaxLift = 6.0;
 #endif
 
 #ifdef DISC
@@ -200,14 +205,13 @@ struct OVERLAY_OUTPUT
 
 OVERLAY_OUTPUT main(VS_OUTPUT input)
 {
-	// The coat's own test: solid paint only. Elsewhere the game's decal is
-	// already the visible surface and drawing it twice would thicken it.
-	float realEnc = PreSkinMasks.Load(int3(input.Position.xy, 0)).y;
-	if (saturate(realEnc - 2.0) < kCoatSolidReal)
-		discard;
-	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+	const int3 pixel = int3(input.Position.xy, 0);
+	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(pixel));
 	float fragDist = SharedData::GetScreenDepth(input.Position.z);
 	if (fragDist > sceneDist + 2.0)
+		discard;
+	float lift = sceneDist - SharedData::GetScreenDepth(SkinDepth.Load(pixel));
+	if (lift < kOverlayMinLift || lift > kOverlayMaxLift)
 		discard;
 	float4 c = Diffuse.Sample(LinearSampler, input.UV);
 	float a = c.a * MaterialAlpha;

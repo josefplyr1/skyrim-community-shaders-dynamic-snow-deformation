@@ -871,8 +871,9 @@ public:
 	std::vector<BloodDisc> bloodDiscQueue;
 	std::mutex bloodDiscMutex;
 	std::unordered_set<std::string> bloodPathsLogged;
-	/** @brief Every blood decal drawn this frame, for the overlay that redraws it on top of the object-snow coat. */
+	/** @brief Every blood decal drawn this frame, once each, for the overlay that redraws it on the snow that covered it. */
 	std::vector<BloodCapture> bloodOverlays;
+	std::unordered_set<const void*> bloodOverlaySet;
 	ID3D11VertexShader* bloodOverlayVS = nullptr;
 	ID3D11VertexShader* bloodOverlaySkinVS = nullptr;
 	ID3D11PixelShader* bloodOverlayPS = nullptr;
@@ -884,7 +885,7 @@ public:
 	winrt::com_ptr<ID3D11DepthStencilState> bloodOverlayDepthState;
 	uint32_t bloodOverlaysLast = 0;
 	/** @brief Draws this frame's blood decals over the object-snow coat, into the skin pass's targets. Called at the end of the skin pass. */
-	void DrawBloodOverlay(ID3D11DeviceContext* a_context);
+	void DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth);
 	struct alignas(16) BloodCB
 	{
 		float4 WorldRow0;
