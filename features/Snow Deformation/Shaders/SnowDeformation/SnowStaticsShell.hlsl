@@ -3508,6 +3508,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float3 normalWS = normalize(input.NormalWS);
+#ifndef PATCH
+	// Double-sided cards (thatch, stall canopies) carry a twin triangle
+	// facing down at the same depth; its coat shades from below and the
+	// later twin wins the depth test. A coat is never seen from behind.
+	[branch] if (dot(normalWS, normalize(input.WorldPos)) > 0.1)
+		discard;
+#endif
 
 	float2 worldXY = GridOrigin + input.GridLocal;
 	float pixelDist = length(input.WorldPos);

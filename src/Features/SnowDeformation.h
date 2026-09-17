@@ -501,6 +501,8 @@ public:
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
 		bool RoadHeightfield = true;
+		/** @brief Landscape shell, road class and trench patch inside child worldspaces (the walled cities). Off by default (Josef, 2026-09-17): where those shells meet city meshes they never sit right, and the volume snow takes the ground over there. Object snow stays. */
+		bool CityShells = false;
 		/** @brief The road patch past the object raster: a road-only top map over the loaded-cell square (heightTopRawFar), read by PatchTop and RoadOwnsColumn outside the coarse window, so the road surface runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
 		bool RoadPatchFarLevel = true;
 		/** @brief Shell albedo texture, loaded through the VFS. User-editable so the shell can be matched to the modlist's snow by eye. The loader resolves PBR companion maps and falls back to the legacy path when the PBR set is absent. */
@@ -2218,6 +2220,10 @@ public:
 	static constexpr float kHeightMapHalfExtent = 4096.0f;
 	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
 	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
+	/** @brief The player is in a child worldspace (a walled city); sampled once per frame in Prepass. */
+	bool cityWorldspace = false;
+	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
+	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
 	/** @brief The reach the accumulated maps were built at; a change re-texels the grid, so the scroll cannot carry them and the window clears instead. */
 	float objectRasterHalfExtentBuilt = 0.0f;
 
@@ -2297,6 +2303,12 @@ public:
 	winrt::com_ptr<ID3D11BlendState> heightMaxBlendState;
 	/** @brief Drawn water's height per terrain-window texel (kShellWindowDim^2, R32F, the terrain window's own frame): MAX of the bodies touching the texel, kShellMissingHeight where none. Rebuilt every frame from last frame's planes (a kept plane poisoned the area until the next cell crossing). Bound at t27 for the landscape shell. */
 	Texture2D* waterHeightTexture = nullptr;
+	/** @brief The same planes at object-raster resolution (kWaterFineDim over ObjectRasterHalfExtent) for Lighting's underwater veto (t104); rebuilt whenever the list or the height window moves. */
+	Texture2D* waterFineTexture = nullptr;
+	float2 waterFineCenter = { 0, 0 };
+	float waterFineHalf = 0.0f;
+	bool waterFineValid = false;
+	static constexpr int kWaterFineDim = 1024;
 	int waterWindowCellX = INT_MIN;
 	int waterWindowCellY = INT_MIN;
 	/** @brief One water body as the capture loop draws it. The bake skips while the fresh gather matches the last one at the same window cell - the texture already holds the same bits. */

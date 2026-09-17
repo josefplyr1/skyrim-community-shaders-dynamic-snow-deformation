@@ -1595,7 +1595,7 @@ void SnowDeformation::DrawShell()
 		                       kSnowGateUnknown;
 		shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
 	}
-	const bool shellGround = shellGateBareFrames < kShellGateBareFrames;
+	const bool shellGround = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	if (!shellGround)
 		globals::profiler->MarkPassSkipped("SnowDeformation::ShellVertexBake");
 	if (shellGround && tessellate && bake) {

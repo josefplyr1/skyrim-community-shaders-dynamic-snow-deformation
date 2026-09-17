@@ -738,7 +738,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		// Re-bind per classified draw, where it is actually sampled. t104 =
 		// the water raster for the underwater veto, same fate.
 		ID3D11ShaderResourceView* horizonSnowSRVs[3] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get(),
-			waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
+			waterFineTexture ? waterFineTexture->srv.get() : nullptr };
 		globals::d3d::context->PSSetShaderResources(102, 3, horizonSnowSRVs);
 	}
 }
@@ -1054,6 +1054,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia,
 			(road && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
 	}
+
+	// Cities: no road skin, no patch; the paving is left to the volume snow.
+	if (road && GroundShellsSuspended())
+		return;
 
 	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
 	// placement suppressor (SKIN-PLACEMENT-PLAN.md). -1 = no projection data
@@ -3879,7 +3883,7 @@ void SnowDeformation::DrawCapturedStatics()
 	// 0 produces dead patch texels for its objects only. Roads are the one
 	// class with depth, so the gate is theirs (the old > 1 threshold
 	// silently disabled the whole patch at depth 1).
-	if (patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f) {
+	if (patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended()) {
 		globals::profiler->BeginPass("SnowDeformation::TrenchPatch");
 		// Tessellated patch: quad patches with trench-aware factors, so the
 		// object trenches pick up the same wall smoothness and rim relief as
@@ -4202,6 +4206,12 @@ void SnowDeformation::RenderWaterCapture()
 		waterHeightTexture->CreateRTV(rtvDesc);
 		waterWindowCellX = INT_MIN;
 		waterBakeValid = false;
+		desc.Width = kWaterFineDim;
+		desc.Height = kWaterFineDim;
+		waterFineTexture = new Texture2D(desc, "SnowDeformation::WaterFine");
+		waterFineTexture->CreateSRV(srvDesc);
+		waterFineTexture->CreateRTV(rtvDesc);
+		waterFineValid = false;
 	}
 	GatherWaterObjects();
 	statWaterCaptured = (uint32_t)capturedWater.size();
@@ -4228,49 +4238,58 @@ void SnowDeformation::RenderWaterCapture()
 	const bool same = waterBakeValid && waterWindowCellX == shellWindowCellX && waterWindowCellY == shellWindowCellY &&
 	                  waterBakeKeys.size() == waterBakeScratch.size() &&
 	                  (waterBakeScratch.empty() || memcmp(waterBakeKeys.data(), waterBakeScratch.data(), waterBakeScratch.size() * sizeof(WaterBakeKey)) == 0);
-	if (same) {
+	// The fine raster follows the object height window as well as the list.
+	const float2 fineCenter = heightWindowCenter;
+	const float fineHalf = ObjectRasterHalfExtent();
+	const bool fineNeeded = waterFineTexture && (!same || !waterFineValid ||
+											   fineCenter.x != waterFineCenter.x || fineCenter.y != waterFineCenter.y || fineHalf != waterFineHalf);
+	if (same && !fineNeeded) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::WaterCapture");
 		capturedWater.clear();
 		return;
 	}
-	waterBakeKeys.swap(waterBakeScratch);
-	waterBakeValid = true;
+	if (!same) {
+		waterBakeKeys.swap(waterBakeScratch);
+		waterBakeValid = true;
+	}
 	// The terrain window's frame, rebuilt whenever the list or the cell
 	// moves (never kept across a change: a plane from an earlier frame - the
 	// waterline effect at the camera's level, a plane seen once from a bad
 	// angle - poisoned the area until the next cell crossing). A body's plane
 	// is set up whenever the ground over it is in view, so nothing the
 	// camera can see is lost.
-	{
-		const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
+	const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
+	if (!same) {
 		context->ClearRenderTargetView(waterHeightTexture->rtv.get(), clear);
 		waterWindowCellX = shellWindowCellX;
 		waterWindowCellY = shellWindowCellY;
 	}
 	statWaterDrawn = 0;
-	if (capturedWater.empty())
+	if (capturedWater.empty()) {
+		waterFineValid = false;
 		return;
+	}
 
 	globals::profiler->BeginPass("SnowDeformation::WaterCapture");
-	// The raster is Lighting's t104; off the PS before it becomes a target.
+	// The fine raster is Lighting's t104; off the PS before it becomes a target.
 	ID3D11ShaderResourceView* nullWaterSRV = nullptr;
 	context->PSSetShaderResources(104, 1, &nullWaterSRV);
-	ID3D11RenderTargetView* rtv = waterHeightTexture->rtv.get();
-	context->OMSetRenderTargets(1, &rtv, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
-	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kShellWindowDim), float(kShellWindowDim), 0.0f, 1.0f };
-	context->RSSetViewports(1, &viewport);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	context->VSSetShader(waterCaptureVS, nullptr, 0);
 	context->PSSetShader(waterCapturePS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
-	const float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
-	const float span = kShellVertexSpacing * kShellWindowDim;
+	// One loop, two frames: the terrain window (coarse) and the object
+	// height window (fine).
+	auto drawPlanes = [&](ID3D11RenderTargetView* a_rtv, uint32_t a_dim, float2 a_center, float a_halfExtent) {
+	context->OMSetRenderTargets(1, &a_rtv, nullptr);
+	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(a_dim), float(a_dim), 0.0f, 1.0f };
+	context->RSSetViewports(1, &viewport);
 	StaticsCB rec{};
-	rec.HeightWindowCenter = { shellWindowCellX * cellSize + span * 0.5f, shellWindowCellY * cellSize + span * 0.5f };
-	rec.HeightHalfExtent = span * 0.5f;
+	rec.HeightWindowCenter = a_center;
+	rec.HeightHalfExtent = a_halfExtent;
 	for (const auto& water : capturedWater) {
 		auto* geometry = water.geometry.get();
 		auto rendererData = geometry ? geometry->GetGeometryRuntimeData().rendererData : nullptr;
@@ -4326,6 +4345,20 @@ void SnowDeformation::RenderWaterCapture()
 		staticsCB->Update(rec);
 		context->DrawIndexed(indexCount, 0, 0);
 		statWaterDrawn++;
+	}
+	};
+	if (!same) {
+		const float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
+		const float span = kShellVertexSpacing * kShellWindowDim;
+		drawPlanes(waterHeightTexture->rtv.get(), kShellWindowDim,
+			{ shellWindowCellX * cellSize + span * 0.5f, shellWindowCellY * cellSize + span * 0.5f }, span * 0.5f);
+	}
+	if (fineNeeded) {
+		context->ClearRenderTargetView(waterFineTexture->rtv.get(), clear);
+		drawPlanes(waterFineTexture->rtv.get(), kWaterFineDim, fineCenter, fineHalf);
+		waterFineCenter = fineCenter;
+		waterFineHalf = fineHalf;
+		waterFineValid = true;
 	}
 	ID3D11RenderTargetView* nullRTV = nullptr;
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);

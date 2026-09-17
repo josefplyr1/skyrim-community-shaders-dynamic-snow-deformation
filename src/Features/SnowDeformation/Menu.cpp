@@ -567,6 +567,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("road_heightfield"), "Road Snow As One Surface"), &settings.RoadHeightfield);
 		if (auto _ttRhf = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_heightfield_tooltip"), "Road snow becomes a single deformable surface that dips underfoot, instead of a flat sheet with a separate trench carved beneath it."));
+		ImGui::Checkbox(T(TKEY("city_shells"), "Landscape And Road Snow In Cities"), &settings.CityShells);
+		if (auto _ttCity = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell and road snow inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there is left to the volume snow."));
 		ImGui::Checkbox(T(TKEY("road_patch_far_level"), "Road Snow To The Loaded Grid"), &settings.RoadPatchFarLevel);
 		if (auto _ttRoadFar = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("road_patch_far_level_tooltip"), "Carries the road surface past the Object Snow Shape Range to the edge of the loaded cells, from a coarser road-only height map (a texel is 12-16 units out there). Off, road snow beyond that range is the flat road skin, and the line where one hands to the other moves with you."));

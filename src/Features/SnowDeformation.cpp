@@ -144,6 +144,7 @@
 	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(RoadHeightfield) \
+	X(CityShells) \
 	X(RoadPatchFarLevel) \
 	X(LODSnowSensitivity) \
 	X(HorizonSnow) \
@@ -615,11 +616,10 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugTilingRuler ? 2u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u);
 	// Water raster frame (t104): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
-	if (settings.EnableSnowDeformation && waterHeightTexture && waterHeightTexture->srv && waterWindowCellX != INT_MIN) {
-		const float waterCell = kShellVertexSpacing * kShellTexelsPerCell;
-		data.WaterWindowOrigin = { float(waterWindowCellX) * waterCell, float(waterWindowCellY) * waterCell };
-		data.WaterWindowTexel = kShellVertexSpacing;
-		data.WaterWindowDim = float(kShellWindowDim);
+	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
+		data.WaterWindowOrigin = { waterFineCenter.x - waterFineHalf, waterFineCenter.y - waterFineHalf };
+		data.WaterWindowTexel = 2.0f * waterFineHalf / float(kWaterFineDim);
+		data.WaterWindowDim = float(kWaterFineDim);
 	}
 
 	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
@@ -866,7 +866,7 @@ void SnowDeformation::Prepass()
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	// Water raster (t104) for Lighting's underwater veto; null until captured.
-	ID3D11ShaderResourceView* waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(104, 1, &waterSRV);
 	// Horizon snow albedo (t102) + normals (t103) for the LOD terrain
 	// recolor; the shader gates on LODReplaceEnable/SnowHasNormal, which
@@ -876,6 +876,12 @@ void SnowDeformation::Prepass()
 		ID3D11ShaderResourceView* horizonSnowSRVs[2] = { shellSnowDiffuseSRV.get(), shellSnowNormalSRV.get() };
 		context->PSSetShaderResources(102, 2, horizonSnowSRVs);
 	}
+
+	// Child worldspace = walled city (WhiterunWorld etc. parent Tamriel).
+	cityWorldspace = false;
+	if (auto* tes = RE::TES::GetSingleton())
+		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
+			cityWorldspace = worldSpace->parentWorld != nullptr;
 
 	// New frame: publish last frame's statics-capture count and reset the
 	// list before this frame's opaque rendering fills it again.
@@ -1593,7 +1599,7 @@ void SnowDeformation::Prepass()
 	// Rebind: the dispatch block nulled t101 while the map was a UAV target.
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
-	waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(104, 1, &waterSRV);
 }
 

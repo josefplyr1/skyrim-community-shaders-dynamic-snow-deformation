@@ -250,7 +250,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 	// caster vertex is below ground and casts nothing. Measured over the shell's
 	// half-span rather than the deformation window: the shell reaches far past
 	// the window, and snow at 200 m still casts into view.
-	if (!ShellFootprintHasSnow()) {
+	if (!ShellFootprintHasSnow() || GroundShellsSuspended()) {
 		logOnce("skip: no snow depth within the shell footprint");
 		return;
 	}
