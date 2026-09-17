@@ -117,22 +117,16 @@ void SnowDeformation::ReleaseBloodShaders()
 			(*shader)->Release();
 		*shader = nullptr;
 	}
-	for (auto** shader : { &bloodOverlayVS, &bloodOverlaySkinVS }) {
-		if (*shader)
-			(*shader)->Release();
-		*shader = nullptr;
-	}
+	if (bloodOverlayVS)
+		bloodOverlayVS->Release();
+	bloodOverlayVS = nullptr;
 	if (bloodOverlayPS)
 		bloodOverlayPS->Release();
 	bloodOverlayPS = nullptr;
 	bloodVSBlob = nullptr;
 	bloodSkinVSBlob = nullptr;
-	bloodOverlayVSBlob = nullptr;
-	bloodOverlaySkinVSBlob = nullptr;
 	bloodILCache.clear();
 	bloodSkinILCache.clear();
-	bloodOverlayILCache.clear();
-	bloodOverlaySkinILCache.clear();
 	bloodShadersFailed = false;
 }
 
@@ -192,20 +186,8 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 	if (!bloodOverlayVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "OVERLAY"));
-		if (blob) {
-			bloodOverlayVSBlob = blob;
-			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlayVS)))
-				Util::SetResourceName(bloodOverlayVS, "SnowDeformation::BloodOverlayVS");
-		}
-	}
-	if (!bloodOverlaySkinVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "OVERLAY", "SKINNED"));
-		if (blob) {
-			bloodOverlaySkinVSBlob = blob;
-			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlaySkinVS)))
-				Util::SetResourceName(bloodOverlaySkinVS, "SnowDeformation::BloodOverlaySkinVS");
-		}
+		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlayVS)))
+			Util::SetResourceName(bloodOverlayVS, "SnowDeformation::BloodOverlayVS");
 	}
 	if (!bloodOverlayPS) {
 		winrt::com_ptr<ID3DBlob> blob;
@@ -213,19 +195,20 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlayPS)))
 			Util::SetResourceName(bloodOverlayPS, "SnowDeformation::BloodOverlayPS");
 	}
-	if (!bloodVS || !bloodSkinVS || !bloodDiscVS || !bloodPS || !bloodDiscPS || !bloodOverlayVS || !bloodOverlaySkinVS || !bloodOverlayPS) {
+	if (!bloodVS || !bloodSkinVS || !bloodDiscVS || !bloodPS || !bloodDiscPS || !bloodOverlayVS || !bloodOverlayPS) {
 		bloodShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Blood on snow disabled (shader compilation failed)");
 		return false;
 	}
 	if (!bloodOverlayBlendState) {
-		// Lit diffuse (RT0) and albedo (RT3) take the pre-snow pixel back at
-		// the decal's alpha; nothing else in the G-buffer is touched.
+		// The decals' own contribution over the snow in the lit diffuse,
+		// normal + gloss, albedo, specular and reflectance; motion vectors
+		// and the masks are left to the snow.
 		D3D11_BLEND_DESC blendDesc{};
 		blendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 8; i++)
 			blendDesc.RenderTarget[i].RenderTargetWriteMask = 0;
-		for (int i : { 0, 3 }) {
+		for (int i : { 0, 2, 3, 4, 5 }) {
 			auto& rt = blendDesc.RenderTarget[i];
 			rt.BlendEnable = TRUE;
 			rt.SrcBlend = D3D11_BLEND_ONE;
@@ -404,12 +387,41 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	capture.reveal = 1.0f;
 	capture.skinned = a_skinned;
 	// Every frame, once per geometry (the hook sees a decal once per pass
-	// that draws it): the overlay redraws it over the snow. The hook runs
-	// before the draw, so at the frame's first decal the targets still hold
-	// the ground the game is about to blend it onto.
+	// that draws it): the decal's screen rectangle joins the overlay's. The
+	// hook runs before the draw, so at the frame's first decal the targets
+	// still hold the ground the game is about to blend it onto.
 	if (bloodOverlays.size() < 512 && bloodOverlaySet.insert(geometry).second) {
-		if (bloodOverlays.empty() && settings.ProjSnowMatch)
-			CopyBloodPreDecalTargets();
+		RECT rect{};
+		UINT viewports = 1;
+		globals::d3d::context->RSGetViewports(&viewports, &bloodViewport);
+		if (viewports >= 1 && BloodScreenRect(geometry, rect)) {
+			auto unite = [](RECT& a, const RECT& b) {
+				a.left = std::min(a.left, b.left);
+				a.top = std::min(a.top, b.top);
+				a.right = std::max(a.right, b.right);
+				a.bottom = std::max(a.bottom, b.bottom);
+			};
+			if (bloodRectFrameValid)
+				unite(bloodRectFrame, rect);
+			else
+				bloodRectFrame = rect;
+			bloodRectFrameValid = true;
+			if (bloodOverlays.empty() && settings.ProjSnowMatch) {
+				// Last frame's rectangle grown a little plus this decal.
+				bloodCopyRect = rect;
+				if (bloodRectPrevValid) {
+					RECT prev = bloodRectPrev;
+					const LONG gx = (prev.right - prev.left) / 12 + 8;
+					const LONG gy = (prev.bottom - prev.top) / 12 + 8;
+					prev.left = std::max(prev.left - gx, 0L);
+					prev.top = std::max(prev.top - gy, 0L);
+					prev.right = std::min(prev.right + gx, LONG(bloodViewport.Width));
+					prev.bottom = std::min(prev.bottom + gy, LONG(bloodViewport.Height));
+					unite(bloodCopyRect, prev);
+				}
+				CopyBloodTargets(true);
+			}
+		}
 		bloodOverlays.push_back(capture);
 	}
 	if (!a_skinned) {
@@ -434,30 +446,87 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		bloodCaptures.push_back(std::move(capture));
 }
 
-void SnowDeformation::CopyBloodPreDecalTargets()
+// The decal's world bound projected with the game's current camera into the
+// bound viewport, in render-resolution pixels; false when it crosses the
+// near plane or is off screen.
+bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const
+{
+	const auto& fb = globals::game::frameBufferCached;
+	const auto& m = fb.GetCameraViewProj();
+	const auto adjust = fb.GetCameraPosAdjust();
+	const auto& bound = a_geometry->worldBound;
+	const float r = std::max(bound.radius, 1.0f);
+	const float cx = bound.center.x - adjust.x, cy = bound.center.y - adjust.y, cz = bound.center.z - adjust.z;
+	float minX = 1e9f, minY = 1e9f, maxX = -1e9f, maxY = -1e9f;
+	for (int c = 0; c < 8; ++c) {
+		const float x = cx + ((c & 1) ? r : -r), y = cy + ((c & 2) ? r : -r), z = cz + ((c & 4) ? r : -r);
+		const float w = m.m[3][0] * x + m.m[3][1] * y + m.m[3][2] * z + m.m[3][3];
+		if (w < 0.1f)
+			return false;
+		const float nx = (m.m[0][0] * x + m.m[0][1] * y + m.m[0][2] * z + m.m[0][3]) / w;
+		const float ny = (m.m[1][0] * x + m.m[1][1] * y + m.m[1][2] * z + m.m[1][3]) / w;
+		minX = std::min(minX, nx);
+		maxX = std::max(maxX, nx);
+		minY = std::min(minY, ny);
+		maxY = std::max(maxY, ny);
+	}
+	const float W = bloodViewport.Width, H = bloodViewport.Height;
+	if (W < 1.0f || H < 1.0f)
+		return false;
+	a_rect.left = LONG(std::floor((minX * 0.5f + 0.5f) * W)) - 2;
+	a_rect.right = LONG(std::ceil((maxX * 0.5f + 0.5f) * W)) + 2;
+	a_rect.top = LONG(std::floor((0.5f - maxY * 0.5f) * H)) - 2;
+	a_rect.bottom = LONG(std::ceil((0.5f - minY * 0.5f) * H)) + 2;
+	a_rect.left = std::clamp(a_rect.left, 0L, LONG(W));
+	a_rect.right = std::clamp(a_rect.right, 0L, LONG(W));
+	a_rect.top = std::clamp(a_rect.top, 0L, LONG(H));
+	a_rect.bottom = std::clamp(a_rect.bottom, 0L, LONG(H));
+	return a_rect.right > a_rect.left && a_rect.bottom > a_rect.top;
+}
+
+// Lit diffuse, normal + gloss, albedo, specular, reflectance over
+// bloodCopyRect into the pre-decal or the pre-snow set. Mid-pass in the
+// hook: the game's targets are unbound around the copy and put back.
+void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 {
 	auto* context = globals::d3d::context;
 	auto& rtData = globals::game::renderer->GetRuntimeData();
-	auto& mainRT = rtData.renderTargets[RE::RENDER_TARGETS::kMAIN];
-	auto& albedoRT = rtData.renderTargets[ALBEDO];
-	bloodPreDecalValid = false;
-	if (!mainRT.SRV || !albedoRT.SRV)
+	static constexpr uint32_t kSources[kBloodCopyCount] = { uint32_t(RE::RENDER_TARGETS::kMAIN), uint32_t(NORMALROUGHNESS), uint32_t(ALBEDO), uint32_t(SPECULAR), uint32_t(REFLECTANCE) };
+	static constexpr const char* kNames[2][kBloodCopyCount] = {
+		{ "SnowDeformation::BloodPreSnow0", "SnowDeformation::BloodPreSnow2", "SnowDeformation::BloodPreSnow3", "SnowDeformation::BloodPreSnow4", "SnowDeformation::BloodPreSnow5" },
+		{ "SnowDeformation::BloodPreDecal0", "SnowDeformation::BloodPreDecal2", "SnowDeformation::BloodPreDecal3", "SnowDeformation::BloodPreDecal4", "SnowDeformation::BloodPreDecal5" }
+	};
+	bool& valid = a_preDecal ? bloodPreDecalValid : bloodPreSnowValid;
+	valid = false;
+	auto* texs = a_preDecal ? bloodPreDecalTex : bloodPreSnowTex;
+	auto* srvs = a_preDecal ? bloodPreDecalSRV : bloodPreSnowSRV;
+	const RECT& rc = bloodCopyRect;
+	if (rc.right <= rc.left || rc.bottom <= rc.top)
 		return;
-	// Mid-pass: unbind the game's targets around the copy and put them back.
+	const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
 	ID3D11RenderTargetView* rtvs[8]{};
 	ID3D11DepthStencilView* dsv = nullptr;
 	context->OMGetRenderTargets(8, rtvs, &dsv);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
-	CopySRVResource(mainRT.SRV, "SnowDeformation::BloodPreDecalColor", bloodPreDecalColorTex, bloodPreDecalColorSRV);
-	CopySRVResource(albedoRT.SRV, "SnowDeformation::BloodPreDecalAlbedo", bloodPreDecalAlbedoTex, bloodPreDecalAlbedoSRV);
+	bool ok = true;
+	for (uint32_t i = 0; i < kBloodCopyCount; ++i) {
+		auto* srv = rtData.renderTargets[kSources[i]].SRV;
+		if (!srv) {
+			ok = false;
+			break;
+		}
+		CopySRVResource(srv, kNames[a_preDecal ? 1 : 0][i], texs[i], srvs[i], &box);
+		ok = ok && srvs[i];
+	}
 	context->OMSetRenderTargets(8, rtvs, dsv);
 	for (auto* rtv : rtvs)
 		if (rtv)
 			rtv->Release();
 	if (dsv)
 		dsv->Release();
-	bloodPreDecalValid = bloodPreDecalColorSRV && bloodPreDecalAlbedoSRV;
+	valid = ok;
 }
+
 
 void SnowDeformation::APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount)
 {
@@ -469,10 +538,10 @@ void SnowDeformation::APIDepositBlood(float a_x, float a_y, float a_z, float a_r
 	bloodDiscQueue.push_back({ a_x, a_y, a_z, a_radius, std::clamp(a_r, 0.0f, 1.0f), std::clamp(a_g, 0.0f, 1.0f), std::clamp(a_b, 0.0f, 1.0f), std::clamp(a_amount, 0.0f, 1.0f) });
 }
 
-uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, bool a_overlay, BloodCB& a_cb)
+uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb)
 {
 	auto* context = a_context;
-	const UINT instances = a_overlay ? 1u : 4u;
+	const UINT instances = 4u;
 	uint32_t drawn = 0;
 
 	auto rowsFrom = [](const RE::NiTransform& a_x, BloodCB& a_out) {
@@ -483,8 +552,8 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_out.WorldRow2 = { r.entry[2][0] * sc, r.entry[2][1] * sc, r.entry[2][2] * sc, a_x.translate.z };
 	};
 	auto layoutFor = [&](uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc, bool a_skinned) -> ID3D11InputLayout* {
-		auto& cache = a_overlay ? (a_skinned ? bloodOverlaySkinILCache : bloodOverlayILCache) : (a_skinned ? bloodSkinILCache : bloodILCache);
-		auto& blob = a_overlay ? (a_skinned ? bloodOverlaySkinVSBlob : bloodOverlayVSBlob) : (a_skinned ? bloodSkinVSBlob : bloodVSBlob);
+		auto& cache = a_skinned ? bloodSkinILCache : bloodILCache;
+		auto& blob = a_skinned ? bloodSkinVSBlob : bloodVSBlob;
 		auto& layout = cache[a_descKey];
 		if (!layout && blob) {
 			const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
@@ -519,7 +588,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.TexcoordOffset = capture.texcoord;
 		a_cb.MaterialAlpha = capture.alpha;
 		a_cb.AlphaThreshold = capture.alphaThreshold;
-		a_cb.Spread = { a_overlay ? 1.0f : capture.reveal, 0.0f, 0.0f, 0.0f };
+		a_cb.Spread = { capture.reveal, 0.0f, 0.0f, 0.0f };
 		ID3D11ShaderResourceView* diffuse = capture.diffuse.get();
 		context->PSSetShaderResources(0, 1, &diffuse);
 
@@ -543,7 +612,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 			UINT offset = 0;
 			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
 			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->VSSetShader(a_overlay ? bloodOverlayVS : bloodVS, nullptr, 0);
+			context->VSSetShader(bloodVS, nullptr, 0);
 			context->IASetInputLayout(layout);
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
@@ -590,7 +659,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.WorldRow1 = { 0, 1, 0, 0 };
 		a_cb.WorldRow2 = { 0, 0, 1, 0 };
 		bloodCB->Update(a_cb);
-		context->VSSetShader(a_overlay ? bloodOverlaySkinVS : bloodSkinVS, nullptr, 0);
+		context->VSSetShader(bloodSkinVS, nullptr, 0);
 		ID3D11Buffer* cb2 = bloodSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &cb2);
 		RE::BSGraphics::TriShape* rangeBuff = nullptr;
@@ -701,7 +770,7 @@ void SnowDeformation::RenderBloodCapture()
 	cb.NormalZMin = 0.3f;
 
 	context->PSSetShader(bloodPS, nullptr, 0);
-	bloodDepositsLast = DrawBloodList(context, bloodCaptures, false, cb);
+	bloodDepositsLast = DrawBloodList(context, bloodCaptures, cb);
 	if (bloodDepositsLast && !bloodDepositLogged) {
 		bloodDepositLogged = true;
 		logger::info("[SNOW DEFORMATION] blood map: first frame deposited {} of {} decals", bloodDepositsLast, bloodCaptures.size());
@@ -757,18 +826,21 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 {
 	bloodOverlaysLast = 0;
 	bloodOverlaySet.clear();
-	const bool preSnow = bloodPreSnowValid && bloodPreDecalValid;
+	const bool copies = bloodPreSnowValid && bloodPreDecalValid;
 	bloodPreSnowValid = false;
 	bloodPreDecalValid = false;
+	bloodRectPrev = bloodRectFrame;
+	bloodRectPrevValid = bloodRectFrameValid;
+	bloodRectFrameValid = false;
 	if (bloodOverlays.empty())
 		return;
+	const size_t decals = bloodOverlays.size();
+	bloodOverlays.clear();
 	// Without the prepass there is no post-skin depth to read the lift from,
-	// and without this frame's pre-snow copy nothing to put back; the decals
-	// stay under the snow that frame rather than double on rock.
-	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !a_postSkinDepth || !preSnow || !EnsureBloodResources()) {
-		bloodOverlays.clear();
+	// and without both copies nothing to put back; the decals stay under the
+	// snow that frame rather than double on rock.
+	if (!settings.BloodOnSnow || !settings.ProjSnowMatch || !a_postSkinDepth || !copies || !EnsureBloodResources())
 		return;
-	}
 	auto* context = a_context;
 	globals::profiler->BeginPass("SnowDeformation::BloodOverlay");
 
@@ -787,34 +859,40 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->RSSetState(bloodRasterState.get());
 	context->HSSetShader(nullptr, nullptr, 0);
 	context->DSSetShader(nullptr, nullptr, 0);
+	context->IASetInputLayout(nullptr);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	ID3D11Buffer* cb0 = shellCB->CB();
-	context->VSSetConstantBuffers(0, 1, &cb0);
-	ID3D11Buffer* cb1 = bloodCB->CB();
-	context->VSSetConstantBuffers(1, 1, &cb1);
-	context->PSSetConstantBuffers(1, 1, &cb1);
-	ID3D11SamplerState* sampler = bloodSampler.get();
-	context->PSSetSamplers(0, 1, &sampler);
-	ID3D11ShaderResourceView* readSRVs[6] = { Util::GetCurrentSceneDepthSRV(false), a_postSkinDepth, bloodPreSnowColorSRV.get(), bloodPreSnowAlbedoSRV.get(), bloodPreDecalColorSRV.get(), bloodPreDecalAlbedoSRV.get() };
-	context->PSSetShaderResources(3, 6, readSRVs);
-	auto state = globals::state;
-	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
-	context->PSSetConstantBuffers(4, 3, sharedBuffers);
+	context->VSSetShader(bloodOverlayVS, nullptr, 0);
 	context->PSSetShader(bloodOverlayPS, nullptr, 0);
 
 	BloodCB cb{};
 	cb.MapDim = 1.0f;
 	cb.Intensity = 1.0f;
-	bloodOverlaysLast = DrawBloodList(context, bloodOverlays, true, cb);
-	if (bloodOverlaysLast && !bloodOverlayLogged) {
-		bloodOverlayLogged = true;
-		logger::info("[SNOW DEFORMATION] blood overlay: first frame drew {} of {} decals over object snow", bloodOverlaysLast, bloodOverlays.size());
+	const float W = std::max(bloodViewport.Width, 1.0f), H = std::max(bloodViewport.Height, 1.0f);
+	cb.OverlayRect = { float(bloodCopyRect.left) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.top) / H * 2.0f,
+		float(bloodCopyRect.right) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.bottom) / H * 2.0f };
+	bloodCB->Update(cb);
+	ID3D11Buffer* cb1 = bloodCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+	context->PSSetConstantBuffers(1, 1, &cb1);
+	ID3D11ShaderResourceView* readSRVs[2 + 2 * kBloodCopyCount] = { Util::GetCurrentSceneDepthSRV(false), a_postSkinDepth };
+	for (uint32_t i = 0; i < kBloodCopyCount; ++i) {
+		readSRVs[2 + i] = bloodPreSnowSRV[i].get();
+		readSRVs[2 + kBloodCopyCount + i] = bloodPreDecalSRV[i].get();
 	}
-	bloodOverlays.clear();
+	context->PSSetShaderResources(3, 2 + 2 * kBloodCopyCount, readSRVs);
+	auto state = globals::state;
+	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 
-	ID3D11ShaderResourceView* nullSRVs[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
-	context->PSSetShaderResources(0, 1, nullSRVs);
-	context->PSSetShaderResources(4, 5, nullSRVs);
+	context->Draw(6, 0);
+	bloodOverlaysLast = uint32_t(decals);
+	if (!bloodOverlayLogged) {
+		bloodOverlayLogged = true;
+		logger::info("[SNOW DEFORMATION] blood overlay: first frame composited {} decals over object snow, rect {}x{}", decals, bloodCopyRect.right - bloodCopyRect.left, bloodCopyRect.bottom - bloodCopyRect.top);
+	}
+
+	ID3D11ShaderResourceView* nullSRVs[2 + 2 * kBloodCopyCount] = {};
+	context->PSSetShaderResources(3, 2 + 2 * kBloodCopyCount, nullSRVs);
 	context->OMSetBlendState(savedBlend.get(), savedBlendFactor, savedSampleMask);
 	context->OMSetDepthStencilState(savedDepth.get(), savedStencilRef);
 	context->RSSetState(savedRaster.get());

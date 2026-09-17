@@ -38,6 +38,9 @@ cbuffer BloodCB : register(b1)
 	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
 	// texel shows once its alpha exceeds (1 - reveal).
 	float4 Spread;
+
+	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
+	float4 OverlayRect;
 }
 
 #ifdef SKINNED
@@ -51,43 +54,37 @@ cbuffer BloodSkinCB : register(b2)
 #endif
 
 #ifdef OVERLAY
-// OVERLAY: the decal drawn again after the object-snow pass, on the snow
-// that covered it. No hardware depth test; the PS keeps a fragment where
-// (a) the decal's own surface was the visible one before any snow drew
-// (the pre-snow depth copy: bodies and props above still hide it) and
-// (b) the depth after the skin pass sits a little nearer than that - a
-// thin snow layer drew here. Bare rock has no lift and stays single; the
-// deep landscape shell and a lifted rise exceed the lift cap and keep
-// their extinction smear. The game's own decal draw zeroes Masks.y under
-// itself, so the coat's paint test cannot be used here. Output = the
-// decal's own lit contribution, premultiplied: the game's pre-snow pixel
-// P = a D + (1 - a) PD (Shell.cpp) minus the pre-decal pixel PD (copied
-// at the frame's first blood decal draw) at (1 - a), blended ONE /
-// INV_SRC_ALPHA over the snow. The decal as the game lit it, the coat's
-// smear under its translucent fringe instead of the white PD the game
-// blended it onto; stacked decals leave the same pixel.
-// ShellCB prefix (SnowDeformation.h): the bound buffer is larger.
-cbuffer ShellCB : register(b0)
-{
-	row_major float4x4 CameraViewProj;
-	row_major float4x4 CameraViewProjUnjittered;
-	row_major float4x4 CameraPreviousViewProjUnjittered;
-	row_major float4x4 CameraView;
-	float4 ShellCameraPosAdjust;
-}
+// OVERLAY: one screen-rectangle pass after the object-snow pass. Per pixel
+// it reads the G-buffer as the game left it before its blood decals drew
+// (PD) and after them (P), both copied over the decals' screen rectangle
+// (Blood.cpp), and puts the decals' own contribution back over thin snow:
+// blood leaves no green or blue, so the stack's alpha is
+// A = 1 - P.gb / PD.gb and the contribution P - (1 - A) PD, blended
+// ONE / INV_SRC_ALPHA into the lit diffuse, the normal + gloss, the albedo,
+// the specular and the reflectance. No decal geometry and no per-decal
+// alpha: stacked decals, the game's own fade and its depth test are all
+// in P already, and pixels the game did not paint stay untouched. Kept
+// where the depth after the skin pass sits 0.05..6 units nearer than the
+// pre-snow depth (a thin layer drew here); bare rock has no lift and the
+// deep shell keeps its extinction smear.
 #	ifdef PSHADER
 #		include "Common/SharedData.hlsli"
 // Pre-snow depth (TerrainBlending's copy) and the skin pass's own depth.
 Texture2D<float> SceneDepth : register(t3);
 Texture2D<float> SkinDepth : register(t4);
-// The lit diffuse and the albedo before any snow drew, and before the
-// frame's first blood decal drew.
-Texture2D<float4> PreSnowColor : register(t5);
-Texture2D<float4> PreSnowAlbedo : register(t6);
-Texture2D<float4> PreDecalColor : register(t7);
-Texture2D<float4> PreDecalAlbedo : register(t8);
+// Lit diffuse, normal + gloss, albedo, specular, reflectance: before any
+// snow drew (t5-t9) and before the frame's first blood decal drew (t10-t14).
+Texture2D<float4> PreSnow0 : register(t5);
+Texture2D<float4> PreSnow2 : register(t6);
+Texture2D<float4> PreSnow3 : register(t7);
+Texture2D<float4> PreSnow4 : register(t8);
+Texture2D<float4> PreSnow5 : register(t9);
+Texture2D<float4> PreDecal0 : register(t10);
+Texture2D<float4> PreDecal2 : register(t11);
+Texture2D<float4> PreDecal3 : register(t12);
+Texture2D<float4> PreDecal4 : register(t13);
+Texture2D<float4> PreDecal5 : register(t14);
 #	endif
-static const float kOverlayLift = 0.0;
 // View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
 static const float kOverlayMinLift = 0.05;
 static const float kOverlayMaxLift = 6.0;
@@ -117,22 +114,26 @@ float4 MapClip(float2 worldXY, uint seam, out float2 logical)
 	return float4(phys.x / MapDim * 2.0 - 1.0, 1.0 - phys.y / MapDim * 2.0, 0.5, 1.0);
 }
 
-// Overlay: world -> clip, pushed toward the camera. Logical is unused (the
-// PS window test is skipped); MapDim keeps it inside the window trivially.
 float4 PlaceVertex(float3 world, uint seam, out float2 logical)
 {
-#ifdef OVERLAY
-	logical = float2(0.0, 0.0);
-	float3 rel = world - ShellCameraPosAdjust.xyz;
-	rel -= normalize(rel) * kOverlayLift;
-	return mul(CameraViewProj, float4(rel, 1.0));
-#else
 	return MapClip(world.xy, seam, logical);
-#endif
 }
 
 #ifdef VSHADER
-#	if defined(DISC)
+#	if defined(OVERLAY)
+VS_OUTPUT main(uint vid : SV_VertexID)
+{
+	const float2 corners[6] = { float2(0, 0), float2(1, 0), float2(0, 1), float2(0, 1), float2(1, 0), float2(1, 1) };
+	float2 c = corners[vid];
+	VS_OUTPUT o;
+	o.Position = float4(lerp(OverlayRect.x, OverlayRect.z, c.x), lerp(OverlayRect.y, OverlayRect.w, c.y), 0.5, 1.0);
+	o.UV = c;
+	o.NormalZ = 1.0;
+	o.Tint = float4(1, 1, 1, 1);
+	o.Logical = float2(0.0, 0.0);
+	return o;
+}
+#	elif defined(DISC)
 VS_OUTPUT main(uint vid : SV_VertexID, uint inst : SV_InstanceID)
 {
 	const uint disc = inst >> 2;
@@ -211,28 +212,36 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 struct OVERLAY_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
+	float4 NormalGloss : SV_Target2;
 	float4 Albedo : SV_Target3;
+	float4 Specular : SV_Target4;
+	float4 Reflectance : SV_Target5;
 };
+
+float4 DecalPart(Texture2D<float4> p, Texture2D<float4> pd, int3 pixel, float a)
+{
+	return float4(max(p.Load(pixel).rgb - (1.0 - a) * pd.Load(pixel).rgb, 0.0), a);
+}
 
 OVERLAY_OUTPUT main(VS_OUTPUT input)
 {
 	const int3 pixel = int3(input.Position.xy, 0);
 	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(pixel));
-	float fragDist = SharedData::GetScreenDepth(input.Position.z);
-	if (fragDist > sceneDist + 2.0)
-		discard;
 	float lift = sceneDist - SharedData::GetScreenDepth(SkinDepth.Load(pixel));
 	if (lift < kOverlayMinLift || lift > kOverlayMaxLift)
 		discard;
-	float4 c = Diffuse.Sample(LinearSampler, input.UV);
-	float a = saturate(c.a * MaterialAlpha);
-	[flatten] if (AlphaThreshold >= 0.0)
-		a = a >= AlphaThreshold ? 1.0 : 0.0;
-	if (a < 0.01)
+	float3 p0 = PreSnow0.Load(pixel).rgb;
+	float3 d0 = PreDecal0.Load(pixel).rgb;
+	float2 ratio = p0.gb / max(d0.gb, 0.02);
+	float a = saturate(1.0 - min(ratio.x, ratio.y));
+	if (a < 0.02)
 		discard;
 	OVERLAY_OUTPUT o;
-	o.Diffuse = float4(max(PreSnowColor.Load(pixel).rgb - (1.0 - a) * PreDecalColor.Load(pixel).rgb, 0.0), a);
-	o.Albedo = float4(max(PreSnowAlbedo.Load(pixel).rgb - (1.0 - a) * PreDecalAlbedo.Load(pixel).rgb, 0.0), a);
+	o.Diffuse = DecalPart(PreSnow0, PreDecal0, pixel, a);
+	o.NormalGloss = DecalPart(PreSnow2, PreDecal2, pixel, a);
+	o.Albedo = DecalPart(PreSnow3, PreDecal3, pixel, a);
+	o.Specular = DecalPart(PreSnow4, PreDecal4, pixel, a);
+	o.Reflectance = DecalPart(PreSnow5, PreDecal5, pixel, a);
 	return o;
 }
 #elif defined(PSHADER)

@@ -22,7 +22,7 @@
 #include "Utils/Game.h"
 
 void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
-	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
+	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box)
 {
 	winrt::com_ptr<ID3D11Resource> srcRes;
 	a_srcSRV->GetResource(srcRes.put());
@@ -63,7 +63,10 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 		}
 	}
 
-	globals::d3d::context->CopyResource(a_tex.get(), srcTex.get());
+	if (a_box)
+		globals::d3d::context->CopySubresourceRegion(a_tex.get(), 0, a_box->left, a_box->top, 0, srcTex.get(), 0, a_box);
+	else
+		globals::d3d::context->CopyResource(a_tex.get(), srcTex.get());
 }
 
 /**
@@ -1280,20 +1283,12 @@ void SnowDeformation::DrawShell()
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
 		}
-		// The game's lit diffuse and albedo before any snow: the blood overlay
-		// puts these pixels back over thin snow (Blood.cpp). Copied only
-		// while blood decals are in view.
+		// The G-buffer before any snow, over the blood decals' rectangle: the
+		// overlay puts the decals' own contribution back over thin snow
+		// (Blood.cpp). Only while blood decals are in view.
 		bloodPreSnowValid = false;
-		if (!bloodOverlays.empty() && settings.BloodOnSnow) {
-			auto& mainRT = renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN];
-			auto& albedoRT = renderer->GetRuntimeData().renderTargets[ALBEDO];
-			if (mainRT.SRV && albedoRT.SRV) {
-				context->OMSetRenderTargets(0, nullptr, nullptr);
-				CopySRVResource(mainRT.SRV, "SnowDeformation::BloodPreSnowColor", bloodPreSnowColorTex, bloodPreSnowColorSRV);
-				CopySRVResource(albedoRT.SRV, "SnowDeformation::BloodPreSnowAlbedo", bloodPreSnowAlbedoTex, bloodPreSnowAlbedoSRV);
-				bloodPreSnowValid = bloodPreSnowColorSRV && bloodPreSnowAlbedoSRV;
-			}
-		}
+		if (!bloodOverlays.empty() && settings.BloodOnSnow && bloodPreDecalValid)
+			CopyBloodTargets(false);
 		// Pre-shell normals for the S4 shell's per-pixel footprint cut
 		// (per-pixel nz, normal maps included). Gated on the 3D toggle so
 		// the off-cost is zero; the null SRV keeps HasSkinNormalCopy off.

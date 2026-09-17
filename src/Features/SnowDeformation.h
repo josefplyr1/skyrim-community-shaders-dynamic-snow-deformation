@@ -874,26 +874,25 @@ public:
 	/** @brief Every blood decal drawn this frame, once each, for the overlay that redraws it on the snow that covered it. */
 	std::vector<BloodCapture> bloodOverlays;
 	std::unordered_set<const void*> bloodOverlaySet;
-	/** @brief The lit diffuse and the albedo as the game left them before any snow drew (Shell.cpp, frames with overlays pending only); the overlay blends these pixels back over the snow. Valid for one frame. */
-	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowColorTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowColorSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowAlbedoTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowAlbedoSRV;
-	bool bloodPreSnowValid = false;
-	/** @brief The same two targets before the frame's first blood decal drew (copied in the capture hook), so the overlay can subtract the PD the game blended the decal onto. Valid for one frame. */
-	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalColorTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalColorSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalAlbedoTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalAlbedoSRV;
+	/** @brief G-buffer targets the overlay reads: lit diffuse, normal + gloss, albedo, specular, reflectance (RT 0, 2, 3, 4, 5), copied over the decals' screen rectangle before the frame's first blood decal drew (the capture hook) and before any snow drew (Shell.cpp). Valid for one frame. */
+	static constexpr uint32_t kBloodCopyCount = 5;
+	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalTex[kBloodCopyCount];
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalSRV[kBloodCopyCount];
+	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowTex[kBloodCopyCount];
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowSRV[kBloodCopyCount];
 	bool bloodPreDecalValid = false;
-	void CopyBloodPreDecalTargets();
+	bool bloodPreSnowValid = false;
+	/** @brief Screen rectangle (render-resolution pixels) of this frame's blood decals so far, last frame's whole, and the one the copies cover: the pre-decal copy is taken at the first decal, so it covers last frame's rectangle grown a little plus that decal; a decal outside it waits a frame. */
+	RECT bloodRectFrame{};
+	bool bloodRectFrameValid = false;
+	RECT bloodRectPrev{};
+	bool bloodRectPrevValid = false;
+	RECT bloodCopyRect{};
+	D3D11_VIEWPORT bloodViewport{};
+	bool BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const;
+	void CopyBloodTargets(bool a_preDecal);
 	ID3D11VertexShader* bloodOverlayVS = nullptr;
-	ID3D11VertexShader* bloodOverlaySkinVS = nullptr;
 	ID3D11PixelShader* bloodOverlayPS = nullptr;
-	winrt::com_ptr<ID3DBlob> bloodOverlayVSBlob;
-	winrt::com_ptr<ID3DBlob> bloodOverlaySkinVSBlob;
-	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodOverlayILCache;
-	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodOverlaySkinILCache;
 	winrt::com_ptr<ID3D11BlendState> bloodOverlayBlendState;
 	winrt::com_ptr<ID3D11DepthStencilState> bloodOverlayDepthState;
 	uint32_t bloodOverlaysLast = 0;
@@ -916,6 +915,8 @@ public:
 		float NormalZMin;
 		/** @brief x = reveal 0..1 (how much of the mark's alpha range has spread in), yzw spare. */
 		float4 Spread;
+		/** @brief Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1). */
+		float4 OverlayRect;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodCB);
 	struct alignas(16) BloodSkinCB
@@ -961,7 +962,7 @@ public:
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
-	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, bool a_overlay, BloodCB& a_cb);
+	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
 
 	// ---- Baked undulation field ----
@@ -1880,7 +1881,7 @@ public:
 
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
-		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
+		winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box = nullptr);
 
 	// ---- Sun shadows on the shells: crisp cascade receiver + caster ----
 
