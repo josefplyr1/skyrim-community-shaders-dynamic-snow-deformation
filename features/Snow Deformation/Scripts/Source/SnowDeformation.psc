@@ -29,11 +29,12 @@ float Function GetSnowDepthAtRef(ObjectReference ref) global native
 ; is off.
 float Function GetSnowAccumulation() global native
 
-; Stains the snow with a soft disc of blood at a world point: radius in
-; world units, pigment as linear red/green/blue 0..1 (blood is about
-; 0.3, 0.02, 0.01), amount 0..1 = how saturated the centre is. Deposited on
-; the next frame; does nothing when the feature or its Blood on Snow setting
-; is off, or the point lies outside the trench window. The mark fades under
-; snowfall and dries over game hours like the game's own blood on the snow.
+; Stains the landscape snow with a soft disc of blood at a world point:
+; radius in world units, pigment as linear red/green/blue 0..1 (blood is
+; about 0.3, 0.02, 0.01), amount 0..1 = how saturated the centre is.
+; Deposited on the next frame; does nothing when the feature or its Blood on
+; Snow setting is off, or the point lies outside the trench window. The mark
+; fades under snowfall and dries over game hours. Snow on objects does not
+; show it; there the game's own blood decals sit on top of the snow.
 ; API version 2.
 Function DepositBlood(float worldX, float worldY, float worldZ, float radius, float red, float green, float blue, float amount) global native

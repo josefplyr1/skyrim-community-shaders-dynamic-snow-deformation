@@ -41,13 +41,15 @@ struct SnowDeformationAPI_V2
 	float (*GetSnowDepthAt)(float worldX, float worldY);
 	float (*GetSnowDepthAtRef)(void* tesObjectREFR);
 	float (*GetSnowAccumulation)();
-	// Stains the snow with a soft disc of blood: world centre, radius in
-	// world units, pigment as linear rgb 0..1 (blood is about 0.3, 0.02,
-	// 0.01), amount 0..1 = concentration at the centre. Queued from any
-	// thread, deposited on the next frame; a no-op when the feature or its
-	// Blood on Snow setting is off, or the point is outside the trench
-	// window. Fades with snowfall and dries over game hours like the game's
-	// own decals do on the snow.
+	// Stains the landscape snow with a soft disc of blood: world centre,
+	// radius in world units, pigment as linear rgb 0..1 (blood is about 0.3,
+	// 0.02, 0.01), amount 0..1 = concentration at the centre. Queued from any
+	// thread, deposited on the next frame, at most 256 per frame (later calls
+	// that frame are dropped); a no-op when the feature or its Blood on Snow
+	// setting is off, or the point is outside the trench window. Fades with
+	// snowfall and dries over game hours. Snow on objects (the recolored
+	// projected snow) does not show these marks: there the game's own blood
+	// decals are put back on top of the snow instead.
 	void (*DepositBlood)(float worldX, float worldY, float worldZ, float radius, float r, float g, float b, float amount);
 };
 

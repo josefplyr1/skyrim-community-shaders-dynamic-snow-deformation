@@ -470,7 +470,7 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("menu_blood_splatter"), "Blood Splatter"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
 		if (auto _ttBlood = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
+			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the landscape snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. On snow lying on objects (the recolored projected snow) the game's own decals are put back on top of the snow instead. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
 		ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBloodI = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains the landscape shell. Object snow (the recolored projected snow) carries the game's own decal on top instead and is not stained. 1 takes the textures as authored; 2 doubles the soak."));
@@ -488,8 +488,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "Blood does not appear on snow all at once: it soaks outward from where it landed. A fresh mark grows from its dense core to its thin fringe over this long. 0 = the whole mark at once."));
 		if (bloodShadersFailed)
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
-		else
-			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
 		ImGui::TreePop();
 	}
 
@@ -1264,6 +1262,11 @@ void SnowDeformation::DrawSettings()
 			WrapTextF("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (refs at last scan %u, movers %u, scan every 6 frames)",
 				stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
 				propScanRefs, stampStats.propMovers);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_blood"), "Blood Decals"))) {
+			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
 			ImGui::TreePop();
 		}
 
