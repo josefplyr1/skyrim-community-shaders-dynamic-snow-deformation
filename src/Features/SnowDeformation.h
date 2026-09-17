@@ -880,6 +880,13 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowAlbedoTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowAlbedoSRV;
 	bool bloodPreSnowValid = false;
+	/** @brief The same two targets before the frame's first blood decal drew (copied in the capture hook), so the overlay can subtract the PD the game blended the decal onto. Valid for one frame. */
+	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalColorTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalColorSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalAlbedoTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalAlbedoSRV;
+	bool bloodPreDecalValid = false;
+	void CopyBloodPreDecalTargets();
 	ID3D11VertexShader* bloodOverlayVS = nullptr;
 	ID3D11VertexShader* bloodOverlaySkinVS = nullptr;
 	ID3D11PixelShader* bloodOverlayPS = nullptr;

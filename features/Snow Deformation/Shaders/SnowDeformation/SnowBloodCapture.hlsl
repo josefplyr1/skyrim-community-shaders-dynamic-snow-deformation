@@ -60,10 +60,12 @@ cbuffer BloodSkinCB : register(b2)
 // deep landscape shell and a lifted rise exceed the lift cap and keep
 // their extinction smear. The game's own decal draw zeroes Masks.y under
 // itself, so the coat's paint test cannot be used here. Output = the
-// game's own pre-snow pixel (lit diffuse + albedo, copied in Shell.cpp)
-// alpha-blended back over the snow: the decal as the game painted it,
-// the coat's smear through its fringe; stacked decals and a second draw
-// of the same spot leave the same pixel.
+// decal's own lit contribution, premultiplied: the game's pre-snow pixel
+// P = a D + (1 - a) PD (Shell.cpp) minus the pre-decal pixel PD (copied
+// at the frame's first blood decal draw) at (1 - a), blended ONE /
+// INV_SRC_ALPHA over the snow. The decal as the game lit it, the coat's
+// smear under its translucent fringe instead of the white PD the game
+// blended it onto; stacked decals leave the same pixel.
 // ShellCB prefix (SnowDeformation.h): the bound buffer is larger.
 cbuffer ShellCB : register(b0)
 {
@@ -78,9 +80,12 @@ cbuffer ShellCB : register(b0)
 // Pre-snow depth (TerrainBlending's copy) and the skin pass's own depth.
 Texture2D<float> SceneDepth : register(t3);
 Texture2D<float> SkinDepth : register(t4);
-// The lit diffuse and the albedo before any snow drew.
+// The lit diffuse and the albedo before any snow drew, and before the
+// frame's first blood decal drew.
 Texture2D<float4> PreSnowColor : register(t5);
 Texture2D<float4> PreSnowAlbedo : register(t6);
+Texture2D<float4> PreDecalColor : register(t7);
+Texture2D<float4> PreDecalAlbedo : register(t8);
 #	endif
 static const float kOverlayLift = 0.0;
 // View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
@@ -225,12 +230,9 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 		a = a >= AlphaThreshold ? 1.0 : 0.0;
 	if (a < 0.01)
 		discard;
-	// The game's pixel already holds the decal at alpha a; the root keeps
-	// the fringe from fading twice while a = 0 still leaves the coat.
-	float w = sqrt(a);
 	OVERLAY_OUTPUT o;
-	o.Diffuse = float4(PreSnowColor.Load(pixel).rgb, w);
-	o.Albedo = float4(PreSnowAlbedo.Load(pixel).rgb, w);
+	o.Diffuse = float4(max(PreSnowColor.Load(pixel).rgb - (1.0 - a) * PreDecalColor.Load(pixel).rgb, 0.0), a);
+	o.Albedo = float4(max(PreSnowAlbedo.Load(pixel).rgb - (1.0 - a) * PreDecalAlbedo.Load(pixel).rgb, 0.0), a);
 	return o;
 }
 #elif defined(PSHADER)
