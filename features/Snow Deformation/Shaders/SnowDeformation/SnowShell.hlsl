@@ -237,7 +237,8 @@ Texture2D<float4> TerrainWindow : register(t0);
 // Drawn water's height per terrain texel, MAX of the bodies touching it,
 // -100000 where none. TerrainWindow's frame, but rasterised +Y-up like the
 // object maps, so its row is (TerrainDim - 1) - the terrain row.
-Texture2D<float> WaterWindow : register(t27);
+Texture2D<float> WaterWindow : register(t27);  // data route: lone wet texels dropped
+Texture2D<float> WaterRawWindow : register(t28);  // the shore cap: every rasterised body
 // Water this shallow over the ground is not water: a placed pond plane's
 // rectangle skims the land around its shore. Also where the shore cap's
 // zero lands, so keep it small or the toe ends under the surface.
@@ -252,8 +253,8 @@ static const float kWaterTexelDepth = 8.0;
 // and rim as any texture seam. Callers gate on CompactLook.x.
 float3 WaterBareTexel(float3 texel, int2 t)
 {
-	[flatten] if (texel.x < WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) - kWaterTexelDepth)
-		texel.y = min(texel.y, -8.0);
+	float water = WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0));
+	texel.y = texel.x < water - kWaterTexelDepth ? min(texel.y, -8.0) : texel.y;
 	return texel;
 }
 // The ground as the engine renders it: bicubic Catmull-Rom of the LAND
@@ -773,26 +774,21 @@ bool ShellTerrainAllBare(float2 lo, float2 hi)
 bool ShellObjectLiftsAt(float2 gridLocal)
 {
 	float field = SampleObjectHeight(GridOrigin + gridLocal);
-	[branch] if (field < -50000.0)
-		return false;
-	return field - SampleTerrainBilinearHeight(gridLocal) > kBareLiftMargin;
+	return field > -50000.0 && field - SampleTerrainBilinearHeight(gridLocal) > kBareLiftMargin;
 }
 
 bool ShellFullyBare(float2 a, float2 b, float2 c, float2 d)
 {
 	float2 lo = min(min(a, b), min(c, d));
 	float2 hi = max(max(a, b), max(c, d));
-	[branch] if (!ShellTerrainAllBare(lo, hi))
-		return false;
-
-	[branch] if (ObjectLiftCap > 1.0)
+	bool bare = ShellTerrainAllBare(lo, hi);
+	[branch] if (bare && ObjectLiftCap > 1.0)
 	{
 		float2 mid = 0.25 * (a + b + c + d);
-		if (ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) ||
-			ShellObjectLiftsAt(d) || ShellObjectLiftsAt(mid))
-			return false;
+		bare = !(ShellObjectLiftsAt(a) || ShellObjectLiftsAt(b) || ShellObjectLiftsAt(c) ||
+				 ShellObjectLiftsAt(d) || ShellObjectLiftsAt(mid));
 	}
-	return true;
+	return bare;
 }
 
 
@@ -926,18 +922,25 @@ float ChurnNoise(float2 worldXY)
 // texture seam. BorderNoise domain-warps where the border falls and
 // BorderSmooth widens the ramp with a tap cross. Terrain height is always
 // sampled at the true position, so the shell keeps conforming.
-// Water level over the texels a point touches: the max, so a shore texel
-// answers with its body's level and the sentinel never blends in.
-float SampleWaterHeight(float2 gridLocal)
+// Water level over the texels a point touches, from the raw raster: the max,
+// so a shore texel answers with its body's level and the sentinel never
+// blends in. .y = bilinear presence of the four texels, so the cap can fade
+// across the raster's last texel instead of stopping on its edge.
+float2 SampleWaterHeight(float2 gridLocal)
 {
 	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
 	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
 	int2 t0 = (int2)t;
+	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
 	int r0 = (int)TerrainDim - 1 - t0.y;
 	int r1 = (int)TerrainDim - 1 - t1.y;
-	return max(max(WaterWindow.Load(int3(t0.x, r0, 0)), WaterWindow.Load(int3(t1.x, r0, 0))),
-	           max(WaterWindow.Load(int3(t0.x, r1, 0)), WaterWindow.Load(int3(t1.x, r1, 0))));
+	float w00 = WaterRawWindow.Load(int3(t0.x, r0, 0));
+	float w10 = WaterRawWindow.Load(int3(t1.x, r0, 0));
+	float w01 = WaterRawWindow.Load(int3(t0.x, r1, 0));
+	float w11 = WaterRawWindow.Load(int3(t1.x, r1, 0));
+	float4 present = step(-50000.0, float4(w00, w10, w01, w11));
+	return float2(max(max(w00, w10), max(w01, w11)), lerp(lerp(present.x, present.y, f.x), lerp(present.z, present.w, f.x), f.y));
 }
 
 // Touch-down toe: positive depth reaches the ground where the alpha's class
@@ -1003,8 +1006,10 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 	waterCap = 1e9;
 	[branch] if (CompactLook.x > 0.5 && terrain.x > -50000.0 && terrain.y > -7.9)
 	{
-		float water = SampleWaterHeight(gridLocal);
-		[branch] if (water > -50000.0)
+		float2 waterAt = SampleWaterHeight(gridLocal);
+		float water = waterAt.x;
+		float waterWeight = waterAt.y;
+		[branch] if (waterWeight > 0.001)
 		{
 			float h = TerrainHeightAt(gridLocal);
 			[branch] if (h > -50000.0)
@@ -1022,7 +1027,8 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 				float2 worldXY = GridOrigin + gridLocal;
 				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
 				// A class ramp runs +30 to -8 across one texel plus the smoothing cross.
-				float cap = (dist - wander) * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth));
+				// Past the raster's last texel the cap lifts clear of the ramp.
+				float cap = (dist - wander) * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth)) + (1.0 - waterWeight) * 60.0;
 				waterCap = cap;
 				terrain.y = max(KneeMin(terrain.y, cap, 4.0), -8.0);
 			}

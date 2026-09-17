@@ -519,33 +519,31 @@ static const float kOpenPad = 24.0;
 	OutA[dtid.xy] = lerp(h, avg, saturate(DiffuseLambda));
 }
 
-// Water the shell reads: the raw water window minus every texel whose land
-// vertex an object's top stands over - a cliff or rock over flooded land the
-// game never shows. InA = raw water window, InB = this frame's object top
-// raster, OutA = the visible water window. Water rows grow with -Y.
+// Water the data route reads: the raw water window minus every lone wet
+// texel. A texel is wet when its land vertex sits kWaterTexelDepth under
+// its water; it keeps its water only when a 4-neighbour is wet too, so a
+// single vertex dipping under a cell plane (inside a cliff mesh) cannot
+// bare a whole texel. InA = raw water window, rows grow with -Y.
+float WaterWetTexel(int2 w)
+{
+	if (any(w < 0) || any(w >= int2(TerrainDim, TerrainDim)))
+		return 0.0;
+	float water = InA.Load(int3(w, 0));
+	float h = TerrainWindow.Load(int3(w.x, (int)TerrainDim - 1 - w.y, 0)).x;
+	return (water > -50000.0 && h > -50000.0 && h < water - 8.0) ? 1.0 : 0.0;
+}
+
 [numthreads(8, 8, 1)] void WaterCoverCS(uint3 dtid : SV_DispatchThreadID)
 {
 	if (any(dtid.xy >= TerrainDim))
 		return;
-	float water = InA.Load(int3(dtid.xy, 0));
-	[branch] if (water > -50000.0)
+	int2 w = (int2)dtid.xy;
+	float water = InA.Load(int3(w, 0));
+	[branch] if (WaterWetTexel(w) > 0.5)
 	{
-		float2 world = TerrainWindowOrigin + float2(float(dtid.x), float(TerrainDim - 1 - dtid.y)) * TerrainTexelSize;
-		uint2 dims;
-		InB.GetDimensions(dims.x, dims.y);
-		float texel = HeightHalfExtent * 2.0 / dims.x;
-		float2 p = float2((world.x - HeightWindowCenter.x) / texel + dims.x * 0.5 - 0.5,
-		                  dims.y * 0.5 - 0.5 - (world.y - HeightWindowCenter.y) / texel);
-		int2 c = (int2)floor(p + 0.5);
-		[branch] if (all(c >= 2) && all(c < int2(dims) - 2))
-		{
-			float top = -100000.0;
-			[unroll] for (int j = -2; j <= 2; j++)
-				[unroll] for (int i = -2; i <= 2; i++)
-					top = max(top, InB.Load(int3(c + int2(i, j), 0)));
-			[flatten] if (top > water)
-				water = -100000.0;
-		}
+		float nb = WaterWetTexel(w + int2(1, 0)) + WaterWetTexel(w - int2(1, 0)) + WaterWetTexel(w + int2(0, 1)) + WaterWetTexel(w - int2(0, 1));
+		[flatten] if (nb < 0.5)
+			water = -100000.0;
 	}
 	OutA[dtid.xy] = water;
 }

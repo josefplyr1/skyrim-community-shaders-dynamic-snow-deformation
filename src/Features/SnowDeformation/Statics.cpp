@@ -4382,31 +4382,30 @@ void SnowDeformation::RenderWaterCapture()
 	capturedWater.clear();
 }
 
-// Every frame, after the object raster: the shell's water window is the raw
-// raster minus the texels an object top covers. Without the pass (no object
-// raster yet, shader failed) the raw window is copied through.
+// Every frame: the data route's water window is the raw raster minus its
+// lone wet texels (WaterCoverCS). Without the pass the raw window is copied
+// through.
 void SnowDeformation::CoverWaterWindow()
 {
 	if (!waterHeightTexture || !waterVisibleTexture || !waterVisibleTexture->uav)
 		return;
 	auto context = globals::d3d::context;
-	auto* top = heightTopRaw[heightCurrent];
-	if (!heightWaterCoverCS || !top || !top->srv || !heightProcessCB) {
+	if (!heightWaterCoverCS || !shellTerrainTexture || !shellTerrainTexture->srv || !heightProcessCB) {
 		context->CopyResource(waterVisibleTexture->resource.get(), waterHeightTexture->resource.get());
 		return;
 	}
 	globals::profiler->BeginPass("SnowDeformation::WaterCover");
-	ID3D11ShaderResourceView* srvs[2] = { waterHeightTexture->srv.get(), top->srv.get() };
+	ID3D11ShaderResourceView* srvs[3] = { waterHeightTexture->srv.get(), nullptr, shellTerrainTexture->srv.get() };
 	ID3D11UnorderedAccessView* uav = waterVisibleTexture->uav.get();
 	ID3D11Buffer* processCB = heightProcessCB->CB();
 	context->CSSetConstantBuffers(0, 1, &processCB);
-	context->CSSetShaderResources(0, 2, srvs);
+	context->CSSetShaderResources(0, 3, srvs);
 	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	context->CSSetShader(heightWaterCoverCS, nullptr, 0);
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
-	ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+	ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
 	ID3D11UnorderedAccessView* nullUAV = nullptr;
-	context->CSSetShaderResources(0, 2, nullSRVs);
+	context->CSSetShaderResources(0, 3, nullSRVs);
 	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
 	globals::profiler->EndPass();

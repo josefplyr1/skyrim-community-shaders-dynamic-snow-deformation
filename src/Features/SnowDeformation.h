@@ -2305,7 +2305,7 @@ public:
 	Texture2D* waterHeightTexture = nullptr;
 	/** @brief The same planes at object-raster resolution (kWaterFineDim over ObjectRasterHalfExtent) for Lighting's underwater veto (t104); rebuilt whenever the list or the height window moves. */
 	Texture2D* waterFineTexture = nullptr;
-	/** @brief The water window the landscape shell reads: waterHeightTexture with every texel cleared whose land vertex lies under an object's top (WaterCoverCS). A cliff or rock over flooded land hides the water the game would draw there, and a lone such vertex turned its whole texel bare (the 2026-09-17 squares). */
+	/** @brief The water window the shell's data route reads (t27): waterHeightTexture minus its lone wet texels (WaterCoverCS), so a single vertex dipping under a cell plane inside a cliff mesh cannot bare a whole texel. The shore cap reads the raw window at t28. */
 	Texture2D* waterVisibleTexture = nullptr;
 	void CoverWaterWindow();
 	float2 waterFineCenter = { 0, 0 };
@@ -2346,7 +2346,7 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
-	/** @brief WaterCoverCS: the raw water window minus texels an object top covers, into waterVisibleTexture, every frame after the object raster. */
+	/** @brief WaterCoverCS: the raw water window minus its lone wet texels, into waterVisibleTexture, every frame. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;
 	ID3D11ComputeShader* objectConeSeedCS = nullptr;
