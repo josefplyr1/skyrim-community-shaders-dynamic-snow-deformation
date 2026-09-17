@@ -3511,8 +3511,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifndef PATCH
 	// Double-sided cards (thatch, stall canopies) carry a twin triangle
 	// facing down at the same depth; its coat shades from below and the
-	// later twin wins the depth test. A coat is never seen from behind.
-	[branch] if (dot(normalWS, normalize(input.WorldPos)) > 0.1)
+	// later twin wins the depth test, from above and from below alike. No
+	// coat forms on a down-facing surface; the rolled rim stays above -0.3.
+	[branch] if (normalWS.z < -0.3)
 		discard;
 #endif
 

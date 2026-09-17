@@ -19,15 +19,32 @@ namespace SnowDeformation
 	Texture2D<float> WaterWindow : register(t104);
 
 	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
-	// No early return: fxc flags one inside a [branch] as X4000.
+	// Bilinear over the four texels: a sloped plane is linear, so this
+	// reconstructs it exactly, where a point Load stepped it per texel and
+	// striped a bed lying a few units under it. A missing texel among the
+	// four falls back to the nearest one. No early return: fxc flags one
+	// inside a [branch] as X4000.
 	bool UnderWater(float3 absWorld)
 	{
 		float dim = SharedData::snowDeformationSettings.WaterWindowDim;
-		float2 t = floor((absWorld.xy - SharedData::snowDeformationSettings.WaterWindowOrigin) / max(SharedData::snowDeformationSettings.WaterWindowTexel, 1.0));
-		bool inside = dim > 0.5 && all(t >= 0.0) && all(t < dim);
+		float2 tf = (absWorld.xy - SharedData::snowDeformationSettings.WaterWindowOrigin) / max(SharedData::snowDeformationSettings.WaterWindowTexel, 1.0) - 0.5;
+		float2 t0f = floor(tf);
+		float2 f = tf - t0f;
+		int2 t0 = int2(t0f);
+		int2 t1 = t0 + 1;
+		bool inside = dim > 0.5 && all(t0 >= 0) && all(t1 < int(dim));
 		float level = -100000.0;
 		[branch] if (inside)
-			level = WaterWindow.Load(int3(int(t.x), int(dim) - 1 - int(t.y), 0));
+		{
+			int rows = int(dim) - 1;
+			float s00 = WaterWindow.Load(int3(t0.x, rows - t0.y, 0));
+			float s10 = WaterWindow.Load(int3(t1.x, rows - t0.y, 0));
+			float s01 = WaterWindow.Load(int3(t0.x, rows - t1.y, 0));
+			float s11 = WaterWindow.Load(int3(t1.x, rows - t1.y, 0));
+			float nearest = f.y < 0.5 ? (f.x < 0.5 ? s00 : s10) : (f.x < 0.5 ? s01 : s11);
+			bool full = min(min(s00, s10), min(s01, s11)) > -50000.0;
+			level = full ? lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) : nearest;
+		}
 		return inside && absWorld.z < level - 2.0;
 	}
 

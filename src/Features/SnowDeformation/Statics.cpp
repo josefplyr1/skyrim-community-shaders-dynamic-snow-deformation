@@ -1036,6 +1036,12 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		road = true;
 		roadVia = "texture";
 	}
+	// Cities: no road class at all. The paving is an ordinary object there
+	// (skin, recolor, volume), like the walls and stairs beside it.
+	if (road && GroundShellsSuspended()) {
+		road = false;
+		roadVia = "city";
+	}
 
 	// Capture log, one line per unique geometry name: classification plus the
 	// diffuse. Began as the road-class log; widened to EVERY capture because
@@ -1054,10 +1060,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia,
 			(road && settings.RoadHeightfield) ? "yes" : "no", diffusePath);
 	}
-
-	// Cities: no road skin, no patch; the paving is left to the volume snow.
-	if (road && GroundShellsSuspended())
-		return;
 
 	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
 	// placement suppressor (SKIN-PLACEMENT-PLAN.md). -1 = no projection data
