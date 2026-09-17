@@ -960,16 +960,44 @@ float KneeMin(float a, float b, float k)
 	return a - knee;
 }
 
+// Bilinear land height from the 128-texel window, -1e5 when a corner is
+// unbaked.
+float TerrainHeightAt(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
+	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
+	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
+	float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
+	[flatten] if (min(min(s00, s10), min(s01, s11)) <= -50000.0)
+		return -100000.0;
+	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+}
+
+// Steepest shore slope the cap converts rise into distance with: a bank
+// steeper than this ends its snow by height above the water (full at
+// ~kShoreMaxSlope * ramp length) instead of within the class ramp's
+// horizontal width up the bank.
+static const float kShoreMaxSlope = 0.2;
+
 // The snow ends AT the waterline with the class border's own slope. The wet
 // texels (-8) give the shore a class ramp, but that ramp is anchored to the
 // land lattice, so its zero can fall either side of the line; this caps the
 // depth by slope x horizontal distance to the line, zero at the line and
 // negative past it. Distance is rise over slope from the 128-texel bilinear
-// alone, so it is the same from every range; the slope floor keeps a flat
-// shore's distance finite. The wander pulls the edge inland only. Rounded
-// knee where the cap meets the class ramp. Once per consumer. waterCap is
-// the height the sheet may stand above the ground here (1e9 = no water),
-// so the object lift can be held to it as well.
+// alone, so it is the same from every range; the slope is a one-texel
+// central difference, continuous across texel edges (the bilinear's own
+// gradient jumps there, and a cliff texel's jump capped the flat texel
+// beside it in a square), floored so a flat shore's distance stays finite
+// and ceilinged so a cliff does not cap the ledge above it. The wander
+// pulls the edge inland only. Rounded knee where the cap meets the class
+// ramp. Once per consumer. waterCap is the height the sheet may stand above
+// the ground here (1e9 = no water), so the object lift can be held to it
+// as well.
 float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 {
 	waterCap = 1e9;
@@ -978,20 +1006,19 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 		float water = SampleWaterHeight(gridLocal);
 		[branch] if (water > -50000.0)
 		{
-			float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-			t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-			int2 t0 = (int2)t;
-			float2 f = t - t0;
-			int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-			float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
-			float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
-			float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
-			float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
-			[branch] if (min(min(s00, s10), min(s01, s11)) > -50000.0)
+			float h = TerrainHeightAt(gridLocal);
+			[branch] if (h > -50000.0)
 			{
-				float h = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-				float2 grad = float2(lerp(s10 - s00, s11 - s01, f.y), lerp(s01 - s00, s11 - s10, f.x)) / TerrainTexelSize;
-				float dist = (h - water + kWaterSkimDepth) / max(length(grad), 0.02);
+				float hx0 = TerrainHeightAt(gridLocal - float2(TerrainTexelSize, 0.0));
+				float hx1 = TerrainHeightAt(gridLocal + float2(TerrainTexelSize, 0.0));
+				float hy0 = TerrainHeightAt(gridLocal - float2(0.0, TerrainTexelSize));
+				float hy1 = TerrainHeightAt(gridLocal + float2(0.0, TerrainTexelSize));
+				hx0 = hx0 > -50000.0 ? hx0 : h;
+				hx1 = hx1 > -50000.0 ? hx1 : h;
+				hy0 = hy0 > -50000.0 ? hy0 : h;
+				hy1 = hy1 > -50000.0 ? hy1 : h;
+				float2 grad = float2(hx1 - hx0, hy1 - hy0) / (2.0 * TerrainTexelSize);
+				float dist = (h - water + kWaterSkimDepth) / clamp(length(grad), 0.02, kShoreMaxSlope);
 				float2 worldXY = GridOrigin + gridLocal;
 				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
 				// A class ramp runs +30 to -8 across one texel plus the smoothing cross.
