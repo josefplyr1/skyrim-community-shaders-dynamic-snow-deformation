@@ -1456,6 +1456,8 @@ bool SnowDeformation::EnsureStaticsShaders()
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
 	if (!heightCombineCS)
 		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
+	if (!heightWaterCoverCS)
+		heightWaterCoverCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "WaterCoverCS"));
 	if (!heightConeCS)
 		heightConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ConeCS"));
 	if (!objectConeSeedCS)
@@ -4208,6 +4210,18 @@ void SnowDeformation::RenderWaterCapture()
 		waterHeightTexture->CreateRTV(rtvDesc);
 		waterWindowCellX = INT_MIN;
 		waterBakeValid = false;
+		{
+			D3D11_TEXTURE2D_DESC visDesc = desc;
+			visDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+			waterVisibleTexture = new Texture2D(visDesc, "SnowDeformation::WaterVisible");
+			waterVisibleTexture->CreateSRV(srvDesc);
+			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
+				.Format = desc.Format,
+				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			waterVisibleTexture->CreateUAV(uavDesc);
+		}
 		desc.Width = kWaterFineDim;
 		desc.Height = kWaterFineDim;
 		waterFineTexture = new Texture2D(desc, "SnowDeformation::WaterFine");
@@ -4366,6 +4380,36 @@ void SnowDeformation::RenderWaterCapture()
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);
 	globals::profiler->EndPass();
 	capturedWater.clear();
+}
+
+// Every frame, after the object raster: the shell's water window is the raw
+// raster minus the texels an object top covers. Without the pass (no object
+// raster yet, shader failed) the raw window is copied through.
+void SnowDeformation::CoverWaterWindow()
+{
+	if (!waterHeightTexture || !waterVisibleTexture || !waterVisibleTexture->uav)
+		return;
+	auto context = globals::d3d::context;
+	auto* top = heightTopRaw[heightCurrent];
+	if (!heightWaterCoverCS || !top || !top->srv || !heightProcessCB) {
+		context->CopyResource(waterVisibleTexture->resource.get(), waterHeightTexture->resource.get());
+		return;
+	}
+	globals::profiler->BeginPass("SnowDeformation::WaterCover");
+	ID3D11ShaderResourceView* srvs[2] = { waterHeightTexture->srv.get(), top->srv.get() };
+	ID3D11UnorderedAccessView* uav = waterVisibleTexture->uav.get();
+	ID3D11Buffer* processCB = heightProcessCB->CB();
+	context->CSSetConstantBuffers(0, 1, &processCB);
+	context->CSSetShaderResources(0, 2, srvs);
+	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetShader(heightWaterCoverCS, nullptr, 0);
+	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
+	ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	context->CSSetShaderResources(0, 2, nullSRVs);
+	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetShader(nullptr, nullptr, 0);
+	globals::profiler->EndPass();
 }
 
 bool SnowDeformation::EnsureContactResources()

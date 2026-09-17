@@ -242,13 +242,17 @@ Texture2D<float> WaterWindow : register(t27);
 // rectangle skims the land around its shore. Also where the shore cap's
 // zero lands, so keep it small or the toe ends under the surface.
 static const float kWaterSkimDepth = 2.0;
+// A texel's vertex must be this far under to read as a bare class: shallower
+// margins are the cap's job per pixel, and a lone shallow vertex would
+// otherwise turn its whole texel into a square.
+static const float kWaterTexelDepth = 8.0;
 
 // A texel whose ground lies under drawn water reads as a non-snow class
 // (-8), so the shoreline is a class border: same noise, smoothing, dither
 // and rim as any texture seam. Callers gate on CompactLook.x.
 float3 WaterBareTexel(float3 texel, int2 t)
 {
-	[flatten] if (texel.x < WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) - kWaterSkimDepth)
+	[flatten] if (texel.x < WaterWindow.Load(int3(t.x, (int)TerrainDim - 1 - t.y, 0)) - kWaterTexelDepth)
 		texel.y = min(texel.y, -8.0);
 	return texel;
 }

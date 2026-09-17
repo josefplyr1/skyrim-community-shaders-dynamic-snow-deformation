@@ -1257,6 +1257,7 @@ void SnowDeformation::DrawShell()
 	if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
 	RenderWaterCapture();
+	CoverWaterWindow();
 	RenderBloodCapture();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
@@ -1408,7 +1409,7 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(0, 6, shellSRVs);
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &fineSRV);
-	ID3D11ShaderResourceView* waterSRV = waterHeightTexture ? waterHeightTexture->srv.get() : nullptr;
+	ID3D11ShaderResourceView* waterSRV = waterVisibleTexture && waterVisibleTexture->srv ? waterVisibleTexture->srv.get() : (waterHeightTexture ? waterHeightTexture->srv.get() : nullptr);
 	context->VSSetShaderResources(27, 1, &waterSRV);
 	// The game's texture tracker rebinds a slot only when it believes the
 	// binding changed. t3 is the effect shaders' soft-particle depth, set
