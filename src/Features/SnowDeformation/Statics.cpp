@@ -4221,6 +4221,10 @@ void SnowDeformation::RenderWaterCapture()
 				.Texture2D = { .MipSlice = 0 }
 			};
 			waterVisibleTexture->CreateUAV(uavDesc);
+			waterNearTexture = new Texture2D(visDesc, "SnowDeformation::WaterNear");
+			waterNearTexture->CreateSRV(srvDesc);
+			waterNearTexture->CreateUAV(uavDesc);
+			waterCoverDirty = true;
 		}
 		desc.Width = kWaterFineDim;
 		desc.Height = kWaterFineDim;
@@ -4267,6 +4271,7 @@ void SnowDeformation::RenderWaterCapture()
 	if (!same) {
 		waterBakeKeys.swap(waterBakeScratch);
 		waterBakeValid = true;
+		waterCoverDirty = true;
 	}
 	// The terrain window's frame, rebuilt whenever the list or the cell
 	// moves (never kept across a change: a plane from an earlier frame - the
@@ -4382,31 +4387,39 @@ void SnowDeformation::RenderWaterCapture()
 	capturedWater.clear();
 }
 
-// Every frame: the data route's water window is the raw raster minus its
-// lone wet texels (WaterCoverCS). Without the pass the raw window is copied
-// through.
+// When the water raster or the terrain window changed: the data route's
+// water window is the raw raster minus its lone wet texels, and the near
+// field is the texel distance to the nearest vertex under the water
+// (WaterCoverCS). Without the pass the raw window is copied through and
+// the near field reads "far".
 void SnowDeformation::CoverWaterWindow()
 {
-	if (!waterHeightTexture || !waterVisibleTexture || !waterVisibleTexture->uav)
+	if (!waterHeightTexture || !waterVisibleTexture || !waterVisibleTexture->uav || !waterNearTexture || !waterNearTexture->uav)
 		return;
+	if (!waterCoverDirty && waterCoverTerrainVersion == shellTerrainVersion)
+		return;
+	waterCoverDirty = false;
+	waterCoverTerrainVersion = shellTerrainVersion;
 	auto context = globals::d3d::context;
 	if (!heightWaterCoverCS || !shellTerrainTexture || !shellTerrainTexture->srv || !heightProcessCB) {
 		context->CopyResource(waterVisibleTexture->resource.get(), waterHeightTexture->resource.get());
+		const float farNear[4] = { 3.0f, 3.0f, 3.0f, 3.0f };
+		context->ClearUnorderedAccessViewFloat(waterNearTexture->uav.get(), farNear);
 		return;
 	}
 	globals::profiler->BeginPass("SnowDeformation::WaterCover");
 	ID3D11ShaderResourceView* srvs[3] = { waterHeightTexture->srv.get(), nullptr, shellTerrainTexture->srv.get() };
-	ID3D11UnorderedAccessView* uav = waterVisibleTexture->uav.get();
+	ID3D11UnorderedAccessView* uavs[2] = { waterVisibleTexture->uav.get(), waterNearTexture->uav.get() };
 	ID3D11Buffer* processCB = heightProcessCB->CB();
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(0, 3, srvs);
-	context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
+	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 	context->CSSetShader(heightWaterCoverCS, nullptr, 0);
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 	ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
-	ID3D11UnorderedAccessView* nullUAV = nullptr;
+	ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(0, 3, nullSRVs);
-	context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
+	context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
 	context->CSSetShader(nullptr, nullptr, 0);
 	globals::profiler->EndPass();
 }

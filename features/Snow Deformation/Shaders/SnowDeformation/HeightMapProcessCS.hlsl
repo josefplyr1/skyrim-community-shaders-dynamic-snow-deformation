@@ -533,6 +533,21 @@ float WaterWetTexel(int2 w)
 	return (water > -50000.0 && h > -50000.0 && h < water - 8.0) ? 1.0 : 0.0;
 }
 
+// A vertex under its water at all (the cap's skim, 2 units).
+float WaterUnderTexel(int2 w)
+{
+	if (any(w < 0) || any(w >= int2(TerrainDim, TerrainDim)))
+		return 0.0;
+	float water = InA.Load(int3(w, 0));
+	float h = TerrainWindow.Load(int3(w.x, (int)TerrainDim - 1 - w.y, 0)).x;
+	return (water > -50000.0 && h > -50000.0 && h < water - 2.0) ? 1.0 : 0.0;
+}
+
+static const float kWaterNearMax = 3.0;
+
+// OutB = texels to the nearest vertex under the water, capped at
+// kWaterNearMax: the cap's horizontal term. Runs only when the water raster
+// or the terrain window changed.
 [numthreads(8, 8, 1)] void WaterCoverCS(uint3 dtid : SV_DispatchThreadID)
 {
 	if (any(dtid.xy >= TerrainDim))
@@ -546,4 +561,10 @@ float WaterWetTexel(int2 w)
 			water = -100000.0;
 	}
 	OutA[dtid.xy] = water;
+	float near = kWaterNearMax;
+	[loop] for (int j = -3; j <= 3; j++)
+		[loop] for (int i = -3; i <= 3; i++)
+			[flatten] if (WaterUnderTexel(w + int2(i, j)) > 0.5)
+				near = min(near, length(float2(i, j)));
+	OutB[dtid.xy] = near;
 }

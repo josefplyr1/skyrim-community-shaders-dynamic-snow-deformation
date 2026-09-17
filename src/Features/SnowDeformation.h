@@ -2307,6 +2307,11 @@ public:
 	Texture2D* waterFineTexture = nullptr;
 	/** @brief The water window the shell's data route reads (t27): waterHeightTexture minus its lone wet texels (WaterCoverCS), so a single vertex dipping under a cell plane inside a cliff mesh cannot bare a whole texel. The shore cap reads the raw window at t28. */
 	Texture2D* waterVisibleTexture = nullptr;
+	/** @brief Texels to the nearest land vertex under its water (WaterCoverCS, t19): the shore cap's horizontal term. */
+	Texture2D* waterNearTexture = nullptr;
+	/** @brief WaterCoverCS reruns when the water raster (waterCoverDirty) or the terrain window (shellTerrainVersion) changed. */
+	bool waterCoverDirty = true;
+	uint32_t waterCoverTerrainVersion = 0;
 	void CoverWaterWindow();
 	float2 waterFineCenter = { 0, 0 };
 	float waterFineHalf = 0.0f;
@@ -2346,7 +2351,7 @@ public:
 	ID3D11PixelShader* heightPeelPS = nullptr;
 	ID3D11ComputeShader* heightScrollCS = nullptr;
 	ID3D11ComputeShader* heightCombineCS = nullptr;
-	/** @brief WaterCoverCS: the raw water window minus its lone wet texels, into waterVisibleTexture, every frame. */
+	/** @brief WaterCoverCS: the raw water window minus its lone wet texels into waterVisibleTexture, and the near field into waterNearTexture. */
 	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
 	ID3D11ComputeShader* heightConeCS = nullptr;
 	ID3D11ComputeShader* objectConeSeedCS = nullptr;

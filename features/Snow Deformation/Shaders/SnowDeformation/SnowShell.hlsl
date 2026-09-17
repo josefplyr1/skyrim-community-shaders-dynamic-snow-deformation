@@ -239,6 +239,7 @@ Texture2D<float4> TerrainWindow : register(t0);
 // object maps, so its row is (TerrainDim - 1) - the terrain row.
 Texture2D<float> WaterWindow : register(t27);  // data route: lone wet texels dropped
 Texture2D<float> WaterRawWindow : register(t28);  // the shore cap: every rasterised body
+Texture2D<float> WaterNear : register(t19);  // texels to the nearest vertex under the water (WaterCoverCS)
 // Water this shallow over the ground is not water: a placed pond plane's
 // rectangle skims the land around its shore. Also where the shore cap's
 // zero lands, so keep it small or the toe ends under the surface.
@@ -943,6 +944,24 @@ float2 SampleWaterHeight(float2 gridLocal)
 	return float2(max(max(w00, w10), max(w01, w11)), lerp(lerp(present.x, present.y, f.x), lerp(present.z, present.w, f.x), f.y));
 }
 
+// Texels from a point to the nearest vertex under the water, bilinear over
+// the near field (rows flipped like the water window).
+float SampleWaterNear(float2 gridLocal)
+{
+	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
+	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	int r0 = (int)TerrainDim - 1 - t0.y;
+	int r1 = (int)TerrainDim - 1 - t1.y;
+	float n00 = WaterNear.Load(int3(t0.x, r0, 0));
+	float n10 = WaterNear.Load(int3(t1.x, r0, 0));
+	float n01 = WaterNear.Load(int3(t0.x, r1, 0));
+	float n11 = WaterNear.Load(int3(t1.x, r1, 0));
+	return lerp(lerp(n00, n10, f.x), lerp(n01, n11, f.x), f.y);
+}
+
 // Touch-down toe: positive depth reaches the ground where the alpha's class
 // gate turns opaque (class depth 3, smoothstep(1, 3) in the PS), tangent
 // there, and is itself again by 9. The edge then commits ON the ground
@@ -995,10 +1014,15 @@ static const float kShoreWanderSlope = 0.2;
 // The wet texels (-8) give the shore a class ramp, but that ramp is anchored
 // to the land lattice, so its zero can fall either side of the line; this
 // caps the depth by rise above the line from the 128-texel bilinear alone
-// (the same from every range), zero at the line, negative past it. Rounded
-// knee where the cap meets the class ramp. Once per consumer. waterCap is
-// the height the sheet may stand above the ground here (1e9 = no water),
-// so the object lift can be held to it as well.
+// (the same from every range), zero at the line, negative past it. The cap
+// is the larger of that and a horizontal term, the class ramp run from one
+// texel past the nearest vertex under the water: ground two texels from
+// the line is free however little it stands above the level (a cave floor
+// 5 units over a lake plane was thinned everywhere, in heightmap-quantised
+// rectangles), and both terms only grow away from the water. Rounded knee
+// where the cap meets the class ramp. Once per consumer. waterCap is the
+// height the sheet may stand above the ground here (1e9 = no water), so
+// the object lift can be held to it as well.
 float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 {
 	waterCap = 1e9;
@@ -1015,8 +1039,10 @@ float3 EndSnowAtWater(float3 terrain, float2 gridLocal, out float waterCap)
 				float2 worldXY = GridOrigin + gridLocal;
 				float wander = saturate(ShapeNoise(worldXY / 37.0) * 0.7 + ShapeNoise(worldXY / 23.0 + 71.3) * 0.3) * BorderNoise;
 				float rise = h - water + kWaterSkimDepth - wander * kShoreWanderSlope;
+				float capRise = rise * (38.0 / kShoreRise);
+				float capNear = (SampleWaterNear(gridLocal) - 1.0) * TerrainTexelSize * (38.0 / (TerrainTexelSize + 2.0 * BorderSmooth));
 				// Past the raster's last texel the cap lifts clear of the ramp.
-				float cap = rise * (38.0 / kShoreRise) + (1.0 - waterWeight) * 60.0;
+				float cap = max(capRise, capNear) + (1.0 - waterWeight) * 60.0;
 				waterCap = cap;
 				terrain.y = max(KneeMin(terrain.y, cap, 4.0), -8.0);
 			}
