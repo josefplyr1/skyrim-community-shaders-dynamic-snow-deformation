@@ -1282,6 +1282,14 @@ void SnowDeformation::DrawShell()
 		if (masksRT.SRV) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV);
+			// The game's blood decals wrote Masks.y = 0 under themselves, which
+			// the coat reads as no paint: over their rectangle the copy takes
+			// the masks from before the first decal drew (Blood.cpp).
+			if (landMasksCopyTex && bloodPreDecalValid && bloodPreDecalMasksTex && settings.BloodOnSnow) {
+				const RECT& rc = bloodCopyRect;
+				const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
+				context->CopySubresourceRegion(landMasksCopyTex.get(), 0, box.left, box.top, 0, bloodPreDecalMasksTex.get(), 0, &box);
+			}
 		}
 		// The G-buffer before any snow, over the blood decals' rectangle: the
 		// overlay puts the decals' own contribution back over thin snow

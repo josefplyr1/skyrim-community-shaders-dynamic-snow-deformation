@@ -2793,18 +2793,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
-	// Blood: the landscape recipe verbatim (SnowShell.hlsl).
-	float bloodFresh = 0.0;
-	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
-	[branch] if (blood.a > 0.002)
-	{
-		float3 pigment = Color::LinearToSrgb(blood.rgb);
-		float pigmentMax = max(max(pigment.r, pigment.g), max(pigment.b, 1e-3));
-		float3 hue = pigment / pigmentMax;
-		hue = lerp(hue, hue * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
-		float k = saturate(blood.a * BloodLook.x);
-		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
-	}
+	// Blood stains the landscape shell only (SnowShell.hlsl); on object snow
+	// the game's own decal is put back on top by the overlay (Blood.cpp), so
+	// a soak here would darken it twice.
 	[branch] if (crustAmount > 0.001)
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(CrustLook.y, CrustLook.z, CrustLook2.x), crustAmount);
 	[branch] if (frost.valid)
@@ -2832,7 +2823,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowRoughness = lerp(snowRoughness, SpellShading.z, crustAmount);
 		snowF0 = lerp(snowF0, CrustLook.xxx, crustAmount);
 	}
-	snowRoughness = lerp(snowRoughness, 0.22, saturate(blood.a * 2.0) * bloodFresh * BloodLook2.y);
 	[branch] if (frost.valid)
 	{
 		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
@@ -3127,9 +3117,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// for why the GridOrigin-folded snowUV re-rolled the sparkle field.
 	const float2 glintUV = glintSide ? (snowSidePlane - 4096.0 * floor(snowSidePlane / 4096.0)) / kSnowUVTile :
 	                                   fmod(input.WorldPos.xy + ShellCameraPosAdjust.xy, 4096.0) / kSnowUVTile;
-	// Built once, shared by the sun and every point light (M3). Soaked snow
-	// does not sparkle.
-	const float glintsHere = EnableGlints * (1.0 - saturate(blood.a * 3.0));
+	// Built once, shared by the sun and every point light (M3).
+	const float glintsHere = EnableGlints;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,

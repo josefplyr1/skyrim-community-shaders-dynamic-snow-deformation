@@ -880,6 +880,9 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalSRV[kBloodCopyCount];
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSnowTex[kBloodCopyCount];
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSnowSRV[kBloodCopyCount];
+	/** @brief Masks before the frame's first blood decal drew: the game's decal writes Masks.y = 0 under itself, which the coat reads as no paint and leaves a hole; LandMasksCopy takes this over the rectangle instead. */
+	winrt::com_ptr<ID3D11Texture2D> bloodPreDecalMasksTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreDecalMasksSRV;
 	bool bloodPreDecalValid = false;
 	bool bloodPreSnowValid = false;
 	/** @brief Screen rectangle (render-resolution pixels) of this frame's blood decals so far, last frame's whole, and the one the copies cover: the pre-decal copy is taken at the first decal, so it covers last frame's rectangle grown a little plus that decal; a decal outside it waits a frame. */

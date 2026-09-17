@@ -531,6 +531,12 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 		CopySRVResource(srv, kNames[a_preDecal ? 1 : 0][i], texs[i], srvs[i], &box);
 		ok = ok && srvs[i];
 	}
+	if (a_preDecal && ok) {
+		auto* masksSRV = rtData.renderTargets[MASKS].SRV;
+		if (masksSRV)
+			CopySRVResource(masksSRV, "SnowDeformation::BloodPreDecalMasks", bloodPreDecalMasksTex, bloodPreDecalMasksSRV, &box);
+		ok = masksSRV && bloodPreDecalMasksSRV;
+	}
 	context->OMSetRenderTargets(8, rtvs, dsv);
 	for (auto* rtv : rtvs)
 		if (rtv)
