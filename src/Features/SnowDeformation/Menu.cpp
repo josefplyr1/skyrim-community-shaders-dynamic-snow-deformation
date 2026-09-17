@@ -483,6 +483,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("blood_sheen"), "Wet Sheen"), &settings.BloodSheen, 0.0f, 1.0f, "%.2f");
 		if (auto _ttBloodS = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
+		ImGui::SliderFloat(T(TKEY("blood_spread_seconds"), "Spread Time"), &settings.BloodSpreadSeconds, 0.0f, 6.0f, "%.1f s");
+		if (auto _ttBloodSp = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "Blood does not appear on snow all at once: it soaks outward from where it landed. A fresh mark grows from its dense core to its thin fringe over this long. 0 = the whole mark at once."));
 		if (bloodShadersFailed)
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
 		else

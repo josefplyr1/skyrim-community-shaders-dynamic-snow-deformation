@@ -135,6 +135,7 @@
 	X(BloodBurial) \
 	X(BloodAgeHours) \
 	X(BloodSheen) \
+	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \

@@ -34,6 +34,10 @@ cbuffer BloodCB : register(b1)
 	float AlphaThreshold;  // < 0: no alpha test
 	float MaterialAlpha;
 	float NormalZMin;
+
+	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
+	// texel shows once its alpha exceeds (1 - reveal).
+	float4 Spread;
 }
 
 #ifdef SKINNED
@@ -62,9 +66,14 @@ cbuffer ShellCB : register(b0)
 	float4 ShellCameraPosAdjust;
 }
 Texture2D<float3> PreSkinMasks : register(t32);
-// Lift past the coat (kEdgeFlankLift 0.4 in SnowStaticsShell.hlsl) but
-// under anything lying on the snow.
-static const float kOverlayLift = 1.5;
+#	ifdef PSHADER
+// The pre-snow depth copy: the decal shows where the surface it lies on
+// was the visible one before the snow drew, so bodies and props above it
+// still hide it while every snow layer is ignored.
+#		include "Common/SharedData.hlsli"
+Texture2D<float> SceneDepth : register(t3);
+#	endif
+static const float kOverlayLift = 0.0;
 static const float kCoatSolidReal = 0.5;
 #endif
 
@@ -196,6 +205,10 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float realEnc = PreSkinMasks.Load(int3(input.Position.xy, 0)).y;
 	if (saturate(realEnc - 2.0) < kCoatSolidReal)
 		discard;
+	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
+	float fragDist = SharedData::GetScreenDepth(input.Position.z);
+	if (fragDist > sceneDist + 2.0)
+		discard;
 	float4 c = Diffuse.Sample(LinearSampler, input.UV);
 	float a = c.a * MaterialAlpha;
 	[flatten] if (AlphaThreshold >= 0.0)
@@ -231,6 +244,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float a = c.a * MaterialAlpha;
 	[flatten] if (AlphaThreshold >= 0.0)
 		a = a >= AlphaThreshold ? 1.0 : 0.0;
+	// Spreading: dense texels first, the thin fringe as the reveal reaches
+	// it; the map keeps the high-water mark so the shape only grows.
+	a *= smoothstep(1.0 - Spread.x, 1.0 - Spread.x + 0.3, c.a);
 	float3 rgb = c.rgb * input.Tint.rgb;
 #	endif
 	a *= Intensity;

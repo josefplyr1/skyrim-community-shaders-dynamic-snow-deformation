@@ -6,6 +6,7 @@
 
 #include "Globals.h"
 #include "State.h"
+#include "Utils/D3D.h"
 
 #include <algorithm>
 #include <cctype>
@@ -241,10 +242,13 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		}
 	}
 	if (!bloodOverlayDepthState) {
+		// No hardware test: the coat, the rise and the shell all sit nearer
+		// than the decal by design. The PS tests against the pre-snow depth
+		// copy instead, so bodies and props still hide it.
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
-		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthEnable = FALSE;
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		dsDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		dsDesc.DepthFunc = D3D11_COMPARISON_ALWAYS;
 		if (FAILED(device->CreateDepthStencilState(&dsDesc, bloodOverlayDepthState.put()))) {
 			logger::error("[SNOW DEFORMATION] blood: overlay depth state failed");
 			bloodShadersFailed = true;
@@ -367,16 +371,24 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	if (auto textureSet = material->textureSet.get())
 		if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
 			diffusePath = path;
-	const float radius = geometry->worldBound.radius;
 	std::string pathLower(diffusePath);
 	std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-	// Weapon drips: tiny decals a blood mod scatters under a bloodied blade
-	// for as long as it likes. Not ours: particle blood owns them.
-	const bool drip = !a_skinned && (radius < 16.0f || pathLower.find("drop") != std::string::npos || pathLower.find("drip") != std::string::npos || pathLower.find("smallsplatter") != std::string::npos);
+	// Not a stain to copy: drips and bleed trails (particle blood owns them),
+	// and decals authored for additive or blend rendering, whose RGB is
+	// black around the blood - the game blends them, we would paint the
+	// black. The bound radius says nothing about a decal's size (Sanguine's
+	// Large spray reports 11) and is not consulted.
+	auto* alphaProperty = runtime.alphaProperty.get();
+	const bool blendsOver = !alphaProperty || !alphaProperty->GetAlphaBlending() ||
+	                        (alphaProperty->GetSrcBlendMode() == RE::NiAlphaProperty::AlphaFunction::kSrcAlpha &&
+							 alphaProperty->GetDestBlendMode() == RE::NiAlphaProperty::AlphaFunction::kInvSrcAlpha);
+	bool ignored = !blendsOver;
+	for (const char* key : { "drop", "drip", "smallsplatter", "blend", "add" })
+		ignored = ignored || pathLower.find(key) != std::string::npos;
 	if (bloodPathsLogged.size() < 64 && bloodPathsLogged.insert(pathLower).second)
-		logger::info("[SNOW DEFORMATION] blood mark '{}' tex='{}' radius {:.1f} skinned={} drip={}",
-			geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, radius, a_skinned ? 1 : 0, drip ? 1 : 0);
-	if (drip)
+		logger::info("[SNOW DEFORMATION] blood mark '{}' tex='{}' skinned={} blendsOver={} ignored={}",
+			geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, a_skinned ? 1 : 0, blendsOver ? 1 : 0, ignored ? 1 : 0);
+	if (ignored)
 		return;
 	float threshold = -1.0f;
 	if (auto* alpha = runtime.alphaProperty.get(); alpha && alpha->GetAlphaTesting())
@@ -388,21 +400,28 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	capture.texcoord = { material->texCoordOffset[0].x, material->texCoordOffset[0].y, material->texCoordScale[0].x, material->texCoordScale[0].y };
 	capture.alpha = property->alpha * material->materialAlpha;
 	capture.alphaThreshold = threshold;
+	capture.reveal = 1.0f;
 	capture.skinned = a_skinned;
 	// Every frame: the overlay redraws it over the coat.
 	if (bloodOverlays.size() < 512)
 		bloodOverlays.push_back(capture);
 	if (!a_skinned) {
-		// Baked geometry: one deposit. A pointer reused for a new decal fails
-		// the buffer-and-position check and deposits again.
+		// Baked geometry: deposited while it spreads, then left alone. A
+		// pointer reused for a new decal fails the buffer-and-position check
+		// and starts over.
 		auto& seen = bloodSeen[geometry];
 		const auto& position = geometry->world.translate;
 		const bool same = seen.frame != 0 && seen.vb == vb && seen.position.GetSquaredDistance(position) < 1.0f;
 		seen.frame = globals::state->frameCount;
 		seen.vb = vb;
 		seen.position = position;
-		if (same)
+		if (!same)
+			seen.firstSeconds = bloodRenderSeconds;
+		const float spread = std::max(settings.BloodSpreadSeconds, 0.0f);
+		const double age = bloodRenderSeconds - seen.firstSeconds;
+		if (same && age > spread + 0.1)
 			return;
+		capture.reveal = spread > 0.0f ? std::clamp(float(age / spread), 0.05f, 1.0f) : 1.0f;
 	}
 	if (bloodCaptures.size() < 512)
 		bloodCaptures.push_back(std::move(capture));
@@ -468,6 +487,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.TexcoordOffset = capture.texcoord;
 		a_cb.MaterialAlpha = capture.alpha;
 		a_cb.AlphaThreshold = capture.alphaThreshold;
+		a_cb.Spread = { a_overlay ? 1.0f : capture.reveal, 0.0f, 0.0f, 0.0f };
 		ID3D11ShaderResourceView* diffuse = capture.diffuse.get();
 		context->PSSetShaderResources(0, 1, &diffuse);
 
@@ -601,6 +621,7 @@ void SnowDeformation::RenderBloodCapture()
 {
 	bloodDepositsLast = 0;
 	bloodDiscsLast = 0;
+	bloodRenderSeconds += double(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 	const uint32_t frame = globals::state->frameCount;
 	// A decal unseen for ten seconds is gone; forget it.
 	if ((frame & 63) == 0 || bloodSeen.size() > 4096)
@@ -670,6 +691,7 @@ void SnowDeformation::RenderBloodCapture()
 			cb.WorldRow2 = { 0, 0, 1, 0 };
 			cb.MaterialAlpha = 1.0f;
 			cb.AlphaThreshold = -1.0f;
+			cb.Spread = { 1.0f, 0.0f, 0.0f, 0.0f };
 			bloodCB->Update(cb);
 			context->VSSetShader(bloodDiscVS, nullptr, 0);
 			context->PSSetShader(bloodDiscPS, nullptr, 0);
@@ -736,6 +758,11 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context)
 	context->PSSetSamplers(0, 1, &sampler);
 	ID3D11ShaderResourceView* masksSRV = landMasksCopySRV.get();
 	context->PSSetShaderResources(32, 1, &masksSRV);
+	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
+	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
+	auto state = globals::state;
+	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 	context->PSSetShader(bloodOverlayPS, nullptr, 0);
 
 	BloodCB cb{};

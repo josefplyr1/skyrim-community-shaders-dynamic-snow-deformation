@@ -576,6 +576,8 @@ public:
 		float BloodAgeHours = 3.0f;
 		/** @brief Gloss of fresh blood on the shells, 0..1 (0 = matte like the snow). */
 		float BloodSheen = 0.6f;
+		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
+		float BloodSpreadSeconds = 2.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -846,6 +848,7 @@ public:
 		float4 texcoord;
 		float alpha;
 		float alphaThreshold;
+		float reveal;
 		bool skinned;
 	};
 	std::vector<BloodCapture> bloodCaptures;
@@ -855,7 +858,9 @@ public:
 		uint32_t frame = 0;
 		const void* vb = nullptr;
 		RE::NiPoint3 position;
+		double firstSeconds = 0.0;
 	};
+	double bloodRenderSeconds = 0.0;
 	std::unordered_map<const void*, BloodSeen> bloodSeen;
 	/** @brief API disc deposits queued from any thread, drawn once. */
 	struct BloodDisc
@@ -895,6 +900,8 @@ public:
 		float AlphaThreshold;
 		float MaterialAlpha;
 		float NormalZMin;
+		/** @brief x = reveal 0..1 (how much of the mark's alpha range has spread in), yzw spare. */
+		float4 Spread;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodCB);
 	struct alignas(16) BloodSkinCB
