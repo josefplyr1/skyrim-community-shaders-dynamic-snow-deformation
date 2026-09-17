@@ -443,9 +443,13 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 // (a surface below a higher top in its OWN column) stays per-vertex in
 // ApplySkinLift, since it depends on the surface's height, not the column.
 // Elevation-angle test per direction: a neighbour must stand meaningfully
-// above the column (6-unit pad ignores kerbs and treads) and steeply
-// (tan 0.35..1.3 ~ 19..52 degrees) to shade it; two radii per direction so
-// both a close wall and a taller ridge further out register.
+// above the column and steeply (tan 0.35..1.3 ~ 19..52 degrees) to shade
+// it; two radii per direction so both a close wall and a taller ridge
+// further out register. The pad is what keeps a surface's own parts out:
+// thatch cards, stall beams and roof ridges sit 10-40 units over the
+// surface beside them and shaded it into a dusting at 6 (Whiterun,
+// 2026-09-17); a wall still clears 24.
+static const float kOpenPad = 24.0;
 [numthreads(8, 8, 1)] void ObjectSkyOpenCS(uint3 dtid
 										   : SV_DispatchThreadID) {
 	uint2 dims;
@@ -481,7 +485,7 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			float t = InA[uint2(q)];
 			float distW = kOpenRadii[r] * 4.0 * length(float2(kOpenDirs[d]));
 			[flatten] if (t > -50000.0)
-				o = max(o, smoothstep(0.35, 1.3, ((t - h) - 6.0) / distW));
+				o = max(o, smoothstep(0.35, 1.3, ((t - h) - kOpenPad) / distW));
 		}
 		occ += o;
 	}

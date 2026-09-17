@@ -558,8 +558,10 @@ struct GeometryRecord
 	// Diffuse path names blood: a decal-mode draw of it is a blood mark.
 	bool bloodTex = false;
 	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
-	// Diffuse under a landscape folder: the road-name signal needs it.
+	// Diffuse under a landscape folder, or a paving texture (floor/slate,
+	// not roof): the road-name signal needs one of them.
 	bool landscapeTex = false;
+	bool pavingTex = false;
 	MatoClass mato = MatoClass::kNoReference;
 	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
 	// or its single-pass marker (SOS_SNOW_SHADER extra data on the root).
@@ -606,6 +608,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
 					r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
 					r.landscapeTex = ContainsNoCase(diffuse, "landscape");
+					r.pavingTex = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
 					r.bloodTex = ContainsNoCase(diffuse, "blood");
 				}
 			}
@@ -1023,9 +1026,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// The name alone is not enough: Whiterun's district meshes are named
 	// WRMainRoad* and carry walls, roofs, stalls and the stream bed, so the
 	// name counts only on a landscape-textured trishape (the road kit's
-	// road01 / snow01 pieces), never on architecture textures.
+	// road01 / snow01 pieces) or a paving one (wrstonefloor, wrslate; not
+	// wrroofslate), never on walls, planks, trims or plaster.
 	const bool bridge = nameFacts.bridge || rec.roadTex == 2;
-	bool road = !bridge && nameFacts.road && rec.landscapeTex;
+	bool road = !bridge && nameFacts.road && (rec.landscapeTex || rec.pavingTex);
 	// Which signal decided it, for the road-classification log below.
 	const char* roadVia = road ? "name" : (bridge ? "bridge excluded" : "no");
 	if (!road && !bridge && rec.roadTex == 1) {

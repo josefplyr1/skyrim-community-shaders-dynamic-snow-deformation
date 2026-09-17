@@ -1788,6 +1788,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		vertexAlpha = 1.0;
 	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
 		vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
+	// Under drawn water the game's own projection paints nothing either,
+	// on snow-classified draws only (the sparkle pass then discards).
+	[flatten] if (snowUnderWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+		vertexAlpha = 0.0;
 #		endif
 	projWeight = -ProjectedUVParams.x * projNoise + (projDot * vertexAlpha - ProjectedUVParams.w);
 #		if defined(LODOBJECTSHD)
