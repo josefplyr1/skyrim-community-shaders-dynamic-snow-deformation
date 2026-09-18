@@ -80,7 +80,7 @@
 	X(LiftRunes) \
 	X(DecalsOnObjectSnow) \
 	X(RuneDecalsOnSnow) \
-	X(RuneGlow) \
+	X(RuneGlow) 	X(ItemEmbedPercent) \
 	X(FrostTexturePath) \
 	X(EnableLightningArcs) \
 	X(LightningArcWidth) \

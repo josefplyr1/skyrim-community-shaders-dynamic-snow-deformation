@@ -794,6 +794,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttTf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trench_floor_tooltip"), "Snow left under a fully trampled trench, as a fraction of the snow depth there: 0.33 keeps a third, so walking through 30 units of snow leaves 10 around your foot instead of a canyon to the ground, and road snow never wears through to the road. 0 carves to the terrain."));
 
+			ImGui::SliderFloat(T(TKEY("item_embed"), "Dropped Item Sink"), &settings.ItemEmbedPercent, 0.0f, 100.0f, "%.0f %%");
+			if (auto _ttEmbed = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("item_embed_tooltip"), "How far a heavy dropped item presses into the floor of the trench it lands in, as a share of its own thickness. Shape decides how much of this an item takes: rounded items (armor, buckets, boots) take all of it, flat ones (shields, swords, books) almost none, so they stay in view. Light items rest on the snow whatever this is. 0 = every item rests on its trench floor."));
+
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 			if (auto _ttSteep = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("mound_steepness_tooltip"), "Angle of repose for snow mounds (1.0 = 45 degrees). Steeper = raised snow clings tighter: narrow banks instead of broad aprons, juttier mounds."));

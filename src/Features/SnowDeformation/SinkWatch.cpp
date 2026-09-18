@@ -174,7 +174,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 12: embed below the trench floor)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 13: embed by shape)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -298,6 +298,10 @@ void SnowDeformation::SinkWatchUpdate()
 			float footprint = 0.0f;
 			float height = 0.0f;
 			float measure = body.mass / 50.0f;
+			// Flat or rounded: thickness over the side of the largest face, both
+			// from the authored box, so the answer does not move with the pose.
+			float thickness = 0.0f;
+			float roundness = 0.0f;
 			// The item's lowest point, from its authored box through the body's
 			// rotation: origins sit anywhere (clothes: on the underside).
 			float bottomZ = body.world.z;
@@ -328,11 +332,13 @@ void SnowDeformation::SinkWatchUpdate()
 				const float cappedMass = std::min(body.mass, kSinkBoxDensityCap * cx * cy * cz);
 				const float face = std::max({ cx * cy, cy * cz, cx * cz });
 				measure = cappedMass / std::sqrt(face);
+				thickness = std::min({ cx, cy, cz });
+				roundness = std::clamp(thickness / std::sqrt(face), 0.0f, 1.0f);
 				if (sinkWatchFormsLogged.size() < 400 && sinkWatchFormsLogged.insert(base->formID).second)
-					logger::info("[SNOW DEFORMATION] SW0 FORM {:08X} '{}' '{}' type {} | havokMass {:.2f} bodies {} | gameWeight {:.3f} | bounds ({:.1f} {:.1f} {:.1f}) lying footprint {:.1f} height {:.1f} | capped mass {:.3f} over side {:.1f} = MEASURE {:.4f}",
+					logger::info("[SNOW DEFORMATION] SW0 FORM {:08X} '{}' '{}' type {} | havokMass {:.2f} bodies {} | gameWeight {:.3f} | bounds ({:.1f} {:.1f} {:.1f}) lying footprint {:.1f} height {:.1f} | capped mass {:.3f} over side {:.1f} = MEASURE {:.4f} | thickness {:.1f} ROUNDNESS {:.2f}",
 						base->formID, Util::GetFormEditorID(base), base->GetName(), static_cast<int>(base->GetFormType()),
 						body.mass, body.bodies, ref->GetWeight(), ex, ey, ez, footprint, height,
-						cappedMass, std::sqrt(face), measure);
+						cappedMass, std::sqrt(face), measure, thickness, roundness);
 			}
 
 			// Havok's box is the shape's LOCAL box turned with the body: never
@@ -349,8 +355,6 @@ void SnowDeformation::SinkWatchUpdate()
 				else
 					state.undersideOffset += (offset - state.undersideOffset) * 0.15f;
 				state.undersideValid = true;
-				// The box height swings with the pose like the underside does.
-				state.heightEased = state.heightEased > 0.0f ? state.heightEased + (height - state.heightEased) * 0.15f : height;
 				bottomZ = body.world.z + state.undersideOffset;
 			}
 
@@ -382,7 +386,11 @@ void SnowDeformation::SinkWatchUpdate()
 				// own height. Squared, so only the heavy ones go under.
 				const float weight = t * t * (3.0f - 2.0f * t);
 				sink = weight * (1.0f - trenchFloor);
-				embed = weight * weight * 0.5f * state.heightEased;
+				// Flat items (shield 0.24, greatsword 0.08, book 0.15) would vanish
+				// under the floor's own lumps; rounded ones (0.5 and up) take it all.
+				const float r = std::clamp((roundness - 0.15f) / (0.5f - 0.15f), 0.0f, 1.0f);
+				const float shape = r * r * (3.0f - 2.0f * r);
+				embed = weight * weight * std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f * thickness * shape;
 				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - embed - bottomZ, 0.0f, kSinkMaxLift);
 				if (want < 0.5f)
 					want = 0.0f;
@@ -422,8 +430,8 @@ void SnowDeformation::SinkWatchUpdate()
 				}
 			}
 			if (asleep && state.asleepFrames == 1)
-				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} embed {:.1f} of height {:.1f} snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
-					pick.formID, base ? base->GetName() : "", measure, sink, embed, state.heightEased, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} embed {:.1f} of thickness {:.1f} (roundness {:.2f}) snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
+					pick.formID, base ? base->GetName() : "", measure, sink, embed, thickness, roundness, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
 					pick.surfaceZ - bottomZ - state.appliedLift);
 
 			const bool flipped = state.frames == 0 || body.islandActive != state.islandActive;

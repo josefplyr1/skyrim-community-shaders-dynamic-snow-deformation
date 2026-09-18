@@ -523,6 +523,8 @@ public:
 		bool SnowBorderDithering = true;
 		/** @brief Snow left under a fully trampled trench as a FRACTION of the local uncarved depth (0.33 = a third: 10 units in 30). Replaced the absolute-units floor 2026-09-10: deep snow keeps snow around the foot instead of a canyon to the ground, and a road's 10-unit layer can never wear through to the mesh. */
 		float TrenchFloorFraction = 0.50f;
+		/** @brief Percent of its own thickness a heavy, rounded dropped item presses into its trench floor (WEIGHT-SINK-PLAN.md). Flat items take a fraction of it by shape. */
+		float ItemEmbedPercent = 50.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
 		float SnowBorderNoise = 8.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -3923,7 +3925,6 @@ protected:
 		float liveY = 0.0f;
 		bool undersideValid = false;
 		float undersideOffset = 0.0f;
-		float heightEased = 0.0f;
 		/** @brief Last frame's final transforms under the root; pointers are compared, never dereferenced. */
 		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
 		uint32_t lastWorldFrame = 0;
