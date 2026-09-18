@@ -138,6 +138,8 @@ struct GeometryNameFacts
 	bool lodNotSnow = false;
 	// Dynamic Bloodpool Framework's skinned pool quads (Decal:NN / DecalExt:NN).
 	bool bloodPool = false;
+	// The engine's own runtime decals: scorch, runes, blood.
+	bool engineDecal = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
 	bool plankLogged = false;
@@ -180,6 +182,7 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 		f.bloodPool = _strnicmp(name, "Decal:", 6) == 0 || _strnicmp(name, "DecalExt:", 9) == 0;
+		f.engineDecal = _stricmp(name, "Decal") == 0 || _stricmp(name, "Permanent Decal") == 0 || _stricmp(name, "SkinnedDecal") == 0;
 		f.lodNotSnow = false;
 		if (length > 3 && std::tolower((unsigned char)name[0]) == 'o' && std::tolower((unsigned char)name[1]) == 'b' && std::tolower((unsigned char)name[2]) == 'j') {
 			for (const auto* keyword : kNotSnowKeywords)
@@ -701,6 +704,9 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		if (!passProjected || treeAnim) {
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (rec.mato == MatoClass::kNotSnow) {
+			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
+		} else if (a_pass->shaderProperty->flags.any(Flag::kDynamicDecal) || NameFactsOf(a_pass->geometry).engineDecal) {
+			// A runtime decal inherits its target's projected technique; it is a mark on the snow, not snow.
 			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
 		} else {
 			statProjMatched.fetch_add(1, std::memory_order_relaxed);
