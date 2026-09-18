@@ -2030,8 +2030,9 @@ void SnowDeformation::DrawSettings()
 			// Stage 0 rune watch (BURIED-REF-LIFT-PLAN.md), throwaway.
 			if (ImGui::TreeNodeEx("Stage 0: rune watch")) {
 				ImGui::Checkbox("Watch spell projectiles (CommunityShaders.log, lines tagged S0)", &runeWatch);
-				ImGui::SliderFloat("Manual lift (units)", &runeWatchLift, 5.0f, 60.0f, "%.0f");
-				if (ImGui::Button("Lift nearest resting projectile"))
+				ImGui::Checkbox("Auto-lift every new rune to the snow surface + clearance", &runeWatchAuto);
+				ImGui::SliderFloat("Clearance above the snow (units)", &runeWatchClearance, 0.0f, 10.0f, "%.1f");
+				if (ImGui::Button("PRESS to lift the nearest resting projectile now"))
 					runeWatchLiftRequest.store(true, std::memory_order_release);
 				RuneWatchReadout readout;
 				{
@@ -2042,7 +2043,7 @@ void SnowDeformation::DrawSettings()
 					runeWatchSamples.load(std::memory_order_relaxed));
 				if (readout.formID) {
 					WrapTextF("nearest resting: %08X%s  %s", readout.formID,
-						readout.formID == runeWatchLiftedID ? " LIFTED" : "", readout.model.c_str());
+						runeWatchLifted.contains(readout.formID) ? " LIFTED" : "", readout.model.c_str());
 					WrapTextF("ref z %.2f | node local z %.2f | node world z %.2f | land %.2f | snow surface %s %.2f",
 						readout.refZ, readout.localZ, readout.worldZ, readout.landZ,
 						readout.surfaceOK ? "ok" : "MISS", readout.surfaceZ);

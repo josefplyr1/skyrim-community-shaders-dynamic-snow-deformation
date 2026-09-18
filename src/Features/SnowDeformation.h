@@ -3767,18 +3767,20 @@ protected:
 	};
 	bool runeWatch = false;
 	bool runeWatchArmed = false;
-	float runeWatchLift = 20.0f;
+	bool runeWatchAuto = false;
+	float runeWatchClearance = 1.0f;
 	std::atomic<bool> runeWatchLiftRequest{ false };
 	std::atomic<uint32_t> runeWatchSamples{ 0 };
 	std::atomic<uint32_t> runeWatchCount{ 0 };
-	uint32_t runeWatchLiftedID = 0;
+	std::unordered_set<uint32_t> runeWatchLifted;
+	bool RuneWatchLiftToSurface(RE::Projectile* a_projectile, const char* a_why);
 	RE::Projectile* runeWatchNearest = nullptr;
 	float runeWatchNearestDistSq = 0.0f;
 	std::unordered_map<uint32_t, RuneWatchState> runeWatchStates;
 	std::mutex runeWatchLock;
 	RuneWatchReadout runeWatchReadout;
 	void RuneWatchConsider(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes);
-	void RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_present, const RE::NiPoint3& a_camera);
+	void RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_present);
 
 	/** @brief Weight a stamped shape puts through a crust, from its radius. Implemented in SnowDeformation/Stamping.cpp. */
 	float CrustBreakForce(float a_radius) const;

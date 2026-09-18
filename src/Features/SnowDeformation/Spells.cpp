@@ -1722,6 +1722,30 @@ namespace
 	}
 }
 
+bool SnowDeformation::RuneWatchLiftToSurface(RE::Projectile* a_projectile, const char* a_why)
+{
+	const uint32_t formID = a_projectile->formID;
+	if (runeWatchLifted.contains(formID)) {
+		logger::info("[SNOW DEFORMATION] S0 LIFT refused ({}): {:08X} already lifted", a_why, formID);
+		return false;
+	}
+	// The node sits at the ref position until something moves it (measured).
+	const RE::NiPoint3 position = a_projectile->GetPosition();
+	float surfaceZ = 0.0f;
+	if (!SampleShellSurface(position.x, position.y, surfaceZ)) {
+		logger::info("[SNOW DEFORMATION] S0 LIFT refused ({}): {:08X} no snow surface here", a_why, formID);
+		return false;
+	}
+	const float lift = surfaceZ + runeWatchClearance - position.z;
+	logger::info("[SNOW DEFORMATION] S0 LIFT queued ({}): {:08X} ref z {:.2f} surface {:.2f} clearance {:.1f} -> +{:.2f}",
+		a_why, formID, position.z, surfaceZ, runeWatchClearance, lift);
+	if (lift < 1.0f)
+		return false;
+	LiftRefOntoSnow(a_projectile, lift);
+	runeWatchLifted.insert(formID);
+	return true;
+}
+
 void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes)
 {
 	auto& runtime = a_projectile->GetProjectileRuntimeData();
@@ -1766,6 +1790,13 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 			tag += resting ? " REST-EDGE" : " WOKE";
 			state.burst = std::max(state.burst, 120u);
 			state.resting = resting;
+			if (resting && runeWatchAuto) {
+				auto* base = a_projectile->GetBaseObject();
+				auto* record = base ? base->As<RE::BGSProjectile>() : nullptr;
+				if (record && record->data.flags.any(RE::BGSProjectileData::BGSProjectileFlags::kExplosionAltTrigger) &&
+					RuneWatchLiftToSurface(a_projectile, "auto"))
+					state.burst = 600;
+			}
 		}
 	}
 	state.flags = flags;
@@ -1798,7 +1829,7 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 	const float living = runtime.livingTime;
 	const uint32_t frame = state.frames;
 	const bool resting = state.resting;
-	const bool lifted = formID == runeWatchLiftedID;
+	const bool lifted = runeWatchLifted.contains(formID);
 	const RE::ObjectRefHandle handle = a_projectile->CreateRefHandle();
 	taskInterface->AddTask([=, this]() {
 		auto ref = handle.get();
@@ -1820,7 +1851,7 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 	});
 }
 
-void SnowDeformation::RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_present, const RE::NiPoint3& a_camera)
+void SnowDeformation::RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_present)
 {
 	for (auto it = runeWatchStates.begin(); it != runeWatchStates.end();) {
 		if (a_present.contains(it->first)) {
@@ -1828,7 +1859,8 @@ void SnowDeformation::RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_pr
 			continue;
 		}
 		logger::info("[SNOW DEFORMATION] S0 GONE {:08X} after {} frames, last flags {:#010x}{}", it->first,
-			it->second.frames, it->second.flags, it->first == runeWatchLiftedID ? " (was lifted)" : "");
+			it->second.frames, it->second.flags, runeWatchLifted.contains(it->first) ? " (was lifted)" : "");
+		runeWatchLifted.erase(it->first);
 		it = runeWatchStates.erase(it);
 	}
 
@@ -1845,13 +1877,8 @@ void SnowDeformation::RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_pr
 	}
 
 	const uint32_t formID = nearest->formID;
-	if (liftRequested) {
-		logger::info("[SNOW DEFORMATION] S0 LIFT queued: {:08X} +{:.1f}, {:.0f} units from the camera", formID,
-			runeWatchLift, std::sqrt(a_camera.GetSquaredDistance(nearest->GetPosition())));
-		LiftRefOntoSnow(nearest, runeWatchLift);
-		runeWatchLiftedID = formID;
+	if (liftRequested && RuneWatchLiftToSurface(nearest, "button"))
 		runeWatchStates[formID].burst = 600;
-	}
 
 	auto* taskInterface = SKSE::GetTaskInterface();
 	if (!taskInterface)
@@ -2089,7 +2116,7 @@ void SnowDeformation::GatherSpellEmitters()
 		logger::info("[SNOW DEFORMATION] S0 rune watch: {}", runeWatch ? "armed" : "off");
 		runeWatchStates.clear();
 		runeWatchNearest = nullptr;
-		runeWatchLiftedID = 0;
+		runeWatchLifted.clear();
 	}
 #endif
 
@@ -2595,7 +2622,7 @@ void SnowDeformation::GatherSpellEmitters()
 
 #if !SNOW_ALPHA_BUILD
 	if (runeWatch)
-		RuneWatchEndFrame(presentIDs, cameraPosition);
+		RuneWatchEndFrame(presentIDs);
 #endif
 
 	spellPrevPositions = std::move(currentPositions);
