@@ -3893,6 +3893,60 @@ protected:
 	 */
 	float SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes);
 
+	// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md, SinkWatch.cpp). Dev builds only, throwaway.
+	static constexpr float kSinkWatchRadius = 700.0f;
+	static constexpr size_t kSinkWatchMax = 6;
+	struct SinkWatchCandidate
+	{
+		RE::ObjectRefHandle handle;
+		RE::NiPoint3 position;
+		uint32_t seenFrame = 0;
+	};
+	struct SinkWatchState
+	{
+		uint32_t frames = 0;
+		uint32_t stillFrames = 0;
+		uint32_t burst = 0;
+		uint32_t inactive0 = 0;
+		int islandActive = -2;
+		bool still = false;
+		bool lifted = false;
+		float liftBaseLocalZ = 0.0f;
+		float liftApplied = 0.0f;
+		RE::NiPoint3 lastWorld;
+	};
+	struct SinkWatchReadout
+	{
+		uint32_t formID = 0;
+		std::string name;
+		float mass = 0.0f;
+		float refWeight = 0.0f;
+		float footprint = 0.0f;
+		int islandActive = -1;
+		uint32_t inactive0 = 0;
+		float speed = 0.0f;
+		bool still = false;
+		float refZ = 0.0f;
+		float localZ = 0.0f;
+		float worldZ = 0.0f;
+		bool lifted = false;
+		float expectedLocalZ = 0.0f;
+	};
+	bool sinkWatch = false;
+	bool sinkWatchArmed = false;
+	float sinkWatchLift = 20.0f;
+	uint32_t sinkWatchFrame = 0;
+	std::atomic<bool> sinkWatchLiftRequest{ false };
+	std::atomic<uint32_t> sinkWatchCount{ 0 };
+	std::unordered_map<uint32_t, SinkWatchCandidate> sinkWatchCandidates;
+	/** @brief Guards the three below: written by the game-thread task, read by the menu. */
+	std::mutex sinkWatchLock;
+	std::unordered_map<uint32_t, SinkWatchState> sinkWatchStates;
+	std::unordered_set<uint32_t> sinkWatchFormsLogged;
+	SinkWatchReadout sinkWatchReadout;
+	void SinkWatchNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
+	void SinkWatchUpdate();
+
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
 

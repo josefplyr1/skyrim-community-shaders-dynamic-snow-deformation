@@ -4,6 +4,8 @@
 
 #include "Features/SnowDeformation.h"
 
+#include "Features/SnowDeformation/AlphaBuild.h"
+
 #include "Globals.h"
 #include "Utils/ActorUtils.h"
 #include "Utils/Game.h"
@@ -1591,6 +1593,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
+#if !SNOW_ALPHA_BUILD
+		if (sinkWatch)
+			SinkWatchNote(a_ref, position);
+#endif
 		// Anchors update in place; the cycle stamp says when the reference was
 		// last seen, and a whole cycle unseen retires it.
 		auto prevIt = propPrevPositions.find(formID);
@@ -1816,6 +1822,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (phase == 0 && propScanCycle >= 2)
 			std::erase_if(propPrevPositions, [&](const auto& a_kv) { return a_kv.second.cycle + 1 < propScanCycle; });
 	}
+
+#if !SNOW_ALPHA_BUILD
+	SinkWatchUpdate();
+#endif
 
 	// Spell emitters melt rather than displace. Appended AFTER actors and
 	// props on purpose: a busy fight must not starve foot prints out of the

@@ -2042,6 +2042,35 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md), throwaway.
+		if (ImGui::TreeNodeEx("Stage 0: weight sink watch")) {
+			ImGui::Checkbox("Watch dropped items near me (CommunityShaders.log, lines tagged SW0)", &sinkWatch);
+			ImGui::SliderFloat("Test lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
+			if (ImGui::Button("PRESS to lift the nearest item that has stopped moving"))
+				sinkWatchLiftRequest.store(true, std::memory_order_release);
+			SinkWatchReadout readout;
+			{
+				std::scoped_lock lock(sinkWatchLock);
+				readout = sinkWatchReadout;
+			}
+			WrapTextF("items watched %u (within %.0f units of you)", sinkWatchCount.load(std::memory_order_relaxed), kSinkWatchRadius);
+			if (readout.formID) {
+				WrapTextF("nearest: %08X %s", readout.formID, readout.name.c_str());
+				WrapTextF("Havok mass %.3f | game weight %.3f | footprint %.1f sq units | mass per footprint %.5f",
+					readout.mass, readout.refWeight, readout.footprint, readout.footprint > 0.01f ? readout.mass / readout.footprint : 0.0f);
+				WrapTextF("physics: %s | frames inactive %u | speed %.2f | our own test: %s",
+					readout.islandActive < 0 ? "no island" : (readout.islandActive ? "ACTIVE" : "asleep"),
+					readout.inactive0, readout.speed, readout.still ? "STILL" : "MOVING");
+				WrapTextF("ref z %.2f | node local z %.2f | node world z %.2f", readout.refZ, readout.localZ, readout.worldZ);
+				if (readout.lifted)
+					WrapTextF("LIFTED: expected node local z %.2f, now off by %+.2f (0 = the lift is holding)",
+						readout.expectedLocalZ, readout.localZ - readout.expectedLocalZ);
+			} else {
+				WrapTextF("nearest: none - drop something on snow");
+			}
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
 				// Diagnostics use plain text by existing convention (no i18n).
