@@ -498,7 +498,7 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 		if (liftedRefs.size() > 512)
 			liftedRefs.clear();
 		liftedRefs.insert(a_ref->formID);
-		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f) * kLiftFraction,
+		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f) * GetAccumulationDepthScale() * kLiftFraction,
 			kMaxLiftHeight);
 		if (lift >= 1.0f) {
 			LiftRefOntoSnow(a_ref, lift);
