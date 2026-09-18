@@ -1306,7 +1306,7 @@ void SnowDeformation::DrawShell()
 			// The game's blood decals wrote Masks.y = 0 under themselves, which
 			// the coat reads as no paint: over their rectangle the copy takes
 			// the masks from before the first decal drew (Blood.cpp).
-			if (landMasksCopyTex && bloodPreDecalValid && bloodPreDecalMasksTex && settings.BloodOnSnow) {
+			if (landMasksCopyTex && bloodPreDecalValid && bloodPreDecalMasksTex && DecalOverlayWanted()) {
 				const RECT& rc = bloodCopyRect;
 				const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
 				context->CopySubresourceRegion(landMasksCopyTex.get(), 0, box.left, box.top, 0, bloodPreDecalMasksTex.get(), 0, &box);
@@ -1316,7 +1316,7 @@ void SnowDeformation::DrawShell()
 		// overlay puts the decals' own contribution back over thin snow
 		// (Blood.cpp). Only while blood decals are in view.
 		bloodPreSnowValid = false;
-		if (!bloodOverlays.empty() && settings.BloodOnSnow && bloodPreDecalValid)
+		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid)
 			CopyBloodTargets(false);
 		// Pre-shell normals for the S4 shell's per-pixel footprint cut
 		// (per-pixel nz, normal maps included). Gated on the 3D toggle so

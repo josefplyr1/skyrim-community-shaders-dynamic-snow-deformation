@@ -791,11 +791,19 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// cards shard under the skin.
 	auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
 	// Drifts ride the ice journey log: same once-per-outcome budget.
-	const bool driftJourney = NameFactsOf(a_pass->geometry).drift;
+	const auto& passFacts = NameFactsOf(a_pass->geometry);
+	const bool driftJourney = passFacts.drift;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Blood decals go to the blood map, never to the statics list. Skinned
 	// blood is a wound decal on a body unless it is a pool framework quad.
+	// The engine's runtime decals that are not blood - scorch, frost, shock,
+	// rune glyphs: the object-snow coat draws over them, so they join the
+	// overlay that puts a decal back over the coat.
+	const bool engineDecal = !rec.bloodTex && (flags.any(Flag::kDynamicDecal) || passFacts.engineDecal);
+	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
+		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
+		CaptureDecalOverlay(a_pass);
 	// A live rune's decal goes to the rune atlas.
 	if (!rec.bloodTex && settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) {
 		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
@@ -803,6 +811,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		if (decalMode && CaptureRuneDraw(a_pass))
 			return;
 	}
+	if (engineDecal)
+		return;
 	if (rec.bloodTex) {
 		const bool poolQuad = NameFactsOf(a_pass->geometry).bloodPool;
 		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||

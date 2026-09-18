@@ -995,6 +995,10 @@ void SnowDeformation::DrawSettings()
 		}
 		ImGui::PopID();
 
+		ImGui::Checkbox(T(TKEY("decals_on_object_snow"), "Spell Marks Over Object Snow"), &settings.DecalsOnObjectSnow);
+		if (auto _ttDecalsOver = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("decals_on_object_snow_tooltip"), "Scorch, frost and shock marks and rune glyphs are decals the game lays on a surface, and the thin snow coat on rocks and walls is drawn on top of them. With this on they are put back over the coat, as blood is. Bare rock is left alone."));
+
 		ImGui::SeparatorText(T(TKEY("spell_cat_runes"), "Runes"));
 		ImGui::Checkbox(T(TKEY("rune_decals"), "Rune Glyphs on Snow"), &settings.RuneDecalsOnSnow);
 		if (auto _ttRuneDecal = Util::HoverTooltipWrapper())
@@ -2056,8 +2060,8 @@ void SnowDeformation::DrawSettings()
 						spellStats.lastShoutSpeed, spellStats.lastShoutForce,
 						spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
 				}
-				WrapTextF("runes in range %u | rune decal draws taken %u | glyph tiles painted %u",
-					runeStatSites, runeStatCaptures, runeStatTiles);
+				WrapTextF("runes in range %u | rune decal draws taken %u | glyph tiles painted %u | spell decals masked over object snow %u",
+					runeStatSites, runeStatCaptures, runeStatTiles, decalMasksLast);
 				WrapTextF("rejected: no element %u | no blast form %u",
 					spellStats.rejectedElement, spellStats.rejectedNoBlast);
 				WrapTextF("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",

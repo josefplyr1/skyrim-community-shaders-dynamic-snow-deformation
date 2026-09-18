@@ -41,6 +41,13 @@ cbuffer BloodCB : register(b1)
 
 	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
 	float4 OverlayRect;
+
+	// Mask: the game's view-projection rows (camera-relative), CameraPosAdjust.
+	float4 ViewProjRow0;
+	float4 ViewProjRow1;
+	float4 ViewProjRow2;
+	float4 ViewProjRow3;
+	float4 CameraAdjust;
 }
 
 #ifdef SKINNED
@@ -84,10 +91,24 @@ Texture2D<float4> PreDecal2 : register(t11);
 Texture2D<float4> PreDecal3 : register(t12);
 Texture2D<float4> PreDecal4 : register(t13);
 Texture2D<float4> PreDecal5 : register(t14);
+// The decals that are not blood, as alpha (MASK pass); 0 where none drew.
+Texture2D<float> DecalMask : register(t15);
 #	endif
 // View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
 static const float kOverlayMinLift = 0.05;
 static const float kOverlayMaxLift = 6.0;
+#endif
+
+#ifdef MASK
+// MASK: a decal that is not blood, drawn again in screen space with the
+// game's camera - its texture alpha into an R8 target, MAX-blended. Blood's
+// alpha is read off its colour in the overlay; a frost mark or a rune has no
+// such tell. Kept where the fragment lies on the pre-snow surface, so a body
+// in front still hides the mark.
+#	ifdef PSHADER
+#		include "Common/SharedData.hlsli"
+Texture2D<float> SceneDepth : register(t3);
+#	endif
 #endif
 
 #ifdef DISC
@@ -199,7 +220,14 @@ VS_OUTPUT main(VS_INPUT input, uint inst : SV_InstanceID)
 		dot(WorldRow1.xyz, nrmMS),
 		dot(WorldRow2.xyz, nrmMS));
 	VS_OUTPUT o;
+#		ifdef MASK
+	float3 rel = world - CameraAdjust.xyz;
+	o.Position = float4(dot(ViewProjRow0.xyz, rel) + ViewProjRow0.w, dot(ViewProjRow1.xyz, rel) + ViewProjRow1.w,
+		dot(ViewProjRow2.xyz, rel) + ViewProjRow2.w, dot(ViewProjRow3.xyz, rel) + ViewProjRow3.w);
+	o.Logical = float2(0.0, 0.0);
+#		else
 	o.Position = PlaceVertex(world, inst & 3u, o.Logical);
+#		endif
 	o.UV = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
 	o.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
 	o.Tint = float4(1, 1, 1, 1);
@@ -233,7 +261,7 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float3 p0 = PreSnow0.Load(pixel).rgb;
 	float3 d0 = PreDecal0.Load(pixel).rgb;
 	float2 ratio = p0.gb / max(d0.gb, 0.02);
-	float a = saturate(1.0 - min(ratio.x, ratio.y));
+	float a = max(saturate(1.0 - min(ratio.x, ratio.y)), DecalMask.Load(pixel));
 	if (a < 0.02)
 		discard;
 	OVERLAY_OUTPUT o;
@@ -243,6 +271,22 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	o.Specular = DecalPart(PreSnow4, PreDecal4, pixel, a);
 	o.Reflectance = DecalPart(PreSnow5, PreDecal5, pixel, a);
 	return o;
+}
+#elif defined(PSHADER) && defined(MASK)
+float main(VS_OUTPUT input) : SV_Target0
+{
+	float4 c = Diffuse.Sample(LinearSampler, input.UV);
+	float a = c.a * MaterialAlpha;
+	[flatten] if (AlphaThreshold >= 0.0)
+		a = a >= AlphaThreshold ? 1.0 : 0.0;
+	if (a < 0.02)
+		discard;
+	const int3 pixel = int3(input.Position.xy, 0);
+	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(pixel));
+	float fragDist = SharedData::GetScreenDepth(input.Position.z);
+	if (fragDist > sceneDist + 2.0 + 0.004 * sceneDist)
+		discard;
+	return saturate(a);
 }
 #elif defined(PSHADER) && defined(RUNE)
 // RUNE: a rune's glyph decal into its atlas tile (Blood.cpp, RenderRuneCapture).

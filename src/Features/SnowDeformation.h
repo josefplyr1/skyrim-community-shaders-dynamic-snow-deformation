@@ -457,6 +457,8 @@ public:
 		bool LiftFrostEffects = true;
 		/** @brief Raises a rune's effect meshes (shimmer, glow, cast flash) onto the snow over them. Ground runes only. */
 		bool LiftRunes = true;
+		/** @brief Scorch, frost and shock marks and rune glyphs - the engine's runtime decals - are put back over the object-snow coat drawn on top of them. */
+		bool DecalsOnObjectSnow = true;
 		/** @brief Paints a rune's glyph - an engine decal on the ground the shell covers - onto the landscape shell. */
 		bool RuneDecalsOnSnow = true;
 		/** @brief Scale on the painted glyph's emission. */
@@ -863,6 +865,8 @@ public:
 		float alphaThreshold;
 		float reveal;
 		bool skinned;
+		/** @brief Not blood: the overlay cannot read its alpha off the colour, so it is drawn into the decal mask. */
+		bool mask = false;
 	};
 	std::vector<BloodCapture> bloodCaptures;
 	/** @brief Engine decals are baked geometry: one deposit per decal. Keyed by geometry, validated by its buffer and position. */
@@ -933,6 +937,12 @@ public:
 		float4 Spread;
 		/** @brief Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1). */
 		float4 OverlayRect;
+		/** @brief Mask: the game's view-projection rows (camera-relative) and CameraPosAdjust. */
+		float4 ViewProjRow0;
+		float4 ViewProjRow1;
+		float4 ViewProjRow2;
+		float4 ViewProjRow3;
+		float4 CameraAdjust;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodCB);
 	struct alignas(16) BloodSkinCB
@@ -978,7 +988,21 @@ public:
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
-	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb);
+	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u);
+	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
+	void RegisterDecalOverlay(const BloodCapture& a_capture);
+	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
+	void CaptureDecalOverlay(RE::BSRenderPass* a_pass);
+	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
+	/** @brief The non-blood decals' alpha in screen space, for the overlay. */
+	Texture2D* decalMaskTexture = nullptr;
+	ID3D11VertexShader* decalMaskVS = nullptr;
+	ID3D11PixelShader* decalMaskPS = nullptr;
+	winrt::com_ptr<ID3D11BlendState> decalMaskBlendState;
+	bool decalMaskFailed = false;
+	bool decalMaskLogged = false;
+	uint32_t decalMasksLast = 0;
+	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
 
 	// ---- Rune decals on snow (BURIED-REF-LIFT-PLAN.md) ----

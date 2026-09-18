@@ -78,6 +78,7 @@
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
 	X(LiftRunes) \
+	X(DecalsOnObjectSnow) \
 	X(RuneDecalsOnSnow) \
 	X(RuneGlow) \
 	X(FrostTexturePath) \
