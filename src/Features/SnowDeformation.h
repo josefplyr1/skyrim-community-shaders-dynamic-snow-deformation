@@ -784,7 +784,8 @@ public:
 		float2 ViewCenter;
 		/** @brief Debug view crop half-extent, world units. */
 		float ViewHalf;
-		float ViewPad;
+		/** @brief TrenchFloorFraction for StampCS's item carve (took the ViewPad slot). */
+		float TrenchFloor;
 		/** @brief Object height window (RenderObjectHeightMap) the road raster at t9 was captured in; HasRoadRaster = 0 when it is not bound. */
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
@@ -3002,6 +3003,8 @@ public:
 	winrt::com_ptr<ID3D11RasterizerState> contactRasterState;
 	ID3D11VertexShader* contactVS = nullptr;
 	ID3D11PixelShader* contactPS = nullptr;
+	/** @brief ITEM variant: also writes the raster's items-only channel. */
+	ID3D11PixelShader* contactItemPS = nullptr;
 	bool contactShadersFailed = false;
 	/**
 	 * @brief One body queued for contact rasterization: a HANDLE, never a NiPointer.
@@ -3021,6 +3024,8 @@ public:
 		/** @brief Actors only: the ground under the feet and the layer depth there, so the draw can refuse parts that cannot reach the snow. */
 		float groundZ = 0.0f;
 		float layer = 0.0f;
+		/** @brief A loose prop riding the actor list (skinned: books). Prints into the raster's item channel. */
+		bool item = false;
 	};
 	/** @brief This frame's rasterized props, gathered by the prop scan; their collision shapes stay out of the stamp list. */
 	std::vector<ContactProp> contactProps;

@@ -4491,6 +4491,12 @@ bool SnowDeformation::EnsureContactResources()
 		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactPS)))
 			Util::SetResourceName(contactPS, "SnowDeformation::ContactCapturePS");
 	}
+	if (!contactItemPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "ITEM"));
+		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactItemPS)))
+			Util::SetResourceName(contactItemPS, "SnowDeformation::ContactCaptureItemPS");
+	}
 	if (!contactSkinVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED"));
@@ -4509,7 +4515,7 @@ bool SnowDeformation::EnsureContactResources()
 		cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 		contactSkinCB = new ConstantBuffer(cbDesc, "SnowDeformation::ContactSkinCB");
 	}
-	if (!contactVS || !contactPS) {
+	if (!contactVS || !contactPS || !contactItemPS) {
 		contactShadersFailed = true;
 		logger::warn("[SNOW DEFORMATION] Prop contact capture disabled (shader compilation failed)");
 		return false;
@@ -4520,7 +4526,8 @@ bool SnowDeformation::EnsureContactResources()
 			.Height = kContactDim,
 			.MipLevels = 1,
 			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32_FLOAT,
+			// x = everything, y = dropped items alone (the ITEM pixel shader).
+			.Format = DXGI_FORMAT_R32G32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
@@ -4581,7 +4588,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		return;
 	auto* context = a_context;
 
-	const float clearValue[4] = { kContactNone, 0.0f, 0.0f, 0.0f };
+	const float clearValue[4] = { kContactNone, kContactNone, 0.0f, 0.0f };
 	context->ClearRenderTargetView(contactHeight->rtv.get(), clearValue);
 	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
 	context->OMSetRenderTargets(1, &rtv, nullptr);
@@ -4593,7 +4600,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	context->RSSetViewports(1, &viewport);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	context->VSSetShader(contactVS, nullptr, 0);
-	context->PSSetShader(contactPS, nullptr, 0);
+	// The prop list is all loose items.
+	context->PSSetShader(contactItemPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
@@ -4747,6 +4755,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
 				continue;
+			context->PSSetShader(actor.item ? contactItemPS : contactPS, nullptr, 0);
 			const uint drawsBeforeActor = contactSkinDrawsLast;
 			// First person hides the player's third-person root, but that skeleton
 			// still animates: the body under the camera is what walks in the snow.

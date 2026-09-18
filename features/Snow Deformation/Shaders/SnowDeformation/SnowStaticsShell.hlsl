@@ -502,6 +502,28 @@ static const float kShelterFar = 32.0;
 // object's own projected snow being exposed where the skin steps aside.
 static const float kShelterDust = 1.0;
 
+// See SnowShell.hlsl: the carve above 1, a dropped item's reach past the
+// actors' trench floor.
+float SampleItemOverdrive(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	// No early return: this is called inside [branch]es (X4000).
+	float inside = (any(uv < 0.0) || any(uv > 1.0)) ? 0.0 : 1.0;
+	uv = saturate(uv);
+
+	float2 dims;
+	DeformationMap.GetDimensions(dims.x, dims.y);
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
+	return inside * saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) - 1.0);
+}
+
 static const float kRimBandPx = 1.2;
 static const float kRimBandMax = 0.25;
 
@@ -1345,7 +1367,10 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float bermD = 0.0;
 		[branch] if (ObjBermHeightAmp > 0.005)
 			bermD = BermField(gridLocal);
-		float depth = CarveProfile(deform, skinDepth, worldXY) +
+		float itemOver = 0.0;
+		[branch] if (deform > 0.999)
+			itemOver = SampleItemOverdrive(gridLocal);
+		float depth = CarveProfile(deform, skinDepth, worldXY, itemOver) +
 		              BermShape(bermD) * saturate(1.0 - deform) * skinDepth * ObjBermHeightAmp * BermDepthGate(skinDepth);
 
 		// Precision pad, NOT a floor. The patch stands on real geometry, so even
@@ -1432,9 +1457,13 @@ PatchVertex BuildPatchVertex(float2 worldXY, uniform bool dense)
 		float dXN = saturate(SampleDeformationSmooth(gridLocal - float2(gStep, 0.0)));
 		float dYP = saturate(SampleDeformationSmooth(gridLocal + float2(0.0, gStep)));
 		float dYN = saturate(SampleDeformationSmooth(gridLocal - float2(0.0, gStep)));
+		float4 tapOver = 0.0;
+		[branch] if (max(max(dXP, dXN), max(dYP, dYN)) > 0.999)
+			tapOver = float4(SampleItemOverdrive(gridLocal + float2(gStep, 0.0)), SampleItemOverdrive(gridLocal - float2(gStep, 0.0)),
+				SampleItemOverdrive(gridLocal + float2(0.0, gStep)), SampleItemOverdrive(gridLocal - float2(0.0, gStep)));
 		float2 profGrad = float2(
-			CarveProfile(dXP, skinDepth, worldXY + float2(gStep, 0.0)) - CarveProfile(dXN, skinDepth, worldXY - float2(gStep, 0.0)),
-			CarveProfile(dYP, skinDepth, worldXY + float2(0.0, gStep)) - CarveProfile(dYN, skinDepth, worldXY - float2(0.0, gStep))) / (2.0 * gStep);
+			CarveProfile(dXP, skinDepth, worldXY + float2(gStep, 0.0), tapOver.x) - CarveProfile(dXN, skinDepth, worldXY - float2(gStep, 0.0), tapOver.y),
+			CarveProfile(dYP, skinDepth, worldXY + float2(0.0, gStep), tapOver.z) - CarveProfile(dYN, skinDepth, worldXY - float2(0.0, gStep), tapOver.w)) / (2.0 * gStep);
 		// Undulation gradient, the same field the depth above displaced by -
 		// mirrors SnowShell.hlsl's PS block. The geometry alone is not enough:
 		// at patch vertex spacing the dunes are far coarser than the shading
