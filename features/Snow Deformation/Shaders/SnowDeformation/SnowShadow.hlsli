@@ -30,8 +30,9 @@ struct PointShadowLight
 {
 	column_major float4x4 LightTransform;
 	uint SliceIndex;
-	uint LightType;  // 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
-	float2 padPSL;
+	uint LightType;      // 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
+	float ShadowRadius;  // radius the map's radial depth was normalised by
+	float padPSL;
 };
 StructuredBuffer<PointShadowLight> PointShadowLights : register(t38);
 Texture2DArray<float> SnowPointShadowAtlas : register(t39);
@@ -208,6 +209,9 @@ namespace SnowShadow
 	float GetPointLightShadow(float3 positionWS, uint shadowLightIndex, float lightRadius)
 	{
 		PointShadowLight sl = PointShadowLights[shadowLightIndex];
+		// The map's own radius, not the cluster light's: ISL moves the latter
+		// with the intensity each frame, after the map was drawn.
+		lightRadius = sl.ShadowRadius > 1.0 ? sl.ShadowRadius : lightRadius;
 		float vis = 1.0;
 		[branch] if (sl.LightType == 1)
 		{

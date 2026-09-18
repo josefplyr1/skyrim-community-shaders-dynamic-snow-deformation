@@ -177,6 +177,10 @@ void SnowDeformation::CapturePointShadowMask()
 		// The copy's slice IS the mask channel.
 		dd.SliceIndex = maskIndex;
 		dd.LightType = isFrustum ? 1u : (light->GetIsOmniLight() ? 3u : 2u);
+		// The map's radial depth is normalised by the radius the light holds
+		// now. ISL rewrites it from the intensity later in the frame, so a
+		// flickering light's cluster radius is one frame ahead of its map.
+		dd.ShadowRadius = light->light ? light->light->GetLightRuntimeData().radius.x : 0.0f;
 
 		if (pointShadowSliceFrame[maskIndex] != pointShadowFrameIndex && desc.shadowmapIndex < liveDesc.ArraySize) {
 			pointShadowSliceFrame[maskIndex] = pointShadowFrameIndex;

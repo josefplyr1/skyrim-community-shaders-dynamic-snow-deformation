@@ -1328,7 +1328,8 @@ public:
 		DirectX::XMFLOAT4X4 LightTransform;
 		uint32_t SliceIndex;
 		uint32_t LightType;  ///< 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
-		float pad[2];
+		float ShadowRadius;  ///< radius the engine normalised this map's depth by
+		float pad;
 	};
 	static constexpr uint32_t kPointShadowMaxLights = 4;
 
