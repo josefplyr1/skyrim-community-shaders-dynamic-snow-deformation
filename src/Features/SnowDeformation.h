@@ -3950,6 +3950,15 @@ protected:
 	std::unordered_map<uint32_t, SinkWatchState> sinkWatchStates;
 	std::unordered_set<uint32_t> sinkWatchFormsLogged;
 	SinkWatchReadout sinkWatchReadout;
+	struct SinkWatchProbe
+	{
+		float meshZ = 0.0f;
+		float rootZ = 0.0f;
+		uint32_t logged = 0;
+		bool valid = false;
+	};
+	/** @brief Render thread only. */
+	std::unordered_map<uint32_t, SinkWatchProbe> sinkWatchProbes;
 	void SinkWatchNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
 	void SinkWatchUpdate();
 

@@ -34,6 +34,9 @@ namespace
 		float geometryZ = 0.0f;
 		float geometryPreviousZ = 0.0f;
 		float radius = 0.0f;
+		/** Lowest point of the collision shapes, world units. OBND cannot give it: armour boxes are in worn space. */
+		bool hasUnderside = false;
+		float undersideZ = 0.0f;
 	};
 
 	RE::BSGeometry* FirstGeometry(RE::NiAVObject* a_object, int a_depth = 0)
@@ -69,6 +72,17 @@ namespace
 			if (!hkpRigid)
 				return RE::BSVisit::BSVisitControl::kContinue;
 			out.bodies++;
+			if (const auto* shape = hkpRigid->collidable.GetShape()) {
+				RE::hkAabb aabb;
+				shape->GetAabbImpl(hkpRigid->motion.motionState.transform, 0.0f, aabb);
+				float low[4];
+				_mm_storeu_ps(low, aabb.min.quad);
+				const float z = low[2] * toGame;
+				if (std::isfinite(z)) {
+					out.undersideZ = out.hasUnderside ? std::min(out.undersideZ, z) : z;
+					out.hasUnderside = true;
+				}
+			}
 			out.mass += hkpRigid->motion.GetMass();
 			if (out.motionType < 0) {
 				out.motionType = static_cast<int>(hkpRigid->motion.type.underlying());
@@ -148,7 +162,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 5)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 6)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -208,6 +222,30 @@ void SnowDeformation::SinkWatchUpdate()
 		pick.snowDepth = rise > 0.0f ? APISnowDepthAt(ground.x, ground.y) : 0.0f;
 	}
 
+	// Blur probe: the drawn mesh's height as THIS thread sees it, every frame.
+	// The game-thread readings are steady, so look for a flicker they cannot see.
+	for (const auto& pick : picks) {
+		auto ref = pick.handle.get();
+		auto* root = ref ? ref->Get3D(false) : nullptr;
+		auto* geometry = FirstGeometry(root);
+		if (!geometry)
+			continue;
+		auto& probe = sinkWatchProbes[pick.formID];
+		const float z = geometry->world.translate.z;
+		const float rootZ = root->world.translate.z;
+		const bool rootStill = probe.valid && std::abs(rootZ - probe.rootZ) < 0.02f;
+		if (rootStill && std::abs(z - probe.meshZ) > 0.25f && probe.logged < 300) {
+			probe.logged++;
+			logger::info("[SNOW DEFORMATION] SW0 RENDER-SIDE {:08X} f{}: body still, drawn mesh z {:.2f} -> {:.2f} ({:+.2f}), previous-frame z {:.2f}",
+				pick.formID, sinkWatchFrame, probe.meshZ, z, z - probe.meshZ, geometry->previousWorld.translate.z);
+		}
+		probe.meshZ = z;
+		probe.rootZ = rootZ;
+		probe.valid = true;
+	}
+	if (sinkWatchProbes.size() > 256)
+		sinkWatchProbes.clear();
+
 	const bool liftRequested = sinkWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
 	const bool autoMode = sinkWatchAuto;
 	const float manualLift = sinkWatchLift;
@@ -260,6 +298,11 @@ void SnowDeformation::SinkWatchUpdate()
 				footprint = ey * ez * ux + ex * ez * uy + ex * ey * uz;
 				height = ex * ux + ey * uy + ez * uz;
 				bottomZ = body.world.z + (body.up.x * centre.x + body.up.y * centre.y + body.up.z * centre.z) * scale - height * 0.5f;
+				if (body.hasUnderside) {
+					if (std::abs(bottomZ - body.undersideZ) > 8.0f && sinkWatchFormsLogged.insert(base->formID ^ 0x80000000u).second)
+						logger::info("[SNOW DEFORMATION] SW0 BOX-vs-COLLISION {:08X} '{}': box underside {:+.2f} from the body, collision underside {:+.2f}",
+							base->formID, base->GetName(), bottomZ - body.world.z, body.undersideZ - body.world.z);
+				}
 				const float cx = std::max(ex, 1.0f), cy = std::max(ey, 1.0f), cz = std::max(ez, 1.0f);
 				const float cappedMass = std::min(body.mass, kSinkBoxDensityCap * cx * cy * cz);
 				const float face = std::max({ cx * cy, cy * cz, cx * cz });
@@ -270,6 +313,9 @@ void SnowDeformation::SinkWatchUpdate()
 						body.mass, body.bodies, ref->GetWeight(), ex, ey, ez, footprint, height,
 						cappedMass, std::sqrt(face), measure);
 			}
+
+			if (body.hasUnderside)
+				bottomZ = body.undersideZ;
 
 			// A rebuilt 3D has lost the offset with its nodes.
 			if (state.offsetApplied && state.offsetRoot != body.root) {
@@ -326,7 +372,7 @@ void SnowDeformation::SinkWatchUpdate()
 				state.dirty = false;
 			}
 			if (asleep && state.asleepFrames == 1)
-				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} box bottom {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
 					pick.formID, base ? base->GetName() : "", measure, sink, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
 					pick.surfaceZ - bottomZ - state.appliedLift);
 
