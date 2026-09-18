@@ -40,6 +40,8 @@ static constexpr float kHazardPieceRadius = 6.0f;
 // Never raise by more than this, whatever the snow says. A lift is a lie told
 // to hide a burial, and a big one starts reading as the effect floating.
 static constexpr float kLiftFraction = 0.5f;
+// Set on a proximity projectile the frame before its explosion replaces it (measured, CODE-NOTES).
+static constexpr auto kProjectileTriggered = RE::Projectile::Flags::kUnk30;
 static constexpr float kMaxLiftHeight = 60.0f;
 // Only half way up: a wall standing on top of the snow reads as balanced on
 // it, half sunk it reads as standing in it. The crust pattern laid around its
@@ -2301,6 +2303,11 @@ void SnowDeformation::GatherSpellEmitters()
 				pending.heightAboveLand = position.z - blastGroundZ;
 				pending.radius = authored * std::max(settings.BlastRadiusScale, 0.0f);
 				pending.element = element;
+				if (auto* baseForm = projectile->GetBaseObject())
+					if (auto* projectileBase = baseForm->As<RE::BGSProjectile>())
+						pending.proximity = projectileBase->data.flags.any(
+							RE::BGSProjectileData::BGSProjectileFlags::kExplosionAltTrigger);
+				pending.triggered = runtime.flags.any(kProjectileTriggered);
 
 				// A projectile that has already struck must mark NOW. Waiting
 				// for it to leave the manager is right for something still in
@@ -2438,6 +2445,9 @@ void SnowDeformation::GatherSpellEmitters()
 		}
 		const PendingBlast blast = it->second;
 		it = projectileBlasts.erase(it);
+		// Replaced by a recast or unloaded, never set off.
+		if (blast.proximity && !blast.triggered)
+			continue;
 		OpenProjectileBlast(blast, tes);
 	}
 

@@ -3864,6 +3864,9 @@ protected:
 		/** @brief How far past the last sighting a traced landing still counts as where this projectile struck. A hitscan bolt resolves at its muzzle, so its strike can be its whole range away; a travelling one moves only a frame's worth. */
 		float landingReach = 0.0f;
 		SpellElement element = SpellElement::None;
+		/** @brief Proximity-triggered record (a rune): leaving the manager is only a blast if it was seen triggered. */
+		bool proximity = false;
+		bool triggered = false;
 	};
 	/** @brief Per live projectile (formID), rebuilt every frame. Holds only projectiles still IN FLIGHT - one that has already struck marks at once instead. */
 	std::unordered_map<uint32_t, PendingBlast> projectileBlasts;
