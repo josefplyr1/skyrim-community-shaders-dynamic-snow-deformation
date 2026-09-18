@@ -174,7 +174,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 11: item trench floor)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 12: embed below the trench floor)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -267,6 +267,7 @@ void SnowDeformation::SinkWatchUpdate()
 	const bool liftRequested = sinkWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
 	const bool autoMode = sinkWatchAuto;
 	const float manualLift = sinkWatchLift;
+	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const uint32_t frame = sinkWatchFrame;
 	// Inline, not an SKSE task: tasks ran on six worker threads here (log
 	// thread ids), racing the scene update. This is the main thread, after
@@ -348,6 +349,8 @@ void SnowDeformation::SinkWatchUpdate()
 				else
 					state.undersideOffset += (offset - state.undersideOffset) * 0.15f;
 				state.undersideValid = true;
+				// The box height swings with the pose like the underside does.
+				state.heightEased = state.heightEased > 0.0f ? state.heightEased + (height - state.heightEased) * 0.15f : height;
 				bottomZ = body.world.z + state.undersideOffset;
 			}
 
@@ -368,15 +371,19 @@ void SnowDeformation::SinkWatchUpdate()
 			// The mesh is held at its rest depth every frame, awake or asleep:
 			// the body falls to the ground, the mesh stops where the snow holds it.
 			float sink = 0.0f;
+			float embed = 0.0f;
 			float want = 0.0f;
 			if (body.bodies > 0 && body.mass > 0.0f && pick.snowDepth >= 1.0f && autoMode) {
 				const float t = std::clamp((std::log(std::max(measure, 1e-4f)) - std::log(kSinkMeasureFloat)) /
 											   (std::log(kSinkMeasureFull) - std::log(kSinkMeasureFloat)),
 					0.0f, 1.0f);
-				// Josef 2026-09-18: items have their own trench floor (kItemTrenchFloor
-				// in SnowFields.hlsli); the heaviest sits ON it.
-				sink = t * t * (3.0f - 2.0f * t) * (1.0f - 0.10f);
-				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - bottomZ, 0.0f, kSinkMaxLift);
+				// Josef 2026-09-18 (final): the trench stops at Trench Floor for items
+				// too, and weight presses the item INTO that floor, up to half its
+				// own height. Squared, so only the heavy ones go under.
+				const float weight = t * t * (3.0f - 2.0f * t);
+				sink = weight * (1.0f - trenchFloor);
+				embed = weight * weight * 0.5f * state.heightEased;
+				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - embed - bottomZ, 0.0f, kSinkMaxLift);
 				if (want < 0.5f)
 					want = 0.0f;
 			}
@@ -415,8 +422,8 @@ void SnowDeformation::SinkWatchUpdate()
 				}
 			}
 			if (asleep && state.asleepFrames == 1)
-				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
-					pick.formID, base ? base->GetName() : "", measure, sink, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} embed {:.1f} of height {:.1f} snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
+					pick.formID, base ? base->GetName() : "", measure, sink, embed, state.heightEased, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
 					pick.surfaceZ - bottomZ - state.appliedLift);
 
 			const bool flipped = state.frames == 0 || body.islandActive != state.islandActive;

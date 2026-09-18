@@ -3923,6 +3923,7 @@ protected:
 		float liveY = 0.0f;
 		bool undersideValid = false;
 		float undersideOffset = 0.0f;
+		float heightEased = 0.0f;
 		/** @brief Last frame's final transforms under the root; pointers are compared, never dereferenced. */
 		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
 		uint32_t lastWorldFrame = 0;
