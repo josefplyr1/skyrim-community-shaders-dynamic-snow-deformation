@@ -462,7 +462,7 @@ public:
 		/** @brief Paints a rune's glyph - an engine decal on the ground the shell covers - onto the landscape shell. */
 		bool RuneDecalsOnSnow = true;
 		/** @brief Scale on the painted glyph's emission. */
-		float RuneGlow = 0.3f;
+		float RuneGlow = 2.0f;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
 		float ForceTrackDepth = 0.45f;
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
