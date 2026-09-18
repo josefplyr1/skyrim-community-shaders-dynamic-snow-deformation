@@ -1644,9 +1644,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
-				contactProps.push_back({ a_ref->CreateRefHandle(),
-					bound.center.x - bound.radius, bound.center.y - bound.radius,
-					bound.center.x + bound.radius, bound.center.y + bound.radius });
+				// Books are skinned (a hinged cover): the prop draw is rigid-only,
+				// the actor draw takes both.
+				bool skinned = false;
+				RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
+					if (!a_geometry->GetGeometryRuntimeData().skinInstance)
+						return RE::BSVisit::BSVisitControl::kContinue;
+					skinned = true;
+					return RE::BSVisit::BSVisitControl::kStop;
+				});
+				(skinned ? contactActors : contactProps).push_back({ a_ref->CreateRefHandle(), bound.center.x - bound.radius, bound.center.y - bound.radius, bound.center.x + bound.radius, bound.center.y + bound.radius, false, groundZ, std::max(GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f) });
 				stampStats.propsRasterized++;
 				return;
 			}
