@@ -397,8 +397,9 @@ void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift)
 		if (!root)
 			return;
 		root->local.translate.z += a_lift;
+		// The whole subtree: UpdateWorldData moves this node alone.
 		RE::NiUpdateData data{};
-		root->UpdateWorldData(&data);
+		root->Update(data);
 	});
 }
 
