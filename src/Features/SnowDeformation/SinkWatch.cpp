@@ -14,9 +14,10 @@
 #if !SNOW_ALPHA_BUILD
 namespace
 {
-	// Provisional, mass alone: the real anchors come from this round's census.
-	constexpr float kSinkMassFloat = 3.0f;
-	constexpr float kSinkMassFull = 35.0f;
+	// Josef's measure, 2026-09-18: size-capped mass over the side of the largest face.
+	constexpr float kSinkBoxDensityCap = 0.004f;
+	constexpr float kSinkMeasureFloat = 0.1f;
+	constexpr float kSinkMeasureFull = 0.8f;
 	constexpr float kSinkMaxLift = 80.0f;
 
 	struct SinkBodyRead
@@ -31,6 +32,7 @@ namespace
 		float speed = 0.0f;
 		bool hasGeometry = false;
 		float geometryZ = 0.0f;
+		float geometryPreviousZ = 0.0f;
 	};
 
 	RE::BSGeometry* FirstGeometry(RE::NiAVObject* a_object, int a_depth = 0)
@@ -78,6 +80,7 @@ namespace
 		if (auto* geometry = FirstGeometry(out.root)) {
 			out.hasGeometry = true;
 			out.geometryZ = geometry->world.translate.z;
+			out.geometryPreviousZ = geometry->previousWorld.translate.z;
 		}
 		return out;
 	}
@@ -90,17 +93,41 @@ namespace
 		if (!node)
 			return 0;
 		uint32_t shifted = 0;
-		RE::NiUpdateData data{};
 		for (auto& child : node->GetChildren()) {
 			if (!child || child->collisionObject)
 				continue;
 			child->local.translate += a_localOffset;
-			child->Update(data);
 			shifted++;
 		}
-		if (shifted)
-			a_root->UpdateWorldBound();
 		return shifted;
+	}
+
+	void SyncPreviousWorld(RE::NiAVObject* a_object, int a_depth = 0)
+	{
+		if (!a_object || a_depth > 8)
+			return;
+		a_object->previousWorld = a_object->world;
+		if (auto* node = a_object->AsNode())
+			for (auto& child : node->GetChildren())
+				SyncPreviousWorld(child.get(), a_depth + 1);
+	}
+
+	// An awake body's root is updated by Havok every frame and carries the
+	// children with it. A sleeping one is not: push the locals down ourselves,
+	// and level previousWorld, or the motion vectors keep the jump for ever.
+	void PropagateChildren(RE::NiAVObject* a_root)
+	{
+		auto* node = a_root ? a_root->AsNode() : nullptr;
+		if (!node)
+			return;
+		RE::NiUpdateData data{};
+		for (auto& child : node->GetChildren()) {
+			if (!child || child->collisionObject)
+				continue;
+			child->Update(data);
+			SyncPreviousWorld(child.get());
+		}
+		a_root->UpdateWorldBound();
 	}
 }
 
@@ -108,9 +135,9 @@ void SnowDeformation::SinkWatchNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3
 {
 	if (sinkWatchCandidates.size() > 512 && !sinkWatchCandidates.contains(a_ref->formID))
 		sinkWatchCandidates.clear();
+	// Every note: dropped items are temporary references and their IDs are recycled.
 	auto& candidate = sinkWatchCandidates[a_ref->formID];
-	if (!candidate.handle)
-		candidate.handle = a_ref->CreateRefHandle();
+	candidate.handle = a_ref->CreateRefHandle();
 	candidate.position = a_position;
 	candidate.seenFrame = sinkWatchFrame;
 }
@@ -119,7 +146,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 3: depth held every frame)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 4)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -157,6 +184,18 @@ void SnowDeformation::SinkWatchUpdate()
 	sinkWatchCount.store(static_cast<uint32_t>(picks.size()), std::memory_order_relaxed);
 	if (picks.empty())
 		return;
+	{
+		// The prop scan is sliced, so its position can be many frames old; the task's is one.
+		std::scoped_lock lock(sinkWatchLock);
+		for (auto& pick : picks) {
+			auto found = sinkWatchStates.find(pick.formID);
+			if (found != sinkWatchStates.end() && found->second.liveValid && found->second.refHandle == pick.handle.native_handle()) {
+				auto& position = sinkWatchCandidates[pick.formID].position;
+				position.x = found->second.liveX;
+				position.y = found->second.liveY;
+			}
+		}
+	}
 	for (auto& pick : picks) {
 		// Measured from the ground under the item, so the answer does not
 		// depend on where in its fall the item is.
@@ -182,6 +221,13 @@ void SnowDeformation::SinkWatchUpdate()
 			if (!body.root)
 				continue;
 			auto& state = sinkWatchStates[pick.formID];
+			if (state.refHandle != pick.handle.native_handle()) {
+				state = {};
+				state.refHandle = pick.handle.native_handle();
+			}
+			state.liveX = body.world.x;
+			state.liveY = body.world.y;
+			state.liveValid = true;
 			auto* base = ref->GetBaseObject();
 			const bool asleep = body.bodies > 0 && body.islandActive == 0;
 
@@ -189,6 +235,7 @@ void SnowDeformation::SinkWatchUpdate()
 			// authored object bounds (OBND) as the footprint it lies on right now.
 			float footprint = 0.0f;
 			float height = 0.0f;
+			float measure = body.mass / 50.0f;
 			if (auto* bound = base ? base->As<RE::TESBoundObject>() : nullptr) {
 				const float s = ref->GetScale();
 				const float ex = float(bound->boundData.boundMax.x - bound->boundData.boundMin.x) * s;
@@ -198,11 +245,15 @@ void SnowDeformation::SinkWatchUpdate()
 				const float ux = std::abs(body.up.x * scale), uy = std::abs(body.up.y * scale), uz = std::abs(body.up.z * scale);
 				footprint = ey * ez * ux + ex * ez * uy + ex * ey * uz;
 				height = ex * ux + ey * uy + ez * uz;
+				const float cx = std::max(ex, 1.0f), cy = std::max(ey, 1.0f), cz = std::max(ez, 1.0f);
+				const float cappedMass = std::min(body.mass, kSinkBoxDensityCap * cx * cy * cz);
+				const float face = std::max({ cx * cy, cy * cz, cx * cz });
+				measure = cappedMass / std::sqrt(face);
 				if (sinkWatchFormsLogged.size() < 400 && sinkWatchFormsLogged.insert(base->formID).second)
-					logger::info("[SNOW DEFORMATION] SW0 FORM {:08X} '{}' '{}' type {} | havokMass {:.2f} bodies {} | gameWeight {:.3f} | bounds ({:.1f} {:.1f} {:.1f}) lying footprint {:.1f} height {:.1f} | mass/footprint {:.5f}",
+					logger::info("[SNOW DEFORMATION] SW0 FORM {:08X} '{}' '{}' type {} | havokMass {:.2f} bodies {} | gameWeight {:.3f} | bounds ({:.1f} {:.1f} {:.1f}) lying footprint {:.1f} height {:.1f} | capped mass {:.3f} over side {:.1f} = MEASURE {:.4f}",
 						base->formID, Util::GetFormEditorID(base), base->GetName(), static_cast<int>(base->GetFormType()),
 						body.mass, body.bodies, ref->GetWeight(), ex, ey, ez, footprint, height,
-						footprint > 0.5f ? body.mass / footprint : 0.0f);
+						cappedMass, std::sqrt(face), measure);
 			}
 
 			// A rebuilt 3D has lost the offset with its nodes.
@@ -224,8 +275,8 @@ void SnowDeformation::SinkWatchUpdate()
 			float sink = 0.0f;
 			float want = 0.0f;
 			if (body.bodies > 0 && body.mass > 0.0f && pick.snowDepth >= 1.0f && autoMode) {
-				const float t = std::clamp((std::log(std::max(body.mass, 0.01f)) - std::log(kSinkMassFloat)) /
-											   (std::log(kSinkMassFull) - std::log(kSinkMassFloat)),
+				const float t = std::clamp((std::log(std::max(measure, 1e-4f)) - std::log(kSinkMeasureFloat)) /
+											   (std::log(kSinkMeasureFull) - std::log(kSinkMeasureFloat)),
 					0.0f, 1.0f);
 				sink = t * t * (3.0f - 2.0f * t);
 				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - body.world.z, 0.0f, kSinkMaxLift);
@@ -241,6 +292,7 @@ void SnowDeformation::SinkWatchUpdate()
 				const bool was = state.offsetApplied;
 				const uint32_t shifted = ShiftChildren(body.root, delta);
 				if (shifted > 0) {
+					state.dirty = true;
 					state.childOffset = offset;
 					state.offsetApplied = want > 0.0f;
 					state.offsetRoot = body.root;
@@ -253,18 +305,22 @@ void SnowDeformation::SinkWatchUpdate()
 						pick.snowDepth, pick.surfaceZ, body.world.z, want, shifted);
 				}
 			}
+			if (state.dirty && (asleep || body.bodies == 0)) {
+				PropagateChildren(body.root);
+				state.dirty = false;
+			}
 			if (asleep && state.asleepFrames == 1)
-				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' mass {:.2f} sink {:.2f} snow {:.1f} | body z {:.2f} mesh held +{:.2f} = {:.1f} below the surface",
-					pick.formID, base ? base->GetName() : "", body.mass, sink, pick.snowDepth, body.world.z, state.appliedLift,
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} mesh held +{:.2f} = {:.1f} below the surface",
+					pick.formID, base ? base->GetName() : "", measure, sink, pick.snowDepth, body.world.z, state.appliedLift,
 					pick.surfaceZ - body.world.z - state.appliedLift);
 
 			const bool flipped = state.frames == 0 || body.islandActive != state.islandActive;
 			if (flipped)
 				state.burst = std::max(state.burst, 20u);
 			if (flipped || state.burst > 0 || state.frames % 120 == 0)
-				logger::info("[SNOW DEFORMATION] SW0 {:08X} f{} {}{} speed {:.2f} | root z {:.2f} mesh z {:.2f} (mesh above root {:+.2f}){} | mass {:.2f}",
+				logger::info("[SNOW DEFORMATION] SW0 {:08X} f{} {}{} speed {:.2f} | root z {:.2f} mesh z {:.2f} (mesh above root {:+.2f}, previous-frame z off by {:+.2f}){} | mass {:.2f}",
 					pick.formID, frame, body.bodies == 0 ? "no body" : (body.islandActive < 0 ? "no island" : (body.islandActive ? "ACTIVE" : "asleep")),
-					flipped && state.frames ? " EDGE" : "", body.speed, body.world.z, body.geometryZ, body.geometryZ - body.world.z,
+					flipped && state.frames ? " EDGE" : "", body.speed, body.world.z, body.geometryZ, body.geometryZ - body.world.z, body.geometryPreviousZ - body.geometryZ,
 					state.offsetApplied ? std::format(" | LIFTED +{:.2f}", state.appliedLift) : std::string(), body.mass);
 			if (state.burst > 0)
 				state.burst--;
@@ -284,6 +340,8 @@ void SnowDeformation::SinkWatchUpdate()
 				sinkWatchReadout.lifted = state.offsetApplied;
 				sinkWatchReadout.appliedLift = state.appliedLift;
 				sinkWatchReadout.snowDepth = pick.snowDepth;
+				sinkWatchReadout.measure = measure;
+				sinkWatchReadout.sink = sink;
 				first = false;
 			}
 		}

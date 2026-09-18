@@ -3914,6 +3914,11 @@ protected:
 		RE::NiPoint3 childOffset;
 		float appliedLift = 0.0f;
 		float manualLift = 0.0f;
+		uint32_t refHandle = 0;
+		bool dirty = false;
+		bool liveValid = false;
+		float liveX = 0.0f;
+		float liveY = 0.0f;
 	};
 	struct SinkWatchReadout
 	{
@@ -3929,6 +3934,8 @@ protected:
 		bool lifted = false;
 		float appliedLift = 0.0f;
 		float snowDepth = 0.0f;
+		float measure = 0.0f;
+		float sink = 0.0f;
 	};
 	bool sinkWatch = false;
 	bool sinkWatchArmed = false;
