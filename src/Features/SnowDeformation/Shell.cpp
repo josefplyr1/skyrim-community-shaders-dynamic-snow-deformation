@@ -1450,6 +1450,13 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(32, 1, &runeSRV);
 	ID3D11Buffer* runeBuffer = runeCB ? runeCB->CB() : nullptr;
 	context->PSSetConstantBuffers(2, 1, &runeBuffer);
+	// Each tile's own diffuse (t80-t83) and normal map (t84-t87).
+	ID3D11ShaderResourceView* runeTextures[2 * kRuneMaxTiles];
+	for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
+		runeTextures[i] = runeTileDiffuse[i].get();
+		runeTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
+	}
+	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, runeTextures);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
@@ -1863,6 +1870,8 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
 	context->PSSetShaderResources(32, 1, nullFinePS);
+	ID3D11ShaderResourceView* nullRuneTextures[2 * kRuneMaxTiles] = {};
+	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullRuneTextures);
 	context->PSSetShaderResources(13, 1, nullFinePS);
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);

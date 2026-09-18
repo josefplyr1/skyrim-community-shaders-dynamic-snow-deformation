@@ -317,44 +317,6 @@ Texture2D<float> BermFieldMap : register(t14);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
-#ifdef PSHADER
-// Rune glyphs (Blood.cpp, RenderRuneCapture): a 2x2 atlas, one tile per live
-// rune, redrawn every frame from the rune's own ground decal.
-Texture2D<float4> RuneAtlas : register(t32);
-cbuffer RuneCB : register(b2)
-{
-	// x = live tiles, y = glow
-	float4 RuneParams;
-	// xy = tile's world min, z = 1 / world size; tile i at (i & 1, i >> 1)
-	float4 RuneRects[4];
-	// rgb = the decal material's emissive
-	float4 RuneTints[4];
-}
-
-// rgb = glyph colour, a = glyph alpha; emission = the glyph's glow at this point.
-float4 SampleRunes(float2 worldXY, out float3 emission)
-{
-	emission = 0.0;
-	float4 glyph = 0.0;
-	const uint count = min((uint)RuneParams.x, 4u);
-	[loop] for (uint i = 0; i < count; i++)
-	{
-		float2 uv = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
-		[branch] if (all(uv > 0.0) && all(uv < 1.0))
-		{
-			// Half a texel in from the tile's edge: the neighbour tile is another rune.
-			float2 inTile = clamp(uv, 0.5 / 512.0, 1.0 - 0.5 / 512.0);
-			float4 c = RuneAtlas.SampleLevel(ShellLinearSampler, (float2(i & 1u, i >> 1u) + inTile) * 0.5, 0);
-			[flatten] if (c.a > glyph.a)
-			{
-				glyph = c;
-				emission = RuneTints[i].rgb * c.a * RuneParams.y;
-			}
-		}
-	}
-	return glyph;
-}
-#endif
 // Wide exclusion field (ExclusionFieldCS): x = door suppression, y = melt, over
 // a window that reaches the shell's own extent. The near mask at t5 still owns
 // the SHELTER term, which needs geometry and so cannot travel this far.
@@ -369,6 +331,91 @@ Texture2D<float4> FrostPatternDiffuse : register(t17);
 Texture2D<float4> UndulationFieldMap : register(t29);
 
 SamplerState SnowSampler : register(s0);
+#ifdef PSHADER
+// Rune glyphs (Blood.cpp, RenderRuneCapture): a 2x2 atlas, one tile per live
+// rune, redrawn every frame from the rune's own ground decal. A tile is the
+// decal's uv field (rg = uv, b = covered, a = material alpha); the glyph
+// itself comes from the rune's own diffuse and normal map through that uv.
+Texture2D<float4> RuneAtlas : register(t32);
+Texture2D<float4> RuneDiffuse[4] : register(t80);
+Texture2D<float4> RuneNormal[4] : register(t84);
+cbuffer RuneCB : register(b2)
+{
+	// x = live tiles, y = glow
+	float4 RuneParams;
+	// xy = tile's world min, z = 1 / world size; tile i at (i & 1, i >> 1)
+	float4 RuneRects[4];
+	// rgb = the decal material's emissive, w = 1 with a normal map
+	float4 RuneTints[4];
+}
+
+struct RuneGlyph
+{
+	float4 colour;     // rgb = the decal's diffuse, a = its alpha here
+	float3 normalTS;   // its normal map
+	float gloss;       // the normal map's alpha, the game's specular mask
+	float3 tangent;    // world direction of +u
+	float3 bitangent;  // world direction of +v
+	float3 emission;
+};
+
+// worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
+RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
+{
+	RuneGlyph g;
+	g.colour = 0.0;
+	g.normalTS = float3(0.0, 0.0, 1.0);
+	g.gloss = 0.0;
+	g.tangent = float3(1.0, 0.0, 0.0);
+	g.bitangent = float3(0.0, 1.0, 0.0);
+	g.emission = 0.0;
+	const uint count = min((uint)RuneParams.x, 4u);
+	[unroll] for (uint i = 0; i < 4; i++)
+	{
+		float2 tileUV = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
+		[branch] if (i < count && all(tileUV > 0.0) && all(tileUV < 1.0))
+		{
+			// In from the tile's edge: the neighbour tile is another rune.
+			float2 inTile = clamp(tileUV, 1.5 / 512.0, 1.0 - 2.5 / 512.0);
+			float2 atlasUV = (float2(i & 1u, i >> 1u) + inTile) * 0.5;
+			const float texel = 0.5 / 512.0;
+			float4 c = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV, 0);
+			float4 cx = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV + float2(texel, 0.0), 0);
+			float4 cy = RuneAtlas.SampleLevel(ShellLinearSampler, atlasUV + float2(0.0, texel), 0);
+			// All three taps inside the decal: a tap straddling its border
+			// blends uv toward 0. The decal's own border is transparent.
+			[branch] if (min(c.b, min(cx.b, cy.b)) > 0.999)
+			{
+				// The uv field is planar, so its world derivative is one
+				// texel's difference, and the screen gradient follows from it.
+				float texelWorld = 1.0 / (RuneRects[i].z * 512.0);
+				float2 uvDx = (cx.rg - c.rg) / texelWorld;
+				float2 uvDy = (cy.rg - c.rg) / texelWorld;
+				float2 gradX = uvDx * worldDx.x + uvDy * worldDx.y;
+				float2 gradY = uvDx * worldDy.x + uvDy * worldDy.y;
+				float4 d = RuneDiffuse[i].SampleGrad(SnowSampler, c.rg, gradX, gradY);
+				float a = d.a * c.a;
+				[branch] if (a > g.colour.a)
+				{
+					g.colour = float4(d.rgb, a);
+					g.emission = RuneTints[i].rgb * a * RuneParams.y;
+					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
+					[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
+					{
+						float4 n = RuneNormal[i].SampleGrad(SnowSampler, c.rg, gradX, gradY);
+						g.normalTS = normalize(n.xyz * 2.0 - 1.0);
+						g.gloss = n.a;
+						// Inverse of [uvDx uvDy]: world xy per unit u, per unit v.
+						g.tangent = normalize(float3(uvDy.y, -uvDx.y, 0.0) / det);
+						g.bitangent = normalize(float3(-uvDy.x, uvDx.x, 0.0) / det);
+					}
+				}
+			}
+		}
+	}
+	return g;
+}
+#endif
 
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the
 // frost pattern - the verbatim-identical pieces of both shells live in one
@@ -2690,10 +2737,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
-	float3 runeEmission = 0.0;
-	float4 rune = SampleRunes(worldXYPS, runeEmission);
-	[branch] if (rune.a > 0.004)
-		kSnowAlbedo = lerp(kSnowAlbedo, rune.rgb, rune.a);
+	RuneGlyph rune = SampleRunes(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
+	float3 runeEmission = rune.emission;
+	[branch] if (rune.colour.a > 0.004)
+	{
+		kSnowAlbedo = lerp(kSnowAlbedo, rune.colour.rgb, rune.colour.a);
+		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
+		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
+	}
 	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
 	// has no wall to light, so it reads by material - pressed wet, darker and
 	// smoother. Gone by ~6 units of cover, where relief takes over.
@@ -2759,6 +2810,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	{
 		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
 		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
+	}
+	// The glyph shines where its normal map's alpha says, as the decal does.
+	[branch] if (rune.colour.a > 0.004)
+	{
+		float runeGloss = rune.colour.a * rune.gloss;
+		snowRoughness = lerp(snowRoughness, 0.28, runeGloss);
+		snowF0 = lerp(snowF0, float3(0.06, 0.06, 0.06), runeGloss);
 	}
 
 	float3 L = SharedData::DirLightDirection.xyz;

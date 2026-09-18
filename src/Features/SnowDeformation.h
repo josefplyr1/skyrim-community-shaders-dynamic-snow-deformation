@@ -460,7 +460,7 @@ public:
 		/** @brief Paints a rune's glyph - an engine decal on the ground the shell covers - onto the landscape shell. */
 		bool RuneDecalsOnSnow = true;
 		/** @brief Scale on the painted glyph's emission. */
-		float RuneGlow = 1.0f;
+		float RuneGlow = 0.3f;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
 		float ForceTrackDepth = 0.45f;
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
@@ -995,6 +995,7 @@ public:
 	struct RuneCapture
 	{
 		BloodCapture draw;
+		winrt::com_ptr<ID3D11ShaderResourceView> normal;
 		float3 emissive{ 0.0f, 0.0f, 0.0f };
 		RE::NiPoint3 centre;
 		float radius = 0.0f;
@@ -1005,7 +1006,7 @@ public:
 		float4 RuneParams;
 		/** @brief xy = tile's world min, z = 1 / world size. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
 		float4 RuneRects[kRuneMaxTiles];
-		/** @brief rgb = the decal material's emissive. */
+		/** @brief rgb = the decal material's emissive, w = 1 when the tile has a normal map. */
 		float4 RuneTints[kRuneMaxTiles];
 	};
 	STATIC_ASSERT_ALIGNAS_16(RuneCB);
@@ -1021,6 +1022,9 @@ public:
 	std::unordered_set<const RE::BSGeometry*> runeCaptureSet;
 	std::unordered_set<std::string> runeDecalPathsLogged;
 	Texture2D* runeAtlasTexture = nullptr;
+	/** @brief Each live tile's own decal textures, sampled by the shell through the tile's uv field. */
+	winrt::com_ptr<ID3D11ShaderResourceView> runeTileDiffuse[kRuneMaxTiles];
+	winrt::com_ptr<ID3D11ShaderResourceView> runeTileNormal[kRuneMaxTiles];
 	ConstantBuffer* runeCB = nullptr;
 	ID3D11PixelShader* runePS = nullptr;
 	winrt::com_ptr<ID3D11BlendState> runeBlendState;

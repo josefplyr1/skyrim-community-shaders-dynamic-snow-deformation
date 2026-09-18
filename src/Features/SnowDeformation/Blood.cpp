@@ -465,7 +465,9 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 // own target: the blood map's texel is several units and a glyph's lines are
 // two or three, so each live rune gets a tile of a small atlas, cleared and
 // redrawn every frame - the glyph leaves with its rune, and its pulse rides
-// the decal's own per-frame alpha.
+// the decal's own per-frame alpha. A tile holds the decal's UV FIELD, not its
+// colour: the shell samples the rune's own diffuse and normal map through it,
+// at the texture's full resolution.
 bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass)
 {
 	auto* geometry = a_pass->geometry;
@@ -509,6 +511,8 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass)
 	capture.draw.alphaThreshold = threshold;
 	capture.draw.reveal = 1.0f;
 	capture.draw.skinned = false;
+	if (auto* normal = material->normalTexture.get(); normal && normal->rendererTexture && normal->rendererTexture->resourceView)
+		capture.normal.copy_from(normal->rendererTexture->resourceView);
 	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property); lighting && lighting->emissiveColor) {
 		const float mult = lighting->emissiveMult;
 		capture.emissive = { lighting->emissiveColor->red * mult, lighting->emissiveColor->green * mult, lighting->emissiveColor->blue * mult };
@@ -533,18 +537,19 @@ bool SnowDeformation::EnsureRuneResources()
 			desc.Height = kRuneTileDim * 2;
 			desc.MipLevels = 1;
 			desc.ArraySize = 1;
-			desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+			// uv at 16 bits: half floats step 1/1024 near 1, a texel of the glyph.
+			desc.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
 			desc.SampleDesc.Count = 1;
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 			runeAtlasTexture = new Texture2D(desc, "SnowDeformation::RuneAtlas");
 			D3D11_SHADER_RESOURCE_VIEW_DESC srv{
-				.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+				.Format = DXGI_FORMAT_R16G16B16A16_UNORM,
 				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
 			};
 			D3D11_RENDER_TARGET_VIEW_DESC rtv{
-				.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+				.Format = DXGI_FORMAT_R16G16B16A16_UNORM,
 				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 				.Texture2D = { .MipSlice = 0 }
 			};
@@ -621,6 +626,10 @@ void SnowDeformation::RenderRuneCapture()
 		}
 		if (runeCB)
 			runeCB->Update(cbRune);
+		for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
+			runeTileDiffuse[i] = nullptr;
+			runeTileNormal[i] = nullptr;
+		}
 		runeCaptures.clear();
 		runeCaptureSet.clear();
 		return;
@@ -650,6 +659,7 @@ void SnowDeformation::RenderRuneCapture()
 			break;
 		list.clear();
 		float3 emissive{ 0.0f, 0.0f, 0.0f };
+		const RuneCapture* first = nullptr;
 		for (const auto& capture : runeCaptures) {
 			const float dx = capture.centre.x - site.position.x;
 			const float dy = capture.centre.y - site.position.y;
@@ -657,6 +667,8 @@ void SnowDeformation::RenderRuneCapture()
 			if (dx * dx + dy * dy > reach * reach)
 				continue;
 			list.push_back(capture.draw);
+			if (!first)
+				first = &capture;
 			emissive = { std::max(emissive.x, capture.emissive.x), std::max(emissive.y, capture.emissive.y), std::max(emissive.z, capture.emissive.z) };
 		}
 		if (list.empty())
@@ -677,8 +689,14 @@ void SnowDeformation::RenderRuneCapture()
 		if (DrawBloodList(context, list, cb) == 0)
 			continue;
 		cbRune.RuneRects[tiles] = { cb.WindowOrigin.x, cb.WindowOrigin.y, 1.0f / (2.0f * kRuneTileHalf), 0.0f };
-		cbRune.RuneTints[tiles] = { emissive.x, emissive.y, emissive.z, 0.0f };
+		cbRune.RuneTints[tiles] = { emissive.x, emissive.y, emissive.z, first->normal ? 1.0f : 0.0f };
+		runeTileDiffuse[tiles] = first->draw.diffuse;
+		runeTileNormal[tiles] = first->normal;
 		tiles++;
+	}
+	for (uint32_t i = tiles; i < kRuneMaxTiles; ++i) {
+		runeTileDiffuse[i] = nullptr;
+		runeTileNormal[i] = nullptr;
 	}
 	cbRune.RuneParams = { float(tiles), std::clamp(settings.RuneGlow, 0.0f, 8.0f), 0.0f, 0.0f };
 	runeCB->Update(cbRune);
