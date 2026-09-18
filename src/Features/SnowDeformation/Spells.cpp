@@ -1667,12 +1667,28 @@ namespace
 		RE::NiPoint3 axisZ;
 		std::string rootName;
 		uint32_t children = 0;
+		bool hasGeometry = false;
+		float geometryZ = 0.0f;
+		std::string geometryName;
 		bool hasImpact = false;
 		uint32_t collidee = 0;
 		int32_t layer = 0;
 		uint32_t material = 0;
 		RE::NiPoint3 negVelocity;
 	};
+
+	RE::BSGeometry* FirstGeometry(RE::NiAVObject* a_object, int a_depth = 0)
+	{
+		if (!a_object || a_depth > 8)
+			return nullptr;
+		if (auto* geometry = a_object->AsGeometry())
+			return geometry;
+		if (auto* node = a_object->AsNode())
+			for (auto& child : node->GetChildren())
+				if (auto* found = FirstGeometry(child.get(), a_depth + 1))
+					return found;
+		return nullptr;
+	}
 
 	// Game thread only.
 	RuneNodeRead ReadRuneNode(RE::TESObjectREFR* a_ref)
@@ -1688,6 +1704,11 @@ namespace
 			out.rootName = root->name.c_str();
 			if (auto* node = root->AsNode())
 				out.children = node->GetChildren().size();
+			if (auto* geometry = FirstGeometry(root)) {
+				out.hasGeometry = true;
+				out.geometryZ = geometry->world.translate.z;
+				out.geometryName = geometry->name.c_str();
+			}
 		}
 		if (auto* projectile = a_ref->AsProjectile()) {
 			auto& impacts = projectile->GetProjectileRuntimeData().impacts;
@@ -1890,13 +1911,13 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 		runeWatchSamples.fetch_add(1, std::memory_order_relaxed);
 		if (dump)
 			DumpRuneTree(ref->Get3D(false), formID, dump, surfaceZ, 0);
-		logger::info("[SNOW DEFORMATION] S0 {:08X} f{} {}{}{} | ref ({:.1f} {:.1f} {:.2f}) land {:.2f} surface {} {:.2f} nominal {:.1f} accum {:.2f} | speed {:.1f} lin {:.1f} moved {:.1f} living {:.2f} flags {:#010x} | node {} localZ {:.2f} world ({:.1f} {:.1f} {:.2f}) axisZ ({:.2f} {:.2f} {:.2f}) axisY ({:.2f} {:.2f} {:.2f}) '{}' kids {} | impact {} collidee {:08X} layer {} mat {:08X} negVel ({:.0f} {:.0f} {:.0f})",
+		logger::info("[SNOW DEFORMATION] S0 {:08X} f{} {}{}{} | ref ({:.1f} {:.1f} {:.2f}) land {:.2f} surface {} {:.2f} nominal {:.1f} accum {:.2f} | speed {:.1f} lin {:.1f} moved {:.1f} living {:.2f} flags {:#010x} | node {} localZ {:.2f} world ({:.1f} {:.1f} {:.2f}) axisZ ({:.2f} {:.2f} {:.2f}) axisY ({:.2f} {:.2f} {:.2f}) '{}' kids {} geom '{}' z {:.2f} | impact {} collidee {:08X} layer {} mat {:08X} negVel ({:.0f} {:.0f} {:.0f})",
 			formID, frame, resting ? "rest" : "move", lifted ? " LIFTED" : "", tag,
 			position.x, position.y, position.z, landZ, surfaceOK ? "ok" : "MISS", surfaceZ, nominal, accumulation,
 			speed, linearSpeed, moved, living, flags,
 			node.has3D ? "ok" : "NONE", node.localZ, node.world.x, node.world.y, node.world.z,
 			node.axisZ.x, node.axisZ.y, node.axisZ.z, node.axisY.x, node.axisY.y, node.axisY.z,
-			node.rootName, node.children,
+			node.rootName, node.children, node.hasGeometry ? node.geometryName : std::string("none"), node.geometryZ,
 			node.hasImpact ? "yes" : "no", node.collidee, node.layer, node.material,
 			node.negVelocity.x, node.negVelocity.y, node.negVelocity.z);
 	});
