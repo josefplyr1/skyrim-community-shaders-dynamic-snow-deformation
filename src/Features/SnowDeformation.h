@@ -525,6 +525,10 @@ public:
 		float TrenchFloorFraction = 0.50f;
 		/** @brief Percent of its own thickness a heavy, rounded dropped item presses into its trench floor (WEIGHT-SINK-PLAN.md). Flat items take a fraction of it by shape. */
 		float ItemEmbedPercent = 50.0f;
+		/** @brief Dropped items rest in the snow by weight and shape; off, they lie on the ground under it as the game leaves them. */
+		bool ItemSink = true;
+		/** @brief Thickness over the side of the largest face below which an item counts as flat and does not press into its trench floor; the share ramps to full at 0.5. */
+		float ItemMinRoundness = 0.20f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
 		float SnowBorderNoise = 8.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -3925,6 +3929,7 @@ protected:
 		float liveY = 0.0f;
 		bool undersideValid = false;
 		float undersideOffset = 0.0f;
+		float lyingHeight = 0.0f;
 		/** @brief Last frame's final transforms under the root; pointers are compared, never dereferenced. */
 		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
 		uint32_t lastWorldFrame = 0;

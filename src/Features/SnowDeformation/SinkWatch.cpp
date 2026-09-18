@@ -38,6 +38,7 @@ namespace
 		/** Lowest point of the collision shapes, world units. OBND cannot give it: armour boxes are in worn space. */
 		bool hasUnderside = false;
 		float undersideZ = 0.0f;
+		float topZ = 0.0f;
 	};
 
 	RE::BSGeometry* FirstGeometry(RE::NiAVObject* a_object, int a_depth = 0)
@@ -76,11 +77,14 @@ namespace
 			if (const auto* shape = hkpRigid->collidable.GetShape()) {
 				RE::hkAabb aabb;
 				shape->GetAabbImpl(hkpRigid->motion.motionState.transform, 0.0f, aabb);
-				float low[4];
+				float low[4], high[4];
 				_mm_storeu_ps(low, aabb.min.quad);
+				_mm_storeu_ps(high, aabb.max.quad);
 				const float z = low[2] * toGame;
-				if (std::isfinite(z)) {
+				const float top = high[2] * toGame;
+				if (std::isfinite(z) && std::isfinite(top)) {
 					out.undersideZ = out.hasUnderside ? std::min(out.undersideZ, z) : z;
+					out.topZ = out.hasUnderside ? std::max(out.topZ, top) : top;
 					out.hasUnderside = true;
 				}
 			}
@@ -174,7 +178,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 13: embed by shape)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 14: settings)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -355,6 +359,10 @@ void SnowDeformation::SinkWatchUpdate()
 				else
 					state.undersideOffset += (offset - state.undersideOffset) * 0.15f;
 				state.undersideValid = true;
+				if (body.hasUnderside) {
+					const float tall = std::max(body.topZ - body.undersideZ, 0.0f);
+					state.lyingHeight = state.lyingHeight > 0.0f ? state.lyingHeight + (tall - state.lyingHeight) * 0.15f : tall;
+				}
 				bottomZ = body.world.z + state.undersideOffset;
 			}
 
@@ -377,7 +385,7 @@ void SnowDeformation::SinkWatchUpdate()
 			float sink = 0.0f;
 			float embed = 0.0f;
 			float want = 0.0f;
-			if (body.bodies > 0 && body.mass > 0.0f && pick.snowDepth >= 1.0f && autoMode) {
+			if (body.bodies > 0 && body.mass > 0.0f && pick.snowDepth >= 1.0f && autoMode && settings.ItemSink) {
 				const float t = std::clamp((std::log(std::max(measure, 1e-4f)) - std::log(kSinkMeasureFloat)) /
 											   (std::log(kSinkMeasureFull) - std::log(kSinkMeasureFloat)),
 					0.0f, 1.0f);
@@ -388,9 +396,14 @@ void SnowDeformation::SinkWatchUpdate()
 				sink = weight * (1.0f - trenchFloor);
 				// Flat items (shield 0.24, greatsword 0.08, book 0.15) would vanish
 				// under the floor's own lumps; rounded ones (0.5 and up) take it all.
-				const float r = std::clamp((roundness - 0.15f) / (0.5f - 0.15f), 0.0f, 1.0f);
+				const float roundFloor = std::clamp(settings.ItemMinRoundness, 0.0f, 1.0f);
+				const float roundFull = std::max(0.5f, roundFloor + 0.05f);
+				const float r = std::clamp((roundness - roundFloor) / (roundFull - roundFloor), 0.0f, 1.0f);
 				const float shape = r * r * (3.0f - 2.0f * r);
-				embed = weight * weight * std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f * thickness * shape;
+				// A mace's authored box is a 54 unit cube; what lies in the snow is
+				// its collision, 10-15 units tall. The lesser of the two.
+				const float lying = state.lyingHeight > 0.0f ? std::min(thickness, state.lyingHeight) : thickness;
+				embed = weight * weight * std::clamp(settings.ItemEmbedPercent, 0.0f, 100.0f) * 0.01f * lying * shape;
 				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - embed - bottomZ, 0.0f, kSinkMaxLift);
 				if (want < 0.5f)
 					want = 0.0f;

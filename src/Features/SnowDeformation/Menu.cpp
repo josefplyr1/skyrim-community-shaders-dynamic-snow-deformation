@@ -772,6 +772,19 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBwS = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("bow_wave_speed_tooltip"), "Travel speed at which the crest reaches full height. Lower means a walk already pushes a wave; higher means only a sprint does. The crest builds quickly and eases out over about a third of a second when you stop."));
 
+		ImGui::SeparatorText(T(TKEY("dropped_items_group"), "Dropped Items"));
+		ImGui::Checkbox(T(TKEY("item_sink"), "Enable Dynamic Object Sink Depth"), &settings.ItemSink);
+		if (auto _ttItemSink = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("item_sink_tooltip"), "A dropped item rests in the snow at a depth set by its weight and size: a ring stays on the surface, a shield goes to the bottom of the trench it cuts. Off, every item falls to the ground under the snow, as the game places it. Items stay where physics left them either way, so picking them up is unchanged."));
+		ImGui::BeginDisabled(!settings.ItemSink);
+		ImGui::SliderFloat(T(TKEY("item_embed"), "Dropped Item Sink"), &settings.ItemEmbedPercent, 0.0f, 100.0f, "%.0f %%");
+		if (auto _ttEmbed = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("item_embed_tooltip"), "How far a heavy dropped item presses into the floor of the trench it lands in, as a share of its own thickness. Shape decides how much of this an item takes: rounded items (armor, buckets, boots) take all of it, flat ones (shields, swords, books) almost none, so they stay in view. Light items rest on the snow whatever this is. 0 = every item rests on its trench floor."));
+		ImGui::SliderFloat(T(TKEY("item_min_roundness"), "Minimum Roundness"), &settings.ItemMinRoundness, 0.0f, 1.0f, "%.2f");
+		if (auto _ttRound = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("item_min_roundness_tooltip"), "How rounded an item must be before it presses into its trench floor at all. Roundness is an item's thickness against the width of its largest side: a greatsword is about 0.08, a book 0.15, a shield 0.24, boots 0.6, a bucket 0.9. Items at or under this value rest on the floor; the share grows from here to the full Dropped Item Sink at 0.5. Raise it if flat items still disappear, lower it to let them sink."));
+		ImGui::EndDisabled();
+
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
 			ImGui::SliderFloat(T(TKEY("stamp_radius"), "Stamp Radius"), &settings.StampRadius, 4.0f, 128.0f, "%.0f");
@@ -793,10 +806,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat(T(TKEY("trench_floor"), "Trench Floor"), &settings.TrenchFloorFraction, 0.0f, 1.0f, "%.2fx");
 			if (auto _ttTf = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("trench_floor_tooltip"), "Snow left under a fully trampled trench, as a fraction of the snow depth there: 0.33 keeps a third, so walking through 30 units of snow leaves 10 around your foot instead of a canyon to the ground, and road snow never wears through to the road. 0 carves to the terrain."));
-
-			ImGui::SliderFloat(T(TKEY("item_embed"), "Dropped Item Sink"), &settings.ItemEmbedPercent, 0.0f, 100.0f, "%.0f %%");
-			if (auto _ttEmbed = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("item_embed_tooltip"), "How far a heavy dropped item presses into the floor of the trench it lands in, as a share of its own thickness. Shape decides how much of this an item takes: rounded items (armor, buckets, boots) take all of it, flat ones (shields, swords, books) almost none, so they stay in view. Light items rest on the snow whatever this is. 0 = every item rests on its trench floor."));
 
 			ImGui::SliderFloat(T(TKEY("mound_steepness"), "Mound Steepness"), &settings.SnowMoundSteepness, 0.5f, 3.0f, "%.1f");
 			if (auto _ttSteep = Util::HoverTooltipWrapper())
@@ -2047,7 +2056,7 @@ void SnowDeformation::DrawSettings()
 		}
 
 		// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md), throwaway.
-		if (ImGui::TreeNodeEx("Stage 0: weight sink watch")) {
+		if (ImGui::TreeNodeEx("Weight sink")) {
 			ImGui::Checkbox("Watch dropped items near me (CommunityShaders.log, lines tagged SW0)", &sinkWatch);
 			ImGui::Checkbox("Hold every watched item at its depth, moving or not (light = on top, heavy = at the bottom)", &sinkWatchAuto);
 			ImGui::SliderFloat("Button lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
