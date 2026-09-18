@@ -17,6 +17,7 @@ namespace
 	// Provisional, mass alone: the real anchors come from this round's census.
 	constexpr float kSinkMassFloat = 3.0f;
 	constexpr float kSinkMassFull = 35.0f;
+	constexpr float kSinkMaxLift = 80.0f;
 
 	struct SinkBodyRead
 	{
@@ -118,7 +119,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 2: child offsets)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 3: depth held every frame)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -136,7 +137,7 @@ void SnowDeformation::SinkWatchUpdate()
 		uint32_t formID;
 		RE::ObjectRefHandle handle;
 		float distSq;
-		float liftToSurface;  // from the root to the snow surface, render-thread reads
+		float surfaceZ;  // absolute, render-thread reads
 		float snowDepth;
 	};
 	std::vector<Pick> picks;
@@ -157,9 +158,13 @@ void SnowDeformation::SinkWatchUpdate()
 	if (picks.empty())
 		return;
 	for (auto& pick : picks) {
-		const auto& position = sinkWatchCandidates[pick.formID].position;
-		pick.liftToSurface = SnowLiftFor(position, 1.0f, 0.0f, tes);
-		pick.snowDepth = APISnowDepthAt(position.x, position.y);
+		// Measured from the ground under the item, so the answer does not
+		// depend on where in its fall the item is.
+		RE::NiPoint3 ground = sinkWatchCandidates[pick.formID].position;
+		tes->GetLandHeight(ground, ground.z);
+		const float rise = SnowLiftFor(ground, 1.0f, 0.0f, tes);
+		pick.surfaceZ = ground.z + rise;
+		pick.snowDepth = rise > 0.0f ? APISnowDepthAt(ground.x, ground.y) : 0.0f;
 	}
 
 	const bool liftRequested = sinkWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
@@ -203,44 +208,55 @@ void SnowDeformation::SinkWatchUpdate()
 			// A rebuilt 3D has lost the offset with its nodes.
 			if (state.offsetApplied && state.offsetRoot != body.root) {
 				state.offsetApplied = false;
+				state.childOffset = {};
+				state.appliedLift = 0.0f;
 				logger::info("[SNOW DEFORMATION] SW0 {:08X} 3D rebuilt: offset gone with it", pick.formID);
-			}
-			// Awake: the item goes where physics takes it, unlifted.
-			if (state.offsetApplied && !asleep) {
-				ShiftChildren(body.root, state.childOffset * -1.0f);
-				state.offsetApplied = false;
-				state.burst = std::max(state.burst, 60u);
-				logger::info("[SNOW DEFORMATION] SW0 DROP {:08X} woke: offset removed", pick.formID);
 			}
 			state.asleepFrames = asleep ? state.asleepFrames + 1 : 0;
 
-			const bool manual = first && liftRequested;
-			if (manual && !asleep)
-				logger::info("[SNOW DEFORMATION] SW0 LIFT refused: nearest item {:08X} is not asleep yet", pick.formID);
-			if (!state.offsetApplied && asleep && state.asleepFrames >= 10 && (manual || autoMode)) {
-				float sink = 0.0f;
-				float lift = manualLift;
-				if (!manual) {
-					const float t = std::clamp((std::log(std::max(body.mass, 0.01f)) - std::log(kSinkMassFloat)) /
-												   (std::log(kSinkMassFull) - std::log(kSinkMassFloat)),
-						0.0f, 1.0f);
-					sink = t * t * (3.0f - 2.0f * t);
-					lift = std::max(pick.liftToSurface - sink * pick.snowDepth, 0.0f);
-				}
-				if (lift >= 1.0f) {
-					state.childOffset = body.up * lift;
-					const uint32_t shifted = ShiftChildren(body.root, state.childOffset);
-					state.offsetApplied = shifted > 0;
+			if (first && liftRequested) {
+				state.manualLift = state.manualLift > 0.0f ? 0.0f : manualLift;
+				logger::info("[SNOW DEFORMATION] SW0 BUTTON {:08X}: fixed lift {}", pick.formID, state.manualLift > 0.0f ? "on" : "off");
+			}
+
+			// The mesh is held at its rest depth every frame, awake or asleep:
+			// the body falls to the ground, the mesh stops where the snow holds it.
+			float sink = 0.0f;
+			float want = 0.0f;
+			if (body.bodies > 0 && body.mass > 0.0f && pick.snowDepth >= 1.0f && autoMode) {
+				const float t = std::clamp((std::log(std::max(body.mass, 0.01f)) - std::log(kSinkMassFloat)) /
+											   (std::log(kSinkMassFull) - std::log(kSinkMassFloat)),
+					0.0f, 1.0f);
+				sink = t * t * (3.0f - 2.0f * t);
+				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - body.world.z, 0.0f, kSinkMaxLift);
+				if (want < 0.5f)
+					want = 0.0f;
+			}
+			if (state.manualLift > 0.0f)
+				want = state.manualLift;
+
+			const RE::NiPoint3 offset = body.up * want;
+			const RE::NiPoint3 delta = offset - state.childOffset;
+			if (delta.SqrLength() > 1e-4f) {
+				const bool was = state.offsetApplied;
+				const uint32_t shifted = ShiftChildren(body.root, delta);
+				if (shifted > 0) {
+					state.childOffset = offset;
+					state.offsetApplied = want > 0.0f;
 					state.offsetRoot = body.root;
-					state.appliedLift = lift;
-					state.burst = 600;
-					logger::info("[SNOW DEFORMATION] SW0 LIFT applied ({}): {:08X} '{}' mass {:.2f} sink {:.2f} snow {:.1f} to-surface {:.1f} -> +{:.2f} on {} child node(s)",
-						manual ? "button" : "auto", pick.formID, base ? base->GetName() : "", body.mass, sink, pick.snowDepth,
-						pick.liftToSurface, lift, shifted);
-				} else if (manual) {
-					logger::info("[SNOW DEFORMATION] SW0 LIFT refused: {:08X} computed lift {:.2f} is under 1 unit", pick.formID, lift);
+					state.appliedLift = want;
+				}
+				if (was != state.offsetApplied) {
+					state.burst = std::max(state.burst, 90u);
+					logger::info("[SNOW DEFORMATION] SW0 HOLD {} {:08X} '{}' mass {:.2f} sink {:.2f} snow {:.1f} surface z {:.2f} body z {:.2f} -> +{:.2f} on {} child node(s)",
+						state.offsetApplied ? "begins" : "ends", pick.formID, base ? base->GetName() : "", body.mass, sink,
+						pick.snowDepth, pick.surfaceZ, body.world.z, want, shifted);
 				}
 			}
+			if (asleep && state.asleepFrames == 1)
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' mass {:.2f} sink {:.2f} snow {:.1f} | body z {:.2f} mesh held +{:.2f} = {:.1f} below the surface",
+					pick.formID, base ? base->GetName() : "", body.mass, sink, pick.snowDepth, body.world.z, state.appliedLift,
+					pick.surfaceZ - body.world.z - state.appliedLift);
 
 			const bool flipped = state.frames == 0 || body.islandActive != state.islandActive;
 			if (flipped)

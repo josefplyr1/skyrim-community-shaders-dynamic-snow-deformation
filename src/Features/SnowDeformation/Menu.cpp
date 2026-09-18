@@ -2045,9 +2045,9 @@ void SnowDeformation::DrawSettings()
 		// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md), throwaway.
 		if (ImGui::TreeNodeEx("Stage 0: weight sink watch")) {
 			ImGui::Checkbox("Watch dropped items near me (CommunityShaders.log, lines tagged SW0)", &sinkWatch);
-			ImGui::Checkbox("Lift every watched item by itself once it comes to rest (light = on top, heavy = at the bottom)", &sinkWatchAuto);
+			ImGui::Checkbox("Hold every watched item at its depth, moving or not (light = on top, heavy = at the bottom)", &sinkWatchAuto);
 			ImGui::SliderFloat("Button lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
-			if (ImGui::Button("PRESS to lift the nearest resting item by the slider amount instead"))
+			if (ImGui::Button("PRESS to hold the nearest item at the slider lift instead (press again to release)"))
 				sinkWatchLiftRequest.store(true, std::memory_order_release);
 			SinkWatchReadout readout;
 			{

@@ -3895,7 +3895,7 @@ protected:
 
 	// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md, SinkWatch.cpp). Dev builds only, throwaway.
 	static constexpr float kSinkWatchRadius = 700.0f;
-	static constexpr size_t kSinkWatchMax = 6;
+	static constexpr size_t kSinkWatchMax = 12;
 	struct SinkWatchCandidate
 	{
 		RE::ObjectRefHandle handle;
@@ -3913,6 +3913,7 @@ protected:
 		bool offsetApplied = false;
 		RE::NiPoint3 childOffset;
 		float appliedLift = 0.0f;
+		float manualLift = 0.0f;
 	};
 	struct SinkWatchReadout
 	{
