@@ -162,7 +162,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 6)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 7)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -182,6 +182,7 @@ void SnowDeformation::SinkWatchUpdate()
 		float distSq;
 		float surfaceZ;  // absolute, render-thread reads
 		float snowDepth;
+		float landZ;
 	};
 	std::vector<Pick> picks;
 	for (auto it = sinkWatchCandidates.begin(); it != sinkWatchCandidates.end();) {
@@ -191,7 +192,7 @@ void SnowDeformation::SinkWatchUpdate()
 		}
 		const float distSq = origin.GetSquaredDistance(it->second.position);
 		if (distSq < kSinkWatchRadius * kSinkWatchRadius)
-			picks.push_back({ it->first, it->second.handle, distSq, 0.0f, 0.0f });
+			picks.push_back({ it->first, it->second.handle, distSq, 0.0f, 0.0f, 0.0f });
 		++it;
 	}
 	std::sort(picks.begin(), picks.end(), [](const Pick& a, const Pick& b) { return a.distSq < b.distSq; });
@@ -219,6 +220,7 @@ void SnowDeformation::SinkWatchUpdate()
 		tes->GetLandHeight(ground, ground.z);
 		const float rise = SnowLiftFor(ground, 1.0f, 0.0f, tes);
 		pick.surfaceZ = ground.z + rise;
+		pick.landZ = ground.z;
 		pick.snowDepth = rise > 0.0f ? APISnowDepthAt(ground.x, ground.y) : 0.0f;
 	}
 
@@ -314,8 +316,22 @@ void SnowDeformation::SinkWatchUpdate()
 						cappedMass, std::sqrt(face), measure);
 			}
 
+			// Havok's box is the shape's LOCAL box turned with the body: never
+			// tighter than the shape, so on a wobbling shield its low corner
+			// swings 6 units under a rim that never leaves the ground. Nothing
+			// is under the land, and what is left of the swing is eased out.
 			if (body.hasUnderside)
 				bottomZ = body.undersideZ;
+			bottomZ = std::max(bottomZ, pick.landZ);
+			{
+				const float offset = bottomZ - body.world.z;
+				if (!state.undersideValid || std::abs(offset - state.undersideOffset) > 12.0f)
+					state.undersideOffset = offset;
+				else
+					state.undersideOffset += (offset - state.undersideOffset) * 0.15f;
+				state.undersideValid = true;
+				bottomZ = body.world.z + state.undersideOffset;
+			}
 
 			// A rebuilt 3D has lost the offset with its nodes.
 			if (state.offsetApplied && state.offsetRoot != body.root) {

@@ -3919,6 +3919,8 @@ protected:
 		bool liveValid = false;
 		float liveX = 0.0f;
 		float liveY = 0.0f;
+		bool undersideValid = false;
+		float undersideOffset = 0.0f;
 	};
 	struct SinkWatchReadout
 	{
