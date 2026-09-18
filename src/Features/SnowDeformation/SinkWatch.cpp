@@ -174,7 +174,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 10: own motion vectors)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 11: item trench floor)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -267,7 +267,6 @@ void SnowDeformation::SinkWatchUpdate()
 	const bool liftRequested = sinkWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
 	const bool autoMode = sinkWatchAuto;
 	const float manualLift = sinkWatchLift;
-	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const uint32_t frame = sinkWatchFrame;
 	// Inline, not an SKSE task: tasks ran on six worker threads here (log
 	// thread ids), racing the scene update. This is the main thread, after
@@ -374,8 +373,9 @@ void SnowDeformation::SinkWatchUpdate()
 				const float t = std::clamp((std::log(std::max(measure, 1e-4f)) - std::log(kSinkMeasureFloat)) /
 											   (std::log(kSinkMeasureFull) - std::log(kSinkMeasureFloat)),
 					0.0f, 1.0f);
-				// Josef 2026-09-18: nothing rests below the trench floor; the heaviest sits ON it.
-				sink = t * t * (3.0f - 2.0f * t) * (1.0f - trenchFloor);
+				// Josef 2026-09-18: items have their own trench floor (kItemTrenchFloor
+				// in SnowFields.hlsli); the heaviest sits ON it.
+				sink = t * t * (3.0f - 2.0f * t) * (1.0f - 0.10f);
 				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - bottomZ, 0.0f, kSinkMaxLift);
 				if (want < 0.5f)
 					want = 0.0f;
