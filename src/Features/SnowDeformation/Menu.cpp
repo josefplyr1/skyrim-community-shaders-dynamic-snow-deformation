@@ -2045,8 +2045,9 @@ void SnowDeformation::DrawSettings()
 		// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md), throwaway.
 		if (ImGui::TreeNodeEx("Stage 0: weight sink watch")) {
 			ImGui::Checkbox("Watch dropped items near me (CommunityShaders.log, lines tagged SW0)", &sinkWatch);
-			ImGui::SliderFloat("Test lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
-			if (ImGui::Button("PRESS to lift the nearest item that has stopped moving"))
+			ImGui::Checkbox("Lift every watched item by itself once it comes to rest (light = on top, heavy = at the bottom)", &sinkWatchAuto);
+			ImGui::SliderFloat("Button lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
+			if (ImGui::Button("PRESS to lift the nearest resting item by the slider amount instead"))
 				sinkWatchLiftRequest.store(true, std::memory_order_release);
 			SinkWatchReadout readout;
 			{
@@ -2058,13 +2059,13 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("nearest: %08X %s", readout.formID, readout.name.c_str());
 				WrapTextF("Havok mass %.3f | game weight %.3f | footprint %.1f sq units | mass per footprint %.5f",
 					readout.mass, readout.refWeight, readout.footprint, readout.footprint > 0.01f ? readout.mass / readout.footprint : 0.0f);
-				WrapTextF("physics: %s | frames inactive %u | speed %.2f | our own test: %s",
-					readout.islandActive < 0 ? "no island" : (readout.islandActive ? "ACTIVE" : "asleep"),
-					readout.inactive0, readout.speed, readout.still ? "STILL" : "MOVING");
-				WrapTextF("ref z %.2f | node local z %.2f | node world z %.2f", readout.refZ, readout.localZ, readout.worldZ);
+				WrapTextF("physics: %s | speed %.2f | snow here %.1f units deep",
+					readout.islandActive < 0 ? "no body" : (readout.islandActive ? "ACTIVE" : "asleep"), readout.speed, readout.snowDepth);
+				WrapTextF("physics node z %.2f | drawn mesh z %.2f (mesh above node %+.2f)", readout.rootZ, readout.meshZ, readout.meshZ - readout.rootZ);
 				if (readout.lifted)
-					WrapTextF("LIFTED: expected node local z %.2f, now off by %+.2f (0 = the lift is holding)",
-						readout.expectedLocalZ, readout.localZ - readout.expectedLocalZ);
+					WrapTextF("LIFTED by %.2f units", readout.appliedLift);
+				else
+					WrapTextF("not lifted");
 			} else {
 				WrapTextF("nearest: none - drop something on snow");
 			}
