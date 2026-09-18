@@ -381,6 +381,23 @@ static float RateScaleOf(const RE::Effect* a_effect)
 		kSpellMagnitudeMin, kSpellMagnitudeMax);
 }
 
+float SnowDeformation::SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes)
+{
+	float landZ = a_position.z;
+	if (a_tes)
+		a_tes->GetLandHeight(a_position, landZ);
+	if (a_position.z - landZ > kElevatedStampCutoff)
+		return 0.0f;
+	const float depth = std::max(GetNominalSnowDepthAt(a_position.x, a_position.y, 0.0f), 0.0f) * GetAccumulationDepthScale();
+	if (depth < 1.0f)
+		return 0.0f;
+	float surfaceZ = 0.0f;
+	if (!SampleShellSurface(a_position.x, a_position.y, surfaceZ))
+		surfaceZ = landZ + depth;
+	const float lift = surfaceZ - (1.0f - std::clamp(a_fraction, 0.0f, 1.0f)) * depth + a_clearance - a_position.z;
+	return lift >= 1.0f ? std::min(lift, kMaxLiftHeight) : 0.0f;
+}
+
 void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ)
 {
 	if (!a_ref || a_lift < 1.0f)
@@ -434,15 +451,10 @@ void SnowDeformation::ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoi
 	}
 
 	if (settings.LiftRunes && runeLifted.insert(formID).second) {
-		float landZ = position.z;
-		a_tes->GetLandHeight(position, landZ);
-		float surfaceZ = 0.0f;
-		if (position.z - landZ <= kElevatedStampCutoff && SampleShellSurface(position.x, position.y, surfaceZ)) {
-			const float lift = std::min(surfaceZ + kRuneClearance - position.z, kMaxLiftHeight);
-			if (lift >= 1.0f) {
-				LiftRefOntoSnow(a_projectile, lift, kRuneMinUpZ);
-				spellStats.lifted++;
-			}
+		const float lift = SnowLiftFor(position, 1.0f, kRuneClearance, a_tes);
+		if (lift > 0.0f) {
+			LiftRefOntoSnow(a_projectile, lift, kRuneMinUpZ);
+			spellStats.lifted++;
 		}
 	}
 }
@@ -498,9 +510,8 @@ void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
 		if (liftedRefs.size() > 512)
 			liftedRefs.clear();
 		liftedRefs.insert(a_ref->formID);
-		const float lift = std::min(GetNominalSnowDepthAt(position.x, position.y, 0.0f) * GetAccumulationDepthScale() * kLiftFraction,
-			kMaxLiftHeight);
-		if (lift >= 1.0f) {
+		const float lift = SnowLiftFor(position, kLiftFraction, 0.0f, tes);
+		if (lift > 0.0f) {
 			LiftRefOntoSnow(a_ref, lift);
 			spellStats.lifted++;
 		}

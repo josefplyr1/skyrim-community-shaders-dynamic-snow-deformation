@@ -3880,6 +3880,18 @@ protected:
 	 */
 	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ = -2.0f);
 
+	/**
+	 * @brief How far to raise something resting at a_position so it sits a_fraction of the way up the snow over it, plus a_clearance.
+	 *
+	 * The one place a lift is measured (BURIED-REF-LIFT-PLAN.md section 4):
+	 * frost pieces pass 0.5, rune effects 1 and a clearance, a dropped item
+	 * its weight's share. Live snow - the shell's own surface where its
+	 * window reaches, the class depth times accumulation elsewhere. 0 when
+	 * there is nothing to lift out of: no snow, already above it, or standing
+	 * off the terrain on a bridge or a roof.
+	 */
+	float SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes);
+
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
 
