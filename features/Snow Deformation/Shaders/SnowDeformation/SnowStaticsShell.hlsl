@@ -4303,7 +4303,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.pixelDeform = pixelDeform;
 	ssi.screenNoise = screenNoise;
 #	ifndef PATCH
-	ssi.selfShadowReject = edgeFlankLift > 0.0 ? max(max(RoundedDepth, ObjectsDepth), kMinSkinLift) + 8.0 : 0.0;
+	// Only where this draw still has a raised shell to ignore (roads). The
+	// drape has none: at class depth 0 the rejection dropped every contact
+	// shadow within 8 units of its caster.
+	const float raisedDepth = max(RoundedDepth, ObjectsDepth);
+	ssi.selfShadowReject = (edgeFlankLift > 0.0 && raisedDepth > kMinSkinLift) ? raisedDepth + 8.0 : 0.0;
 #	else
 	ssi.selfShadowReject = 0.0;
 #	endif
