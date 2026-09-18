@@ -1445,11 +1445,11 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(14, 1, &bermSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
-	// Rune glyph atlas (t32) and its tile table (b2). Unbound reads as no tiles.
+	// Rune glyph atlas (t90) and its tile table (b7). Unbound reads as no tiles.
 	ID3D11ShaderResourceView* runeSRV = GetRuneAtlasSRV();
-	context->PSSetShaderResources(32, 1, &runeSRV);
+	context->PSSetShaderResources(90, 1, &runeSRV);
 	ID3D11Buffer* runeBuffer = runeCB ? runeCB->CB() : nullptr;
-	context->PSSetConstantBuffers(2, 1, &runeBuffer);
+	context->PSSetConstantBuffers(7, 1, &runeBuffer);
 	// Each tile's own diffuse (t80-t83) and normal map (t84-t87).
 	ID3D11ShaderResourceView* runeTextures[2 * kRuneMaxTiles];
 	for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
@@ -1869,7 +1869,7 @@ void SnowDeformation::DrawShell()
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
-	context->PSSetShaderResources(32, 1, nullFinePS);
+	context->PSSetShaderResources(90, 1, nullFinePS);
 	ID3D11ShaderResourceView* nullRuneTextures[2 * kRuneMaxTiles] = {};
 	context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullRuneTextures);
 	context->PSSetShaderResources(13, 1, nullFinePS);

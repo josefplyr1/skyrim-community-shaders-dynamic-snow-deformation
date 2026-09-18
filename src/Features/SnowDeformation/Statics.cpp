@@ -3973,6 +3973,18 @@ void SnowDeformation::DrawCapturedStatics()
 		                                               heightSkinDepth->srv.get() :
 		                                               nullptr;
 		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
+		// Rune glyphs on the road's snow: the landscape shell's atlas (t90),
+		// tile table (b7) and per-tile textures (t80-t87).
+		ID3D11ShaderResourceView* patchRuneSRV = GetRuneAtlasSRV();
+		context->PSSetShaderResources(90, 1, &patchRuneSRV);
+		ID3D11Buffer* patchRuneCB = runeCB ? runeCB->CB() : nullptr;
+		context->PSSetConstantBuffers(7, 1, &patchRuneCB);
+		ID3D11ShaderResourceView* patchRuneTextures[2 * kRuneMaxTiles];
+		for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
+			patchRuneTextures[i] = runeTileDiffuse[i].get();
+			patchRuneTextures[kRuneMaxTiles + i] = runeTileNormal[i].get();
+		}
+		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, patchRuneTextures);
 
 		// ONE recipe with the shadow caster (FillPatchDrawCB): the caster must
 		// be the exact surface this draw renders.
@@ -4009,6 +4021,9 @@ void SnowDeformation::DrawCapturedStatics()
 
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->VSSetShaderResources(11, 2, nullHeightSRVs);
+		ID3D11ShaderResourceView* nullPatchRune[2 * kRuneMaxTiles] = {};
+		context->PSSetShaderResources(80, 2 * kRuneMaxTiles, nullPatchRune);
+		context->PSSetShaderResources(90, 1, nullPatchRune);
 		globals::profiler->EndPass();
 	}
 

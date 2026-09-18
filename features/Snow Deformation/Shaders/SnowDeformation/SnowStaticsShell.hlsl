@@ -399,6 +399,11 @@ SamplerState SnowSampler : register(s0);
 
 // Shared trench-detail shaping (noise, berm shape/bake tap, churn) - the
 // verbatim-identical pieces of both shells live in one file (M8).
+// The road patch paints rune glyphs as the landscape shell does; the skins
+// leave them to the decal overlay.
+#ifdef PATCH
+#	define SNOW_RUNE_GLYPHS
+#endif
 #include "SnowDeformation/SnowFields.hlsli"
 
 // Warped band grid, shared with the landscape shell.
@@ -2785,6 +2790,15 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		                     (bumpT * frost.normal.x + bumpB * frost.normal.y) * frostAmount * bumpFadeRaw);
 	}
 
+#ifdef SNOW_RUNE_GLYPHS
+	// A rune's glyph on the road's snow; the landscape shell's recipe.
+	RuneGlyph rune = SampleRunes(worldXY, ddx(worldXY), ddy(worldXY));
+	[branch] if (rune.colour.a > 0.004)
+	{
+		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
+		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
+	}
+#endif
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
 	// Snow material; same albedo path as the terrain shell.
@@ -2795,6 +2809,10 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		[flatten] if (SnowTextureIsLinear != 0.0)
 			kSnowAlbedo = Color::LinearToSrgb(kSnowAlbedo);
 	}
+#ifdef SNOW_RUNE_GLYPHS
+	[branch] if (rune.colour.a > 0.004)
+		kSnowAlbedo = lerp(kSnowAlbedo, rune.colour.rgb, rune.colour.a);
+#endif
 	// Spell marks on the albedo; the landscape recipes verbatim.
 	{
 		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
@@ -2836,6 +2854,14 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		snowRoughness = saturate(snowRoughness * lerp(1.0, lerp(1.35, 0.45, frost.crystal), frostAmount));
 		snowF0 = snowF0 * lerp(1.0, lerp(0.75, 1.7, frost.crystal), frostAmount);
 	}
+#ifdef SNOW_RUNE_GLYPHS
+	[branch] if (rune.colour.a > 0.004)
+	{
+		float runeGloss = rune.colour.a * rune.gloss;
+		snowRoughness = lerp(snowRoughness, 0.28, runeGloss);
+		snowF0 = lerp(snowF0, float3(0.06, 0.06, 0.06), runeGloss);
+	}
+#endif
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -3195,6 +3221,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse;
+#ifdef SNOW_RUNE_GLYPHS
+	preLit += rune.emission * Color::PBRLightingScale;
+#endif
 
 	// Debug view: decision data as flat colors. Patch: R = trample,
 	// G = skin depth (packed by FinishPatchVertex). Skins: teal, brightness
