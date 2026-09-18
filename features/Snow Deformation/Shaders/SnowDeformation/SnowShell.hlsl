@@ -398,7 +398,8 @@ RuneGlyph SampleRunes(float2 worldXY, float2 worldDx, float2 worldDy)
 				[branch] if (a > g.colour.a)
 				{
 					g.colour = float4(d.rgb, a);
-					g.emission = RuneTints[i].rgb * a * RuneParams.y;
+					// Lighting adds a material's emissive to the LIGHT, before the texture colour multiplies it: a dark rim glows dark.
+					g.emission = RuneTints[i].rgb * d.rgb * a * RuneParams.y;
 					float det = uvDx.x * uvDy.y - uvDy.x * uvDx.y;
 					[branch] if (RuneTints[i].w > 0.5 && abs(det) > 1e-12)
 					{
