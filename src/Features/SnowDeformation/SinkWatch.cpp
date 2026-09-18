@@ -131,17 +131,36 @@ namespace
 	// An awake body's root is updated by Havok every frame and carries the
 	// children with it. A sleeping one is not: push the locals down ourselves,
 	// and level previousWorld, or the motion vectors keep the jump for ever.
-	void PropagateChildren(RE::NiAVObject* a_root)
+	void CollectPreviousWorld(RE::NiAVObject* a_object, std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>>& a_out, int a_depth = 0)
+	{
+		if (!a_object || a_depth > 8)
+			return;
+		a_out.emplace_back(a_object, a_object->previousWorld);
+		if (auto* node = a_object->AsNode())
+			for (auto& child : node->GetChildren())
+				CollectPreviousWorld(child.get(), a_out, a_depth + 1);
+	}
+
+	// a_still: a sleeping item gets no further updates, so previousWorld is
+	// levelled. A moving one keeps the engine's, whatever Update() does to it.
+	void PropagateChildren(RE::NiAVObject* a_root, bool a_still)
 	{
 		auto* node = a_root ? a_root->AsNode() : nullptr;
 		if (!node)
 			return;
 		RE::NiUpdateData data{};
+		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> previous;
 		for (auto& child : node->GetChildren()) {
 			if (!child || child->collisionObject)
 				continue;
+			previous.clear();
+			if (!a_still)
+				CollectPreviousWorld(child.get(), previous);
 			child->Update(data);
-			SyncPreviousWorld(child.get());
+			if (a_still)
+				SyncPreviousWorld(child.get());
+			for (auto& [object, transform] : previous)
+				object->previousWorld = transform;
 		}
 		a_root->UpdateWorldBound();
 	}
@@ -162,16 +181,15 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 7)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 8: main thread)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
 		return;
 	sinkWatchFrame++;
 	auto* player = RE::PlayerCharacter::GetSingleton();
-	auto* taskInterface = SKSE::GetTaskInterface();
 	auto* tes = RE::TES::GetSingleton();
-	if (!player || !taskInterface || !tes)
+	if (!player || !tes)
 		return;
 	const RE::NiPoint3 origin = player->GetPosition();
 
@@ -253,7 +271,10 @@ void SnowDeformation::SinkWatchUpdate()
 	const float manualLift = sinkWatchLift;
 	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const uint32_t frame = sinkWatchFrame;
-	taskInterface->AddTask([this, picks, liftRequested, autoMode, manualLift, trenchFloor, frame]() {
+	// Inline, not an SKSE task: tasks ran on six worker threads here (log
+	// thread ids), racing the scene update. This is the main thread, after
+	// Havok wrote the nodes and before the draw.
+	{
 		std::scoped_lock lock(sinkWatchLock);
 		bool first = true;
 		for (const auto& pick : picks) {
@@ -370,7 +391,7 @@ void SnowDeformation::SinkWatchUpdate()
 				const bool was = state.offsetApplied;
 				const uint32_t shifted = ShiftChildren(body.root, delta);
 				if (shifted > 0) {
-					state.dirty = true;
+					PropagateChildren(body.root, asleep || body.bodies == 0);
 					state.childOffset = offset;
 					state.offsetApplied = want > 0.0f;
 					state.offsetRoot = body.root;
@@ -382,10 +403,6 @@ void SnowDeformation::SinkWatchUpdate()
 						state.offsetApplied ? "begins" : "ends", pick.formID, base ? base->GetName() : "", body.mass, sink,
 						pick.snowDepth, pick.surfaceZ, body.world.z, want, shifted);
 				}
-			}
-			if (state.dirty && (asleep || body.bodies == 0)) {
-				PropagateChildren(body.root);
-				state.dirty = false;
 			}
 			if (asleep && state.asleepFrames == 1)
 				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} underside {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
@@ -425,6 +442,6 @@ void SnowDeformation::SinkWatchUpdate()
 		}
 		if (sinkWatchStates.size() > 256)
 			sinkWatchStates.clear();
-	});
+	}
 }
 #endif
