@@ -40,10 +40,14 @@ namespace SnowLights
 	// raised snow. Room/portal culling is skipped: the shell only exists in
 	// exteriors. GetAttenuation self-selects inverse-square vs vanilla
 	// falloff per light flags, so ISL parity is automatic.
+	// gameShadowMask: the game's shadow mask at this pixel, one channel per
+	// shadow light, for a surface lying ON the geometry the mask was drawn
+	// for (the drape); x < 0 = none, sample the light's own map.
 	void AccumulatePointLights(
 		SnowMaterialCtx mtl,
 		float3 worldPos, float3 worldPosAbs, float3 normalWS, float3 V, float viewZ,
 		float2 clusterUV, float2 glintUV, float2 uvDDX, float2 uvDDY,
+		float4 gameShadowMask,
 		inout float3 diffuse, inout float3 specular)
 	{
 		uint clusterIndex = 0;
@@ -67,7 +71,12 @@ namespace SnowLights
 
 			float lightShadow = 1.0;
 			[branch] if (light.lightFlags & LightLimitFix::LightFlags::Shadow)
-				lightShadow = SnowShadow::GetPointLightShadow(worldPosAbs, light.shadowLightIndex, light.radius);
+			{
+				[branch] if (gameShadowMask.x >= 0.0)
+					lightShadow = gameShadowMask[min(light.shadowLightIndex, 3u)];
+				else
+					lightShadow = SnowShadow::GetPointLightShadow(worldPosAbs, light.shadowLightIndex, light.radius);
+			}
 
 			float3 L = normalize(lightDirection);
 			if (dot(normalWS, L) <= 0.0 || lightShadow <= 0.0)

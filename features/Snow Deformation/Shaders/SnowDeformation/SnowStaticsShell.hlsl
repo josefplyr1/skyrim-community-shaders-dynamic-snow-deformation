@@ -341,6 +341,10 @@ Texture2D<float4> ProjNoiseMap : register(t21);
 // encode this PS writes): the scene's per-pixel shaded normal under each
 // shell pixel, before any shell overwrote it. Skin PS only.
 Texture2D<float4> PreSkinNormals : register(t23);
+// The game's shadow mask (Lighting's t14): x = sun, one channel per shadow
+// light by mask index. Drawn for the scene's own geometry, so only the drape,
+// which lies on it, may read it.
+Texture2D<float4> GameShadowMask : register(t24);
 // Pre-shell MASKS copy (the terrain shell's LandMasksCopy): y carries the
 // landscape grain height in (0,1] and, on classified projected-snow statics,
 // the recolor's real blend weight as 2 + w. The coat and the edge lumps key
@@ -2517,6 +2521,10 @@ struct SkinShadeInput
 	// >0 on coat/lump pixels: cascade occluders nearer than this along the
 	// light are the raised shell's own rim over its object and are ignored.
 	float selfShadowReject;
+	// 1 = the drape: on its object's own surface, no lift. It takes the
+	// shadows the game drew for that surface (mask + screen-space shadows)
+	// instead of sampling maps from a position of its own.
+	float onObject;
 	// 1 = the full material. Toward 0 the parts invisible at range - the
 	// parallax marches, the berm relief, the horizon march - drop out. The
 	// skins pass 1; the volume draw fades it with distance.
@@ -2839,8 +2847,20 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// quantise into blocky patches on object snow while the ground beside it
 	// shows soft penumbra.
 	float farShadowT = smoothstep(6000.0, 15000.0, pixelDist);
+	float4 gameShadowMask = float4(-1.0, 0.0, 0.0, 0.0);
+	float2 gameMaskDim;
+	GameShadowMask.GetDimensions(gameMaskDim.x, gameMaskDim.y);
+	[branch] if (input.onObject > 0.5 && gameMaskDim.x > 0.5)
+		gameShadowMask = GameShadowMask.Load(int3(input.Position.xy, 0));
 	float sunShadow;
-	[branch] if (CrispShadows > 0.5)
+	[branch] if (gameShadowMask.x >= 0.0)
+	{
+		// No bias, no receiver offset: the mask has neither, so a shadow
+		// reaches its caster's foot from any sun angle as it does on the
+		// object underneath.
+		sunShadow = worldShadow * (ShadowSampling::HasDirectionalShadows() ? gameShadowMask.x : 1.0);
+	}
+	else [branch] if (CrispShadows > 0.5)
 	{
 		// Full-resolution comparison PCF; same path as the terrain shell.
 		// (the round-31 seamShadowLift receiver raise is REVERTED -
@@ -3072,12 +3092,16 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		// shallow skin and kill the mask outright rather than where a caster
 		// explains it.
 		sssBlend *= SnowShadow::GetSssHandoff(shellZ);
+		// The drape IS the surface the mask was marched for: all of it, at
+		// every range, as Lighting applies it.
+		[flatten] if (gameShadowMask.x >= 0.0)
+			sssBlend = SharedData::InInterior ? 0.0 : 1.0;
 		sunShadow *= lerp(1.0, ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0), sssBlend);
 	}
 
 	// Shell-surface re-march: the near-field counterpart to the mask above,
 	// same gate, same hand-off band, so the two never double.
-	[branch] if (CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
+	[branch] if (gameShadowMask.x < 0.0 && CompactLook.y > 0.5 && ScreenSpaceShadowsActive > 0.5 &&
 		SnowShadow::GetSssHandoff(input.CurrentClip.w) < 0.999 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01)
 	{
 		// Packed: integer part = mode (1 march, 2 march + thickness),
@@ -3144,7 +3168,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 screenUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
 		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
+			normalWS, V, viewZ, screenUV, glintUV, glintDuvdx, glintDuvdy, gameShadowMask, directDiffuse, directSpecular);
 	}
 
 	// No AO here: the routed lobes already carry it (see SnowShell.hlsl).
@@ -3458,6 +3482,7 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 	ssi.pixelDeform = 0.0;
 	ssi.screenNoise = noise;
 	ssi.selfShadowReject = 0.0;
+	ssi.onObject = 0.0;
 	ssi.geoNz = -1.0;
 	// Full material inside the detail distance, the range-invisible parts
 	// gone by one and a half times it.
@@ -4308,8 +4333,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// shadow within 8 units of its caster.
 	const float raisedDepth = max(RoundedDepth, ObjectsDepth);
 	ssi.selfShadowReject = (edgeFlankLift > 0.0 && raisedDepth > kMinSkinLift) ? raisedDepth + 8.0 : 0.0;
+	ssi.onObject = raisedDepth > kMinSkinLift ? 0.0 : 1.0;
 #	else
 	ssi.selfShadowReject = 0.0;
+	ssi.onObject = 0.0;
 #	endif
 	ssi.detail = 1.0;
 	ssi.pom = 1.0;

@@ -3339,6 +3339,11 @@ void SnowDeformation::DrawCapturedStatics()
 	// The pre-shell Masks copy: the recolor's real projected weight.
 	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
 	context->PSSetShaderResources(32, 1, &skinMasksSRV);
+	// The game's shadow mask: the drape lies on the geometry it was drawn
+	// for and takes its shadows from it (sun in x, local lights by mask
+	// index), as Lighting does at t14.
+	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
+	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
 
 	// Depth prepass for the skins. Unlike the shell's, the private test
 	// depth is written BY the prepass draws themselves rather than through a
@@ -3866,6 +3871,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->HSSetShaderResources(13, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(25, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(25, 1, &nullSmoothSRV);

@@ -2996,7 +2996,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float4 clip = mul(CameraViewProj, float4(input.WorldPos, 1.0));
 		float2 clusterUV = clip.xy / max(clip.w, 1e-4) * float2(0.5, -0.5) + 0.5;
 		SnowLights::AccumulatePointLights(snowMtl, input.WorldPos, input.WorldPos + ShellCameraPosAdjust.xyz,
-			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, directDiffuse, directSpecular);
+			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), directDiffuse, directSpecular);
 	}
 
 	// No AO here: the routed GetIndirectLobeWeights already folds snowAO into
