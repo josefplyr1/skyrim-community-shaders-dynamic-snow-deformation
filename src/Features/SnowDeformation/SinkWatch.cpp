@@ -33,6 +33,7 @@ namespace
 		bool hasGeometry = false;
 		float geometryZ = 0.0f;
 		float geometryPreviousZ = 0.0f;
+		float radius = 0.0f;
 	};
 
 	RE::BSGeometry* FirstGeometry(RE::NiAVObject* a_object, int a_depth = 0)
@@ -56,6 +57,7 @@ namespace
 		if (!out.root)
 			return out;
 		out.world = out.root->world.translate;
+		out.radius = out.root->worldBound.radius;
 		const auto& rotate = out.root->world.rotate;
 		const float scale = std::max(out.root->world.scale, 1e-3f);
 		out.up = { rotate.entry[2][0] / scale, rotate.entry[2][1] / scale, rotate.entry[2][2] / scale };
@@ -146,7 +148,7 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 4)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 5)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
@@ -209,8 +211,9 @@ void SnowDeformation::SinkWatchUpdate()
 	const bool liftRequested = sinkWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
 	const bool autoMode = sinkWatchAuto;
 	const float manualLift = sinkWatchLift;
+	const float trenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	const uint32_t frame = sinkWatchFrame;
-	taskInterface->AddTask([this, picks, liftRequested, autoMode, manualLift, frame]() {
+	taskInterface->AddTask([this, picks, liftRequested, autoMode, manualLift, trenchFloor, frame]() {
 		std::scoped_lock lock(sinkWatchLock);
 		bool first = true;
 		for (const auto& pick : picks) {
@@ -236,15 +239,27 @@ void SnowDeformation::SinkWatchUpdate()
 			float footprint = 0.0f;
 			float height = 0.0f;
 			float measure = body.mass / 50.0f;
+			// The item's lowest point, from its authored box through the body's
+			// rotation: origins sit anywhere (clothes: on the underside).
+			float bottomZ = body.world.z;
 			if (auto* bound = base ? base->As<RE::TESBoundObject>() : nullptr) {
 				const float s = ref->GetScale();
-				const float ex = float(bound->boundData.boundMax.x - bound->boundData.boundMin.x) * s;
-				const float ey = float(bound->boundData.boundMax.y - bound->boundData.boundMin.y) * s;
-				const float ez = float(bound->boundData.boundMax.z - bound->boundData.boundMin.z) * s;
+				float ex = float(bound->boundData.boundMax.x - bound->boundData.boundMin.x) * s;
+				float ey = float(bound->boundData.boundMax.y - bound->boundData.boundMin.y) * s;
+				float ez = float(bound->boundData.boundMax.z - bound->boundData.boundMin.z) * s;
+				RE::NiPoint3 centre{ float(bound->boundData.boundMax.x + bound->boundData.boundMin.x) * 0.5f * s,
+					float(bound->boundData.boundMax.y + bound->boundData.boundMin.y) * 0.5f * s,
+					float(bound->boundData.boundMax.z + bound->boundData.boundMin.z) * 0.5f * s };
+				// No authored box (mod-added forms): a cube inside the 3D's bound sphere.
+				if (ex + ey + ez < 1.0f) {
+					ex = ey = ez = body.radius * 1.1547f;
+					centre = {};
+				}
 				const float scale = std::max(body.root->world.scale, 1e-3f);
 				const float ux = std::abs(body.up.x * scale), uy = std::abs(body.up.y * scale), uz = std::abs(body.up.z * scale);
 				footprint = ey * ez * ux + ex * ez * uy + ex * ey * uz;
 				height = ex * ux + ey * uy + ez * uz;
+				bottomZ = body.world.z + (body.up.x * centre.x + body.up.y * centre.y + body.up.z * centre.z) * scale - height * 0.5f;
 				const float cx = std::max(ex, 1.0f), cy = std::max(ey, 1.0f), cz = std::max(ez, 1.0f);
 				const float cappedMass = std::min(body.mass, kSinkBoxDensityCap * cx * cy * cz);
 				const float face = std::max({ cx * cy, cy * cz, cx * cz });
@@ -278,8 +293,9 @@ void SnowDeformation::SinkWatchUpdate()
 				const float t = std::clamp((std::log(std::max(measure, 1e-4f)) - std::log(kSinkMeasureFloat)) /
 											   (std::log(kSinkMeasureFull) - std::log(kSinkMeasureFloat)),
 					0.0f, 1.0f);
-				sink = t * t * (3.0f - 2.0f * t);
-				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - body.world.z, 0.0f, kSinkMaxLift);
+				// Josef 2026-09-18: nothing rests below the trench floor; the heaviest sits ON it.
+				sink = t * t * (3.0f - 2.0f * t) * (1.0f - trenchFloor);
+				want = std::clamp(pick.surfaceZ - sink * pick.snowDepth - bottomZ, 0.0f, kSinkMaxLift);
 				if (want < 0.5f)
 					want = 0.0f;
 			}
@@ -310,9 +326,9 @@ void SnowDeformation::SinkWatchUpdate()
 				state.dirty = false;
 			}
 			if (asleep && state.asleepFrames == 1)
-				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} mesh held +{:.2f} = {:.1f} below the surface",
-					pick.formID, base ? base->GetName() : "", measure, sink, pick.snowDepth, body.world.z, state.appliedLift,
-					pick.surfaceZ - body.world.z - state.appliedLift);
+				logger::info("[SNOW DEFORMATION] SW0 REST {:08X} '{}' measure {:.4f} sink {:.2f} snow {:.1f} | body z {:.2f} box bottom {:+.2f} from it | mesh held +{:.2f} = underside {:.1f} below the surface",
+					pick.formID, base ? base->GetName() : "", measure, sink, pick.snowDepth, body.world.z, bottomZ - body.world.z, state.appliedLift,
+					pick.surfaceZ - bottomZ - state.appliedLift);
 
 			const bool flipped = state.frames == 0 || body.islandActive != state.islandActive;
 			if (flipped)

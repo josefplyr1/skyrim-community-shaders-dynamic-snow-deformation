@@ -2062,7 +2062,7 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("physics: %s | speed %.2f | snow here %.1f units deep",
 					readout.islandActive < 0 ? "no body" : (readout.islandActive ? "ACTIVE" : "asleep"), readout.speed, readout.snowDepth);
 				WrapTextF("physics node z %.2f | drawn mesh z %.2f (mesh above node %+.2f)", readout.rootZ, readout.meshZ, readout.meshZ - readout.rootZ);
-				WrapTextF("sink measure %.4f (0.1 rests on top, 0.8 goes to the bottom) -> sinks %.0f %% of the depth", readout.measure, readout.sink * 100.0f);
+				WrapTextF("sink measure %.4f (0.1 rests on top, 0.8 rests on the Trench Floor) -> underside %.0f %% of the depth down", readout.measure, readout.sink * 100.0f);
 				if (readout.lifted)
 					WrapTextF("LIFTED by %.2f units", readout.appliedLift);
 				else
