@@ -1674,7 +1674,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					skinned = true;
 					return RE::BSVisit::BSVisitControl::kStop;
 				});
-				(skinned ? contactActors : contactProps).push_back({ a_ref->CreateRefHandle(), bound.center.x - bound.radius, bound.center.y - bound.radius, bound.center.x + bound.radius, bound.center.y + bound.radius, false, groundZ, std::max(GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f), true });
+				(skinned ? contactActors : contactProps).push_back({ a_ref->CreateRefHandle(), bound.center.x - bound.radius, bound.center.y - bound.radius, bound.center.x + bound.radius, bound.center.y + bound.radius, false, groundZ, std::max(GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f) });
 				stampStats.propsRasterized++;
 				return;
 			}

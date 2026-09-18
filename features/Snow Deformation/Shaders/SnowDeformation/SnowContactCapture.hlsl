@@ -120,14 +120,8 @@ VS_OUTPUT main(VS_INPUT input)
 #endif
 
 #ifdef PSHADER
-// x = lowest surface of everything drawn; y = of dropped items alone (ITEM),
-// the far value from everything else so the MIN blend leaves it untouched.
-float2 main(VS_OUTPUT input) : SV_Target
+float main(VS_OUTPUT input) : SV_Target
 {
-#	ifdef ITEM
-	return input.WorldZ.xx;
-#	else
-	return float2(input.WorldZ, 1.0e30);
-#	endif
+	return input.WorldZ;
 }
 #endif

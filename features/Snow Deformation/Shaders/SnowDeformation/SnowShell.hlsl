@@ -657,29 +657,6 @@ float SampleDisplacedFast(float2 gridLocal)
 // SampleMelted / SampleScorch / SampleCrust live in SnowFields.hlsli
 //: both shells read the surface-state channels identically.
 
-// The carve above 1: a dropped item's reach past the actors' trench floor
-// (TrenchFloorDepth). Its own tap - every other read is clamped to 1 for
-// consumers that use it as a weight.
-float SampleItemOverdrive(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	// No early return: this is called inside [branch]es (X4000).
-	float inside = (any(uv < 0.0) || any(uv > 1.0)) ? 0.0 : 1.0;
-	uv = saturate(uv);
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
-	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
-	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
-	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
-	return inside * saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y) - 1.0);
-}
-
 // Single-bilinear deformation tap: for many-tap averages (BermField) where
 // the sum provides the smoothness and bicubic per tap would be waste.
 float SampleDeformationFast(float2 gridLocal)
@@ -1351,10 +1328,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// blurred field also lifted the trench floor and walls - a narrow
 			// trail's disc average is well above zero at its own centre, so
 			// raising Berm Height raised the whole trench with it.
-			float itemOver = 0.0;
-			[branch] if (deformation > 0.999)
-				itemOver = SampleItemOverdrive(gridLocal);
-			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal, itemOver) +
+			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal) +
 			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved);
 			depth += BowWaveHeight(GridOrigin + gridLocal, gridLocal, deformation, uncarved);
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
@@ -2375,10 +2349,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// override, and is the one voice allowed to overrule it.
 	[branch] if (HasSnowHeight > 0.5 && contestFade > 0.001 && pixelCarve > 0.75 && coverageAlpha > 0.001)
 	{
-		float floorOver = 0.0;
-		[branch] if (pixelCarve > 0.999)
-			floorOver = SampleItemOverdrive(gridLocal);
-		float floorEff = TrenchFloorDepth(pixelEffDepth, floorOver);
+		float floorEff = min(pixelEffDepth, pixelEffDepth * saturate(BorderStyle.y));
 		float remaining = max(pixelEffDepth * (1.0 - pixelCarve), floorEff);
 		[branch] if (remaining < 4.0)
 		{
@@ -2442,14 +2413,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// scales by it, so a print in a melt basin shades as flat as it is built.
 	float pixelDepth = lerp(pixelRampDepth, min(pixelRampDepth, kFireMeltFloor), pixelMelt);
 	pixelDepth = max(TouchDownToe(pixelDepth), 0.0);
-	// Item trenches: the four taps take the floor the geometry took.
-	float4 tapOver = 0.0;
-	[branch] if (max(max(dXP, dXN), max(dYP, dYN)) > 0.999)
-		tapOver = float4(SampleItemOverdrive(gridLocal + float2(step, 0.0)), SampleItemOverdrive(gridLocal - float2(step, 0.0)),
-			SampleItemOverdrive(gridLocal + float2(0.0, step)), SampleItemOverdrive(gridLocal - float2(0.0, step)));
 	float2 profileGrad = float2(
-		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0), tapOver.x) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0), tapOver.y),
-		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step), tapOver.z) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step), tapOver.w)) / (2.0 * step);
+		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
 	// Berm shading: numerical gradient of the SAME blurred hill the
 	// geometry displaces by, so the light/shadow break sits on the hill's
 	// true flanks (the analytic shortcut put the terminator on the crest).

@@ -1099,7 +1099,6 @@ void SnowDeformation::Prepass()
 	}
 	perFrameData.ViewCenter = contactCenter;
 	perFrameData.ViewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-	perFrameData.TrenchFloor = std::clamp(settings.TrenchFloorFraction, 0.0f, 1.0f);
 	contactViewBoundRadius = 0.0f;
 	if (debugContactView) {
 		if (auto* player = RE::PlayerCharacter::GetSingleton()) {

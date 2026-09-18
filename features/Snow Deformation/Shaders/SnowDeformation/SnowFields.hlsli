@@ -393,21 +393,7 @@ float2 UndulationGradSampled(float2 worldXY)
 // one function, every consumer agrees. Teeth first, then the depth remap,
 // then the lip on the notched value so the teeth break the lip into blocks
 // (RDR2 O1: "irregular teeth and broken blocks" at the rim).
-// Dropped items rest below the actors' trench floor: where an item reaches
-// past it, StampCS stores 1 + reach, and the part above 1 (itemOverdrive,
-// each shell's SampleItemOverdrive) lowers the floor to what the item left.
-// Never under kItemTrenchFloor of the layer nor 2 units, so a thin road layer
-// keeps its mesh covered. 0 = an actor's trench, unchanged.
-static const float kItemTrenchFloor = 0.10;
-float TrenchFloorDepth(float uncarvedDepth, float itemOverdrive)
-{
-	float floorDepth = min(uncarvedDepth, uncarvedDepth * saturate(BorderStyle.y));
-	[flatten] if (itemOverdrive > 0.0)
-		floorDepth = min(floorDepth, max(uncarvedDepth * max(1.0 - itemOverdrive, kItemTrenchFloor), min(uncarvedDepth, 2.0)));
-	return floorDepth;
-}
-
-float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY, float itemOverdrive = 0.0)
+float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = saturate(deformation);
@@ -428,7 +414,7 @@ float CarveProfile(float deformation, float uncarvedDepth, float2 worldXY, float
 
 	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
 	d = lerp(soft, d, depthT);
-	float floorDepth = TrenchFloorDepth(uncarvedDepth, itemOverdrive);
+	float floorDepth = min(uncarvedDepth, uncarvedDepth * saturate(BorderStyle.y));
 	float profile = max(uncarvedDepth * (1.0 - d), floorDepth);
 
 	// P5 lip: the rim rolls UP before it drops - a small cornice bulge on

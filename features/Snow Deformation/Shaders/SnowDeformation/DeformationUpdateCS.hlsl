@@ -266,9 +266,7 @@ cbuffer PerFrame : register(b0)
 	float2 ViewCenter;
 	// Debug view crop half-extent, world units.
 	float ViewHalf;
-	// The Trench Floor setting (took the ViewPad slot, layout unchanged): an
-	// item's reach past 1 - TrenchFloor is stored above 1.
-	float TrenchFloor;
+	float ViewPad;
 	// Object height window the road raster (t9) was captured in.
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
@@ -312,8 +310,7 @@ StructuredBuffer<uint> TileListIn : register(t5);
 // render meshes, MIN-blended; CONTACT_NONE where nothing was drawn. The
 // terrain window gives the ground and the layer depth the contact is
 // measured into. Stamp pass only.
-// x = everything, y = dropped items alone (SnowContactCapture.hlsl).
-Texture2D<float2> ContactHeight : register(t7);
+Texture2D<float> ContactHeight : register(t7);
 Texture2D<float4> TerrainWindow : register(t8);
 // Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
 // y = highest road top in the column, kNoRoadTop where no road drew.
@@ -870,7 +867,6 @@ bool StampTexel(uint2 phys)
 	// permanent and a hotter source reaches the same bowl sooner instead of
 	// digging a deeper one.
 	float carve = deformation;
-	float itemCarve = 0.0;
 	float meltTarget = 0.0;
 	float meltRate = 0.0;
 	float scorch = max(-melted, 0.0);
@@ -1069,19 +1065,10 @@ bool StampTexel(uint2 phys)
 		{
 			int dim = (int)ContactDim;
 			int2 ct = int2((rel.x * 0.5 + 0.5) * ContactDim, (0.5 - rel.y * 0.5) * ContactDim);
-			float2 contactBoth = CONTACT_NONE;
+			float contact = CONTACT_NONE;
 			[unroll] for (int oy = -1; oy <= 1; oy++)
 				[unroll] for (int ox = -1; ox <= 1; ox++)
-					contactBoth = min(contactBoth, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
-			float contact = contactBoth.x;
-			// A dropped item rests below the actors' trench floor: the reach past
-			// it is stored as 1 + reach (SnowFields.hlsli, TrenchFloorDepth).
-			[branch] if (contactBoth.y < CONTACT_NONE * 0.5)
-			{
-				float reach = saturate(1.0 - ContactAbove(worldPos, contactBoth.y));
-				[flatten] if (reach > 1.0 - saturate(TrenchFloor))
-					itemCarve = 1.0 + reach;
-			}
+					contact = min(contact, ContactHeight.Load(int3(clamp(ct + int2(ox, oy), 0, dim - 1), 0)));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
 				float printed = saturate(1.0 - ContactAbove(worldPos, contact));
@@ -1096,8 +1083,7 @@ bool StampTexel(uint2 phys)
 	float total = carve;
 	[flatten] if (meltTarget > total)
 		total = min(total + meltRate * DeltaTime, meltTarget);
-	// An item trench already in the map keeps its value above 1.
-	total = max(min(total, max(1.0, deformation)), itemCarve);
+	total = min(total, 1.0);
 
 	// Melt-origin depth is recorded positive so the berm field can subtract it;
 	// scorch is recorded negative so it keeps its berm and can darken the
@@ -1286,7 +1272,7 @@ bool StampTexel(uint2 phys)
 		[branch] if (all(abs(crel) < 1.0))
 		{
 			int2 ct = int2((crel.x * 0.5 + 0.5) * ContactDim, (0.5 - crel.y * 0.5) * ContactDim);
-			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0)).x;
+			const float contact = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
 				float above = ContactAbove(worldPos, contact);
