@@ -3905,7 +3905,7 @@ protected:
 	static constexpr float kItemSinkRadius = 3000.0f;
 	static constexpr size_t kItemSinkMax = 32;
 	static constexpr uint32_t kItemSinkRecord = 'SNIS';
-	static constexpr uint32_t kItemSinkRecordVersion = 1;
+	static constexpr uint32_t kItemSinkRecordVersion = 2;
 	struct ItemSinkCandidate
 	{
 		RE::ObjectRefHandle handle;
@@ -3929,17 +3929,25 @@ protected:
 		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
 		uint32_t lastWorldFrame = 0;
 		uint32_t restPasses = 0;
-		/** @brief The underside's absolute height where the item settled, and where that was. Snow buries: it only ever falls. */
+		/** @brief The snow the item settled in (surface height, depth, share dug away around it) and where that was. Snow buries: replaced only by a snow state that puts the item lower. */
 		bool restValid = false;
-		float restZ = 0.0f;
+		float restSurface = 0.0f;
+		float restDepth = 0.0f;
+		float restCarve = 0.0f;
 		RE::NiPoint3 restPos;
+		/** @brief Trench store read on a ring around the item, refreshed every 8th frame. */
+		float carveAround = 0.0f;
+		/** @brief Under where today's snow would put it: it stops printing, or its own trench would keep the snow off it. */
+		bool buried = false;
 	};
 	struct ItemSinkRecord
 	{
 		uint32_t baseID = 0;
 		float x = 0.0f;
 		float y = 0.0f;
-		float restZ = 0.0f;
+		float surface = 0.0f;
+		float depth = 0.0f;
+		float carve = 0.0f;
 	};
 	uint32_t itemSinkFrame = 0;
 	/** @brief Main thread only, by ref handle: dropped items are temporary references and their form IDs are recycled. */
@@ -3955,7 +3963,10 @@ protected:
 	std::atomic<bool> itemSinkReadoutWanted{ false };
 	std::atomic<uint32_t> itemSinkHeld{ 0 };
 	std::atomic<uint32_t> itemSinkWatched{ 0 };
+	uint32_t itemSinkClaimsLogged = 0;
 	void ItemSinkNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
+	/** @brief A held item at rest keeps printing its trench (the refill would close it), unless the snow has buried it. */
+	bool ItemSinkWantsPrint(RE::TESObjectREFR* a_ref);
 	void SaveItemSink(const SKSE::SerializationInterface* a_intfc);
 	void LoadItemSink(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 	void RegisterItemSinkCoSave();

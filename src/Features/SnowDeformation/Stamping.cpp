@@ -1633,8 +1633,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (scanning)
 				propScanMovers[phase].push_back(a_ref->CreateRefHandle());
 		}
-		if (!propMoved)
-			return;  // at rest: the refill buries it
+		// At rest the refill buries a prop - except an item the snow is holding
+		// up, whose trench is what shows it.
+		if (!propMoved && !ItemSinkWantsPrint(a_ref))
+			return;
 		if (stampCount >= actorCeiling)
 			return;  // keep collecting anchors
 

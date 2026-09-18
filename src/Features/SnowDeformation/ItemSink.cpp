@@ -22,6 +22,10 @@ namespace
 	/** A saved rest height is taken only by an item this close to where it was saved. */
 	constexpr float kRecordMatch = 8.0f;
 	constexpr size_t kMaxRecords = 4096;
+	/** Melee weapons are authored anywhere from 9 to 35 for the same blade (steel vs iron greatsword); this much per unit of length at least. */
+	constexpr float kWeaponMassPerLength = 0.3f;
+	/** An item this far under where today's snow would put it is buried, and stops printing its trench. */
+	constexpr float kBuriedMargin = 2.0f;
 
 	struct BodyRead
 	{
@@ -164,6 +168,16 @@ void SnowDeformation::ItemSinkNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3&
 	candidate.seenFrame = itemSinkFrame;
 }
 
+bool SnowDeformation::ItemSinkWantsPrint(RE::TESObjectREFR* a_ref)
+{
+	if (!settings.ItemSink || itemSinkHeld.load(std::memory_order_relaxed) == 0)
+		return false;
+	const uint32_t key = a_ref->CreateRefHandle().native_handle();
+	std::scoped_lock lock(itemSinkLock);
+	auto found = itemSinkStates.find(key);
+	return found != itemSinkStates.end() && found->second.offsetApplied && !found->second.buried;
+}
+
 void SnowDeformation::ItemSinkUpdate()
 {
 	// Switched off: keep running until every offset this pass can reach is undone.
@@ -236,6 +250,7 @@ void SnowDeformation::ItemSinkUpdate()
 		// EXTENTS (its centre is worn-space on armour and is never used).
 		float thickness = body.radius * 1.1547f;
 		float side = thickness;
+		float longest = thickness;
 		if (auto* bound = base->As<RE::TESBoundObject>()) {
 			const float s = ref->GetScale();
 			const float ex = std::max(float(bound->boundData.boundMax.x - bound->boundData.boundMin.x) * s, 1.0f);
@@ -244,15 +259,19 @@ void SnowDeformation::ItemSinkUpdate()
 			if (ex + ey + ez > 3.5f) {
 				thickness = std::min({ ex, ey, ez });
 				side = std::sqrt(std::max({ ex * ey, ey * ez, ex * ez }));
+				longest = std::max({ ex, ey, ez });
 			}
 		}
 		thickness = std::max(thickness, 1.0f);
 		side = std::max(side, 1.0f);
-		const float cappedMass = std::min(body.mass, kBoxDensityCap * side * side * thickness);
+		float mass = body.mass;
+		if (auto* weapon = base->As<RE::TESObjectWEAP>(); weapon && !weapon->IsBow() && !weapon->IsCrossbow() && !weapon->IsStaff())
+			mass = std::max(mass, kWeaponMassPerLength * longest);
+		const float cappedMass = std::min(mass, kBoxDensityCap * side * side * thickness);
 		const float measure = cappedMass / side;
 		const float roundness = std::clamp(thickness / side, 0.0f, 1.0f);
 		if (itemSinkFormsLogged.size() < 64 && itemSinkFormsLogged.insert(base->GetFormID()).second)
-			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' mass {:.1f} (capped {:.3f}) side {:.1f} thickness {:.1f} -> measure {:.4f}, roundness {:.2f}",
+			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' mass {:.1f} (used {:.3f}) side {:.1f} thickness {:.1f} -> measure {:.4f}, roundness {:.2f}",
 				base->GetFormID(), base->GetName(), body.mass, cappedMass, side, thickness, measure, roundness);
 
 		// Underside: the collision's, never under the land, eased - the loose
@@ -288,33 +307,72 @@ void SnowDeformation::ItemSinkUpdate()
 		const float sink = weight * (1.0f - trenchFloor);
 		const float lying = state.lyingHeight > 0.0f ? std::min(thickness, state.lyingHeight) : thickness;
 		const float embed = weight * weight * embedShare * lying * Smooth((roundness - roundFloor) / (roundFull - roundFloor));
-		float target = surfaceZ - sink * snowDepth - embed;
 
-		// Snow buries: the height an item settled at is absolute. Rising snow
-		// closes over it, falling snow takes it down and it stays down.
+		// Snow already dug away around the item (the player's trenches, a
+		// trampled yard): it rests on what is left, not on the snow that was.
+		// A ring outside its own print, or its own trench would pull it down.
+		if (((frame + pick.key) & 7) == 0 || fresh) {
+			const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
+			const float ring = side * 0.75f + 14.0f;
+			float carved = 0.0f;
+			std::scoped_lock storeLock(trenchStoreMutex);
+			for (int i = 0; i < 8; ++i) {
+				const float angle = 0.785398f * i;
+				carved += SampleTrenchStore(worldspace, body.world.x + std::cos(angle) * ring, body.world.y + std::sin(angle) * ring);
+			}
+			state.carveAround = std::clamp(carved * 0.125f, 0.0f, 1.0f);
+		}
+		const float carveAround = std::min(state.carveAround, 1.0f - trenchFloor);
+		// The height a snow state puts this item at, under the CURRENT settings.
+		auto heightIn = [&](float a_surface, float a_depth, float a_carve) { return a_surface - std::max(sink, a_carve) * a_depth - embed; };
+		const float today = heightIn(surfaceZ, snowDepth, carveAround);
+
+		// Snow buries: what is kept is the snow the item settled in. Rising
+		// snow closes over it; falling or dug snow takes it down, and it stays
+		// down. Kept as the snow rather than a height so the settings stay live.
 		if (state.restValid && body.world.GetSquaredDistance(state.restPos) > kRestMove * kRestMove)
 			state.restValid = false;
 		if (fresh && !state.restValid) {
 			if (auto found = itemSinkLoaded.find(state.formID); found != itemSinkLoaded.end()) {
 				const auto& record = found->second;
-				if (record.baseID == state.baseID && std::abs(record.x - body.world.x) < kRecordMatch && std::abs(record.y - body.world.y) < kRecordMatch) {
+				const bool claimed = record.baseID == state.baseID && std::abs(record.x - body.world.x) < kRecordMatch && std::abs(record.y - body.world.y) < kRecordMatch;
+				if (claimed) {
 					state.restValid = true;
-					state.restZ = record.restZ;
+					state.restSurface = record.surface;
+					state.restDepth = record.depth;
+					state.restCarve = record.carve;
 					state.restPos = body.world;
+				}
+				if (itemSinkClaimsLogged < 64) {
+					itemSinkClaimsLogged++;
+					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {} its saved rest (snow then {:.1f} deep at z {:.1f}, carved {:.2f}; today {:.1f} deep at z {:.1f}, carved {:.2f}; moved {:.1f}, {:.1f})",
+						state.formID, base->GetName(), claimed ? "claims" : "REFUSES", record.depth, record.surface, record.carve, snowDepth, surfaceZ, carveAround,
+						body.world.x - record.x, body.world.y - record.y);
 				}
 				itemSinkLoaded.erase(found);
 			}
 		}
+		// No snow data (a load's first frames, a cell edge) says nothing about
+		// where the snow is; only real readings move the rest.
+		const bool snowKnown = snowDepth >= 1.0f;
+		float target = today;
 		if (state.restValid) {
-			state.restZ = std::min(state.restZ, target);
-			target = state.restZ;
-		} else if (body.asleep) {
+			if (snowKnown && today < heightIn(state.restSurface, state.restDepth, state.restCarve)) {
+				state.restSurface = surfaceZ;
+				state.restDepth = snowDepth;
+				state.restCarve = carveAround;
+			}
+			target = heightIn(state.restSurface, state.restDepth, state.restCarve);
+		} else if (body.asleep && snowKnown) {
 			state.restValid = true;
-			state.restZ = target;
+			state.restSurface = surfaceZ;
+			state.restDepth = snowDepth;
+			state.restCarve = carveAround;
 			state.restPos = body.world;
 		}
+		state.buried = snowKnown && today - target > kBuriedMargin;
 
-		float want = enabled && snowDepth >= 1.0f ? std::clamp(target - bottomZ, 0.0f, kMaxLift) : 0.0f;
+		float want = enabled && snowKnown ? std::clamp(target - bottomZ, 0.0f, kMaxLift) : 0.0f;
 		if (want < 0.5f)
 			want = 0.0f;
 
@@ -347,7 +405,9 @@ void SnowDeformation::ItemSinkUpdate()
 										  "snow {:.1f} deep | sinks {:.0f} % of it + {:.1f} into the floor | held +{:.1f} | rest height {}",
 				state.formID, base->GetName(), body.asleep ? "asleep" : "MOVING", body.mass, measure, roundness, thickness, lying,
 				snowDepth, sink * 100.0f, embed, state.appliedLift,
-				state.restValid ? std::format("{:.1f} ({:.1f} under today's snow)", state.restZ, surfaceZ - state.restZ) : std::string("not settled"));
+				state.restValid ? std::format("z {:.1f}, {:.1f} under where today's snow would put it{} | snow dug away around it {:.0f} %",
+									  target, today - target, state.buried ? " (BURIED, no trench)" : "", carveAround * 100.0f) :
+								  std::string("not settled"));
 		}
 	}
 	if (first && wantReadout)
@@ -367,18 +427,18 @@ void SnowDeformation::SaveItemSink(const SKSE::SerializationInterface* a_intfc)
 	struct Row
 	{
 		uint32_t formID, baseID;
-		float x, y, restZ;
+		float x, y, surface, depth, carve;
 	};
 	std::vector<Row> rows;
 	{
 		std::scoped_lock lock(itemSinkLock);
 		for (const auto& [key, state] : itemSinkStates)
 			if (state.restValid && state.formID && rows.size() < kMaxRecords)
-				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restZ });
+				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restSurface, state.restDepth, state.restCarve });
 		// Settled items this session never came near keep their records.
 		for (const auto& [formID, record] : itemSinkLoaded)
 			if (rows.size() < kMaxRecords)
-				rows.push_back({ formID, record.baseID, record.x, record.y, record.restZ });
+				rows.push_back({ formID, record.baseID, record.x, record.y, record.surface, record.depth, record.carve });
 	}
 	if (rows.empty() || !a_intfc->OpenRecord(kItemSinkRecord, kItemSinkRecordVersion))
 		return;
@@ -396,14 +456,14 @@ void SnowDeformation::LoadItemSink(const SKSE::SerializationInterface* a_intfc, 
 	}
 	uint32_t count = 0;
 	if (a_length < sizeof(count) || a_intfc->ReadRecordData(&count, sizeof(count)) != sizeof(count) ||
-		count > kMaxRecords || a_length != sizeof(count) + count * 20u) {
+		count > kMaxRecords || a_length != sizeof(count) + count * 28u) {
 		logger::warn("[SNOW DEFORMATION] item sink co-save is {} bytes for {} rows; dropped", a_length, count);
 		return;
 	}
 	std::unordered_map<uint32_t, ItemSinkRecord> restored;
 	for (uint32_t i = 0; i < count; ++i) {
 		uint32_t ids[2];
-		float values[3];
+		float values[5];
 		if (a_intfc->ReadRecordData(ids, sizeof(ids)) != sizeof(ids) || a_intfc->ReadRecordData(values, sizeof(values)) != sizeof(values)) {
 			logger::warn("[SNOW DEFORMATION] item sink co-save short read at row {}; the rest dropped", i);
 			break;
@@ -413,9 +473,9 @@ void SnowDeformation::LoadItemSink(const SKSE::SerializationInterface* a_intfc, 
 		RE::FormID formID = 0, baseID = 0;
 		if (!a_intfc->ResolveFormID(ids[0], formID) || !a_intfc->ResolveFormID(ids[1], baseID))
 			continue;
-		if (!std::isfinite(values[0]) || !std::isfinite(values[1]) || !std::isfinite(values[2]))
+		if (!std::isfinite(values[0]) || !std::isfinite(values[1]) || !std::isfinite(values[2]) || !std::isfinite(values[3]) || !std::isfinite(values[4]))
 			continue;
-		restored[formID] = { baseID, values[0], values[1], values[2] };
+		restored[formID] = { baseID, values[0], values[1], values[2], values[3], std::clamp(values[4], 0.0f, 1.0f) };
 	}
 	std::scoped_lock lock(itemSinkLock);
 	itemSinkLoaded = std::move(restored);
@@ -434,6 +494,7 @@ void SnowDeformation::RegisterItemSinkCoSave()
 			std::scoped_lock lock(itemSinkLock);
 			itemSinkStates.clear();
 			itemSinkLoaded.clear();
+			itemSinkClaimsLogged = 0;
 			itemSinkCandidatesStale.store(true, std::memory_order_release);
 		});
 }
