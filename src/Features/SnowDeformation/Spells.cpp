@@ -1703,6 +1703,47 @@ namespace
 		return out;
 	}
 
+	// Game thread only. One line per node of the rune's 3D.
+	void DumpRuneTree(RE::NiAVObject* a_object, uint32_t a_formID, const char* a_when, float a_surfaceZ, int a_depth)
+	{
+		if (!a_object || a_depth > 8)
+			return;
+		const auto* rtti = a_object->GetRTTI();
+		std::string line = std::format("[SNOW DEFORMATION] S0 TREE {:08X} {} {}{} '{}' {} localZ {:.2f} worldZ {:.2f} (surface {:+.2f}){}",
+			a_formID, a_when, std::string(a_depth * 2, ' '), a_depth, a_object->name.c_str(), rtti ? rtti->GetName() : "?",
+			a_object->local.translate.z, a_object->world.translate.z, a_object->world.translate.z - a_surfaceZ,
+			a_object->GetAppCulled() ? " CULLED" : "");
+		if (auto* geometry = a_object->AsGeometry()) {
+			auto& runtime = geometry->GetGeometryRuntimeData();
+			line += std::format(" | bound z {:.2f} ({:+.2f}) r {:.1f}", a_object->worldBound.center.z,
+				a_object->worldBound.center.z - a_surfaceZ, a_object->worldBound.radius);
+			if (auto* alpha = runtime.alphaProperty.get())
+				line += std::format(" | blend {} src {} dst {} test {}", alpha->GetAlphaBlending(),
+					static_cast<int>(alpha->GetSrcBlendMode()), static_cast<int>(alpha->GetDestBlendMode()),
+					alpha->GetAlphaTesting());
+			if (auto* shader = runtime.shaderProperty.get()) {
+				using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
+				const auto* shaderRTTI = shader->GetRTTI();
+				line += std::format(" | {} flags {:#x}{}{}{}{}{}", shaderRTTI ? shaderRTTI->GetName() : "?",
+					shader->flags.underlying(), shader->flags.any(Flag::kDecal) ? " DECAL" : "",
+					shader->flags.any(Flag::kDynamicDecal) ? " DYNDECAL" : "", shader->flags.any(Flag::kSoftEffect) ? " SOFT" : "",
+					shader->flags.any(Flag::kZBufferTest) ? " ztest" : " NOZTEST",
+					shader->flags.any(Flag::kZBufferWrite) ? " zwrite" : "");
+				if (shader->material && shader->material->GetType() == RE::BSShaderMaterial::Type::kEffect) {
+					auto* material = static_cast<RE::BSEffectShaderMaterial*>(shader->material);
+					line += std::format(" | softDepth {:.1f} colour ({:.2f} {:.2f} {:.2f} {:.2f}) x{:.2f} tex '{}'",
+						material->softFalloffDepth, material->baseColor.red, material->baseColor.green,
+						material->baseColor.blue, material->baseColor.alpha, material->baseColorScale,
+						material->sourceTexturePath.c_str());
+				}
+			}
+		}
+		logger::info("{}", line);
+		if (auto* node = a_object->AsNode())
+			for (auto& child : node->GetChildren())
+				DumpRuneTree(child.get(), a_formID, a_when, a_surfaceZ, a_depth + 1);
+	}
+
 	std::string RuneFlagDiff(uint32_t a_before, uint32_t a_after)
 	{
 		static const char* kNames[32] = { "Unk0", "NotAddThreat", "Unk2", "Unk3", "IsTracer", "Fading",
@@ -1830,6 +1871,13 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 	const uint32_t frame = state.frames;
 	const bool resting = state.resting;
 	const bool lifted = runeWatchLifted.contains(formID);
+	const char* dump = nullptr;
+	if (frame == 1 || frame == 20) {
+		auto* base = a_projectile->GetBaseObject();
+		auto* record = base ? base->As<RE::BGSProjectile>() : nullptr;
+		if (record && record->data.flags.any(RE::BGSProjectileData::BGSProjectileFlags::kExplosionAltTrigger))
+			dump = frame == 1 ? "before" : (lifted ? "after-lift" : "unlifted");
+	}
 	const RE::ObjectRefHandle handle = a_projectile->CreateRefHandle();
 	taskInterface->AddTask([=, this]() {
 		auto ref = handle.get();
@@ -1839,6 +1887,8 @@ void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::
 		}
 		const RuneNodeRead node = ReadRuneNode(ref.get());
 		runeWatchSamples.fetch_add(1, std::memory_order_relaxed);
+		if (dump)
+			DumpRuneTree(ref->Get3D(false), formID, dump, surfaceZ, 0);
 		logger::info("[SNOW DEFORMATION] S0 {:08X} f{} {}{}{} | ref ({:.1f} {:.1f} {:.2f}) land {:.2f} surface {} {:.2f} nominal {:.1f} accum {:.2f} | speed {:.1f} lin {:.1f} moved {:.1f} living {:.2f} flags {:#010x} | node {} localZ {:.2f} world ({:.1f} {:.1f} {:.2f}) axisZ ({:.2f} {:.2f} {:.2f}) axisY ({:.2f} {:.2f} {:.2f}) '{}' kids {} | impact {} collidee {:08X} layer {} mat {:08X} negVel ({:.0f} {:.0f} {:.0f})",
 			formID, frame, resting ? "rest" : "move", lifted ? " LIFTED" : "", tag,
 			position.x, position.y, position.z, landZ, surfaceOK ? "ok" : "MISS", surfaceZ, nominal, accumulation,
