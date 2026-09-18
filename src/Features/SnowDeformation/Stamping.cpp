@@ -1851,10 +1851,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			std::erase_if(propPrevPositions, [&](const auto& a_kv) { return a_kv.second.cycle + 1 < propScanCycle; });
 	}
 
-#if !SNOW_ALPHA_BUILD
-	SinkWatchUpdate();
-#endif
-
 	// Spell emitters melt rather than displace. Appended AFTER actors and
 	// props on purpose: a busy fight must not starve foot prints out of the
 	// stamp budget, and prints are the marks players read first.

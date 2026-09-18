@@ -4,6 +4,8 @@
 
 #include "Features/SnowDeformation.h"
 
+#include "Features/SnowDeformation/AlphaBuild.h"
+
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
 
@@ -1781,6 +1783,12 @@ struct SD_PlayerCamera_Update
 		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
 			snowDeformation.ClampCameraAboveSnow();
+#if !SNOW_ALPHA_BUILD
+		// Stage 0 sink watch, throwaway. Here, not in the prepass: the prepass
+		// runs inside the World pass, after the depth prepass has drawn the item.
+		if (snowDeformation.loaded)
+			snowDeformation.SinkWatchUpdate();
+#endif
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

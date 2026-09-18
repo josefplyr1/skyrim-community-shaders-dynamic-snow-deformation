@@ -1975,6 +1975,8 @@ public:
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
 	void ClampCameraAboveSnow();
+	/** @brief Stage 0 sink watch (SinkWatch.cpp), throwaway; public for the camera hook. */
+	void SinkWatchUpdate();
 	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
@@ -3962,7 +3964,6 @@ protected:
 	/** @brief Render thread only. */
 	std::unordered_map<uint32_t, SinkWatchProbe> sinkWatchProbes;
 	void SinkWatchNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
-	void SinkWatchUpdate();
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;
