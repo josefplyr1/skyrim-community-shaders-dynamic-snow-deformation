@@ -1261,6 +1261,18 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->OMGetDepthStencilState(savedDepth.put(), &savedStencilRef);
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());
+	// The trench patch draws next and INHERITS most of its pixel-stage
+	// textures from the skin pass: what this pass binds over is put back,
+	// not nulled (the road patch shaded against empty rasters, 2026-09-18).
+	constexpr UINT kOverlaySlots = 3 + 2 * kBloodCopyCount;  // t3 .. t15
+	ID3D11ShaderResourceView* savedSRVs[kOverlaySlots]{};
+	context->PSGetShaderResources(3, kOverlaySlots, savedSRVs);
+	ID3D11ShaderResourceView* savedDiffuse = nullptr;
+	context->PSGetShaderResources(0, 1, &savedDiffuse);
+	ID3D11Buffer* savedVSCB1 = nullptr;
+	ID3D11Buffer* savedPSCB1 = nullptr;
+	context->VSGetConstantBuffers(1, 1, &savedVSCB1);
+	context->PSGetConstantBuffers(1, 1, &savedPSCB1);
 
 	context->OMSetBlendState(bloodOverlayBlendState.get(), nullptr, 0xFFFFFFFF);
 	context->OMSetDepthStencilState(bloodOverlayDepthState.get(), 0);
@@ -1332,8 +1344,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 			maskCB.ViewProjRow3 = { m.m[3][0], m.m[3][1], m.m[3][2], m.m[3][3] };
 			maskCB.CameraAdjust = { adjust.x, adjust.y, adjust.z, 0.0f };
 			decalMasksLast = DrawBloodList(context, masked, maskCB, decalMaskVS, 1u);
-			ID3D11ShaderResourceView* nullDiffuse = nullptr;
-			context->PSSetShaderResources(0, 1, &nullDiffuse);
 			ID3D11SamplerState* restoreSampler = savedSampler.get();
 			context->PSSetSamplers(0, 1, &restoreSampler);
 			context->OMSetRenderTargets(8, savedRTVs, savedDSV);
@@ -1359,16 +1369,25 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->PSSetShaderResources(15, 1, &maskSRV);
 
 	context->Draw(6, 0);
-	ID3D11ShaderResourceView* nullMask = nullptr;
-	context->PSSetShaderResources(15, 1, &nullMask);
 	bloodOverlaysLast = uint32_t(decals);
 	if (!bloodOverlayLogged) {
 		bloodOverlayLogged = true;
 		logger::info("[SNOW DEFORMATION] blood overlay: first frame composited {} decals over object snow, rect {}x{}", decals, bloodCopyRect.right - bloodCopyRect.left, bloodCopyRect.bottom - bloodCopyRect.top);
 	}
 
-	ID3D11ShaderResourceView* nullSRVs[2 + 2 * kBloodCopyCount] = {};
-	context->PSSetShaderResources(3, 2 + 2 * kBloodCopyCount, nullSRVs);
+	context->PSSetShaderResources(3, kOverlaySlots, savedSRVs);
+	context->PSSetShaderResources(0, 1, &savedDiffuse);
+	context->VSSetConstantBuffers(1, 1, &savedVSCB1);
+	context->PSSetConstantBuffers(1, 1, &savedPSCB1);
+	for (auto* srv : savedSRVs)
+		if (srv)
+			srv->Release();
+	if (savedDiffuse)
+		savedDiffuse->Release();
+	if (savedVSCB1)
+		savedVSCB1->Release();
+	if (savedPSCB1)
+		savedPSCB1->Release();
 	context->OMSetBlendState(savedBlend.get(), savedBlendFactor, savedSampleMask);
 	context->OMSetDepthStencilState(savedDepth.get(), savedStencilRef);
 	context->RSSetState(savedRaster.get());
