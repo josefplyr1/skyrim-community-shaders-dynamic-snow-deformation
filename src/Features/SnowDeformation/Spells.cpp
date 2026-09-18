@@ -41,6 +41,10 @@ static constexpr float kLiftFraction = 0.5f;
 // Set on a proximity projectile the frame before its explosion replaces it (measured, CODE-NOTES).
 static constexpr auto kProjectileTriggered = RE::Projectile::Flags::kUnk30;
 static constexpr float kMaxLiftHeight = 60.0f;
+// A rune is a flat glyph: onto the surface, not half into it.
+static constexpr float kRuneClearance = 1.0f;
+// Glyph normal (the node's Z axis) below this = cast on a wall; left alone.
+static constexpr float kRuneMinUpZ = 0.7f;
 // Only half way up: a wall standing on top of the snow reads as balanced on
 // it, half sunk it reads as standing in it. The crust pattern laid around its
 // feet closes the join.
@@ -377,7 +381,7 @@ static float RateScaleOf(const RE::Effect* a_effect)
 		kSpellMagnitudeMin, kSpellMagnitudeMax);
 }
 
-void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift)
+void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ)
 {
 	if (!a_ref || a_lift < 1.0f)
 		return;
@@ -387,18 +391,72 @@ void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift)
 	// A handle, not the pointer: by the time the task runs the reference may
 	// have gone, and a hazard's whole life is measured in seconds.
 	const RE::ObjectRefHandle handle = a_ref->CreateRefHandle();
-	taskInterface->AddTask([handle, a_lift]() {
+	taskInterface->AddTask([handle, a_lift, a_minUpZ]() {
 		auto ref = handle.get();
 		if (!ref)
 			return;
 		auto* root = ref->Get3D(false);
 		if (!root)
 			return;
+		if (root->world.rotate.entry[2][2] < a_minUpZ)
+			return;
 		root->local.translate.z += a_lift;
 		// The whole subtree: UpdateWorldData moves this node alone.
 		RE::NiUpdateData data{};
 		root->Update(data);
 	});
+}
+
+void SnowDeformation::ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes)
+{
+	auto* base = a_projectile->GetBaseObject();
+	auto* record = base ? base->As<RE::BGSProjectile>() : nullptr;
+	if (!record || !record->data.flags.any(RE::BGSProjectileData::BGSProjectileFlags::kExplosionAltTrigger))
+		return;
+	const RE::NiPoint3 position = a_projectile->GetPosition();
+	const float distSq = a_camera.GetSquaredDistance(position);
+	if (distSq > a_cullRadius * a_cullRadius)
+		return;
+	const uint32_t formID = a_projectile->formID;
+
+	if (settings.RuneDecalsOnSnow) {
+		auto [it, fresh] = runeDecalPathCache.try_emplace(record);
+		if (fresh && record->data.decalData) {
+			if (const char* path = record->data.decalData->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
+				std::string lower(path);
+				std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return ch == '/' ? '\\' : char(std::tolower(ch)); });
+				it->second = std::move(lower);
+				logger::info("[SNOW DEFORMATION] rune record {:08X}: decal texture '{}'", record->formID, it->second);
+			}
+		}
+		if (!it->second.empty())
+			runeSitesScratch.push_back({ formID, position, it->second, distSq });
+	}
+
+	if (settings.LiftRunes && runeLifted.insert(formID).second) {
+		float landZ = position.z;
+		a_tes->GetLandHeight(position, landZ);
+		float surfaceZ = 0.0f;
+		if (position.z - landZ <= kElevatedStampCutoff && SampleShellSurface(position.x, position.y, surfaceZ)) {
+			const float lift = std::min(surfaceZ + kRuneClearance - position.z, kMaxLiftHeight);
+			if (lift >= 1.0f) {
+				LiftRefOntoSnow(a_projectile, lift, kRuneMinUpZ);
+				spellStats.lifted++;
+			}
+		}
+	}
+}
+
+void SnowDeformation::PublishRuneSites(const std::unordered_set<uint32_t>& a_present)
+{
+	std::erase_if(runeLifted, [&](uint32_t a_id) { return !a_present.contains(a_id); });
+	std::sort(runeSitesScratch.begin(), runeSitesScratch.end(), [](const RuneSite& a, const RuneSite& b) { return a.distSq < b.distSq; });
+	if (runeSitesScratch.size() > kRuneMaxTiles)
+		runeSitesScratch.resize(kRuneMaxTiles);
+	std::scoped_lock lock(runeLock);
+	runeSites.swap(runeSitesScratch);
+	runeSitesScratch.clear();
+	runeSitesLive.store(static_cast<uint32_t>(runeSites.size()), std::memory_order_release);
 }
 
 void SnowDeformation::ConsiderHazard(RE::TESObjectREFR* a_ref)
@@ -1684,6 +1742,8 @@ void SnowDeformation::GatherSpellEmitters()
 	}
 
 	if (!settings.EnableSpellIntegration) {
+		runeSitesScratch.clear();
+		PublishRuneSites({});
 		spellStats = {};
 		spellGameHours = -1.0f;
 		spellPrevPositions.clear();
@@ -1884,6 +1944,9 @@ void SnowDeformation::GatherSpellEmitters()
 			break;
 		if (!projectile || !projectile->Is3DLoaded())
 			continue;
+
+		if (settings.RuneDecalsOnSnow || settings.LiftRunes)
+			ConsiderRune(projectile.get(), cameraPosition, cullRadius, tes);
 
 		auto& runtime = projectile->GetProjectileRuntimeData();
 
@@ -2346,6 +2409,8 @@ void SnowDeformation::GatherSpellEmitters()
 
 	// Projectile form ids are recycled, so a fired id must not stay latched.
 	std::erase_if(hitscanBlasted, [&](uint32_t a_id) { return !presentIDs.contains(a_id); });
+
+	PublishRuneSites(presentIDs);
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);

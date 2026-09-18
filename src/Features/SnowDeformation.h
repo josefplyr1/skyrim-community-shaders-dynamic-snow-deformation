@@ -455,6 +455,12 @@ public:
 		 * the feature that moves a game object, so it is narrow and switchable.
 		 */
 		bool LiftFrostEffects = true;
+		/** @brief Raises a rune's effect meshes (shimmer, glow, cast flash) onto the snow over them. Ground runes only. */
+		bool LiftRunes = true;
+		/** @brief Paints a rune's glyph - an engine decal on the ground the shell covers - onto the landscape shell. */
+		bool RuneDecalsOnSnow = true;
+		/** @brief Scale on the painted glyph's emission. */
+		float RuneGlow = 1.0f;
 		/** @brief How deep a travelling shove scours, against a full carve. Well under 1 on purpose: a vortex scours the surface rather than excavating to the ground, and the berm is derived from how deep the cut goes - so this is also the dial that decides whether the track reads as a scoured hollow or as a canyon with a ridge down each side. */
 		float ForceTrackDepth = 0.45f;
 		/** @brief Width of the track a slow shove leaves behind it, in world units. Nothing authors a width for any shout - only a reach - so this is taste, exactly as the cone's spread is. */
@@ -974,6 +980,67 @@ public:
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
 	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
+
+	// ---- Rune decals on snow (BURIED-REF-LIFT-PLAN.md) ----
+	static constexpr uint32_t kRuneMaxTiles = 4;
+	static constexpr uint32_t kRuneTileDim = 512;
+	static constexpr float kRuneTileHalf = 110.0f;
+	struct RuneSite
+	{
+		uint32_t formID = 0;
+		RE::NiPoint3 position;
+		std::string decalPath;
+		float distSq = 0.0f;
+	};
+	struct RuneCapture
+	{
+		BloodCapture draw;
+		float3 emissive{ 0.0f, 0.0f, 0.0f };
+		RE::NiPoint3 centre;
+		float radius = 0.0f;
+	};
+	struct alignas(16) RuneCB
+	{
+		/** @brief x = live tiles, y = glow. */
+		float4 RuneParams;
+		/** @brief xy = tile's world min, z = 1 / world size. Tile i sits at (i & 1, i >> 1) of the 2x2 atlas. */
+		float4 RuneRects[kRuneMaxTiles];
+		/** @brief rgb = the decal material's emissive. */
+		float4 RuneTints[kRuneMaxTiles];
+	};
+	STATIC_ASSERT_ALIGNAS_16(RuneCB);
+	/** @brief Guards runeSites: written by the spell gather, read by the capture hook. */
+	std::mutex runeLock;
+	std::vector<RuneSite> runeSites;
+	std::atomic<uint32_t> runeSitesLive{ 0 };
+	std::vector<RuneSite> runeSitesScratch;
+	std::unordered_map<const RE::BGSProjectile*, std::string> runeDecalPathCache;
+	/** @brief Runes already judged for a lift, by formID; pruned as they leave, since projectile ids are recycled. */
+	std::unordered_set<uint32_t> runeLifted;
+	std::vector<RuneCapture> runeCaptures;
+	std::unordered_set<const RE::BSGeometry*> runeCaptureSet;
+	std::unordered_set<std::string> runeDecalPathsLogged;
+	Texture2D* runeAtlasTexture = nullptr;
+	ConstantBuffer* runeCB = nullptr;
+	ID3D11PixelShader* runePS = nullptr;
+	winrt::com_ptr<ID3D11BlendState> runeBlendState;
+	bool runeResourcesFailed = false;
+	bool runeAtlasDirty = false;
+	bool runePaintLogged = false;
+	bool runeMissLogged = false;
+	uint32_t runeMissFrames = 0;
+	uint32_t runeStatSites = 0;
+	uint32_t runeStatCaptures = 0;
+	uint32_t runeStatTiles = 0;
+	ID3D11ShaderResourceView* GetRuneAtlasSRV() const { return runeAtlasTexture ? runeAtlasTexture->srv.get() : nullptr; }
+	/** @brief From the spell gather, per live projectile: a proximity record is a rune - lifted once, and listed as a site for its decal. */
+	void ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes);
+	void PublishRuneSites(const std::unordered_set<uint32_t>& a_present);
+	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture and it was taken. */
+	bool CaptureRuneDraw(RE::BSRenderPass* a_pass);
+	bool EnsureRuneResources();
+	/** @brief Clears the atlas and draws this frame's rune decals into their tiles. After the blood capture, before the shells. */
+	void RenderRuneCapture();
 
 	// ---- Baked undulation field ----
 	// The dune field is a pure function of world XY and the Spacing slider,
@@ -3783,7 +3850,7 @@ protected:
 	 * of thing that crashed this feature repeatedly when it was only reading,
 	 * so the lift goes through the SKSE task interface.
 	 */
-	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift);
+	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ = -2.0f);
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;

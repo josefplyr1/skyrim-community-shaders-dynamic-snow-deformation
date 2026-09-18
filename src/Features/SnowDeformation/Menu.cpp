@@ -995,6 +995,17 @@ void SnowDeformation::DrawSettings()
 		}
 		ImGui::PopID();
 
+		ImGui::SeparatorText(T(TKEY("spell_cat_runes"), "Runes"));
+		ImGui::Checkbox(T(TKEY("rune_decals"), "Rune Glyphs on Snow"), &settings.RuneDecalsOnSnow);
+		if (auto _ttRuneDecal = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("rune_decals_tooltip"), "A rune's glyph is a decal the game lays on the ground, so deep snow covers it. With this on, the glyph is painted onto the snow over it instead, and leaves with the rune. Landscape snow only: a rune on a snowy road or rock still shows the game's own glyph underneath."));
+		ImGui::SliderFloat(T(TKEY("rune_glow"), "Rune Glyph Glow"), &settings.RuneGlow, 0.0f, 4.0f, "%.2f");
+		if (auto _ttRuneGlow = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("rune_glow_tooltip"), "How strongly the painted glyph glows. 1 is the rune's own glow as the game authors it."));
+		ImGui::Checkbox(T(TKEY("lift_runes"), "Raise Buried Rune Effects"), &settings.LiftRunes);
+		if (auto _ttLiftRunes = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("lift_runes_tooltip"), "Lifts a rune's shimmer, glow and cast flash onto the snow standing over them, so they play at the painted glyph rather than under it. Ground runes only - one cast on a wall stays where it is. What sets a rune off does not move: it still triggers from the ground."));
+
 		ImGui::SeparatorText(T(TKEY("spell_cat_frost"), "Frost"));
 		if (auto _ttFrost = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_cat_frost_tooltip"), "Frost neither removes snow nor throws it aside - it refreezes what is there. Crusted snow bears weight, so tracks across it barely print, and it shades as ice rather than powder. Something heavy enough still breaks through."));
@@ -2045,6 +2056,8 @@ void SnowDeformation::DrawSettings()
 						spellStats.lastShoutSpeed, spellStats.lastShoutForce,
 						spellStats.lastShoutVerdict < IM_ARRAYSIZE(kVerdict) ? kVerdict[spellStats.lastShoutVerdict] : "?");
 				}
+				WrapTextF("runes in range %u | rune decal draws taken %u | glyph tiles painted %u",
+					runeStatSites, runeStatCaptures, runeStatTiles);
 				WrapTextF("rejected: no element %u | no blast form %u",
 					spellStats.rejectedElement, spellStats.rejectedNoBlast);
 				WrapTextF("innate auras %u | bodies burning %u | marking corpses %u | floating %u | translucent %u (neither carving)",

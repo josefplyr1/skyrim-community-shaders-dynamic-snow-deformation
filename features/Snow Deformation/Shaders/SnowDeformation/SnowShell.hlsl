@@ -317,6 +317,44 @@ Texture2D<float> BermFieldMap : register(t14);
 // Blood map + deposit clocks, the deformation map's torus (SnowFields.hlsli).
 Texture2D<float4> BloodMap : register(t30);
 Texture2D<float2> BloodClock : register(t31);
+#ifdef PSHADER
+// Rune glyphs (Blood.cpp, RenderRuneCapture): a 2x2 atlas, one tile per live
+// rune, redrawn every frame from the rune's own ground decal.
+Texture2D<float4> RuneAtlas : register(t32);
+cbuffer RuneCB : register(b2)
+{
+	// x = live tiles, y = glow
+	float4 RuneParams;
+	// xy = tile's world min, z = 1 / world size; tile i at (i & 1, i >> 1)
+	float4 RuneRects[4];
+	// rgb = the decal material's emissive
+	float4 RuneTints[4];
+}
+
+// rgb = glyph colour, a = glyph alpha; emission = the glyph's glow at this point.
+float4 SampleRunes(float2 worldXY, out float3 emission)
+{
+	emission = 0.0;
+	float4 glyph = 0.0;
+	const uint count = min((uint)RuneParams.x, 4u);
+	[loop] for (uint i = 0; i < count; i++)
+	{
+		float2 uv = (worldXY - RuneRects[i].xy) * RuneRects[i].z;
+		[branch] if (all(uv > 0.0) && all(uv < 1.0))
+		{
+			// Half a texel in from the tile's edge: the neighbour tile is another rune.
+			float2 inTile = clamp(uv, 0.5 / 512.0, 1.0 - 0.5 / 512.0);
+			float4 c = RuneAtlas.SampleLevel(ShellLinearSampler, (float2(i & 1u, i >> 1u) + inTile) * 0.5, 0);
+			[flatten] if (c.a > glyph.a)
+			{
+				glyph = c;
+				emission = RuneTints[i].rgb * c.a * RuneParams.y;
+			}
+		}
+	}
+	return glyph;
+}
+#endif
 // Wide exclusion field (ExclusionFieldCS): x = door suppression, y = melt, over
 // a window that reaches the shell's own extent. The near mask at t5 still owns
 // the SHELTER term, which needs geometry and so cannot travel this far.
@@ -2650,6 +2688,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float k = saturate(blood.a * BloodLook.x);
 		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
 	}
+	// A rune's glyph lies on the snow as the game's decal lies on the ground:
+	// its colour over the albedo by its alpha, its glow added after lighting.
+	float3 runeEmission = 0.0;
+	float4 rune = SampleRunes(worldXYPS, runeEmission);
+	[branch] if (rune.a > 0.004)
+		kSnowAlbedo = lerp(kSnowAlbedo, rune.rgb, rune.a);
 	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
 	// has no wall to light, so it reads by material - pressed wet, darker and
 	// smoother. Gone by ~6 units of cover, where relief takes over.
@@ -3027,7 +3071,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	directDiffuse *= Color::PBRLightingScale;
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
-	float3 preLit = ambientPart + directDiffuse;
+	float3 preLit = ambientPart + directDiffuse + runeEmission * Color::PBRLightingScale;
 
 	[branch] if (ShellDebugData == 2)
 	{

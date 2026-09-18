@@ -1259,6 +1259,7 @@ void SnowDeformation::DrawShell()
 	RenderWaterCapture();
 	CoverWaterWindow();
 	RenderBloodCapture();
+	RenderRuneCapture();
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	// The main pass's depth range, not the decal viewport the deferred span
@@ -1444,6 +1445,11 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(14, 1, &bermSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
+	// Rune glyph atlas (t32) and its tile table (b2). Unbound reads as no tiles.
+	ID3D11ShaderResourceView* runeSRV = GetRuneAtlasSRV();
+	context->PSSetShaderResources(32, 1, &runeSRV);
+	ID3D11Buffer* runeBuffer = runeCB ? runeCB->CB() : nullptr;
+	context->PSSetConstantBuffers(2, 1, &runeBuffer);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
@@ -1856,6 +1862,7 @@ void SnowDeformation::DrawShell()
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
+	context->PSSetShaderResources(32, 1, nullFinePS);
 	context->PSSetShaderResources(13, 1, nullFinePS);
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);

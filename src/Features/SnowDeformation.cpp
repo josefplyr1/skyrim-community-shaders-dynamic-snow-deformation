@@ -77,6 +77,9 @@
 	X(ForceTrackWidth) \
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
+	X(LiftRunes) \
+	X(RuneDecalsOnSnow) \
+	X(RuneGlow) \
 	X(FrostTexturePath) \
 	X(EnableLightningArcs) \
 	X(LightningArcWidth) \

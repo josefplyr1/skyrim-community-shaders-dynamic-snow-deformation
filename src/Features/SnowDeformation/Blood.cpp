@@ -123,6 +123,10 @@ void SnowDeformation::ReleaseBloodShaders()
 	if (bloodOverlayPS)
 		bloodOverlayPS->Release();
 	bloodOverlayPS = nullptr;
+	if (runePS)
+		runePS->Release();
+	runePS = nullptr;
+	runeResourcesFailed = false;
 	bloodVSBlob = nullptr;
 	bloodSkinVSBlob = nullptr;
 	bloodILCache.clear();
@@ -454,6 +458,246 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	}
 	if (bloodCaptures.size() < 512)
 		bloodCaptures.push_back(std::move(capture));
+}
+
+// Rune glyphs (BURIED-REF-LIFT-PLAN.md). A rune's visible glyph is an engine
+// decal on the ground the landscape shell covers. Same capture as blood, its
+// own target: the blood map's texel is several units and a glyph's lines are
+// two or three, so each live rune gets a tile of a small atlas, cleared and
+// redrawn every frame - the glyph leaves with its rune, and its pulse rides
+// the decal's own per-frame alpha.
+bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass)
+{
+	auto* geometry = a_pass->geometry;
+	auto* property = a_pass->shaderProperty;
+	auto* material = property ? static_cast<RE::BSLightingShaderMaterialBase*>(property->material) : nullptr;
+	if (!geometry || !material)
+		return false;
+	const char* diffusePath = nullptr;
+	if (auto textureSet = material->textureSet.get())
+		diffusePath = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse);
+	if (!diffusePath || !*diffusePath)
+		return false;
+	std::string pathLower(diffusePath);
+	std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), [](unsigned char c) { return c == '/' ? '\\' : char(std::tolower(c)); });
+	bool matched = false;
+	{
+		std::scoped_lock lock(runeLock);
+		for (const auto& site : runeSites)
+			matched = matched || pathLower.find(site.decalPath) != std::string::npos;
+	}
+	if (runeDecalPathsLogged.size() < 32 && runeDecalPathsLogged.insert(pathLower).second)
+		logger::info("[SNOW DEFORMATION] rune watch: decal draw '{}' tex='{}' rune={}",
+			geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, matched ? 1 : 0);
+	if (!matched)
+		return false;
+	if (!runeCaptureSet.insert(geometry).second || runeCaptures.size() >= 64)
+		return true;
+	auto* texture = material->diffuseTexture.get();
+	if (!texture || !texture->rendererTexture || !texture->rendererTexture->resourceView)
+		return true;
+	auto& runtime = geometry->GetGeometryRuntimeData();
+	float threshold = -1.0f;
+	if (auto* alpha = runtime.alphaProperty.get(); alpha && alpha->GetAlphaTesting())
+		threshold = float(alpha->alphaThreshold) / 255.0f;
+	RuneCapture capture{};
+	capture.draw.geometry = RE::NiPointer<RE::BSGeometry>(geometry);
+	capture.draw.world = geometry->world;
+	capture.draw.diffuse.copy_from(texture->rendererTexture->resourceView);
+	capture.draw.texcoord = { material->texCoordOffset[0].x, material->texCoordOffset[0].y, material->texCoordScale[0].x, material->texCoordScale[0].y };
+	capture.draw.alpha = property->alpha * material->materialAlpha;
+	capture.draw.alphaThreshold = threshold;
+	capture.draw.reveal = 1.0f;
+	capture.draw.skinned = false;
+	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property); lighting && lighting->emissiveColor) {
+		const float mult = lighting->emissiveMult;
+		capture.emissive = { lighting->emissiveColor->red * mult, lighting->emissiveColor->green * mult, lighting->emissiveColor->blue * mult };
+	}
+	capture.centre = geometry->worldBound.center;
+	capture.radius = geometry->worldBound.radius;
+	runeCaptures.push_back(std::move(capture));
+	return true;
+}
+
+bool SnowDeformation::EnsureRuneResources()
+{
+	if (runeResourcesFailed)
+		return false;
+	if (runeAtlasTexture && runeCB && runePS && runeBlendState)
+		return true;
+	auto* device = globals::d3d::device;
+	try {
+		if (!runeAtlasTexture) {
+			D3D11_TEXTURE2D_DESC desc{};
+			desc.Width = kRuneTileDim * 2;
+			desc.Height = kRuneTileDim * 2;
+			desc.MipLevels = 1;
+			desc.ArraySize = 1;
+			desc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+			desc.SampleDesc.Count = 1;
+			desc.Usage = D3D11_USAGE_DEFAULT;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			runeAtlasTexture = new Texture2D(desc, "SnowDeformation::RuneAtlas");
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv{
+				.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
+			};
+			D3D11_RENDER_TARGET_VIEW_DESC rtv{
+				.Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
+				.Texture2D = { .MipSlice = 0 }
+			};
+			runeAtlasTexture->CreateSRV(srv);
+			runeAtlasTexture->CreateRTV(rtv);
+		}
+		if (!runeCB)
+			runeCB = new ConstantBuffer(ConstantBufferDesc<RuneCB>(), "SnowDeformation::RuneCB");
+	} catch (const std::exception& e) {
+		logger::error("[SNOW DEFORMATION] rune atlas creation failed: {} - rune glyphs on snow are off", e.what());
+		runeResourcesFailed = true;
+		return false;
+	}
+	if (!runePS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl", "ps_5_0", "PSHADER", "RUNE"));
+		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &runePS)))
+			Util::SetResourceName(runePS, "SnowDeformation::RuneCapturePS");
+	}
+	if (!runeBlendState) {
+		// Pieces of one decal, clipped to different surfaces, overlap from
+		// above: MAX keeps the deposit idempotent.
+		D3D11_BLEND_DESC blendDesc{};
+		auto& rt = blendDesc.RenderTarget[0];
+		rt.BlendEnable = TRUE;
+		rt.SrcBlend = D3D11_BLEND_ONE;
+		rt.DestBlend = D3D11_BLEND_ONE;
+		rt.BlendOp = D3D11_BLEND_OP_MAX;
+		rt.SrcBlendAlpha = D3D11_BLEND_ONE;
+		rt.DestBlendAlpha = D3D11_BLEND_ONE;
+		rt.BlendOpAlpha = D3D11_BLEND_OP_MAX;
+		rt.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+		device->CreateBlendState(&blendDesc, runeBlendState.put());
+	}
+	if (!runePS || !runeBlendState) {
+		logger::warn("[SNOW DEFORMATION] rune glyphs on snow disabled (shader or blend state failed)");
+		runeResourcesFailed = true;
+		return false;
+	}
+	return true;
+}
+
+void SnowDeformation::RenderRuneCapture()
+{
+	std::vector<RuneSite> sites;
+	{
+		std::scoped_lock lock(runeLock);
+		sites = runeSites;
+	}
+	runeStatSites = uint32_t(sites.size());
+	runeStatCaptures = uint32_t(runeCaptures.size());
+	runeStatTiles = 0;
+
+	// A rune in range whose decal never matched: say so once, with what the
+	// record named, so the log can be read against the decal draws it lists.
+	if (!sites.empty() && runeCaptures.empty()) {
+		if (++runeMissFrames == 180 && !runeMissLogged) {
+			runeMissLogged = true;
+			logger::warn("[SNOW DEFORMATION] rune in range for 180 frames and no decal draw matched '{}'", sites.front().decalPath);
+		}
+	} else {
+		runeMissFrames = 0;
+	}
+
+	auto context = globals::d3d::context;
+	const bool paint = settings.RuneDecalsOnSnow && !sites.empty() && !runeCaptures.empty() &&
+	                   EnsureBloodResources() && EnsureRuneResources();
+	RuneCB cbRune{};
+	if (!paint) {
+		if (runeAtlasDirty && runeAtlasTexture) {
+			const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			context->ClearRenderTargetView(runeAtlasTexture->rtv.get(), zero);
+			runeAtlasDirty = false;
+		}
+		if (runeCB)
+			runeCB->Update(cbRune);
+		runeCaptures.clear();
+		runeCaptureSet.clear();
+		return;
+	}
+
+	globals::profiler->BeginPass("SnowDeformation::RuneCapture");
+	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	context->ClearRenderTargetView(runeAtlasTexture->rtv.get(), zero);
+	ID3D11RenderTargetView* rtvs[1] = { runeAtlasTexture->rtv.get() };
+	context->OMSetRenderTargets(1, rtvs, nullptr);
+	context->OMSetBlendState(runeBlendState.get(), nullptr, 0xFFFFFFFF);
+	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
+	context->RSGetState(savedRaster.put());
+	context->RSSetState(bloodRasterState.get());
+	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11Buffer* cb1 = bloodCB->CB();
+	context->VSSetConstantBuffers(1, 1, &cb1);
+	context->PSSetConstantBuffers(1, 1, &cb1);
+	ID3D11SamplerState* sampler = bloodSampler.get();
+	context->PSSetSamplers(0, 1, &sampler);
+	context->PSSetShader(runePS, nullptr, 0);
+
+	uint32_t tiles = 0;
+	std::vector<BloodCapture> list;
+	for (const auto& site : sites) {
+		if (tiles >= kRuneMaxTiles)
+			break;
+		list.clear();
+		float3 emissive{ 0.0f, 0.0f, 0.0f };
+		for (const auto& capture : runeCaptures) {
+			const float dx = capture.centre.x - site.position.x;
+			const float dy = capture.centre.y - site.position.y;
+			const float reach = capture.radius + kRuneTileHalf;
+			if (dx * dx + dy * dy > reach * reach)
+				continue;
+			list.push_back(capture.draw);
+			emissive = { std::max(emissive.x, capture.emissive.x), std::max(emissive.y, capture.emissive.y), std::max(emissive.z, capture.emissive.z) };
+		}
+		if (list.empty())
+			continue;
+		const float tileX = float((tiles & 1u) * kRuneTileDim);
+		const float tileY = float((tiles >> 1u) * kRuneTileDim);
+		D3D11_VIEWPORT viewport{ tileX, tileY, float(kRuneTileDim), float(kRuneTileDim), 0.0f, 1.0f };
+		context->RSSetViewports(1, &viewport);
+		// The blood VS's map transform, aimed at one tile: no torus, so its
+		// seam instances fall outside clip space.
+		BloodCB cb{};
+		cb.WindowOrigin = { site.position.x - kRuneTileHalf, site.position.y - kRuneTileHalf };
+		cb.TexelSize = 2.0f * kRuneTileHalf / float(kRuneTileDim);
+		cb.MapDim = float(kRuneTileDim);
+		cb.MapOrigin = { 0, 0 };
+		cb.Intensity = 1.0f;
+		cb.NormalZMin = 0.3f;
+		if (DrawBloodList(context, list, cb) == 0)
+			continue;
+		cbRune.RuneRects[tiles] = { cb.WindowOrigin.x, cb.WindowOrigin.y, 1.0f / (2.0f * kRuneTileHalf), 0.0f };
+		cbRune.RuneTints[tiles] = { emissive.x, emissive.y, emissive.z, 0.0f };
+		tiles++;
+	}
+	cbRune.RuneParams = { float(tiles), std::clamp(settings.RuneGlow, 0.0f, 8.0f), 0.0f, 0.0f };
+	runeCB->Update(cbRune);
+	runeAtlasDirty = true;
+	runeStatTiles = tiles;
+	if (tiles && !runePaintLogged) {
+		runePaintLogged = true;
+		logger::info("[SNOW DEFORMATION] rune atlas: first frame painted {} tile(s) from {} decal draw(s), {} rune(s) in range",
+			tiles, runeCaptures.size(), sites.size());
+	}
+
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	context->PSSetShaderResources(0, 1, &nullSRV);
+	ID3D11RenderTargetView* nullRTV = nullptr;
+	context->OMSetRenderTargets(1, &nullRTV, nullptr);
+	context->RSSetState(savedRaster.get());
+	globals::profiler->EndPass();
+	runeCaptures.clear();
+	runeCaptureSet.clear();
 }
 
 // The decal's world bound projected with the game's current camera into the

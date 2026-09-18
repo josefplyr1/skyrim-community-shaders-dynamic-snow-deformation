@@ -244,6 +244,24 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	o.Reflectance = DecalPart(PreSnow5, PreDecal5, pixel, a);
 	return o;
 }
+#elif defined(PSHADER) && defined(RUNE)
+// RUNE: a rune's glyph decal into its atlas tile (Blood.cpp, RenderRuneCapture).
+// The decal's own colour and alpha, as authored; MAX-blended. Emission is the
+// material's, carried beside the tile, not in it.
+float4 main(VS_OUTPUT input) : SV_Target0
+{
+	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
+		discard;
+	if (input.NormalZ < NormalZMin)
+		discard;
+	float4 c = Diffuse.Sample(LinearSampler, input.UV);
+	float a = c.a * MaterialAlpha;
+	[flatten] if (AlphaThreshold >= 0.0)
+		a = a >= AlphaThreshold ? 1.0 : 0.0;
+	if (a < 0.004)
+		discard;
+	return float4(c.rgb, saturate(a));
+}
 #elif defined(PSHADER)
 struct PS_OUTPUT
 {

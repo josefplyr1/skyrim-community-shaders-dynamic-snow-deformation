@@ -790,6 +790,13 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	const auto& flags = a_pass->shaderProperty->flags;
 	// Blood decals go to the blood map, never to the statics list. Skinned
 	// blood is a wound decal on a body unless it is a pool framework quad.
+	// A live rune's decal goes to the rune atlas.
+	if (!rec.bloodTex && settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) {
+		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
+		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
+		if (decalMode && CaptureRuneDraw(a_pass))
+			return;
+	}
 	if (rec.bloodTex) {
 		const bool poolQuad = NameFactsOf(a_pass->geometry).bloodPool;
 		const bool decalMode = RE::BSGraphics::RendererShadowState::GetSingleton()->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
