@@ -9,6 +9,7 @@
 
 #include "Features/SnowDeformation/AlphaBuild.h"
 #include "Globals.h"
+#include "State.h"
 #include "Utils/Form.h"
 
 #if !SNOW_ALPHA_BUILD
@@ -118,50 +119,42 @@ namespace
 		return shifted;
 	}
 
-	void SyncPreviousWorld(RE::NiAVObject* a_object, int a_depth = 0)
+	using WorldList = std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>>;
+
+	void CollectWorld(RE::NiAVObject* a_object, WorldList& a_out, int a_depth = 0)
 	{
 		if (!a_object || a_depth > 8)
 			return;
-		a_object->previousWorld = a_object->world;
+		a_out.emplace_back(a_object, a_object->world);
 		if (auto* node = a_object->AsNode())
 			for (auto& child : node->GetChildren())
-				SyncPreviousWorld(child.get(), a_depth + 1);
+				CollectWorld(child.get(), a_out, a_depth + 1);
 	}
 
-	// An awake body's root is updated by Havok every frame and carries the
-	// children with it. A sleeping one is not: push the locals down ourselves,
-	// and level previousWorld, or the motion vectors keep the jump for ever.
-	void CollectPreviousWorld(RE::NiAVObject* a_object, std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>>& a_out, int a_depth = 0)
-	{
-		if (!a_object || a_depth > 8)
-			return;
-		a_out.emplace_back(a_object, a_object->previousWorld);
-		if (auto* node = a_object->AsNode())
-			for (auto& child : node->GetChildren())
-				CollectPreviousWorld(child.get(), a_out, a_depth + 1);
-	}
-
-	// a_still: a sleeping item gets no further updates, so previousWorld is
-	// levelled. A moving one keeps the engine's, whatever Update() does to it.
-	void PropagateChildren(RE::NiAVObject* a_root, bool a_still)
+	// Nothing refreshes previousWorld under a Havok-driven root (log, round 9:
+	// it sat 6 units off for 30 frames until the sleep-edge levelling), and the
+	// motion vectors are made from it: a ghost trailing every moving item. So
+	// it is set here: last frame's final transforms where the subtree is the
+	// same one, this frame's otherwise. a_last is never dereferenced.
+	void PropagateChildren(RE::NiAVObject* a_root, bool a_consecutive, WorldList& a_last)
 	{
 		auto* node = a_root ? a_root->AsNode() : nullptr;
 		if (!node)
 			return;
 		RE::NiUpdateData data{};
-		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> previous;
+		WorldList now;
 		for (auto& child : node->GetChildren()) {
 			if (!child || child->collisionObject)
 				continue;
-			previous.clear();
-			if (!a_still)
-				CollectPreviousWorld(child.get(), previous);
 			child->Update(data);
-			if (a_still)
-				SyncPreviousWorld(child.get());
-			for (auto& [object, transform] : previous)
-				object->previousWorld = transform;
+			CollectWorld(child.get(), now);
 		}
+		bool same = a_consecutive && now.size() == a_last.size();
+		for (size_t i = 0; same && i < now.size(); ++i)
+			same = now[i].first == a_last[i].first;
+		for (size_t i = 0; i < now.size(); ++i)
+			now[i].first->previousWorld = same ? a_last[i].second : now[i].second;
+		a_last = std::move(now);
 		a_root->UpdateWorldBound();
 	}
 }
@@ -181,11 +174,16 @@ void SnowDeformation::SinkWatchUpdate()
 {
 	if (sinkWatch != sinkWatchArmed) {
 		sinkWatchArmed = sinkWatch;
-		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 9: before the frame renders)", sinkWatch ? "armed" : "off");
+		logger::info("[SNOW DEFORMATION] SW0 weight sink watch: {} (round 10: own motion vectors)", sinkWatch ? "armed" : "off");
 		sinkWatchCandidates.clear();
 	}
 	if (!sinkWatch)
 		return;
+	// PlayerCamera::Update runs twice a frame (log, round 9: paired calls 1 ms apart).
+	static uint lastRenderFrame = ~0u;
+	if (lastRenderFrame == globals::state->frameCount)
+		return;
+	lastRenderFrame = globals::state->frameCount;
 	sinkWatchFrame++;
 	auto* player = RE::PlayerCharacter::GetSingleton();
 	auto* tes = RE::TES::GetSingleton();
@@ -387,11 +385,23 @@ void SnowDeformation::SinkWatchUpdate()
 
 			const RE::NiPoint3 offset = body.up * want;
 			const RE::NiPoint3 delta = offset - state.childOffset;
-			if (delta.SqrLength() > 1e-4f) {
+			const bool still = asleep || body.bodies == 0;
+			const bool moved = delta.SqrLength() > 1e-4f;
+			// A held item that is awake moves every frame whether or not the lift
+			// changed, and needs its previousWorld kept; a sleeping one needs it
+			// levelled once (two passes: the second sees last == now).
+			if (!moved && state.offsetApplied && state.offsetRoot == body.root && (!still || state.restPasses < 2)) {
+				PropagateChildren(body.root, state.lastWorldFrame + 1 == frame, state.lastWorlds);
+				state.lastWorldFrame = frame;
+				state.restPasses = still ? state.restPasses + 1 : 0;
+			}
+			if (moved) {
 				const bool was = state.offsetApplied;
 				const uint32_t shifted = ShiftChildren(body.root, delta);
 				if (shifted > 0) {
-					PropagateChildren(body.root, asleep || body.bodies == 0);
+					PropagateChildren(body.root, state.lastWorldFrame + 1 == frame && state.offsetRoot == body.root, state.lastWorlds);
+					state.lastWorldFrame = frame;
+					state.restPasses = 0;
 					state.childOffset = offset;
 					state.offsetApplied = want > 0.0f;
 					state.offsetRoot = body.root;
