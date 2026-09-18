@@ -4497,6 +4497,7 @@ protected:
 	{
 		RE::NiPoint3 pos;
 		uint32_t cycle = 0;  // the scan cycle that last visited it; a full cycle unseen = the reference left
+		bool mover = false;  // travelled, and its body has not slept since
 	};
 	std::unordered_map<uint32_t, PropAnchor> propPrevPositions;
 	static constexpr uint32_t kPropScanInterval = 6;

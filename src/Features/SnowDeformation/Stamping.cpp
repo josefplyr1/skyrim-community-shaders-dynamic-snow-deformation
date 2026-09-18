@@ -21,6 +21,22 @@ static constexpr float kStampRadiusNeutral = 20.0f;
 static constexpr float kTrailBreakDistance = 256.0f;
 // Movement below this counts as standing still.
 static constexpr float kStampMovementGate = 3.0f;
+
+// First rigid body's island: Havok's own verdict on whether the prop has settled.
+static bool PropBodyAwake(RE::NiAVObject* a_root)
+{
+	bool awake = false;
+	RE::BSVisit::TraverseScenegraphCollision(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
+		auto* body = a_object ? a_object->body.get() : nullptr;
+		auto* bhkRigid = body ? body->AsBhkRigidBody() : nullptr;
+		auto* hkpRigid = bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(bhkRigid->referencedObject.get()) : nullptr;
+		if (!hkpRigid)
+			return RE::BSVisit::BSVisitControl::kContinue;
+		awake = hkpRigid->simulationIsland && hkpRigid->simulationIsland->isInActiveIslandsArray;
+		return RE::BSVisit::BSVisitControl::kStop;
+	});
+	return awake;
+}
 // Full reference scan cadence, in frames. Between scans only the movers and
 // hazards the last scan found are revisited; a prop's first motion waits at
 // most one interval (~100 ms), which no one has seen.
@@ -1606,9 +1622,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		// Frozen anchor: slow motion accumulates toward the gate instead
 		// of resetting every frame.
-		const bool propMoved = position.GetSquaredDistance(prevIt->second.pos) >= kStampMovementGate * kStampMovementGate;
+		const bool propTravelled = position.GetSquaredDistance(prevIt->second.pos) >= kStampMovementGate * kStampMovementGate;
+		// A prop that turns, rocks or rolls in place travels nowhere and printed
+		// once per 3 units: a trench that lagged the mesh by half a second.
+		// Once moving, it prints every frame until Havok puts it to sleep.
+		const bool propMoved = propTravelled || (prevIt->second.mover && PropBodyAwake(root));
+		prevIt->second.mover = propMoved;
 		prevIt->second.cycle = propScanCycle;
-		if (propMoved)
+		if (propTravelled)
 			prevIt->second.pos = position;
 		if (propMoved) {
 			stampStats.propMovers++;
