@@ -705,8 +705,9 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			statProjNoProjection.fetch_add(1, std::memory_order_relaxed);
 		} else if (rec.mato == MatoClass::kNotSnow) {
 			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
-		} else if (a_pass->shaderProperty->flags.any(Flag::kDynamicDecal) || NameFactsOf(a_pass->geometry).engineDecal) {
+		} else if (NameFactsOf(a_pass->geometry).engineDecal) {
 			// A runtime decal inherits its target's projected technique; it is a mark on the snow, not snow.
+			// By the engine's own geometry name, never kDynamicDecal: DynDOLOD's passthru LOD batches carry that flag.
 			statProjVetoed.fetch_add(1, std::memory_order_relaxed);
 		} else {
 			statProjMatched.fetch_add(1, std::memory_order_relaxed);
@@ -800,7 +801,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	// The engine's runtime decals that are not blood - scorch, frost, shock,
 	// rune glyphs: the object-snow coat draws over them, so they join the
 	// overlay that puts a decal back over the coat.
-	const bool engineDecal = !rec.bloodTex && (flags.any(Flag::kDynamicDecal) || passFacts.engineDecal);
+	// By name, never by kDynamicDecal: DynDOLOD's passthru LOD batches carry the
+	// flag and draw mid-pass, which put the overlay's pre-decal snapshot ahead of
+	// half the frame and the stale paint mask under the road patch (2026-09-18).
+	const bool engineDecal = !rec.bloodTex && passFacts.engineDecal &&
+	                         !flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape);
 	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
 		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
 		CaptureDecalOverlay(a_pass);

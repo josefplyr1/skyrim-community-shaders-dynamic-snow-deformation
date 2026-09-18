@@ -1001,6 +1001,7 @@ public:
 	winrt::com_ptr<ID3D11BlendState> decalMaskBlendState;
 	bool decalMaskFailed = false;
 	bool decalMaskLogged = false;
+	std::unordered_set<std::string> decalOverlayNamesLogged;
 	uint32_t decalMasksLast = 0;
 	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);

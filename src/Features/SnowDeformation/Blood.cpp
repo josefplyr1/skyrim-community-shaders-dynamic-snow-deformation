@@ -426,6 +426,14 @@ void SnowDeformation::CaptureDecalOverlay(RE::BSRenderPass* a_pass)
 	capture.reveal = 1.0f;
 	capture.skinned = false;
 	capture.mask = true;
+	if (decalOverlayNamesLogged.size() < 16) {
+		const char* path = "";
+		if (auto textureSet = material->textureSet.get())
+			if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
+				path = diffuse;
+		if (decalOverlayNamesLogged.insert(path).second)
+			logger::info("[SNOW DEFORMATION] decal overlay takes '{}' tex='{}'", geometry->name.c_str() ? geometry->name.c_str() : "", path);
+	}
 	RegisterDecalOverlay(capture);
 }
 
