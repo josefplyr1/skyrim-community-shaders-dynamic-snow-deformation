@@ -1187,6 +1187,7 @@ void SnowDeformation::PostPostLoad()
 	// loaded straight from the main menu, and an unclaimed record is skipped.
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
+	RegisterItemSinkCoSave();
 }
 
 // Cell-granular on purpose: the per-texel answer lives in a GPU texture, and a
@@ -1783,12 +1784,10 @@ struct SD_PlayerCamera_Update
 		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
 			snowDeformation.ClampCameraAboveSnow();
-#if !SNOW_ALPHA_BUILD
-		// Stage 0 sink watch, throwaway. Here, not in the prepass: the prepass
-		// runs inside the World pass, after the depth prepass has drawn the item.
+		// Here, not in Prepass: that runs inside the World pass, after the depth
+		// prepass has drawn the item where it was.
 		if (snowDeformation.loaded)
-			snowDeformation.SinkWatchUpdate();
-#endif
+			snowDeformation.ItemSinkUpdate();
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

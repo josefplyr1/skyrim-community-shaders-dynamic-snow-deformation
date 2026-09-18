@@ -1981,8 +1981,8 @@ public:
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person only: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would. */
 	void ClampCameraAboveSnow();
-	/** @brief Stage 0 sink watch (SinkWatch.cpp), throwaway; public for the camera hook. */
-	void SinkWatchUpdate();
+	/** @brief Holds dropped items at their depth in the snow. From the camera-update hook: before the frame's first pass, main thread. */
+	void ItemSinkUpdate();
 	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
@@ -3901,32 +3901,27 @@ protected:
 	 */
 	float SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes);
 
-	// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md, SinkWatch.cpp). Dev builds only, throwaway.
-	static constexpr float kSinkWatchRadius = 700.0f;
-	static constexpr size_t kSinkWatchMax = 12;
-	struct SinkWatchCandidate
+	// Dropped items rest in the snow by weight and shape (ItemSink.cpp, WEIGHT-SINK-PLAN.md).
+	static constexpr float kItemSinkRadius = 3000.0f;
+	static constexpr size_t kItemSinkMax = 32;
+	static constexpr uint32_t kItemSinkRecord = 'SNIS';
+	static constexpr uint32_t kItemSinkRecordVersion = 1;
+	struct ItemSinkCandidate
 	{
 		RE::ObjectRefHandle handle;
 		RE::NiPoint3 position;
 		uint32_t seenFrame = 0;
 	};
-	struct SinkWatchState
+	struct ItemSinkState
 	{
-		uint32_t frames = 0;
-		uint32_t asleepFrames = 0;
-		uint32_t burst = 0;
-		int islandActive = -2;
+		uint32_t formID = 0;
+		uint32_t baseID = 0;
+		uint32_t seenFrame = 0;
 		/** @brief Identity only, never dereferenced: a rebuilt 3D took the offset with it. */
 		RE::NiAVObject* offsetRoot = nullptr;
 		bool offsetApplied = false;
 		RE::NiPoint3 childOffset;
 		float appliedLift = 0.0f;
-		float manualLift = 0.0f;
-		uint32_t refHandle = 0;
-		bool dirty = false;
-		bool liveValid = false;
-		float liveX = 0.0f;
-		float liveY = 0.0f;
 		bool undersideValid = false;
 		float undersideOffset = 0.0f;
 		float lyingHeight = 0.0f;
@@ -3934,47 +3929,36 @@ protected:
 		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
 		uint32_t lastWorldFrame = 0;
 		uint32_t restPasses = 0;
+		/** @brief The underside's absolute height where the item settled, and where that was. Snow buries: it only ever falls. */
+		bool restValid = false;
+		float restZ = 0.0f;
+		RE::NiPoint3 restPos;
 	};
-	struct SinkWatchReadout
+	struct ItemSinkRecord
 	{
-		uint32_t formID = 0;
-		std::string name;
-		float mass = 0.0f;
-		float refWeight = 0.0f;
-		float footprint = 0.0f;
-		int islandActive = -1;
-		float speed = 0.0f;
-		float rootZ = 0.0f;
-		float meshZ = 0.0f;
-		bool lifted = false;
-		float appliedLift = 0.0f;
-		float snowDepth = 0.0f;
-		float measure = 0.0f;
-		float sink = 0.0f;
+		uint32_t baseID = 0;
+		float x = 0.0f;
+		float y = 0.0f;
+		float restZ = 0.0f;
 	};
-	bool sinkWatch = false;
-	bool sinkWatchArmed = false;
-	bool sinkWatchAuto = true;
-	float sinkWatchLift = 20.0f;
-	uint32_t sinkWatchFrame = 0;
-	std::atomic<bool> sinkWatchLiftRequest{ false };
-	std::atomic<uint32_t> sinkWatchCount{ 0 };
-	std::unordered_map<uint32_t, SinkWatchCandidate> sinkWatchCandidates;
-	/** @brief Guards the three below: written by the game-thread task, read by the menu. */
-	std::mutex sinkWatchLock;
-	std::unordered_map<uint32_t, SinkWatchState> sinkWatchStates;
-	std::unordered_set<uint32_t> sinkWatchFormsLogged;
-	SinkWatchReadout sinkWatchReadout;
-	struct SinkWatchProbe
-	{
-		float meshZ = 0.0f;
-		float rootZ = 0.0f;
-		uint32_t logged = 0;
-		bool valid = false;
-	};
-	/** @brief Render thread only. */
-	std::unordered_map<uint32_t, SinkWatchProbe> sinkWatchProbes;
-	void SinkWatchNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
+	uint32_t itemSinkFrame = 0;
+	/** @brief Main thread only, by ref handle: dropped items are temporary references and their form IDs are recycled. */
+	std::unordered_map<uint32_t, ItemSinkCandidate> itemSinkCandidates;
+	std::atomic<bool> itemSinkCandidatesStale{ false };
+	/** @brief Guards the states, the loaded records and the readout: the co-save callbacks arrive on the game thread. */
+	std::mutex itemSinkLock;
+	std::unordered_map<uint32_t, ItemSinkState> itemSinkStates;
+	/** @brief Rest heights from the co-save, by form ID, until the item is seen and takes (or fails) its own. */
+	std::unordered_map<uint32_t, ItemSinkRecord> itemSinkLoaded;
+	std::unordered_set<uint32_t> itemSinkFormsLogged;
+	std::string itemSinkReadout;
+	std::atomic<bool> itemSinkReadoutWanted{ false };
+	std::atomic<uint32_t> itemSinkHeld{ 0 };
+	std::atomic<uint32_t> itemSinkWatched{ 0 };
+	void ItemSinkNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
+	void SaveItemSink(const SKSE::SerializationInterface* a_intfc);
+	void LoadItemSink(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
+	void RegisterItemSinkCoSave();
 
 	/** @brief Hazards already raised, by formID, so the lift happens once rather than every frame. */
 	std::unordered_set<uint32_t> liftedRefs;

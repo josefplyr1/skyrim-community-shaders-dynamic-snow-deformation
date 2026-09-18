@@ -2055,34 +2055,17 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
-		// Stage 0 weight sink watch (WEIGHT-SINK-PLAN.md), throwaway.
 		if (ImGui::TreeNodeEx("Weight sink")) {
-			ImGui::Checkbox("Watch dropped items near me (CommunityShaders.log, lines tagged SW0)", &sinkWatch);
-			ImGui::Checkbox("Hold every watched item at its depth, moving or not (light = on top, heavy = at the bottom)", &sinkWatchAuto);
-			ImGui::SliderFloat("Button lift (units)", &sinkWatchLift, 5.0f, 40.0f, "%.0f");
-			if (ImGui::Button("PRESS to hold the nearest item at the slider lift instead (press again to release)"))
-				sinkWatchLiftRequest.store(true, std::memory_order_release);
-			SinkWatchReadout readout;
+			itemSinkReadoutWanted.store(true, std::memory_order_release);
+			std::string readout;
 			{
-				std::scoped_lock lock(sinkWatchLock);
-				readout = sinkWatchReadout;
+				std::scoped_lock lock(itemSinkLock);
+				readout = itemSinkReadout;
 			}
-			WrapTextF("items watched %u (within %.0f units of you)", sinkWatchCount.load(std::memory_order_relaxed), kSinkWatchRadius);
-			if (readout.formID) {
-				WrapTextF("nearest: %08X %s", readout.formID, readout.name.c_str());
-				WrapTextF("Havok mass %.3f | game weight %.3f | footprint %.1f sq units | mass per footprint %.5f",
-					readout.mass, readout.refWeight, readout.footprint, readout.footprint > 0.01f ? readout.mass / readout.footprint : 0.0f);
-				WrapTextF("physics: %s | speed %.2f | snow here %.1f units deep",
-					readout.islandActive < 0 ? "no body" : (readout.islandActive ? "ACTIVE" : "asleep"), readout.speed, readout.snowDepth);
-				WrapTextF("physics node z %.2f | drawn mesh z %.2f (mesh above node %+.2f)", readout.rootZ, readout.meshZ, readout.meshZ - readout.rootZ);
-				WrapTextF("sink measure %.4f (0.1 rests on top, 0.8 rests on the Trench Floor) -> underside %.0f %% of the depth down", readout.measure, readout.sink * 100.0f);
-				if (readout.lifted)
-					WrapTextF("LIFTED by %.2f units", readout.appliedLift);
-				else
-					WrapTextF("not lifted");
-			} else {
-				WrapTextF("nearest: none - drop something on snow");
-			}
+			WrapTextF("dropped items in range %u (within %.0f units, nearest %u) | held above the ground %u",
+				itemSinkWatched.load(std::memory_order_relaxed), kItemSinkRadius, (uint32_t)kItemSinkMax, itemSinkHeld.load(std::memory_order_relaxed));
+			WrapTextF("%s", readout.c_str());
+			WrapTextF("Each item type logs its measure and roundness once to CommunityShaders.log ('item sink:').");
 			ImGui::TreePop();
 		}
 

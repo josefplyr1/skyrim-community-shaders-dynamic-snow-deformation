@@ -1609,10 +1609,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
-#if !SNOW_ALPHA_BUILD
-		if (sinkWatch)
-			SinkWatchNote(a_ref, position);
-#endif
+		ItemSinkNote(a_ref, position);
 		// Anchors update in place; the cycle stamp says when the reference was
 		// last seen, and a whole cycle unseen retires it.
 		auto prevIt = propPrevPositions.find(formID);
