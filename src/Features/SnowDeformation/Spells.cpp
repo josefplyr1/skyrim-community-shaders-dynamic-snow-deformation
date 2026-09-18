@@ -4,9 +4,7 @@
 
 #include "Features/SnowDeformation.h"
 
-#include "Features/SnowDeformation/AlphaBuild.h"
 #include "Globals.h"
-#include "Utils/Form.h"
 #include "Utils/Game.h"
 
 // How far along a stream to look for the ground it lands on. A held flame is
@@ -1654,236 +1652,6 @@ void SnowDeformation::OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* 
 	activeBlasts.push_back(opened);
 }
 
-// Stage 0 rune watch (BURIED-REF-LIFT-PLAN.md). Dev builds only, throwaway.
-#if !SNOW_ALPHA_BUILD
-namespace
-{
-	struct RuneNodeRead
-	{
-		bool has3D = false;
-		float localZ = 0.0f;
-		RE::NiPoint3 world;
-		RE::NiPoint3 axisY;
-		RE::NiPoint3 axisZ;
-		std::string rootName;
-		uint32_t children = 0;
-		bool hasImpact = false;
-		uint32_t collidee = 0;
-		int32_t layer = 0;
-		uint32_t material = 0;
-		RE::NiPoint3 negVelocity;
-	};
-
-	// Game thread only.
-	RuneNodeRead ReadRuneNode(RE::TESObjectREFR* a_ref)
-	{
-		RuneNodeRead out;
-		if (auto* root = a_ref->Get3D(false)) {
-			out.has3D = true;
-			out.localZ = root->local.translate.z;
-			out.world = root->world.translate;
-			const auto& m = root->world.rotate;
-			out.axisY = { m.entry[0][1], m.entry[1][1], m.entry[2][1] };
-			out.axisZ = { m.entry[0][2], m.entry[1][2], m.entry[2][2] };
-			out.rootName = root->name.c_str();
-			if (auto* node = root->AsNode())
-				out.children = node->GetChildren().size();
-		}
-		if (auto* projectile = a_ref->AsProjectile()) {
-			auto& impacts = projectile->GetProjectileRuntimeData().impacts;
-			if (!impacts.empty())
-				if (auto* impact = impacts.front()) {
-					out.hasImpact = true;
-					if (auto collidee = impact->collidee.get())
-						out.collidee = collidee->formID;
-					out.layer = static_cast<int32_t>(impact->collidedLayer.underlying());
-					out.material = impact->material ? impact->material->formID : 0u;
-					out.negVelocity = impact->negativeVelocity;
-				}
-		}
-		return out;
-	}
-
-	std::string RuneFlagDiff(uint32_t a_before, uint32_t a_after)
-	{
-		static const char* kNames[32] = { "Unk0", "NotAddThreat", "Unk2", "Unk3", "IsTracer", "Fading",
-			"GravityUpdateModel", "Unk7", "Inited", "ChainShatter", "Unk10", "Unk11", "AlwaysHit", "HitScan",
-			"Unk14", "DestroyAfterHit", "AddedToManager", "NoDamageOutsideCombat", "CanStartTrails",
-			"AggressiveActor", "AddedVisualEffectOnGround", "AutoAim", "ProcessedImpacts", "Unk23", "Unk24",
-			"Destroyed", "Unk26", "Unk27", "IsDual", "UseOrigin", "Unk30", "Moved" };
-		std::string out;
-		for (uint32_t bit = 0; bit < 32; ++bit) {
-			const uint32_t mask = 1u << bit;
-			if ((a_before ^ a_after) & mask) {
-				out += (a_after & mask) ? " +" : " -";
-				out += kNames[bit];
-			}
-		}
-		return out;
-	}
-}
-
-void SnowDeformation::RuneWatchConsider(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes)
-{
-	auto& runtime = a_projectile->GetProjectileRuntimeData();
-	// Stuck arrows sit in the manager for minutes.
-	if (runtime.ammoSource)
-		return;
-	const RE::NiPoint3 position = a_projectile->GetPosition();
-	const float distSq = a_camera.GetSquaredDistance(position);
-	if (distSq > a_cullRadius * a_cullRadius)
-		return;
-
-	const uint32_t formID = a_projectile->formID;
-	if (runeWatchStates.size() > 512 && !runeWatchStates.contains(formID))
-		runeWatchStates.clear();
-	auto& state = runeWatchStates[formID];
-	const uint32_t flags = runtime.flags.underlying();
-	std::string tag;
-
-	if (state.frames == 0) {
-		auto* base = a_projectile->GetBaseObject();
-		auto* record = base ? base->As<RE::BGSProjectile>() : nullptr;
-		logger::info("[SNOW DEFORMATION] S0 NEW {:08X} base {:08X} '{}' model '{}' spell {:08X} '{}' types {:#x} recflags {:#x} explosion {:08X} lifetime {:.1f} proximity {:.1f} timer {:.1f} collRadius {:.1f} speed {:.0f} range {:.0f} flags {:#010x}",
-			formID, base ? base->formID : 0u, Util::GetFormEditorID(base), record ? record->GetModel() : "",
-			runtime.spell ? runtime.spell->formID : 0u, runtime.spell ? runtime.spell->GetFullName() : "",
-			record ? static_cast<uint32_t>(record->data.types.underlying()) : 0u,
-			record ? static_cast<uint32_t>(record->data.flags.underlying()) : 0u,
-			record && record->data.explosionType ? record->data.explosionType->formID : 0u,
-			record ? record->data.lifetime : 0.0f, record ? record->data.explosionProximity : 0.0f,
-			record ? record->data.explosionTimer : 0.0f, record ? record->data.collisionRadius : 0.0f,
-			record ? record->data.speed : 0.0f, record ? record->data.range : 0.0f, flags);
-		state.burst = 120;
-		tag = " NEW";
-	} else {
-		if (flags != state.flags) {
-			logger::info("[SNOW DEFORMATION] S0 FLAGS {:08X} f{} :{}", formID, state.frames,
-				RuneFlagDiff(state.flags, flags));
-			state.burst = std::max(state.burst, 60u);
-			tag = " FLAGS";
-		}
-		const bool resting = position.GetSquaredDistance(state.previous) < 0.01f;
-		if (resting != state.resting) {
-			tag += resting ? " REST-EDGE" : " WOKE";
-			state.burst = std::max(state.burst, 120u);
-			state.resting = resting;
-		}
-	}
-	state.flags = flags;
-	state.previous = position;
-	state.frames++;
-
-	if (state.resting && (!runeWatchNearest || distSq < runeWatchNearestDistSq)) {
-		runeWatchNearest = a_projectile;
-		runeWatchNearestDistSq = distSq;
-	}
-
-	const bool sample = state.burst > 0 || state.frames % 30 == 0;
-	if (state.burst > 0)
-		state.burst--;
-	if (!sample)
-		return;
-	auto* taskInterface = SKSE::GetTaskInterface();
-	if (!taskInterface)
-		return;
-
-	float landZ = position.z;
-	a_tes->GetLandHeight(position, landZ);
-	float surfaceZ = 0.0f;
-	const bool surfaceOK = SampleShellSurface(position.x, position.y, surfaceZ);
-	const float nominal = GetNominalSnowDepthAt(position.x, position.y, -1.0f);
-	const float accumulation = GetAccumulationDepthScale();
-	const float speed = runtime.velocity.Length();
-	const float linearSpeed = runtime.linearVelocity.Length();
-	const float moved = runtime.distanceMoved;
-	const float living = runtime.livingTime;
-	const uint32_t frame = state.frames;
-	const bool resting = state.resting;
-	const bool lifted = formID == runeWatchLiftedID;
-	const RE::ObjectRefHandle handle = a_projectile->CreateRefHandle();
-	taskInterface->AddTask([=, this]() {
-		auto ref = handle.get();
-		if (!ref) {
-			logger::info("[SNOW DEFORMATION] S0 {:08X} f{} gone before the task ran", formID, frame);
-			return;
-		}
-		const RuneNodeRead node = ReadRuneNode(ref.get());
-		runeWatchSamples.fetch_add(1, std::memory_order_relaxed);
-		logger::info("[SNOW DEFORMATION] S0 {:08X} f{} {}{}{} | ref ({:.1f} {:.1f} {:.2f}) land {:.2f} surface {} {:.2f} nominal {:.1f} accum {:.2f} | speed {:.1f} lin {:.1f} moved {:.1f} living {:.2f} flags {:#010x} | node {} localZ {:.2f} world ({:.1f} {:.1f} {:.2f}) axisZ ({:.2f} {:.2f} {:.2f}) axisY ({:.2f} {:.2f} {:.2f}) '{}' kids {} | impact {} collidee {:08X} layer {} mat {:08X} negVel ({:.0f} {:.0f} {:.0f})",
-			formID, frame, resting ? "rest" : "move", lifted ? " LIFTED" : "", tag,
-			position.x, position.y, position.z, landZ, surfaceOK ? "ok" : "MISS", surfaceZ, nominal, accumulation,
-			speed, linearSpeed, moved, living, flags,
-			node.has3D ? "ok" : "NONE", node.localZ, node.world.x, node.world.y, node.world.z,
-			node.axisZ.x, node.axisZ.y, node.axisZ.z, node.axisY.x, node.axisY.y, node.axisY.z,
-			node.rootName, node.children,
-			node.hasImpact ? "yes" : "no", node.collidee, node.layer, node.material,
-			node.negVelocity.x, node.negVelocity.y, node.negVelocity.z);
-	});
-}
-
-void SnowDeformation::RuneWatchEndFrame(const std::unordered_set<uint32_t>& a_present, const RE::NiPoint3& a_camera)
-{
-	for (auto it = runeWatchStates.begin(); it != runeWatchStates.end();) {
-		if (a_present.contains(it->first)) {
-			++it;
-			continue;
-		}
-		logger::info("[SNOW DEFORMATION] S0 GONE {:08X} after {} frames, last flags {:#010x}{}", it->first,
-			it->second.frames, it->second.flags, it->first == runeWatchLiftedID ? " (was lifted)" : "");
-		it = runeWatchStates.erase(it);
-	}
-
-	runeWatchCount.store(static_cast<uint32_t>(runeWatchStates.size()), std::memory_order_relaxed);
-	const bool liftRequested = runeWatchLiftRequest.exchange(false, std::memory_order_acq_rel);
-	auto* nearest = runeWatchNearest;
-	runeWatchNearest = nullptr;
-	if (!nearest) {
-		if (liftRequested)
-			logger::info("[SNOW DEFORMATION] S0 LIFT refused: no resting projectile in range");
-		std::scoped_lock lock(runeWatchLock);
-		runeWatchReadout = {};
-		return;
-	}
-
-	const uint32_t formID = nearest->formID;
-	if (liftRequested) {
-		logger::info("[SNOW DEFORMATION] S0 LIFT queued: {:08X} +{:.1f}, {:.0f} units from the camera", formID,
-			runeWatchLift, std::sqrt(a_camera.GetSquaredDistance(nearest->GetPosition())));
-		LiftRefOntoSnow(nearest, runeWatchLift);
-		runeWatchLiftedID = formID;
-		runeWatchStates[formID].burst = 600;
-	}
-
-	auto* taskInterface = SKSE::GetTaskInterface();
-	if (!taskInterface)
-		return;
-	const RE::NiPoint3 position = nearest->GetPosition();
-	RuneWatchReadout readout{};
-	readout.formID = formID;
-	readout.flags = nearest->GetProjectileRuntimeData().flags.underlying();
-	readout.refZ = position.z;
-	readout.landZ = position.z;
-	if (auto* tes = RE::TES::GetSingleton())
-		tes->GetLandHeight(position, readout.landZ);
-	readout.surfaceOK = SampleShellSurface(position.x, position.y, readout.surfaceZ);
-	if (auto* base = nearest->GetBaseObject())
-		if (auto* record = base->As<RE::BGSProjectile>())
-			readout.model = record->GetModel();
-	const RE::ObjectRefHandle handle = nearest->CreateRefHandle();
-	taskInterface->AddTask([this, handle, readout]() mutable {
-		auto ref = handle.get();
-		if (!ref)
-			return;
-		const RuneNodeRead node = ReadRuneNode(ref.get());
-		readout.localZ = node.localZ;
-		readout.worldZ = node.world.z;
-		readout.upZ = node.axisZ.z;
-		std::scoped_lock lock(runeWatchLock);
-		runeWatchReadout = readout;
-	});
-}
-#endif
-
 void SnowDeformation::GatherSpellEmitters()
 {
 	spellEmitters.clear();
@@ -2084,16 +1852,6 @@ void SnowDeformation::GatherSpellEmitters()
 		GatherDashGouges(cloakDelta, cameraPosition, cullRadius);
 	}
 
-#if !SNOW_ALPHA_BUILD
-	if (runeWatch != runeWatchArmed) {
-		runeWatchArmed = runeWatch;
-		logger::info("[SNOW DEFORMATION] S0 rune watch: {}", runeWatch ? "armed" : "off");
-		runeWatchStates.clear();
-		runeWatchNearest = nullptr;
-		runeWatchLiftedID = 0;
-	}
-#endif
-
 	// Every projectile still flying, recorded before any culling or
 	// classification. Anything missing from this next frame has DIED; a
 	// projectile that merely flew out of the window is still in here, so
@@ -2126,11 +1884,6 @@ void SnowDeformation::GatherSpellEmitters()
 			break;
 		if (!projectile || !projectile->Is3DLoaded())
 			continue;
-
-#if !SNOW_ALPHA_BUILD
-		if (runeWatch)
-			RuneWatchConsider(projectile.get(), cameraPosition, cullRadius, tes);
-#endif
 
 		auto& runtime = projectile->GetProjectileRuntimeData();
 
@@ -2593,11 +2346,6 @@ void SnowDeformation::GatherSpellEmitters()
 
 	// Projectile form ids are recycled, so a fired id must not stay latched.
 	std::erase_if(hitscanBlasted, [&](uint32_t a_id) { return !presentIDs.contains(a_id); });
-
-#if !SNOW_ALPHA_BUILD
-	if (runeWatch)
-		RuneWatchEndFrame(presentIDs, cameraPosition);
-#endif
 
 	spellPrevPositions = std::move(currentPositions);
 	spellTrailPrev = std::move(currentTrailPositions);

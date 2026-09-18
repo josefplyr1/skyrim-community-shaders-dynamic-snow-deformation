@@ -2027,31 +2027,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
-			// Stage 0 rune watch (BURIED-REF-LIFT-PLAN.md), throwaway.
-			if (ImGui::TreeNodeEx("Stage 0: rune watch")) {
-				ImGui::Checkbox("Watch spell projectiles (CommunityShaders.log, lines tagged S0)", &runeWatch);
-				ImGui::SliderFloat("Manual lift (units)", &runeWatchLift, 5.0f, 60.0f, "%.0f");
-				if (ImGui::Button("Lift nearest resting projectile"))
-					runeWatchLiftRequest.store(true, std::memory_order_release);
-				RuneWatchReadout readout;
-				{
-					std::scoped_lock lock(runeWatchLock);
-					readout = runeWatchReadout;
-				}
-				WrapTextF("watched %u | samples logged %u", runeWatchCount.load(std::memory_order_relaxed),
-					runeWatchSamples.load(std::memory_order_relaxed));
-				if (readout.formID) {
-					WrapTextF("nearest resting: %08X%s  %s", readout.formID,
-						readout.formID == runeWatchLiftedID ? " LIFTED" : "", readout.model.c_str());
-					WrapTextF("ref z %.2f | node local z %.2f | node world z %.2f | land %.2f | snow surface %s %.2f",
-						readout.refZ, readout.localZ, readout.worldZ, readout.landZ,
-						readout.surfaceOK ? "ok" : "MISS", readout.surfaceZ);
-					WrapTextF("node up-axis z %.2f (1 = lying flat) | flags %08X", readout.upZ, readout.flags);
-				} else {
-					WrapTextF("nearest resting: none");
-				}
-				ImGui::TreePop();
-			}
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
 				// Diagnostics use plain text by existing convention (no i18n).
 				WrapTextF("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
