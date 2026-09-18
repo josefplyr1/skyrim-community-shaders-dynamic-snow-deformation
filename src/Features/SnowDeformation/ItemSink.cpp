@@ -40,6 +40,9 @@ namespace
 		bool hasBox = false;
 		float undersideZ = 0.0f;
 		float topZ = 0.0f;
+		/** The first shape's box in its own frame, game units: pose-independent. */
+		bool hasLocal = false;
+		float local[3] = {};
 	};
 
 	// Masses summed over every body; sleep is the first body's island.
@@ -82,6 +85,23 @@ namespace
 					out.undersideZ = out.hasBox ? std::min(out.undersideZ, z) : z;
 					out.topZ = out.hasBox ? std::max(out.topZ, top) : top;
 					out.hasBox = true;
+				}
+				if (!out.hasLocal) {
+					RE::hkTransform identity;
+					identity.rotation.col0 = { 1.0f, 0.0f, 0.0f, 0.0f };
+					identity.rotation.col1 = { 0.0f, 1.0f, 0.0f, 0.0f };
+					identity.rotation.col2 = { 0.0f, 0.0f, 1.0f, 0.0f };
+					identity.translation = { 0.0f, 0.0f, 0.0f, 0.0f };
+					RE::hkAabb box;
+					shape->GetAabbImpl(identity, 0.0f, box);
+					_mm_storeu_ps(low, box.min.quad);
+					_mm_storeu_ps(high, box.max.quad);
+					bool finite = true;
+					for (int i = 0; i < 3; ++i) {
+						out.local[i] = (high[i] - low[i]) * toGame;
+						finite = finite && std::isfinite(out.local[i]) && out.local[i] > 0.0f;
+					}
+					out.hasLocal = finite;
 				}
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
@@ -262,6 +282,14 @@ void SnowDeformation::ItemSinkUpdate()
 				longest = std::max({ ex, ey, ez });
 			}
 		}
+		// No authored box (mod-added forms), or a cube (the iron mace is 54 on
+		// every side): the collision's own box is the better shape.
+		if (body.hasLocal && thickness > 0.95f * longest) {
+			const float lx = std::max(body.local[0], 1.0f), ly = std::max(body.local[1], 1.0f), lz = std::max(body.local[2], 1.0f);
+			thickness = std::min({ lx, ly, lz });
+			side = std::sqrt(std::max({ lx * ly, ly * lz, lx * lz }));
+			longest = std::max({ lx, ly, lz });
+		}
 		thickness = std::max(thickness, 1.0f);
 		side = std::max(side, 1.0f);
 		float mass = body.mass;
@@ -296,11 +324,41 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 		}
 
-		// A rebuilt 3D has lost the offset with its nodes.
-		if (state.offsetApplied && state.offsetRoot != body.root) {
+		// A rebuilt 3D has lost the offset with its nodes - and a 3D that
+		// outlived its state (a load clears states) still carries one.
+		if (state.offsetRoot != body.root) {
 			state.offsetApplied = false;
 			state.childOffset = {};
 			state.appliedLift = 0.0f;
+			state.offsetRoot = nullptr;
+			if (auto found = itemSinkApplied.find(body.root); found != itemSinkApplied.end()) {
+				auto* node = body.root->AsNode();
+				RE::NiAVObject* firstChild = nullptr;
+				if (node)
+					for (auto& child : node->GetChildren())
+						if (child && !child->collisionObject) {
+							firstChild = child.get();
+							break;
+						}
+				const auto& applied = found->second;
+				const bool same = firstChild && firstChild == applied.child &&
+				                  firstChild->local.translate.x == applied.childLocal.x &&
+				                  firstChild->local.translate.y == applied.childLocal.y &&
+				                  firstChild->local.translate.z == applied.childLocal.z;
+				if (same) {
+					state.offsetApplied = true;
+					state.childOffset = applied.offset;
+					state.offsetRoot = body.root;
+					state.appliedLift = applied.lift;
+					if (itemSinkClaimsLogged < 64) {
+						itemSinkClaimsLogged++;
+						logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' still carries +{:.1f} from before its state was dropped; adopted",
+							state.formID, base->GetName(), applied.lift);
+					}
+				} else {
+					itemSinkApplied.erase(found);
+				}
+			}
 		}
 
 		const float weight = Smooth((std::log(std::max(measure, 1e-4f)) - std::log(kMeasureFloat)) / (std::log(kMeasureFull) - std::log(kMeasureFloat)));
@@ -313,14 +371,23 @@ void SnowDeformation::ItemSinkUpdate()
 		// A ring outside its own print, or its own trench would pull it down.
 		if (((frame + pick.key) & 7) == 0 || fresh) {
 			const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
-			const float ring = side * 0.75f + 14.0f;
-			float carved = 0.0f;
-			std::scoped_lock storeLock(trenchStoreMutex);
-			for (int i = 0; i < 8; ++i) {
-				const float angle = 0.785398f * i;
-				carved += SampleTrenchStore(worldspace, body.world.x + std::cos(angle) * ring, body.world.y + std::sin(angle) * ring);
+			// Just past its own print, and the three deepest of eight: an item
+			// wider than a trail still drops into it, where the average of a ring
+			// that mostly lands on untouched snow left it hanging over the trail.
+			const float ring = side * 0.5f + 10.0f;
+			float taps[8];
+			{
+				std::scoped_lock storeLock(trenchStoreMutex);
+				for (int i = 0; i < 8; ++i) {
+					const float angle = 0.785398f * i;
+					taps[i] = SampleTrenchStore(worldspace, body.world.x + std::cos(angle) * ring, body.world.y + std::sin(angle) * ring);
+				}
+				// The sampler's one-tile cache must not outlive the lock.
+				trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
+				trenchSampleTile = nullptr;
 			}
-			state.carveAround = std::clamp(carved * 0.125f, 0.0f, 1.0f);
+			std::sort(std::begin(taps), std::end(taps), std::greater<float>());
+			state.carveAround = std::clamp((taps[0] + taps[1] + taps[2]) / 3.0f, 0.0f, 1.0f);
 		}
 		const float carveAround = std::min(state.carveAround, 1.0f - trenchFloor);
 		// The height a snow state puts this item at, under the CURRENT settings.
@@ -395,9 +462,26 @@ void SnowDeformation::ItemSinkUpdate()
 			state.offsetApplied = want > 0.0f;
 			state.offsetRoot = body.root;
 			state.appliedLift = want;
+			if (itemSinkApplied.size() > 512)
+				itemSinkApplied.clear();
+			if (auto* node = body.root->AsNode())
+				for (auto& child : node->GetChildren())
+					if (child && !child->collisionObject) {
+						itemSinkApplied[body.root] = { child.get(), child->local.translate, offset, want };
+						break;
+					}
 		}
 		if (state.offsetApplied)
 			held++;
+
+		// One line when an item comes to rest: every number the height is made of.
+		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
+			itemSinkRestsLogged++;
+			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
+				state.formID, base->GetName(), snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
+				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
+		}
+		state.wasAsleep = body.asleep;
 
 		if (first && wantReadout) {
 			first = false;

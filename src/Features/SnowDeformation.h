@@ -3939,7 +3939,18 @@ protected:
 		float carveAround = 0.0f;
 		/** @brief Under where today's snow would put it: it stops printing, or its own trench would keep the snow off it. */
 		bool buried = false;
+		bool wasAsleep = false;
 	};
+	/** @brief What was last written to a root's first free child. A state can be dropped (a load) while the 3D lives on; an exact match means the offset is still there. Pointers are compared, never dereferenced. */
+	struct ItemSinkApplied
+	{
+		RE::NiAVObject* child = nullptr;
+		RE::NiPoint3 childLocal;
+		RE::NiPoint3 offset;
+		float lift = 0.0f;
+	};
+	std::unordered_map<RE::NiAVObject*, ItemSinkApplied> itemSinkApplied;
+	uint32_t itemSinkRestsLogged = 0;
 	struct ItemSinkRecord
 	{
 		uint32_t baseID = 0;
