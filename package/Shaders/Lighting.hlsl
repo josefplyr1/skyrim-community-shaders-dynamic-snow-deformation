@@ -3275,17 +3275,21 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #			if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV)
 	// Masks.y is dead for statics too (SSS reads it only where Masks.x >
-	// 0): carry the projection's real weight as 2 + w for the object snow
-	// shell's coat and edge lumps, 2.5 = the half blend the recolor cuts at,
-	// +-1 of weight either side (the surface reach grows from it).
-	// Landscape keeps (0, 1] for its grain.
+	// 0): carry the projection's verdict for the object snow shell's coat.
+	// The target is an 11-bit float, 64 steps an octave: 2 = known and bare,
+	// [4, 32) = bare with the weight, three octaves over 0.3 below the half
+	// blend (the coat's cut sinks into it as snow accumulates), 48 = painted.
+	// Landscape keeps (0, 1] for its grain. Mirror: SnowStaticsShell.hlsl.
 	[flatten] if (snowProjMatch)
-		psout.Masks.y = 2.0 + saturate(0.5 + 0.5 * projWeight);
+	{
+		float snowBareT = saturate(1.0 + projWeight / 0.3);
+		psout.Masks.y = projWeight >= 0.0 ? 48.0 : (snowBareT > 0.0 ? 4.0 * exp2(3.0 * snowBareT) : 2.0);
+	}
 #			elif defined(SNOW_DEFORMATION)
 	// A Seasons of Skyrim multipass object's base pass: no projection, so
 	// nothing above writes the weight and the skin's read-back saw 0
 	// ("unknown") and reconstructed a coat over every face. 2 = known and
-	// unpainted; the sparkle pass writes 2 + w over it where it paints.
+	// unpainted; the sparkle pass writes 48 over it where it paints.
 	// Same for any multipass snow MATO (vanilla glaciers and ice, Simplicity
 	// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
 	[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase)) != 0)
@@ -3294,12 +3298,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #			if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
 	// The snow-textured recolor's weight, same encoding, for the same coat.
 	[flatten] if (snowTexWeight > 0.003)
-		psout.Masks.y = 2.0 + saturate(snowTexWeight);
+		psout.Masks.y = snowTexWeight >= 0.5 ? 48.0 : 2.0;
 #			endif
 #			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
 	// The LOD brightness recolor's weight, same encoding, for the same coat.
 	[flatten] if (snowLodReplaceW > 0.003)
-		psout.Masks.y = 2.0 + saturate(snowLodReplaceW);
+		psout.Masks.y = snowLodReplaceW >= 0.5 ? 48.0 : 2.0;
 #			endif
 #			if defined(SNOW_DEFORMATION)
 	// Under drawn water: 2 = known, unpainted, so the coat stays off too.
@@ -3307,10 +3311,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		psout.Masks.y = 2.0;
 #			endif
 #			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
-	// An object LOD's weight rides 4 + w: the skin tells a LOD the game drew
-	// alone from one hidden inside its full model.
+	// An object LOD's verdict rides x256 (exact in a float): the skin tells a
+	// LOD the game drew alone from one hidden inside its full model.
 	[flatten] if (psout.Masks.y >= 1.5)
-		psout.Masks.y += 2.0;
+		psout.Masks.y *= 256.0;
 #			endif
 #		endif
 

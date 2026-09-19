@@ -501,14 +501,8 @@ public:
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f };
 		/** @brief Per-texture depth overrides keyed by lowercased diffuse path. Keyed by path, not form ID, so load-order changes cannot rebind them. */
 		std::map<std::string, float> TextureDepths;
-		/** @brief "Edge Lump Reach", 0-1: how far past the solid snow's contour the lumps hang on, in world units (1 = kEdgeReachUnits, 0 = no lumps), measured through the smooth projected weight's gradient so a wall's uniform faint frosting never counts as an edge. Feeds StaticsCB::EdgeFlankWidth. */
+		/** @brief "Edge Lump Reach", 0-1: how far the coat reaches past the game's solid paint, as a drop of the cut on the projection's own weight read back from Masks.y (1 = kEdgeReachWeightShift, 0 = the paint itself). Same from every view. Feeds StaticsCB::EdgeFlankWidth. */
 		float SkinEdgeFlankWidth = 0.0f;
-		/** @brief The edge lumps' screen-space reach disc keeps only taps that are on screen and within the reach of this point in 3D by scene depth, scoring over the taps kept: the lumps stop shifting with the camera. Default on (Josef, 2026-09-12); off is the old unchecked disc. */
-		bool EdgeReachTapsCheckDepth = true;
-		/** @brief A/B: the edge-reach disc is laid on the surface in world units and scored from the reconstructed projected weight, not from screen neighbours. Sends StaticsCB::EdgeReachDepthCheck = 2. */
-		bool EdgeReachOnSurface = false;
-		/** @brief A/B, wins over EdgeReachOnSurface: no disc; the coat's cut sinks below the game's half blend on the projection's own weight (Masks.y read-back), kEdgeReachWeightShift at reach 1. Sends StaticsCB::EdgeReachDepthCheck = 3. */
-		bool EdgeReachByWeight = false;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
@@ -2120,8 +2114,7 @@ public:
 		float ClassOverride;
 		/** @brief CapturedSnowStatic::projNoiseScale (projectedUVParams.x) - strength of vanilla's projected-noise term. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseScale;
-		/** @brief >0.5: Settings::EdgeReachTapsCheckDepth (was ProjSnowFillSk). Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
-		float EdgeReachDepthCheck;
+		float padEdgeReach;
 		/** @brief CapturedSnowStatic::projNoiseTiling (projectedUVParams.z) - the noise map's world-space tiling. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */
 		float ProjNoiseTiling;
 		/** @brief 2 = the S4 shell owns this draw (SKIN-PLACEMENT-PLAN S4 phase 1): the rolling-ball fillet grown vertically over the fill-covered slice of the projected footprint, per-pixel coverage from the reconstructed vanilla weight. 0 = classic path (no projection data, or a road). Encoded as 2 so the shader's >1.5 tests survive any future middle state. Requires the noise map at t21. Mirror in SnowStaticsShell.hlsl and SnowHeightCapture.hlsl. */

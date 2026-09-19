@@ -48,7 +48,7 @@ cbuffer StaticCB : register(b1)
 	// SnowDeformation.h.
 	float ClassOverride;
 	float ProjNoiseScale;   // layout sync with SnowStaticsShell; unused here
-	float EdgeReachDepthCheck;  // layout sync with SnowStaticsShell; unused here
+	float padEdgeReach;         // layout sync with SnowStaticsShell; unused here
 	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
 	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
 	float HasSkinNormalCopy;  // layout sync with SnowStaticsShell; unused here

@@ -253,9 +253,7 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	// >0.5: the edge-reach disc's screen taps are each checked against
-	// scene depth (was ProjSnowFillSk). Mirror in SnowDeformation.h.
-	float EdgeReachDepthCheck;
+	float padEdgeReach;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
@@ -347,8 +345,8 @@ Texture2D<float4> PreSkinNormals : register(t23);
 Texture2D<float4> GameShadowMask : register(t24);
 // Pre-shell MASKS copy (the terrain shell's LandMasksCopy): y carries the
 // landscape grain height in (0,1] and, on classified projected-snow statics,
-// the recolor's real blend weight as 2 + w. The coat and the edge lumps key
-// off the paint the game really applied, not a reconstruction of it.
+// the projection's verdict (SkinRecolorEnc). The coat and its reach key off
+// the paint the game really applied, not a reconstruction of it.
 Texture2D<float3> PreSkinMasks : register(t32);
 
 // The terrain window also reaches the patch VS: the road-verge depth blend
@@ -476,10 +474,11 @@ static const float kEdgeFlankLift = 0.4;
 // Reconstructed projected weight (vanilla projWeight + 0.1; the game's blend
 // is smoothstep(0,1,5w), 0 at w=0, 1 at w=0.2) at which the coat is solid.
 static const float kCoatSolidW = 0.15;
-// Edge Lump Reach 1 in world units past the solid contour.
-static const float kEdgeReachUnits = 32.0;
-// Edge reach by weight: how far below the half blend the cut sinks at reach 1.
-static const float kEdgeReachWeightShift = 0.5;
+// Edge Lump Reach 1: how far below the game's half blend the coat's cut sinks,
+// in projected weight. Under kRecolorWeightSpan, or reach 1 coats every face.
+static const float kEdgeReachWeightShift = 0.25;
+// Bare weights Lighting encodes, below the half blend (mirror: Lighting.hlsl).
+static const float kRecolorWeightSpan = 0.3;
 // The largest shortfall below the solid contour the lumps may hang from
 // (the game's own fade is 0.2 wide).
 static const float kEdgeMaxDrop = 0.12;
@@ -490,11 +489,19 @@ static const float kCoatMinNz = -1.0;
 // recolor's half blend, so the coat's edge sits where the recolor reads as
 // snow rather than at its last trace.
 static const float kCoatSolidReal = 0.5;
-// Masks.y read-back (Lighting.hlsl): 2 + w on a full model, 4 + w on an
-// object LOD the game drew. Returns the 2 + w form.
+// Masks.y read-back (Lighting.hlsl, 11-bit float): 2 = known and bare,
+// [4, 32) = bare with the projection's weight, 48 = painted; x256 = an object
+// LOD the game drew. Returns 0 unknown, 2 bare, 3 painted.
 float SkinRecolorEnc(float enc)
 {
-	return enc >= 3.5 ? enc - 2.0 : enc;
+	enc = enc >= 256.0 ? enc / 256.0 : enc;
+	return enc < 1.5 ? 0.0 : (enc >= 40.0 ? 3.0 : 2.0);
+}
+// The projection's weight under a bare pixel, <= 0; -1 = none written.
+float SkinRecolorWeight(float enc)
+{
+	enc = enc >= 256.0 ? enc / 256.0 : enc;
+	return (enc >= 3.5 && enc < 40.0) ? (log2(enc * 0.25) / 3.0 - 1.0) * kRecolorWeightSpan : -1.0;
 }
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
@@ -2143,12 +2150,7 @@ VS_OUTPUT main(VS_INPUT input)
 	// alpha carries information the normal test lacks (SKIN-PLACEMENT-PLAN).
 	// Mode 6 (Shell Layers): which peeled plane owned the vertex + the depth
 	// it was granted, the two questions every S4 report reduces to.
-	[flatten] if (StaticsDebugView > 10.5)
-	{
-		vsout.Coverage = v.NormalWS.z;
-		vsout.Flat = v.Flat;
-	}
-	else [flatten] if (StaticsDebugView > 5.5)
+	[flatten] if (StaticsDebugView > 5.5)
 	{
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
 		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, v.Flat), kMinSkinLift));
@@ -2347,12 +2349,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
 	// then traceable to whichever of the two is lying.
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 10.5)
-	{
-		vsout.Coverage = smoothZ;
-		vsout.Flat = isFlat;
-	}
-	else [flatten] if (StaticsDebugView > 5.5)
+	[flatten] if (StaticsDebugView > 5.5)
 	{
 		// Mode 6: identical encoding to the untessellated VS.
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
@@ -3564,50 +3561,6 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 #endif
 
 #if !defined(VOXEL)
-// A scalar's gradient along the surface, world units, from its screen
-// derivatives.
-float3 SurfaceGradient(float3 dPx, float3 dPy, float dSx, float dSy)
-{
-	float e = dot(dPx, dPx);
-	float f = dot(dPx, dPy);
-	float g = dot(dPy, dPy);
-	float det = e * g - f * f;
-	float3 grad = ((g * dSx - f * dSy) * dPx + (e * dSy - f * dSx) * dPy) / max(det, 1e-20);
-	return det > 1e-4 * e * g ? grad : float3(0.0, 0.0, 0.0);
-}
-
-#	ifndef PATCH
-// Edge reach on the surface (A/B against the screen disc): the same three
-// rings of eight, laid on the tangent plane in world units. Each tap is the
-// game's REAL weight at this pixel (wHere, read back) plus the reconstructed
-// CHANGE to the tap - noise difference, smooth half along its surface
-// gradient. The reconstruction's absolute value is a superset (bias, clamped
-// threshold) and coated whole houses; its differences hold. Returns the
-// painted share, 0 at zero reach.
-float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wHere, float noiseHere, float3 grad, float reachU, float3 gx, float3 gy, out float reachKept)
-{
-	float3 t = normalize(cross(n, abs(n.z) < 0.99 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
-	float3 b = cross(n, t);
-	// The linear carry holds only while the surface has not turned away.
-	float reach = min(reachU, 0.75 / max(length(grad), 1e-4));
-	reachKept = reach / max(reachU, 1e-4);
-	float hits = 0.0;
-	[unroll] for (int ring = 1; ring <= 3; ring++)
-	{
-		float r = reach * float(ring) / 3.0;
-		[unroll] for (int k = 0; k < 8; k++)
-		{
-			float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
-			float3 d = (t * cos(a) + b * sin(a)) * r;
-			float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, pos + d, triW, ProjNoiseTiling, gx, gy).x;
-			float w = wHere + clamp(dot(grad, d), -1.0, 1.0) - ProjNoiseScale * (noise - noiseHere);
-			hits += saturate(w * 50.0 + 0.5);
-		}
-	}
-	return hits / 24.0;
-}
-#	endif
-
 // Depth prepass (SNOW_STATICS_DEPTH_PREPASS): the alpha cut and nothing else,
 // no colour, no export - the hardware writes the raster depth exactly as the
 // shipping no-export twin does. Only non-carving draws take it; a carving
@@ -3661,11 +3614,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// 3907). The seam square is where the game stops drawing full
 		// models; SeamBounds carries the fade overlap, one ramp width.
 		// Not every cell of the square draws its models (the outer ring can
-		// stand as LOD alone): the pixel's owner decides, 4 + w = a LOD draw.
+		// stand as LOD alone): the pixel's owner decides, x256 = a LOD draw.
 		[flatten] if (SeamRampInv > 0.0)
 		{
 			float band = 1.0 / SeamRampInv;
-			bool lodOwnsPixel = HasSkinMasksCopy > 0.5 && PreSkinMasks.Load(int3(input.Position.xy, 0)).y >= 3.5;
+			bool lodOwnsPixel = HasSkinMasksCopy > 0.5 && PreSkinMasks.Load(int3(input.Position.xy, 0)).y >= 256.0;
 			[flatten] if (!lodOwnsPixel && all(worldXY > SeamBounds.xy + band) && all(worldXY < SeamBounds.zw - band))
 				discard;
 		}
@@ -3791,11 +3744,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
 	float edgeThr = kCoatSolidW;
-	// Surface reach inputs (EdgeReachSurface).
-	float reachNoise = 0.0;
-	float3 reachTriW = float3(0.0, 0.0, 1.0);
-	float reachSmoothRaw = normalWS.z * input.ProjFactor;
-	float3 reachGrad = SurfaceGradient(dPosX, dPosY, ddx(reachSmoothRaw), ddy(reachSmoothRaw));
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -3830,8 +3778,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// excluded), descending monotonically across the border, while
 		// the noisy cut stays narrow and only keeps the edge ragged.
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		reachNoise = noise;
-		reachTriW = triW;
 		// As the recolor applies it: everything the game paints at all is
 		// solid, so the footprint floors above the coat threshold.
 		float wFill = wpix > 0.003 ? max(wpix, 0.2) : wpix;
@@ -4228,18 +4174,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// THE COAT AND THE EDGE LUMPS (projected-snow draws whose property
 	// really carries projection data, Recolor Projected Snow on). The coat
 	// draws the shell's material over the paint the game REALLY applied,
-	// read back from the pre-shell Masks copy (Lighting writes 2 + weight
+	// read back from the pre-shell Masks copy (Lighting writes its verdict
 	// on classified statics), lifted off the object along the view ray for
-	// the z-test. The edge lumps hang past that paint's edge. An unpainted
-	// pixel samples a disc of the copy around it (three rings of eight,
-	// Edge Lump Reach wide) and takes the fraction that is solidly painted:
-	// about half beside a real edge, near nothing deep in a bare patch, and
-	// a lone speck of the game's noise moves it by 1/24 - a one-direction
-	// march counted every speck as an edge and hatched whole faces. The
-	// blob field (Edge Lump Size) turns that fraction into melded lobes on
-	// the contour, thinning to cores, nothing beyond. The solid part is
-	// never touched. Without the read-back the reconstruction stands in
-	// for the coat and no lumps are drawn.
+	// the z-test. Past that paint's edge the coat reaches by WEIGHT: a bare
+	// pixel carries the projection's own weight, and Edge Lump Reach sinks
+	// the cut into it (kEdgeReachWeightShift at 1). The solid part is never
+	// touched. Without the read-back the reconstruction stands in for the
+	// coat and nothing reaches.
 	float edgeFlankLift = 0.0;
 	// Solid coat pixels export a depth pushed toward the camera like the
 	// lumps do, kept apart from edgeFlankLift so the near-occluder shadow
@@ -4249,14 +4190,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Josef's shack roofs, bright with vanilla's snow rim light from one
 	// angle, correct straight down or close (2026-09-04).
 	float coatPush = 0.0;
-	// Reach compare view: x = screen disc score, y = surface score,
-	// z = 1 painted, 0 bare, -1 not a coat pixel.
-	float3 dbgReach = float3(0.0, 0.0, -1.0);
-	// Reach readings view: x = surface score, y = how far this pixel's real
-	// weight sits below the half blend, z = share of the reach the gradient
-	// cap kept.
-	float3 dbgReachRead = 0.0;
-	float dbgReachFade = fadeAlpha;
 	// S4 draws have no sheet of their own: every pdMode pixel reads as
 	// !inside below and only the coat block, off the game's real paint, can
 	// raise it again (the drape). Classic draws keep their own coverage.
@@ -4293,17 +4226,22 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// 2026-09-04). Where the shell overhangs an unclassified pixel
 			// the nearest classified neighbour stands in.
 			float realEnc = 0.0;
+			float realW = -1.0;
 			[branch] if (HasSkinMasksCopy > 0.5)
 			{
 				int2 mp = int2(input.Position.xy);
-				realEnc = SkinRecolorEnc(PreSkinMasks.Load(int3(mp, 0)).y);
+				float rawEnc = PreSkinMasks.Load(int3(mp, 0)).y;
+				realEnc = SkinRecolorEnc(rawEnc);
+				realW = SkinRecolorWeight(rawEnc);
 				[flatten] if (realEnc < 1.5)
 				{
 					int2 mmax = int2(masksDim) - 1;
-					realEnc = max(max(SkinRecolorEnc(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y),
-									  SkinRecolorEnc(PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y)),
-						max(SkinRecolorEnc(PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y),
-							SkinRecolorEnc(PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y)));
+					float4 rawN = float4(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y,
+						PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y,
+						PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y,
+						PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y);
+					realEnc = max(max(SkinRecolorEnc(rawN.x), SkinRecolorEnc(rawN.y)), max(SkinRecolorEnc(rawN.z), SkinRecolorEnc(rawN.w)));
+					realW = max(max(SkinRecolorWeight(rawN.x), SkinRecolorWeight(rawN.y)), max(SkinRecolorWeight(rawN.z), SkinRecolorWeight(rawN.w)));
 				}
 			}
 			bool realKnown = realEnc >= 1.5;
@@ -4313,80 +4251,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
-			dbgReach.z = painted ? 1.0 : 0.0;
 			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
-				// No pixel floor: a 3 px minimum gave every fleck a ring at
-				// 0.01 that 0.00 did not have, the whole slider's step in
-				// one notch. Sub-pixel reach samples the fleck itself, so
-				// the halo shrinks to nothing as the slider does.
-				const float reachU = kEdgeReachUnits * EdgeFlankWidth;
-				// EdgeReachDepthCheck 2 = score on the surface instead; the
-				// compare view runs both.
-				// 3 = no disc at all: the cut sinks on the game's own weight.
-				const bool reachByWeight = EdgeReachDepthCheck > 2.5;
-				const bool reachOnSurface = EdgeReachDepthCheck > 1.5 && !reachByWeight;
-				const bool reachCompare = StaticsDebugView > 10.5;
-				[branch] if (!(reachOnSurface || reachByWeight) || reachCompare)
-				{
-					// The disc in screen space. Its taps are screen neighbours,
-					// not surface neighbours, so unchecked it shifted with the
-					// view and died when the paint left the frame: with the
-					// depth check only taps on screen and within the reach of
-					// this point in 3D by their scene depth count, scored
-					// over those. A geodesic measure from the reconstruction's
-					// gradient was tried and retired (2026-09-12): it scores
-					// distance, not paint density, and coated ropes whole.
-					const bool tapsCheckDepth = EdgeReachDepthCheck > 0.5;
-					float reachPx = min(reachU / max(footprint, 1e-3), 96.0);
-					float pixZ = input.CurrentClip.w;
-					float hits = 0.0;
-					float valid = 0.0;
-					[unroll] for (int ring = 1; ring <= 3; ring++)
-					{
-						float r = reachPx * float(ring) / 3.0;
-						[unroll] for (int k = 0; k < 8; k++)
-						{
-							float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
-							float2 sp = input.Position.xy + float2(cos(a), sin(a)) * r;
-							float ok = 1.0;
-							[flatten] if (tapsCheckDepth)
-							{
-								bool onScreen = all(sp >= 0.0) && all(sp < masksDim);
-								float tapZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(clamp(sp, 0.0, masksDim - 1.0), 0)));
-								// Lateral gap scaled to the tap's own depth, plus the depth gap.
-								float lateral = r * footprint * tapZ / max(pixZ, 1e-3);
-								float dz = tapZ - pixZ;
-								float dist3 = sqrt(lateral * lateral + dz * dz);
-								ok = (onScreen && dist3 < 1.25 * reachU) ? 1.0 : 0.0;
-							}
-							float ee = SkinRecolorEnc(PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y);
-							// Soft: a tap on the paint's edge counts by how far it is in.
-							// The copy carries the weight itself now: same edge,
-							// cut as sharply as the recolor cuts it.
-							hits += ok * saturate((ee - (2.0 + kCoatSolidReal)) * 100.0 + 0.5);
-							valid += ok;
-						}
-					}
-					// A third of the disc at least: a lone surviving tap must
-					// not score as a whole painted disc.
-					nearPaint = hits / max(valid, 8.0);
-				}
-				[branch] if (reachOnSurface || reachByWeight || reachCompare)
-				{
-					// 2.5 = weight 0; a bare 2 carries no magnitude and never grows.
-					float wHere = (realEnc - 2.5) * 2.0;
-					float altPaint = saturate((wHere + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
-					[branch] if (!reachByWeight)
-					{
-						float reachKept;
-						altPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, wHere, reachNoise, reachGrad, reachU, projGradX, projGradY, reachKept);
-						dbgReachRead = float3(altPaint, -wHere, reachKept);
-					}
-					dbgReach.xy = float2(nearPaint, altPaint);
-					[flatten] if (reachOnSurface || reachByWeight)
-						nearPaint = altPaint;
-				}
+				// The cut sinks on the game's own weight at this pixel's own
+				// texel: the same from every view, the paint itself at reach 0.
+				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}
@@ -4534,30 +4403,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 11.5)
-		{
-			// Reach readings (surface scorer): R = its score, G = how far
-			// the pixel's real weight sits below the half blend (1 = a full
-			// unit or no magnitude written), B = share of the reach the
-			// gradient cap kept. White = solid paint, dim blue = no coat.
-			preLit = dbgReach.z < -0.5 ? float3(0.1, 0.15, 0.25) :
-			         (dbgReach.z > 0.5 ? float3(0.85, 0.85, 0.85) : saturate(dbgReachRead));
-		}
-		else [branch] if (StaticsDebugView > 10.5)
-		{
-			// Reach compare: where each edge-reach scorer would hang lumps,
-			// by the live keep rule. White = the game's solid paint, red =
-			// screen disc only, green = the other scorer only (by weight if
-			// that is ticked, else the surface disc), yellow = both, dark =
-			// neither, dim blue = not a coat pixel.
-			float fadeTerm = 1.5 * (1.0 - dbgReachFade);
-			bool byDisc = (dbgReach.x - 0.4) * 2.5 - fadeTerm >= 0.0;
-			bool bySurf = (dbgReach.y - 0.4) * 2.5 - fadeTerm >= 0.0;
-			preLit = dbgReach.z < -0.5 ? float3(0.1, 0.15, 0.25) :
-			         (dbgReach.z > 0.5 ? float3(0.85, 0.85, 0.85) :
-			                             float3(byDisc ? 1.0 : 0.12, bySurf ? 1.0 : 0.12, 0.12));
-		}
-		else [branch] if (StaticsDebugView > 9.5)
+		[branch] if (StaticsDebugView > 9.5)
 		{
 			// Volume seed: the seed pass's verdict at this surface, level 0,
 			// re-evaluated the way VoxelSeedCS does. Green = the field holds
