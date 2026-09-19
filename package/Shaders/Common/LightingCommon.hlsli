@@ -59,9 +59,6 @@ namespace Glints
 struct MaterialProperties
 {
 	float3 BaseColor;
-	// Unconditional: PBR::GetIndirectLobeWeights reads AO, and the snow-LOD
-	// path evaluates it in non-TRUE_PBR permutations. Unused members strip.
-	float AO;
 #if !defined(TRUE_PBR)
 	float Shininess;
 	float Glossiness;
@@ -80,13 +77,18 @@ struct MaterialProperties
 	float Curvature;
 	float Thickness;
 	float3 SubsurfaceColor;
+	float AO;
 	float FuzzRoughness;
 	float3 FuzzColor;
 	float FuzzWeight;
+#	else
+	// PBR::GetIndirectLobeWeights reads AO; present in every layout.
+	float AO;
 #	endif
 #else
 	float Roughness;
 	float Metallic;
+	float AO;
 	float3 F0;
 	float3 SubsurfaceColor;
 	float Thickness;
