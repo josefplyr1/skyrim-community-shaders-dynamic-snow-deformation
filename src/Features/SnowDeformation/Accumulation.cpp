@@ -4,7 +4,7 @@
 
 #include "Features/SnowDeformation.h"
 
-#include "CoSave.h"
+#include "Features/SnowDeformation/CoSave.h"
 #include "Globals.h"
 
 // Progressive snow accumulation: one global scalar, 0 = the authored per-class

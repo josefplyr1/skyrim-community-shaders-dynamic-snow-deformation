@@ -5,6 +5,7 @@
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/AlphaBuild.h"
+#include "Features/SnowDeformation/CoSave.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
@@ -1185,6 +1186,7 @@ void SnowDeformation::PostPostLoad()
 
 	// Claims the co-save records. Here rather than later because a save can be
 	// loaded straight from the main menu, and an unclaimed record is skipped.
+	CoSave::GetSingleton()->Install();
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
 	RegisterItemSinkCoSave();

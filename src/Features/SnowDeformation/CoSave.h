@@ -1,7 +1,11 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #pragma once
 
 /**
- * @brief Community Shaders' SKSE co-save channel.
+ * @brief Snow Deformation's SKSE co-save channel (the plugin's only one: SKSE allows one unique ID per plugin).
  *
  * A co-save is a `.skse` file created, copied and deleted WITH the save it
  * belongs to. Features needing per-save state therefore need no file of their
@@ -43,7 +47,7 @@ public:
 	/** @brief Plugin-wide co-save ID. Changing it orphans every existing chunk. */
 	static constexpr uint32_t kUniqueID = 'CSHD';
 
-	/** @brief Installs the SKSE callbacks. Call once, from the plugin's Load(), before any save can be loaded. */
+	/** @brief Installs the SKSE callbacks. Idempotent; called from the feature's PostPostLoad, before any save can be loaded. */
 	void Install();
 
 	/**
