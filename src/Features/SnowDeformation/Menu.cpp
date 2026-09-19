@@ -783,6 +783,9 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("item_min_roundness"), "Minimum Roundness"), &settings.ItemMinRoundness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttRound = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("item_min_roundness_tooltip"), "How rounded an item must be before it presses into its trench floor at all. Roundness is an item's thickness against the width of its largest side: a greatsword is about 0.08, a book 0.15, a shield 0.24, boots 0.6, a bucket 0.9. Items at or under this value rest on the floor; the share grows from here to the full Dropped Item Sink at 0.5. Raise it if flat items still disappear, lower it to let them sink."));
+		ImGui::SliderFloat(T(TKEY("item_snow_grip"), "Snow Grip"), &settings.ItemSnowGripPercent, 0.0f, 100.0f, "%.0f %%");
+		if (auto _ttGrip = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("item_snow_grip_tooltip"), "Snow packs under what drops into it and stops it rolling. The deeper an item is in the snow and the slower it is travelling, the harder it is held: dropped straight into deep snow it stays where it lands, thrown hard it still slides until it slows, and in shallow snow it rolls almost as it would on bare ground. 0 = the game's own physics."));
 		ImGui::EndDisabled();
 
 		ImGui::PushID("snow_trenches");

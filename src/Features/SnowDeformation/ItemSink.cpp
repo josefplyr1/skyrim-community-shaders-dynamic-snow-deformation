@@ -19,13 +19,21 @@ namespace
 	constexpr float kMaxLift = 80.0f;
 	/** A rest height is the item's where it lies; this far from there it is forgotten. */
 	constexpr float kRestMove = 3.0f;
-	/** A saved rest height is taken only by an item this close to where it was saved. */
-	constexpr float kRecordMatch = 8.0f;
+	/** A saved rest is taken only by an item this close to where it was saved: a load jostles a pile by 10-30 units, and a recycled form ID is usually much further. */
+	constexpr float kRecordMatch = 48.0f;
 	constexpr size_t kMaxRecords = 4096;
 	/** Melee weapons are authored anywhere from 9 to 35 for the same blade (steel vs iron greatsword); this much per unit of length at least. */
 	constexpr float kWeaponMassPerLength = 0.3f;
 	/** An item this far under where today's snow would put it is buried, and stops printing its trench. */
 	constexpr float kBuriedMargin = 2.0f;
+	/** Snow's grip on a body inside it, per second at full strength. Havok's damping is isotropic, so the linear part also slows the last of the fall: 686 u/s^2 over 6 = a 114 u/s sink. */
+	constexpr float kGripLinear = 6.0f;
+	constexpr float kGripAngular = 10.0f;
+	/** Flat speed under which the snow holds fully, and over which a thrown item still slides. */
+	constexpr float kGripSlow = 60.0f;
+	constexpr float kGripFast = 240.0f;
+	/** Snow over the body's underside at which the grip is full. */
+	constexpr float kGripDeep = 24.0f;
 
 	struct BodyRead
 	{
@@ -43,6 +51,9 @@ namespace
 		/** The first shape's box in its own frame, game units: pose-independent. */
 		bool hasLocal = false;
 		float local[3] = {};
+		/** Up to four bodies, this frame only: the snow's grip is written to them. */
+		RE::hkpRigidBody* rigid[4] = {};
+		float speedFlat = 0.0f;
 	};
 
 	// Masses summed over every body; sleep is the first body's island.
@@ -67,41 +78,59 @@ namespace
 				return RE::BSVisit::BSVisitControl::kContinue;
 			out.bodies++;
 			out.mass += hkpRigid->motion.GetMass();
+			if (out.bodies <= 4)
+				out.rigid[out.bodies - 1] = hkpRigid;
 			if (first) {
 				first = false;
 				out.asleep = hkpRigid->simulationIsland && !hkpRigid->simulationIsland->isInActiveIslandsArray;
+				float v[4];
+				_mm_storeu_ps(v, hkpRigid->motion.linearVelocity.quad);
+				out.speedFlat = std::sqrt(v[0] * v[0] + v[1] * v[1]) * toGame;
 			}
-			// The shape's LOCAL box turned with the body: never tighter than the
-			// shape, so it only ever errs downward (clamped to the land below).
+			// Havok's world box is the shape's own box turned with the body: for
+			// anything round it hangs far under the shape (an apple: 10.7 under a
+			// centre 5.5 above its skin), and the land clamp only helps an item
+			// lying ON the land. Half-height as an ellipsoid's instead -
+			// sqrt(sum((axis.z * extent)^2)) - exact for round shapes and for
+			// anything lying flat, short only for a box balanced on an edge.
 			if (const auto* shape = hkpRigid->collidable.GetShape()) {
+				const auto& transform = hkpRigid->motion.motionState.transform;
 				RE::hkAabb aabb;
-				shape->GetAabbImpl(hkpRigid->motion.motionState.transform, 0.0f, aabb);
-				float low[4], high[4];
+				shape->GetAabbImpl(transform, 0.0f, aabb);
+				RE::hkTransform identity;
+				identity.rotation.col0 = { 1.0f, 0.0f, 0.0f, 0.0f };
+				identity.rotation.col1 = { 0.0f, 1.0f, 0.0f, 0.0f };
+				identity.rotation.col2 = { 0.0f, 0.0f, 1.0f, 0.0f };
+				identity.translation = { 0.0f, 0.0f, 0.0f, 0.0f };
+				RE::hkAabb box;
+				shape->GetAabbImpl(identity, 0.0f, box);
+				float low[4], high[4], boxLow[4], boxHigh[4], axis[3][4];
 				_mm_storeu_ps(low, aabb.min.quad);
 				_mm_storeu_ps(high, aabb.max.quad);
-				const float z = low[2] * toGame;
-				const float top = high[2] * toGame;
-				if (std::isfinite(z) && std::isfinite(top)) {
-					out.undersideZ = out.hasBox ? std::min(out.undersideZ, z) : z;
-					out.topZ = out.hasBox ? std::max(out.topZ, top) : top;
-					out.hasBox = true;
+				_mm_storeu_ps(boxLow, box.min.quad);
+				_mm_storeu_ps(boxHigh, box.max.quad);
+				_mm_storeu_ps(axis[0], transform.rotation.col0.quad);
+				_mm_storeu_ps(axis[1], transform.rotation.col1.quad);
+				_mm_storeu_ps(axis[2], transform.rotation.col2.quad);
+				float extent[3];
+				float halfSquared = 0.0f;
+				bool finite = std::isfinite(low[2]) && std::isfinite(high[2]);
+				for (int i = 0; i < 3; ++i) {
+					extent[i] = (boxHigh[i] - boxLow[i]) * toGame;
+					finite = finite && std::isfinite(extent[i]) && extent[i] > 0.0f;
+					halfSquared += (axis[i][2] * extent[i] * 0.5f) * (axis[i][2] * extent[i] * 0.5f);
 				}
-				if (!out.hasLocal) {
-					RE::hkTransform identity;
-					identity.rotation.col0 = { 1.0f, 0.0f, 0.0f, 0.0f };
-					identity.rotation.col1 = { 0.0f, 1.0f, 0.0f, 0.0f };
-					identity.rotation.col2 = { 0.0f, 0.0f, 1.0f, 0.0f };
-					identity.translation = { 0.0f, 0.0f, 0.0f, 0.0f };
-					RE::hkAabb box;
-					shape->GetAabbImpl(identity, 0.0f, box);
-					_mm_storeu_ps(low, box.min.quad);
-					_mm_storeu_ps(high, box.max.quad);
-					bool finite = true;
-					for (int i = 0; i < 3; ++i) {
-						out.local[i] = (high[i] - low[i]) * toGame;
-						finite = finite && std::isfinite(out.local[i]) && out.local[i] > 0.0f;
+				if (finite) {
+					const float centre = (low[2] + high[2]) * 0.5f * toGame;
+					const float half = std::sqrt(halfSquared);
+					out.undersideZ = out.hasBox ? std::min(out.undersideZ, centre - half) : centre - half;
+					out.topZ = out.hasBox ? std::max(out.topZ, centre + half) : centre + half;
+					out.hasBox = true;
+					if (!out.hasLocal) {
+						for (int i = 0; i < 3; ++i)
+							out.local[i] = extent[i];
+						out.hasLocal = true;
 					}
-					out.hasLocal = finite;
 				}
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
@@ -397,8 +426,10 @@ void SnowDeformation::ItemSinkUpdate()
 		}
 		const float carveAround = std::min(state.carveAround, 1.0f - trenchFloor);
 		// The height a snow state puts this item at, under the CURRENT settings.
-		auto heightIn = [&](float a_surface, float a_depth, float a_carve) { return a_surface - std::max(sink, a_carve) * a_depth - embed; };
-		const float today = heightIn(surfaceZ, snowDepth, carveAround);
+		// Over the land under the item, not an absolute height: the rest then
+		// holds for an item a load has shoved a few units along a slope.
+		auto heightIn = [&](float a_rise, float a_depth, float a_carve) { return ground.z + a_rise - std::max(sink, a_carve) * a_depth - embed; };
+		const float today = heightIn(rise, snowDepth, carveAround);
 
 		// Snow buries: what is kept is the snow the item settled in. Rising
 		// snow closes over it; falling or dug snow takes it down, and it stays
@@ -411,15 +442,15 @@ void SnowDeformation::ItemSinkUpdate()
 				const bool claimed = record.baseID == state.baseID && std::abs(record.x - body.world.x) < kRecordMatch && std::abs(record.y - body.world.y) < kRecordMatch;
 				if (claimed) {
 					state.restValid = true;
-					state.restSurface = record.surface;
+					state.restRise = record.rise;
 					state.restDepth = record.depth;
 					state.restCarve = record.carve;
 					state.restPos = body.world;
 				}
 				if (itemSinkClaimsLogged < 64) {
 					itemSinkClaimsLogged++;
-					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {} its saved rest (snow then {:.1f} deep at z {:.1f}, carved {:.2f}; today {:.1f} deep at z {:.1f}, carved {:.2f}; moved {:.1f}, {:.1f})",
-						state.formID, base->GetName(), claimed ? "claims" : "REFUSES", record.depth, record.surface, record.carve, snowDepth, surfaceZ, carveAround,
+					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {} its saved rest (snow then {:.1f} deep rising {:.1f}, carved {:.2f}; today {:.1f} deep rising {:.1f}, carved {:.2f}; moved {:.1f}, {:.1f})",
+						state.formID, base->GetName(), claimed ? "claims" : "REFUSES", record.depth, record.rise, record.carve, snowDepth, rise, carveAround,
 						body.world.x - record.x, body.world.y - record.y);
 				}
 				itemSinkLoaded.erase(found);
@@ -430,15 +461,15 @@ void SnowDeformation::ItemSinkUpdate()
 		const bool snowKnown = snowDepth >= 1.0f;
 		float target = today;
 		if (state.restValid) {
-			if (snowKnown && today < heightIn(state.restSurface, state.restDepth, state.restCarve)) {
-				state.restSurface = surfaceZ;
+			if (snowKnown && today < heightIn(state.restRise, state.restDepth, state.restCarve)) {
+				state.restRise = rise;
 				state.restDepth = snowDepth;
 				state.restCarve = carveAround;
 			}
-			target = heightIn(state.restSurface, state.restDepth, state.restCarve);
+			target = heightIn(state.restRise, state.restDepth, state.restCarve);
 		} else if (body.asleep && snowKnown) {
 			state.restValid = true;
-			state.restSurface = surfaceZ;
+			state.restRise = rise;
 			state.restDepth = snowDepth;
 			state.restCarve = carveAround;
 			state.restPos = body.world;
@@ -482,6 +513,39 @@ void SnowDeformation::ItemSinkUpdate()
 		if (state.offsetApplied)
 			held++;
 
+		// Snow packs under what drops into it: the deeper the body is in, and
+		// the less it is travelling, the harder it is held. Written only on a
+		// change, under the world's write lock; the body's own damping goes back
+		// when it sleeps or leaves the snow.
+		{
+			const float over = snowKnown ? surfaceZ - carveAround * snowDepth - std::max(body.hasBox ? body.undersideZ : body.world.z, ground.z) : 0.0f;
+			float grip = enabled && !body.asleep ? std::clamp(settings.ItemSnowGripPercent, 0.0f, 100.0f) * 0.01f * Smooth(over / kGripDeep) *
+														(1.0f - Smooth((body.speedFlat - kGripSlow) / (kGripFast - kGripSlow))) :
+			                                       0.0f;
+			if (grip < 0.02f)
+				grip = 0.0f;
+			if (std::abs(grip - state.grip) > 0.05f || (grip == 0.0f) != (state.grip == 0.0f)) {
+				auto* cell = ref->GetParentCell();
+				auto* world = cell ? cell->GetbhkWorld() : nullptr;
+				if (world) {
+					RE::BSWriteLockGuard guard(world->worldLock);
+					for (auto* rigid : body.rigid) {
+						if (!rigid)
+							continue;
+						auto& motion = rigid->motion.motionState;
+						if (!state.gripBaseKnown) {
+							state.gripBaseLinear = motion.linearDamping;
+							state.gripBaseAngular = motion.angularDamping;
+							state.gripBaseKnown = true;
+						}
+						motion.linearDamping = state.gripBaseLinear + grip * kGripLinear;
+						motion.angularDamping = state.gripBaseAngular + grip * kGripAngular;
+					}
+					state.grip = grip;
+				}
+			}
+		}
+
 		// One line when an item comes to rest: every number the height is made of.
 		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
 			itemSinkRestsLogged++;
@@ -519,18 +583,18 @@ void SnowDeformation::SaveItemSink(const SKSE::SerializationInterface* a_intfc)
 	struct Row
 	{
 		uint32_t formID, baseID;
-		float x, y, surface, depth, carve;
+		float x, y, rise, depth, carve;
 	};
 	std::vector<Row> rows;
 	{
 		std::scoped_lock lock(itemSinkLock);
 		for (const auto& [key, state] : itemSinkStates)
 			if (state.restValid && state.formID && rows.size() < kMaxRecords)
-				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restSurface, state.restDepth, state.restCarve });
+				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restRise, state.restDepth, state.restCarve });
 		// Settled items this session never came near keep their records.
 		for (const auto& [formID, record] : itemSinkLoaded)
 			if (rows.size() < kMaxRecords)
-				rows.push_back({ formID, record.baseID, record.x, record.y, record.surface, record.depth, record.carve });
+				rows.push_back({ formID, record.baseID, record.x, record.y, record.rise, record.depth, record.carve });
 	}
 	if (rows.empty() || !a_intfc->OpenRecord(kItemSinkRecord, kItemSinkRecordVersion))
 		return;

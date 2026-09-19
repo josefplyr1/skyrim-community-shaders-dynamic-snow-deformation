@@ -529,6 +529,8 @@ public:
 		bool ItemSink = true;
 		/** @brief Thickness over the side of the largest face below which an item counts as flat and does not press into its trench floor; the share ramps to full at 0.5. */
 		float ItemMinRoundness = 0.20f;
+		/** @brief Percent of full grip: snow damps a dropped item's roll and slide by how deep it is in and how slowly it is travelling. 0 = the game's physics untouched. */
+		float ItemSnowGripPercent = 100.0f;
 		/** @brief World-unit jitter of where class-depth borders fall (fine-grained domain warp), so snow edges never trace the texture seam. Capped 37-unit wander plus a fine 8-unit octave. */
 		float SnowBorderNoise = 8.0f;
 		/** @brief World-unit radius widening the depth ramp between neighboring classes, so deep snow meets shallow ground in a slope instead of a ravine wall. */
@@ -3905,7 +3907,7 @@ protected:
 	static constexpr float kItemSinkRadius = 3000.0f;
 	static constexpr size_t kItemSinkMax = 32;
 	static constexpr uint32_t kItemSinkRecord = 'SNIS';
-	static constexpr uint32_t kItemSinkRecordVersion = 2;
+	static constexpr uint32_t kItemSinkRecordVersion = 3;
 	struct ItemSinkCandidate
 	{
 		RE::ObjectRefHandle handle;
@@ -3931,7 +3933,7 @@ protected:
 		uint32_t restPasses = 0;
 		/** @brief The snow the item settled in (surface height, depth, share dug away around it) and where that was. Snow buries: replaced only by a snow state that puts the item lower. */
 		bool restValid = false;
-		float restSurface = 0.0f;
+		float restRise = 0.0f;
 		float restDepth = 0.0f;
 		float restCarve = 0.0f;
 		RE::NiPoint3 restPos;
@@ -3943,6 +3945,11 @@ protected:
 		/** @brief The first free child's translate as last written: a root that changes over meshes still holding it has not lost the offset. */
 		bool hasWritten = false;
 		RE::NiPoint3 lastWritten;
+		/** @brief The snow's grip as last written to the body's damping, and the damping it had before. */
+		float grip = 0.0f;
+		bool gripBaseKnown = false;
+		float gripBaseLinear = 0.0f;
+		float gripBaseAngular = 0.0f;
 	};
 	/** @brief What was last written to a root's first free child. A state can be dropped (a load) while the 3D lives on; an exact match means the offset is still there. Pointers are compared, never dereferenced. */
 	struct ItemSinkApplied
@@ -3958,7 +3965,7 @@ protected:
 		uint32_t baseID = 0;
 		float x = 0.0f;
 		float y = 0.0f;
-		float surface = 0.0f;
+		float rise = 0.0f;
 		float depth = 0.0f;
 		float carve = 0.0f;
 	};

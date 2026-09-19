@@ -81,6 +81,7 @@
 	X(DecalsOnObjectSnow) \
 	X(RuneDecalsOnSnow) \
 	X(RuneGlow) 	X(ItemEmbedPercent) 	X(ItemSink) 	X(ItemMinRoundness) \
+	X(ItemSnowGripPercent) \
 	X(FrostTexturePath) \
 	X(EnableLightningArcs) \
 	X(LightningArcWidth) \
