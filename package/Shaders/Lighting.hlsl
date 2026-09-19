@@ -897,18 +897,16 @@ float GetSnowParameterY(float texProjTmp, float alpha)
 
 #	include "Common/LightingEval.hlsli"
 
-#	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-// Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
-// the LOD terrain family (horizon snow) and projected-snow statics (the
-// frame7075 fence, technique ENVMAP+PROJECTED_UV). The optional-lobe
-// branches inside are TRUE_PBR-gated, so these permutations compile the
-// coatless diffuse/lobe core against the vanilla MaterialProperties.
-#		include "Common/PBR.hlsli"
+#	if defined(SNOW_DEFORMATION)
+#		include "SnowDeformation/SnowLighting.hlsli"
 #	endif
 
 PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 {
 	PS_OUTPUT psout;
+#	if defined(SNOW_DEFORMATION)
+	SnowLighting::State snowState = (SnowLighting::State)0;
+#	endif
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;
 	float3 viewDirection = -normalize(input.WorldPosition.xyz);
@@ -1204,24 +1202,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #		if defined(SNOW_DEFORMATION)
-	// Per-tile snow detection: how much of this pixel's landscape blend is
-	// snow material. Also computed for the debug overlay while the feature is
-	// disabled — snow detection is exactly what the overlay exists to verify.
-	float snowDeformationSnowness = 0.0;
-	[branch] if (SharedData::snowDeformationSettings.EnableSnowDeformation || (SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
-	{
-#			if defined(TRUE_PBR)
-		// PBR terrain replaces the vanilla per-layer snow constants, so the
-		// CPU side publishes per-tile snow-material bits via the permutation
-		// data (see SnowDeformation::BSLightingShader_SetupMaterial).
-		uint snowTileBits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
-		float4 snowIsSnow1to4 = float4(snowTileBits & 1, (snowTileBits >> 1) & 1, (snowTileBits >> 2) & 1, (snowTileBits >> 3) & 1);
-		float2 snowIsSnow5to6 = float2((snowTileBits >> 4) & 1, (snowTileBits >> 5) & 1);
-		snowDeformationSnowness = saturate(dot(input.LandBlendWeights1, snowIsSnow1to4) + dot(input.LandBlendWeights2.xy, snowIsSnow5to6));
-#			else
-		snowDeformationSnowness = saturate(dot(input.LandBlendWeights1, LandscapeTexture1to4IsSnow) + input.LandBlendWeights2.x * LandscapeTexture5to6IsSnow.x + input.LandBlendWeights2.y * LandscapeTexture5to6IsSnow.y);
-#			endif
-	}
+	SnowLighting::LandSnowness(snowState, input.LandBlendWeights1, input.LandBlendWeights2.xy);
 #		endif
 
 #		if defined(EMAT)
@@ -1353,41 +1334,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif
 
 #		if defined(SNOW_DEFORMATION)
-	// Diagnostic overlay: R = outside deformation window, G = raw
-	// deformation sample, B = detected snowness.
-	[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
-	{
-		float2 debugWorldXY = input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
-		float2 debugUV = SnowDeformation::GetDeformationUV(debugWorldXY);
-		float debugOutside = (all(debugUV > 0.0) && all(debugUV < 1.0)) ? 0.0 : 1.0;
-		float debugDeformation = SnowDeformation::GetDeformation(debugWorldXY);
-		baseColor.xyz = lerp(baseColor.xyz, float3(debugOutside, debugDeformation, snowDeformationSnowness), 0.75);
-	}
-
-	// Tiling ruler: three grids on the same ground, for measuring the land
-	// texture's world-space repeat against the shell's kSnowUVTile.
-	// Red = one landscape texture repeat, green = 256 world units (the shell's
-	// tile), blue = 4096 (cell boundary; the scale anchor that proves the
-	// world XY is right). Red per green IS the tiling ratio.
-	[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 2) != 0)
-	{
-		float2 rulerWorldXY = input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy;
-		// Constant ~1px lines: distance to the nearest gridline, in units of
-		// that grid's own screen-space derivative.
-#		define SNOW_RULER_LINE(COORD) \
-			(1.0 - smoothstep(0.0, 1.0, (0.5 - abs(frac(COORD) - 0.5)) / max(fwidth(COORD), 1e-9)))
-
-		float2 landLineXY = SNOW_RULER_LINE(uvOriginal);
-		float2 tileLineXY = SNOW_RULER_LINE(rulerWorldXY / 256.0);
-		float2 cellLineXY = SNOW_RULER_LINE(rulerWorldXY / 4096.0);
-#		undef SNOW_RULER_LINE
-
-		float3 rulerColor = 0.0;
-		rulerColor.x = max(landLineXY.x, landLineXY.y);
-		rulerColor.y = max(tileLineXY.x, tileLineXY.y);
-		rulerColor.z = max(cellLineXY.x, cellLineXY.y);
-		baseColor.xyz = lerp(baseColor.xyz, rulerColor, saturate(dot(rulerColor, 1.0)));
-	}
+	SnowLighting::DebugLandOverlay(baseColor.xyz, input.WorldPosition.xy, snowState.landSnowness, uvOriginal);
 #		endif
 #	else  // Non-landscape code
 	float4 rawBaseColor = TexColorSampler.SampleBias(SampColorSampler, diffuseUv, SharedData::MipBias);
@@ -1488,63 +1435,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // MODELSPACENORMALS
 
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	// Horizon snow: where the game's own LOD terrain bake reads as snow,
-	// wear the shell's snow material instead — same albedo, same world
-	// tiling — so the shell's geometry hands off to identically-dressed
-	// terrain beyond its reach. Classification runs on the raw (gamma)
-	// bake, matching the window fill's thresholds; LOD meshes carry
-	// model-space normals ≈ world space, so normal.z gates cliffs back to
-	// rock even where the bake is pale. Shading happens at the write tail
-	// (the shell's recipe on the OUTPUTS); the legacy A/B path patches the
-	// vanilla INPUTS here instead.
-	float snowLodReplaceW = 0.0;
-	float3 snowLodAlbedo = 0.0;
-#		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
-	// Plain object-LOD batches flagged by the statics hook: their baked snow
-	// (drifts, roads, piles in the atlas) takes the horizon recipe. The
-	// bake covers the mesh whole, so only undersides are kept out.
-	bool snowLodOn = SharedData::snowDeformationSettings.LODObjectEnable > 0.5 &&
-	                 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0;
-#		else
-	bool snowLodOn = SharedData::snowDeformationSettings.LODReplaceEnable > 0.5;
-#		endif
-	[branch] if (snowLodOn)
-	{
-		float lodSnowScore = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb);
-		float lodReplaceT = saturate((length(input.WorldPosition.xy) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
-#		if defined(LODOBJECTS) || defined(LODOBJECTSHD)
-		float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);
-#		else
-		float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
-#		endif
-		[branch] if (lodReplaceW > 0.003)
-		{
-			// frac + explicit gradients: correct mip selection across the
-			// tile seam regardless of the sampler's address mode.
-			float2 snowRawUV = (input.WorldPosition.xy + FrameBuffer::CameraPosAdjust.xy) / SnowDeformation::SnowUVTile;
-			float3 snowSample = SnowDeformation::HorizonSnowAlbedo.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).rgb;
-			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo):
-			// sRGB-encoded, no vanilla Diffuse() processing. (The legacy
-			// vanilla-math recolor A/B this used to branch on is retired.)
-			snowLodReplaceW = lodReplaceW;
-			snowLodAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowSample) : snowSample;
-			// Classification debug (bit 4): the baked recipe's pixels in magenta too.
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-				snowLodAlbedo = float3(1.0, 0.0, 1.0);
-			// Normal-map parity with the shell: perturb the LOD normal by the
-			// snow normal at the same world tiling. LOD normals are world-
-			// space up-ish, so a world-axis tangent frame is stable here.
-			// Shared by both paths; feeds N·L and the DALC/IBL ambient.
-			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
-			{
-				float3 snowNormalTS = SnowDeformation::HorizonSnowNormal.SampleGrad(SampColorSampler, frac(snowRawUV), ddx(snowRawUV), ddy(snowRawUV)).xyz * 2.0 - 1.0;
-				float3 lodTangent = normalize(cross(float3(0.0, 1.0, 0.0), normal.xyz));
-				float3 lodBitangent = cross(normal.xyz, lodTangent);
-				float3 snowWorldNormal = normalize(snowNormalTS.x * lodTangent + snowNormalTS.y * lodBitangent + max(snowNormalTS.z, 0.05) * normal.xyz);
-				normal.xyz = normalize(lerp(normal.xyz, snowWorldNormal, lodReplaceW));
-			}
-		}
-	}
+	SnowLighting::LODRecolor(snowState, rawBaseColor.rgb, input.WorldPosition.xy, normal.xyz);
 #	endif
 
 #	if defined(WORLD_MAP)
@@ -1741,16 +1632,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 	float projWeight = 0;
 
-#	if defined(SNOW_DEFORMATION)
-	// SNOW-MATCH Phase 2: set where the CPU classified this draw's projected
-	// material as snow and the swap ran; the albedo is saved for the write
-	// tail, which re-lights the projected-snow fraction of non-PBR pixels.
-	bool snowProjMatch = false;
-	float3 snowProjAlbedo = 0.0;
-	// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
-	bool snowUnderWater = false;
-	[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
-		snowUnderWater = SnowDeformation::UnderWater(input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz);
+#	if defined(SNOW_DEFORMATION) && !defined(LANDSCAPE)
+	SnowLighting::BeginObject(snowState, input.WorldPosition.xyz);
 #	endif
 
 #	if defined(PROJECTED_UV)
@@ -1766,24 +1649,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // defined (TREE_ANIM) || defined (LODOBJECTSHD)
 	float projDot = dot(worldNormal.xyz, texProj);
 #		if defined(SNOW_DEFORMATION)
-	// Runtime-applied projections (Seasons of Skyrim) carry the record
-	// default max angle (cos 0) and no vertex-alpha mask, so every face short
-	// of an overhang paints. Stand in for the mask an author would have
-	// painted: a slope cut at the max angle, applied to the alpha so tops
-	// keep the projection's own full weight and noise (a threshold
-	// subtracted from the weight left only patches) and steeper faces go
-	// bare. The game's own paint, the sparkle discard and the recolor all
-	// follow it.
-	// Seasons' own snow statics carry no authored alpha at all (it reads 0):
-	// the mask stands in for it rather than scaling it.
-	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedNoAlpha) != 0)
-		vertexAlpha = 1.0;
-	[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
-		vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
-	// Under drawn water the game's own projection paints nothing either,
-	// on snow-classified draws only (the sparkle pass then discards).
-	[flatten] if (snowUnderWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
-		vertexAlpha = 0.0;
+	vertexAlpha = SnowLighting::ProjectionAlpha(snowState, vertexAlpha, projDot);
 #		endif
 	projWeight = -ProjectedUVParams.x * projNoise + (projDot * vertexAlpha - ProjectedUVParams.w);
 #		if defined(LODOBJECTSHD)
@@ -1803,8 +1669,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		float detailNormalScale = ProjectedUVParams3.y * ProjectedUVParams.z;
 		float3 projDetailNormal = Triplanar::SampleStochastic(TexProjDetail, SampProjDetailSampler, projWorldPos, triWeights, detailNormalScale, screenNoise).xyz;
 		float3 finalProjNormal = normalize(TransformNormal(projDetailNormal) * float3(1, 1, projNormal.z) + float3(projNormal.xy, 0));
-		float3 projDiffuse = Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz;
-		float3 projBaseColor = Color::ColorToLinear(projDiffuse) * Color::ColorToLinear(ProjectedUVParams2.xyz);
+		float3 projBaseColor = Color::ColorToLinear(Triplanar::SampleStochastic(TexProjDiffuseSampler, SampProjDiffuseSampler, projWorldPos, triWeights, diffuseNormalScale, screenNoise).xyz) * Color::ColorToLinear(ProjectedUVParams2.xyz);
 		projectedMaterialWeight = smoothstep(0, 1, 5 * (0.1 + projWeight));
 #			if defined(TRUE_PBR)
 		projBaseColor = max(0, projBaseColor.xyz * MaterialObjectRGBScale);
@@ -1841,110 +1706,18 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif      // SPARKLE
 
 #		if defined(SNOW_DEFORMATION) && !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
-	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
-	// picks texture vs flat-color projection above; when the CPU classified
-	// this draw's projected material as snow, both paths converge here onto
-	// the shell's snow set. The flat path especially: its untextured white
-	// is the only story consistent with every frame7075 measurement
-	// (RGBScale = 0 blacks the texture path, yet the fence rails render
-	// blue-white), and it samples no texture, which is why the in-branch
-	// swap of rounds 1-4 could never change it. Sits after the SPARKLE
-	// branch so the multipass snow pass (technique 14, every surviving pixel
-	// already snow) takes the same set.
-	snowProjMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !snowUnderWater &&
-	                (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
-	[branch] if (snowProjMatch)
-	{
-		// All or nothing at the game's own half blend (projWeight 0, where
-		// vanilla's flat-colour path starts painting), in the object's own
-		// shader so no angle is missed. The old cut at the last trace of
-		// paint turned a faint dusting into full snow (interior floors,
-		// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
-		projectedMaterialWeight = smoothstep(-0.01, 0.01, projWeight);
-		[branch] if (projectedMaterialWeight > 0.003)
-		{
-			// Plane weights from the smooth vertex normal. The derivative face
-			// normal behind triWeights goes through a hard step() mask and flips
-			// planes on the quads straddling mesh creases - a line of a different
-			// snow texel along the edge.
-			float3 snowTriWeights = Triplanar::GetWeights(tbnTr[2], tbnTr[2]);
-			// The sparkle pass declares no projected-diffuse sampler (s3 is
-			// its own texture there); its colour sampler is the same wrap state.
-#			if defined(SPARKLE)
-			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-#			else
-			float3 snowProjSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, projWorldPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-#			endif
-			// Shell albedo convention: sRGB-encoded (SnowShell.hlsl:1592).
-			snowProjAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowProjSample) : snowProjSample;
-			// Classification debug: everything this block replaces, in magenta.
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-				snowProjAlbedo = float3(1.0, 0.0, 1.0);
-			// Recolor weight view (bit 32): the weight the recolor really
-			// blends by, as a grey ramp.
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
-				snowProjAlbedo = projectedMaterialWeight.xxx;
-			// Sampled-albedo view (bit 64): the texture read above, raw. The
-			// magenta and weight views both REPLACE snowProjSample, so they
-			// say nothing about whether HorizonSnowAlbedo reached the draw -
-			// and a recolor whose block runs at full weight while the pixel
-			// does not change can only be the sample.
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 64) != 0)
-				snowProjAlbedo = snowProjSample;
-#			if defined(TRUE_PBR)
-			// PBR pixels are convention-correct already: albedo + the shell's
-			// response stand-ins (rawRMAOS.w IS F0; 0.028 = shell kSnowF0).
-			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowProjAlbedo), projectedMaterialWeight);
-			rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), projectedMaterialWeight);
-#			else
-			// Vanilla pixels get the albedo here; the write tail re-lights
-			// the snow fraction through the PBR evaluators (hue+brightness).
-			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowProjAlbedo) * Color::VanillaDiffuseColorMult(), projectedMaterialWeight);
-#			endif
-		}
-	}
-	// Recolor weight view (bit 32): projected draws the recolor does not
-	// classify as snow go red, so an unpainted wall reads as "not ours".
-	[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !snowProjMatch)
-		baseColor.xyz = float3(1.0, 0.0, 0.0);
+	SnowLighting::ProjectedRecolor(snowState, projWeight, tbnTr[2], projWorldPos, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS);
 #		endif
 
 #	endif  // SNOW
 
 #	if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-	// Snow-textured shapes without projection (a dirt cliff's snow01 top, a
-	// season swap's alternate set, drifts), flagged by the statics hook: the
-	// shell's snow set at the texel's own brightness, in the object's own
-	// shader. The weight is written back like projected snow for the coat.
-	float snowTexWeight = 0.0;
-	[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 && !snowUnderWater &&
-	             (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
-	{
-		snowTexWeight = SnowDeformation::ClassifyLODSnow(rawBaseColor.rgb) * smoothstep(0.35, 0.65, worldNormal.z);
-		[branch] if (snowTexWeight > 0.003)
-		{
-			float3 snowTexWorld = input.WorldPosition.xyz + FrameBuffer::CameraPosAdjust.xyz;
-			float3 snowTexWeights = Triplanar::GetWeights(worldNormal, worldNormal);
-			float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
-			float3 snowTexAlbedo = SharedData::snowDeformationSettings.SnowIsLinear > 0.5 ? Color::LinearToSrgb(snowTexSample) : snowTexSample;
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-				snowTexAlbedo = float3(1.0, 0.0, 1.0);
-			[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
-				snowTexAlbedo = snowTexWeight.xxx;
-#		if defined(TRUE_PBR)
-			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowTexAlbedo), snowTexWeight);
-			rawRMAOS.xyw = lerp(rawRMAOS.xyw, float3(SharedData::snowDeformationSettings.SnowRoughnessScale, 0, 0.028), snowTexWeight);
-#		else
-			baseColor.xyz = lerp(baseColor.xyz, Color::ColorToLinear(snowTexAlbedo) * Color::VanillaDiffuseColorMult(), snowTexWeight);
-#		endif
-		}
-	}
+	SnowLighting::SnowTexturedRecolor(snowState, rawBaseColor.rgb, worldNormal.xyz, input.WorldPosition.xyz, screenNoise, baseColor.xyz, rawRMAOS);
 #	endif
 
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(rawBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
-
 
 #	if defined(MODELSPACENORMALS)
 	float3 vertexNormal = worldNormal;
@@ -2895,10 +2668,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
-	// Total accumulated lights before :2798 clobbers diffuseColor; the
-	// projected-snow override below reconstructs the point-light share
-	// from it so torch-lit snow caps keep their light at night.
-	float3 snowProjLightTotal = diffuseColor;
+	snowState.projLightTotal = diffuseColor;
 #	endif
 
 	color.xyz += indirectLobeWeights.diffuse * directionalAmbientColor;
@@ -2945,74 +2715,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float3 outputAlbedo = indirectLobeWeights.diffuse * vertexColor.xyz;
 
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
-	// re-evaluated through the SAME PBR functions the shell and TruePBR
-	// statics use — dirLightContext already carries this pixel's perturbed
-	// normal, view ray, and the EHF/world-shadowed sun; the compensation
-	// reconstructs the TRUE_PBR-flavoured light input this non-PBR
-	// permutation never applied (PI-CONVENTION-SPIKE.md), and GetDirect-
-	// LightInput's Lambert cancels it back out. Mirrors the TRUE_PBR tail
-	// (:2735-2790): direct + Fresnel-weighted lobe × ambient, all
-	// × PBRLightingScale, and the sun GGX and environment lobes the shell
-	// writes (without them the horizon read darker than the shell by the
-	// sun's angle, Josef 2026-09-10); no vertex color — the shell has none.
-	[branch] if (snowLodReplaceW > 0.003)
-	{
-		MaterialProperties snowMaterial = (MaterialProperties)0;
-		snowMaterial.BaseColor = snowLodAlbedo;
-		// The shell's material defaults (SnowShell.hlsl kSnowRoughness/kSnowF0)
-		// under the same roughness scale: scalar stand-ins for its RMAOS map,
-		// which mips flat at LOD range anyway.
-		snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
-		snowMaterial.F0 = 0.028;
-		snowMaterial.AO = 1.0;
-		DirectContext snowContext = dirLightContext;
-		snowContext.lightColor *= Color::PBRLightingCompensation;
-		DirectLightingOutput snowLit;
-		PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);
-		IndirectLobeWeights snowLobes;
-		PBR::GetIndirectLobeWeights(snowLobes, indirectContext, snowMaterial);
-		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
-		color.xyz = lerp(color.xyz, snowColor, snowLodReplaceW);
-		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, snowLodReplaceW);
-		specularColor = lerp(specularColor, snowLit.specular * Color::PBRLightingScale, snowLodReplaceW);
-		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, snowLobes.specular, snowLodReplaceW);
-		material.Roughness = lerp(material.Roughness, snowMaterial.Roughness, snowLodReplaceW);
-	}
+	SnowLighting::RelightLOD(snowState, dirLightContext, indirectContext, directionalAmbientColor,
+		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
-	// SNOW-MATCH Phase 2 round 3: the projected-snow fraction of non-PBR
-	// statics re-lit through the SAME PBR evaluators as the shell and the
-	// horizon snow. frame7075 measured the fence's snow pass (vanilla
-	// ENVMAP+PROJECTED_UV) writing blue-tilted Diffuse — the Phase 0
-	// convention signature; a brightness scale cannot fix hue. Sun and
-	// ambient rebuilt on the snow albedo saved at the swap; the point-light
-	// share is carried over from the vanilla accumulation (the sun's vanilla
-	// term subtracted out), scaled into the same units. The wood fraction
-	// keeps the vanilla output untouched.
-	[branch] if (snowProjMatch && projectedMaterialWeight > 0.003)
-	{
-		MaterialProperties snowMaterial = (MaterialProperties)0;
-		snowMaterial.BaseColor = snowProjAlbedo;
-		snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
-		snowMaterial.F0 = 0.028;
-		snowMaterial.AO = 1.0;
-		DirectContext snowContext = dirLightContext;
-		snowContext.lightColor *= Color::PBRLightingCompensation;
-		DirectLightingOutput snowLit;
-		PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);
-		IndirectLobeWeights snowLobes;
-		PBR::GetIndirectLobeWeights(snowLobes, indirectContext, snowMaterial);
-		float3 vanillaSunTerm = dirLightColor * saturate(dot(worldNormal.xyz, DirLightDirection.xyz)) * dirDetailedShadow;
-		float3 pointLightShare = max(0.0, snowProjLightTotal - vanillaSunTerm);
-		float3 snowColor = (snowLit.diffuse * snowMaterial.BaseColor + pointLightShare * snowMaterial.BaseColor + snowLobes.diffuse * directionalAmbientColor) * Color::PBRLightingScale;
-		color.xyz = lerp(color.xyz, snowColor, projectedMaterialWeight);
-		outputAlbedo = lerp(outputAlbedo, snowLobes.diffuse * Color::PBRLightingScale, projectedMaterialWeight);
-		specularColor = lerp(specularColor, snowLit.specular * Color::PBRLightingScale, projectedMaterialWeight);
-		indirectLobeWeights.specular = lerp(indirectLobeWeights.specular, snowLobes.specular, projectedMaterialWeight);
-		material.Roughness = lerp(material.Roughness, snowMaterial.Roughness, projectedMaterialWeight);
-	}
+	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, dirLightContext, indirectContext, directionalAmbientColor,
+		dirLightColor, worldNormal.xyz, dirDetailedShadow,
+		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
 #	endif
 
 	directionalAmbientColor *= outputAlbedo;
@@ -3265,7 +2975,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
-#		elif defined(LANDSCAPE)
+#		elif defined(LANDSCAPE) && defined(SNOW_DEFORMATION)
 	// Masks.y is dead for landscape (SSS reads it only where Masks.x > 0):
 	// carry the EM-resolved grain height (the terrain POM hit, 0.5-neutral in
 	// the far fade) for Snow Deformation's two-sided edge contest. 0 = no
@@ -3273,48 +2983,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, pixelOffset > 0.0 ? 0.004 + pixelOffset * 0.996 : 0.0, masksZ, psout.Diffuse.w);
 #		else
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
-#			if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV)
-	// Masks.y is dead for statics too (SSS reads it only where Masks.x >
-	// 0): carry the projection's verdict for the object snow shell's coat.
-	// The target is an 11-bit float, 64 steps an octave: 2 = known and bare,
-	// [4, 32) = bare with the weight, three octaves over 0.3 below the half
-	// blend (the coat's cut sinks into it as snow accumulates), 48 = painted.
-	// Landscape keeps (0, 1] for its grain. Mirror: SnowStaticsShell.hlsl.
-	[flatten] if (snowProjMatch)
-	{
-		float snowBareT = saturate(1.0 + projWeight / 0.3);
-		psout.Masks.y = projWeight >= 0.0 ? 48.0 : (snowBareT > 0.0 ? 4.0 * exp2(3.0 * snowBareT) : 2.0);
-	}
-#			elif defined(SNOW_DEFORMATION)
-	// A Seasons of Skyrim multipass object's base pass: no projection, so
-	// nothing above writes the weight and the skin's read-back saw 0
-	// ("unknown") and reconstructed a coat over every face. 2 = known and
-	// unpainted; the sparkle pass writes 48 over it where it paints.
-	// Same for any multipass snow MATO (vanilla glaciers and ice, Simplicity
-	// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
-	[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase)) != 0)
-		psout.Masks.y = 2.0;
-#			endif
-#			if defined(SNOW_DEFORMATION) && !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-	// The snow-textured recolor's weight, same encoding, for the same coat.
-	[flatten] if (snowTexWeight > 0.003)
-		psout.Masks.y = snowTexWeight >= 0.5 ? 48.0 : 2.0;
-#			endif
-#			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	// The LOD brightness recolor's weight, same encoding, for the same coat.
-	[flatten] if (snowLodReplaceW > 0.003)
-		psout.Masks.y = snowLodReplaceW >= 0.5 ? 48.0 : 2.0;
-#			endif
 #			if defined(SNOW_DEFORMATION)
-	// Under drawn water: 2 = known, unpainted, so the coat stays off too.
-	[flatten] if (snowUnderWater)
-		psout.Masks.y = 2.0;
-#			endif
-#			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
-	// An object LOD's verdict rides x256 (exact in a float): the skin tells a
-	// LOD the game drew alone from one hidden inside its full model.
-	[flatten] if (psout.Masks.y >= 1.5)
-		psout.Masks.y *= 256.0;
+	SnowLighting::WriteMasksY(snowState, projWeight, psout.Masks.y);
 #			endif
 #		endif
 
