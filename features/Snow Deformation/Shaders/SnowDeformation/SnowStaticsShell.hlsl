@@ -2141,7 +2141,12 @@ VS_OUTPUT main(VS_INPUT input)
 	// alpha carries information the normal test lacks (SKIN-PLACEMENT-PLAN).
 	// Mode 6 (Shell Layers): which peeled plane owned the vertex + the depth
 	// it was granted, the two questions every S4 report reduces to.
-	[flatten] if (StaticsDebugView > 5.5)
+	[flatten] if (StaticsDebugView > 10.5)
+	{
+		vsout.Coverage = v.NormalWS.z;
+		vsout.Flat = v.Flat;
+	}
+	else [flatten] if (StaticsDebugView > 5.5)
 	{
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
 		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, v.Flat), kMinSkinLift));
@@ -2340,7 +2345,12 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	// zero the lift; a surface that looks up-facing but reads UpFacing 0 is
 	// then traceable to whichever of the two is lying.
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 5.5)
+	[flatten] if (StaticsDebugView > 10.5)
+	{
+		vsout.Coverage = smoothZ;
+		vsout.Flat = isFlat;
+	}
+	else [flatten] if (StaticsDebugView > 5.5)
 	{
 		// Mode 6: identical encoding to the untessellated VS.
 		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
@@ -3552,6 +3562,47 @@ PS_OUTPUT main(VOXEL_VS_OUTPUT input)
 #endif
 
 #if !defined(VOXEL)
+// A scalar's gradient along the surface, world units, from its screen
+// derivatives.
+float3 SurfaceGradient(float3 dPx, float3 dPy, float dSx, float dSy)
+{
+	float e = dot(dPx, dPx);
+	float f = dot(dPx, dPy);
+	float g = dot(dPy, dPy);
+	float det = e * g - f * f;
+	float3 grad = ((g * dSx - f * dSy) * dPx + (e * dSy - f * dSx) * dPy) / max(det, 1e-20);
+	return det > 1e-4 * e * g ? grad : float3(0.0, 0.0, 0.0);
+}
+
+#	ifndef PATCH
+// Edge reach on the surface (A/B against the screen disc): the same three
+// rings of eight, laid on the tangent plane in world units. Each tap scores
+// the reconstructed projected weight there - noise read at the tap, the
+// smooth half carried along its surface gradient - against the game's half
+// blend (weight 0, +0.1 reconstruction bias). Returns the painted share.
+float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wSmooth, float3 grad, float reachU, float3 gx, float3 gy)
+{
+	float3 t = normalize(cross(n, abs(n.z) < 0.99 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
+	float3 b = cross(n, t);
+	// The linear carry holds only while the surface has not turned away.
+	float reach = min(reachU, 0.75 / max(length(grad), 1e-4));
+	float hits = 0.0;
+	[unroll] for (int ring = 1; ring <= 3; ring++)
+	{
+		float r = reach * float(ring) / 3.0;
+		[unroll] for (int k = 0; k < 8; k++)
+		{
+			float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
+			float3 d = (t * cos(a) + b * sin(a)) * r;
+			float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, pos + d, triW, ProjNoiseTiling, gx, gy).x;
+			float w = clamp(wSmooth + dot(grad, d), -1.0, 1.1) - ProjNoiseScale * noise;
+			hits += saturate((w - 0.1) * 50.0 + 0.5);
+		}
+	}
+	return hits / 24.0;
+}
+#	endif
+
 // Depth prepass (SNOW_STATICS_DEPTH_PREPASS): the alpha cut and nothing else,
 // no colour, no export - the hardware writes the raster depth exactly as the
 // shipping no-export twin does. Only non-carving draws take it; a carving
@@ -3735,6 +3786,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeNz = normalWS.z;
 	float edgeW = -1.0;
 	float edgeThr = kCoatSolidW;
+	// Surface reach inputs (EdgeReachSurface).
+	float reachWSmooth = -1.0;
+	float3 reachTriW = float3(0.0, 0.0, 1.0);
+	float reachSmoothRaw = normalWS.z * input.ProjFactor;
+	float3 reachGrad = SurfaceGradient(dPosX, dPosY, ddx(reachSmoothRaw), ddy(reachSmoothRaw));
 	[branch] if (pdMode)
 	{
 		// Fallback for pixels the copy cannot answer (copy missing, or the
@@ -3769,6 +3825,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// excluded), descending monotonically across the border, while
 		// the noisy cut stays narrow and only keeps the edge ragged.
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
+		reachWSmooth = wSmooth;
+		reachTriW = triW;
 		// As the recolor applies it: everything the game paints at all is
 		// solid, so the footprint floors above the coat threshold.
 		float wFill = wpix > 0.003 ? max(wpix, 0.2) : wpix;
@@ -4186,6 +4244,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Josef's shack roofs, bright with vanilla's snow rim light from one
 	// angle, correct straight down or close (2026-09-04).
 	float coatPush = 0.0;
+	// Reach compare view: x = screen disc score, y = surface score,
+	// z = 1 painted, 0 bare, -1 not a coat pixel.
+	float3 dbgReach = float3(0.0, 0.0, -1.0);
+	float dbgReachFade = fadeAlpha;
 	// S4 draws have no sheet of their own: every pdMode pixel reads as
 	// !inside below and only the coat block, off the game's real paint, can
 	// raise it again (the drape). Classic draws keep their own coverage.
@@ -4242,6 +4304,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
+			dbgReach.z = painted ? 1.0 : 0.0;
 			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
 				// No pixel floor: a 3 px minimum gave every fleck a ring at
@@ -4249,6 +4312,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// one notch. Sub-pixel reach samples the fleck itself, so
 				// the halo shrinks to nothing as the slider does.
 				const float reachU = kEdgeReachUnits * EdgeFlankWidth;
+				// EdgeReachDepthCheck 2 = score on the surface instead; the
+				// compare view runs both.
+				const bool reachOnSurface = EdgeReachDepthCheck > 1.5;
+				const bool reachCompare = StaticsDebugView > 10.5;
+				[branch] if (!reachOnSurface || reachCompare)
 				{
 					// The disc in screen space. Its taps are screen neighbours,
 					// not surface neighbours, so unchecked it shifted with the
@@ -4290,6 +4358,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 					// A third of the disc at least: a lone surviving tap must
 					// not score as a whole painted disc.
 					nearPaint = hits / max(valid, 8.0);
+				}
+				[branch] if (reachOnSurface || reachCompare)
+				{
+					float surfPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, reachWSmooth, reachGrad, reachU, projGradX, projGradY);
+					dbgReach.xy = float2(nearPaint, surfPaint);
+					[flatten] if (reachOnSurface)
+						nearPaint = surfPaint;
 				}
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
@@ -4438,7 +4513,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 9.5)
+		[branch] if (StaticsDebugView > 10.5)
+		{
+			// Reach compare: where each edge-reach scorer would hang lumps,
+			// by the live keep rule. White = the game's solid paint, red =
+			// screen disc only, green = surface only, yellow = both, dark =
+			// neither, dim blue = not a coat pixel.
+			float fadeTerm = 1.5 * (1.0 - dbgReachFade);
+			bool byDisc = (dbgReach.x - 0.4) * 2.5 - fadeTerm >= 0.0;
+			bool bySurf = (dbgReach.y - 0.4) * 2.5 - fadeTerm >= 0.0;
+			preLit = dbgReach.z < -0.5 ? float3(0.1, 0.15, 0.25) :
+			         (dbgReach.z > 0.5 ? float3(0.85, 0.85, 0.85) :
+			                             float3(byDisc ? 1.0 : 0.12, bySurf ? 1.0 : 0.12, 0.12));
+		}
+		else [branch] if (StaticsDebugView > 9.5)
 		{
 			// Volume seed: the seed pass's verdict at this surface, level 0,
 			// re-evaluated the way VoxelSeedCS does. Green = the field holds

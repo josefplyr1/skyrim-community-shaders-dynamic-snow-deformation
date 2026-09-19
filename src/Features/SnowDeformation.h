@@ -505,6 +505,8 @@ public:
 		float SkinEdgeFlankWidth = 0.0f;
 		/** @brief The edge lumps' screen-space reach disc keeps only taps that are on screen and within the reach of this point in 3D by scene depth, scoring over the taps kept: the lumps stop shifting with the camera. Default on (Josef, 2026-09-12); off is the old unchecked disc. */
 		bool EdgeReachTapsCheckDepth = true;
+		/** @brief A/B: the edge-reach disc is laid on the surface in world units and scored from the reconstructed projected weight, not from screen neighbours. Sends StaticsCB::EdgeReachDepthCheck = 2. */
+		bool EdgeReachOnSurface = false;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */
