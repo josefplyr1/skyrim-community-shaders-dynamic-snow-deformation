@@ -3304,6 +3304,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	[flatten] if (snowUnderWater)
 		psout.Masks.y = 2.0;
 #			endif
+#			if defined(SNOW_DEFORMATION) && (defined(LODOBJECTS) || defined(LODOBJECTSHD))
+	// An object LOD's weight rides 4 + w: the skin tells a LOD the game drew
+	// alone from one hidden inside its full model.
+	[flatten] if (psout.Masks.y >= 1.5)
+		psout.Masks.y += 2.0;
+#			endif
 #		endif
 
 	// Stored as 1 - vertexAO so the cleared default (0) means no occlusion

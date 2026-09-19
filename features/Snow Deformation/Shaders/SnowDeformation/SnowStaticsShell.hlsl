@@ -488,6 +488,12 @@ static const float kCoatMinNz = -1.0;
 // recolor's half blend, so the coat's edge sits where the recolor reads as
 // snow rather than at its last trace.
 static const float kCoatSolidReal = 0.5;
+// Masks.y read-back (Lighting.hlsl): 2 + w on a full model, 4 + w on an
+// object LOD the game drew. Returns the 2 + w form.
+float SkinRecolorEnc(float enc)
+{
+	return enc >= 3.5 ? enc - 2.0 : enc;
+}
 // Lift-gradient debug view: full red at this MULTIPLE of the steepest slope
 // the shell is designed to have. That reference is the cornice roll, which
 // descends the whole class depth across kCorniceRoll world units - a slope of
@@ -3598,10 +3604,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// across the model's coat (Josef's zigzag streaks, RenderDoc frame
 		// 3907). The seam square is where the game stops drawing full
 		// models; SeamBounds carries the fade overlap, one ramp width.
+		// Not every cell of the square draws its models (the outer ring can
+		// stand as LOD alone): the pixel's owner decides, 4 + w = a LOD draw.
 		[flatten] if (SeamRampInv > 0.0)
 		{
 			float band = 1.0 / SeamRampInv;
-			[flatten] if (all(worldXY > SeamBounds.xy + band) && all(worldXY < SeamBounds.zw - band))
+			bool lodOwnsPixel = HasSkinMasksCopy > 0.5 && PreSkinMasks.Load(int3(input.Position.xy, 0)).y >= 3.5;
+			[flatten] if (!lodOwnsPixel && all(worldXY > SeamBounds.xy + band) && all(worldXY < SeamBounds.zw - band))
 				discard;
 		}
 		float lodZ = input.CurrentClip.w;
@@ -3777,7 +3786,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// footprint, the same at every depth.
 		[branch] if (HasSkinMasksCopy > 0.5 && input.Lift < 2.0 * coatRef)
 		{
-			float realEnc = PreSkinMasks.Load(int3(input.Position.xy, 0)).y;
+			float realEnc = SkinRecolorEnc(PreSkinMasks.Load(int3(input.Position.xy, 0)).y);
 			[flatten] if (realEnc >= 1.5)
 				pdCoverage *= (saturate(realEnc - 2.0) >= kCoatSolidReal) ? 1.0 : 0.0;
 		}
@@ -4216,14 +4225,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 			[branch] if (HasSkinMasksCopy > 0.5)
 			{
 				int2 mp = int2(input.Position.xy);
-				realEnc = PreSkinMasks.Load(int3(mp, 0)).y;
+				realEnc = SkinRecolorEnc(PreSkinMasks.Load(int3(mp, 0)).y);
 				[flatten] if (realEnc < 1.5)
 				{
 					int2 mmax = int2(masksDim) - 1;
-					realEnc = max(max(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y,
-									  PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y),
-						max(PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y,
-							PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y));
+					realEnc = max(max(SkinRecolorEnc(PreSkinMasks.Load(int3(min(mp + int2(1, 0), mmax), 0)).y),
+									  SkinRecolorEnc(PreSkinMasks.Load(int3(max(mp - int2(1, 0), 0), 0)).y)),
+						max(SkinRecolorEnc(PreSkinMasks.Load(int3(min(mp + int2(0, 1), mmax), 0)).y),
+							SkinRecolorEnc(PreSkinMasks.Load(int3(max(mp - int2(0, 1), 0), 0)).y)));
 				}
 			}
 			bool realKnown = realEnc >= 1.5;
@@ -4272,7 +4281,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 								float dist3 = sqrt(lateral * lateral + dz * dz);
 								ok = (onScreen && dist3 < 1.25 * reachU) ? 1.0 : 0.0;
 							}
-							float ee = PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y;
+							float ee = SkinRecolorEnc(PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y);
 							// Soft: a tap on the paint's edge counts by how far it is in.
 							hits += ok * saturate((ee - (2.0 + kCoatSolidReal)) * 8.0 + 0.5);
 							valid += ok;
