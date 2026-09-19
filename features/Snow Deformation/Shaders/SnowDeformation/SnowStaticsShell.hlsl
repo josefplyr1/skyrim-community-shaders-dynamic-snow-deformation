@@ -3576,11 +3576,13 @@ float3 SurfaceGradient(float3 dPx, float3 dPy, float dSx, float dSy)
 
 #	ifndef PATCH
 // Edge reach on the surface (A/B against the screen disc): the same three
-// rings of eight, laid on the tangent plane in world units. Each tap scores
-// the reconstructed projected weight there - noise read at the tap, the
-// smooth half carried along its surface gradient - against the game's half
-// blend (weight 0, +0.1 reconstruction bias). Returns the painted share.
-float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wSmooth, float3 grad, float reachU, float3 gx, float3 gy)
+// rings of eight, laid on the tangent plane in world units. Each tap is the
+// game's REAL weight at this pixel (wHere, read back) plus the reconstructed
+// CHANGE to the tap - noise difference, smooth half along its surface
+// gradient. The reconstruction's absolute value is a superset (bias, clamped
+// threshold) and coated whole houses; its differences hold. Returns the
+// painted share, 0 at zero reach.
+float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wHere, float noiseHere, float3 grad, float reachU, float3 gx, float3 gy)
 {
 	float3 t = normalize(cross(n, abs(n.z) < 0.99 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
 	float3 b = cross(n, t);
@@ -3595,8 +3597,8 @@ float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wSmooth, float3 
 			float a = (float(k) + 0.5 * float(ring & 1)) * 0.785398;
 			float3 d = (t * cos(a) + b * sin(a)) * r;
 			float noise = Triplanar::SampleGrad(ProjNoiseMap, SnowSampler, pos + d, triW, ProjNoiseTiling, gx, gy).x;
-			float w = clamp(wSmooth + dot(grad, d), -1.0, 1.1) - ProjNoiseScale * noise;
-			hits += saturate((w - 0.1) * 50.0 + 0.5);
+			float w = wHere + clamp(dot(grad, d), -1.0, 1.0) - ProjNoiseScale * (noise - noiseHere);
+			hits += saturate(w * 50.0 + 0.5);
 		}
 	}
 	return hits / 24.0;
@@ -3787,7 +3789,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float edgeW = -1.0;
 	float edgeThr = kCoatSolidW;
 	// Surface reach inputs (EdgeReachSurface).
-	float reachWSmooth = -1.0;
+	float reachNoise = 0.0;
 	float3 reachTriW = float3(0.0, 0.0, 1.0);
 	float reachSmoothRaw = normalWS.z * input.ProjFactor;
 	float3 reachGrad = SurfaceGradient(dPosX, dPosY, ddx(reachSmoothRaw), ddy(reachSmoothRaw));
@@ -3825,7 +3827,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 		// excluded), descending monotonically across the border, while
 		// the noisy cut stays narrow and only keeps the edge ragged.
 		float wSmooth = nzPix * input.ProjFactor - max(ProjThreshold, 0.0) + 0.1;
-		reachWSmooth = wSmooth;
+		reachNoise = noise;
 		reachTriW = triW;
 		// As the recolor applies it: everything the game paints at all is
 		// solid, so the footprint floors above the coat threshold.
@@ -4351,7 +4353,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 							}
 							float ee = SkinRecolorEnc(PreSkinMasks.SampleLevel(ShellLinearSampler, sp / masksDim, 0).y);
 							// Soft: a tap on the paint's edge counts by how far it is in.
-							hits += ok * saturate((ee - (2.0 + kCoatSolidReal)) * 8.0 + 0.5);
+							// The copy carries the weight itself now: same edge,
+							// cut as sharply as the recolor cuts it.
+							hits += ok * saturate((ee - (2.0 + kCoatSolidReal)) * 100.0 + 0.5);
 							valid += ok;
 						}
 					}
@@ -4361,7 +4365,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 				}
 				[branch] if (reachOnSurface || reachCompare)
 				{
-					float surfPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, reachWSmooth, reachGrad, reachU, projGradX, projGradY);
+					// 2.5 = weight 0; a bare 2 carries no magnitude and never grows.
+					float wHere = (realEnc - 2.5) * 2.0;
+					float surfPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, wHere, reachNoise, reachGrad, reachU, projGradX, projGradY);
 					dbgReach.xy = float2(nearPaint, surfPaint);
 					[flatten] if (reachOnSurface)
 						nearPaint = surfPaint;

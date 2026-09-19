@@ -3275,10 +3275,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	psout.Masks = float4(0, 0, masksZ, psout.Diffuse.w);
 #			if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV)
 	// Masks.y is dead for statics too (SSS reads it only where Masks.x >
-	// 0): carry the recolor's real blend weight as 2 + w for the object snow
-	// shell's coat and edge lumps. Landscape keeps (0, 1] for its grain.
+	// 0): carry the projection's real weight as 2 + w for the object snow
+	// shell's coat and edge lumps, 2.5 = the half blend the recolor cuts at,
+	// +-1 of weight either side (the surface reach grows from it).
+	// Landscape keeps (0, 1] for its grain.
 	[flatten] if (snowProjMatch)
-		psout.Masks.y = 2.0 + saturate(projectedMaterialWeight);
+		psout.Masks.y = 2.0 + saturate(0.5 + 0.5 * projWeight);
 #			elif defined(SNOW_DEFORMATION)
 	// A Seasons of Skyrim multipass object's base pass: no projection, so
 	// nothing above writes the weight and the skin's read-back saw 0
