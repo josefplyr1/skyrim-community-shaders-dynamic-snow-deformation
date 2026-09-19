@@ -2733,6 +2733,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	// look), and only where the property really carries projection data:
 	// the mesh-replacer default reconstructs a weight the game never paints.
 	// LOD batches read the brightness recolor's written weight instead.
+	a_scb.SteepThin = std::clamp(settings.SteepFaceThinning, 0.0f, 1.0f);
 	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry &&
 	                  ClassifyProjectedMato(a_cap.geometry.get()) != MatoClass::kNotSnow) ? 1.0f : 0.0f;
 	a_scb.HasSkinNormalCopy = a_hasSkinNormalCopy ? 1.0f : 0.0f;

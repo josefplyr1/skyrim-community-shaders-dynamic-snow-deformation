@@ -253,7 +253,9 @@ cbuffer StaticCB : register(b1)
 	// projectedUVParams.x - strength of vanilla's projected-noise term for
 	// this draw; 0 without projection data. Mirror in SnowDeformation.h.
 	float ProjNoiseScale;
-	float padEdgeReach;
+	// Steep Face Thinning: share of the reach a vertical face gives up.
+	// Mirror in SnowDeformation.h.
+	float SteepThin;
 	// projectedUVParams.z - the noise map's world-space tiling. Mirror in
 	// SnowDeformation.h.
 	float ProjNoiseTiling;
@@ -4255,7 +4257,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 			{
 				// The cut sinks on the game's own weight at this pixel's own
 				// texel: the same from every view, the paint itself at reach 0.
-				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
+				// Steep faces give up the reach, never the paint: the face's own
+				// slope (smooth normal) scales the drop, so at reach 0 nothing
+				// changes and a wall stays as the game painted it while the
+				// roof beside it fills in.
+				float steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, normalWS.z));
+				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * steepKeep) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}
