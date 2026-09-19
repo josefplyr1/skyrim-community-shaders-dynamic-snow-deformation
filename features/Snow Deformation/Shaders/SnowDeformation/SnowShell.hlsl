@@ -1297,11 +1297,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			}
 		}
 
-		{
-			coverage *= saturate(1.0 - shelterMask.x);
-			float melt = saturate(shelterMask.y);
-			rampDepth = lerp(rampDepth, min(rampDepth, kFireMeltFloor), melt);
-		}
+		coverage *= saturate(1.0 - shelterMask.x);
 
 		// Bare ground contributes negative depth so the shell submerges toward
 		// uncovered terrain as well; edgeFade (computed above) melts the shell
@@ -1313,6 +1309,10 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		// Deep trench floors pass unchanged; a floor set below ~9 (a low
 		// Trench Floor fraction) compresses with the toe.
 		depth = TouchDownToe(depth);
+		// Melt AFTER the toe: the floor stands kFireMeltFloor over the
+		// ground. Melted first, the toe took it to exactly 0 and the sheet
+		// fought the land for every pixel of the basin.
+		depth = lerp(depth, min(depth, kFireMeltFloor), saturate(shelterMask.y));
 
 		// Carves only where the layer is raised; the negative-depth submerge at
 		// class edges is untouched. The floor holds at the Trench Floor
@@ -2389,10 +2389,13 @@ PS_OUTPUT main(VS_OUTPUT input)
 		coverageAlpha = 1.0;
 	}
 
+	// A melted floor is as thin as an edge: it takes the near micro-clamp
+	// too, which the unmelted depth alone never asked for.
+	float exportEffDepth = lerp(pixelEffDepth, min(pixelEffDepth, kFireMeltFloor), pixelMelt);
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
-	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
+	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS
@@ -2408,11 +2411,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float dYN = SampleDeformation(gridLocal - float2(0.0, step));
 
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
-	// Shading depth mirrors ShellSurfaceZ's uncarved depth: melt thins toward
-	// kFireMeltFloor, then the touch-down toe. Every relief gradient below
+	// Shading depth mirrors ShellSurfaceZ's uncarved depth: the touch-down
+	// toe, then melt thins toward kFireMeltFloor. Every relief gradient below
 	// scales by it, so a print in a melt basin shades as flat as it is built.
-	float pixelDepth = lerp(pixelRampDepth, min(pixelRampDepth, kFireMeltFloor), pixelMelt);
-	pixelDepth = max(TouchDownToe(pixelDepth), 0.0);
+	float pixelDepth = max(TouchDownToe(pixelRampDepth), 0.0);
+	pixelDepth = lerp(pixelDepth, min(pixelDepth, kFireMeltFloor), pixelMelt);
 	float2 profileGrad = float2(
 		CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
 		CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) / (2.0 * step);
@@ -2662,10 +2665,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
 		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
 	}
-	// Thin-snow print: a boot through a dusting (melt floors, thin classes)
-	// has no wall to light, so it reads by material - pressed wet, darker and
-	// smoother. Gone by ~6 units of cover, where relief takes over.
-	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth));
+	// Thin-snow print: a boot through a dusting (thin classes) has no wall
+	// to light, so it reads by material - pressed wet, darker and smoother.
+	// Gone by ~6 units of cover, where relief takes over. Not on melted
+	// floors: a walked fire ring went dark as a whole.
+	float wetPrint = smoothstep(0.1, 0.5, pixelCarve) * (1.0 - smoothstep(1.5, 6.0, pixelDepth)) * (1.0 - smoothstep(0.1, 0.4, pixelMelt));
 	[branch] if (wetPrint > 0.001)
 		kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.76, 0.77, 0.80), wetPrint);
 	// PBR snow material: GGX microfacet specular with Fresnel and energy-
@@ -3245,7 +3249,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, pixelEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
+	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
 #	endif
 
 	return psout;
