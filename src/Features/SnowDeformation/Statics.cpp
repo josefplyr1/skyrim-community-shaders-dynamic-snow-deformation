@@ -2729,7 +2729,7 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
 	                           snowAccumulation.load(std::memory_order_relaxed) :
 	                           std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
-	a_scb.EdgeReachDepthCheck = settings.EdgeReachOnSurface ? 2.0f : (settings.EdgeReachTapsCheckDepth ? 1.0f : 0.0f);
+	a_scb.EdgeReachDepthCheck = settings.EdgeReachByWeight ? 3.0f : (settings.EdgeReachOnSurface ? 2.0f : (settings.EdgeReachTapsCheckDepth ? 1.0f : 0.0f));
 	// Same veto as the Lighting-side recolor (sand and moss keep their
 	// look), and only where the property really carries projection data:
 	// the mesh-replacer default reconstructs a weight the game never paints.

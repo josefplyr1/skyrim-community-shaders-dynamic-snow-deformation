@@ -507,6 +507,8 @@ public:
 		bool EdgeReachTapsCheckDepth = true;
 		/** @brief A/B: the edge-reach disc is laid on the surface in world units and scored from the reconstructed projected weight, not from screen neighbours. Sends StaticsCB::EdgeReachDepthCheck = 2. */
 		bool EdgeReachOnSurface = false;
+		/** @brief A/B, wins over EdgeReachOnSurface: no disc; the coat's cut sinks below the game's half blend on the projection's own weight (Masks.y read-back), kEdgeReachWeightShift at reach 1. Sends StaticsCB::EdgeReachDepthCheck = 3. */
+		bool EdgeReachByWeight = false;
 		/** @brief Model-class override: ROAD MESHES (matched by geometry name or road texture path; "bridge" in either excludes). Default deliberately below the ~30-unit surrounding snow classes: the shallow band is what makes the road's course readable through the snowfield. */
 		float RoadMeshesDepth = 10.0f;
 		/** @brief ROAD-HEIGHTFIELD-PLAN: roads drop their skin and the trench patch owns the whole road surface, so road snow is ONE deformable heightfield instead of skin + patch + floor + POM trench. Default ON per Josef's S0 verdict 2026-08-25 (no sheet, no verge seam). Bridges are not road meshes at all since 2026-09-12. */

@@ -478,6 +478,8 @@ static const float kEdgeFlankLift = 0.4;
 static const float kCoatSolidW = 0.15;
 // Edge Lump Reach 1 in world units past the solid contour.
 static const float kEdgeReachUnits = 32.0;
+// Edge reach by weight: how far below the half blend the cut sinks at reach 1.
+static const float kEdgeReachWeightShift = 0.5;
 // The largest shortfall below the solid contour the lumps may hang from
 // (the game's own fade is 0.2 wide).
 static const float kEdgeMaxDrop = 0.12;
@@ -3582,12 +3584,13 @@ float3 SurfaceGradient(float3 dPx, float3 dPy, float dSx, float dSy)
 // gradient. The reconstruction's absolute value is a superset (bias, clamped
 // threshold) and coated whole houses; its differences hold. Returns the
 // painted share, 0 at zero reach.
-float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wHere, float noiseHere, float3 grad, float reachU, float3 gx, float3 gy)
+float EdgeReachSurface(float3 pos, float3 n, float3 triW, float wHere, float noiseHere, float3 grad, float reachU, float3 gx, float3 gy, out float reachKept)
 {
 	float3 t = normalize(cross(n, abs(n.z) < 0.99 ? float3(0.0, 0.0, 1.0) : float3(1.0, 0.0, 0.0)));
 	float3 b = cross(n, t);
 	// The linear carry holds only while the surface has not turned away.
 	float reach = min(reachU, 0.75 / max(length(grad), 1e-4));
+	reachKept = reach / max(reachU, 1e-4);
 	float hits = 0.0;
 	[unroll] for (int ring = 1; ring <= 3; ring++)
 	{
@@ -4249,6 +4252,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Reach compare view: x = screen disc score, y = surface score,
 	// z = 1 painted, 0 bare, -1 not a coat pixel.
 	float3 dbgReach = float3(0.0, 0.0, -1.0);
+	// Reach readings view: x = surface score, y = how far this pixel's real
+	// weight sits below the half blend, z = share of the reach the gradient
+	// cap kept.
+	float3 dbgReachRead = 0.0;
 	float dbgReachFade = fadeAlpha;
 	// S4 draws have no sheet of their own: every pdMode pixel reads as
 	// !inside below and only the coat block, off the game's real paint, can
@@ -4316,9 +4323,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 				const float reachU = kEdgeReachUnits * EdgeFlankWidth;
 				// EdgeReachDepthCheck 2 = score on the surface instead; the
 				// compare view runs both.
-				const bool reachOnSurface = EdgeReachDepthCheck > 1.5;
+				// 3 = no disc at all: the cut sinks on the game's own weight.
+				const bool reachByWeight = EdgeReachDepthCheck > 2.5;
+				const bool reachOnSurface = EdgeReachDepthCheck > 1.5 && !reachByWeight;
 				const bool reachCompare = StaticsDebugView > 10.5;
-				[branch] if (!reachOnSurface || reachCompare)
+				[branch] if (!(reachOnSurface || reachByWeight) || reachCompare)
 				{
 					// The disc in screen space. Its taps are screen neighbours,
 					// not surface neighbours, so unchecked it shifted with the
@@ -4363,14 +4372,20 @@ PS_OUTPUT main(VS_OUTPUT input)
 					// not score as a whole painted disc.
 					nearPaint = hits / max(valid, 8.0);
 				}
-				[branch] if (reachOnSurface || reachCompare)
+				[branch] if (reachOnSurface || reachByWeight || reachCompare)
 				{
 					// 2.5 = weight 0; a bare 2 carries no magnitude and never grows.
 					float wHere = (realEnc - 2.5) * 2.0;
-					float surfPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, wHere, reachNoise, reachGrad, reachU, projGradX, projGradY);
-					dbgReach.xy = float2(nearPaint, surfPaint);
-					[flatten] if (reachOnSurface)
-						nearPaint = surfPaint;
+					float altPaint = saturate((wHere + kEdgeReachWeightShift * EdgeFlankWidth) * 50.0 + 0.5);
+					[branch] if (!reachByWeight)
+					{
+						float reachKept;
+						altPaint = EdgeReachSurface(projWorldPos, normalWS, reachTriW, wHere, reachNoise, reachGrad, reachU, projGradX, projGradY, reachKept);
+						dbgReachRead = float3(altPaint, -wHere, reachKept);
+					}
+					dbgReach.xy = float2(nearPaint, altPaint);
+					[flatten] if (reachOnSurface || reachByWeight)
+						nearPaint = altPaint;
 				}
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
@@ -4519,11 +4534,21 @@ PS_OUTPUT main(VS_OUTPUT input)
 			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
 		}
 #else
-		[branch] if (StaticsDebugView > 10.5)
+		[branch] if (StaticsDebugView > 11.5)
+		{
+			// Reach readings (surface scorer): R = its score, G = how far
+			// the pixel's real weight sits below the half blend (1 = a full
+			// unit or no magnitude written), B = share of the reach the
+			// gradient cap kept. White = solid paint, dim blue = no coat.
+			preLit = dbgReach.z < -0.5 ? float3(0.1, 0.15, 0.25) :
+			         (dbgReach.z > 0.5 ? float3(0.85, 0.85, 0.85) : saturate(dbgReachRead));
+		}
+		else [branch] if (StaticsDebugView > 10.5)
 		{
 			// Reach compare: where each edge-reach scorer would hang lumps,
 			// by the live keep rule. White = the game's solid paint, red =
-			// screen disc only, green = surface only, yellow = both, dark =
+			// screen disc only, green = the other scorer only (by weight if
+			// that is ticked, else the surface disc), yellow = both, dark =
 			// neither, dim blue = not a coat pixel.
 			float fadeTerm = 1.5 * (1.0 - dbgReachFade);
 			bool byDisc = (dbgReach.x - 0.4) * 2.5 - fadeTerm >= 0.0;

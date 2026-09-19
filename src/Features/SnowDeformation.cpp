@@ -36,6 +36,7 @@
 	X(RecoloredSnowAccumulates) \
 	X(EdgeReachTapsCheckDepth) \
 	X(EdgeReachOnSurface) \
+	X(EdgeReachByWeight) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
 	X(AccumulationMeltHours) \
