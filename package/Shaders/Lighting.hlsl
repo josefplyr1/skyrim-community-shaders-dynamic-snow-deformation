@@ -1789,6 +1789,16 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODOBJECTSHD)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
+#		if defined(SNOW_DEFORMATION)
+	// Steep faces hold thin snow: the weight drops with the FACE's slope
+	// (vertex normal), so on a post or a wall only the noise's lows and the
+	// normal map's up-facing ledges still paint. In the weight itself, so the
+	// game's paint, the sparkle discard, the recolor, the coat and the
+	// accumulation reach all follow it. Snow-classified draws only.
+	[flatten] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+	              (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+		projWeight -= SharedData::snowDeformationSettings.ProjSteepThin * (1.0 - smoothstep(0.15, 0.5, normalize(tbnTr[2]).z));
+#		endif
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;

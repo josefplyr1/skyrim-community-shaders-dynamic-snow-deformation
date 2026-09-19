@@ -269,6 +269,9 @@ void SnowDeformation::DrawSettings()
 		}
 		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far the snow on rocks and buildings reaches past the patches the game paints, onto the bare surface. At 0 it is exactly the game's paint. Raising it lets the snow creep outward along the game's own falloff - slope, painted alpha and the projection's noise - so thin dustings thicken first and steep faces stay bare longest. The same from every angle. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
+		ImGui::SliderFloat(T(TKEY("steep_face_thinning"), "Steep Face Thinning"), &settings.SteepFaceThinning, 0.0f, 1.0f, "%.2f");
+		if (auto _ttSteep = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("steep_face_thinning_tooltip"), "How much of the game's painted snow a steep face gives up. Snow does not settle on a vertical post or wall the way it does on a roof: at 0 the game's paint is kept as authored, and raising this strips it from steep faces until only the patches the projection's noise favours and the up-facing bumps of the surface keep any. Slopes gentler than about 60 degrees are untouched. As snow accumulates the patches grow back over the face. Needs Recolor Projected Snow; only snow projections take part."));
 
 		// The object-snow experiments live HERE, beside the sliders they
 		// modify, so the whole workbench is one tree (Josef's round-9 ask -

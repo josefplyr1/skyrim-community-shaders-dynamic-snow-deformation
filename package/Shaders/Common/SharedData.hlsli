@@ -383,7 +383,10 @@ namespace SharedData
 		// Toroidal deformation-map addressing: physical position of logical
 		// texel (0,0); every map Load adds this and masks by dim-1.
 		int2 DeformMapOrigin;
-		int2 DeformTorusPad;
+		// How much projected weight a vertical face loses (Steep Face
+		// Thinning); half the old torus pad. Mirror in SnowDeformation.h.
+		float ProjSteepThin;
+		float padSteep;
 
 		// Water raster (t104) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.

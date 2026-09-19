@@ -354,6 +354,8 @@ public:
 		bool PersistAccumulation = true;
 		/** @brief Edge Lump Reach follows the accumulation scalar itself (0 at rest, 1 at the peak, over Accumulation Time / Melt Time / Fade regardless of the peak's height) instead of the slider. */
 		bool RecoloredSnowAccumulates = true;
+		/** @brief "Steep Face Thinning", 0-1: projected-snow weight taken off a vertical face (full below 60 degrees of slope, all of it by ~80), so posts and walls keep snow only in the noise's lows and on up-facing relief. 0 = the game's paint as authored. Snow-classified projections only. */
+		float SteepFaceThinning = 0.5f;
 		/** @brief Game hours of full-intensity snowfall to grow from the authored depth to the peak. Growth is scaled by the held snowfall intensity, so light snow takes proportionally longer. Tuned low so the change is visible within a session at typical timescales. */
 		float AccumulationHours = 1.0f;
 		/** @brief Game hours to settle from the peak back to the authored depth in clear weather. Equal to the growth time rather than asymmetric, so the change stays watchable. */
@@ -699,7 +701,9 @@ public:
 
 		/** @brief Toroidal deformation-map addressing for Lighting's GetDeformation: physical position of logical texel (0,0). Mirror in SharedData.hlsli. */
 		DirectX::XMINT2 DeformMapOrigin;
-		DirectX::XMINT2 DeformTorusPad;
+		/** @brief Settings::SteepFaceThinning: projected weight a vertical face loses in Lighting (half the old torus pad). Mirror in SharedData.hlsli. */
+		float ProjSteepThin;
+		float padSteep;
 
 		/** @brief Water raster (t104) frame for Lighting's underwater veto: world xy of texel (0,0) and the texel size; Dim 0 = no raster this frame. Mirror in SharedData.hlsli. */
 		float2 WaterWindowOrigin;
