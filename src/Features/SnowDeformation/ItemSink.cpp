@@ -324,41 +324,47 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 		}
 
-		// A rebuilt 3D has lost the offset with its nodes - and a 3D that
-		// outlived its state (a load clears states) still carries one.
+		// A new root is not always a new 3D. Measured 2026-09-19 (capture): some
+		// seconds after a load every item's root is replaced while the meshes
+		// under it keep the offset, and lifting again drew each item at twice
+		// its height. The test is the first free child's translate: exactly
+		// what was last written means the offset is still there.
 		if (state.offsetRoot != body.root) {
-			state.offsetApplied = false;
-			state.childOffset = {};
-			state.appliedLift = 0.0f;
-			state.offsetRoot = nullptr;
-			if (auto found = itemSinkApplied.find(body.root); found != itemSinkApplied.end()) {
-				auto* node = body.root->AsNode();
-				RE::NiAVObject* firstChild = nullptr;
-				if (node)
-					for (auto& child : node->GetChildren())
-						if (child && !child->collisionObject) {
-							firstChild = child.get();
-							break;
-						}
-				const auto& applied = found->second;
-				const bool same = firstChild && firstChild == applied.child &&
-				                  firstChild->local.translate.x == applied.childLocal.x &&
-				                  firstChild->local.translate.y == applied.childLocal.y &&
-				                  firstChild->local.translate.z == applied.childLocal.z;
-				if (same) {
-					state.offsetApplied = true;
-					state.childOffset = applied.offset;
-					state.offsetRoot = body.root;
-					state.appliedLift = applied.lift;
-					if (itemSinkClaimsLogged < 64) {
-						itemSinkClaimsLogged++;
-						logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' still carries +{:.1f} from before its state was dropped; adopted",
-							state.formID, base->GetName(), applied.lift);
+			RE::NiAVObject* firstChild = nullptr;
+			if (auto* node = body.root->AsNode())
+				for (auto& child : node->GetChildren())
+					if (child && !child->collisionObject) {
+						firstChild = child.get();
+						break;
 					}
-				} else {
-					itemSinkApplied.erase(found);
+			auto holds = [&](const RE::NiPoint3& a_written) {
+				return firstChild && firstChild->local.translate.x == a_written.x && firstChild->local.translate.y == a_written.y && firstChild->local.translate.z == a_written.z;
+			};
+			bool kept = state.hasWritten && holds(state.lastWritten);
+			if (!kept) {
+				state.offsetApplied = false;
+				state.childOffset = {};
+				state.appliedLift = 0.0f;
+				// A state dropped by a load, its meshes still alive.
+				if (auto found = itemSinkApplied.find(firstChild); firstChild && found != itemSinkApplied.end()) {
+					if (holds(found->second.childLocal)) {
+						state.offsetApplied = true;
+						state.childOffset = found->second.offset;
+						state.appliedLift = found->second.lift;
+						state.lastWritten = found->second.childLocal;
+						state.hasWritten = true;
+						kept = true;
+					} else {
+						itemSinkApplied.erase(found);
+					}
 				}
 			}
+			if (state.offsetRoot && itemSinkClaimsLogged < 64) {
+				itemSinkClaimsLogged++;
+				logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' has a new root; its meshes {} (+{:.1f})",
+					state.formID, base->GetName(), kept ? "still carry the lift, kept" : "are new, lifted afresh", state.appliedLift);
+			}
+			state.offsetRoot = kept ? body.root : nullptr;
 		}
 
 		const float weight = Smooth((std::log(std::max(measure, 1e-4f)) - std::log(kMeasureFloat)) / (std::log(kMeasureFull) - std::log(kMeasureFloat)));
@@ -467,7 +473,9 @@ void SnowDeformation::ItemSinkUpdate()
 			if (auto* node = body.root->AsNode())
 				for (auto& child : node->GetChildren())
 					if (child && !child->collisionObject) {
-						itemSinkApplied[body.root] = { child.get(), child->local.translate, offset, want };
+						state.lastWritten = child->local.translate;
+						state.hasWritten = true;
+						itemSinkApplied[child.get()] = { child->local.translate, offset, want };
 						break;
 					}
 		}
