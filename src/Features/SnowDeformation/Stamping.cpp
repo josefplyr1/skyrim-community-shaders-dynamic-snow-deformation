@@ -7,6 +7,7 @@
 #include "Features/SnowDeformation/AlphaBuild.h"
 
 #include "Globals.h"
+#include "Features/SnowDeformation/ShapeBounds.h"
 #include "Utils/ActorUtils.h"
 #include "Utils/Game.h"
 
@@ -567,7 +568,7 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 		SnowDeformation::TimedTraverse(a_root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
-			if (Util::GetShapeBound(a_object, centerPos, radius))
+			if (SnowShapes::GetShapeBound(a_object, centerPos, radius))
 				lowest = std::min(lowest, centerPos.z - radius);
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
@@ -606,7 +607,7 @@ static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_cur
 {
 	ShapeStamp out{ a_current, a_previous, a_boundRadius, a_boundRadius };
 	float ax, ay, halfLen, halfWid, halfHgt;
-	if (!a_footprints || !Util::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid, halfHgt))
+	if (!a_footprints || !SnowShapes::GetShapeFootprint(a_object, ax, ay, halfLen, halfWid, halfHgt))
 		return out;
 	out.halfHeight = halfHgt;
 	const float seg = std::max(halfLen - halfWid, 0.0f);
@@ -657,7 +658,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 	// Living actors stamp heel-to-toe capsules from skeleton foot bones
 	// (discrete alternating prints); skeletons without foot bones, corpses
-	// and props stamp their Havok collision shapes (Util::GetShapeBound over
+	// and props stamp their Havok collision shapes (SnowShapes::GetShapeBound over
 	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
 	// Raster slots to the player and the nearest living actors inside the
 	// contact window, not the first in the process list.
@@ -1450,7 +1451,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 				RE::NiPoint3 centerPos;
 				float radius;
-				if (Util::GetShapeBound(a_object, centerPos, radius)) {
+				if (SnowShapes::GetShapeBound(a_object, centerPos, radius)) {
 					// Stable per-skeleton traversal order keys the trail history.
 					const uint32_t thisIndex = shapeIndex++;
 					if (stampCount >= actorCeiling)
@@ -1690,7 +1691,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
 			float radius;
-			if (Util::GetShapeBound(a_object, centerPos, radius)) {
+			if (SnowShapes::GetShapeBound(a_object, centerPos, radius)) {
 				const uint32_t thisIndex = shapeIndex++;
 				if (stampCount >= actorCeiling)
 					return RE::BSVisit::BSVisitControl::kStop;
