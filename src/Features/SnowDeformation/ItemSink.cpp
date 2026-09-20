@@ -566,6 +566,20 @@ void SnowDeformation::ItemSinkUpdate()
 				state.formID, base->GetName(), body.world.x, body.world.y, ref->GetPositionX(), ref->GetPositionY(), snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
+		// The game keeps no running record of where a dropped item lies: carried
+		// or rolled, it reloads where it was dropped. Marked as moved by physics,
+		// the save takes the body's place instead.
+		if (body.asleep && !state.wasAsleep) {
+			const float dx = body.world.x - ref->GetPositionX(), dy = body.world.y - ref->GetPositionY();
+			if (dx * dx + dy * dy > 1.0f) {
+				ref->AddChange(RE::TESObjectREFR::ChangeFlags::kMoved | RE::TESObjectREFR::ChangeFlags::kHavokMoved);
+				if (itemSinkClaimsLogged < 96) {
+					itemSinkClaimsLogged++;
+					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' rests {:.1f} units from the game's record of it; marked as moved",
+						state.formID, base->GetName(), std::sqrt(dx * dx + dy * dy));
+				}
+			}
+		}
 		state.wasAsleep = body.asleep;
 
 		if (first && wantReadout) {
