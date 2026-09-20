@@ -625,9 +625,9 @@ public:
 		bool SnowTexturedRecolor = false;
 		/** @brief "Shelter Max Height" (units): a roof, bridge or archway whose underside is higher than this above the ground no longer thins the snow beneath it; a wide arch with plenty of air is as open as the sky. */
 		float ShelterMaxHeight = 150.0f;
-		/** @brief "Shelter Follows Drift Angle": shelter is the covered share of the cone snowfall arrives through (tap radius = underside clearance * tan(ShelterDriftAngle)) instead of a clearance cutoff; ShelterMaxHeight is replaced by kShelterConeMaxHeight while on. */
+		/** @brief "Enclosed Shelter": cover whose underside sits between ShelterMaxHeight and kShelterBandHeight also shelters, as far as the spot is enclosed (covered share of a disc of radius kShelterBandHeight * tan(ShelterDriftAngle)). Tents, not overhangs. */
 		bool ShelterDriftCone = false;
-		/** @brief "Snow Drift Angle" (degrees from vertical): how far under cover blown snow reaches, as a multiple of the cover's clearance. */
+		/** @brief "Snow Drift Angle" (degrees from vertical): sizes the enclosure disc; higher asks for deeper cover before the band shelters. */
 		float ShelterDriftAngle = 30.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
@@ -2365,8 +2365,8 @@ public:
 	static constexpr float kRimStep = 6.0f;
 	/** @brief Cover above a plane that neither splits it nor demotes it (world units). Was "Ignore Cover Above", retired 2026-09-10 at its default. */
 	static constexpr float kOverheadIgnore = 0.0f;
-	/** @brief Clearance cutoff while the shelter drift cone is on (world units); the cone decides below it. */
-	static constexpr float kShelterConeMaxHeight = 1000.0f;
+	/** @brief Top of the enclosed-shelter band (world units, fades over the next 100): a tent ridge is inside it. */
+	static constexpr float kShelterBandHeight = 250.0f;
 	/** @brief Cone settling, the 4-neighbour Jacobi lambda at its stability bound. Was "Snow Settling" at 100%, retired 2026-09-10. */
 	static constexpr float kDiffuseLambda = 0.5f;
 
@@ -2503,12 +2503,13 @@ public:
 		/** @brief kOverheadIgnore - the seed's rise-rim upper bound: surfaces further above do not split the plane when this plane continues beneath them (the next layer's top says). */
 		float OverheadIgnore;
 
-		float padMeld;
+		/** @brief Top of the enclosure band (units), >= ShelterMaxHeight; read only while ShelterConeTan > 0. */
+		float ShelterBandHeight;
 		/** @brief kDiffuseLambda - per-iteration Jacobi blend toward the 4-neighbour average over the finished cone fields. */
 		float DiffuseLambda;
 		/** @brief A floating structure whose underside is this far above the ground stops sheltering it (fade over the next 100 units). Mirror in HeightMapProcessCS.hlsl. */
 		float ShelterMaxHeight;
-		/** @brief tan(ShelterDriftAngle); 0 = the fixed shelter ring. */
+		/** @brief tan(ShelterDriftAngle); 0 = no enclosure band. */
 		float ShelterConeTan;
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
