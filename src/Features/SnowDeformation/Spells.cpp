@@ -402,26 +402,44 @@ void SnowDeformation::LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, fl
 {
 	if (!a_ref || a_lift < 1.0f)
 		return;
-	auto* taskInterface = SKSE::GetTaskInterface();
-	if (!taskInterface)
-		return;
-	// A handle, not the pointer: by the time the task runs the reference may
-	// have gone, and a hazard's whole life is measured in seconds.
-	const RE::ObjectRefHandle handle = a_ref->CreateRefHandle();
-	taskInterface->AddTask([handle, a_lift, a_minUpZ]() {
-		auto ref = handle.get();
+	// Queued, not done here and not in an SKSE task: tasks run on worker
+	// threads in this setup, and the scene graph is the main thread's. A
+	// handle, not the pointer: a hazard's whole life is measured in seconds.
+	std::scoped_lock lock(spellLiftLock);
+	if (spellLiftQueue.size() < 256)
+		spellLiftQueue.push_back({ a_ref->CreateRefHandle(), a_lift, a_minUpZ });
+}
+
+void SnowDeformation::ApplySpellLifts()
+{
+	std::vector<PendingLift> pending;
+	{
+		std::scoped_lock lock(spellLiftLock);
+		if (spellLiftQueue.empty())
+			return;
+		pending.swap(spellLiftQueue);
+	}
+	// PlayerCamera::Update runs twice a frame; the second call finds the
+	// queue empty, so a waiting entry ages two per frame.
+	for (auto& entry : pending) {
+		auto ref = entry.handle.get();
 		if (!ref)
-			return;
+			continue;
 		auto* root = ref->Get3D(false);
-		if (!root)
-			return;
-		if (root->world.rotate.entry[2][2] < a_minUpZ)
-			return;
-		root->local.translate.z += a_lift;
+		if (!root) {
+			if (++entry.waited < 120) {
+				std::scoped_lock lock(spellLiftLock);
+				spellLiftQueue.push_back(entry);
+			}
+			continue;
+		}
+		if (root->world.rotate.entry[2][2] < entry.minUpZ)
+			continue;
+		root->local.translate.z += entry.lift;
 		// The whole subtree: UpdateWorldData moves this node alone.
 		RE::NiUpdateData data{};
 		root->Update(data);
-	});
+	}
 }
 
 void SnowDeformation::ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes)

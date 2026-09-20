@@ -1788,8 +1788,10 @@ struct SD_PlayerCamera_Update
 			snowDeformation.ClampCameraAboveSnow();
 		// Here, not in Prepass: that runs inside the World pass, after the depth
 		// prepass has drawn the item where it was.
-		if (snowDeformation.loaded)
+		if (snowDeformation.loaded) {
 			snowDeformation.ItemSinkUpdate();
+			snowDeformation.ApplySpellLifts();
+		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

@@ -1985,6 +1985,8 @@ public:
 	void ClampCameraAboveSnow();
 	/** @brief Holds dropped items at their depth in the snow. From the camera-update hook: before the frame's first pass, main thread. */
 	void ItemSinkUpdate();
+	/** @brief Raises the rune and frost pieces the spell scan queued. From the camera-update hook: main thread, before the frame's first pass. */
+	void ApplySpellLifts();
 	/** @brief Probe readout of the last clamp: 0 not third person / off, 1 no shell data under the camera, 2 clear, 3 pulled in. */
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
@@ -3890,6 +3892,17 @@ protected:
 	 * so the lift goes through the SKSE task interface.
 	 */
 	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ = -2.0f);
+	struct PendingLift
+	{
+		RE::ObjectRefHandle handle;
+		float lift = 0.0f;
+		float minUpZ = -2.0f;
+		/** @brief Frames waited for a 3D that was not there yet. */
+		uint32_t waited = 0;
+	};
+	/** @brief Lifts asked for by the spell scan, applied by ApplySpellLifts. */
+	std::mutex spellLiftLock;
+	std::vector<PendingLift> spellLiftQueue;
 
 	/**
 	 * @brief How far to raise something resting at a_position so it sits a_fraction of the way up the snow over it, plus a_clearance.
