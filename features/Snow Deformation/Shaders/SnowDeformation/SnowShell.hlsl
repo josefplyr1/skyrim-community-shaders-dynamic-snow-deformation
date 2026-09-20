@@ -135,9 +135,11 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	// Retired water-edge rows; layout keepers.
-	float Spare0;
+	// Units over which the sheet's normal eases to a painted object's where
+	// they meet; 0 = off.
+	float ObjectMeetBand;
 
+	// Retired water-edge row; layout keeper.
 	float Spare1;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
@@ -311,6 +313,9 @@ Texture2D<float4> SnowHeightMap : register(t8);
 // (Lighting.hlsl LANDSCAPE writes it; 0 = no data - POM inactive, grass, or
 // an object behind), the missing side of the two-sided edge contest.
 Texture2D<float3> LandMasksCopy : register(t10);
+// Pre-shell copy of NORMALROUGHNESS: the normal of whatever stands behind
+// the sheet at this pixel.
+Texture2D<float4> PreShellNormals : register(t21);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -2613,6 +2618,25 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
+	}
+
+	// Meeting a snow-painted object: the sheet's normal eases to the object's
+	// own through the last units before they touch, so the junction carries
+	// no lighting step. Distance is taken perpendicular to the object's
+	// surface (ray gap x |V.N|), which holds still under a moving camera on a
+	// flat face. Masks.y >= 2 = a classified projected-snow static.
+	[branch] if (ObjectMeetBand > 0.0 && sceneZ > shellZ)
+	{
+		float meetEnc = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
+		meetEnc = meetEnc >= 256.0 ? meetEnc / 256.0 : meetEnc;
+		[branch] if (meetEnc >= 1.5)
+		{
+			float3 objectN = normalize(mul(GBuffer::DecodeNormal(PreShellNormals.Load(int3(input.Position.xy, 0)).xy), (float3x3)CameraView));
+			float rayGap = length(input.WorldPos) * (sceneZ - shellZ) / max(shellZ, 1e-3);
+			float meetDist = rayGap * abs(dot(normalize(input.WorldPos), objectN));
+			float meet = (1.0 - smoothstep(0.0, ObjectMeetBand, meetDist)) * smoothstep(0.0, 0.3, objectN.z);
+			normalWS = normalize(lerp(normalWS, objectN, meet));
+		}
 	}
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));

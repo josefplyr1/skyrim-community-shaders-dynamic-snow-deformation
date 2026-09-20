@@ -1372,8 +1372,8 @@ public:
 		float ObjBermHeightAmp;
 		float ObjChurnHeightAmp;
 		float ObjChurnSizeScale;
-		/** @brief Retired water-edge rows (before that ObjCrisp); layout keepers. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
-		float Spare0;
+		/** @brief Landscape shell: distance (units, perpendicular to the object's surface) over which the sheet's normal eases to a snow-painted object's where they meet; 0 = off / no normals copy. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float ObjectMeetBand;
 
 		float Spare1;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
@@ -2005,6 +2005,10 @@ public:
 	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
+
+	/** @brief Pre-shell copy of the NORMALROUGHNESS target for the landscape shell: the normal of whatever stands behind each shell pixel, which the sheet's own normal eases to where it meets a snow-painted object. Bound at shell PS t21. */
+	winrt::com_ptr<ID3D11Texture2D> preShellNormalsTex;
+	winrt::com_ptr<ID3D11ShaderResourceView> preShellNormalsSRV;
 
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,

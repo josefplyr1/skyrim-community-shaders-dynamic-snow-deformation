@@ -138,9 +138,9 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	// Retired water-edge rows; layout keepers.
-	float Spare0;
+	float ObjectMeetBand;  // landscape shell only, unread here
 
+	// Retired water-edge row; layout keeper.
 	float Spare1;
 	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
 	uint ShellLODDebug;
