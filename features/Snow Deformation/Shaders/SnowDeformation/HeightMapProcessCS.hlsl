@@ -55,7 +55,7 @@ cbuffer HeightProcessCB : register(b0)
 	// average, applied to the finished cone depth fields (0 = off).
 	float DiffuseLambda;
 	float ShelterMaxHeight;  // underside height above ground past which a structure stops sheltering
-	float padHeight;
+	float ShelterConeTan;  // tan(drift angle from vertical); 0 = fixed ring
 }
 
 // Shelter melt strength: snow under roofs/tents/walkways thins to a light
@@ -67,6 +67,11 @@ cbuffer HeightProcessCB : register(b0)
 // a ~40-unit band, so a full-depth sink slopes at ~20 degrees instead
 // of presenting a snow cliff at the roofline.
 #define SHELTER_RING_TEXELS 10
+// Drift cone: tap radius cap (texels) and the covered share of the cone
+// at which shelter starts / is complete.
+#define SHELTER_CONE_MAX_TEXELS 160.0
+#define SHELTER_CONE_LO 0.35
+#define SHELTER_CONE_HI 0.8
 
 
 // ScrollCS only (b2 is unbound for every other entry point here). Mirror of
@@ -209,6 +214,32 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 	return result;
 }
 
+// Covered share of the cone snowfall can arrive through: the tap radius is
+// the centre's clearance * tan(drift angle), floored at the fixed ring.
+// Rings are rotated against each other so a straight roofline crosses one
+// tap at a time.
+float ShelterCone(int2 texel, int2 dims, float terrain)
+{
+	static const float2 kConeTaps[24] = {
+		float2(1.000, 0.000), float2(0.707, 0.707), float2(0.000, 1.000), float2(-0.707, 0.707),
+		float2(-1.000, 0.000), float2(-0.707, -0.707), float2(0.000, -1.000), float2(0.707, -0.707),
+		float2(0.644, 0.173), float2(0.333, 0.577), float2(-0.173, 0.644), float2(-0.577, 0.333),
+		float2(-0.644, -0.173), float2(-0.333, -0.577), float2(0.173, -0.644), float2(0.577, -0.333),
+		float2(0.289, 0.167), float2(0.086, 0.322), float2(-0.167, 0.289), float2(-0.322, 0.086),
+		float2(-0.289, -0.167), float2(-0.086, -0.322), float2(0.167, -0.289), float2(0.322, -0.086)
+	};
+	float texelSize = HeightHalfExtent * 2.0 / dims.x;
+	float radius = SHELTER_RING_TEXELS;
+	int2 centre = clamp(texel, int2(0, 0), dims - 1);
+	if (InA[centre] > -50000.0)
+		radius = clamp((InB[centre] - terrain) * ShelterConeTan / texelSize, SHELTER_RING_TEXELS, SHELTER_CONE_MAX_TEXELS);
+
+	float covered = ShelterTap(texel, dims, terrain) * 2.0;
+	[loop] for (uint tapI = 0; tapI < 24; tapI++)
+		covered += ShelterTap(texel + int2(round(kConeTaps[tapI] * radius)), dims, terrain);
+	return smoothstep(SHELTER_CONE_LO, SHELTER_CONE_HI, covered / 26.0);
+}
+
 // InA = raw tops, InB = raw bottoms. OutA = base field, OutB = shelter mask.
 [numthreads(8, 8, 1)] void CombineCS(uint3 dtid
 									 : SV_DispatchThreadID) {
@@ -246,11 +277,19 @@ float ShelterTap(int2 p, int2 dims, float terrain)
 			int2(5, 0), int2(-5, 0), int2(0, 5), int2(0, -5),
 			int2(4, 4), int2(4, -4), int2(-4, 4), int2(-4, -4)
 		};
-		float shelterFrac = ShelterTap(texel, dimsI, terrain) * 2.0;
-		[unroll] for (uint ringI = 0; ringI < 8; ringI++)
-			shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain) +
-			               ShelterTap(texel + kShelterRingInner[ringI], dimsI, terrain);
-		shelterFrac /= 18.0;
+		float shelterFrac = 0.0;
+		[branch] if (ShelterConeTan > 0.0)
+		{
+			shelterFrac = ShelterCone(texel, dimsI, terrain);
+		}
+		else
+		{
+			shelterFrac = ShelterTap(texel, dimsI, terrain) * 2.0;
+			[unroll] for (uint ringI = 0; ringI < 8; ringI++)
+				shelterFrac += ShelterTap(texel + kShelterRing[ringI], dimsI, terrain) +
+				               ShelterTap(texel + kShelterRingInner[ringI], dimsI, terrain);
+			shelterFrac /= 18.0;
+		}
 		// Deliberately no edge noise: roofline sinks read best smooth (fire
 		// bowls keep their noisy rims; sheltered snow follows the structure).
 		melt = max(melt, SHELTER_MELT * saturate(shelterFrac));

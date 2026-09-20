@@ -157,6 +157,8 @@
 	X(SeasonsSnowMaxAngle) \
 	X(MultipassSnowFollowsPaint) \
 	X(ShelterMaxHeight) \
+	X(ShelterDriftCone) \
+	X(ShelterDriftAngle) \
 	X(LODObjectSnow) \
 	X(SnowTexturedRecolor) \
 	X(VolumeSnow) \

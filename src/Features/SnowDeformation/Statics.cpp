@@ -1732,7 +1732,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.RimStep = kRimStep;
 	processData.OverheadIgnore = kOverheadIgnore;
 	processData.DiffuseLambda = kDiffuseLambda;
-	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
+	processData.ShelterMaxHeight = settings.ShelterDriftCone ? kShelterConeMaxHeight : std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
+	processData.ShelterConeTan = settings.ShelterDriftCone ? std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f)) : 0.0f;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;

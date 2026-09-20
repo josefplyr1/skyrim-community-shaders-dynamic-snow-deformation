@@ -222,9 +222,19 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttCap = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("sss_remarch_cap_tooltip"), "The re-march only accepts casters SHORTER than this above the snow line. Anything taller - people, fences, trees - already casts real shadows via the cascades, so its re-marched copy is the doubled soft bleed around actors. 20 = short grass only (default); 200 = accept everything. Only does anything with the re-march on."));
 
+			ImGui::BeginDisabled(settings.ShelterDriftCone);
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
+			ImGui::EndDisabled();
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_max_height_tooltip"), "Snow under a roof, bridge or archway thins out, because the structure keeps the snowfall off. A structure whose underside is higher above the ground than this no longer counts: a wide archway with plenty of air under it is as open as the sky, and the snow beneath it keeps its full depth. Fades out over the next 100 units. 70 units is about a metre."));
+			ImGui::Checkbox(T(TKEY("shelter_drift_cone"), "Shelter Follows Drift Angle"), &settings.ShelterDriftCone);
+			if (auto _ttShelterCone = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shelter_drift_cone_tooltip"), "Decides shelter by how enclosed a spot is instead of by how high the cover above it sits. Snow is taken to blow in at the Snow Drift Angle, so it reaches under an edge about as far as the cover is high: a shallow cliff overhang or a tall archway keeps its snow, while a tent or a deep roof stays clear inside. While on, Shelter Max Height is not used. Off by default."));
+			ImGui::BeginDisabled(!settings.ShelterDriftCone);
+			ImGui::SliderFloat(T(TKEY("shelter_drift_angle"), "Snow Drift Angle"), &settings.ShelterDriftAngle, 5.0f, 70.0f, "%.0f deg");
+			ImGui::EndDisabled();
+			if (auto _ttShelterAngle = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("shelter_drift_angle_tooltip"), "How far from straight down the snow blows in. Higher = snow reaches further under cover, so less ground counts as sheltered; lower = closer to a plain 'is there a roof overhead' test. At 45 degrees snow reaches as far under an edge as the cover is high. Default 30."));
 			ImGui::Checkbox(T(TKEY("shell_bare_ground_cull"), "Bare-Ground Cull"), &settings.ShellBareGroundCull);
 			if (auto _ttBare = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_bare_ground_cull_tooltip"), "Stops drawing the snow layer over ground that has no snow class under it at all - sand, riverbed, road, seafloor. There the layer sits below the terrain and cannot produce a pixel, so skipping it is free. The test is the -8 floor, the depth ground reaches only when every texture under it is a non-snow class, so the ramp that climbs into a snow layer is never cut and edges are unaffected. Leave on."));
