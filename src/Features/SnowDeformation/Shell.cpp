@@ -1286,18 +1286,7 @@ void SnowDeformation::DrawShell()
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
 		(exclusionFieldValid && !shellDistantExclusionsDisabled) ? 1.0f : 0.0f };
-
-	// Pre-shell normals (PS t21): the sheet eases its normal to a painted
-	// object's where they meet. Before the upload, so the band is 0 on a
-	// frame without the copy.
-	constexpr float kObjectMeetBand = 12.0f;
-	bool preShellNormalsValid = false;
-	if (auto& normalsRT = renderer->GetRuntimeData().renderTargets[NORMALROUGHNESS]; normalsRT.SRV) {
-		context->OMSetRenderTargets(0, nullptr, nullptr);
-		CopySRVResource(normalsRT.SRV, "SnowDeformation::PreShellNormals", preShellNormalsTex, preShellNormalsSRV);
-		preShellNormalsValid = preShellNormalsSRV != nullptr;
-	}
-	cbData.ObjectMeetBand = preShellNormalsValid ? kObjectMeetBand : 0.0f;
+	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	shellCB->Update(cbData);
 
 	// Snapshot for next frame's shadow-caster injection (it runs at the
@@ -1481,9 +1470,6 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	context->VSSetShaderResources(15, 1, &exclusionSRV);
 	context->PSSetShaderResources(15, 1, &exclusionSRV);
-	// Pre-shell normals (t21); nulled with t20-t23 after the pass.
-	ID3D11ShaderResourceView* preShellNormals = preShellNormalsValid ? preShellNormalsSRV.get() : nullptr;
-	context->PSSetShaderResources(21, 1, &preShellNormals);
 	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
 	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {

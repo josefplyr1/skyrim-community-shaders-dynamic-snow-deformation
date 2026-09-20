@@ -237,6 +237,10 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttBare = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shell_bare_ground_cull_tooltip"), "Stops drawing the snow layer over ground that has no snow class under it at all - sand, riverbed, road, seafloor. There the layer sits below the terrain and cannot produce a pixel, so skipping it is free. The test is the -8 floor, the depth ground reaches only when every texture under it is a non-snow class, so the ramp that climbs into a snow layer is never cut and edges are unaffected. Leave on."));
 
+			ImGui::SliderFloat(T(TKEY("object_meet_band"), "Object Meeting Blend"), &settings.ObjectMeetBand, 0.0f, 64.0f, "%.0f units");
+			if (auto _ttMeet = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the ground snow's shading eases into the object's slope, so the two read as one surface instead of meeting at a lit line. This is how many units of snow over the object the easing takes: higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre. Default 12."));
+
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

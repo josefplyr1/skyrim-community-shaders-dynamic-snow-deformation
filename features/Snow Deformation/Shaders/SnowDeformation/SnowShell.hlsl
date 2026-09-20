@@ -135,8 +135,8 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	// Units over which the sheet's normal eases to a painted object's where
-	// they meet; 0 = off.
+	// Units of snow over a captured object through which the sheet's macro
+	// slope eases to the object's; 0 = off.
 	float ObjectMeetBand;
 
 	// Retired water-edge row; layout keeper.
@@ -313,9 +313,6 @@ Texture2D<float4> SnowHeightMap : register(t8);
 // (Lighting.hlsl LANDSCAPE writes it; 0 = no data - POM inactive, grass, or
 // an object behind), the missing side of the two-sided edge contest.
 Texture2D<float3> LandMasksCopy : register(t10);
-// Pre-shell copy of NORMALROUGHNESS: the normal of whatever stands behind
-// the sheet at this pixel.
-Texture2D<float4> PreShellNormals : register(t21);
 // Baked berm field (BermFieldCS): the 17-tap disc average of the deformation
 // map, at the map's own resolution and addressing.
 Texture2D<float> BermFieldMap : register(t14);
@@ -877,6 +874,35 @@ float SampleObjectDepthCap(float2 worldXY)
 	[branch] if (all(roadTops > kNoRoadTop * 0.5) && all(tops - roadTops < kRoadOwnsTop))
 		return 0.0;
 	return max(max(sd00.x, sd10.x), max(sd01.x, sd11.x));
+}
+
+// Bilinear raw object top at world XY; sentinel where a texel is empty.
+// a_skipRoads also returns it over road-owned columns (the patch's ground).
+float SampleObjectTopRaw(float2 worldXY, bool a_skipRoads)
+{
+	float2 dims;
+	bool valid;
+	float2 t = ObjectMapTexel(worldXY, dims, valid);
+	float top = -100000.0;
+	[branch] if (valid)
+	{
+		int2 t0 = (int2)t;
+		float2 f = t - t0;
+		int2 t1 = min(t0 + 1, int2(dims) - 1);
+		float4 tops = float4(
+			ObjectTopsRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t0.y, 0)),
+			ObjectTopsRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t1.y, 0)));
+		[branch] if (all(tops > -50000.0))
+		{
+			bool road = false;
+			[branch] if (a_skipRoads)
+				road = max(max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)).y, ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0)).y),
+						   max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)).y, ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0)).y)) > kNoRoadTop * 0.5;
+			[flatten] if (!road)
+				top = lerp(lerp(tops.x, tops.y, f.x), lerp(tops.z, tops.w, f.x), f.y);
+		}
+	}
+	return top;
 }
 
 // ---- Surface undulation: wind-settled dunes ----
@@ -2438,7 +2464,38 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) * saturate(1.0 - dXP) - BermShape(bermXN) * saturate(1.0 - dXN),
 		BermShape(bermYP) * saturate(1.0 - dYP) - BermShape(bermYN) * saturate(1.0 - dYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	float2 gradZ = -terrainNormal.xy / max(terrainNormal.z, 0.1) + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
+	// Meeting a captured object: the sheet's MACRO slope eases to the object's
+	// through the last ObjectMeetBand units of snow over it, so both sides of
+	// the junction shade with one normal while the sheet keeps its own relief
+	// and grain. Slope and gap come from the raw top raster at the pixel's own
+	// world XY: no object texture detail, and nothing a camera can move. The
+	// 8-unit step spans whole texels, which cancels the MAX raster's stair.
+	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
+	[branch] if (ObjectMeetBand > 0.0)
+	{
+		float2 meetXY = GridOrigin + gridLocal;
+		float meetTop = SampleObjectTopRaw(meetXY, true);
+		float meetGap = input.WorldPos.z + ShellCameraPosAdjust.z - meetTop;
+		[branch] if (meetTop > -50000.0 && meetGap < ObjectMeetBand && meetGap > -16.0)
+		{
+			const float mStep = 8.0;
+			float mXP = SampleObjectTopRaw(meetXY + float2(mStep, 0.0), false);
+			float mXN = SampleObjectTopRaw(meetXY - float2(mStep, 0.0), false);
+			float mYP = SampleObjectTopRaw(meetXY + float2(0.0, mStep), false);
+			float mYN = SampleObjectTopRaw(meetXY - float2(0.0, mStep), false);
+			[flatten] if (min(min(mXP, mXN), min(mYP, mYN)) > -50000.0)
+			{
+				float2 objectGrad = float2(mXP - mXN, mYP - mYN) / (2.0 * mStep);
+				float objectNz = rsqrt(1.0 + dot(objectGrad, objectGrad));
+				// Perpendicular snow thickness; an upper deck (gap well below
+				// zero) and faces too steep to hold a coat take no ease.
+				float meet = (1.0 - smoothstep(0.0, ObjectMeetBand, meetGap * objectNz)) *
+				             (1.0 - smoothstep(8.0, 16.0, -meetGap)) * smoothstep(0.35, 0.6, objectNz);
+				macroGrad = lerp(macroGrad, objectGrad, meet);
+			}
+		}
+	}
+	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
 	float2 worldXYPS = GridOrigin + gridLocal;
@@ -2618,25 +2675,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float hy = dot(SnowDiffuse.Sample(SnowSampler, detailUV + float2(0.0, e)).rgb, kLum);
 		float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
-	}
-
-	// Meeting a snow-painted object: the sheet's normal eases to the object's
-	// own through the last units before they touch, so the junction carries
-	// no lighting step. Distance is taken perpendicular to the object's
-	// surface (ray gap x |V.N|), which holds still under a moving camera on a
-	// flat face. Masks.y >= 2 = a classified projected-snow static.
-	[branch] if (ObjectMeetBand > 0.0 && sceneZ > shellZ)
-	{
-		float meetEnc = LandMasksCopy.Load(int3(input.Position.xy, 0)).y;
-		meetEnc = meetEnc >= 256.0 ? meetEnc / 256.0 : meetEnc;
-		[branch] if (meetEnc >= 1.5)
-		{
-			float3 objectN = normalize(mul(GBuffer::DecodeNormal(PreShellNormals.Load(int3(input.Position.xy, 0)).xy), (float3x3)CameraView));
-			float rayGap = length(input.WorldPos) * (sceneZ - shellZ) / max(shellZ, 1e-3);
-			float meetDist = rayGap * abs(dot(normalize(input.WorldPos), objectN));
-			float meet = (1.0 - smoothstep(0.0, ObjectMeetBand, meetDist)) * smoothstep(0.0, 0.3, objectN.z);
-			normalWS = normalize(lerp(normalWS, objectN, meet));
-		}
 	}
 
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));

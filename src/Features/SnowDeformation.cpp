@@ -159,6 +159,7 @@
 	X(ShelterMaxHeight) \
 	X(ShelterDriftCone) \
 	X(ShelterDriftAngle) \
+	X(ObjectMeetBand) \
 	X(LODObjectSnow) \
 	X(SnowTexturedRecolor) \
 	X(VolumeSnow) \

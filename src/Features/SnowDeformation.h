@@ -629,6 +629,8 @@ public:
 		bool ShelterDriftCone = true;
 		/** @brief "Snow Drift Angle" (degrees from vertical): sizes the enclosure disc; higher asks for deeper cover before the band shelters. */
 		float ShelterDriftAngle = 30.0f;
+		/** @brief "Object Meeting Blend" (units): thickness of snow over a captured object through which the landscape sheet's macro slope eases to the object's, so the sheet and the object's coat shade as one surface where they meet. 0 = off. */
+		float ObjectMeetBand = 12.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
@@ -1372,7 +1374,7 @@ public:
 		float ObjBermHeightAmp;
 		float ObjChurnHeightAmp;
 		float ObjChurnSizeScale;
-		/** @brief Landscape shell: distance (units, perpendicular to the object's surface) over which the sheet's normal eases to a snow-painted object's where they meet; 0 = off / no normals copy. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		/** @brief Landscape shell: settings.ObjectMeetBand. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
 		float Spare1;
@@ -2005,10 +2007,6 @@ public:
 	/** @brief Pre-shell copy of the NORMALROUGHNESS target: the scene's per-pixel shaded normals (normal maps included) before any shell overwrote them - the S4 shell's per-pixel footprint cut reads its nz here. Bound at skin PS t23. */
 	winrt::com_ptr<ID3D11Texture2D> preSkinNormalsCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preSkinNormalsCopySRV;
-
-	/** @brief Pre-shell copy of the NORMALROUGHNESS target for the landscape shell: the normal of whatever stands behind each shell pixel, which the sheet's own normal eases to where it meets a snow-painted object. Bound at shell PS t21. */
-	winrt::com_ptr<ID3D11Texture2D> preShellNormalsTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> preShellNormalsSRV;
 
 	/** @brief Copies the resource behind a_srcSRV into an owned SRV-only texture, recreating it when dimensions or format change. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
