@@ -596,6 +596,12 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
+		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
+		bool BloodDetail = true;
+		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..16. 0 = no soak. Needs BloodDetail. */
+		float BloodSoakReach = 6.0f;
+		/** @brief Real seconds (at the current timescale) the soak takes to reach ~95% of BloodSoakReach. Runs on the game clock, so waiting or sleeping finishes it. */
+		float BloodSoakSeconds = 40.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -881,6 +887,8 @@ public:
 		bool skinned;
 		/** @brief Not blood: the overlay cannot read its alpha off the colour, so it is drawn into the decal mask. */
 		bool mask = false;
+		/** @brief Burial clock and game hours when the mark was first seen; the detail tiles date it by these, so a redraw does not make it fresh again. */
+		float2 clock{ 0.0f, 0.0f };
 	};
 	std::vector<BloodCapture> bloodCaptures;
 	/** @brief Engine decals are baked geometry: one deposit per decal. Keyed by geometry, validated by its buffer and position. */
@@ -890,6 +898,16 @@ public:
 		const void* vb = nullptr;
 		RE::NiPoint3 position;
 		double firstSeconds = 0.0;
+		float2 firstClock{ 0.0f, 0.0f };
+		/** @brief Detail tiles: bloodTileEpoch when every tile under the mark last took it whole; a tile allocated since is owed a redraw. */
+		uint32_t fineEpoch = 0;
+		/** @brief A cell under the mark had no slot to be had; asked again at fineRetryFrame. */
+		bool fineMissing = false;
+		uint32_t fineRetryFrame = 0;
+		/** @brief World XY bounds of the decal's vertices, read once. */
+		bool boundsKnown = false;
+		float2 boundsMin{ 0.0f, 0.0f };
+		float2 boundsMax{ 0.0f, 0.0f };
 	};
 	double bloodRenderSeconds = 0.0;
 	std::unordered_map<const void*, BloodSeen> bloodSeen;
@@ -1002,7 +1020,7 @@ public:
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_overlay picks the overlay variants and one instance instead of the map's four seam instances. */
-	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u);
+	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false);
 	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
 	void RegisterDecalOverlay(const BloodCapture& a_capture);
 	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
@@ -1019,6 +1037,124 @@ public:
 	uint32_t decalMasksLast = 0;
 	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
+
+	// ---- Blood detail tiles (BloodTiles.cpp; BLOOD-DESIGN.md "Detail tiles") ----
+	static constexpr uint32_t kBloodTileDim = 512;
+	static constexpr uint32_t kBloodTilesAcross = 4;
+	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
+	static constexpr uint32_t kBloodTileMips = 4;
+	static constexpr float kBloodTileTexel = 0.5f;
+	/** @brief A tile owns a cell and carries an apron around it, so a soak crossing the cell's edge still finds its blood. Mirrored in SnowFields.hlsli. */
+	static constexpr float kBloodTileCell = 224.0f;
+	static constexpr float kBloodTileApron = 16.0f;
+	static constexpr uint32_t kBloodTileBlock = 8;
+	static constexpr int32_t kBloodTileIndexDim = 64;
+	static constexpr int32_t kBloodTileKeepCells = 24;
+	static constexpr float kBloodSoakMaxReach = 16.0f;
+	struct BloodTile
+	{
+		bool live = false;
+		int32_t cellX = 0;
+		int32_t cellY = 0;
+		/** @brief bloodTileEpoch at allocation. */
+		uint32_t gen = 0;
+		bool jfaDirty = false;
+		/** @brief Burial clock at the newest deposit: a tile snowed under whole is free. */
+		float lastBurial = 0.0f;
+		std::vector<BloodCapture> draws;
+		bool discs = false;
+	};
+	struct BloodFineRequest
+	{
+		BloodCapture draw;
+		const void* key = nullptr;
+		bool revealing = false;
+	};
+	struct alignas(16) BloodTileCB
+	{
+		int32_t TileTexel[2];
+		int32_t TileBlock[2];
+		float2 TileWorldMin;
+		float FineTexel;
+		int32_t JfaStep;
+		float2 WindowOrigin;
+		float CoarseTexel;
+		int32_t CoarseDim;
+		int32_t MapOrigin[2];
+		float BurialNow;
+		float BurialRefills;
+		int32_t MipTexel[2];
+		int32_t MipDim;
+		int32_t padTile;
+	};
+	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
+	enum BloodTileShader : uint32_t
+	{
+		kBloodTileSeed,
+		kBloodTileMergeClock,
+		kBloodTileMergePigment,
+		kBloodTileMipDown,
+		kBloodTileJfaInit,
+		kBloodTileJfaStep,
+		kBloodTileJfaResolve,
+		kBloodTileShaderCount
+	};
+	BloodTile bloodTiles[kBloodMaxTiles];
+	std::vector<BloodFineRequest> bloodFineQueue;
+	uint32_t bloodTileEpoch = 1;
+	uint32_t bloodTilesLive = 0;
+	uint32_t bloodTileMergesLast = 0;
+	uint32_t bloodTileBoundsRead = 0;
+	uint32_t bloodTileBoundsGuessed = 0;
+	bool bloodTileIndexDirty = true;
+	bool bloodTilesFailed = false;
+	bool bloodTilesLogged = false;
+	/** @brief Set where the deformation map is cleared whole (worldspace or range change): the tiles' ground is gone. */
+	bool bloodTilesDrop = false;
+	float bloodTileReachLast = 0.0f;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasRawSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileAtlasUAV[kBloodTileMips];
+	winrt::com_ptr<ID3D11Texture2D> bloodTileSeeds;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSeedsSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileSeedsUAV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileClock;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileClockSRV;
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileClockUAV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileIndex;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileIndexSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileScratch;
+	winrt::com_ptr<ID3D11RenderTargetView> bloodTileScratchRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileScratchRawSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileScratchClock;
+	winrt::com_ptr<ID3D11RenderTargetView> bloodTileScratchClockRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileScratchClockSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTilePrev;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevRawSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTilePrevClock;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevClockSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileJfa[2];
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileJfaSRV[2];
+	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileJfaUAV[2];
+	winrt::com_ptr<ID3D11Buffer> bloodTileCB;
+	ID3D11ComputeShader* bloodTileCS[kBloodTileShaderCount]{};
+	ID3D11ComputeShader* GetBloodTileCS(BloodTileShader a_which);
+	bool BloodTilesWanted() const { return settings.BloodOnSnow && settings.BloodDetail && !bloodTilesFailed; }
+	bool BloodTilesLive() const { return BloodTilesWanted() && bloodTilesLive > 0 && bloodTileAtlasSRV; }
+	bool EnsureBloodTileResources();
+	void ReleaseBloodTiles();
+	void DropBloodTiles();
+	/** @brief The mark's world XY bounds: its vertices where the CPU holds them, a guess around its bound otherwise. */
+	void BloodMarkBounds(const BloodCapture& a_capture, BloodSeen& a_seen);
+	int32_t FindBloodTile(int32_t a_cellX, int32_t a_cellY) const;
+	int32_t AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int32_t a_cameraCellX, int32_t a_cameraCellY);
+	void FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const;
+	void SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
+	void MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs);
+	void SoakBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
+	/** @brief Draws this frame's detail requests into their tiles, then the soak field of tiles that changed. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
+	void RenderBloodTiles(const std::vector<BloodDisc>& a_discs);
 
 	// ---- Rune decals on snow (BURIED-REF-LIFT-PLAN.md) ----
 	static constexpr uint32_t kRuneMaxTiles = 4;
@@ -1423,8 +1559,10 @@ public:
 		float4 DebugSkinDepth;
 		/** @brief Blood: x = Settings::BloodIntensity, y = the burial clock now (bloodBurialClock), z = game hours now, w = Settings::BloodBurial. Appended last; mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float4 BloodLook;
-		/** @brief Blood: x = Settings::BloodAgeHours, y = Settings::BloodSheen, z > 0.5 = the map is live, w spare. Mirror in both shells. */
+		/** @brief Blood: x = Settings::BloodAgeHours, y = Settings::BloodSheen, z > 0.5 = the map is live, w > 0.5 = detail tiles are live. Mirror in both shells. */
 		float4 BloodLook2;
+		/** @brief Blood soak: x = Settings::BloodSoakReach, y = 3 / the soak time in game hours, zw spare. Appended last; mirror in both shells. */
+		float4 BloodLook3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 

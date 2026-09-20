@@ -83,6 +83,7 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 	context->ClearRenderTargetView(bloodMapTexture->rtv.get(), zero);
 	context->ClearRenderTargetView(bloodClockTexture->rtv.get(), zero);
 	bloodSeen.clear();
+	bloodTilesDrop = true;
 	logger::info("[SNOW DEFORMATION] blood map {}x{} created", desc.Width, desc.Height);
 	} catch (const std::exception& e) {
 		logger::error("[SNOW DEFORMATION] blood map creation failed: {} - blood on snow is off", e.what());
@@ -139,6 +140,7 @@ void SnowDeformation::ReleaseBloodShaders()
 	bloodILCache.clear();
 	bloodSkinILCache.clear();
 	bloodShadersFailed = false;
+	ReleaseBloodTiles();
 }
 
 bool SnowDeformation::EnsureBloodResources()
@@ -494,16 +496,49 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		auto& seen = bloodSeen[geometry];
 		const auto& position = geometry->world.translate;
 		const bool same = seen.frame != 0 && seen.vb == vb && seen.position.GetSquaredDistance(position) < 1.0f;
-		seen.frame = globals::state->frameCount;
+		const uint32_t frame = globals::state->frameCount;
+		seen.frame = frame;
 		seen.vb = vb;
 		seen.position = position;
-		if (!same)
+		if (!same) {
 			seen.firstSeconds = bloodRenderSeconds;
+			seen.firstClock = { bloodBurialClock, gameClockHours.load(std::memory_order_relaxed) };
+			seen.fineEpoch = 0;
+			seen.fineMissing = false;
+			seen.fineRetryFrame = 0;
+			seen.boundsKnown = false;
+		}
+		capture.clock = seen.firstClock;
 		const float spread = std::max(settings.BloodSpreadSeconds, 0.0f);
 		const double age = bloodRenderSeconds - seen.firstSeconds;
-		if (same && age > spread + 0.1)
-			return;
+		const bool revealing = !(same && age > spread + 0.1);
 		capture.reveal = spread > 0.0f ? std::clamp(float(age / spread), 0.05f, 1.0f) : 1.0f;
+		// The detail tiles take the mark while it spreads, and again when a
+		// tile under it was allocated after it finished. Not once snowfall
+		// has buried it: it would only win back the tile that burial freed.
+		const bool buried = bloodBurialClock - seen.firstClock.x >= std::max(settings.BloodBurial, 0.01f);
+		if (BloodTilesWanted() && !buried && bloodFineQueue.size() < 512 &&
+			(revealing || ((seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame)))
+			bloodFineQueue.push_back({ capture, geometry, revealing });
+		if (!revealing)
+			return;
+	} else if (BloodTilesWanted() && bloodFineQueue.size() < 512) {
+		// Pool quads animate: the tiles follow every eighth frame for the
+		// first minute, by when a pool has stopped growing.
+		auto& seen = bloodSeen[geometry];
+		const uint32_t frame = globals::state->frameCount;
+		if (seen.frame == 0 || frame - seen.frame > 600) {
+			seen.firstSeconds = bloodRenderSeconds;
+			seen.firstClock = { bloodBurialClock, gameClockHours.load(std::memory_order_relaxed) };
+			seen.fineEpoch = 0;
+		}
+		seen.frame = frame;
+		seen.position = geometry->world.translate;
+		capture.clock = seen.firstClock;
+		const bool growing = bloodRenderSeconds - seen.firstSeconds < 60.0;
+		if ((growing && ((frame + uint32_t(reinterpret_cast<uintptr_t>(geometry) >> 6)) & 7u) == 0) ||
+			(!growing && (seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame))
+			bloodFineQueue.push_back({ capture, geometry, growing });
 	}
 	if (bloodCaptures.size() < 512)
 		bloodCaptures.push_back(std::move(capture));
@@ -941,7 +976,7 @@ void SnowDeformation::APIDepositBlood(float a_x, float a_y, float a_z, float a_r
 	bloodDiscQueue.push_back({ a_x, a_y, a_z, a_radius, std::clamp(a_r, 0.0f, 1.0f), std::clamp(a_g, 0.0f, 1.0f), std::clamp(a_b, 0.0f, 1.0f), std::clamp(a_amount, 0.0f, 1.0f) });
 }
 
-uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS, UINT a_instances)
+uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS, UINT a_instances, bool a_ownClock)
 {
 	auto* context = a_context;
 	const UINT instances = a_instances;
@@ -992,6 +1027,8 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.MaterialAlpha = capture.alpha;
 		a_cb.AlphaThreshold = capture.alphaThreshold;
 		a_cb.Spread = { capture.reveal, 0.0f, 0.0f, 0.0f };
+		if (a_ownClock && capture.clock.y > 0.0f)
+			a_cb.ClockNow = capture.clock;
 		ID3D11ShaderResourceView* diffuse = capture.diffuse.get();
 		context->PSSetShaderResources(0, 1, &diffuse);
 
@@ -1137,14 +1174,15 @@ void SnowDeformation::RenderBloodCapture()
 		std::scoped_lock lock(bloodDiscMutex);
 		discs.swap(bloodDiscQueue);
 	}
-	if (!settings.BloodOnSnow || !bloodMapTexture || !bloodClockTexture || (bloodCaptures.empty() && discs.empty())) {
+	const bool tileWork = !bloodFineQueue.empty() || bloodTilesLive > 0;
+	if (!settings.BloodOnSnow || !bloodMapTexture || !bloodClockTexture || (bloodCaptures.empty() && discs.empty() && !tileWork) || !EnsureBloodResources()) {
 		bloodCaptures.clear();
+		bloodFineQueue.clear();
 		return;
 	}
-	if (!EnsureBloodResources()) {
-		bloodCaptures.clear();
+	RenderBloodTiles(discs);
+	if (bloodCaptures.empty() && discs.empty())
 		return;
-	}
 
 	auto context = globals::d3d::context;
 	globals::profiler->BeginPass("SnowDeformation::BloodCapture");

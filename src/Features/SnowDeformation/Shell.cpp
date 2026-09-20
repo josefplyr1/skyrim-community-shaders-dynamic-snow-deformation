@@ -1027,7 +1027,12 @@ void SnowDeformation::DrawShell()
 	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
 		gameClockHours.load(std::memory_order_relaxed), std::max(settings.BloodBurial, 0.01f) };
 	cbData.BloodLook2 = { std::max(settings.BloodAgeHours, 0.1f), std::clamp(settings.BloodSheen, 0.0f, 1.0f),
-		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, 0.0f };
+		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, BloodTilesLive() ? 1.0f : 0.0f };
+	{
+		// Real seconds on the game clock: 3 time constants in the soak time.
+		const float soakHours = std::max(settings.BloodSoakSeconds, 0.1f) * gameClock.timescale / 3600.0f;
+		cbData.BloodLook3 = { std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach), 3.0f / soakHours, 0.0f, 0.0f };
+	}
 
 	// Loaded-cell boundary square around the PLAYER's cell (cell attachment
 	// follows the player, not the camera): full terrain inside, LOD outside.
@@ -1446,6 +1451,9 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(14, 1, &bermSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
+	// Blood detail tiles (t66-t69): cell index, pigment atlas, soak offsets, clock blocks.
+	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodTileAtlasSRV.get(), bloodTileSeedsSRV.get(), bloodTileClockSRV.get() };
+	context->PSSetShaderResources(66, 4, bloodTileSRVs);
 	// Rune glyph atlas (t90) and its tile table (b7). Unbound reads as no tiles.
 	ID3D11ShaderResourceView* runeSRV = GetRuneAtlasSRV();
 	context->PSSetShaderResources(90, 1, &runeSRV);

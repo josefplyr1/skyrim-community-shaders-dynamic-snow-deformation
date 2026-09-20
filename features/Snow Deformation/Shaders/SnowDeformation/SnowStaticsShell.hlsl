@@ -192,6 +192,7 @@ cbuffer ShellCB : register(b0)
 	// y = wet sheen, z > 0.5 = map live.
 	float4 BloodLook;
 	float4 BloodLook2;
+	float4 BloodLook3;  // landscape shell only (SnowShell.hlsl)
 }
 
 cbuffer StaticCB : register(b1)

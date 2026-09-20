@@ -141,6 +141,9 @@
 	X(BloodAgeHours) \
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
+	X(BloodDetail) \
+	X(BloodSoakReach) \
+	X(BloodSoakSeconds) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \
@@ -1035,6 +1038,7 @@ void SnowDeformation::Prepass()
 		clearRequested = true;
 
 	perFrameData.ClearMap = clearRequested;
+	bloodTilesDrop = bloodTilesDrop || clearRequested;
 	clearRequested = false;
 
 	// The texels whose world assignment this frame's scroll (or clear)

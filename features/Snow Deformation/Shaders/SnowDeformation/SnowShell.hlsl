@@ -214,8 +214,11 @@ cbuffer ShellCB : register(b0)
 	// Blood: x = intensity, y = burial clock now, z = game hours now,
 	// w = snowfall that buries a mark (fraction of a refill).
 	float4 BloodLook;
-	// x = hours a mark takes to dry, y = wet sheen, z > 0.5 = map live.
+	// x = hours a mark takes to dry, y = wet sheen, z > 0.5 = map live,
+	// w > 0.5 = detail tiles live.
 	float4 BloodLook2;
+	// Soak: x = reach in units, y = 3 / the soak time in game hours.
+	float4 BloodLook3;
 }
 
 // Bow wave: the crest a moving body pushes ahead of and beside its legs.
@@ -337,8 +340,10 @@ SamplerState SnowSampler : register(s0);
 // Shared trench-detail shaping, spell-mark readers, field surfaces and the
 // frost pattern - the verbatim-identical pieces of both shells live in one
 // file.
-// The landscape shell paints rune glyphs (SnowFields.hlsli).
+// The landscape shell paints rune glyphs and reads the blood detail tiles
+// (SnowFields.hlsli).
 #define SNOW_RUNE_GLYPHS
+#define SNOW_BLOOD_TILES
 #include "SnowDeformation/SnowFields.hlsli"
 
 
@@ -2723,6 +2728,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// black-red. Drying turns the hue maroon.
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
+	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh);
 	[branch] if (blood.a > 0.002)
 	{
 		float3 pigment = Color::LinearToSrgb(blood.rgb);

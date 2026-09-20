@@ -563,6 +563,91 @@ float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
 
 #endif  //__SNOW_FIELDS_DEPENDENCY_HLSL__
 
+#if defined(PSHADER) && defined(SNOW_BLOOD_TILES)
+// Blood detail tiles (BloodTiles.cpp), landscape shell only. Where a tile
+// lies it replaces the blood map's reading: the pigment at half a unit per
+// texel (premultiplied, own mip chain), dated per 4-unit block, plus the
+// offset to the nearest solid blood that the soak grows from. Constants
+// mirror SnowDeformation.h.
+Texture2D<uint> BloodTileIndex : register(t66);
+Texture2D<float4> BloodTilePigment : register(t67);
+Texture2D<float4> BloodTileSeeds : register(t68);
+Texture2D<float4> BloodTileClock : register(t69);
+
+static const float kBloodTileCell = 224.0;
+static const float kBloodTileApron = 16.0;
+static const float kBloodTileTexel = 0.5;
+static const int kBloodTileDim = 512;
+static const int kBloodTilesAcross = 4;
+// A clock block is 8 texels, 4 units.
+static const int kBloodTileBlockShift = 3;
+
+// worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
+void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout float4 blood, inout float fresh)
+{
+	[branch] if (BloodLook2.w > 0.5)
+	{
+		const int2 cell = (int2)floor(worldXY / kBloodTileCell);
+		const uint slot1 = BloodTileIndex.Load(int3(cell & 63, 0));
+		[branch] if (slot1 != 0u)
+		{
+			const uint slot = slot1 - 1u;
+			const int2 tileTexel = int2(slot % (uint)kBloodTilesAcross, slot / (uint)kBloodTilesAcross) * kBloodTileDim;
+			const float2 local = (worldXY - (float2(cell) * kBloodTileCell - kBloodTileApron)) / kBloodTileTexel;
+			const float atlasDim = float(kBloodTileDim * kBloodTilesAcross);
+			const float uvPerUnit = 1.0 / (kBloodTileTexel * atlasDim);
+			float4 own = BloodTilePigment.SampleGrad(ShellLinearSampler, (float2(tileTexel) + local) / atlasDim, worldDx * uvPerUnit, worldDy * uvPerUnit);
+
+			const int2 texel = clamp((int2)local, 0, kBloodTileDim - 1);
+			const int2 blockOrigin = tileTexel >> kBloodTileBlockShift;
+			float4 clock = BloodTileClock.Load(int3(blockOrigin + texel >> kBloodTileBlockShift, 0));
+
+			// The soak: blood shows out to a radius that rises with the age
+			// of the nearest solid blood, its rim broken up by the grain.
+			float soak = 0.0;
+			float3 soakRgb = 0.0;
+			float4 seedClock = 0.0;
+			const float2 seedCode = BloodTileSeeds.Load(int3(tileTexel + texel, 0)).xy;
+			[branch] if (BloodLook3.x > 0.0 && any(seedCode > 0.0))
+			{
+				const int2 seedTexel = clamp(texel + (int2)round(seedCode * 255.0) - 128, 0, kBloodTileDim - 1);
+				const float4 seed = BloodTilePigment.Load(int3(tileTexel + seedTexel, 0));
+				seedClock = BloodTileClock.Load(int3(blockOrigin + seedTexel >> kBloodTileBlockShift, 0));
+				const float dist = length(float2(seedTexel) + 0.5 - local) * kBloodTileTexel;
+				const float grown = 1.0 - exp(-max(BloodLook.z - seedClock.z, 0.0) * BloodLook3.y);
+				// At most 1, so the setting is the farthest the soak gets and the
+				// tile's apron always holds its blood.
+				const float grain = 0.5 + 0.5 * ShapeNoise(worldXY * 0.45);
+				const float radius = max(BloodLook3.x * grown * grain, 1e-3);
+				soak = seed.a * (1.0 - smoothstep(0.35, 1.0, dist / radius)) * step(1e-4, seedClock.y);
+				soakRgb = seed.rgb / max(seed.a, 1e-3);
+			}
+			// A filtered tap can reach a block nothing was drawn in; it is
+			// dated by the blood it bled from.
+			[flatten] if (clock.y <= 0.0)
+				clock = seedClock;
+
+			const float ownKeep = step(1e-4, clock.y) * (1.0 - saturate((BloodLook.y - clock.x) / BloodLook.w));
+			const float soakKeep = 1.0 - saturate((BloodLook.y - seedClock.x) / BloodLook.w);
+			const float ownConc = own.a * ownKeep;
+			const float soakConc = soak * soakKeep * 0.85;
+			const float conc = max(ownConc, soakConc);
+			blood = 0.0;
+			fresh = 0.0;
+			[branch] if (conc > 1e-4)
+			{
+				const float w = ownConc / (ownConc + soakConc + 1e-5);
+				blood = float4(lerp(soakRgb, own.rgb / max(own.a, 1e-3), w), conc);
+				const float ownFresh = 1.0 - saturate((BloodLook.z - clock.y) / BloodLook2.x);
+				const float soakFresh = 1.0 - saturate((BloodLook.z - seedClock.y) / BloodLook2.x);
+				// Soaked-in blood carries little of the pool's gloss.
+				fresh = lerp(soakFresh * 0.4, ownFresh, w);
+			}
+		}
+	}
+}
+#endif
+
 #if defined(PSHADER) && defined(SNOW_RUNE_GLYPHS)
 // Rune glyphs (Blood.cpp, RenderRuneCapture), for the shells that define
 // SNOW_RUNE_GLYPHS - the landscape shell and the road patch; object skins

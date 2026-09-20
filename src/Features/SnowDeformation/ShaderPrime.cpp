@@ -260,6 +260,10 @@ void SnowDeformation::RunShaderPrime()
 	const std::function<void()> effectSteps[] = {
 		[&] { GetLightningArcVS(); },
 		[&] { GetLightningArcPS(); },
+		[&] {
+			for (uint32_t i = 0; i < kBloodTileShaderCount; ++i)
+				GetBloodTileCS(BloodTileShader(i));
+		},
 	};
 
 	auto runGroup = [&](const std::function<void()>* a_steps, size_t a_count, int a_phase, const char* a_name) {

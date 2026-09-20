@@ -495,9 +495,22 @@ void SnowDeformation::DrawSettings()
 		ImGui::SliderFloat(T(TKEY("blood_sheen"), "Wet Sheen"), &settings.BloodSheen, 0.0f, 1.0f, "%.2f");
 		if (auto _ttBloodS = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
-		ImGui::SliderFloat(T(TKEY("blood_spread_seconds"), "Spread Time"), &settings.BloodSpreadSeconds, 0.0f, 6.0f, "%.1f s");
+		ImGui::SliderFloat(T(TKEY("blood_spread_seconds"), "Appear Time"), &settings.BloodSpreadSeconds, 0.0f, 6.0f, "%.1f s");
 		if (auto _ttBloodSp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "Blood does not appear on snow all at once: it soaks outward from where it landed. A fresh mark grows from its dense core to its thin fringe over this long. 0 = the whole mark at once."));
+			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "A fresh mark does not appear all at once: it grows from its dense core to its thin fringe over this long. 0 = the whole mark at once. How far blood then creeps past the mark is Soak Reach."));
+		ImGui::Checkbox(T(TKEY("blood_detail"), "Detailed Blood Marks"), &settings.BloodDetail);
+		if (auto _ttBloodD = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_detail_tooltip"), "The blood map's texel is several units wide, so on its own a splatter lands on the landscape snow as a soft blob. On, ground that holds blood near you keeps it at half a unit per texel, and the snow shows the decal's own contours: droplets, streaks and all. Sixteen patches of about three metres each, the nearest kept; farther marks fall back to the blood map. Landscape snow only. Costs about 27 MB of video memory once blood first appears, and nothing per frame while no blood is being spilled."));
+		ImGui::BeginDisabled(!settings.BloodDetail);
+		ImGui::SliderFloat(T(TKEY("blood_soak_reach"), "Soak Reach"), &settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach, "%.1f units");
+		if (auto _ttBloodSr = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_soak_reach_tooltip"), "How far blood creeps outward through the snow from a mark's solid contour, in game units (16 is about 23 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only."));
+		ImGui::SliderFloat(T(TKEY("blood_soak_seconds"), "Soak Time"), &settings.BloodSoakSeconds, 1.0f, 300.0f, "%.0f s");
+		if (auto _ttBloodSt = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_soak_seconds_tooltip"), "Seconds the soak takes to reach nearly its full Soak Reach: fast at first, then slowing. It runs on the game clock, so waiting, sleeping or fast travel finishes it, and blood the snow has buried stops with the rest of the mark."));
+		ImGui::EndDisabled();
+		if (bloodTilesFailed)
+			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_tiles_status_failed"), "Detailed Blood Marks is NOT RUNNING: a texture or shader failed - see CommunityShaders.log. The blood map carries on alone."));
 		if (bloodShadersFailed)
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
 		ImGui::TreePop();
@@ -1314,6 +1327,7 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_blood"), "Blood Decals"))) {
 			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
+			WrapTextDisabledF("%s", std::format("Detail tiles: {} of {} live, {} merged this frame; mark bounds {} from vertices, {} guessed", bloodTilesLive, kBloodMaxTiles, bloodTileMergesLast, bloodTileBoundsRead, bloodTileBoundsGuessed).c_str());
 			ImGui::TreePop();
 		}
 
