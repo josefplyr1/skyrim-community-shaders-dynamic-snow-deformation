@@ -38,6 +38,15 @@ cbuffer BloodTileCB : register(b0)
 	int2 MipTexel;
 	int MipDim;
 	int padTile;
+
+	// MIGRATE: one tile of the previous detail level.
+	float2 OldWorldMin;
+	float OldTexel;
+	float OldAtlasDim;
+	int2 OldTileTexel;
+	int2 OldTileBlock;
+	float2 OldCellMin;
+	float2 OldCellMax;
 }
 
 static const int kTileDim = 512;
@@ -57,6 +66,24 @@ float3 LinearToSrgb(float3 c)
 float3 SrgbToLinear(float3 c)
 {
 	return lerp(c / 12.92, pow(max((c + 0.055) / 1.055, 1e-6), 2.4), step(0.04045, c));
+}
+
+// The concentration's low bit says where a texel came from: odd = a decal was
+// drawn here, even = copied in (the blood map's blobs, another level's
+// tiles). A copy is what the merge may clear under a decal; a deposit never.
+float CopiedAlpha(float a)
+{
+	return float((uint)round(saturate(a) * 255.0) & ~1u) / 255.0;
+}
+
+float DepositedAlpha(float a)
+{
+	return float((uint)round(saturate(a) * 255.0) | 1u) / 255.0;
+}
+
+bool IsCopied(float a)
+{
+	return ((uint)round(a * 255.0) & 1u) == 0u;
 }
 
 #if defined(SEED_TILE)
@@ -101,7 +128,7 @@ int3 CoarsePhys(int2 logical)
 	}
 	float4 o = 0.0;
 	if (acc.a > kMinAlpha)
-		o = float4(LinearToSrgb(acc.rgb), acc.a);
+		o = float4(LinearToSrgb(acc.rgb), CopiedAlpha(acc.a));
 	Pigment[TileTexel + int2(dtid.xy)] = o;
 	// One thread per block dates it.
 	if (all(gtid.xy == 3u))
@@ -160,6 +187,7 @@ RWTexture2D<float4> Clock : register(u0);
 Texture2D<float4> ScratchPigment : register(t0);
 Texture2D<float4> PrevPigment : register(t1);
 Texture2D<float4> ClockAtlas : register(t2);
+Texture2D<float> Cover : register(t3);
 RWTexture2D<float4> Pigment : register(u0);
 
 // The blood map's own blend: the pigment as drawn, the concentration's
@@ -173,12 +201,48 @@ RWTexture2D<float4> Pigment : register(u0);
 	float4 o = PrevPigment.Load(p);
 	if (ClockAtlas.Load(int3(TileBlock + (int2(dtid.xy) >> kBlockShift), 0)).w > 0.5)
 		o = 0.0;
+	// Under a decal's geometry a copied texel is that decal's own blur (or
+	// an older mark's, inside this one's margin): the decal draws the truth.
+	if (Cover.Load(p) > 0.5 && IsCopied(o.a))
+		o = 0.0;
 	if (n.a >= kMinAlpha)
 	{
-		float a = max(n.a, o.a);
+		float a = DepositedAlpha(max(n.a, o.a));
 		o = float4(LinearToSrgb(SrgbToLinear(n.rgb) * a), a);
 	}
 	Pigment[TileTexel + int2(dtid.xy)] = o;
+}
+#endif
+
+#if defined(MIGRATE)
+Texture2D<float4> OldPigment : register(t0);
+Texture2D<float4> OldClock : register(t1);
+SamplerState LinearClamp : register(s0);
+RWTexture2D<float4> Pigment : register(u0);
+RWTexture2D<float4> Clock : register(u1);
+
+// A detail level change: the ground one old tile's cell held, resampled into
+// this tile, over whatever the blood map seeded there. Copied, not deposited:
+// decals the game still has redraw themselves at the new level over it.
+[numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
+{
+	if (any(dtid.xy >= (uint)kTileDim))
+		return;
+	float2 world = TileWorldMin + (float2(dtid.xy) + 0.5) * FineTexel;
+	if (any(world < OldCellMin) || any(world >= OldCellMax))
+		return;
+	float2 oldLocal = (world - OldWorldMin) / OldTexel;
+	float lod = max(log2(FineTexel / OldTexel), 0.0);
+	float4 s = OldPigment.SampleLevel(LinearClamp, (float2(OldTileTexel) + oldLocal) / OldAtlasDim, lod);
+	float4 o = 0.0;
+	if (s.a > kMinAlpha)
+		o = float4(LinearToSrgb(s.rgb), CopiedAlpha(s.a));
+	Pigment[TileTexel + int2(dtid.xy)] = o;
+	if (all(gtid.xy == 3u))
+	{
+		float4 c = OldClock.Load(int3(OldTileBlock + (int2(oldLocal) >> kBlockShift), 0));
+		Clock[TileBlock + (int2(dtid.xy) >> kBlockShift)] = float4(c.xyz, 0.0);
+	}
 }
 #endif
 

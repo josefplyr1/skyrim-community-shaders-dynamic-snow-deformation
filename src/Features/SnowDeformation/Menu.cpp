@@ -507,7 +507,7 @@ void SnowDeformation::DrawSettings()
 			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
 			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
 			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than either level (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 27 MB at Standard, about 120 MB at High. Changing it redraws the marks whose decals the game still has; older ones stay soft."));
+				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than either level (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 27 MB at Standard, about 120 MB at High. Changing it carries the marks over: decals the game still has redraw at the new level, older ones keep the detail they had."));
 		}
 		// A value saved under the old 16-unit range.
 		settings.BloodSoakReach = std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach);

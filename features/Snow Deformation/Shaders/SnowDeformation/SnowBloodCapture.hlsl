@@ -297,6 +297,18 @@ float main(VS_OUTPUT input) : SV_Target0
 		discard;
 	return saturate(a);
 }
+#elif defined(PSHADER) && defined(COVER)
+// COVER: where a decal's geometry lies in a detail tile, its transparent
+// margin included. A tile that began as a copy of the blood map holds that
+// map's blur of this very mark; the merge clears copied texels under here.
+float main(VS_OUTPUT input) : SV_Target0
+{
+	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
+		discard;
+	if (input.NormalZ < NormalZMin)
+		discard;
+	return 1.0;
+}
 #elif defined(PSHADER) && defined(RUNE)
 // RUNE: a rune's glyph decal into its atlas tile (Blood.cpp, RenderRuneCapture).
 // Not its colour - its UV FIELD: rg = the decal's uv at this ground point,

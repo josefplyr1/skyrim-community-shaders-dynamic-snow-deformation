@@ -27,7 +27,7 @@
 
 ID3D11ComputeShader* SnowDeformation::GetBloodTileCS(BloodTileShader a_which)
 {
-	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "JFA_INIT", "JFA_STEP", "JFA_RESOLVE" };
+	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "MIGRATE", "JFA_INIT", "JFA_STEP", "JFA_RESOLVE" };
 	if (!bloodTileCS[a_which]) {
 		logger::debug("Compiling BloodTilesCS:{}", defines[a_which]);
 		bloodTileCS[a_which] = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BloodTilesCS.hlsl", { { defines[a_which], "" } }, "cs_5_0"));
@@ -42,6 +42,9 @@ void SnowDeformation::ReleaseBloodTiles()
 			shader->Release();
 		shader = nullptr;
 	}
+	if (bloodCoverPS)
+		bloodCoverPS->Release();
+	bloodCoverPS = nullptr;
 	bloodTilesFailed = false;
 }
 
@@ -70,6 +73,9 @@ void SnowDeformation::ReleaseBloodTileTextures()
 	bloodTilePrevRawSRV = nullptr;
 	bloodTilePrevClock = nullptr;
 	bloodTilePrevClockSRV = nullptr;
+	bloodTileCover = nullptr;
+	bloodTileCoverRTV = nullptr;
+	bloodTileCoverSRV = nullptr;
 	for (uint32_t i = 0; i < 2; ++i) {
 		bloodTileJfa[i] = nullptr;
 		bloodTileJfaSRV[i] = nullptr;
@@ -100,7 +106,7 @@ bool SnowDeformation::EnsureBloodTileResources()
 	// The atlases are sized by the level.
 	ReleaseBloodTileTextures();
 	// fxc-reflected offsets (BloodTilesCS.hlsl; ShellCB in both shells).
-	static_assert(sizeof(BloodTileCB) == 80);
+	static_assert(sizeof(BloodTileCB) == 128);
 	static_assert(offsetof(ShellCB, BloodLook3) == 784);
 	auto* device = globals::d3d::device;
 	bool ok = true;
@@ -198,6 +204,17 @@ bool SnowDeformation::EnsureBloodTileResources()
 	texture(bloodTileScratchClock, kBloodTileDim, DXGI_FORMAT_R32G32_FLOAT, kTarget, 1, "SnowDeformation::BloodTileScratchClock");
 	rtv(bloodTileScratchClockRTV, bloodTileScratchClock.get(), DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::BloodTileScratchClock RTV");
 	srv(bloodTileScratchClockSRV, bloodTileScratchClock.get(), DXGI_FORMAT_R32G32_FLOAT, 1, "SnowDeformation::BloodTileScratchClock SRV");
+
+	texture(bloodTileCover, kBloodTileDim, DXGI_FORMAT_R8_UNORM, kTarget, 1, "SnowDeformation::BloodTileCover");
+	rtv(bloodTileCoverRTV, bloodTileCover.get(), DXGI_FORMAT_R8_UNORM, "SnowDeformation::BloodTileCover RTV");
+	srv(bloodTileCoverSRV, bloodTileCover.get(), DXGI_FORMAT_R8_UNORM, 1, "SnowDeformation::BloodTileCover SRV");
+	if (!bloodCoverPS) {
+		winrt::com_ptr<ID3DBlob> blob;
+		blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl", "ps_5_0", "PSHADER", "COVER"));
+		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodCoverPS)))
+			Util::SetResourceName(bloodCoverPS, "SnowDeformation::BloodCoverPS");
+	}
+	ok = ok && bloodCoverPS != nullptr;
 
 	// Copies of what a pass is about to overwrite: a texture is never a
 	// dispatch's input and output.
@@ -345,6 +362,7 @@ int32_t SnowDeformation::AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int
 	tile.lastBurial = bloodBurialClock;
 	tile.draws.clear();
 	tile.discs = false;
+	tile.seeded = true;
 	bloodTileIndexDirty = true;
 	return slot;
 }
@@ -385,9 +403,9 @@ namespace
 
 	void UnbindCompute(ID3D11DeviceContext* a_context)
 	{
-		ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
+		ID3D11ShaderResourceView* nullSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
 		ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
-		a_context->CSSetShaderResources(0, 3, nullSRVs);
+		a_context->CSSetShaderResources(0, 4, nullSRVs);
 		a_context->CSSetUnorderedAccessViews(0, 2, nullUAVs, nullptr);
 	}
 }
@@ -404,8 +422,54 @@ void SnowDeformation::SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_s
 	a_context->CSSetShader(GetBloodTileCS(kBloodTileSeed), nullptr, 0);
 	a_context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
 	UnbindCompute(a_context);
+	MigrateBloodTile(a_context, a_slot);
 	// Or the shell reads the slot's last tenant from the mips.
 	BuildBloodTileMips(a_context, a_slot);
+}
+
+// After a detail level change: every tile of the previous level whose cell
+// reaches into this tile is resampled over the map's seed.
+void SnowDeformation::MigrateBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot)
+{
+	const auto& stash = bloodTileStash;
+	if (!stash.atlasSRV || !stash.clockSRV || stash.tiles.empty())
+		return;
+	BloodTileCB cb{};
+	FillBloodTileCB(cb, a_slot);
+	const float span = float(kBloodTileDim) * BloodTileTexel();
+	const float oldTexel = 0.5f / float(1 << stash.level);
+	const float oldCell = float(kBloodTileDim) * oldTexel - 2.0f * kBloodTileApron;
+	const uint32_t oldAcross = 4u << uint32_t(stash.level);
+	bool bound = false;
+	for (const auto& old : stash.tiles) {
+		const float2 cellMin{ float(old.cellX) * oldCell, float(old.cellY) * oldCell };
+		const float2 cellMax{ cellMin.x + oldCell, cellMin.y + oldCell };
+		if (cellMax.x <= cb.TileWorldMin.x || cellMin.x >= cb.TileWorldMin.x + span || cellMax.y <= cb.TileWorldMin.y || cellMin.y >= cb.TileWorldMin.y + span)
+			continue;
+		cb.OldWorldMin = { cellMin.x - kBloodTileApron, cellMin.y - kBloodTileApron };
+		cb.OldTexel = oldTexel;
+		cb.OldAtlasDim = float(kBloodTileDim * oldAcross);
+		cb.OldTileTexel[0] = int32_t((old.slot % oldAcross) * kBloodTileDim);
+		cb.OldTileTexel[1] = int32_t((old.slot / oldAcross) * kBloodTileDim);
+		cb.OldTileBlock[0] = cb.OldTileTexel[0] / int32_t(kBloodTileBlock);
+		cb.OldTileBlock[1] = cb.OldTileTexel[1] / int32_t(kBloodTileBlock);
+		cb.OldCellMin = cellMin;
+		cb.OldCellMax = cellMax;
+		UploadTileCB(a_context, bloodTileCB.get(), cb);
+		if (!bound) {
+			bound = true;
+			ID3D11ShaderResourceView* srvs[2] = { stash.atlasSRV.get(), stash.clockSRV.get() };
+			ID3D11UnorderedAccessView* uavs[2] = { bloodTileAtlasUAV[0].get(), bloodTileClockUAV.get() };
+			ID3D11SamplerState* sampler = bloodSampler.get();
+			a_context->CSSetShaderResources(0, 2, srvs);
+			a_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+			a_context->CSSetSamplers(0, 1, &sampler);
+			a_context->CSSetShader(GetBloodTileCS(kBloodTileMigrate), nullptr, 0);
+		}
+		a_context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
+	}
+	if (bound)
+		UnbindCompute(a_context);
 }
 
 void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs)
@@ -468,6 +532,14 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 			drawn++;
 		}
 	}
+	// Where the decals' geometry lies, for a tile that began as a copy.
+	context->ClearRenderTargetView(bloodTileCoverRTV.get(), zero);
+	if (tile.seeded && !tile.draws.empty()) {
+		ID3D11RenderTargetView* coverRTV = bloodTileCoverRTV.get();
+		context->OMSetRenderTargets(1, &coverRTV, nullptr);
+		context->PSSetShader(bloodCoverPS, nullptr, 0);
+		DrawBloodList(context, tile.draws, cb, nullptr, 1u, true);
+	}
 	ID3D11RenderTargetView* nullRTVs[2] = { nullptr, nullptr };
 	context->OMSetRenderTargets(2, nullRTVs, nullptr);
 	ID3D11ShaderResourceView* nullPS = nullptr;
@@ -497,9 +569,9 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 		UnbindCompute(context);
 	}
 	{
-		ID3D11ShaderResourceView* srvs[3] = { bloodTileScratchRawSRV.get(), bloodTilePrevRawSRV.get(), bloodTileClockSRV.get() };
+		ID3D11ShaderResourceView* srvs[4] = { bloodTileScratchRawSRV.get(), bloodTilePrevRawSRV.get(), bloodTileClockSRV.get(), bloodTileCoverSRV.get() };
 		ID3D11UnorderedAccessView* uavs[1] = { bloodTileAtlasUAV[0].get() };
-		context->CSSetShaderResources(0, 3, srvs);
+		context->CSSetShaderResources(0, 4, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetShader(GetBloodTileCS(kBloodTileMergePigment), nullptr, 0);
 		context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
@@ -602,14 +674,30 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		bloodFineQueue.clear();
 		return;
 	}
-	// Another level is another cell grid: the tiles start over, seeded from
-	// the map, and the decals still drawn take them again.
+	const uint32_t frame = globals::state->frameCount;
+	if (bloodTileStash.atlasSRV && frame > bloodTileStash.untilFrame)
+		bloodTileStash = {};
+	// Another level is another cell grid and another atlas. The old atlases
+	// are kept for a while: the new tiles are placed over the same ground and
+	// start from the old tiles' detail, and the decals still drawn take them
+	// again at the new level.
 	if (bloodTileLevelLast != BloodDetailLevel()) {
+		bloodTileStash = {};
+		if (bloodTilesLive && bloodTileAtlasSRV && bloodTileClockSRV && bloodTileResourcesLevel == bloodTileLevelLast) {
+			bloodTileStash.atlasSRV = bloodTileAtlasSRV;
+			bloodTileStash.clockSRV = bloodTileClockSRV;
+			bloodTileStash.level = bloodTileLevelLast;
+			bloodTileStash.untilFrame = frame + 1800;
+			bloodTileStash.place = true;
+			for (uint32_t i = 0; i < kBloodMaxTiles; ++i)
+				if (bloodTiles[i].live)
+					bloodTileStash.tiles.push_back({ bloodTiles[i].cellX, bloodTiles[i].cellY, i });
+		}
 		bloodTileLevelLast = BloodDetailLevel();
 		DropBloodTiles();
 		bloodFineQueue.clear();
 	}
-	if (bloodFineQueue.empty() && bloodTilesLive == 0)
+	if (bloodFineQueue.empty() && bloodTilesLive == 0 && !bloodTileStash.place)
 		return;
 	// The prime's last group compiles the tile computes; marks ask again.
 	if (SnowShadersPending(3)) {
@@ -622,7 +710,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	}
 
 	auto* context = globals::d3d::context;
-	const uint32_t frame = globals::state->frameCount;
 	// Nearest to the PLAYER: an orbiting third-person camera swings hundreds
 	// of units around the blood it is looking at, and tiles ranked by it
 	// changed hands as it turned.
@@ -662,6 +749,35 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	// last whole deposit.
 	uint32_t seeded[kBloodMaxTiles];
 	uint32_t seededCount = 0;
+
+	// After a level change: tiles over the ground the old ones held, nearest
+	// the player first, until the slots run out.
+	if (bloodTileStash.place) {
+		bloodTileStash.place = false;
+		const float oldTexel = 0.5f / float(1 << bloodTileStash.level);
+		const float oldCell = float(kBloodTileDim) * oldTexel - 2.0f * kBloodTileApron;
+		auto ordered = bloodTileStash.tiles;
+		std::sort(ordered.begin(), ordered.end(), [&](const auto& a_left, const auto& a_right) {
+			auto away = [&](const auto& a_tile) {
+				const float dx = (float(a_tile.cellX) + 0.5f) * oldCell - eye.x;
+				const float dy = (float(a_tile.cellY) + 0.5f) * oldCell - eye.y;
+				return dx * dx + dy * dy;
+			};
+			return away(a_left) < away(a_right);
+		});
+		for (const auto& old : ordered) {
+			const float x = float(old.cellX) * oldCell, y = float(old.cellY) * oldCell;
+			for (int32_t cy = BloodCellOf(y); cy <= BloodCellOf(y + oldCell - 0.01f); ++cy) {
+				for (int32_t cx = BloodCellOf(x); cx <= BloodCellOf(x + oldCell - 0.01f); ++cx) {
+					if (FindBloodTile(cx, cy) >= 0)
+						continue;
+					const int32_t slot = AllocateBloodTile(cx, cy, cameraCellX, cameraCellY);
+					if (slot >= 0 && seededCount < kBloodMaxTiles)
+						seeded[seededCount++] = uint32_t(slot);
+				}
+			}
+		}
+	}
 	for (auto& request : bloodFineQueue) {
 		auto found = bloodSeen.find(request.key);
 		if (found == bloodSeen.end() || !request.draw.geometry)
@@ -728,8 +844,10 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		context->CSGetShader(savedCS.put(), nullptr, nullptr);
 		winrt::com_ptr<ID3D11Buffer> savedCB;
 		context->CSGetConstantBuffers(0, 1, savedCB.put());
-		ID3D11ShaderResourceView* savedSRVs[3]{};
-		context->CSGetShaderResources(0, 3, savedSRVs);
+		ID3D11ShaderResourceView* savedSRVs[4]{};
+		context->CSGetShaderResources(0, 4, savedSRVs);
+		winrt::com_ptr<ID3D11SamplerState> savedSampler;
+		context->CSGetSamplers(0, 1, savedSampler.put());
 		ID3D11UnorderedAccessView* savedUAVs[2]{};
 		context->CSGetUnorderedAccessViews(0, 2, savedUAVs);
 		winrt::com_ptr<ID3D11RasterizerState> savedRaster;
@@ -770,7 +888,9 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 
 		ID3D11Buffer* restoreCB = savedCB.get();
 		context->CSSetConstantBuffers(0, 1, &restoreCB);
-		context->CSSetShaderResources(0, 3, savedSRVs);
+		context->CSSetShaderResources(0, 4, savedSRVs);
+		ID3D11SamplerState* restoreSampler = savedSampler.get();
+		context->CSSetSamplers(0, 1, &restoreSampler);
 		context->CSSetUnorderedAccessViews(0, 2, savedUAVs, nullptr);
 		for (auto* view : savedSRVs)
 			if (view)

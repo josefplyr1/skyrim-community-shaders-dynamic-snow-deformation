@@ -599,7 +599,7 @@ public:
 		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
 		bool BloodDetail = true;
 		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel, sixteen tiles; 1 = 0.25 units, sixty-four tiles over the same ground, four times the memory. */
-		int BloodDetailLevel = 0;
+		int BloodDetailLevel = 1;
 		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..1. 0 = no soak. Needs BloodDetail. */
 		float BloodSoakReach = 0.01f;
 		/** @brief Real seconds (at the current timescale) the soak takes to reach ~95% of BloodSoakReach. Runs on the game clock, so waiting or sleeping finishes it. */
@@ -1075,6 +1075,8 @@ public:
 		float lastBurial = 0.0f;
 		std::vector<BloodCapture> draws;
 		bool discs = false;
+		/** @brief The tile began as a copy (the blood map's blobs, or another level's tiles): the merge clears copied texels under every decal drawn into it. */
+		bool seeded = false;
 	};
 	struct BloodFineRequest
 	{
@@ -1098,6 +1100,13 @@ public:
 		int32_t MipTexel[2];
 		int32_t MipDim;
 		int32_t padTile;
+		float2 OldWorldMin;
+		float OldTexel;
+		float OldAtlasDim;
+		int32_t OldTileTexel[2];
+		int32_t OldTileBlock[2];
+		float2 OldCellMin;
+		float2 OldCellMax;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
 	enum BloodTileShader : uint32_t
@@ -1106,6 +1115,7 @@ public:
 		kBloodTileMergeClock,
 		kBloodTileMergePigment,
 		kBloodTileMipDown,
+		kBloodTileMigrate,
 		kBloodTileJfaInit,
 		kBloodTileJfaStep,
 		kBloodTileJfaResolve,
@@ -1131,6 +1141,27 @@ public:
 	int bloodTileLevelLast = 0;
 	/** @brief Level the tile textures were created for; -1 = none. */
 	int bloodTileResourcesLevel = -1;
+	/** @brief The previous level's atlases, kept for a while after a level change so the new tiles start from their detail instead of from the blood map's blobs. */
+	struct BloodTileStash
+	{
+		winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
+		winrt::com_ptr<ID3D11ShaderResourceView> clockSRV;
+		int level = 0;
+		uint32_t untilFrame = 0;
+		bool place = false;
+		struct Tile
+		{
+			int32_t cellX, cellY;
+			uint32_t slot;
+		};
+		std::vector<Tile> tiles;
+	};
+	BloodTileStash bloodTileStash;
+	winrt::com_ptr<ID3D11Texture2D> bloodTileCover;
+	winrt::com_ptr<ID3D11RenderTargetView> bloodTileCoverRTV;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileCoverSRV;
+	ID3D11PixelShader* bloodCoverPS = nullptr;
+	void MigrateBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	void ReleaseBloodTileTextures();
 	/** @brief The tile's own mip chain from its mip 0, through a scratch copy per level. Run with every merge: past a few metres the shell reads the mips, not mip 0. */
 	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
