@@ -192,6 +192,55 @@ namespace
 		a_root->UpdateWorldBound();
 	}
 
+	/** The game's angles for a rotation (the inverse of EulerAnglesToAxesZXY); false near the pole or when the rebuilt matrix misses. */
+	bool AnglesOf(const RE::NiMatrix3& a_m, RE::NiPoint3& a_out)
+	{
+		a_out = { std::asin(std::clamp(-a_m.entry[2][1], -1.0f, 1.0f)), std::atan2(a_m.entry[2][0], a_m.entry[2][2]), std::atan2(a_m.entry[0][1], a_m.entry[1][1]) };
+		RE::NiMatrix3 back;
+		back.EulerAnglesToAxesZXY(a_out);
+		float worst = 0.0f;
+		for (int i = 0; i < 3; ++i)
+			for (int j = 0; j < 3; ++j)
+				worst = std::max(worst, std::abs(back.entry[i][j] - a_m.entry[i][j]));
+		return worst < 0.01f;
+	}
+
+	/** Proven once a session on the cell's own statics: their 3D is their angles through EulerAnglesToAxesZXY. -1 until enough were seen. */
+	int angleRule = -1;
+	bool AngleRuleHolds(RE::TESObjectCELL* a_cell)
+	{
+		if (angleRule >= 0 || !a_cell)
+			return angleRule == 1;
+		int good = 0, bad = 0;
+		float worstGood = 0.0f;
+		a_cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+			auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
+			auto* root = base && base->Is(RE::FormType::Static) ? a_ref->Get3D() : nullptr;
+			const auto& angle = a_ref->data.angle;
+			if (!root || std::abs(angle.x) + std::abs(angle.y) + std::abs(angle.z) < 0.3f)
+				return RE::BSContainer::ForEachResult::kContinue;
+			RE::NiMatrix3 built;
+			built.EulerAnglesToAxesZXY(angle);
+			float worst = 0.0f;
+			for (int i = 0; i < 3; ++i)
+				for (int j = 0; j < 3; ++j)
+					worst = std::max(worst, std::abs(built.entry[i][j] - root->world.rotate.entry[i][j]));
+			if (worst < 0.01f) {
+				good++;
+				worstGood = std::max(worstGood, worst);
+			} else {
+				bad++;
+			}
+			return good + bad < 48 ? RE::BSContainer::ForEachResult::kContinue : RE::BSContainer::ForEachResult::kStop;
+		});
+		if (good + bad >= 6) {
+			angleRule = good >= 9 * bad ? 1 : 0;
+			logger::info("[SNOW DEFORMATION] item sink: angle rule checked on {} statics: {} match (worst {:.4f}), {} miss -> rotations {} written",
+				good + bad, good, worstGood, bad, angleRule == 1 ? "are" : "are NOT");
+		}
+		return angleRule == 1;
+	}
+
 	float Smooth(float a_t)
 	{
 		a_t = std::clamp(a_t, 0.0f, 1.0f);
@@ -290,6 +339,17 @@ void SnowDeformation::ItemSinkUpdate()
 			continue;
 		auto& state = itemSinkStates[pick.key];
 		const bool fresh = state.formID == 0;
+		if (fresh && itemSinkClaimsLogged < 96)
+			if (auto* node = body.root->AsNode())
+				for (auto& child : node->GetChildren())
+					if (child && !child->collisionObject) {
+						if (child->local.translate.SqrLength() > 0.25f) {
+							itemSinkClaimsLogged++;
+							logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' first seen with its mesh already at local {:.1f}, {:.1f}, {:.1f}",
+								ref->GetFormID(), base->GetName(), child->local.translate.x, child->local.translate.y, child->local.translate.z);
+						}
+						break;
+					}
 		state.formID = ref->GetFormID();
 		state.baseID = base->GetFormID();
 		state.seenFrame = frame;
@@ -567,16 +627,27 @@ void SnowDeformation::ItemSinkUpdate()
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
 		// The game keeps no running record of where a dropped item lies: carried
-		// or rolled, it reloads where it was dropped. Marked as moved by physics,
-		// the save takes the body's place instead.
+		// or rolled, it reloads where it was dropped. At rest its place goes into
+		// the reference. (Marking it kHavokMoved instead, tried 2026-09-20, did
+		// not move it and reloaded it floating.)
 		if (body.asleep && !state.wasAsleep) {
-			const float dx = body.world.x - ref->GetPositionX(), dy = body.world.y - ref->GetPositionY();
-			if (dx * dx + dy * dy > 1.0f) {
-				ref->AddChange(RE::TESObjectREFR::ChangeFlags::kMoved | RE::TESObjectREFR::ChangeFlags::kHavokMoved);
+			const RE::NiPoint3 place = body.root->world.translate;
+			if (place.GetSquaredDistance(ref->data.location) > 1.0f) {
+				auto* cell = ref->GetParentCell();
+				const bool sameCell = cell && (cell->IsInteriorCell() || tes->GetCell(place) == cell);
+				RE::NiPoint3 angle;
+				const bool turned = sameCell && AnglesOf(body.root->world.rotate, angle) && AngleRuleHolds(cell);
 				if (itemSinkClaimsLogged < 96) {
 					itemSinkClaimsLogged++;
-					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' rests {:.1f} units from the game's record of it; marked as moved",
-						state.formID, base->GetName(), std::sqrt(dx * dx + dy * dy));
+					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' rests {:.1f} units from the game's record of it ({:.1f}, {:.1f}, {:.1f} -> {:.1f}, {:.1f}, {:.1f}): {}",
+						state.formID, base->GetName(), std::sqrt(place.GetSquaredDistance(ref->data.location)), ref->data.location.x, ref->data.location.y, ref->data.location.z,
+						place.x, place.y, place.z, !sameCell ? "in another cell, left alone" : turned ? "place and rotation written" : "place written, rotation left");
+				}
+				if (sameCell) {
+					ref->data.location = place;
+					if (turned)
+						ref->data.angle = angle;
+					ref->AddChange(RE::TESObjectREFR::ChangeFlags::kMoved);
 				}
 			}
 		}
