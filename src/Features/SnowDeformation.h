@@ -3944,23 +3944,12 @@ protected:
 		bool wasAsleep = false;
 		/** @brief Took its co-save record this session; past the load's grace it does not take it twice. */
 		bool claimed = false;
-		/** @brief The first free child's translate as last written: a root that changes over meshes still holding it has not lost the offset. */
-		bool hasWritten = false;
-		RE::NiPoint3 lastWritten;
 		/** @brief The snow's grip as last written to the body's damping, and the damping it had before. */
 		float grip = 0.0f;
 		bool gripBaseKnown = false;
 		float gripBaseLinear = 0.0f;
 		float gripBaseAngular = 0.0f;
 	};
-	/** @brief What was last written to a root's first free child. A state can be dropped (a load) while the 3D lives on; an exact match means the offset is still there. Pointers are compared, never dereferenced. */
-	struct ItemSinkApplied
-	{
-		RE::NiPoint3 childLocal;
-		RE::NiPoint3 offset;
-		float lift = 0.0f;
-	};
-	std::unordered_map<RE::NiAVObject*, ItemSinkApplied> itemSinkApplied;
 	uint32_t itemSinkRestsLogged = 0;
 	struct ItemSinkRecord
 	{

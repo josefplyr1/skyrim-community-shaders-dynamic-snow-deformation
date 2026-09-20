@@ -155,6 +155,48 @@ namespace
 		return shifted;
 	}
 
+	RE::NiAVObject* FirstFreeChild(RE::NiAVObject* a_root)
+	{
+		if (auto* node = a_root ? a_root->AsNode() : nullptr)
+			for (auto& child : node->GetChildren())
+				if (child && !child->collisionObject)
+					return child.get();
+		return nullptr;
+	}
+
+	// The offset is written on the mesh that carries it. States are dropped
+	// by loads, roots are replaced and subtrees cloned with the offset still
+	// in them; extra data goes wherever the transform goes.
+	const RE::BSFixedString& LiftTag()
+	{
+		static const RE::BSFixedString tag("SnowDeformationItemLift");
+		return tag;
+	}
+
+	bool ReadLiftTag(RE::NiAVObject* a_child, RE::NiPoint3& a_offset, float& a_lift)
+	{
+		auto* data = a_child ? a_child->GetExtraData<RE::NiFloatsExtraData>(LiftTag()) : nullptr;
+		if (!data || data->size < 4 || !data->value)
+			return false;
+		a_offset = { data->value[0], data->value[1], data->value[2] };
+		a_lift = data->value[3];
+		return true;
+	}
+
+	void WriteLiftTag(RE::NiAVObject* a_child, const RE::NiPoint3& a_offset, float a_lift)
+	{
+		if (!a_child)
+			return;
+		if (auto* data = a_child->GetExtraData<RE::NiFloatsExtraData>(LiftTag()); data && data->size >= 4 && data->value) {
+			data->value[0] = a_offset.x;
+			data->value[1] = a_offset.y;
+			data->value[2] = a_offset.z;
+			data->value[3] = a_lift;
+		} else if (auto* made = RE::NiFloatsExtraData::Create(LiftTag(), { a_offset.x, a_offset.y, a_offset.z, a_lift })) {
+			a_child->AddExtraData(made);
+		}
+	}
+
 	using WorldList = std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>>;
 
 	void CollectWorld(RE::NiAVObject* a_object, WorldList& a_out, int a_depth = 0)
@@ -339,17 +381,6 @@ void SnowDeformation::ItemSinkUpdate()
 			continue;
 		auto& state = itemSinkStates[pick.key];
 		const bool fresh = state.formID == 0;
-		if (fresh && itemSinkClaimsLogged < 96)
-			if (auto* node = body.root->AsNode())
-				for (auto& child : node->GetChildren())
-					if (child && !child->collisionObject) {
-						if (child->local.translate.SqrLength() > 0.25f) {
-							itemSinkClaimsLogged++;
-							logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' first seen with its mesh already at local {:.1f}, {:.1f}, {:.1f}",
-								ref->GetFormID(), base->GetName(), child->local.translate.x, child->local.translate.y, child->local.translate.z);
-						}
-						break;
-					}
 		state.formID = ref->GetFormID();
 		state.baseID = base->GetFormID();
 		state.seenFrame = frame;
@@ -413,47 +444,24 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 		}
 
-		// A new root is not always a new 3D. Measured 2026-09-19 (capture): some
-		// seconds after a load every item's root is replaced while the meshes
-		// under it keep the offset, and lifting again drew each item at twice
-		// its height. The test is the first free child's translate: exactly
-		// what was last written means the offset is still there.
-		if (state.offsetRoot != body.root) {
-			RE::NiAVObject* firstChild = nullptr;
-			if (auto* node = body.root->AsNode())
-				for (auto& child : node->GetChildren())
-					if (child && !child->collisionObject) {
-						firstChild = child.get();
-						break;
-					}
-			auto holds = [&](const RE::NiPoint3& a_written) {
-				return firstChild && firstChild->local.translate.x == a_written.x && firstChild->local.translate.y == a_written.y && firstChild->local.translate.z == a_written.z;
-			};
-			bool kept = state.hasWritten && holds(state.lastWritten);
-			if (!kept) {
-				state.offsetApplied = false;
-				state.childOffset = {};
-				state.appliedLift = 0.0f;
-				// A state dropped by a load, its meshes still alive.
-				if (auto found = itemSinkApplied.find(firstChild); firstChild && found != itemSinkApplied.end()) {
-					if (holds(found->second.childLocal)) {
-						state.offsetApplied = true;
-						state.childOffset = found->second.offset;
-						state.appliedLift = found->second.lift;
-						state.lastWritten = found->second.childLocal;
-						state.hasWritten = true;
-						kept = true;
-					} else {
-						itemSinkApplied.erase(found);
-					}
-				}
-			}
-			if (state.offsetRoot && itemSinkClaimsLogged < 64) {
+		// What the meshes carry is read off them every frame, never remembered:
+		// a load drops the state, replaces the root or clones the subtree with
+		// the offset still in it, and lifting again draws the item at twice its
+		// height (measured 2026-09-19 by capture, again 2026-09-20).
+		{
+			RE::NiPoint3 carried;
+			float carriedLift = 0.0f;
+			const bool tagged = ReadLiftTag(FirstFreeChild(body.root), carried, carriedLift);
+			if (tagged && state.offsetRoot != body.root && itemSinkClaimsLogged < 96) {
 				itemSinkClaimsLogged++;
-				logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' has a new root; its meshes {} (+{:.1f})",
-					state.formID, base->GetName(), kept ? "still carry the lift, kept" : "are new, lifted afresh", state.appliedLift);
+				logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {}: its meshes already carry +{:.1f}, kept",
+					state.formID, base->GetName(), fresh ? "first seen" : "has a new root", carriedLift);
 			}
-			state.offsetRoot = kept ? body.root : nullptr;
+			state.childOffset = tagged ? carried : RE::NiPoint3{};
+			state.appliedLift = tagged ? carriedLift : 0.0f;
+			state.offsetApplied = tagged && carriedLift > 0.0f;
+			if (state.offsetRoot != body.root)
+				state.offsetRoot = tagged ? body.root : nullptr;
 		}
 
 		const float weight = Smooth((std::log(std::max(measure, 1e-4f)) - std::log(kMeasureFloat)) / (std::log(kMeasureFull) - std::log(kMeasureFloat)));
@@ -572,16 +580,7 @@ void SnowDeformation::ItemSinkUpdate()
 			state.offsetApplied = want > 0.0f;
 			state.offsetRoot = body.root;
 			state.appliedLift = want;
-			if (itemSinkApplied.size() > 512)
-				itemSinkApplied.clear();
-			if (auto* node = body.root->AsNode())
-				for (auto& child : node->GetChildren())
-					if (child && !child->collisionObject) {
-						state.lastWritten = child->local.translate;
-						state.hasWritten = true;
-						itemSinkApplied[child.get()] = { child->local.translate, offset, want };
-						break;
-					}
+			WriteLiftTag(FirstFreeChild(body.root), offset, want);
 		}
 		if (state.offsetApplied)
 			held++;
