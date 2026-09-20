@@ -1376,7 +1376,7 @@
     "feature.snow_deformation.blood_sheen": "Wet Sheen",
     "feature.snow_deformation.blood_sheen_tooltip": "Gloss of fresh blood, 0 = matte like the snow around it.",
     "feature.snow_deformation.blood_soak_reach": "Soak Reach",
-    "feature.snow_deformation.blood_soak_reach_tooltip": "How far blood creeps outward through the snow from a mark's solid contour, in game units (16 is about 23 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only.",
+    "feature.snow_deformation.blood_soak_reach_tooltip": "How far blood creeps outward through the snow from a mark's solid contour, in game units (1 unit is about 1.4 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only.",
     "feature.snow_deformation.blood_soak_seconds": "Soak Time",
     "feature.snow_deformation.blood_soak_seconds_tooltip": "Seconds the soak takes to reach nearly its full Soak Reach: fast at first, then slowing. It runs on the game clock, so waiting, sleeping or fast travel finishes it, and blood the snow has buried stops with the rest of the mark.",
     "feature.snow_deformation.blood_spread_seconds": "Appear Time",
