@@ -4102,7 +4102,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// world-anchored normal map. Keyed to the analytic height field, NOT the
 	// ray gate, whose boundary would print its own edge into a normal blend.
 	// Blanket depth > 0.5 keeps pair 4's bare-ground hand-off out.
-	[branch] if (HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
+	// Not in pdMode: the ease is the dissolve's companion, and a zero-lift
+	// coat neither dissolves nor meets the sheet at the analytic top, so the
+	// band printed a flat-lit stripe on the object above the real junction.
+	[branch] if (!pdMode && HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
 	{
 		float blanketTopZ = groundData.x + max(groundData.y, 0.0);
 		float dzTop = pixelAbsZ - blanketTopZ;
