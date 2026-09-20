@@ -562,8 +562,8 @@ void SnowDeformation::ItemSinkUpdate()
 		// One line when an item comes to rest: every number the height is made of.
 		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
 			itemSinkRestsLogged++;
-			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS at {:.1f}, {:.1f} | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
-				state.formID, base->GetName(), body.world.x, body.world.y, snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
+			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS at {:.1f}, {:.1f} (the game's own record of it {:.1f}, {:.1f}) | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
+				state.formID, base->GetName(), body.world.x, body.world.y, ref->GetPositionX(), ref->GetPositionY(), snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
 		state.wasAsleep = body.asleep;
