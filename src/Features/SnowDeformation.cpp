@@ -160,6 +160,7 @@
 	X(ShelterDriftCone) \
 	X(ShelterDriftAngle) \
 	X(ObjectMeetBand) \
+	X(ObjectMeetTextureFade) \
 	X(LODObjectSnow) \
 	X(SnowTexturedRecolor) \
 	X(VolumeSnow) \

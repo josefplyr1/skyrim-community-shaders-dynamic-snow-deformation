@@ -138,10 +138,11 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	float ObjectMeetBand;  // landscape shell only, unread here
+	// The meeting with the landscape sheet (SnowShell.hlsl): band in units,
+	// half on each side of the junction, and >0.5 = the texture fade.
+	float ObjectMeetBand;
 
-	// Retired water-edge row; layout keeper.
-	float Spare1;
+	float ObjectMeetFade;
 	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
 	uint ShellLODDebug;
 	float SeamRampInv;
@@ -2394,6 +2395,49 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 // (Stage 2 P3): the landscape shell runs the same two-plane blend now.
 
 
+#if defined(PSHADER)
+// Land-exact layer, the ground the landscape sheet stands on (SnowShell.hlsl
+// LandHeightFine; FineWindow rides ShellCB).
+Texture2D<float> TerrainFine : register(t52);
+
+// The landscape sheet's drawn surface at a grid-local point, as SnowShell's
+// ShellSurfaceZ builds open snow: land-exact ground, class depth, melt, carve,
+// berm, undulation. The analytic top (window height + depth) stands 4-9 units
+// off it. Sentinel where no sheet stands.
+float SheetSurfaceZ(float2 gridLocal)
+{
+	float z = -100000.0;
+	float3 st = SampleTerrainStatics(gridLocal);
+	float depth = st.y - 8.0 * saturate(1.0 - st.z);
+	[branch] if (st.x > -50000.0 && depth > 4.0)
+	{
+		float land = st.x;
+		float2 tf = (FineWindow.xy + gridLocal) / FineWindow.w;
+		[branch] if (FineWindow.z > 0.5 && (ShellFlags.x & 4) == 0 && all(tf >= 0.0) && all(tf < FineWindow.z - 1.0))
+		{
+			int2 f0 = (int2)tf;
+			float2 ff = tf - f0;
+			float g00 = TerrainFine.Load(int3(f0, 0));
+			float g10 = TerrainFine.Load(int3(f0 + int2(1, 0), 0));
+			float g01 = TerrainFine.Load(int3(f0 + int2(0, 1), 0));
+			float g11 = TerrainFine.Load(int3(f0 + int2(1, 1), 0));
+			bool slash = ((f0.x + f0.y) & 1) == 0;
+			float hA = ff.y <= ff.x ? g00 + (g10 - g00) * ff.x + (g11 - g10) * ff.y : g00 + (g01 - g00) * ff.y + (g11 - g01) * ff.x;
+			float hB = (ff.x + ff.y) <= 1.0 ? g00 + (g10 - g00) * ff.x + (g01 - g00) * ff.y : g11 + (g10 - g11) * (1.0 - ff.y) + (g01 - g11) * (1.0 - ff.x);
+			[flatten] if (min(min(g00, g10), min(g01, g11)) > -50000.0)
+				land = slash ? hA : hB;
+		}
+		float2 worldXY = GridOrigin + gridLocal;
+		depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionField(worldXY).y));
+		float deform = SampleDeformation(gridLocal);
+		float berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : 0.0;
+		float carved = CarveProfile(deform, depth, worldXY) + BermShape(berm) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth);
+		z = land + carved + UndulationSampled(worldXY) * saturate(carved / 8.0);
+	}
+	return z;
+}
+#endif
+
 struct PS_OUTPUT
 {
 	float4 Diffuse : SV_Target0;
@@ -4135,6 +4179,36 @@ PS_OUTPUT main(VS_OUTPUT input)
 		}
 	}
 
+	// The drape's half of the meeting with the landscape sheet: its normal
+	// goes halfway to the sheet's through the last half of ObjectMeetBand above
+	// the sheet's DRAWN surface (one-sided: everything at or under that surface
+	// holds the full weight, so no stripe can float over the junction). The
+	// sheet comes the other half (SnowShell.hlsl ShellObjectMeet).
+	float sheetMeet = 0.0;
+#	ifndef PATCH
+	[branch] if (pdMode && ObjectMeetBand > 0.0 && pixelDist < 2048.0 && groundData.x > -50000.0)
+	{
+		float sheetZ = SheetSurfaceZ(input.GridLocal);
+		float sheetGap = pixelAbsZ - sheetZ;
+		[branch] if (sheetZ > -50000.0 && sheetGap < ObjectMeetBand * 0.5)
+		{
+			sheetMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, sheetGap)) * smoothstep(0.35, 0.6, normalize(input.NormalWS).z) *
+			            (1.0 - smoothstep(1024.0, 2048.0, pixelDist));
+			const float mStep = 4.0;
+			float3 mXP = SampleTerrainStatics(input.GridLocal + float2(mStep, 0.0));
+			float3 mXN = SampleTerrainStatics(input.GridLocal - float2(mStep, 0.0));
+			float3 mYP = SampleTerrainStatics(input.GridLocal + float2(0.0, mStep));
+			float3 mYN = SampleTerrainStatics(input.GridLocal - float2(0.0, mStep));
+			[flatten] if (min(min(mXP.x, mXN.x), min(mYP.x, mYN.x)) > -50000.0)
+			{
+				float3 sheetN = normalize(float3(-((mXP.x + max(mXP.y, 0.0)) - (mXN.x + max(mXN.y, 0.0))) / (2.0 * mStep),
+					-((mYP.x + max(mYP.y, 0.0)) - (mYN.x + max(mYN.y, 0.0))) / (2.0 * mStep), 1.0));
+				normalWS = normalize(lerp(normalWS, sheetN, 0.5 * sheetMeet));
+			}
+		}
+	}
+#	endif
+
 	// Guaranteed snow floor in object trenches; the statics-skin mirror of
 	// the landscape shell's trench floor: a carved, solidly-covered pixel
 	// must never dissolve to the object's own texture, whatever the seam
@@ -4256,7 +4330,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
-			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
+			// Object Meeting Texture Fade: toward the sheet the cut sinks through
+			// the whole weight span, so the coat closes to the sheet's solid
+			// cover as the two meet. Adds to the paint, like the reach.
+			float meetFill = ObjectMeetFade > 0.5 ? sheetMeet : 0.0;
+			[branch] if (!painted && (lumpsOn || meetFill > 0.001) && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
 				// The cut sinks on the game's own weight at this pixel's own
 				// texel: the same from every view, the paint itself at reach 0.
@@ -4265,7 +4343,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// changes and a wall stays as the game painted it while the
 				// roof beside it fills in.
 				float steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, normalWS.z));
-				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * steepKeep) * 50.0 + 0.5);
+				nearPaint = saturate((realW + (kEdgeReachWeightShift * EdgeFlankWidth + (kRecolorWeightSpan + 0.02) * meetFill) * steepKeep) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}

@@ -3325,6 +3325,9 @@ void SnowDeformation::DrawCapturedStatics()
 	context->VSSetShaderResources(13, 1, &coneSRV);
 	context->DSSetShaderResources(13, 1, &coneSRV);
 	context->PSSetShaderResources(13, 1, &coneSRV);
+	// Land-exact layer (t52): the drape finds the landscape sheet's drawn surface with it.
+	ID3D11ShaderResourceView* landFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
+	context->PSSetShaderResources(52, 1, &landFineSRV);
 	// Near clipmap (t33 cone, t34 top): the same two maps at one unit per
 	// texel over the inner window. Every reader that takes them falls back to
 	// t13/t11 outside it, so a null bind here is simply the coarse behaviour.
@@ -3903,6 +3906,7 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(23, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
+	context->PSSetShaderResources(52, 1, &nullSmoothSRV);
 	context->VSSetShaderResources(25, 1, &nullSmoothSRV);
 	context->DSSetShaderResources(25, 1, &nullSmoothSRV);
 	if (volumeSeedView) {

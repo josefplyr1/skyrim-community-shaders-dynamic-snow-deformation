@@ -135,12 +135,12 @@ cbuffer ShellCB : register(b0)
 	float ObjBermHeightAmp;
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
-	// Units of snow over a captured object through which the sheet's macro
-	// slope eases to the object's; 0 = off.
+	// Units across which the sheet and an object's coat meet, half on each
+	// side of the junction; 0 = off.
 	float ObjectMeetBand;
 
-	// Retired water-edge row; layout keeper.
-	float Spare1;
+	// >0.5: Object Meeting Texture Fade.
+	float ObjectMeetFade;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
@@ -903,6 +903,41 @@ float SampleObjectTopRaw(float2 worldXY, bool a_skipRoads)
 		}
 	}
 	return top;
+}
+
+// Where the sheet lies over a captured object: x = meeting weight (1 on the
+// junction, 0 from half of ObjectMeetBand of perpendicular snow thickness
+// up; each side takes half the band), yz = the object's macro slope. Both
+// from the raw top raster at the pixel's own world XY: no object texture
+// detail, nothing a camera can move. The 8-unit step spans whole texels,
+// which cancels the MAX raster's stair. An upper deck (gap well below zero)
+// and faces too steep to hold a coat weigh nothing.
+float3 ShellObjectMeet(float2 worldXY, float sheetZ)
+{
+	float3 result = float3(0.0, 0.0, 0.0);
+	float halfBand = ObjectMeetBand * 0.5;
+	[branch] if (halfBand > 0.0)
+	{
+		float meetTop = SampleObjectTopRaw(worldXY, true);
+		float meetGap = sheetZ - meetTop;
+		[branch] if (meetTop > -50000.0 && meetGap < halfBand * 3.0 && meetGap > -16.0)
+		{
+			const float mStep = 8.0;
+			float mXP = SampleObjectTopRaw(worldXY + float2(mStep, 0.0), false);
+			float mXN = SampleObjectTopRaw(worldXY - float2(mStep, 0.0), false);
+			float mYP = SampleObjectTopRaw(worldXY + float2(0.0, mStep), false);
+			float mYN = SampleObjectTopRaw(worldXY - float2(0.0, mStep), false);
+			[flatten] if (min(min(mXP, mXN), min(mYP, mYN)) > -50000.0)
+			{
+				float2 objectGrad = float2(mXP - mXN, mYP - mYN) / (2.0 * mStep);
+				float objectNz = rsqrt(1.0 + dot(objectGrad, objectGrad));
+				float meet = (1.0 - smoothstep(0.0, halfBand, meetGap * objectNz)) *
+				             (1.0 - smoothstep(8.0, 16.0, -meetGap)) * smoothstep(0.35, 0.6, objectNz);
+				result = float3(meet, objectGrad);
+			}
+		}
+	}
+	return result;
 }
 
 // ---- Surface undulation: wind-settled dunes ----
@@ -2401,6 +2436,12 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// from the intersection onto the ground, never upward into the
 	// committed sheet; off is a clean binary cut.
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	float3 objectMeet = float3(0.0, 0.0, 0.0);
+	[branch] if (shellZ < 2048.0)
+	{
+		objectMeet = ShellObjectMeet(GridOrigin + gridLocal, input.WorldPos.z + ShellCameraPosAdjust.z);
+		objectMeet.x *= 1.0 - smoothstep(1024.0, 2048.0, shellZ);
+	}
 	[branch] if (ShellLODDebug == 1)
 	{
 		// Heatmap analyzes the covered snow surface only: bare/submerged
@@ -2416,6 +2457,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		                 ? saturate((coverageAlpha - 0.2) * (1.0 / 0.3))
 		                 : (coverageAlpha >= 0.5 ? 1.0 : 0.0);
 		if (screenNoise * screenNoise >= dust)
+			discard;
+		// Object Meeting Texture Fade: the sheet thins to half over its half
+		// of the band, so the coat under it shows through as the two meet.
+		// A second noise phase, or it would cut where the dust already cut.
+		if (ObjectMeetFade > 0.5 && frac(screenNoise + 0.5) < 0.5 * objectMeet.x)
 			discard;
 		coverageAlpha = 1.0;
 	}
@@ -2464,37 +2510,11 @@ PS_OUTPUT main(VS_OUTPUT input)
 		BermShape(bermXP) * saturate(1.0 - dXP) - BermShape(bermXN) * saturate(1.0 - dXN),
 		BermShape(bermYP) * saturate(1.0 - dYP) - BermShape(bermYN) * saturate(1.0 - dYN)) / (2.0 * step);
 	float bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
-	// Meeting a captured object: the sheet's MACRO slope eases to the object's
-	// through the last ObjectMeetBand units of snow over it, so both sides of
-	// the junction shade with one normal while the sheet keeps its own relief
-	// and grain. Slope and gap come from the raw top raster at the pixel's own
-	// world XY: no object texture detail, and nothing a camera can move. The
-	// 8-unit step spans whole texels, which cancels the MAX raster's stair.
+	// Meeting a captured object: the sheet's MACRO slope goes halfway to the
+	// object's (ShellObjectMeet); the coat comes the other half
+	// (SnowStaticsShell.hlsl). Relief and grain stay the sheet's own.
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
-	[branch] if (ObjectMeetBand > 0.0)
-	{
-		float2 meetXY = GridOrigin + gridLocal;
-		float meetTop = SampleObjectTopRaw(meetXY, true);
-		float meetGap = input.WorldPos.z + ShellCameraPosAdjust.z - meetTop;
-		[branch] if (meetTop > -50000.0 && meetGap < ObjectMeetBand && meetGap > -16.0)
-		{
-			const float mStep = 8.0;
-			float mXP = SampleObjectTopRaw(meetXY + float2(mStep, 0.0), false);
-			float mXN = SampleObjectTopRaw(meetXY - float2(mStep, 0.0), false);
-			float mYP = SampleObjectTopRaw(meetXY + float2(0.0, mStep), false);
-			float mYN = SampleObjectTopRaw(meetXY - float2(0.0, mStep), false);
-			[flatten] if (min(min(mXP, mXN), min(mYP, mYN)) > -50000.0)
-			{
-				float2 objectGrad = float2(mXP - mXN, mYP - mYN) / (2.0 * mStep);
-				float objectNz = rsqrt(1.0 + dot(objectGrad, objectGrad));
-				// Perpendicular snow thickness; an upper deck (gap well below
-				// zero) and faces too steep to hold a coat take no ease.
-				float meet = (1.0 - smoothstep(0.0, ObjectMeetBand, meetGap * objectNz)) *
-				             (1.0 - smoothstep(8.0, 16.0, -meetGap)) * smoothstep(0.35, 0.6, objectNz);
-				macroGrad = lerp(macroGrad, objectGrad, meet);
-			}
-		}
-	}
+	macroGrad = lerp(macroGrad, objectMeet.yz, 0.5 * objectMeet.x);
 	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
 
 	// Undulation gradient (same field the VS displaced by) shades the dunes.
