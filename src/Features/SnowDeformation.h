@@ -3942,6 +3942,8 @@ protected:
 		/** @brief Under where today's snow would put it: it stops printing, or its own trench would keep the snow off it. */
 		bool buried = false;
 		bool wasAsleep = false;
+		/** @brief Took its co-save record this session; past the load's grace it does not take it twice. */
+		bool claimed = false;
 		/** @brief The first free child's translate as last written: a root that changes over meshes still holding it has not lost the offset. */
 		bool hasWritten = false;
 		RE::NiPoint3 lastWritten;
@@ -3978,6 +3980,9 @@ protected:
 	std::unordered_map<uint32_t, ItemSinkState> itemSinkStates;
 	/** @brief Rest heights from the co-save, by form ID, until the item is seen and takes (or fails) its own. */
 	std::unordered_map<uint32_t, ItemSinkRecord> itemSinkLoaded;
+	/** @brief Records outlive their first claim this long after a load: a load can arrive in two passes, the second putting the items back. */
+	static constexpr float kItemSinkLoadGrace = 60.0f;
+	std::chrono::steady_clock::time_point itemSinkLoadedAt{};
 	std::unordered_set<uint32_t> itemSinkFormsLogged;
 	std::string itemSinkReadout;
 	std::atomic<bool> itemSinkReadoutWanted{ false };

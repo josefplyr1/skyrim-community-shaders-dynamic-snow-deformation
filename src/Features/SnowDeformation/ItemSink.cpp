@@ -434,26 +434,39 @@ void SnowDeformation::ItemSinkUpdate()
 		// Snow buries: what is kept is the snow the item settled in. Rising
 		// snow closes over it; falling or dug snow takes it down, and it stays
 		// down. Kept as the snow rather than a height so the settings stay live.
-		if (state.restValid && body.world.GetSquaredDistance(state.restPos) > kRestMove * kRestMove)
+		if (state.restValid && body.world.GetSquaredDistance(state.restPos) > kRestMove * kRestMove) {
+			if (itemSinkClaimsLogged < 96) {
+				itemSinkClaimsLogged++;
+				logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' left its rest: {:.1f}, {:.1f} -> {:.1f}, {:.1f} ({})",
+					state.formID, base->GetName(), state.restPos.x, state.restPos.y, body.world.x, body.world.y, body.asleep ? "asleep" : "awake");
+			}
 			state.restValid = false;
-		if (fresh && !state.restValid) {
+		}
+		// Inside the grace a record survives its claim: a load that arrives in
+		// two passes shows the items somewhere else first, and the rest taken
+		// there is dropped the moment the second pass puts them back.
+		if ((fresh || body.asleep) && !state.restValid) {
 			if (auto found = itemSinkLoaded.find(state.formID); found != itemSinkLoaded.end()) {
+				const bool grace = std::chrono::duration<float>(std::chrono::steady_clock::now() - itemSinkLoadedAt).count() < kItemSinkLoadGrace;
 				const auto& record = found->second;
-				const bool claimed = record.baseID == state.baseID && std::abs(record.x - body.world.x) < kRecordMatch && std::abs(record.y - body.world.y) < kRecordMatch;
+				const bool claimed = (grace || !state.claimed) && record.baseID == state.baseID &&
+				                     std::abs(record.x - body.world.x) < kRecordMatch && std::abs(record.y - body.world.y) < kRecordMatch;
 				if (claimed) {
 					state.restValid = true;
+					state.claimed = true;
 					state.restRise = record.rise;
 					state.restDepth = record.depth;
 					state.restCarve = record.carve;
 					state.restPos = body.world;
 				}
-				if (itemSinkClaimsLogged < 64) {
+				if ((claimed || fresh || !state.wasAsleep) && itemSinkClaimsLogged < 96) {
 					itemSinkClaimsLogged++;
-					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {} its saved rest (snow then {:.1f} deep rising {:.1f}, carved {:.2f}; today {:.1f} deep rising {:.1f}, carved {:.2f}; moved {:.1f}, {:.1f})",
+					logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' {} its saved rest (snow then {:.1f} deep rising {:.1f}, carved {:.2f}; today {:.1f} deep rising {:.1f}, carved {:.2f}; saved at {:.1f}, {:.1f}, now {:.1f}, {:.1f}{})",
 						state.formID, base->GetName(), claimed ? "claims" : "REFUSES", record.depth, record.rise, record.carve, snowDepth, rise, carveAround,
-						body.world.x - record.x, body.world.y - record.y);
+						record.x, record.y, body.world.x, body.world.y, grace ? "; record kept" : "");
 				}
-				itemSinkLoaded.erase(found);
+				if (!grace)
+					itemSinkLoaded.erase(found);
 			}
 		}
 		// No snow data (a load's first frames, a cell edge) says nothing about
@@ -549,8 +562,8 @@ void SnowDeformation::ItemSinkUpdate()
 		// One line when an item comes to rest: every number the height is made of.
 		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
 			itemSinkRestsLogged++;
-			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
-				state.formID, base->GetName(), snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
+			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS at {:.1f}, {:.1f} | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
+				state.formID, base->GetName(), body.world.x, body.world.y, snowDepth, surfaceZ, ground.z, carveAround, sink, embed, today, target, state.buried ? " (buried)" : "",
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
 		state.wasAsleep = body.asleep;
@@ -588,12 +601,13 @@ void SnowDeformation::SaveItemSink(const SKSE::SerializationInterface* a_intfc)
 	std::vector<Row> rows;
 	{
 		std::scoped_lock lock(itemSinkLock);
+		std::unordered_set<uint32_t> written;
 		for (const auto& [key, state] : itemSinkStates)
-			if (state.restValid && state.formID && rows.size() < kMaxRecords)
+			if (state.restValid && state.formID && rows.size() < kMaxRecords && written.insert(state.formID).second)
 				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restRise, state.restDepth, state.restCarve });
 		// Settled items this session never came near keep their records.
 		for (const auto& [formID, record] : itemSinkLoaded)
-			if (rows.size() < kMaxRecords)
+			if (rows.size() < kMaxRecords && written.insert(formID).second)
 				rows.push_back({ formID, record.baseID, record.x, record.y, record.rise, record.depth, record.carve });
 	}
 	if (rows.empty() || !a_intfc->OpenRecord(kItemSinkRecord, kItemSinkRecordVersion))
@@ -635,6 +649,7 @@ void SnowDeformation::LoadItemSink(const SKSE::SerializationInterface* a_intfc, 
 	}
 	std::scoped_lock lock(itemSinkLock);
 	itemSinkLoaded = std::move(restored);
+	itemSinkLoadedAt = std::chrono::steady_clock::now();
 	logger::info("[SNOW DEFORMATION] item sink: {} of {} rest heights restored", itemSinkLoaded.size(), count);
 }
 
