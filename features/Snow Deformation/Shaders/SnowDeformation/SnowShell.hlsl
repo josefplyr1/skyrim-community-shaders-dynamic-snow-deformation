@@ -217,7 +217,8 @@ cbuffer ShellCB : register(b0)
 	// x = hours a mark takes to dry, y = wet sheen, z > 0.5 = map live,
 	// w > 0.5 = detail tiles live.
 	float4 BloodLook2;
-	// Soak: x = reach in units, y = 3 / the soak time in game hours.
+	// Soak: x = reach in units, y = 3 / the soak time in game hours;
+	// z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
 }
 

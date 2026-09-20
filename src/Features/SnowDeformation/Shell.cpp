@@ -1041,7 +1041,7 @@ void SnowDeformation::DrawShell()
 	{
 		// Real seconds on the game clock: 3 time constants in the soak time.
 		const float soakHours = std::max(settings.BloodSoakSeconds, 0.1f) * gameClock.timescale / 3600.0f;
-		cbData.BloodLook3 = { std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach), 3.0f / soakHours, 0.0f, 0.0f };
+		cbData.BloodLook3 = { std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach), 3.0f / soakHours, BloodTileCell(), BloodTileTexel() };
 	}
 
 	// Loaded-cell boundary square around the PLAYER's cell (cell attachment

@@ -502,9 +502,18 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBloodD = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_detail_tooltip"), "The blood map's texel is several units wide, so on its own a splatter lands on the landscape snow as a soft blob. On, ground that holds blood near you keeps it at half a unit per texel, and the snow shows the decal's own contours: droplets, streaks and all. Sixteen patches of about three metres each, the nearest kept; farther marks fall back to the blood map. Landscape snow only. Costs about 27 MB of video memory once blood first appears, and nothing per frame while no blood is being spilled."));
 		ImGui::BeginDisabled(!settings.BloodDetail);
-		ImGui::SliderFloat(T(TKEY("blood_soak_reach"), "Soak Reach"), &settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach, "%.1f units");
+		{
+			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units)", "Ultra (0.125 units)" };
+			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
+			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
+			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than any of these (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Every level uses the same memory and the same sixteen patches; a finer level makes each patch smaller, so it covers less ground and marks beyond it fall back to the soft blood map sooner. Standard: 0.5 units a texel, patches of about 3.5 m. High: 0.25 units, about 1.7 m. Ultra: 0.125 units, about 0.8 m - one corpse's worth. Changing it redraws the marks whose decals the game still has; older ones stay soft."));
+		}
+		// A value saved under the old 16-unit range.
+		settings.BloodSoakReach = std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach);
+		ImGui::SliderFloat(T(TKEY("blood_soak_reach"), "Soak Reach"), &settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach, "%.2f units");
 		if (auto _ttBloodSr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_soak_reach_tooltip"), "How far blood creeps outward through the snow from a mark's solid contour, in game units (16 is about 23 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only."));
+			ImGui::Text("%s", T(TKEY("blood_soak_reach_tooltip"), "How far blood creeps outward through the snow from a mark's solid contour, in game units (1 unit is about 1.4 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only."));
 		ImGui::SliderFloat(T(TKEY("blood_soak_seconds"), "Soak Time"), &settings.BloodSoakSeconds, 1.0f, 300.0f, "%.0f s");
 		if (auto _ttBloodSt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_soak_seconds_tooltip"), "Seconds the soak takes to reach nearly its full Soak Reach: fast at first, then slowing. It runs on the game clock, so waiting, sleeping or fast travel finishes it, and blood the snow has buried stops with the rest of the mark."));

@@ -570,15 +570,13 @@ float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
 // offset to the nearest solid blood that the soak grows from. The mark
 // itself comes back as PAINT - the decal's colour over the snow by its
 // alpha, as a rune's glyph lies on it; only the soak around and under it
-// stains by extinction. Constants mirror SnowDeformation.h.
+// stains by extinction. The cell and the texel come from BloodLook3.zw (the
+// detail level sets them); the rest mirrors SnowDeformation.h.
 Texture2D<uint> BloodTileIndex : register(t66);
 Texture2D<float4> BloodTilePigment : register(t67);
 Texture2D<float4> BloodTileSeeds : register(t68);
 Texture2D<float4> BloodTileClock : register(t69);
 
-static const float kBloodTileCell = 224.0;
-static const float kBloodTileApron = 16.0;
-static const float kBloodTileTexel = 0.5;
 static const int kBloodTileDim = 512;
 static const int kBloodTilesAcross = 4;
 // A clock block is 8 texels, 4 units.
@@ -590,6 +588,9 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 	paint = 0.0;
 	[branch] if (BloodLook2.w > 0.5)
 	{
+		const float kBloodTileCell = BloodLook3.z;
+		const float kBloodTileTexel = BloodLook3.w;
+		const float kBloodTileApron = 0.5 * (float(kBloodTileDim) * kBloodTileTexel - kBloodTileCell);
 		const int2 cell = (int2)floor(worldXY / kBloodTileCell);
 		const uint slot1 = BloodTileIndex.Load(int3(cell & 63, 0));
 		[branch] if (slot1 != 0u)

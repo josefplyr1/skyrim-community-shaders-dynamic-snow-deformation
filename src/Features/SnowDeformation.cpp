@@ -142,6 +142,7 @@
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
 	X(BloodDetail) \
+	X(BloodDetailLevel) \
 	X(BloodSoakReach) \
 	X(BloodSoakSeconds) \
 	X(DeformMapResolution) \

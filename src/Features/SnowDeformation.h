@@ -598,8 +598,10 @@ public:
 		float BloodSpreadSeconds = 1.5f;
 		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
 		bool BloodDetail = true;
-		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..16. 0 = no soak. Needs BloodDetail. */
-		float BloodSoakReach = 6.0f;
+		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel over 248-unit cells, 1 = 0.25 over 120, 2 = 0.125 over 56. Same memory at every level; finer tiles cover less ground, and marks past them fall back to the blood map. */
+		int BloodDetailLevel = 0;
+		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..1. 0 = no soak. Needs BloodDetail. */
+		float BloodSoakReach = 0.5f;
 		/** @brief Real seconds (at the current timescale) the soak takes to reach ~95% of BloodSoakReach. Runs on the game clock, so waiting or sleeping finishes it. */
 		float BloodSoakSeconds = 40.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
@@ -1043,14 +1045,21 @@ public:
 	static constexpr uint32_t kBloodTilesAcross = 4;
 	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
 	static constexpr uint32_t kBloodTileMips = 4;
-	static constexpr float kBloodTileTexel = 0.5f;
-	/** @brief A tile owns a cell and carries an apron around it, so a soak crossing the cell's edge still finds its blood. Mirrored in SnowFields.hlsli. */
-	static constexpr float kBloodTileCell = 224.0f;
-	static constexpr float kBloodTileApron = 16.0f;
+	/** @brief A tile owns a cell and carries an apron around it, so a soak crossing the cell's edge still finds its blood and a filtered tap never leaves the tile. */
+	static constexpr float kBloodTileApron = 4.0f;
+	static constexpr int kBloodDetailLevels = 3;
+	int BloodDetailLevel() const { return std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1); }
+	/** @brief World units a texel of the detail tiles covers at the chosen level. */
+	float BloodTileTexel() const { return 0.5f / float(1 << BloodDetailLevel()); }
+	/** @brief World units of the cell a tile owns: the tile's span less its two aprons. The shell derives the apron back from the pair (ShellCB BloodLook3.zw). */
+	float BloodTileCell() const { return float(kBloodTileDim) * BloodTileTexel() - 2.0f * kBloodTileApron; }
+	int32_t BloodCellOf(float a_world) const { return int32_t(std::floor(a_world / BloodTileCell())); }
+	/** @brief Tiles are kept this many cells out: 4096 units, and never so far that two live cells share an entry of the 64-cell index torus. */
+	int32_t BloodTileKeepCells() const { return std::min(28, int32_t(std::ceil(4096.0f / BloodTileCell()))); }
 	static constexpr uint32_t kBloodTileBlock = 8;
 	static constexpr int32_t kBloodTileIndexDim = 64;
-	static constexpr int32_t kBloodTileKeepCells = 24;
-	static constexpr float kBloodSoakMaxReach = 16.0f;
+	/** @brief Under the apron, so a soak never outruns the blood its tile holds. */
+	static constexpr float kBloodSoakMaxReach = 1.0f;
 	struct BloodTile
 	{
 		bool live = false;
@@ -1116,6 +1125,7 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	bool bloodPreSkinDepthThisFrame = false;
 	float bloodTileReachLast = 0.0f;
+	int bloodTileLevelLast = 0;
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasRawSRV;
@@ -1565,7 +1575,7 @@ public:
 		float4 BloodLook;
 		/** @brief Blood: x = Settings::BloodAgeHours, y = Settings::BloodSheen, z > 0.5 = the map is live, w > 0.5 = detail tiles are live. Mirror in both shells. */
 		float4 BloodLook2;
-		/** @brief Blood soak: x = Settings::BloodSoakReach, y = 3 / the soak time in game hours, zw spare. Appended last; mirror in both shells. */
+		/** @brief Blood soak and tile geometry: x = Settings::BloodSoakReach, y = 3 / the soak time in game hours, z = the detail tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

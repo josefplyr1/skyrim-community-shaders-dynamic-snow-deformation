@@ -25,14 +25,6 @@
 // solid blood, which is what the soak grows from: the shell shows blood out
 // to a radius that rises with the block's age.
 
-namespace
-{
-	int32_t CellOf(float a_world)
-	{
-		return int32_t(std::floor(a_world / SnowDeformation::kBloodTileCell));
-	}
-}
-
 ID3D11ComputeShader* SnowDeformation::GetBloodTileCS(BloodTileShader a_which)
 {
 	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "JFA_INIT", "JFA_STEP", "JFA_RESOLVE" };
@@ -211,7 +203,7 @@ bool SnowDeformation::EnsureBloodTileResources()
 	bloodTileIndexDirty = true;
 	bloodTileCB = cb;
 	logger::info("[SNOW DEFORMATION] blood detail tiles ready: {} tiles of {}x{} at {} u/texel, offsets in {}",
-		kBloodMaxTiles, kBloodTileDim, kBloodTileDim, kBloodTileTexel, seedFormat == DXGI_FORMAT_R8G8_UNORM ? "R8G8" : "R8G8B8A8");
+		kBloodMaxTiles, kBloodTileDim, kBloodTileDim, BloodTileTexel(), seedFormat == DXGI_FORMAT_R8G8_UNORM ? "R8G8" : "R8G8B8A8");
 	return true;
 }
 
@@ -284,7 +276,7 @@ int32_t SnowDeformation::AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int
 		return std::max(std::abs(a_x - a_cameraCellX), std::abs(a_y - a_cameraCellY));
 	};
 	const int32_t wanted = distance(a_cellX, a_cellY);
-	if (wanted > kBloodTileKeepCells)
+	if (wanted > BloodTileKeepCells())
 		return -1;
 	int32_t slot = -1;
 	int32_t farthest = wanted;
@@ -325,8 +317,8 @@ void SnowDeformation::FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const
 	a_cb.TileTexel[1] = int32_t((a_slot / kBloodTilesAcross) * kBloodTileDim);
 	a_cb.TileBlock[0] = a_cb.TileTexel[0] / int32_t(kBloodTileBlock);
 	a_cb.TileBlock[1] = a_cb.TileTexel[1] / int32_t(kBloodTileBlock);
-	a_cb.TileWorldMin = { float(tile.cellX) * kBloodTileCell - kBloodTileApron, float(tile.cellY) * kBloodTileCell - kBloodTileApron };
-	a_cb.FineTexel = kBloodTileTexel;
+	a_cb.TileWorldMin = { float(tile.cellX) * BloodTileCell() - kBloodTileApron, float(tile.cellY) * BloodTileCell() - kBloodTileApron };
+	a_cb.FineTexel = BloodTileTexel();
 	a_cb.JfaStep = 1;
 	a_cb.WindowOrigin = windowOrigin;
 	a_cb.CoarseTexel = deformWorldSize / float(deformMapDim);
@@ -393,7 +385,7 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 
 	BloodCB cb{};
 	cb.WindowOrigin = tileCB.TileWorldMin;
-	cb.TexelSize = kBloodTileTexel;
+	cb.TexelSize = BloodTileTexel();
 	cb.MapDim = float(kBloodTileDim);
 	cb.MapOrigin = { 0, 0 };
 	cb.ClockNow = { bloodBurialClock, gameClockHours.load(std::memory_order_relaxed) };
@@ -517,9 +509,15 @@ void SnowDeformation::SoakBloodTile(ID3D11DeviceContext* a_context, uint32_t a_s
 		context->Dispatch(groups, groups, 1);
 		UnbindCompute(context);
 	}
-	// Reach is at most 16 units, 32 texels; the closing step of 1 runs twice.
+	// The flood only has to carry as far as the soak reaches: from the power
+	// of two over that many texels down to 1, and 1 once more to close.
+	const int32_t reachTexels = int32_t(std::ceil(std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach) / BloodTileTexel())) + 1;
+	int32_t firstStep = 1;
+	while (firstStep < reachTexels && firstStep < 32)
+		firstStep *= 2;
 	context->CSSetShader(GetBloodTileCS(kBloodTileJfaStep), nullptr, 0);
-	for (int32_t step : { 32, 16, 8, 4, 2, 1, 1 }) {
+	for (int32_t step = firstStep, closing = 0; closing < 2; step = std::max(step / 2, 1)) {
+		closing += step == 1 ? 1 : 0;
 		cb.JfaStep = step;
 		UploadTileCB(context, bloodTileCB.get(), cb);
 		ID3D11ShaderResourceView* srvs[1] = { bloodTileJfaSRV[src].get() };
@@ -555,6 +553,12 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		bloodFineQueue.clear();
 		return;
 	}
+	// Another level is another cell grid: the tiles start over, seeded from
+	// the map, and the decals still drawn take them again.
+	if (bloodTileLevelLast != BloodDetailLevel()) {
+		bloodTileLevelLast = BloodDetailLevel();
+		DropBloodTiles();
+	}
 	if (bloodFineQueue.empty() && bloodTilesLive == 0)
 		return;
 	// The prime's last group compiles the tile computes; marks ask again.
@@ -570,8 +574,9 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	auto* context = globals::d3d::context;
 	const uint32_t frame = globals::state->frameCount;
 	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-	const int32_t cameraCellX = CellOf(eye.x);
-	const int32_t cameraCellY = CellOf(eye.y);
+	const int32_t cameraCellX = BloodCellOf(eye.x);
+	const int32_t cameraCellY = BloodCellOf(eye.y);
+	const int32_t keepCells = BloodTileKeepCells();
 
 	// Tiles left far behind or snowed under whole are free.
 	const float burialRefills = std::max(settings.BloodBurial, 0.01f);
@@ -579,7 +584,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		if (!tile.live)
 			continue;
 		const int32_t d = std::max(std::abs(tile.cellX - cameraCellX), std::abs(tile.cellY - cameraCellY));
-		if (d > kBloodTileKeepCells || bloodBurialClock - tile.lastBurial >= burialRefills) {
+		if (d > keepCells || bloodBurialClock - tile.lastBurial >= burialRefills) {
 			tile.live = false;
 			tile.draws.clear();
 			bloodTilesLive--;
@@ -605,16 +610,17 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 			continue;
 		auto& seen = found->second;
 		BloodMarkBounds(request.draw, seen);
-		int32_t x0 = CellOf(seen.boundsMin.x), x1 = CellOf(seen.boundsMax.x);
-		int32_t y0 = CellOf(seen.boundsMin.y), y1 = CellOf(seen.boundsMax.y);
-		// A mark wider than three cells is a misread; keep its middle.
-		if (x1 - x0 > 2) {
-			x0 = CellOf((seen.boundsMin.x + seen.boundsMax.x) * 0.5f) - 1;
-			x1 = x0 + 2;
+		int32_t x0 = BloodCellOf(seen.boundsMin.x), x1 = BloodCellOf(seen.boundsMax.x);
+		int32_t y0 = BloodCellOf(seen.boundsMin.y), y1 = BloodCellOf(seen.boundsMax.y);
+		// One mark takes at most four cells a side - all sixteen tiles, at
+		// the finest level, for a pool that size. A wider one keeps its middle.
+		if (x1 - x0 > 3) {
+			x0 = BloodCellOf((seen.boundsMin.x + seen.boundsMax.x) * 0.5f) - 1;
+			x1 = x0 + 3;
 		}
-		if (y1 - y0 > 2) {
-			y0 = CellOf((seen.boundsMin.y + seen.boundsMax.y) * 0.5f) - 1;
-			y1 = y0 + 2;
+		if (y1 - y0 > 3) {
+			y0 = BloodCellOf((seen.boundsMin.y + seen.boundsMax.y) * 0.5f) - 1;
+			y1 = y0 + 3;
 		}
 		bool missing = false;
 		for (int32_t cy = y0; cy <= y1; ++cy) {
@@ -646,8 +652,8 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 
 	// API discs go to the tiles they touch; they allocate nothing.
 	for (const auto& disc : a_discs) {
-		for (int32_t cy = CellOf(disc.y - disc.radius); cy <= CellOf(disc.y + disc.radius); ++cy) {
-			for (int32_t cx = CellOf(disc.x - disc.radius); cx <= CellOf(disc.x + disc.radius); ++cx) {
+		for (int32_t cy = BloodCellOf(disc.y - disc.radius); cy <= BloodCellOf(disc.y + disc.radius); ++cy) {
+			for (int32_t cx = BloodCellOf(disc.x - disc.radius); cx <= BloodCellOf(disc.x + disc.radius); ++cx) {
 				const int32_t slot = FindBloodTile(cx, cy);
 				if (slot >= 0)
 					bloodTiles[slot].discs = true;
