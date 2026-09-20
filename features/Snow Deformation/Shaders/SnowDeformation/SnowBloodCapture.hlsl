@@ -36,7 +36,8 @@ cbuffer BloodCB : register(b1)
 	float NormalZMin;
 
 	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
-	// texel shows once its alpha exceeds (1 - reveal).
+	// texel shows once its alpha exceeds (1 - reveal). y > 0.5 (overlay):
+	// leave pixels no coat drew on to the landscape shell.
 	float4 Spread;
 
 	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
@@ -93,6 +94,8 @@ Texture2D<float4> PreDecal4 : register(t13);
 Texture2D<float4> PreDecal5 : register(t14);
 // The decals that are not blood, as alpha (MASK pass); 0 where none drew.
 Texture2D<float> DecalMask : register(t15);
+// The main depth after the landscape shell, before the object-snow skins.
+Texture2D<float> PreSkinDepth : register(t16);
 #	endif
 // View-distance units. Coat lift is 0.4; a rise or the shell is 10-40.
 static const float kOverlayMinLift = 0.05;
@@ -257,6 +260,12 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float sceneDist = SharedData::GetScreenDepth(SceneDepth.Load(pixel));
 	float lift = sceneDist - SharedData::GetScreenDepth(SkinDepth.Load(pixel));
 	if (lift < kOverlayMinLift || lift > kOverlayMaxLift)
+		discard;
+	// With the detail tiles live the landscape shell paints its own blood,
+	// from every angle; this lift is measured along the view ray, so on thin
+	// landscape snow the overlay came and went with the camera. A pixel whose
+	// depth the skin pass left alone is the shell's.
+	if (Spread.y > 0.5 && SkinDepth.Load(pixel) >= PreSkinDepth.Load(pixel))
 		discard;
 	float3 p0 = PreSnow0.Load(pixel).rgb;
 	float3 d0 = PreDecal0.Load(pixel).rgb;

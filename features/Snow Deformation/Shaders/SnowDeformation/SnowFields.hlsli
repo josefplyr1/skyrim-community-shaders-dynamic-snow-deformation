@@ -567,8 +567,10 @@ float SnowHeightBlendOneSided(float w, float hSnow, float heightBlend)
 // Blood detail tiles (BloodTiles.cpp), landscape shell only. Where a tile
 // lies it replaces the blood map's reading: the pigment at half a unit per
 // texel (premultiplied, own mip chain), dated per 4-unit block, plus the
-// offset to the nearest solid blood that the soak grows from. Constants
-// mirror SnowDeformation.h.
+// offset to the nearest solid blood that the soak grows from. The mark
+// itself comes back as PAINT - the decal's colour over the snow by its
+// alpha, as a rune's glyph lies on it; only the soak around and under it
+// stains by extinction. Constants mirror SnowDeformation.h.
 Texture2D<uint> BloodTileIndex : register(t66);
 Texture2D<float4> BloodTilePigment : register(t67);
 Texture2D<float4> BloodTileSeeds : register(t68);
@@ -583,8 +585,9 @@ static const int kBloodTilesAcross = 4;
 static const int kBloodTileBlockShift = 3;
 
 // worldDx / worldDy: screen derivatives of worldXY, taken outside any branch.
-void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout float4 blood, inout float fresh)
+void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout float4 blood, inout float fresh, out float4 paint)
 {
+	paint = 0.0;
 	[branch] if (BloodLook2.w > 0.5)
 	{
 		const int2 cell = (int2)floor(worldXY / kBloodTileCell);
@@ -600,7 +603,7 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 
 			const int2 texel = clamp((int2)local, 0, kBloodTileDim - 1);
 			const int2 blockOrigin = tileTexel >> kBloodTileBlockShift;
-			float4 clock = BloodTileClock.Load(int3(blockOrigin + texel >> kBloodTileBlockShift, 0));
+			float4 clock = BloodTileClock.Load(int3(blockOrigin + (texel >> kBloodTileBlockShift), 0));
 
 			// The soak: blood shows out to a radius that rises with the age
 			// of the nearest solid blood, its rim broken up by the grain.
@@ -612,7 +615,7 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 			{
 				const int2 seedTexel = clamp(texel + (int2)round(seedCode * 255.0) - 128, 0, kBloodTileDim - 1);
 				const float4 seed = BloodTilePigment.Load(int3(tileTexel + seedTexel, 0));
-				seedClock = BloodTileClock.Load(int3(blockOrigin + seedTexel >> kBloodTileBlockShift, 0));
+				seedClock = BloodTileClock.Load(int3(blockOrigin + (seedTexel >> kBloodTileBlockShift), 0));
 				const float dist = length(float2(seedTexel) + 0.5 - local) * kBloodTileTexel;
 				const float grown = 1.0 - exp(-max(BloodLook.z - seedClock.z, 0.0) * BloodLook3.y);
 				// At most 1, so the setting is the farthest the soak gets and the
@@ -631,18 +634,12 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 			const float soakKeep = 1.0 - saturate((BloodLook.y - seedClock.x) / BloodLook.w);
 			const float ownConc = own.a * ownKeep;
 			const float soakConc = soak * soakKeep * 0.85;
-			const float conc = max(ownConc, soakConc);
-			blood = 0.0;
-			fresh = 0.0;
-			[branch] if (conc > 1e-4)
-			{
-				const float w = ownConc / (ownConc + soakConc + 1e-5);
-				blood = float4(lerp(soakRgb, own.rgb / max(own.a, 1e-3), w), conc);
-				const float ownFresh = 1.0 - saturate((BloodLook.z - clock.y) / BloodLook2.x);
-				const float soakFresh = 1.0 - saturate((BloodLook.z - seedClock.y) / BloodLook2.x);
-				// Soaked-in blood carries little of the pool's gloss.
-				fresh = lerp(soakFresh * 0.4, ownFresh, w);
-			}
+			blood = float4(soakRgb, soakConc);
+			paint = float4(own.rgb / max(own.a, 1e-3), saturate(ownConc));
+			const float ownFresh = 1.0 - saturate((BloodLook.z - clock.y) / BloodLook2.x);
+			const float soakFresh = 1.0 - saturate((BloodLook.z - seedClock.y) / BloodLook2.x);
+			// Soaked-in blood carries little of the pool's gloss.
+			fresh = lerp(soakFresh * 0.4, ownFresh, saturate(ownConc * 2.0));
 		}
 	}
 }

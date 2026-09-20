@@ -2728,7 +2728,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// black-red. Drying turns the hue maroon.
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
-	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh);
+	float4 bloodPaint;
+	SampleBloodTiles(worldXYPS, ddx(worldXYPS), ddy(worldXYPS), blood, bloodFresh, bloodPaint);
 	[branch] if (blood.a > 0.002)
 	{
 		float3 pigment = Color::LinearToSrgb(blood.rgb);
@@ -2738,6 +2739,16 @@ PS_OUTPUT main(VS_OUTPUT input)
 		float k = saturate(blood.a * BloodLook.x);
 		kSnowAlbedo *= exp(-3.0 * k * (1.0 - hue)) * lerp(1.0, max(pigmentMax, 0.12), k);
 	}
+	// A blood mark from the detail tiles lies on the snow the same way the
+	// game's decal lies on the ground: its colour over the albedo by its
+	// alpha, over whatever the soak stained beneath it. Drying turns it maroon.
+	[branch] if (bloodPaint.a > 0.002)
+	{
+		float3 paintRgb = Color::LinearToSrgb(bloodPaint.rgb);
+		paintRgb = lerp(paintRgb, paintRgb * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
+		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(bloodPaint.a * BloodLook.x));
+	}
+	const float bloodCover = max(blood.a, bloodPaint.a);
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
 	RuneGlyph rune = SampleRunes(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
@@ -2804,7 +2815,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// Wet print: same ordering rule as crust, after the RMAOS overwrite.
 	snowRoughness = lerp(snowRoughness, snowRoughness * 0.76, wetPrint);
 	// Fresh blood is wet and glossy; dried blood is matte like the snow.
-	snowRoughness = lerp(snowRoughness, 0.22, saturate(blood.a * 2.0) * bloodFresh * BloodLook2.y);
+	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
 
 	// The crystal has to be the part that shines. A normal map alone tilts
 	// facets away from the light and puts the highlight in the gaps between
@@ -3074,7 +3085,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	                                   fmod(GridOrigin + gridLocal, 4096.0) / kSnowUVTile;
 	// Built once, shared by the sun and every point light (M3). Soaked snow
 	// does not sparkle.
-	const float glintsHere = EnableGlints * (1.0 - saturate(blood.a * 3.0));
+	const float glintsHere = EnableGlints * (1.0 - saturate(bloodCover * 3.0));
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, input.WorldPos, ShellCameraPosAdjust.xyz, sunShadow,

@@ -3834,6 +3834,15 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
+		// The decal overlay leaves the landscape shell's pixels to the blood
+		// detail tiles; it tells them by the depth the skins did not touch.
+		bloodPreSkinDepthThisFrame = false;
+		if (BloodTilesLive() && !bloodOverlays.empty() && bloodPreSkinDepth && bloodPreSkinDepthSRV) {
+			winrt::com_ptr<ID3D11Resource> mainDepthResource;
+			mainDepthSRV->GetResource(mainDepthResource.put());
+			context->CopyResource(bloodPreSkinDepth.get(), mainDepthResource.get());
+			bloodPreSkinDepthThisFrame = true;
+		}
 		fill(shellTestDepthDSV.get(), mainDepthSRV);
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);

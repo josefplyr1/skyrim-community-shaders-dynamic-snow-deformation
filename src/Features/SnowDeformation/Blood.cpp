@@ -1302,7 +1302,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	// The trench patch draws next and INHERITS most of its pixel-stage
 	// textures from the skin pass: what this pass binds over is put back,
 	// not nulled (the road patch shaded against empty rasters, 2026-09-18).
-	constexpr UINT kOverlaySlots = 3 + 2 * kBloodCopyCount;  // t3 .. t15
+	constexpr UINT kOverlaySlots = 4 + 2 * kBloodCopyCount;  // t3 .. t16
 	ID3D11ShaderResourceView* savedSRVs[kOverlaySlots]{};
 	context->PSGetShaderResources(3, kOverlaySlots, savedSRVs);
 	ID3D11ShaderResourceView* savedDiffuse = nullptr;
@@ -1325,6 +1325,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	BloodCB cb{};
 	cb.MapDim = 1.0f;
 	cb.Intensity = 1.0f;
+	const bool shellPaintsOwn = bloodPreSkinDepthThisFrame && BloodTilesLive();
+	bloodPreSkinDepthThisFrame = false;
+	cb.Spread = { 0.0f, shellPaintsOwn ? 1.0f : 0.0f, 0.0f, 0.0f };
 	const float W = std::max(bloodViewport.Width, 1.0f), H = std::max(bloodViewport.Height, 1.0f);
 	cb.OverlayRect = { float(bloodCopyRect.left) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.top) / H * 2.0f,
 		float(bloodCopyRect.right) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.bottom) / H * 2.0f };
@@ -1405,6 +1408,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		}
 	}
 	context->PSSetShaderResources(15, 1, &maskSRV);
+	ID3D11ShaderResourceView* preSkinSRV = shellPaintsOwn ? bloodPreSkinDepthSRV.get() : nullptr;
+	context->PSSetShaderResources(16, 1, &preSkinSRV);
 
 	context->Draw(6, 0);
 	bloodOverlaysLast = uint32_t(decals);

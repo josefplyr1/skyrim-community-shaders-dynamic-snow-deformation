@@ -1111,6 +1111,10 @@ public:
 	bool bloodTilesLogged = false;
 	/** @brief Set where the deformation map is cleared whole (worldspace or range change): the tiles' ground is gone. */
 	bool bloodTilesDrop = false;
+	/** @brief The main depth after the landscape shell and before the object-snow skins, copied on frames the decal overlay will run with tiles live: a pixel the skins left alone is the shell's, and the shell paints its own blood. */
+	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
+	bool bloodPreSkinDepthThisFrame = false;
 	float bloodTileReachLast = 0.0f;
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;

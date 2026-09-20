@@ -714,6 +714,16 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 			else
 				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
 		}
+		// Same copy, taken between the landscape shell and the skins.
+		bloodPreSkinDepth = nullptr;
+		bloodPreSkinDepthSRV = nullptr;
+		if (SUCCEEDED(device->CreateTexture2D(&preDesc, nullptr, bloodPreSkinDepth.put()))) {
+			Util::SetResourceName(bloodPreSkinDepth.get(), "SnowDeformation::BloodPreSkinDepth");
+			if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), &mainSrvDesc, bloodPreSkinDepthSRV.put())))
+				bloodPreSkinDepth = nullptr;
+			else
+				Util::SetResourceName(bloodPreSkinDepthSRV.get(), "SnowDeformation::BloodPreSkinDepth SRV");
+		}
 	}
 	if (!shellPrepassMainDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
