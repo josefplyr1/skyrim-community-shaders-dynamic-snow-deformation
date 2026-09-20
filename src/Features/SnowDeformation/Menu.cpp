@@ -503,11 +503,11 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("blood_detail_tooltip"), "The blood map's texel is several units wide, so on its own a splatter lands on the landscape snow as a soft blob. On, ground that holds blood near you keeps it at half a unit per texel, and the snow shows the decal's own contours: droplets, streaks and all. Sixteen patches of about three metres each, the nearest kept; farther marks fall back to the blood map. Landscape snow only. Costs about 27 MB of video memory once blood first appears, and nothing per frame while no blood is being spilled."));
 		ImGui::BeginDisabled(!settings.BloodDetail);
 		{
-			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units)", "Ultra (0.125 units)" };
+			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units, 4x memory)" };
 			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
 			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
 			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than any of these (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Every level uses the same memory and the same sixteen patches; a finer level makes each patch smaller, so it covers less ground and marks beyond it fall back to the soft blood map sooner. Standard: 0.5 units a texel, patches of about 3.5 m. High: 0.25 units, about 1.7 m. Ultra: 0.125 units, about 0.8 m - one corpse's worth. Changing it redraws the marks whose decals the game still has; older ones stay soft."));
+				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than either level (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 27 MB at Standard, about 120 MB at High. Changing it redraws the marks whose decals the game still has; older ones stay soft."));
 		}
 		// A value saved under the old 16-unit range.
 		settings.BloodSoakReach = std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach);
@@ -1336,7 +1336,7 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_blood"), "Blood Decals"))) {
 			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
-			WrapTextDisabledF("%s", std::format("Detail tiles: {} of {} live, {} merged this frame; mark bounds {} from vertices, {} guessed", bloodTilesLive, kBloodMaxTiles, bloodTileMergesLast, bloodTileBoundsRead, bloodTileBoundsGuessed).c_str());
+			WrapTextDisabledF("%s", std::format("Detail tiles: {} of {} live, {} merged this frame; mark bounds {} from vertices, {} guessed", bloodTilesLive, BloodTileCount(), bloodTileMergesLast, bloodTileBoundsRead, bloodTileBoundsGuessed).c_str());
 			ImGui::TreePop();
 		}
 

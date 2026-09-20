@@ -578,7 +578,6 @@ Texture2D<float4> BloodTileSeeds : register(t68);
 Texture2D<float4> BloodTileClock : register(t69);
 
 static const int kBloodTileDim = 512;
-static const int kBloodTilesAcross = 4;
 // A clock block is 8 texels, 4 units.
 static const int kBloodTileBlockShift = 3;
 
@@ -591,14 +590,16 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 		const float kBloodTileCell = BloodLook3.z;
 		const float kBloodTileTexel = BloodLook3.w;
 		const float kBloodTileApron = 0.5 * (float(kBloodTileDim) * kBloodTileTexel - kBloodTileCell);
+		// 4 tiles a side at 0.5 units a texel, 8 at 0.25.
+		const uint kBloodTilesAcross = (uint)round(2.0 / kBloodTileTexel);
 		const int2 cell = (int2)floor(worldXY / kBloodTileCell);
 		const uint slot1 = BloodTileIndex.Load(int3(cell & 63, 0));
 		[branch] if (slot1 != 0u)
 		{
 			const uint slot = slot1 - 1u;
-			const int2 tileTexel = int2(slot % (uint)kBloodTilesAcross, slot / (uint)kBloodTilesAcross) * kBloodTileDim;
+			const int2 tileTexel = int2(slot % kBloodTilesAcross, slot / kBloodTilesAcross) * kBloodTileDim;
 			const float2 local = (worldXY - (float2(cell) * kBloodTileCell - kBloodTileApron)) / kBloodTileTexel;
-			const float atlasDim = float(kBloodTileDim * kBloodTilesAcross);
+			const float atlasDim = float(kBloodTileDim) * float(kBloodTilesAcross);
 			const float uvPerUnit = 1.0 / (kBloodTileTexel * atlasDim);
 			float4 own = BloodTilePigment.SampleGrad(ShellLinearSampler, (float2(tileTexel) + local) / atlasDim, worldDx * uvPerUnit, worldDy * uvPerUnit);
 

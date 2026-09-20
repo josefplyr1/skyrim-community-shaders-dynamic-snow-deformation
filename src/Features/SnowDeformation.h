@@ -598,10 +598,10 @@ public:
 		float BloodSpreadSeconds = 1.5f;
 		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
 		bool BloodDetail = true;
-		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel over 248-unit cells, 1 = 0.25 over 120, 2 = 0.125 over 56. Same memory at every level; finer tiles cover less ground, and marks past them fall back to the blood map. */
+		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel, sixteen tiles; 1 = 0.25 units, sixty-four tiles over the same ground, four times the memory. */
 		int BloodDetailLevel = 0;
 		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..1. 0 = no soak. Needs BloodDetail. */
-		float BloodSoakReach = 0.5f;
+		float BloodSoakReach = 0.01f;
 		/** @brief Real seconds (at the current timescale) the soak takes to reach ~95% of BloodSoakReach. Runs on the game clock, so waiting or sleeping finishes it. */
 		float BloodSoakSeconds = 40.0f;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
@@ -1042,12 +1042,15 @@ public:
 
 	// ---- Blood detail tiles (BloodTiles.cpp; BLOOD-DESIGN.md "Detail tiles") ----
 	static constexpr uint32_t kBloodTileDim = 512;
-	static constexpr uint32_t kBloodTilesAcross = 4;
-	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
+	/** @brief The atlas is 4 tiles a side at the standard level and 8 at the high one: a finer texel takes more tiles to hold the same ground. */
+	static constexpr uint32_t kBloodMaxTilesAcross = 8;
+	static constexpr uint32_t kBloodMaxTiles = kBloodMaxTilesAcross * kBloodMaxTilesAcross;
 	static constexpr uint32_t kBloodTileMips = 4;
 	/** @brief A tile owns a cell and carries an apron around it, so a soak crossing the cell's edge still finds its blood and a filtered tap never leaves the tile. */
 	static constexpr float kBloodTileApron = 4.0f;
-	static constexpr int kBloodDetailLevels = 3;
+	static constexpr int kBloodDetailLevels = 2;
+	uint32_t BloodTilesAcross() const { return 4u << uint32_t(BloodDetailLevel()); }
+	uint32_t BloodTileCount() const { return BloodTilesAcross() * BloodTilesAcross(); }
 	int BloodDetailLevel() const { return std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1); }
 	/** @brief World units a texel of the detail tiles covers at the chosen level. */
 	float BloodTileTexel() const { return 0.5f / float(1 << BloodDetailLevel()); }
@@ -1126,6 +1129,11 @@ public:
 	bool bloodPreSkinDepthThisFrame = false;
 	float bloodTileReachLast = 0.0f;
 	int bloodTileLevelLast = 0;
+	/** @brief Level the tile textures were created for; -1 = none. */
+	int bloodTileResourcesLevel = -1;
+	void ReleaseBloodTileTextures();
+	/** @brief The tile's own mip chain from its mip 0, through a scratch copy per level. Run with every merge: past a few metres the shell reads the mips, not mip 0. */
+	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasRawSRV;
