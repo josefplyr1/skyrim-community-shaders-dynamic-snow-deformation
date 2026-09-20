@@ -139,10 +139,11 @@ cbuffer ShellCB : register(b0)
 	float ObjChurnHeightAmp;
 	float ObjChurnSizeScale;
 	// The meeting with the landscape sheet (SnowShell.hlsl): band in units,
-	// half on each side of the junction, and >0.5 = the texture fade.
+	// half on each side of the junction.
 	float ObjectMeetBand;
 
-	float ObjectMeetFade;
+	// Retired (Object Meeting Texture Fade); layout keeper.
+	float Spare1;
 	// Landscape-shell only; declared so the tail below keeps ShellCB's layout.
 	uint ShellLODDebug;
 	float SeamRampInv;
@@ -4330,11 +4331,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 			// The slope gate on the SMOOTH normal: a bump on a vertical wall
 			// faces up per pixel, but the wall does not.
 			solid = painted && input.Coverage >= kCoatMinNz;
-			// Object Meeting Texture Fade: toward the sheet the cut sinks through
-			// the whole weight span, so the coat closes to the sheet's solid
-			// cover as the two meet. Adds to the paint, like the reach.
-			float meetFill = ObjectMeetFade > 0.5 ? sheetMeet : 0.0;
-			[branch] if (!painted && (lumpsOn || meetFill > 0.001) && realKnown && input.Coverage > kCoatMinNz - 0.1)
+			[branch] if (!painted && lumpsOn && realKnown && input.Coverage > kCoatMinNz - 0.1)
 			{
 				// The cut sinks on the game's own weight at this pixel's own
 				// texel: the same from every view, the paint itself at reach 0.
@@ -4343,7 +4340,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 				// changes and a wall stays as the game painted it while the
 				// roof beside it fills in.
 				float steepKeep = 1.0 - SteepThin * (1.0 - smoothstep(0.15, 0.5, normalWS.z));
-				nearPaint = saturate((realW + (kEdgeReachWeightShift * EdgeFlankWidth + (kRecolorWeightSpan + 0.02) * meetFill) * steepKeep) * 50.0 + 0.5);
+				nearPaint = saturate((realW + kEdgeReachWeightShift * EdgeFlankWidth * steepKeep) * 50.0 + 0.5);
 			}
 			needField = solid ? (fadeIn < 0.5) : (nearPaint > 0.15);
 		}

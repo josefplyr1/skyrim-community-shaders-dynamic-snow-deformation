@@ -239,12 +239,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::SliderFloat(T(TKEY("object_meet_band"), "Object Meeting Blend"), &settings.ObjectMeetBand, 0.0f, 64.0f, "%.0f units");
 			if (auto _ttMeet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the two blend toward each other so they read as one surface instead of meeting at a lit line. This is the width of that meeting, split in half: at 12, the ground snow's shading eases toward the object's slope over its last 6 units, and the object's snow eases toward the ground's over the first 6 units up from it, meeting in the middle. Higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre. Default 12."));
-			ImGui::BeginDisabled(settings.ObjectMeetBand <= 0.0f);
-			ImGui::Checkbox(T(TKEY("object_meet_texture_fade"), "Object Meeting Texture Fade"), &settings.ObjectMeetTextureFade);
-			ImGui::EndDisabled();
-			if (auto _ttMeetFade = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_meet_texture_fade_tooltip"), "Across the same width, the two snows also fade into each other instead of changing look at a line. The ground snow thins out toward the object (down to half, as fine grain that the anti-aliasing smooths), letting the object's snow show through it; and the object's snow closes over its bare specks toward the ground, so it arrives at the ground snow's solid cover. Steep faces that hold no snow are left alone. Turn off to compare: only the shading blend remains. Needs Object Meeting Blend above 0."));
+				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the two blend toward each other so they read as one surface instead of meeting at a lit line. This is the width of that meeting, split in half: at 32, the ground snow's shading eases toward the object's slope over its last 16 units, and the object's snow eases toward the ground's over the first 16 units up from it, meeting in the middle. Higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre. Default 32."));
 
 			ImGui::TreePop();
 		}

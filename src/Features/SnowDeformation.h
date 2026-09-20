@@ -630,9 +630,7 @@ public:
 		/** @brief "Snow Drift Angle" (degrees from vertical): sizes the enclosure disc; higher asks for deeper cover before the band shelters. */
 		float ShelterDriftAngle = 30.0f;
 		/** @brief "Object Meeting Blend" (units): thickness of snow over a captured object across which the landscape sheet and an object's coat meet, half on each side of the junction: the sheet's macro slope goes halfway to the object's over its half, the coat's normal halfway to the sheet's over the other. 0 = off. */
-		float ObjectMeetBand = 12.0f;
-		/** @brief "Object Meeting Texture Fade": across the same band the sheet thins stochastically to half over the object (the coat under it shows through) and the coat's cut sinks through the whole weight span toward the sheet (it closes to solid cover), so the two looks cross-fade. */
-		bool ObjectMeetTextureFade = true;
+		float ObjectMeetBand = 32.0f;
 		/** @brief "Recolor Baked LOD Snow": plain object-LOD batches (DynDOLOD's unflagged 'obj' shapes: drifts, roads, piles beyond the loaded grid) take the horizon recolor wherever their atlas texel reads as snow. RenderDoc 2026-09-06: no road capture past 7,538 units, snow-flagged LOD skinned to 70,000 - the far roads and drifts were these batches. */
 		bool LODObjectSnow = true;
 		/** @brief "Volume Snow" (VOLUME-SNOW-PLAN V0-V2): rasterise the captured statics into the clipmap's voxel occupancy volumes, grow the snow field on them and draw it. One switch for build and draw (Josef, 2026-09-07); the slice view stays available under it. */
@@ -1379,8 +1377,8 @@ public:
 		/** @brief settings.ObjectMeetBand, read by the landscape shell and the drape. Was Spare0. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
 		float ObjectMeetBand;
 
-		/** @brief >0.5: settings.ObjectMeetTextureFade. Was Spare1. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
-		float ObjectMeetFade;
+		/** @brief Retired (water edge, then Object Meeting Texture Fade); layout keeper. Mirror in SnowShell.hlsl AND SnowStaticsShell.hlsl. */
+		float Spare1;
 		/** @brief Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at u1), 2 warp-ring view, 3 data-provenance view. */
 		uint ShellLODDebug;
 		/** @brief 1/width of the seam depth ramp; 0 = no seam data this frame (span fade only). */

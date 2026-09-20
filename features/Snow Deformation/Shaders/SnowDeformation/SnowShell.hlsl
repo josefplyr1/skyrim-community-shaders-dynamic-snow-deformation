@@ -139,8 +139,8 @@ cbuffer ShellCB : register(b0)
 	// side of the junction; 0 = off.
 	float ObjectMeetBand;
 
-	// >0.5: Object Meeting Texture Fade.
-	float ObjectMeetFade;
+	// Retired (Object Meeting Texture Fade); layout keeper.
+	float Spare1;
 	// Distant-snow diagnostics: 0 off, 1 depth-delta heatmap (histogram at
 	// u1), 2 warp-ring view, 3 data-provenance view.
 	uint ShellLODDebug;
@@ -2457,11 +2457,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		                 ? saturate((coverageAlpha - 0.2) * (1.0 / 0.3))
 		                 : (coverageAlpha >= 0.5 ? 1.0 : 0.0);
 		if (screenNoise * screenNoise >= dust)
-			discard;
-		// Object Meeting Texture Fade: the sheet thins to half over its half
-		// of the band, so the coat under it shows through as the two meet.
-		// A second noise phase, or it would cut where the dust already cut.
-		if (ObjectMeetFade > 0.5 && frac(screenNoise + 0.5) < 0.5 * objectMeet.x)
 			discard;
 		coverageAlpha = 1.0;
 	}
