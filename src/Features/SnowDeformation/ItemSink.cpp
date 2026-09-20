@@ -671,8 +671,15 @@ void SnowDeformation::ItemSinkUpdate()
 	// Unseen for a while: picked up, unloaded or out of range. Nothing to undo -
 	// the offset lives on nodes that went with the 3D, or stays right for an
 	// item that is merely far away.
-	if ((frame & 0xFF) == 0)
+	if ((frame & 0xFF) == 0) {
 		std::erase_if(itemSinkStates, [&](const auto& a_kv) { return frame - a_kv.second.seenFrame > 1200; });
+		// Past the grace a record is spent once its item has a rest of its own;
+		// left in, it is written back by every save taken while the item moves.
+		if (!itemSinkLoaded.empty() && std::chrono::duration<float>(std::chrono::steady_clock::now() - itemSinkLoadedAt).count() > kItemSinkLoadGrace)
+			for (const auto& [key, state] : itemSinkStates)
+				if (state.restValid)
+					itemSinkLoaded.erase(state.formID);
+	}
 }
 
 void SnowDeformation::SaveItemSink(const SKSE::SerializationInterface* a_intfc)
