@@ -596,14 +596,8 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
-		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
-		bool BloodDetail = true;
 		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel, sixteen tiles; 1 = 0.25 units, sixty-four tiles over the same ground, four times the memory. */
-		int BloodDetailLevel = 1;
-		/** @brief Units blood soaks outward from a mark's solid contour on the landscape shell, 0..1. 0 = no soak. Needs BloodDetail. */
-		float BloodSoakReach = 0.01f;
-		/** @brief Real seconds (at the current timescale) the soak takes to reach ~95% of BloodSoakReach. Runs on the game clock, so waiting or sleeping finishes it. */
-		float BloodSoakSeconds = 40.0f;
+		int BloodDetailLevel = 0;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -1046,7 +1040,7 @@ public:
 	static constexpr uint32_t kBloodMaxTilesAcross = 8;
 	static constexpr uint32_t kBloodMaxTiles = kBloodMaxTilesAcross * kBloodMaxTilesAcross;
 	static constexpr uint32_t kBloodTileMips = 4;
-	/** @brief A tile owns a cell and carries an apron around it, so a soak crossing the cell's edge still finds its blood and a filtered tap never leaves the tile. */
+	/** @brief A tile owns a cell and carries an apron around it, so a filtered tap, mips included, never leaves the tile. */
 	static constexpr float kBloodTileApron = 4.0f;
 	static constexpr int kBloodDetailLevels = 2;
 	uint32_t BloodTilesAcross() const { return 4u << uint32_t(BloodDetailLevel()); }
@@ -1061,8 +1055,6 @@ public:
 	int32_t BloodTileKeepCells() const { return std::min(28, int32_t(std::ceil(4096.0f / BloodTileCell()))); }
 	static constexpr uint32_t kBloodTileBlock = 8;
 	static constexpr int32_t kBloodTileIndexDim = 64;
-	/** @brief Under the apron, so a soak never outruns the blood its tile holds. */
-	static constexpr float kBloodSoakMaxReach = 1.0f;
 	struct BloodTile
 	{
 		bool live = false;
@@ -1070,7 +1062,6 @@ public:
 		int32_t cellY = 0;
 		/** @brief bloodTileEpoch at allocation. */
 		uint32_t gen = 0;
-		bool jfaDirty = false;
 		/** @brief Burial clock at the newest deposit: a tile snowed under whole is free. */
 		float lastBurial = 0.0f;
 		std::vector<BloodCapture> draws;
@@ -1090,7 +1081,7 @@ public:
 		int32_t TileBlock[2];
 		float2 TileWorldMin;
 		float FineTexel;
-		int32_t JfaStep;
+		int32_t padStep;
 		float2 WindowOrigin;
 		float CoarseTexel;
 		int32_t CoarseDim;
@@ -1116,9 +1107,6 @@ public:
 		kBloodTileMergePigment,
 		kBloodTileMipDown,
 		kBloodTileMigrate,
-		kBloodTileJfaInit,
-		kBloodTileJfaStep,
-		kBloodTileJfaResolve,
 		kBloodTileShaderCount
 	};
 	BloodTile bloodTiles[kBloodMaxTiles];
@@ -1137,7 +1125,6 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	bool bloodPreSkinDepthThisFrame = false;
-	float bloodTileReachLast = 0.0f;
 	int bloodTileLevelLast = 0;
 	/** @brief Level the tile textures were created for; -1 = none. */
 	int bloodTileResourcesLevel = -1;
@@ -1169,9 +1156,6 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasRawSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileAtlasUAV[kBloodTileMips];
-	winrt::com_ptr<ID3D11Texture2D> bloodTileSeeds;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSeedsSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileSeedsUAV;
 	winrt::com_ptr<ID3D11Texture2D> bloodTileClock;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileClockSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileClockUAV;
@@ -1187,13 +1171,10 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevRawSRV;
 	winrt::com_ptr<ID3D11Texture2D> bloodTilePrevClock;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevClockSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileJfa[2];
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileJfaSRV[2];
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileJfaUAV[2];
 	winrt::com_ptr<ID3D11Buffer> bloodTileCB;
 	ID3D11ComputeShader* bloodTileCS[kBloodTileShaderCount]{};
 	ID3D11ComputeShader* GetBloodTileCS(BloodTileShader a_which);
-	bool BloodTilesWanted() const { return settings.BloodOnSnow && settings.BloodDetail && !bloodTilesFailed; }
+	bool BloodTilesWanted() const { return settings.BloodOnSnow && !bloodTilesFailed; }
 	bool BloodTilesLive() const { return BloodTilesWanted() && bloodTilesLive > 0 && bloodTileAtlasSRV; }
 	bool EnsureBloodTileResources();
 	void ReleaseBloodTiles();
@@ -1205,8 +1186,7 @@ public:
 	void FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const;
 	void SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	void MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs);
-	void SoakBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
-	/** @brief Draws this frame's detail requests into their tiles, then the soak field of tiles that changed. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
+	/** @brief Draws this frame's detail requests into their tiles. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
 	void RenderBloodTiles(const std::vector<BloodDisc>& a_discs);
 
 	// ---- Rune decals on snow (BURIED-REF-LIFT-PLAN.md) ----
@@ -1614,7 +1594,7 @@ public:
 		float4 BloodLook;
 		/** @brief Blood: x = Settings::BloodAgeHours, y = Settings::BloodSheen, z > 0.5 = the map is live, w > 0.5 = detail tiles are live. Mirror in both shells. */
 		float4 BloodLook2;
-		/** @brief Blood soak and tile geometry: x = Settings::BloodSoakReach, y = 3 / the soak time in game hours, z = the detail tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
+		/** @brief Blood detail tiles: xy spare (the retired soak), z = the tiles' cell in units, w = their texel in units. Appended last; mirror in both shells. */
 		float4 BloodLook3;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);

@@ -20,14 +20,12 @@
 // again when a tile under them is allocated later. The landscape shell reads
 // a tile in place of the map wherever one lies.
 //
-// Beside the pigment a tile carries clock blocks (the map's two clocks plus
-// the hour the oldest blood showing arrived) and the offset to the nearest
-// solid blood, which is what the soak grows from: the shell shows blood out
-// to a radius that rises with the block's age.
+// Beside the pigment a tile carries clock blocks: the map's two clocks, so a
+// mark dries and is buried as the map's does.
 
 ID3D11ComputeShader* SnowDeformation::GetBloodTileCS(BloodTileShader a_which)
 {
-	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "MIGRATE", "JFA_INIT", "JFA_STEP", "JFA_RESOLVE" };
+	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "MIGRATE" };
 	if (!bloodTileCS[a_which]) {
 		logger::debug("Compiling BloodTilesCS:{}", defines[a_which]);
 		bloodTileCS[a_which] = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BloodTilesCS.hlsl", { { defines[a_which], "" } }, "cs_5_0"));
@@ -55,9 +53,6 @@ void SnowDeformation::ReleaseBloodTileTextures()
 	bloodTileAtlasRawSRV = nullptr;
 	for (auto& view : bloodTileAtlasUAV)
 		view = nullptr;
-	bloodTileSeeds = nullptr;
-	bloodTileSeedsSRV = nullptr;
-	bloodTileSeedsUAV = nullptr;
 	bloodTileClock = nullptr;
 	bloodTileClockSRV = nullptr;
 	bloodTileClockUAV = nullptr;
@@ -76,11 +71,6 @@ void SnowDeformation::ReleaseBloodTileTextures()
 	bloodTileCover = nullptr;
 	bloodTileCoverRTV = nullptr;
 	bloodTileCoverSRV = nullptr;
-	for (uint32_t i = 0; i < 2; ++i) {
-		bloodTileJfa[i] = nullptr;
-		bloodTileJfaSRV[i] = nullptr;
-		bloodTileJfaUAV[i] = nullptr;
-	}
 	bloodTileCB = nullptr;
 	bloodTileResourcesLevel = -1;
 	bloodTileIndexDirty = true;
@@ -182,15 +172,6 @@ bool SnowDeformation::EnsureBloodTileResources()
 	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
 		uav(bloodTileAtlasUAV[mip], bloodTileAtlas.get(), DXGI_FORMAT_R8G8B8A8_UNORM, mip, "SnowDeformation::BloodTileAtlas UAV");
 
-	// Two channels are enough for the offsets where the device writes them.
-	DXGI_FORMAT seedFormat = DXGI_FORMAT_R8G8_UNORM;
-	UINT support = 0;
-	if (FAILED(device->CheckFormatSupport(seedFormat, &support)) || !(support & D3D11_FORMAT_SUPPORT_TYPED_UNORDERED_ACCESS_VIEW))
-		seedFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-	texture(bloodTileSeeds, atlasDim, seedFormat, kCompute, 1, "SnowDeformation::BloodTileSeeds");
-	srv(bloodTileSeedsSRV, bloodTileSeeds.get(), seedFormat, 1, "SnowDeformation::BloodTileSeeds SRV");
-	uav(bloodTileSeedsUAV, bloodTileSeeds.get(), seedFormat, 0, "SnowDeformation::BloodTileSeeds UAV");
-
 	texture(bloodTileClock, blocks * BloodTilesAcross(), DXGI_FORMAT_R32G32B32A32_FLOAT, kCompute, 1, "SnowDeformation::BloodTileClock");
 	srv(bloodTileClockSRV, bloodTileClock.get(), DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "SnowDeformation::BloodTileClock SRV");
 	uav(bloodTileClockUAV, bloodTileClock.get(), DXGI_FORMAT_R32G32B32A32_FLOAT, 0, "SnowDeformation::BloodTileClock UAV");
@@ -223,12 +204,6 @@ bool SnowDeformation::EnsureBloodTileResources()
 	texture(bloodTilePrevClock, blocks, DXGI_FORMAT_R32G32B32A32_FLOAT, kRead, 1, "SnowDeformation::BloodTilePrevClock");
 	srv(bloodTilePrevClockSRV, bloodTilePrevClock.get(), DXGI_FORMAT_R32G32B32A32_FLOAT, 1, "SnowDeformation::BloodTilePrevClock SRV");
 
-	for (uint32_t i = 0; i < 2; ++i) {
-		texture(bloodTileJfa[i], kBloodTileDim, DXGI_FORMAT_R32_UINT, kCompute, 1, "SnowDeformation::BloodTileJfa");
-		srv(bloodTileJfaSRV[i], bloodTileJfa[i].get(), DXGI_FORMAT_R32_UINT, 1, "SnowDeformation::BloodTileJfa SRV");
-		uav(bloodTileJfaUAV[i], bloodTileJfa[i].get(), DXGI_FORMAT_R32_UINT, 0, "SnowDeformation::BloodTileJfa UAV");
-	}
-
 	for (uint32_t i = 0; i < kBloodTileShaderCount; ++i)
 		ok = ok && GetBloodTileCS(BloodTileShader(i)) != nullptr;
 
@@ -252,13 +227,11 @@ bool SnowDeformation::EnsureBloodTileResources()
 	const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	for (uint32_t mip = 0; mip < kBloodTileMips; ++mip)
 		context->ClearUnorderedAccessViewFloat(bloodTileAtlasUAV[mip].get(), zero);
-	context->ClearUnorderedAccessViewFloat(bloodTileSeedsUAV.get(), zero);
 	context->ClearUnorderedAccessViewFloat(bloodTileClockUAV.get(), zero);
 	bloodTileIndexDirty = true;
 	bloodTileCB = cb;
 	bloodTileResourcesLevel = BloodDetailLevel();
-	logger::info("[SNOW DEFORMATION] blood detail tiles ready: {} tiles of {}x{} at {} u/texel, offsets in {}",
-		BloodTileCount(), kBloodTileDim, kBloodTileDim, BloodTileTexel(), seedFormat == DXGI_FORMAT_R8G8_UNORM ? "R8G8" : "R8G8B8A8");
+	logger::info("[SNOW DEFORMATION] blood detail tiles ready: {} tiles of {}x{} at {} u/texel", BloodTileCount(), kBloodTileDim, kBloodTileDim, BloodTileTexel());
 	return true;
 }
 
@@ -358,7 +331,6 @@ int32_t SnowDeformation::AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int
 	tile.cellX = a_cellX;
 	tile.cellY = a_cellY;
 	tile.gen = ++bloodTileEpoch;
-	tile.jfaDirty = true;
 	tile.lastBurial = bloodBurialClock;
 	tile.draws.clear();
 	tile.discs = false;
@@ -376,7 +348,7 @@ void SnowDeformation::FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const
 	a_cb.TileBlock[1] = a_cb.TileTexel[1] / int32_t(kBloodTileBlock);
 	a_cb.TileWorldMin = { float(tile.cellX) * BloodTileCell() - kBloodTileApron, float(tile.cellY) * BloodTileCell() - kBloodTileApron };
 	a_cb.FineTexel = BloodTileTexel();
-	a_cb.JfaStep = 1;
+	a_cb.padStep = 0;
 	a_cb.WindowOrigin = windowOrigin;
 	a_cb.CoarseTexel = deformWorldSize / float(deformMapDim);
 	a_cb.CoarseDim = int32_t(deformMapDim);
@@ -578,7 +550,6 @@ void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_
 		UnbindCompute(context);
 	}
 	BuildBloodTileMips(context, a_slot);
-	tile.jfaDirty = true;
 	tile.lastBurial = bloodBurialClock;
 	bloodTileMergesLast++;
 }
@@ -605,57 +576,6 @@ void SnowDeformation::BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_
 		context->CSSetShaderResources(0, 1, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->Dispatch((UINT(cb.MipDim) + 7) / 8, (UINT(cb.MipDim) + 7) / 8, 1);
-		UnbindCompute(context);
-	}
-}
-
-// The tile's nearest-blood field, from mip 0.
-void SnowDeformation::SoakBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot)
-{
-	auto* context = a_context;
-	BloodTileCB cb{};
-	FillBloodTileCB(cb, a_slot);
-
-	if (settings.BloodSoakReach <= 0.0f)
-		return;
-	const UINT groups = kBloodTileDim / 8;
-	uint32_t src = 0;
-	{
-		UploadTileCB(context, bloodTileCB.get(), cb);
-		ID3D11ShaderResourceView* srvs[1] = { bloodTileAtlasRawSRV.get() };
-		ID3D11UnorderedAccessView* uavs[1] = { bloodTileJfaUAV[src].get() };
-		context->CSSetShaderResources(0, 1, srvs);
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-		context->CSSetShader(GetBloodTileCS(kBloodTileJfaInit), nullptr, 0);
-		context->Dispatch(groups, groups, 1);
-		UnbindCompute(context);
-	}
-	// The flood only has to carry as far as the soak reaches: from the power
-	// of two over that many texels down to 1, and 1 once more to close.
-	const int32_t reachTexels = int32_t(std::ceil(std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach) / BloodTileTexel())) + 1;
-	int32_t firstStep = 1;
-	while (firstStep < reachTexels && firstStep < 32)
-		firstStep *= 2;
-	context->CSSetShader(GetBloodTileCS(kBloodTileJfaStep), nullptr, 0);
-	for (int32_t step = firstStep, closing = 0; closing < 2; step = std::max(step / 2, 1)) {
-		closing += step == 1 ? 1 : 0;
-		cb.JfaStep = step;
-		UploadTileCB(context, bloodTileCB.get(), cb);
-		ID3D11ShaderResourceView* srvs[1] = { bloodTileJfaSRV[src].get() };
-		ID3D11UnorderedAccessView* uavs[1] = { bloodTileJfaUAV[1 - src].get() };
-		context->CSSetShaderResources(0, 1, srvs);
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-		context->Dispatch(groups, groups, 1);
-		UnbindCompute(context);
-		src = 1 - src;
-	}
-	{
-		ID3D11ShaderResourceView* srvs[1] = { bloodTileJfaSRV[src].get() };
-		ID3D11UnorderedAccessView* uavs[1] = { bloodTileSeedsUAV.get() };
-		context->CSSetShaderResources(0, 1, srvs);
-		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-		context->CSSetShader(GetBloodTileCS(kBloodTileJfaResolve), nullptr, 0);
-		context->Dispatch(groups, groups, 1);
 		UnbindCompute(context);
 	}
 }
@@ -738,11 +658,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 			bloodTileEpoch++;
 		}
 	}
-	const float reach = std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach);
-	if (reach > 0.0f && bloodTileReachLast <= 0.0f)
-		for (auto& tile : bloodTiles)
-			tile.jfaDirty = tile.jfaDirty || tile.live;
-	bloodTileReachLast = reach;
 
 	// Requests to tiles. A mark asks for every cell its bounds touch; a tile
 	// takes it while it spreads, or when the tile is newer than the mark's
@@ -837,7 +752,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 
 	bool work = seededCount > 0;
 	for (const auto& tile : bloodTiles)
-		work = work || (tile.live && (!tile.draws.empty() || tile.discs || tile.jfaDirty));
+		work = work || (tile.live && (!tile.draws.empty() || tile.discs));
 	if (work) {
 		globals::profiler->BeginPass("SnowDeformation::BloodTiles");
 		winrt::com_ptr<ID3D11ComputeShader> savedCS;
@@ -874,17 +789,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		for (uint32_t i = 0; i < kBloodMaxTiles; ++i)
 			if (bloodTiles[i].live && (!bloodTiles[i].draws.empty() || bloodTiles[i].discs))
 				MergeBloodTile(context, i, a_discs);
-
-		// The soak field trails the merges, four tiles a frame.
-		uint32_t soaked = 0;
-		for (uint32_t i = 0; i < kBloodMaxTiles && soaked < 4; ++i) {
-			const uint32_t slot = (i + frame) % kBloodMaxTiles;
-			if (!bloodTiles[slot].live || !bloodTiles[slot].jfaDirty)
-				continue;
-			SoakBloodTile(context, slot);
-			bloodTiles[slot].jfaDirty = false;
-			soaked++;
-		}
 
 		ID3D11Buffer* restoreCB = savedCB.get();
 		context->CSSetConstantBuffers(0, 1, &restoreCB);

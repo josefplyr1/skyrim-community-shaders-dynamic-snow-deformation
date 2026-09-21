@@ -217,8 +217,7 @@ cbuffer ShellCB : register(b0)
 	// x = hours a mark takes to dry, y = wet sheen, z > 0.5 = map live,
 	// w > 0.5 = detail tiles live.
 	float4 BloodLook2;
-	// Soak: x = reach in units, y = 3 / the soak time in game hours;
-	// z = the detail tiles' cell in units, w = their texel in units.
+	// xy spare; z = the detail tiles' cell in units, w = their texel in units.
 	float4 BloodLook3;
 }
 
@@ -2742,7 +2741,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 	// A blood mark from the detail tiles lies on the snow the same way the
 	// game's decal lies on the ground: its colour over the albedo by its
-	// alpha, over whatever the soak stained beneath it. Drying turns it maroon.
+	// alpha. Drying turns it maroon.
 	[branch] if (bloodPaint.a > 0.002)
 	{
 		float3 paintRgb = Color::LinearToSrgb(bloodPaint.rgb);

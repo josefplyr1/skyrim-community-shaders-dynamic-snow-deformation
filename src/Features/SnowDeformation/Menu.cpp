@@ -156,7 +156,7 @@ void SnowDeformation::DrawSettings()
 	// The six performance levers in one click (FPS-STABILISATION-PLAN.md
 	// §7.2 vectors); nothing else is touched.
 	{
-		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow) {
+		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow, int a_bloodDetail) {
 			if (settings.DeformMapResolution != a_mapDim) {
 				settings.DeformMapResolution = a_mapDim;
 				deformMapDimDirty = true;
@@ -169,6 +169,7 @@ void SnowDeformation::DrawSettings()
 			settings.Tessellation = a_tess;
 			settings.ParallaxDepth = a_parallaxDepth;
 			settings.ParallaxShadowStrength = a_parallaxShadow;
+			settings.BloodDetailLevel = a_bloodDetail;
 		};
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
@@ -176,16 +177,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the six performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, Tessellate Trenches and the two Parallax dials. Everything else keeps its value, and any of the seven can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_low"), "Low")))
-			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f);
+			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f, 0);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_medium"), "Medium")))
-			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f);
+			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f, 0);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_high"), "High")))
-			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f);
+			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f, 1);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f);
+			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f, 1);
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
@@ -483,6 +484,13 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
 		if (auto _ttBlood = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the landscape snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. On snow lying on objects (the recolored projected snow) the game's own decals are put back on top of the snow instead. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
+		{
+			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units, 4x memory)" };
+			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
+			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
+			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks on the landscape snow are. Ground that holds blood near you keeps it in patches of its own, so the snow shows the decal's contours - droplets, streaks and all - instead of the blood map's soft blob; marks farther out fall back to that map. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 25 MB at Standard, about 90 MB at High, allocated when blood first appears. The quality presets pick Standard at Low and Medium and High at High and Ultra. Changing it carries the marks over."));
+		}
 		ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBloodI = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains the landscape shell. Object snow (the recolored projected snow) carries the game's own decal on top instead and is not stained. 1 takes the textures as authored; 2 doubles the soak."));
@@ -497,29 +505,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("blood_sheen_tooltip"), "Gloss of fresh blood, 0 = matte like the snow around it."));
 		ImGui::SliderFloat(T(TKEY("blood_spread_seconds"), "Appear Time"), &settings.BloodSpreadSeconds, 0.0f, 6.0f, "%.1f s");
 		if (auto _ttBloodSp = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "A fresh mark does not appear all at once: it grows from its dense core to its thin fringe over this long. 0 = the whole mark at once. How far blood then creeps past the mark is Soak Reach."));
-		ImGui::Checkbox(T(TKEY("blood_detail"), "Detailed Blood Marks"), &settings.BloodDetail);
-		if (auto _ttBloodD = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_detail_tooltip"), "The blood map's texel is several units wide, so on its own a splatter lands on the landscape snow as a soft blob. On, ground that holds blood near you keeps it at half a unit per texel, and the snow shows the decal's own contours: droplets, streaks and all. Sixteen patches of about three metres each, the nearest kept; farther marks fall back to the blood map. Landscape snow only. Costs about 27 MB of video memory once blood first appears, and nothing per frame while no blood is being spilled."));
-		ImGui::BeginDisabled(!settings.BloodDetail);
-		{
-			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units, 4x memory)" };
-			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
-			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
-			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks are. The decals' own textures are finer than either level (about 0.05 to 0.1 units a texel), so this is how closely the snow's copy follows them. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 27 MB at Standard, about 120 MB at High. Changing it carries the marks over: decals the game still has redraw at the new level, older ones keep the detail they had."));
-		}
-		// A value saved under the old 16-unit range.
-		settings.BloodSoakReach = std::clamp(settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach);
-		ImGui::SliderFloat(T(TKEY("blood_soak_reach"), "Soak Reach"), &settings.BloodSoakReach, 0.0f, kBloodSoakMaxReach, "%.2f units");
-		if (auto _ttBloodSr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_soak_reach_tooltip"), "How far blood creeps outward through the snow from a mark's solid contour, in game units (1 unit is about 1.4 cm). The edge thins to pink and breaks up with the snow's grain. 0 = no soak: the mark keeps the decal's exact shape. Needs Detailed Blood Marks; landscape snow only."));
-		ImGui::SliderFloat(T(TKEY("blood_soak_seconds"), "Soak Time"), &settings.BloodSoakSeconds, 1.0f, 300.0f, "%.0f s");
-		if (auto _ttBloodSt = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_soak_seconds_tooltip"), "Seconds the soak takes to reach nearly its full Soak Reach: fast at first, then slowing. It runs on the game clock, so waiting, sleeping or fast travel finishes it, and blood the snow has buried stops with the rest of the mark."));
-		ImGui::EndDisabled();
+			ImGui::Text("%s", T(TKEY("blood_spread_seconds_tooltip"), "A fresh mark does not appear all at once: it grows from its dense core to its thin fringe over this long. 0 = the whole mark at once."));
 		if (bloodTilesFailed)
-			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_tiles_status_failed"), "Detailed Blood Marks is NOT RUNNING: a texture or shader failed - see CommunityShaders.log. The blood map carries on alone."));
+			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_tiles_status_failed"), "The detailed blood marks are NOT RUNNING: a texture or shader failed - see CommunityShaders.log. The blood map carries on alone."));
 		if (bloodShadersFailed)
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
 		ImGui::TreePop();

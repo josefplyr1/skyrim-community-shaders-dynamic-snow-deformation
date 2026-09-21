@@ -6,8 +6,7 @@
 // blood map's texel is several units, a splatter's contours a fraction of
 // one, so ground that holds blood near the camera gets a tile of a fine
 // atlas. A tile is drawn into a scratch first; these passes fold the scratch
-// into the atlas, date the tile's clock blocks, and build the nearest-blood
-// field the shell grows the soak from.
+// into the atlas and date the tile's clock blocks.
 //
 // Pigment textures are read and written as raw UNORM bytes, sRGB-encoded:
 // the scratch is drawn through an sRGB view and the atlas sampled through
@@ -23,7 +22,7 @@ cbuffer BloodTileCB : register(b0)
 
 	float2 TileWorldMin;
 	float FineTexel;
-	int JfaStep;
+	int padStep;
 
 	// The blood map (SeedTileCS).
 	float2 WindowOrigin;
@@ -52,10 +51,6 @@ cbuffer BloodTileCB : register(b0)
 static const int kTileDim = 512;
 static const int kBlockTexels = 8;
 static const int kBlockShift = 3;
-static const uint kNoSeed = 0xFFFFFFFFu;
-// Concentration a texel needs to feed the soak: the solid mark, not its
-// faint fringe, so the halo inherits a colour worth spreading.
-static const float kSeedAlpha = 0.25;
 static const float kMinAlpha = 0.02;
 
 float3 LinearToSrgb(float3 c)
@@ -143,19 +138,21 @@ Texture2D<float4> PrevClock : register(t2);
 RWTexture2D<float4> Clock : register(u0);
 
 // Per block: x = burial clock and y = game hours of the newest deposit,
-// z = game hours of the oldest still showing (the soak grows from it),
+// z = game hours of the oldest still showing,
 // w = 1 when what lay here was buried for good and this merge replaces it.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
 {
 	const int blocks = kTileDim / kBlockTexels;
 	if (any(dtid.xy >= (uint)blocks))
 		return;
+	// One texel past the block on every side: the shell's filtered tap at a
+	// mark's rim reaches a texel into the next block, which must be dated too.
 	float2 newest = 0.0;
-	for (int y = 0; y < kBlockTexels; y++)
+	for (int y = -1; y <= kBlockTexels; y++)
 	{
-		for (int x = 0; x < kBlockTexels; x++)
+		for (int x = -1; x <= kBlockTexels; x++)
 		{
-			int3 p = int3(int2(dtid.xy) * kBlockTexels + int2(x, y), 0);
+			int3 p = int3(clamp(int2(dtid.xy) * kBlockTexels + int2(x, y), 0, kTileDim - 1), 0);
 			if (ScratchPigment.Load(p).a >= kMinAlpha)
 			{
 				float2 c = ScratchClock.Load(p);
@@ -264,73 +261,5 @@ RWTexture2D<float4> Dst : register(u0);
 	}
 	acc *= 0.25;
 	Dst[MipTexel + int2(dtid.xy)] = float4(LinearToSrgb(acc.rgb), acc.a);
-}
-#endif
-
-#if defined(JFA_INIT)
-Texture2D<float4> PigmentRaw : register(t0);
-RWTexture2D<uint> Dst : register(u0);
-
-[numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
-{
-	if (any(dtid.xy >= (uint)kTileDim))
-		return;
-	float a = PigmentRaw.Load(int3(TileTexel + int2(dtid.xy), 0)).a;
-	Dst[dtid.xy] = a >= kSeedAlpha ? (dtid.x | (dtid.y << 16)) : kNoSeed;
-}
-#endif
-
-#if defined(JFA_STEP)
-Texture2D<uint> Src : register(t0);
-RWTexture2D<uint> Dst : register(u0);
-
-[numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
-{
-	if (any(dtid.xy >= (uint)kTileDim))
-		return;
-	const int2 p = int2(dtid.xy);
-	uint best = kNoSeed;
-	int bestD = 0x7FFFFFFF;
-	for (int y = -1; y <= 1; y++)
-	{
-		for (int x = -1; x <= 1; x++)
-		{
-			int2 q = p + int2(x, y) * JfaStep;
-			if (any(q < 0) || any(q >= kTileDim))
-				continue;
-			uint s = Src.Load(int3(q, 0));
-			if (s == kNoSeed)
-				continue;
-			int2 d = int2(s & 0xFFFFu, s >> 16) - p;
-			int dd = d.x * d.x + d.y * d.y;
-			if (dd < bestD)
-			{
-				bestD = dd;
-				best = s;
-			}
-		}
-	}
-	Dst[dtid.xy] = best;
-}
-#endif
-
-#if defined(JFA_RESOLVE)
-Texture2D<uint> Src : register(t0);
-RWTexture2D<float4> Seeds : register(u0);
-
-// rg = offset to the nearest solid blood in texels, + 128; 0 = none in reach.
-[numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
-{
-	if (any(dtid.xy >= (uint)kTileDim))
-		return;
-	uint s = Src.Load(int3(dtid.xy, 0));
-	float4 o = 0.0;
-	if (s != kNoSeed)
-	{
-		int2 d = int2(s & 0xFFFFu, s >> 16) - int2(dtid.xy);
-		if (all(abs(d) <= 127))
-			o.xy = float2(d + 128) / 255.0;
-	}
-	Seeds[TileTexel + int2(dtid.xy)] = o;
 }
 #endif
