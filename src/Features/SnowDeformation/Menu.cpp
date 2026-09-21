@@ -525,6 +525,7 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttBloodSt = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_soak_seconds_tooltip"), "Seconds the soak takes to reach nearly its full Soak Reach: fast at first, then slowing. It runs on the game clock, so waiting, sleeping or fast travel finishes it, and blood the snow has buried stops with the rest of the mark."));
 		ImGui::EndDisabled();
+		ImGui::EndDisabled();
 		if (bloodTilesFailed)
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_tiles_status_failed"), "Detailed Blood Marks is NOT RUNNING: a texture or shader failed - see CommunityShaders.log. The blood map carries on alone."));
 		if (bloodShadersFailed)
