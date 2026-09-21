@@ -2749,14 +2749,10 @@ PS_OUTPUT main(VS_OUTPUT input)
 		paintRgb = lerp(paintRgb, paintRgb * float3(0.75, 0.55, 0.55), 1.0 - bloodFresh);
 		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(bloodPaint.a * BloodLook.x));
 	}
-	// A/B: the blood decals themselves, through the rune glyph's own code below.
-	const RuneGlyph bloodGlyph = SampleBloodDecals(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
-	const float bloodCover = max(max(blood.a, bloodPaint.a), bloodGlyph.colour.a);
+	const float bloodCover = max(blood.a, bloodPaint.a);
 	// A rune's glyph lies on the snow as the game's decal lies on the ground:
 	// its colour over the albedo by its alpha, its glow added after lighting.
 	RuneGlyph rune = SampleRunes(worldXYPS, ddx(worldXYPS), ddy(worldXYPS));
-	[branch] if (bloodGlyph.colour.a > rune.colour.a)
-		rune = bloodGlyph;
 	float3 runeEmission = rune.emission;
 	[branch] if (rune.colour.a > 0.004)
 	{

@@ -141,7 +141,6 @@
 	X(BloodAgeHours) \
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
-	X(BloodDirectDecals) \
 	X(BloodDetail) \
 	X(BloodDetailLevel) \
 	X(BloodSoakReach) \

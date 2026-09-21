@@ -45,10 +45,6 @@ void SnowDeformation::ReleaseBloodTiles()
 	if (bloodCoverPS)
 		bloodCoverPS->Release();
 	bloodCoverPS = nullptr;
-	if (bloodDecalPS)
-		bloodDecalPS->Release();
-	bloodDecalPS = nullptr;
-	bloodDecalsFailed = false;
 	bloodTilesFailed = false;
 }
 
@@ -681,20 +677,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	const uint32_t frame = globals::state->frameCount;
 	if (bloodTileStash.atlasSRV && frame > bloodTileStash.untilFrame)
 		bloodTileStash = {};
-	// The A/B switch: the two systems share the tile slots and nothing else.
-	if (bloodDirectLast != settings.BloodDirectDecals) {
-		bloodDirectLast = settings.BloodDirectDecals;
-		bloodTileStash = {};
-		bloodTileLevelLast = BloodDetailLevel();
-		DropBloodTiles();
-		bloodFineQueue.clear();
-		if (!bloodDirectLast)
-			ReleaseBloodDecalResources();
-	}
-	if (settings.BloodDirectDecals) {
-		RenderBloodDecalTiles();
-		return;
-	}
 	// Another level is another cell grid and another atlas. The old atlases
 	// are kept for a while: the new tiles are placed over the same ground and
 	// start from the old tiles' detail, and the decals still drawn take them
