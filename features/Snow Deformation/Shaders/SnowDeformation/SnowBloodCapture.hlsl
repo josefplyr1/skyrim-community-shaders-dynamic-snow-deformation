@@ -37,7 +37,8 @@ cbuffer BloodCB : register(b1)
 
 	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
 	// texel shows once its alpha exceeds (1 - reveal). y > 0.5 (overlay):
-	// leave pixels no coat drew on to the landscape shell.
+	// leave pixels no coat drew on to the landscape shell. z (DECAL): the
+	// decal's texture slot, (slot + 1) / 255.
 	float4 Spread;
 
 	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
@@ -296,6 +297,34 @@ float main(VS_OUTPUT input) : SV_Target0
 	if (fragDist > sceneDist + 2.0 + 0.004 * sceneDist)
 		discard;
 	return saturate(a);
+}
+#elif defined(PSHADER) && defined(DECAL)
+// DECAL: a blood decal's UV FIELD into a direct-decal tile (BloodDecals.cpp),
+// the rune tile's layout with a texture slot where the rune has "covered":
+// rg = the decal's uv here, b = its slot, a = the material's alpha this
+// frame. The shell samples the game's own texture through it. Where decals
+// overlap the one with more blood at the texel wins: depth = 1 - alpha.
+struct DECAL_OUTPUT
+{
+	float4 Field : SV_Target0;
+	float Depth : SV_Depth;
+};
+
+DECAL_OUTPUT main(VS_OUTPUT input)
+{
+	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
+		discard;
+	if (input.NormalZ < NormalZMin)
+		discard;
+	float a = Diffuse.Sample(LinearSampler, input.UV).a * MaterialAlpha;
+	[flatten] if (AlphaThreshold >= 0.0)
+		a = a >= AlphaThreshold ? 1.0 : 0.0;
+	if (a < 0.02)
+		discard;
+	DECAL_OUTPUT o;
+	o.Field = float4(saturate(input.UV), Spread.z, saturate(MaterialAlpha));
+	o.Depth = 1.0 - 0.999 * saturate(a);
+	return o;
 }
 #elif defined(PSHADER) && defined(COVER)
 // COVER: where a decal's geometry lies in a detail tile, its transparent

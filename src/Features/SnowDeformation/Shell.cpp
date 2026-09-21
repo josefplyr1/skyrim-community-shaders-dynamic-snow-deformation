@@ -1036,8 +1036,11 @@ void SnowDeformation::DrawShell()
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
 		gameClockHours.load(std::memory_order_relaxed), std::max(settings.BloodBurial, 0.01f) };
+	// z: the blood map is read. w: 1 = detail tiles, 2 = direct decals (which read neither the map nor the tiles' pigment).
+	const bool bloodDirect = settings.BloodOnSnow && BloodDirectLive();
 	cbData.BloodLook2 = { std::max(settings.BloodAgeHours, 0.1f), std::clamp(settings.BloodSheen, 0.0f, 1.0f),
-		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, BloodTilesLive() ? 1.0f : 0.0f };
+		(settings.BloodOnSnow && !settings.BloodDirectDecals && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f,
+		BloodTilesLive() ? (bloodDirect ? 2.0f : 1.0f) : 0.0f };
 	{
 		// Real seconds on the game clock: 3 time constants in the soak time.
 		const float soakHours = std::max(settings.BloodSoakSeconds, 0.1f) * gameClock.timescale / 3600.0f;
@@ -1462,8 +1465,17 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
 	// Blood detail tiles (t66-t69): cell index, pigment atlas, soak offsets, clock blocks.
-	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodTileAtlasSRV.get(), bloodTileSeedsSRV.get(), bloodTileClockSRV.get() };
+	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodDirect ? bloodDecalAtlasSRV.get() : bloodTileAtlasSRV.get(), bloodTileSeedsSRV.get(), bloodTileClockSRV.get() };
 	context->PSSetShaderResources(66, 4, bloodTileSRVs);
+	// Direct decals: the blood textures themselves (t105..) and their normal maps (t116..).
+	ID3D11ShaderResourceView* bloodDecalSRVs[2 * kBloodDecalTextures]{};
+	if (bloodDirect) {
+		for (uint32_t i = 0; i < kBloodDecalTextures; ++i) {
+			bloodDecalSRVs[i] = bloodDecalSlots[i].diffuse.get();
+			bloodDecalSRVs[kBloodDecalTextures + i] = bloodDecalSlots[i].normal.get();
+		}
+	}
+	context->PSSetShaderResources(105, 2 * kBloodDecalTextures, bloodDecalSRVs);
 	// Rune glyph atlas (t90) and its tile table (b7). Unbound reads as no tiles.
 	ID3D11ShaderResourceView* runeSRV = GetRuneAtlasSRV();
 	context->PSSetShaderResources(90, 1, &runeSRV);

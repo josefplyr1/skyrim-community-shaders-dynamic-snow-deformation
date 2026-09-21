@@ -483,9 +483,16 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
 		if (auto _ttBlood = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the landscape snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. On snow lying on objects (the recolored projected snow) the game's own decals are put back on top of the snow instead. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
+		ImGui::Checkbox(T(TKEY("blood_direct_decals"), "Paint Blood Decals Directly (A/B)"), &settings.BloodDirectDecals);
+		if (auto _ttBloodDd = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("blood_direct_decals_tooltip"), "Two ways to put blood on the landscape snow. ON: the snow shows the game's blood decals themselves - their own textures and normal maps, at full sharpness, exactly as it shows a rune's glyph - so whatever blood mod is installed is what you see, and a mark stays as long as the game keeps its decal. Nothing is stored: no drying, no burial under snowfall, no soak, and Detailed Blood Marks, Mark Detail, Soak Reach and Soak Time do nothing. OFF: the snow keeps its own copy of every mark (the detail tiles and the blood map), which outlives the decal, dries, and is buried by snowfall, at the copy's resolution. Landscape snow only either way."));
+		if (bloodDecalsFailed)
+			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_direct_status_failed"), "Paint Blood Decals Directly is NOT RUNNING: a texture or shader failed - see CommunityShaders.log."));
 		ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBloodI = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains the landscape shell. Object snow (the recolored projected snow) carries the game's own decal on top instead and is not stained. 1 takes the textures as authored; 2 doubles the soak."));
+		// The direct decals store nothing: no burial, drying, reveal, detail level or soak.
+		ImGui::BeginDisabled(settings.BloodDirectDecals);
 		ImGui::SliderFloat(T(TKEY("blood_burial"), "Snowfall Burial"), &settings.BloodBurial, 0.02f, 1.0f, "%.2f refills");
 		if (auto _ttBloodB = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_burial_tooltip"), "How much snowfall hides a mark for good, measured in trench refills: the same clock that fills a footprint back in. 0.15 = buried by a seventh of the snow that fills a trench, so a blizzard scrubs a battlefield in minutes while clear cold weather keeps it all session."));
@@ -1337,6 +1344,12 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_blood"), "Blood Decals"))) {
 			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
 			WrapTextDisabledF("%s", std::format("Detail tiles: {} of {} live, {} merged this frame; mark bounds {} from vertices, {} guessed", bloodTilesLive, BloodTileCount(), bloodTileMergesLast, bloodTileBoundsRead, bloodTileBoundsGuessed).c_str());
+			if (settings.BloodDirectDecals) {
+				uint32_t slotsUsed = 0;
+				for (const auto& slot : bloodDecalSlots)
+					slotsUsed += slot.diffuse ? 1u : 0u;
+				WrapTextDisabledF("%s", std::format("Direct decals: {} live, {} of {} texture slots, {} tile(s) redrawn this frame", bloodDecalLive.size(), slotsUsed, kBloodDecalTextures, bloodTileMergesLast).c_str());
+			}
 			ImGui::TreePop();
 		}
 

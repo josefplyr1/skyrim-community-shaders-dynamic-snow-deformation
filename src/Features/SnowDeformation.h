@@ -596,6 +596,8 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
+		/** @brief A/B: blood decals painted directly. The landscape shell samples the game's own blood textures and normal maps through a per-tile UV field, as it does a rune's glyph; nothing is stored, so a mark shows while the game draws its decal. Off = the detail tiles and the blood map. */
+		bool BloodDirectDecals = true;
 		/** @brief Blood detail tiles: ground holding blood near the camera keeps its marks at half a unit per texel instead of the blood map's several, so the landscape shell shows the decals' own contours. Off = the blood map alone. */
 		bool BloodDetail = true;
 		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel, sixteen tiles; 1 = 0.25 units, sixty-four tiles over the same ground, four times the memory. */
@@ -891,6 +893,8 @@ public:
 		bool mask = false;
 		/** @brief Burial clock and game hours when the mark was first seen; the detail tiles date it by these, so a redraw does not make it fresh again. */
 		float2 clock{ 0.0f, 0.0f };
+		/** @brief Direct decals: (texture slot + 1) / 255, written beside the uv. */
+		float slotCode = 0.0f;
 	};
 	std::vector<BloodCapture> bloodCaptures;
 	/** @brief Engine decals are baked geometry: one deposit per decal. Keyed by geometry, validated by its buffer and position. */
@@ -1051,7 +1055,7 @@ public:
 	static constexpr int kBloodDetailLevels = 2;
 	uint32_t BloodTilesAcross() const { return 4u << uint32_t(BloodDetailLevel()); }
 	uint32_t BloodTileCount() const { return BloodTilesAcross() * BloodTilesAcross(); }
-	int BloodDetailLevel() const { return std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1); }
+	int BloodDetailLevel() const { return settings.BloodDirectDecals ? 0 : std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1); }
 	/** @brief World units a texel of the detail tiles covers at the chosen level. */
 	float BloodTileTexel() const { return 0.5f / float(1 << BloodDetailLevel()); }
 	/** @brief World units of the cell a tile owns: the tile's span less its two aprons. The shell derives the apron back from the pair (ShellCB BloodLook3.zw). */
@@ -1077,6 +1081,10 @@ public:
 		bool discs = false;
 		/** @brief The tile began as a copy (the blood map's blobs, or another level's tiles): the merge clears copied texels under every decal drawn into it. */
 		bool seeded = false;
+		/** @brief Direct decals: what the tile was last drawn from, what lies in it this frame, and the last frame anything did. */
+		uint64_t decalHash = 0;
+		uint64_t decalHashNow = 0;
+		uint32_t decalFrame = 0;
 	};
 	struct BloodFineRequest
 	{
@@ -1193,7 +1201,8 @@ public:
 	winrt::com_ptr<ID3D11Buffer> bloodTileCB;
 	ID3D11ComputeShader* bloodTileCS[kBloodTileShaderCount]{};
 	ID3D11ComputeShader* GetBloodTileCS(BloodTileShader a_which);
-	bool BloodTilesWanted() const { return settings.BloodOnSnow && settings.BloodDetail && !bloodTilesFailed; }
+	bool BloodTilesWanted() const { return settings.BloodOnSnow && (settings.BloodDetail || settings.BloodDirectDecals) && !bloodTilesFailed; }
+	bool BloodDirectLive() const { return settings.BloodDirectDecals && !bloodDecalsFailed && bloodDecalAtlasSRV; }
 	bool BloodTilesLive() const { return BloodTilesWanted() && bloodTilesLive > 0 && bloodTileAtlasSRV; }
 	bool EnsureBloodTileResources();
 	void ReleaseBloodTiles();
@@ -1208,6 +1217,41 @@ public:
 	void SoakBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	/** @brief Draws this frame's detail requests into their tiles, then the soak field of tiles that changed. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
 	void RenderBloodTiles(const std::vector<BloodDisc>& a_discs);
+
+	// ---- Blood decals painted directly (BloodDecals.cpp; BLOOD-DESIGN.md "Direct decals") ----
+	/** @brief Distinct blood textures the shell can sample at once: diffuse at t105.., normal maps at t116... */
+	static constexpr uint32_t kBloodDecalTextures = 11;
+	struct BloodDecalLive
+	{
+		BloodCapture draw;
+		winrt::com_ptr<ID3D11ShaderResourceView> normal;
+		uint32_t lastFrame = 0;
+		int32_t slot = -1;
+	};
+	struct BloodDecalSlot
+	{
+		winrt::com_ptr<ID3D11ShaderResourceView> diffuse;
+		winrt::com_ptr<ID3D11ShaderResourceView> normal;
+		uint32_t lastFrame = 0;
+	};
+	std::unordered_map<const void*, BloodDecalLive> bloodDecalLive;
+	BloodDecalSlot bloodDecalSlots[kBloodDecalTextures];
+	winrt::com_ptr<ID3D11Texture2D> bloodDecalAtlas;
+	winrt::com_ptr<ID3D11ShaderResourceView> bloodDecalAtlasSRV;
+	winrt::com_ptr<ID3D11Texture2D> bloodDecalScratch;
+	winrt::com_ptr<ID3D11RenderTargetView> bloodDecalScratchRTV;
+	winrt::com_ptr<ID3D11Texture2D> bloodDecalDepth;
+	winrt::com_ptr<ID3D11DepthStencilView> bloodDecalDepthDSV;
+	winrt::com_ptr<ID3D11DepthStencilState> bloodDecalDepthState;
+	winrt::com_ptr<ID3D11BlendState> bloodDecalBlendState;
+	ID3D11PixelShader* bloodDecalPS = nullptr;
+	bool bloodDecalsFailed = false;
+	bool bloodDecalsLogged = false;
+	bool bloodDirectLast = false;
+	bool EnsureBloodDecalResources();
+	void ReleaseBloodDecalResources();
+	/** @brief The direct-decal path of RenderBloodTiles: uv-field tiles redrawn when what lies in them changes. */
+	void RenderBloodDecalTiles();
 
 	// ---- Rune decals on snow (BURIED-REF-LIFT-PLAN.md) ----
 	static constexpr uint32_t kRuneMaxTiles = 4;

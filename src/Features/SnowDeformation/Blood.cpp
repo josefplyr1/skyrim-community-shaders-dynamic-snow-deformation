@@ -489,6 +489,14 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	capture.reveal = 1.0f;
 	capture.skinned = a_skinned;
 	RegisterDecalOverlay(capture);
+	if (settings.BloodDirectDecals && BloodTilesWanted() && bloodDecalLive.size() < 512) {
+		auto& live = bloodDecalLive[geometry];
+		live.draw = capture;
+		live.normal = nullptr;
+		if (auto* normal = material->normalTexture.get(); normal && normal->rendererTexture && normal->rendererTexture->resourceView)
+			live.normal.copy_from(normal->rendererTexture->resourceView);
+		live.lastFrame = globals::state->frameCount;
+	}
 	if (!a_skinned) {
 		// Baked geometry: deposited while it spreads, then left alone. A
 		// pointer reused for a new decal fails the buffer-and-position check
@@ -517,12 +525,13 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		// tile under it was allocated after it finished. Not once snowfall
 		// has buried it: it would only win back the tile that burial freed.
 		const bool buried = bloodBurialClock - seen.firstClock.x >= std::max(settings.BloodBurial, 0.01f);
-		if (BloodTilesWanted() && !buried && bloodFineQueue.size() < 512 &&
+		if (BloodTilesWanted() && !settings.BloodDirectDecals && !buried && bloodFineQueue.size() < 512 &&
 			(revealing || ((seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame)))
 			bloodFineQueue.push_back({ capture, geometry, revealing });
 		if (!revealing)
 			return;
 	} else if (BloodTilesWanted() && bloodFineQueue.size() < 512) {
+		// (Direct decals need the entry too: it holds the mark's bounds.)
 		// Pool quads animate: the tiles follow every eighth frame for the
 		// first minute, by when a pool has stopped growing.
 		auto& seen = bloodSeen[geometry];
@@ -537,8 +546,10 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		capture.clock = seen.firstClock;
 		const bool growing = bloodRenderSeconds - seen.firstSeconds < 60.0;
 		if ((growing && ((frame + uint32_t(reinterpret_cast<uintptr_t>(geometry) >> 6)) & 7u) == 0) ||
-			(!growing && (seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame))
-			bloodFineQueue.push_back({ capture, geometry, growing });
+			(!growing && (seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame)) {
+			if (!settings.BloodDirectDecals)
+				bloodFineQueue.push_back({ capture, geometry, growing });
+		}
 	}
 	if (bloodCaptures.size() < 512)
 		bloodCaptures.push_back(std::move(capture));
@@ -1026,7 +1037,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.TexcoordOffset = capture.texcoord;
 		a_cb.MaterialAlpha = capture.alpha;
 		a_cb.AlphaThreshold = capture.alphaThreshold;
-		a_cb.Spread = { capture.reveal, 0.0f, 0.0f, 0.0f };
+		a_cb.Spread = { capture.reveal, 0.0f, capture.slotCode, 0.0f };
 		if (a_ownClock && capture.clock.y > 0.0f)
 			a_cb.ClockNow = capture.clock;
 		ID3D11ShaderResourceView* diffuse = capture.diffuse.get();
@@ -1174,7 +1185,7 @@ void SnowDeformation::RenderBloodCapture()
 		std::scoped_lock lock(bloodDiscMutex);
 		discs.swap(bloodDiscQueue);
 	}
-	const bool tileWork = !bloodFineQueue.empty() || bloodTilesLive > 0;
+	const bool tileWork = !bloodFineQueue.empty() || bloodTilesLive > 0 || !bloodDecalLive.empty();
 	if (!settings.BloodOnSnow || !bloodMapTexture || !bloodClockTexture || (bloodCaptures.empty() && discs.empty() && !tileWork) || !EnsureBloodResources()) {
 		bloodCaptures.clear();
 		bloodFineQueue.clear();
