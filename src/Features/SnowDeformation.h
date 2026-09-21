@@ -596,8 +596,6 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
-		/** @brief How fine the detail tiles are: 0 = 0.5 units a texel, sixteen tiles; 1 = 0.25 units, sixty-four tiles over the same ground, four times the memory. */
-		int BloodDetailLevel = 0;
 		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
@@ -1036,25 +1034,28 @@ public:
 
 	// ---- Blood detail tiles (BloodTiles.cpp; BLOOD-DESIGN.md "Detail tiles") ----
 	static constexpr uint32_t kBloodTileDim = 512;
-	/** @brief The atlas is 4 tiles a side at the standard level and 8 at the high one: a finer texel takes more tiles to hold the same ground. */
-	static constexpr uint32_t kBloodMaxTilesAcross = 8;
-	static constexpr uint32_t kBloodMaxTiles = kBloodMaxTilesAcross * kBloodMaxTilesAcross;
+	/** @brief 64 tiles of 512 x 512 at a quarter unit a texel: a 4096 atlas, about 90 MB with its mips and scratch, allocated when blood first appears. */
+	static constexpr uint32_t kBloodTilesAcross = 8;
+	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
+	static constexpr float kBloodTileTexel = 0.25f;
 	static constexpr uint32_t kBloodTileMips = 4;
 	/** @brief A tile owns a cell and carries an apron around it, so a filtered tap, mips included, never leaves the tile. */
 	static constexpr float kBloodTileApron = 4.0f;
-	static constexpr int kBloodDetailLevels = 2;
-	uint32_t BloodTilesAcross() const { return 4u << uint32_t(BloodDetailLevel()); }
-	uint32_t BloodTileCount() const { return BloodTilesAcross() * BloodTilesAcross(); }
-	int BloodDetailLevel() const { return std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1); }
-	/** @brief World units a texel of the detail tiles covers at the chosen level. */
-	float BloodTileTexel() const { return 0.5f / float(1 << BloodDetailLevel()); }
-	/** @brief World units of the cell a tile owns: the tile's span less its two aprons. The shell derives the apron back from the pair (ShellCB BloodLook3.zw). */
-	float BloodTileCell() const { return float(kBloodTileDim) * BloodTileTexel() - 2.0f * kBloodTileApron; }
-	int32_t BloodCellOf(float a_world) const { return int32_t(std::floor(a_world / BloodTileCell())); }
-	/** @brief Tiles are kept this many cells out: 4096 units, and never so far that two live cells share an entry of the 64-cell index torus. */
-	int32_t BloodTileKeepCells() const { return std::min(28, int32_t(std::ceil(4096.0f / BloodTileCell()))); }
+	/** @brief World units of the cell a tile owns: the tile's span less its two aprons, 120. The shell derives the apron back from cell and texel (ShellCB BloodLook3.zw). */
+	static constexpr float kBloodTileCell = float(kBloodTileDim) * kBloodTileTexel - 2.0f * kBloodTileApron;
+	/** @brief How far from the player ground may hold a tile: 100 m. Past it, and wherever the 64 tiles have run out nearer in, the shell reads the blood map. */
+	static constexpr float kBloodTileKeepUnits = 7000.0f;
+	static constexpr int32_t kBloodTileKeepCells = 59;
+	/** @brief Cell -> slot on a torus. Two live cells must never share an entry, so its side is more than twice the keep distance in cells. */
+	static constexpr int32_t kBloodTileIndexDim = 128;
+	static_assert(float(kBloodTileKeepCells) * kBloodTileCell >= kBloodTileKeepUnits && 2 * kBloodTileKeepCells + 1 <= kBloodTileIndexDim);
+	uint32_t BloodTilesAcross() const { return kBloodTilesAcross; }
+	uint32_t BloodTileCount() const { return kBloodMaxTiles; }
+	float BloodTileTexel() const { return kBloodTileTexel; }
+	float BloodTileCell() const { return kBloodTileCell; }
+	int32_t BloodCellOf(float a_world) const { return int32_t(std::floor(a_world / kBloodTileCell)); }
+	int32_t BloodTileKeepCells() const { return kBloodTileKeepCells; }
 	static constexpr uint32_t kBloodTileBlock = 8;
-	static constexpr int32_t kBloodTileIndexDim = 64;
 	struct BloodTile
 	{
 		bool live = false;
@@ -1091,13 +1092,6 @@ public:
 		int32_t MipTexel[2];
 		int32_t MipDim;
 		int32_t padTile;
-		float2 OldWorldMin;
-		float OldTexel;
-		float OldAtlasDim;
-		int32_t OldTileTexel[2];
-		int32_t OldTileBlock[2];
-		float2 OldCellMin;
-		float2 OldCellMax;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
 	enum BloodTileShader : uint32_t
@@ -1106,7 +1100,6 @@ public:
 		kBloodTileMergeClock,
 		kBloodTileMergePigment,
 		kBloodTileMipDown,
-		kBloodTileMigrate,
 		kBloodTileShaderCount
 	};
 	BloodTile bloodTiles[kBloodMaxTiles];
@@ -1125,31 +1118,10 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	bool bloodPreSkinDepthThisFrame = false;
-	int bloodTileLevelLast = 0;
-	/** @brief Level the tile textures were created for; -1 = none. */
-	int bloodTileResourcesLevel = -1;
-	/** @brief The previous level's atlases, kept for a while after a level change so the new tiles start from their detail instead of from the blood map's blobs. */
-	struct BloodTileStash
-	{
-		winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
-		winrt::com_ptr<ID3D11ShaderResourceView> clockSRV;
-		int level = 0;
-		uint32_t untilFrame = 0;
-		bool place = false;
-		struct Tile
-		{
-			int32_t cellX, cellY;
-			uint32_t slot;
-		};
-		std::vector<Tile> tiles;
-	};
-	BloodTileStash bloodTileStash;
 	winrt::com_ptr<ID3D11Texture2D> bloodTileCover;
 	winrt::com_ptr<ID3D11RenderTargetView> bloodTileCoverRTV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileCoverSRV;
 	ID3D11PixelShader* bloodCoverPS = nullptr;
-	void MigrateBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
-	void ReleaseBloodTileTextures();
 	/** @brief The tile's own mip chain from its mip 0, through a scratch copy per level. Run with every merge: past a few metres the shell reads the mips, not mip 0. */
 	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
 	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;

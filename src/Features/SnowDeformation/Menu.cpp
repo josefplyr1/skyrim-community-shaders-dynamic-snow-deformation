@@ -156,7 +156,7 @@ void SnowDeformation::DrawSettings()
 	// The six performance levers in one click (FPS-STABILISATION-PLAN.md
 	// §7.2 vectors); nothing else is touched.
 	{
-		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow, int a_bloodDetail) {
+		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow) {
 			if (settings.DeformMapResolution != a_mapDim) {
 				settings.DeformMapResolution = a_mapDim;
 				deformMapDimDirty = true;
@@ -169,7 +169,6 @@ void SnowDeformation::DrawSettings()
 			settings.Tessellation = a_tess;
 			settings.ParallaxDepth = a_parallaxDepth;
 			settings.ParallaxShadowStrength = a_parallaxShadow;
-			settings.BloodDetailLevel = a_bloodDetail;
 		};
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
@@ -177,16 +176,16 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the six performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, Tessellate Trenches and the two Parallax dials. Everything else keeps its value, and any of the seven can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_low"), "Low")))
-			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f, 0);
+			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_medium"), "Medium")))
-			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f, 0);
+			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_high"), "High")))
-			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f, 1);
+			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f, 1);
+			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f);
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
@@ -483,14 +482,7 @@ void SnowDeformation::DrawSettings()
 	if (ImGui::TreeNodeEx(T(TKEY("menu_blood_splatter"), "Blood Splatter"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
 		if (auto _ttBlood = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied into a blood map the moment they appear, and the landscape snow shades as blood soaked into it: pink at the fringe, dark red in the pool, the sparkle gone. On snow lying on objects (the recolored projected snow) the game's own decals are put back on top of the snow instead. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
-		{
-			const char* levels[] = { "Standard (0.5 units)", "High (0.25 units, 4x memory)" };
-			settings.BloodDetailLevel = std::clamp(settings.BloodDetailLevel, 0, kBloodDetailLevels - 1);
-			ImGui::Combo(T(TKEY("blood_detail_level"), "Mark Detail"), &settings.BloodDetailLevel, levels, kBloodDetailLevels);
-			if (auto _ttBloodDl = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("blood_detail_level_tooltip"), "How sharp the marks on the landscape snow are. Ground that holds blood near you keeps it in patches of its own, so the snow shows the decal's contours - droplets, streaks and all - instead of the blood map's soft blob; marks farther out fall back to that map. Both levels hold the same ground; High holds it at twice the sharpness in four times the patches, so it costs four times the video memory: about 25 MB at Standard, about 90 MB at High, allocated when blood first appears. The quality presets pick Standard at Low and Medium and High at High and Ultra. Changing it carries the marks over."));
-		}
+			ImGui::Text("%s", T(TKEY("blood_on_snow_tooltip"), "Every blood mod paints the ground, which the snow covers, so a kill in a snowfield left nothing to see. On, the game's blood decals and pool quads (vanilla, Enhanced Blood Textures, Sanguine Symphony, Dynamic Bloodpool Framework - anything whose texture is a blood texture) are copied the moment they appear, and the landscape snow shows them: within 100 m of you as the marks themselves, droplets and streaks at a quarter of a unit, painted on the snow; farther out, and where a very large battle runs past what that layer can hold, as a soft stain soaked into it. On snow lying on objects (the recolored projected snow) the game's own decals are put back on top of the snow instead. Wounds on bodies and sprays on walls stay the game's own. Marks last until snowfall buries them or the map scrolls away; digging finds the game's stain on the ground beneath."));
 		ImGui::SliderFloat(T(TKEY("blood_intensity"), "Blood Intensity"), &settings.BloodIntensity, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBloodI = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("blood_intensity_tooltip"), "How much blood each mark deposits and how strongly it stains the landscape shell. Object snow (the recolored projected snow) carries the game's own decal on top instead and is not stained. 1 takes the textures as authored; 2 doubles the soak."));

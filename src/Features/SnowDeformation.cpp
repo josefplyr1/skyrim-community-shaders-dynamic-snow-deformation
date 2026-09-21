@@ -141,7 +141,6 @@
 	X(BloodAgeHours) \
 	X(BloodSheen) \
 	X(BloodSpreadSeconds) \
-	X(BloodDetailLevel) \
 	X(DeformMapResolution) \
 	X(RangeTrenchesM) \
 	X(RangeSkinsM) \

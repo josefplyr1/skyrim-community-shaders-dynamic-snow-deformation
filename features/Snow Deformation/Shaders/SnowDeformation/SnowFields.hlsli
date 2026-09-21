@@ -587,10 +587,9 @@ void SampleBloodTiles(float2 worldXY, float2 worldDx, float2 worldDy, inout floa
 		const float kBloodTileCell = BloodLook3.z;
 		const float kBloodTileTexel = BloodLook3.w;
 		const float kBloodTileApron = 0.5 * (float(kBloodTileDim) * kBloodTileTexel - kBloodTileCell);
-		// 4 tiles a side at 0.5 units a texel, 8 at 0.25.
-		const uint kBloodTilesAcross = (uint)round(2.0 / kBloodTileTexel);
+		const uint kBloodTilesAcross = 8u;
 		const int2 cell = (int2)floor(worldXY / kBloodTileCell);
-		const uint slot1 = BloodTileIndex.Load(int3(cell & 63, 0));
+		const uint slot1 = BloodTileIndex.Load(int3(cell & 127, 0));
 		[branch] if (slot1 != 0u)
 		{
 			const uint slot = slot1 - 1u;

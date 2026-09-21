@@ -14,8 +14,9 @@
 
 // Blood detail tiles (BLOOD-DESIGN.md "Detail tiles"). The blood map's texel
 // is several units; a splatter's contours are a fraction of one. Ground that
-// holds blood near the camera gets a tile of a 4x4 atlas at half a unit per
-// texel, world-anchored on a cell grid and kept while it is among the nearest.
+// holds blood within 100 m of the player gets a tile of an 8x8 atlas at a
+// quarter unit per texel, world-anchored on a cell grid and kept while it is
+// among the nearest.
 // A tile is persistent like the map: decals deposit while they spread, and
 // again when a tile under them is allocated later. The landscape shell reads
 // a tile in place of the map wherever one lies.
@@ -25,7 +26,7 @@
 
 ID3D11ComputeShader* SnowDeformation::GetBloodTileCS(BloodTileShader a_which)
 {
-	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN", "MIGRATE" };
+	static constexpr const char* defines[kBloodTileShaderCount] = { "SEED_TILE", "MERGE_CLOCK", "MERGE_PIGMENT", "MIP_DOWN" };
 	if (!bloodTileCS[a_which]) {
 		logger::debug("Compiling BloodTilesCS:{}", defines[a_which]);
 		bloodTileCS[a_which] = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BloodTilesCS.hlsl", { { defines[a_which], "" } }, "cs_5_0"));
@@ -46,36 +47,6 @@ void SnowDeformation::ReleaseBloodTiles()
 	bloodTilesFailed = false;
 }
 
-void SnowDeformation::ReleaseBloodTileTextures()
-{
-	bloodTileAtlas = nullptr;
-	bloodTileAtlasSRV = nullptr;
-	bloodTileAtlasRawSRV = nullptr;
-	for (auto& view : bloodTileAtlasUAV)
-		view = nullptr;
-	bloodTileClock = nullptr;
-	bloodTileClockSRV = nullptr;
-	bloodTileClockUAV = nullptr;
-	bloodTileIndex = nullptr;
-	bloodTileIndexSRV = nullptr;
-	bloodTileScratch = nullptr;
-	bloodTileScratchRTV = nullptr;
-	bloodTileScratchRawSRV = nullptr;
-	bloodTileScratchClock = nullptr;
-	bloodTileScratchClockRTV = nullptr;
-	bloodTileScratchClockSRV = nullptr;
-	bloodTilePrev = nullptr;
-	bloodTilePrevRawSRV = nullptr;
-	bloodTilePrevClock = nullptr;
-	bloodTilePrevClockSRV = nullptr;
-	bloodTileCover = nullptr;
-	bloodTileCoverRTV = nullptr;
-	bloodTileCoverSRV = nullptr;
-	bloodTileCB = nullptr;
-	bloodTileResourcesLevel = -1;
-	bloodTileIndexDirty = true;
-}
-
 void SnowDeformation::DropBloodTiles()
 {
 	for (auto& tile : bloodTiles) {
@@ -91,12 +62,10 @@ bool SnowDeformation::EnsureBloodTileResources()
 {
 	if (bloodTilesFailed)
 		return false;
-	if (bloodTileCB && bloodTileResourcesLevel == BloodDetailLevel())
+	if (bloodTileCB)
 		return true;
-	// The atlases are sized by the level.
-	ReleaseBloodTileTextures();
 	// fxc-reflected offsets (BloodTilesCS.hlsl; ShellCB in both shells).
-	static_assert(sizeof(BloodTileCB) == 128);
+	static_assert(sizeof(BloodTileCB) == 80);
 	static_assert(offsetof(ShellCB, BloodLook3) == 784);
 	auto* device = globals::d3d::device;
 	bool ok = true;
@@ -230,7 +199,6 @@ bool SnowDeformation::EnsureBloodTileResources()
 	context->ClearUnorderedAccessViewFloat(bloodTileClockUAV.get(), zero);
 	bloodTileIndexDirty = true;
 	bloodTileCB = cb;
-	bloodTileResourcesLevel = BloodDetailLevel();
 	logger::info("[SNOW DEFORMATION] blood detail tiles ready: {} tiles of {}x{} at {} u/texel", BloodTileCount(), kBloodTileDim, kBloodTileDim, BloodTileTexel());
 	return true;
 }
@@ -394,54 +362,8 @@ void SnowDeformation::SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_s
 	a_context->CSSetShader(GetBloodTileCS(kBloodTileSeed), nullptr, 0);
 	a_context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
 	UnbindCompute(a_context);
-	MigrateBloodTile(a_context, a_slot);
 	// Or the shell reads the slot's last tenant from the mips.
 	BuildBloodTileMips(a_context, a_slot);
-}
-
-// After a detail level change: every tile of the previous level whose cell
-// reaches into this tile is resampled over the map's seed.
-void SnowDeformation::MigrateBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot)
-{
-	const auto& stash = bloodTileStash;
-	if (!stash.atlasSRV || !stash.clockSRV || stash.tiles.empty())
-		return;
-	BloodTileCB cb{};
-	FillBloodTileCB(cb, a_slot);
-	const float span = float(kBloodTileDim) * BloodTileTexel();
-	const float oldTexel = 0.5f / float(1 << stash.level);
-	const float oldCell = float(kBloodTileDim) * oldTexel - 2.0f * kBloodTileApron;
-	const uint32_t oldAcross = 4u << uint32_t(stash.level);
-	bool bound = false;
-	for (const auto& old : stash.tiles) {
-		const float2 cellMin{ float(old.cellX) * oldCell, float(old.cellY) * oldCell };
-		const float2 cellMax{ cellMin.x + oldCell, cellMin.y + oldCell };
-		if (cellMax.x <= cb.TileWorldMin.x || cellMin.x >= cb.TileWorldMin.x + span || cellMax.y <= cb.TileWorldMin.y || cellMin.y >= cb.TileWorldMin.y + span)
-			continue;
-		cb.OldWorldMin = { cellMin.x - kBloodTileApron, cellMin.y - kBloodTileApron };
-		cb.OldTexel = oldTexel;
-		cb.OldAtlasDim = float(kBloodTileDim * oldAcross);
-		cb.OldTileTexel[0] = int32_t((old.slot % oldAcross) * kBloodTileDim);
-		cb.OldTileTexel[1] = int32_t((old.slot / oldAcross) * kBloodTileDim);
-		cb.OldTileBlock[0] = cb.OldTileTexel[0] / int32_t(kBloodTileBlock);
-		cb.OldTileBlock[1] = cb.OldTileTexel[1] / int32_t(kBloodTileBlock);
-		cb.OldCellMin = cellMin;
-		cb.OldCellMax = cellMax;
-		UploadTileCB(a_context, bloodTileCB.get(), cb);
-		if (!bound) {
-			bound = true;
-			ID3D11ShaderResourceView* srvs[2] = { stash.atlasSRV.get(), stash.clockSRV.get() };
-			ID3D11UnorderedAccessView* uavs[2] = { bloodTileAtlasUAV[0].get(), bloodTileClockUAV.get() };
-			ID3D11SamplerState* sampler = bloodSampler.get();
-			a_context->CSSetShaderResources(0, 2, srvs);
-			a_context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
-			a_context->CSSetSamplers(0, 1, &sampler);
-			a_context->CSSetShader(GetBloodTileCS(kBloodTileMigrate), nullptr, 0);
-		}
-		a_context->Dispatch(kBloodTileDim / 8, kBloodTileDim / 8, 1);
-	}
-	if (bound)
-		UnbindCompute(a_context);
 }
 
 void SnowDeformation::MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs)
@@ -595,29 +517,7 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		return;
 	}
 	const uint32_t frame = globals::state->frameCount;
-	if (bloodTileStash.atlasSRV && frame > bloodTileStash.untilFrame)
-		bloodTileStash = {};
-	// Another level is another cell grid and another atlas. The old atlases
-	// are kept for a while: the new tiles are placed over the same ground and
-	// start from the old tiles' detail, and the decals still drawn take them
-	// again at the new level.
-	if (bloodTileLevelLast != BloodDetailLevel()) {
-		bloodTileStash = {};
-		if (bloodTilesLive && bloodTileAtlasSRV && bloodTileClockSRV && bloodTileResourcesLevel == bloodTileLevelLast) {
-			bloodTileStash.atlasSRV = bloodTileAtlasSRV;
-			bloodTileStash.clockSRV = bloodTileClockSRV;
-			bloodTileStash.level = bloodTileLevelLast;
-			bloodTileStash.untilFrame = frame + 1800;
-			bloodTileStash.place = true;
-			for (uint32_t i = 0; i < kBloodMaxTiles; ++i)
-				if (bloodTiles[i].live)
-					bloodTileStash.tiles.push_back({ bloodTiles[i].cellX, bloodTiles[i].cellY, i });
-		}
-		bloodTileLevelLast = BloodDetailLevel();
-		DropBloodTiles();
-		bloodFineQueue.clear();
-	}
-	if (bloodFineQueue.empty() && bloodTilesLive == 0 && !bloodTileStash.place)
+	if (bloodFineQueue.empty() && bloodTilesLive == 0)
 		return;
 	// The prime's last group compiles the tile computes; marks ask again.
 	if (SnowShadersPending(3)) {
@@ -665,34 +565,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	uint32_t seeded[kBloodMaxTiles];
 	uint32_t seededCount = 0;
 
-	// After a level change: tiles over the ground the old ones held, nearest
-	// the player first, until the slots run out.
-	if (bloodTileStash.place) {
-		bloodTileStash.place = false;
-		const float oldTexel = 0.5f / float(1 << bloodTileStash.level);
-		const float oldCell = float(kBloodTileDim) * oldTexel - 2.0f * kBloodTileApron;
-		auto ordered = bloodTileStash.tiles;
-		std::sort(ordered.begin(), ordered.end(), [&](const auto& a_left, const auto& a_right) {
-			auto away = [&](const auto& a_tile) {
-				const float dx = (float(a_tile.cellX) + 0.5f) * oldCell - eye.x;
-				const float dy = (float(a_tile.cellY) + 0.5f) * oldCell - eye.y;
-				return dx * dx + dy * dy;
-			};
-			return away(a_left) < away(a_right);
-		});
-		for (const auto& old : ordered) {
-			const float x = float(old.cellX) * oldCell, y = float(old.cellY) * oldCell;
-			for (int32_t cy = BloodCellOf(y); cy <= BloodCellOf(y + oldCell - 0.01f); ++cy) {
-				for (int32_t cx = BloodCellOf(x); cx <= BloodCellOf(x + oldCell - 0.01f); ++cx) {
-					if (FindBloodTile(cx, cy) >= 0)
-						continue;
-					const int32_t slot = AllocateBloodTile(cx, cy, cameraCellX, cameraCellY);
-					if (slot >= 0 && seededCount < kBloodMaxTiles)
-						seeded[seededCount++] = uint32_t(slot);
-				}
-			}
-		}
-	}
 	for (auto& request : bloodFineQueue) {
 		auto found = bloodSeen.find(request.key);
 		if (found == bloodSeen.end() || !request.draw.geometry)
@@ -761,8 +633,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		context->CSGetConstantBuffers(0, 1, savedCB.put());
 		ID3D11ShaderResourceView* savedSRVs[4]{};
 		context->CSGetShaderResources(0, 4, savedSRVs);
-		winrt::com_ptr<ID3D11SamplerState> savedSampler;
-		context->CSGetSamplers(0, 1, savedSampler.put());
 		ID3D11UnorderedAccessView* savedUAVs[2]{};
 		context->CSGetUnorderedAccessViews(0, 2, savedUAVs);
 		winrt::com_ptr<ID3D11RasterizerState> savedRaster;
@@ -793,8 +663,6 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 		ID3D11Buffer* restoreCB = savedCB.get();
 		context->CSSetConstantBuffers(0, 1, &restoreCB);
 		context->CSSetShaderResources(0, 4, savedSRVs);
-		ID3D11SamplerState* restoreSampler = savedSampler.get();
-		context->CSSetSamplers(0, 1, &restoreSampler);
 		context->CSSetUnorderedAccessViews(0, 2, savedUAVs, nullptr);
 		for (auto* view : savedSRVs)
 			if (view)
@@ -813,8 +681,8 @@ void SnowDeformation::RenderBloodTiles(const std::vector<BloodDisc>& a_discs)
 	}
 
 	if (bloodTileIndexDirty) {
-		// Cell -> slot + 1 on a 64-cell torus; every live tile lies within 24
-		// cells of the camera, so no two share an entry.
+		// Cell -> slot + 1 on a torus wider than twice the keep distance, so no
+		// two live tiles share an entry.
 		uint8_t table[kBloodTileIndexDim * kBloodTileIndexDim]{};
 		for (uint32_t i = 0; i < kBloodMaxTiles; ++i) {
 			if (!bloodTiles[i].live)

@@ -37,15 +37,6 @@ cbuffer BloodTileCB : register(b0)
 	int2 MipTexel;
 	int MipDim;
 	int padTile;
-
-	// MIGRATE: one tile of the previous detail level.
-	float2 OldWorldMin;
-	float OldTexel;
-	float OldAtlasDim;
-	int2 OldTileTexel;
-	int2 OldTileBlock;
-	float2 OldCellMin;
-	float2 OldCellMax;
 }
 
 static const int kTileDim = 512;
@@ -64,8 +55,8 @@ float3 SrgbToLinear(float3 c)
 }
 
 // The concentration's low bit says where a texel came from: odd = a decal was
-// drawn here, even = copied in (the blood map's blobs, another level's
-// tiles). A copy is what the merge may clear under a decal; a deposit never.
+// drawn here, even = copied in from the blood map when the tile was
+// allocated. A copy is what the merge may clear under a decal; a deposit never.
 float CopiedAlpha(float a)
 {
 	return float((uint)round(saturate(a) * 255.0) & ~1u) / 255.0;
@@ -208,38 +199,6 @@ RWTexture2D<float4> Pigment : register(u0);
 		o = float4(LinearToSrgb(SrgbToLinear(n.rgb) * a), a);
 	}
 	Pigment[TileTexel + int2(dtid.xy)] = o;
-}
-#endif
-
-#if defined(MIGRATE)
-Texture2D<float4> OldPigment : register(t0);
-Texture2D<float4> OldClock : register(t1);
-SamplerState LinearClamp : register(s0);
-RWTexture2D<float4> Pigment : register(u0);
-RWTexture2D<float4> Clock : register(u1);
-
-// A detail level change: the ground one old tile's cell held, resampled into
-// this tile, over whatever the blood map seeded there. Copied, not deposited:
-// decals the game still has redraw themselves at the new level over it.
-[numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
-{
-	if (any(dtid.xy >= (uint)kTileDim))
-		return;
-	float2 world = TileWorldMin + (float2(dtid.xy) + 0.5) * FineTexel;
-	if (any(world < OldCellMin) || any(world >= OldCellMax))
-		return;
-	float2 oldLocal = (world - OldWorldMin) / OldTexel;
-	float lod = max(log2(FineTexel / OldTexel), 0.0);
-	float4 s = OldPigment.SampleLevel(LinearClamp, (float2(OldTileTexel) + oldLocal) / OldAtlasDim, lod);
-	float4 o = 0.0;
-	if (s.a > kMinAlpha)
-		o = float4(LinearToSrgb(s.rgb), CopiedAlpha(s.a));
-	Pigment[TileTexel + int2(dtid.xy)] = o;
-	if (all(gtid.xy == 3u))
-	{
-		float4 c = OldClock.Load(int3(OldTileBlock + (int2(oldLocal) >> kBlockShift), 0));
-		Clock[TileBlock + (int2(dtid.xy) >> kBlockShift)] = float4(c.xyz, 0.0);
-	}
 }
 #endif
 
