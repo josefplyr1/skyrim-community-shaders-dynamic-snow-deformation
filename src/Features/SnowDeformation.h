@@ -596,7 +596,7 @@ public:
 		float BloodSheen = 0.5f;
 		/** @brief Seconds a fresh mark takes to spread to its full shape: the dense core first, the thin fringe last. 0 = at once. */
 		float BloodSpreadSeconds = 1.5f;
-		/** @brief Deformation map resolution (1024/2048/4096, snapped to pow2 - the toroidal mask requires it). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 / 4.71 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
+		/** @brief Deformation map resolution (1024 or 2048, snapped to pow2 - the toroidal mask requires it; 4096 was offered until 2026-09-21 and retired: trenches looked worse at it and it cost 4.71 ms). The performance side of trench detail: cost scales quadratically (S0: 0.29 / ~1.1 ms full-map at the anchor), texel size scales with it and with the Trenches range. Applies like a range change: recreate + clear, the store re-injects. Promoted from the S0 debug combo once S3 made it a real perf lever. */
 		uint32_t DeformMapResolution = 2048;
 		/** @brief Render distances in meters (converted via kUnitsPerMeter). The shell itself auto-sizes to the loaded-cell grid (no slider); Trenches resizes the deformation window and clears the map on apply (content is scale-relative). */
 		float RangeTrenchesM = 125.0f;

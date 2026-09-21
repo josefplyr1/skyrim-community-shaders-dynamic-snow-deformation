@@ -185,7 +185,7 @@ void SnowDeformation::DrawSettings()
 			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(4096u, 125.0f, 750.0f, true, 1.0f, 0.5f);
+			applyPreset(2048u, 125.0f, 750.0f, true, 1.0f, 0.5f);
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
@@ -707,9 +707,9 @@ void SnowDeformation::DrawSettings()
 		// change: the map clears and the trench store re-injects what it
 		// remembers.
 		{
-			static const uint kMapDims[] = { 1024u, 2048u, 4096u };
-			int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : (settings.DeformMapResolution >= 4096u ? 2 : 1);
-			if (ImGui::Combo(T(TKEY("map_resolution"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0" "4096\0")) {
+			static const uint kMapDims[] = { 1024u, 2048u };
+			int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : 1;
+			if (ImGui::Combo(T(TKEY("map_resolution"), "Deformation Map Resolution"), &dimIndex, "1024\0" "2048\0")) {
 				settings.DeformMapResolution = kMapDims[dimIndex];
 				deformMapDimDirty = true;
 			}

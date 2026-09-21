@@ -676,9 +676,11 @@ void SnowDeformation::ApplyRangeSettings()
 	// companions) and clears, and the store re-injects what it holds.
 	if (deformMapDimDirty || !rangeInitApplied) {
 		// Snapped to a power of two - the toroidal mask requires it. The
-		// combo only offers these three; this guards a hand-edited JSON.
-		const uint clamped = std::clamp(settings.DeformMapResolution, 1024u, 4096u);
-		const uint desired = clamped >= 4096u ? 4096u : (clamped >= 2048u ? 2048u : 1024u);
+		// combo only offers these two; this guards a hand-edited JSON and a
+		// file saved while 4096 was still offered, and writes the value back
+		// so the next save holds what is running.
+		const uint desired = settings.DeformMapResolution >= 2048u ? 2048u : 1024u;
+		settings.DeformMapResolution = desired;
 		if (desired != deformMapDim) {
 			deformMapDim = desired;
 			CreateDeformationTextures();
