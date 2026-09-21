@@ -2156,7 +2156,11 @@ static const float kShellClampOccluderSlack = 8.0;
 // a low wall reads at the wall's height, so the clamp fired anyway and the
 // caps stayed dark (Josef, 2026-09-08). Outside the terrain window, and over
 // missing data, this says nothing and the clamp keeps its old behaviour.
-float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ)
+//
+// A projected-snow static (Masks.y >= 2; land keeps (0, 1]) is an occluder at
+// any height: its foot stands inside the slack, and a sheet clamped over it
+// reads the cascades from inside the object - a dark rim past 4000 units.
+float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ, float2 pixel)
 {
 	float3 sceneRel = worldPosRel * (sceneZ / max(shellZ, 1e-3));
 	float2 sceneLocal = sceneRel.xy + ShellCameraPosAdjust.xy - GridOrigin;
@@ -2164,7 +2168,9 @@ float ShellSceneAboveSnowLine(float3 worldPosRel, float sceneZ, float shellZ)
 	bool inWindow = all(tt >= 0.0) && all(tt <= (float)(TerrainDim - 1));
 	float3 st = SampleTerrain(sceneLocal);
 	float above = (sceneRel.z + ShellCameraPosAdjust.z) - (st.x + max(st.y, 0.0));
-	return (inWindow && st.x > -50000.0) ? above : 0.0;
+	above = (inWindow && st.x > -50000.0) ? above : 0.0;
+	bool sceneIsStatic = LandMasksCopy.Load(int3(pixel, 0)).y >= 1.5;
+	return sceneIsStatic ? 1e6 : above;
 }
 
 float ShellExportDepth(float rasterZ, float rawSceneDepth, float shellZ, float sceneZ, float pixelEffDepth, float pixelCarve, float sceneAbove)
@@ -2472,7 +2478,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 #ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
-	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
+	prepassOut.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
 	return prepassOut;
 #endif
 #ifndef SNOW_SHELL_DEPTH_PREPASS
@@ -3343,7 +3349,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	// FAR FIELD ONLY: it cannot tell a legitimate occluder from a coincident
 	// terrain surface, so anything standing in the snow would be overdrawn.
 #	ifndef SNOW_SHELL_NO_DEPTH_EXPORT
-	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ));
+	psout.DepthLE = ShellExportDepth(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, ShellSceneAboveSnowLine(input.WorldPos, sceneZ, shellZ, input.Position.xy));
 #	endif
 
 	return psout;
