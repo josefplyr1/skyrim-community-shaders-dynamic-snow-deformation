@@ -153,10 +153,9 @@ void SnowDeformation::DrawSettings()
 
 	ImGui::Checkbox(T(TKEY("enable"), "Enable Snow Deformation"), &settings.EnableSnowDeformation);
 
-	// The six performance levers in one click (FPS-STABILISATION-PLAN.md
-	// §7.2 vectors); nothing else is touched.
+	// Quality presets: vectors from the 2026-09-20 sweep (FPS-STABILISATION-PLAN.md §7.2).
 	{
-		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, bool a_tess, float a_parallaxDepth, float a_parallaxShadow) {
+		auto applyPreset = [&](uint a_mapDim, float a_trenchesM, float a_skinsM, float a_parallaxDepth, float a_parallaxShadow, float a_skinTessCapPx) {
 			if (settings.DeformMapResolution != a_mapDim) {
 				settings.DeformMapResolution = a_mapDim;
 				deformMapDimDirty = true;
@@ -166,26 +165,28 @@ void SnowDeformation::DrawSettings()
 				trenchRangeDirty = true;
 			}
 			settings.RangeSkinsM = a_skinsM;
-			settings.Tessellation = a_tess;
+			settings.Tessellation = true;
 			settings.ParallaxDepth = a_parallaxDepth;
 			settings.ParallaxShadowStrength = a_parallaxShadow;
+			settings.SkinTessCapPx = a_skinTessCapPx;
+			settings.VolumeSnow = false;
 		};
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the six performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, Tessellate Trenches and the two Parallax dials. Everything else keeps its value, and any of the seven can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click: Deformation Map Resolution, the two Distant Snow ranges, the two Parallax dials and the Object Snow Tessellation Cap. The Trenches range is the main cost; the rest is small. Every preset also turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value, and any of these can still be tweaked afterwards. Ultra assumes upscaling. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_low"), "Low")))
-			applyPreset(1024u, 60.0f, 100.0f, false, 0.0f, 0.0f);
+			applyPreset(1024u, 60.0f, 100.0f, 0.0f, 0.0f, 24.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_medium"), "Medium")))
-			applyPreset(2048u, 80.0f, 150.0f, true, 0.33f, 0.15f);
+			applyPreset(2048u, 75.0f, 150.0f, 1.0f, 0.5f, 20.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_high"), "High")))
-			applyPreset(2048u, 100.0f, 250.0f, true, 0.66f, 0.25f);
+			applyPreset(2048u, 95.0f, 250.0f, 1.0f, 0.5f, 16.0f);
 		ImGui::SameLine();
 		if (ImGui::Button(T(TKEY("preset_ultra"), "Ultra")))
-			applyPreset(2048u, 125.0f, 750.0f, true, 1.0f, 0.5f);
+			applyPreset(2048u, 125.0f, 750.0f, 1.0f, 0.5f, 16.0f);
 	}
 
 	if (ImGui::TreeNodeEx(T(TKEY("general_settings"), "General Settings"), ImGuiTreeNodeFlags_Framed)) {
