@@ -1233,7 +1233,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	const auto& rangeBound = a_pass->geometry->worldBound;
 	float dx = rangeBound.center.x - eye.x;
 	float dy = rangeBound.center.y - eye.y;
-	const float captureRange = settings.RangeSkinsM * kUnitsPerMeter + std::max(rangeBound.radius, 0.0f);
+	const float captureRange = SkinFadeEndUnits() + std::max(rangeBound.radius, 0.0f);
 	// Road skins belong to the ground: no Object Snow range cap, no distance dissolve.
 	if (!fadeExempt && !fullCoat && !road && dx * dx + dy * dy > captureRange * captureRange) {
 		LogCaptureVerdict(a_pass, "rejected: range cap despite family signal (fadeExempt did not fire)");
@@ -2704,6 +2704,7 @@ void SnowDeformation::RenderObjectHeightMap()
 			mix(&exclusionCount, sizeof(exclusionCount));
 			if (h != exclusionListHash || !doorsCBUploaded) {
 				doorsCB->Update(exclusionData);
+				exclusionListBuffer->Update(&exclusionData, sizeof(float4) * kMaxExclusions * 2);
 				doorsCBUploaded = true;
 			}
 			exclusionListHash = h;
@@ -2713,8 +2714,23 @@ void SnowDeformation::RenderObjectHeightMap()
 		RenderExclusionField(exclusionData);
 	}
 
+	// A capture wholly outside a window rasterizes to nothing there; the list
+	// reaches the object-snow range, far past the raster windows.
+	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
+		const auto& wb = a_geometry->worldBound;
+		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
+		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
+	};
+	// LOD batches never rasterize: with none of the rest in the window and no ghost, the merges
+	// scroll sentinels into sentinels and the cone seeds zero, so the last such run's maps stand.
+	const bool emptyWindow = !heightGhostsLive && std::ranges::none_of(capturedStatics, [&](const auto& a_cap) {
+		return a_cap.geometry && !a_cap.lodBatch && !outsideWindow(a_cap.geometry.get(), halfExtent);
+	});
+	const bool keepEmpty = emptyWindow && heightMapsEmpty && !processData.ClearAll && !heightRasterCacheOff && !coneVerify;
+
 	uint previous = heightCurrent;
-	heightCurrent ^= 1;
+	if (!keepEmpty)
+		heightCurrent ^= 1;
 
 	ID3D11Buffer* processCB = heightProcessCB->CB();
 	ID3D11ShaderResourceView* nullCsSRVs[2] = { nullptr, nullptr };
@@ -2779,7 +2795,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Levels kept from an earlier run (heightRasterKey) skip their clears.
 	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
 	const float rasterClear[4] = { kHeightMapEmptyTop, -kHeightMapEmptyBottom, 0.0f, 0.0f };
-	if (heightTop2Raw[heightCurrent])
+	if (heightTop2Raw[heightCurrent] && !keepEmpty)
 		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
 
 	// G = road top, so it clears to the no-road sentinel, not to zero: zero is
@@ -2848,13 +2864,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	static std::vector<StaticsCB> sCaptureRecords;
 	sCaptureRecords.assign(size_t(farRecordBase) + farCount, StaticsCB{});
 	auto& captureRecords = sCaptureRecords;
-	// A capture wholly outside a window rasterizes to nothing there; the list
-	// reaches the object-snow range, far past the raster windows.
-	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
-		const auto& wb = a_geometry->worldBound;
-		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
-		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
-	};
 	// The records a draw below binds: the loops' own tests. The volume binds every coarse record; far records are all kept.
 	std::vector<uint8_t> recordNeeded(captureRecords.size(), 0);
 	// Read once: a volume the mask did not cover takes the per-draw update path.
@@ -3179,7 +3188,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	// Layer 1 is complete only once the ghost is under it: the peels below
 	// test against it, and so does everything downstream.
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Ghost Merge"));
-	mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
+	if (!keepEmpty)
+		mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
 	// The top-only levels: 1 near clipmap, 2 far roads. RT0 alone, no ghost.
@@ -3255,7 +3265,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	// column. The layer-1 cone seed reads it for its plane-continuation test.
 	// Only the transform and the window fields matter here.
 	Texture2D* peelTarget = heightTop2Raw[heightCurrent];
-	if (heightPeelPS && peelTarget) {
+	if (heightPeelPS && peelTarget && !keepEmpty) {
 		ID3D11RenderTargetView* peelRTVs[1] = { peelTarget->rtv.get() };
 		context->OMSetRenderTargets(1, peelRTVs, nullptr);
 		context->PSSetShader(heightPeelPS, nullptr, 0);
@@ -3394,8 +3404,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11Buffer* exclusionCB = doorsCB->CB();
 		// t4: the layer-1 merge's tile flags (unbound reads 0, which never skips).
 		ID3D11ShaderResourceView* tileSRV = heightTileEmpty ? heightTileEmpty->srv.get() : nullptr;
+		ID3D11ShaderResourceView* exclusionListSRV = exclusionListBuffer->SRV();
 		context->CSSetConstantBuffers(1, 1, &exclusionCB);
 		context->CSSetShaderResources(0, 2, combineSRVs);
+		context->CSSetShaderResources(5, 1, &exclusionListSRV);
 		context->CSSetShader(heightCombineCS, nullptr, 0);
 		auto combine = [&](Texture2D* a_mask, ID3D11ShaderResourceView* a_tiles) {
 			// Two-channel mask at u2 (u1 belongs to ScrollCS's raw bottoms; u0
@@ -3409,7 +3421,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		if (combineVerifyOn)
 			combine(combineVerifyTex, nullptr);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
-		context->CSSetShaderResources(4, 1, nullCsSRVs);
+		context->CSSetShaderResources(4, 2, nullCsSRVs);
 		ID3D11UnorderedAccessView* nullCombineUAVs[3] = { nullptr, nullptr, nullptr };
 		context->CSSetUnorderedAccessViews(0, 3, nullCombineUAVs, nullptr);
 		ID3D11Buffer* nullExclusionCB = nullptr;
@@ -3453,9 +3465,11 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ObjectSnowDepth = 0.1f;
 	heightProcessCB->Update(processData);
 	conePassesCoarse = 0;
-	if (!roadMaps) {
+	bool coneBuilt = false;
+	if (!roadMaps || keepEmpty) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	} else if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
+		coneBuilt = true;
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Object Cone"));
 		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
 		conePassesCoarse = uint32_t(coarseSteps.size());
@@ -3559,6 +3573,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->EndPass();
 
 	}
+	heightMapsEmpty = emptyWindow && (keepEmpty || coneBuilt);
 
 	if ((verifyOn || coneVerifyOn || combineVerifyOn) && verifiedLevels) {
 		auto& ring = heightRasterVerifyRing;
@@ -4774,6 +4789,8 @@ void SnowDeformation::DrawCapturedStatics()
 	const uint32_t hiZExtentH = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
 	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV, hiZExtentW, hiZExtentH);
+	// Every drawn skin added its footprint: the culls ran over all of them.
+	bool skinFootprintLive = false;
 	if (cullActive) {
 		const float liftMargin = settings.RoadMeshesDepth + kSkinCullMargin;
 		uint32_t clusterSkins = 0, trisTotal = 0;
@@ -4786,6 +4803,8 @@ void SnowDeformation::DrawCapturedStatics()
 		clusterSkinsLast = clusterSkins;
 		clusterScratchUsedLast = scratchNext;
 		clusterScratchNeeded = scratchWanted;
+		// Debug views draw every skin at full visibility, past the range too.
+		const float skinFadeEnd = staticsDebugView != 0 ? 0.0f : SkinFadeEndUnits();
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(skinCullBounds->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 			auto* out = static_cast<SkinCullBound*>(mapped.pData);
@@ -4799,7 +4818,8 @@ void SnowDeformation::DrawCapturedStatics()
 					d.clusterOffset, d.clusterCount, d.indexPoolOffset, d.scratchBase,
 					{ rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, d.cap->world.translate.x },
 					{ rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, d.cap->world.translate.y },
-					{ rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, d.cap->world.translate.z } };
+					{ rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, d.cap->world.translate.z },
+					d.cap->fadeExempt ? 0.0f : skinFadeEnd };
 			}
 			context->Unmap(skinCullBounds->resource.get(), 0);
 		}
@@ -4867,13 +4887,19 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetShaderResources(2, 3, cullSRVs);
 		ID3D11UnorderedAccessView* argsUAV = skinCullArgs->uav.get();
 		context->CSSetUnorderedAccessViews(3, 1, &argsUAV, nullptr);
+		ID3D11UnorderedAccessView* footprintUAV = skinFootprint->uav.get();
+		const UINT footprintClear[4] = {};
+		context->ClearUnorderedAccessViewUint(footprintUAV, footprintClear);
+		context->CSSetUnorderedAccessViews(7, 1, &footprintUAV, nullptr);
 		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
 
 		// Cluster pass: refines the arguments of every skin the whole-skin
 		// test kept, and compacts what survives into the scratch buffer both
 		// draw loops read.
 		auto* clusterCull = clusterSkins > 0 ? GetClusterCullCS() : nullptr;
-		if (clusterCull && clusterScratchIB && clusterScratchIB->uav) {
+		const bool clusterPass = clusterCull && clusterScratchIB && clusterScratchIB->uav;
+		skinFootprintLive = clusterSkins == 0 || clusterPass;
+		if (clusterPass) {
 			ID3D11ShaderResourceView* clusterSRVs[2] = { clusterBounds->srv.get(), clusterIndexPool->srv.get() };
 			context->CSSetShaderResources(5, 2, clusterSRVs);
 			ID3D11UnorderedAccessView* scratchUAV = clusterScratchIB->uav.get();
@@ -4886,6 +4912,7 @@ void SnowDeformation::DrawCapturedStatics()
 		}
 		context->CSSetShaderResources(1, 4, nullCullSRVs);
 		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
+		context->CSSetUnorderedAccessViews(7, 1, nullCullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
 		// Census: the arguments and the pyramid's top texel two frames back,
@@ -4909,7 +4936,7 @@ void SnowDeformation::DrawCapturedStatics()
 			if (SUCCEEDED(context->Map(skinCullArgsStaging[readRing].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &rd))) {
 				const auto* args = static_cast<const uint32_t*>(rd.pData);
 				uint32_t drawn = 0, culled = 0, trisDrawn = 0;
-				uint32_t reasons[8] = {};
+				uint32_t reasons[kSkinCullReasons] = {};
 				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
 					if (args[i * 5 + 1]) {
 						drawn++;
@@ -4917,14 +4944,14 @@ void SnowDeformation::DrawCapturedStatics()
 						trisDrawn += args[i * 5] / 3;
 					} else
 						culled++;
-					reasons[std::min(args[i * 5 + 4], 7u)]++;
+					reasons[std::min(args[i * 5 + 4], kSkinCullReasons - 1)]++;
 				}
 				auto& names = skinCullLogNames[readRing];
 				if (!names.empty()) {
-					static constexpr const char* kReason[8] = { "visible", "unprojectable", "no occluder", "outside view", "past far", "occluded", "eye plane", "huge" };
+					static constexpr const char* kReason[kSkinCullReasons] = { "visible", "unprojectable", "no occluder", "outside view", "past far", "occluded", "eye plane", "huge", "past range" };
 					for (uint32_t i = 0; i < skinCullStagingCount[readRing] && i < names.size(); i++)
 						if (args[i * 5 + 1] == 0 || names[i].starts_with("[decal]"))
-							logger::info("[SNOW DEFORMATION] skin cull slot {} inst {} idx {} reason {} ({}): '{}'", i, args[i * 5 + 1], args[i * 5], args[i * 5 + 4], kReason[std::min(args[i * 5 + 4], 7u)], names[i]);
+							logger::info("[SNOW DEFORMATION] skin cull slot {} inst {} idx {} reason {} ({}): '{}'", i, args[i * 5 + 1], args[i * 5], args[i * 5 + 4], kReason[std::min(args[i * 5 + 4], kSkinCullReasons - 1)], names[i]);
 					names.clear();
 				}
 				context->Unmap(skinCullArgsStaging[readRing].get(), 0);
@@ -5087,7 +5114,11 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 
 	if (prepass) {
-		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source, bool a_preSnow) {
+		// DepthSyncCS FillFootprint.
+		static constexpr UINT kFillFootprintSlot = 62;
+		auto* fillRectVS = skinFootprintLive ? GetShellFillRectVS() : nullptr;
+		// a_footprint: over the drawn skins' footprint alone.
+		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source, bool a_preSnow, bool a_footprint) {
 			ID3D11RenderTargetView* preSnowRTV = preSnowDepthRTV.get();
 			context->OMSetRenderTargets(a_preSnow ? 1 : 0, a_preSnow ? &preSnowRTV : nullptr, a_target);
 			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
@@ -5096,12 +5127,22 @@ void SnowDeformation::DrawCapturedStatics()
 				context->RSSetViewports(vpCount, fillVps);
 			context->IASetInputLayout(nullptr);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			context->VSSetShader(fillVS, nullptr, 0);
+			context->VSSetShader(a_footprint ? fillRectVS : fillVS, nullptr, 0);
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->PSSetShaderResources(9, 1, &a_source);
 			context->PSSetShader(a_preSnow ? GetShellFillPSPreSnow() : fillPS, nullptr, 0);
-			context->Draw(3, 0);
+			if (a_footprint) {
+				winrt::com_ptr<ID3D11ShaderResourceView> savedFootprintSRV;
+				context->VSGetShaderResources(kFillFootprintSlot, 1, savedFootprintSRV.put());
+				ID3D11ShaderResourceView* footprintSRV = skinFootprint->srv.get();
+				context->VSSetShaderResources(kFillFootprintSlot, 1, &footprintSRV);
+				context->Draw(6, 0);
+				footprintSRV = savedFootprintSRV.get();
+				context->VSSetShaderResources(kFillFootprintSlot, 1, &footprintSRV);
+			} else {
+				context->Draw(3, 0);
+			}
 			ID3D11ShaderResourceView* nullFillSRV = nullptr;
 			context->PSSetShaderResources(9, 1, &nullFillSRV);
 			if (vpCount)
@@ -5126,7 +5167,10 @@ void SnowDeformation::DrawCapturedStatics()
 			globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		}
 		statsRow("SnowDeformation::Objects - Depth Prepass");
-		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow);
+		// Off the footprint the private depth is read only by the pre-snow copy,
+		// the skins' second SSS march, the decal overlay and the depth-fight view.
+		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch && bloodOverlays.empty() && staticsDebugView != 9;
+		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
 		if (fillPreSnow) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 			preSnowDepthThisFrame = true;
@@ -5162,7 +5206,7 @@ void SnowDeformation::DrawCapturedStatics()
 		}
 
 		statsRow("SnowDeformation::Objects - Depth Prepass");
-		fill(dsv.get(), shellTestDepthSRV.get(), false);
+		fill(dsv.get(), shellTestDepthSRV.get(), false, fillRectVS != nullptr);
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	} else {
@@ -6874,6 +6918,27 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		}
 	}
 
+	if (!skinFootprint) {
+		D3D11_BUFFER_DESC footDesc{};
+		footDesc.Usage = D3D11_USAGE_DEFAULT;
+		footDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+		footDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
+		footDesc.ByteWidth = sizeof(uint32_t) * 4;
+		D3D11_SHADER_RESOURCE_VIEW_DESC footSRV{};
+		footSRV.Format = DXGI_FORMAT_R32_TYPELESS;
+		footSRV.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
+		footSRV.BufferEx.NumElements = 4;
+		footSRV.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC footUAV{};
+		footUAV.Format = DXGI_FORMAT_R32_TYPELESS;
+		footUAV.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		footUAV.Buffer.NumElements = 4;
+		footUAV.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		skinFootprint = new Buffer(footDesc, nullptr, "SnowDeformation::SkinFootprint");
+		skinFootprint->CreateSRV(footSRV);
+		skinFootprint->CreateUAV(footUAV);
+	}
+
 	// Bounds in, indirect arguments out; grown in steps of 256 skins.
 	if (a_count > skinCullCapacity) {
 		const uint32_t capacity = (a_count + 255) & ~255u;
@@ -6926,7 +6991,8 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		}
 		skinCullCapacity = capacity;
 	}
-	return skinCullHiZ->srv && skinCullHiZScratch.size() == skinCullLevels && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav;
+	return skinCullHiZ->srv && skinCullHiZScratch.size() == skinCullLevels && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav &&
+	       skinFootprint->srv && skinFootprint->uav;
 }
 
 // Mirrors RE::TES::ForEachReferenceInRange: the interior cell alone, or the

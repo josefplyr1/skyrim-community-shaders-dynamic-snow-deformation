@@ -469,6 +469,13 @@ ID3D11VertexShader* SnowDeformation::GetShellFillVS()
 	return shellFillVS;
 }
 
+ID3D11VertexShader* SnowDeformation::GetShellFillRectVS()
+{
+	if (!shellFillRectVS)
+		shellFillRectVS = static_cast<ID3D11VertexShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillRectVS"));
+	return shellFillRectVS;
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 {
 	if (!shellFillPS) {
@@ -1847,7 +1854,7 @@ void SnowDeformation::DrawShell()
 	// taken over by Distant Bare Rock and the geometry-range flatten. The skin
 	// now dissolves over a fixed ~29 m band inside the capture range, so
 	// lowering Object Snow keeps a soft edge without a second slider.
-	cbData.SkinFadeEnd = settings.RangeSkinsM * kUnitsPerMeter;
+	cbData.SkinFadeEnd = SkinFadeEndUnits();
 	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
 	// Field enable gate + window addressing for the object map samplers; the
 	// center is re-uploaded below once the height pass has recentered.

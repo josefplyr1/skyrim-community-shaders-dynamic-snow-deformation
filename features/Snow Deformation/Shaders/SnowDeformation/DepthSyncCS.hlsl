@@ -183,6 +183,36 @@ float4 FillVS(uint vertexID : SV_VertexID) : SV_Position
 	return float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
 }
 
+// The drawn skins' screen footprint (SkinCullCS, ClusterCullCS): an NDC
+// rectangle as order-preserving uints, every slot raised by InterlockedMax from
+// a zero clear - [0] ~min x, [1] ~min y, [2] max x, [3] max y. A zero max means
+// no skin draws.
+uint FootprintKey(float f)
+{
+	const uint u = asuint(f);
+	return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+}
+
+float FootprintValue(uint k)
+{
+	return asfloat((k & 0x80000000u) ? (k & 0x7FFFFFFFu) : ~k);
+}
+
+ByteAddressBuffer FillFootprint : register(t62);
+
+// FillVS over the footprint alone: two triangles, collapsed when it is empty.
+float4 FillRectVS(uint vertexID : SV_VertexID) : SV_Position
+{
+	static const uint2 kCorner[6] = { uint2(0, 1), uint2(1, 1), uint2(0, 0), uint2(1, 1), uint2(1, 0), uint2(0, 0) };
+	const uint4 k = FillFootprint.Load4(0);
+	if (k.z == 0)
+		return float4(0.0, 0.0, 0.0, 1.0);
+	const float2 lo = float2(FootprintValue(~k.x), FootprintValue(~k.y));
+	const float2 hi = float2(FootprintValue(k.z), FootprintValue(k.w));
+	const uint2 c = kCorner[vertexID];
+	return float4(c.x ? hi.x : lo.x, c.y ? hi.y : lo.y, 0.0, 1.0);
+}
+
 #ifdef FILL_PRE_SNOW
 // The skins' first fill also leaves the pre-snow depth for DepthSync: off the
 // shell prepass's raster marks the main depth still holds it here.
@@ -303,11 +333,31 @@ struct SkinBound
 	float4 WorldRow0;
 	float4 WorldRow1;
 	float4 WorldRow2;
+	float FadeEnd;  // SnowStaticsShell's SkinFadeEnd; 0 = never dissolves
+	float3 pad;
 };
 StructuredBuffer<SkinBound> SkinBounds : register(t2);
 Texture2D<float> HiZ : register(t3);
 StructuredBuffer<float4> MeshBounds : register(t4);
 RWByteAddressBuffer SkinArgs : register(u3);
+RWByteAddressBuffer SkinFootprint : register(u7);
+
+// A drawn footprint's keys, one pixel of slack each way as TestProjectedBox reads.
+uint4 SkinFootprintKeys(float2 lo, float2 hi)
+{
+	const float2 pad = 2.0 / CullViewport.zw;
+	lo = clamp(lo - pad, -1.0, 1.0);
+	hi = clamp(hi + pad, -1.0, 1.0);
+	return uint4(~FootprintKey(lo.x), ~FootprintKey(lo.y), FootprintKey(hi.x), FootprintKey(hi.y));
+}
+
+void AddFootprint(uint4 keys)
+{
+	SkinFootprint.InterlockedMax(0, keys.x);
+	SkinFootprint.InterlockedMax(4, keys.y);
+	SkinFootprint.InterlockedMax(8, keys.z);
+	SkinFootprint.InterlockedMax(12, keys.w);
+}
 
 // Reason codes, stored in the argument block's StartInstanceLocation (no
 // instance streams, so the draw ignores it) and read back for the census:
@@ -315,7 +365,29 @@ RWByteAddressBuffer SkinArgs : register(u3);
 // occluder read as zero (dead read), 3 culled - outside the view, 4 culled -
 // beyond the far plane, 5 culled - behind the scene, 6 kept - sphere path,
 // sphere reaches the eye plane, 7 kept - as 1 but the box spans over 2,000
-// units (a precombined cell chunk, not an object).
+// units (a precombined cell chunk, not an object), 8 culled - past the
+// Object Snow range, where SnowStaticsShell's distance fade discards every
+// fragment.
+
+// Whether a local box, placed by the skin's world rows, lies wholly past the
+// fade end in camera-horizontal distance.
+bool BoxPastFadeEnd(float3 bmin, float3 bmax, float4 r0, float4 r1, float fadeEnd)
+{
+	float3 c = (bmin + bmax) * 0.5;
+	float3 e = (bmax - bmin) * 0.5;
+	float2 wc = float2(dot(r0.xyz, c) + r0.w, dot(r1.xyz, c) + r1.w);
+	float2 we = float2(dot(abs(r0.xyz), e), dot(abs(r1.xyz), e));
+	return fadeEnd > 0.0 && length(max(abs(wc - CullCameraPosAdjust.xy) - we, 0.0)) > fadeEnd;
+}
+// Corner i (bit 0 x, 1 y, 2 z: max) of a local box, placed by a skin's world
+// rows, in the camera's clip space.
+float4 LocalBoxCornerClip(uint i, float3 bmin, float3 bmax, float4 r0, float4 r1, float4 r2)
+{
+	float3 l = float3((i & 1) ? bmax.x : bmin.x, (i & 2) ? bmax.y : bmin.y, (i & 4) ? bmax.z : bmin.z);
+	float3 wp = float3(dot(r0.xyz, l) + r0.w, dot(r1.xyz, l) + r1.w, dot(r2.xyz, l) + r2.w);
+	return mul(CullViewProj, float4(wp - CullCameraPosAdjust.xyz, 1.0));
+}
+
 // Projects a local-space box through a skin's world rows into the camera's
 // clip space. Returns false when a corner is at or behind the eye plane, so
 // the footprint is unbounded and the caller must keep the geometry.
@@ -328,9 +400,7 @@ bool ProjectLocalBox(float3 bmin, float3 bmax, float4 r0, float4 r1, float4 r2,
 	bool behind = false;
 	[unroll] for (uint i = 0; i < 8; i++)
 	{
-		float3 l = float3((i & 1) ? bmax.x : bmin.x, (i & 2) ? bmax.y : bmin.y, (i & 4) ? bmax.z : bmin.z);
-		float3 wp = float3(dot(r0.xyz, l) + r0.w, dot(r1.xyz, l) + r1.w, dot(r2.xyz, l) + r2.w);
-		float4 clip = mul(CullViewProj, float4(wp - CullCameraPosAdjust.xyz, 1.0));
+		float4 clip = LocalBoxCornerClip(i, bmin, bmax, r0, r1, r2);
 		if (clip.w <= 1e-3)
 			behind = true;
 		else
@@ -342,6 +412,39 @@ bool ProjectLocalBox(float3 bmin, float3 bmax, float4 r0, float4 r1, float4 r2,
 		}
 	}
 	return !behind;
+}
+
+// The NDC bounds of the part of a local box in front of the near plane (clip
+// z >= 0), where the skins' rasterisation clips: the corners there and the
+// edges' crossings of it. False when none of the box is in front.
+bool ProjectLocalBoxNear(float3 bmin, float3 bmax, float4 r0, float4 r1, float4 r2, out float2 lo, out float2 hi)
+{
+	float4 clip[8];
+	[unroll] for (uint i = 0; i < 8; i++)
+		clip[i] = LocalBoxCornerClip(i, bmin, bmax, r0, r1, r2);
+	lo = 1e9;
+	hi = -1e9;
+	bool front = false;
+	[unroll] for (uint c = 0; c < 8; c++)
+	{
+		[flatten] if (clip[c].z >= 0.0)
+		{
+			lo = min(lo, clip[c].xy / clip[c].w);
+			hi = max(hi, clip[c].xy / clip[c].w);
+			front = true;
+		}
+		[unroll] for (uint axis = 1; axis < 8; axis <<= 1)
+		{
+			const uint d = c | axis;
+			[flatten] if (d != c && (clip[c].z >= 0.0) != (clip[d].z >= 0.0))
+			{
+				const float4 p = lerp(clip[c], clip[d], clip[c].z / (clip[c].z - clip[d].z));
+				lo = min(lo, p.xy / p.w);
+				hi = max(hi, p.xy / p.w);
+			}
+		}
+	}
+	return front;
 }
 
 // Verdict for a projected box: 0 draw, 2 keep (the pyramid read as zero, so
@@ -430,6 +533,7 @@ bool ProjectSphere(float3 center, float r, out float2 lo, out float2 hi, out flo
 	float zn = 0.0;
 	bool bounded = false;
 	bool boxed = false;
+	bool pastRange = false;
 
 	[branch] if (b.HasBounds != 0)
 	{
@@ -441,6 +545,7 @@ bool ProjectSphere(float3 center, float r, out float2 lo, out float2 hi, out flo
 		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
 		bmin -= grow;
 		bmax += grow;
+		pastRange = BoxPastFadeEnd(bmin, bmax, b.WorldRow0, b.WorldRow1, b.FadeEnd);
 		if (ProjectLocalBox(bmin, bmax, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn))
 			bounded = boxed = true;
 		else
@@ -448,6 +553,7 @@ bool ProjectSphere(float3 center, float r, out float2 lo, out float2 hi, out flo
 	}
 	else
 	{
+		pastRange = b.FadeEnd > 0.0 && length(b.Center.xy - CullCameraPosAdjust.xy) - b.Radius > b.FadeEnd;
 		if (ProjectSphere(b.Center, b.Radius, lo, hi, zn))
 			bounded = true;
 		else
@@ -478,6 +584,23 @@ bool ProjectSphere(float3 center, float r, out float2 lo, out float2 hi, out flo
 		reason = verdict;
 		if (verdict >= 3)
 			draw = 0;
+	}
+	[flatten] if (draw != 0 && pastRange)
+	{
+		draw = 0;
+		reason = 8;
+	}
+	// A clustered skin's footprint is its surviving clusters' (ClusterCullCS). The
+	// engine sphere, not the box: a decal overlay's box has missed its pixels.
+	[branch] if (draw != 0 && b.ClusterCount == 0)
+	{
+		float2 slo, shi;
+		float szn;
+		if (!ProjectSphere(b.Center, b.Radius, slo, shi, szn)) {
+			slo = -1.0;
+			shi = 1.0;
+		}
+		AddFootprint(SkinFootprintKeys(slo, shi));
 	}
 	uint base = id.x * 20;
 	SkinArgs.Store(base, b.IndexCount);
@@ -581,9 +704,14 @@ RWByteAddressBuffer ClusterScratchIndices : register(u4);
 
 #define SNOW_CLUSTER_GROUP 256
 groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
+// The skin's footprint over its kept clusters, SkinFootprint's layout.
+groupshared uint gClusterFootprint[4];
 
 [numthreads(SNOW_CLUSTER_GROUP, 1, 1)] void ClusterCullCS(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID)
 {
+	if (gtid.x < 4)
+		gClusterFootprint[gtid.x] = 0;
+	GroupMemoryBarrierWithGroupSync();
 	uint skin = gid.x;
 	SkinBound b = SkinBounds[min(skin, max(CullSkinCount, 1u) - 1u)];
 	uint argBase = skin * 20;
@@ -605,10 +733,22 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
 		float2 lo, hi;
 		float zn;
-		if (!ProjectLocalBox(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn))
+		bool drawsOnScreen = true;
+		if (BoxPastFadeEnd(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.FadeEnd))
+			keep = 0;
+		else if (!ProjectLocalBox(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi, zn)) {
 			keep = idxCount;  // reaches the eye plane: unbounded, keep
-		else
+			drawsOnScreen = ProjectLocalBoxNear(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.WorldRow2, lo, hi);
+		} else
 			keep = TestProjectedBox(lo, hi, zn) >= 3 ? 0 : idxCount;
+		[branch] if (keep != 0 && drawsOnScreen)
+		{
+			const uint4 keys = SkinFootprintKeys(lo, hi);
+			InterlockedMax(gClusterFootprint[0], keys.x);
+			InterlockedMax(gClusterFootprint[1], keys.y);
+			InterlockedMax(gClusterFootprint[2], keys.z);
+			InterlockedMax(gClusterFootprint[3], keys.w);
+		}
 	}
 
 	// Ordered exclusive scan of the surviving index counts. The trip count is
@@ -642,6 +782,8 @@ groupshared uint gClusterScan[SNOW_CLUSTER_GROUP];
 		SkinArgs.Store(argBase, total);
 		SkinArgs.Store(argBase + 4, total > 0 ? 1 : 0);
 		SkinArgs.Store(argBase + 8, b.ScratchBase);
+		if (gClusterFootprint[2] != 0)
+			AddFootprint(uint4(gClusterFootprint[0], gClusterFootprint[1], gClusterFootprint[2], gClusterFootprint[3]));
 	}
 }
 #endif

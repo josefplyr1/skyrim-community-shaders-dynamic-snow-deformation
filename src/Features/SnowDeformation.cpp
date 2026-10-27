@@ -649,6 +649,8 @@ void SnowDeformation::SetupResources()
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
 	heightGhostCB = new ConstantBuffer(ConstantBufferDesc<HeightGhostCB>(), "SnowDeformation::HeightGhostCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
+	exclusionListBuffer = new StructuredBuffer(StructuredBufferDesc<float4>(kMaxExclusions * 2), kMaxExclusions * 2, "SnowDeformation::ExclusionList");
+	exclusionListBuffer->CreateSRV();
 
 	CreateHeightFieldResources();
 
@@ -2415,6 +2417,9 @@ void SnowDeformation::ClearShaderCache()
 	if (shellFillVS)
 		shellFillVS->Release();
 	shellFillVS = nullptr;
+	if (shellFillRectVS)
+		shellFillRectVS->Release();
+	shellFillRectVS = nullptr;
 	if (shellFillPS)
 		shellFillPS->Release();
 	shellFillPS = nullptr;
@@ -2619,7 +2624,7 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, 750.0f);
+	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, kMaxRangeSkinsM);
 	// Loaded values may change the window size or map resolution; the apply
 	// path is a no-op when they match the current state.
 	trenchRangeDirty = true;

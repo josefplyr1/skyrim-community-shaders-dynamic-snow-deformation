@@ -167,7 +167,7 @@ namespace
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
 		{ 1024u, 512u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
 		{ 2048u, 1024u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
-		{ 4096u, 2048u, 200.0f, 200.0f, 750.0f, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
+		{ 4096u, 2048u, 200.0f, 200.0f, SnowDeformation::kMaxRangeSkinsM, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
 	};
 }
 
@@ -563,9 +563,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_actor_trenches_tooltip"), "How far from the camera NPCs, creatures and corpses still carve trenches. Past it they leave no prints, and the work of following their bodies is skipped. You always carve. It never reaches past the Trenches range. Lower saves CPU time where many people or animals are on the move. Applies live."));
 
-		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, kMinRangeSkinsM, 750.0f, "%.0f m");
+		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, kMinRangeSkinsM, kMaxRangeSkinsM, "%.0f m");
 		if (auto _ttRk = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live."));
+			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Applies live."));
 
 		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Height Map Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
 		if (auto _ttOrr = Util::HoverTooltipWrapper())
@@ -1832,10 +1832,10 @@ void SnowDeformation::DrawSettings()
 					total ? 100.0 * skinCullCulledLast / total : 0.0);
 				WrapTextF("  clusters: %u skins cut, %.2f M of %.2f M triangles drawn, scratch %.2f M indices",
 					clusterSkinsLast, skinCullTrisDrawnLast / 1e6, skinCullTrisTotalLast / 1e6, clusterScratchUsedLast / 1e6);
-				WrapTextF("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene | HiZ top %.5f",
+				WrapTextF("  kept: %u tested, %u at eye plane (box %u, giant box %u, sphere %u), %u zero read | culled: %u outside view, %u past far, %u behind scene, %u past range | HiZ top %.5f",
 					skinCullReasonLast[0], skinCullReasonLast[1] + skinCullReasonLast[6] + skinCullReasonLast[7],
 					skinCullReasonLast[1], skinCullReasonLast[7], skinCullReasonLast[6], skinCullReasonLast[2],
-					skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5],
+					skinCullReasonLast[3], skinCullReasonLast[4], skinCullReasonLast[5], skinCullReasonLast[8],
 					skinCullHiZTopLast);
 				if (ImGui::Button(T(TKEY("skin_cull_log"), "Log Skin Cull Verdicts")))
 					skinCullLogArmed = true;

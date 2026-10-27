@@ -226,6 +226,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellPSDeferred(); },
 		[&] { GetNoiseHashCS(); },
 		[&] { GetShellFillVS(); },
+		[&] { GetShellFillRectVS(); },
 		[&] { GetShellFillPS(); },
 		[&] { GetShellFillPSClaim(); },
 		[&] { GetShellFillPSPreSnow(); },
