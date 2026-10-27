@@ -28,6 +28,23 @@ namespace
 	constexpr uint32_t kWalksPerFrame = 4;
 	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
+	// Each hole octave's share of the coat at full graininess (estimate; 30 %
+	// together).
+	constexpr float kHoleShare = 0.11f;
+
+	// CoatNoise's upper tail (SnowLighting.hlsli, measured over 2e6 samples): the
+	// threshold that leaves a share of it above; 10 leaves none.
+	float NoiseCut(float a_share)
+	{
+		static constexpr float kShare[] = { 0.0f, 0.01f, 0.02f, 0.05f, 0.08f, 0.11f, 0.15f };
+		static constexpr float kCut[] = { 0.99f, 0.587f, 0.533f, 0.447f, 0.3875f, 0.3406f, 0.2919f };
+		if (a_share <= 0.0f)
+			return 10.0f;
+		for (size_t i = 1; i < std::size(kShare); ++i)
+			if (a_share <= kShare[i])
+				return std::lerp(kCut[i - 1], kCut[i], (a_share - kShare[i - 1]) / (kShare[i] - kShare[i - 1]));
+		return kCut[std::size(kCut) - 1];
+	}
 
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
@@ -286,7 +303,7 @@ struct SnowDeformation::BodyCoatStore
 	float glint[4] = {};
 	float look[4] = {};
 	float amounts[2] = {};
-	bool hairGrainsOnly = false;
+	bool hairSpecks = false;
 
 	winrt::com_ptr<ID3D11Texture3D> atlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
@@ -902,7 +919,7 @@ struct SnowDeformation::BodyCoatStore
 				r.View = uint(view);
 				r.Slot = uint(f.slot * 2 + std::max(f.half, 0));
 				r.Component = shape.frame;
-				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving) | (shape.hair && hairGrainsOnly ? kBodyCoatFlagGrainsOnly : 0u);
+				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving) | (shape.hair && hairSpecks ? kBodyCoatFlagHairSpecks : 0u);
 				r.Glint = float4(glint[0], glint[1], glint[2], glint[3]);
 				r.Look = float4(look[0], look[1], look[2], look[3]);
 				r.Amounts = float4(amounts[0], amounts[1], 0.0f, 0.0f);
@@ -992,22 +1009,23 @@ void SnowDeformation::TickBodyCoatStore()
 	const uint32_t lookFlags = debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
-	// The cranks as the shader compares them: cosines of the slopes where
-	// snowfall starts sliding off, is gone (20 degrees on), and its grains end
-	// (graininess x 20 degrees further, never past vertical).
-	const float repose = std::clamp(debugBodyCoatRepose, 0.0f, 89.0f);
+	// The cranks as the shader reads them: one over the angle of repose in
+	// radians, and the graininess as its three hole octaves' noise thresholds,
+	// the coarsest opening first, each to kHoleShare of the coat.
+	const float repose = std::clamp(debugBodyCoatRepose, 1.0f, 89.0f);
 	const float grain = std::clamp(debugBodyCoatGraininess, 0.0f, 1.0f);
-	const float look[4] = { std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f, 90.0f))), std::cos(DirectX::XMConvertToRadians(repose)),
-		std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f + 20.0f * grain, 90.0f))), grain };
-	// The forced coat's lumps and grains, apart (S2's cranks).
+	float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose) };
+	for (int k = 0; k < 3; ++k)
+		look[1 + k] = NoiseCut(kHoleShare * std::clamp(3.0f * grain - float(k), 0.0f, 1.0f));
+	// The forced coat's lumps and coat, apart (S2's cranks).
 	const float amounts[2] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
-		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairGrainsOnly != debugBodyCoatHairGrainsOnly) {
+		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairSpecks != debugBodyCoatHairSpecks) {
 		store.lookFlags = lookFlags;
 		memcpy(store.glint, glint, sizeof(glint));
 		memcpy(store.look, look, sizeof(look));
 		memcpy(store.amounts, amounts, sizeof(amounts));
-		store.hairGrainsOnly = debugBodyCoatHairGrainsOnly;
+		store.hairSpecks = debugBodyCoatHairSpecks;
 		store.recordsDirty = true;
 	}
 	auto* player = globals::game::player;
