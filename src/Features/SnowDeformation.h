@@ -101,6 +101,10 @@ public:
 
 	/** @brief Skyrim world units per meter (1 unit â‰ˆ 1.43 cm). Range sliders are in meters. */
 	static constexpr float kUnitsPerMeter = 70.0f;
+	/** @brief Object Snow range floor (m); below it the 2048-unit skin dissolve band starts at the camera. */
+	static constexpr float kMinRangeSkinsM = 50.0f;
+	/** @brief Object Snow range ceiling (m): past it the coat reads no different from the LOD recolor under it. */
+	static constexpr float kMaxRangeSkinsM = 200.0f;
 
 	// ---- Snow shell: a camera-following grid of real snow geometry ----
 
@@ -594,7 +598,7 @@ public:
 		float RangeTrenchesM = 200.0f;
 		/** @brief Camera distance (m) past which NPCs, creatures and corpses do not carve; the player always does. Bounded by RangeTrenchesM. */
 		float RangeActorTrenchesM = 200.0f;
-		float RangeSkinsM = 750.0f;
+		float RangeSkinsM = kMaxRangeSkinsM;
 		/** @brief "Object Height Map Range" (m): half-width of the top-down object height window (ObjectRasterHalfExtent). Read by the ground snow's shelter under cover (the near mask), the road patch and road skins (PatchTop, ObjectConeDepth; past it only the far road level), road stamps (ContactAbove), the object-print top gate (PrintTopGap: below the print map's reach it clips the prints) and the volume seed's shelter and sky maps. Fixed 2048 texels, so this trades texel size against reach: 58 m = 4 units a texel, 117 m = 8. The near level stays a quarter of it. */
 		float ObjectRasterReachM = 100.0f;
 		/** @brief Rasterizer depth bias for the object skins, in depth-buffer ULPs toward the camera (D3D11 DepthBias, negated). Replaces the decal viewport cap's accidental ~500-ULP push, which let a skin beat its own mesh at range but stood a peak 2000 units in front of its mist. */
@@ -2093,8 +2097,11 @@ public:
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
 
 	ID3D11VertexShader* GetShellFillVS();
+	/** @brief FillVS over the skins' footprint (skinFootprint at VS t62) instead of the whole viewport. */
+	ID3D11VertexShader* GetShellFillRectVS();
 	ID3D11PixelShader* GetShellFillPS();
 	ID3D11VertexShader* shellFillVS = nullptr;
+	ID3D11VertexShader* shellFillRectVS = nullptr;
 	ID3D11PixelShader* shellFillPS = nullptr;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
@@ -2925,6 +2932,8 @@ public:
 	static constexpr float kObjectConeSlope = 3.0f;
 	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
 	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
+	/** @brief Horizontal camera distance (units) at which a non-exempt skin has dissolved whole (ShellCB::SkinFadeEnd). */
+	float SkinFadeEndUnits() const { return settings.RangeSkinsM * kUnitsPerMeter; }
 	/** @brief The player is in a child worldspace (a walled city); sampled once per frame in Prepass. */
 	bool cityWorldspace = false;
 	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
@@ -3019,8 +3028,6 @@ public:
 	uint32_t heightProbeShownFrame = UINT32_MAX;
 	bool FineLevelOn() const { return settings.ObjectSnowNearDetail; }
 	static constexpr int kQualityPresetCount = 3;
-	/** @brief Object Snow range floor (m); below it the 2048-unit skin dissolve band starts at the camera. */
-	static constexpr float kMinRangeSkinsM = 50.0f;
 	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
@@ -3038,6 +3045,8 @@ public:
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
+	/** @brief The current object maps are an object-free window's: sentinel tops and bottoms, empty tiles, a zero cone. While the window stays free a run keeps them. */
+	bool heightMapsEmpty = false;
 	float2 heightWindowCenter = { 0, 0 };
 	/** @brief Depth range of the game's main-pass viewport, sampled once per frame after the first deferred-pass lighting draw (NoteMainViewport). The deferred span ends on the blended-decal viewport (max depth 0.999968 against the pass's 0.999998), and a shell drawn through that cap sits ~3e-5 NDC nearer than its own object. */
 	float mainViewportMinDepth = 0.0f;
@@ -3107,7 +3116,7 @@ public:
 	ID3D11ComputeShader* heightScrollRasterCS = nullptr;
 	/** @brief Per raster level (0 = layer 1 with the skin depth, 1 = fine, 2 = far): what its targets were last drawn from (every draw's binds and record bytes, the inherited state, shaders and terrain window). A run whose key matches keeps the targets; the ghost merge still runs. */
 	std::vector<uint8_t> heightRasterKey[3];
-	/** @brief A/B, runtime-only: every level redraws every run. */
+	/** @brief A/B, runtime-only: every level redraws every run, and an object-free window reruns its merges and cone (heightMapsEmpty). */
 	bool heightRasterCacheOff = false;
 	/** @brief Debug, runtime-only: a kept level (and with heightRasterVerifyMiss a redrawn one) is drawn again into scratch targets and compared bit for bit; totals read back without stalling. */
 	bool heightRasterVerify = false;
@@ -3581,7 +3590,10 @@ public:
 		float pad[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ExclusionsCB);
+	static_assert(offsetof(ExclusionsCB, ExclusionCount) == sizeof(float4) * kMaxExclusions * 2, "exclusionListBuffer mirrors the two leading arrays");
 	ConstantBuffer* doorsCB = nullptr;
+	/** @brief ExclusionsCB's PosRadius and DirExtType arrays as a structured buffer (t5): CombineCS's per-tile cull reads one entry per thread, which a cbuffer serializes. */
+	StructuredBuffer* exclusionListBuffer = nullptr;
 	/** @brief The list as last uploaded, hashed: the volume's idle gate reads it. */
 	uint64_t exclusionListHash = 0;
 	bool doorsCBUploaded = false;
@@ -3696,6 +3708,9 @@ public:
 		float4 WorldRow0;
 		float4 WorldRow1;
 		float4 WorldRow2;
+		/** @brief Horizontal camera distance past which the skin dissolves whole (SkinFadeEnd); 0 = never (fade-exempt, debug views). */
+		float FadeEnd;
+		float pad[3];
 	};
 	struct alignas(16) SkinCullCB
 	{
@@ -3708,6 +3723,8 @@ public:
 		float pad[2];
 	};
 	static constexpr uint32_t kSkinCullArgStride = 20;
+	/** @brief SkinCullCS reason codes 0-8 (DepthSyncCS.hlsl). */
+	static constexpr uint32_t kSkinCullReasons = 9;
 	static constexpr int kSkinCullRing = 3;
 	/** @brief World-unit growth of the bound beyond the class depth: cornice roll, relief, the toward-eye flank push. */
 	static constexpr float kSkinCullMargin = 24.0f;
@@ -3716,6 +3733,8 @@ public:
 	ConstantBuffer* skinCullCB = nullptr;
 	Buffer* skinCullBounds = nullptr;
 	Buffer* skinCullArgs = nullptr;
+	/** @brief The drawn skins' NDC footprint (DepthSyncCS SkinFootprint, u7 in the culls, t62 in FillRectVS): four uints, cleared each frame. */
+	Buffer* skinFootprint = nullptr;
 	uint32_t skinCullCapacity = 0;
 	winrt::com_ptr<ID3D11Buffer> skinCullArgsStaging[kSkinCullRing];
 	bool skinCullStagingIssued[kSkinCullRing] = {};
@@ -3737,8 +3756,8 @@ public:
 	uint32_t skinCullCulledLast = 0;
 	uint32_t skinCullTrisDrawnLast = 0;
 	uint32_t skinCullTrisTotalLast = 0;
-	/** @brief Per-reason census (SkinCullCS reason codes 0-5) and the pyramid's 1x1 top level, read back through 1x1 staging textures: 0 there means the pyramid is dead. */
-	uint32_t skinCullReasonLast[8] = {};
+	/** @brief Per-reason census (SkinCullCS reason codes) and the pyramid's 1x1 top level, read back through 1x1 staging textures: 0 there means the pyramid is dead. */
+	uint32_t skinCullReasonLast[kSkinCullReasons] = {};
 	float skinCullHiZTopLast = -1.0f;
 	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
 	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);

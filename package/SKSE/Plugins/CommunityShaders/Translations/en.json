@@ -2985,7 +2985,7 @@
     "feature.snow_deformation.range_actor_trenches": "NPC Trenches",
     "feature.snow_deformation.range_actor_trenches_tooltip": "How far from the camera NPCs, creatures and corpses still carve trenches. Past it they leave no prints, and the work of following their bodies is skipped. You always carve. It never reaches past the Trenches range. Lower saves CPU time where many people or animals are on the move. Applies live.",
     "feature.snow_deformation.range_skins": "Object Snow",
-    "feature.snow_deformation.range_skins_tooltip": "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Loaded cells bound the real reach (~200 m at uGridsToLoad 5), so values above that only matter with a larger uGridsToLoad. Applies live.",
+    "feature.snow_deformation.range_skins_tooltip": "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Applies live.",
     "feature.snow_deformation.range_trenches": "Trenches",
     "feature.snow_deformation.range_trenches_tooltip": "Deformation window radius: you carve anywhere inside it, NPCs out to NPC Trenches. Applying a change CLEARS existing trenches. NOT a GPU setting: GPU cost follows Deformation Map Resolution, not range. Texel detail is range divided by resolution, so a smaller range at the same resolution means sharper footprints over a shorter reach.",
     "feature.snow_deformation.recolored_snow_accumulates": "Recolored Snow Accumulates",

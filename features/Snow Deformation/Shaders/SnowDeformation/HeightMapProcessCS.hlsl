@@ -108,6 +108,9 @@ RWTexture2D<float2> OutMask : register(u2);
 // (unbound reads 0, which never skips).
 RWTexture2D<uint> TileEmptyOut : register(u3);
 Texture2D<uint> TileEmpty : register(t4);
+// CombineCS's tile cull: ExclusionCB's PosRadius then DirExtType arrays. Each
+// thread reads a different entry, which a cbuffer serializes across the warp.
+StructuredBuffer<float4> ExclusionList : register(t5);
 #ifdef SCROLL_RASTER_RG
 // Layer 1's raster (SnowHeightCapture): x = top, y = the negated bottom.
 Texture2D<float2> RasterIn : register(t6);
@@ -334,8 +337,9 @@ groupshared uint combineElevated;
 		float2 tileMin = min(cornerA, cornerB);
 		float2 tileMax = max(cornerA, cornerB);
 		for (uint testI = gi; testI < ExclusionCount; testI += 64) {
-			float2 center = ExclusionPosRadius[testI].xy;
-			float reach = ExclusionReach(testI);
+			float4 posRadius = ExclusionList[testI];
+			float2 center = posRadius.xy;
+			float reach = ExclusionReach(posRadius, ExclusionList[MAX_EXCLUSIONS + testI]);
 			float2 closest = clamp(center, tileMin, tileMax);
 			[branch] if (dot(closest - center, closest - center) <= reach * reach)
 			{

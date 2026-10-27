@@ -3858,6 +3858,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float4 attrGridDeriv = float4(ddx_coarse(input.GridLocal), ddy_coarse(input.GridLocal));
 	const float2 attrZDeriv = float2(ddx_coarse(input.WorldPos.z), ddy_coarse(input.WorldPos.z));
 #endif
+	// Past the range the distance fade below discards every pixel; skip the coat's work.
+	[branch] if (FadeExempt < 0.5 && StaticsDebugView == 0.0 && length(input.WorldPos.xy) >= SkinFadeEnd)
+		discard;
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
 	float3 normalWS = normalize(input.NormalWS);
