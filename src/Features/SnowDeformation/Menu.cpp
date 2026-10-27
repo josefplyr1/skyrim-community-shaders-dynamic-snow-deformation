@@ -2040,18 +2040,24 @@ void SnowDeformation::DrawSettings()
 			ImGui::Combo("Force Coat", &debugBodyCoatForce, "Off\0Legs to the Knee\0Snowfall from Above\0Left Half\0Everything\0");
 			if (auto _ttForce = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Stage S2 of MD plans/BODY-SNOW-PLAN.md: until contact and snowfall write a real coat, puts a synthetic one on the player and the actors near them, so the look can be judged. Legs to the Knee: contact snow below each actor's knees. Snowfall from Above: fallen snow, shown only on the parts that face up in the rest pose. Left Half: contact snow down the left side, as on a body that lay there. Everything: the whole body. The coat wears the snow shell's own texture set (colour, grain, roughness, brightness). Skin, eyes, brows and scars take none. The first time it turns on, the coat's shaders compile, so armour and clothing take a few seconds to show it.");
-			ImGui::SliderFloat("Force Coat Amount", &debugBodyCoatAmount, 0.0f, 1.0f, "%.2f");
-			if (auto _ttAmount = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. How much snow the forced coat holds: low is a dusting the armour shows through, 1 is a full coat whose clumps go solid.");
+			ImGui::SliderFloat("Lump Amount", &debugBodyCoatLumps, 0.0f, 1.0f, "%.2f");
+			if (auto _ttLumps = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. How much of the forced coat lies as lumps: 0 none, 1 solid snow wherever the coat reaches. Fewer lumps never means thinner ones.");
+			ImGui::SliderFloat("Grain Amount", &debugBodyCoatGrains, 0.0f, 1.0f, "%.2f");
+			if (auto _ttGrains = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. How much of the forced coat lies as loose grains, apart from the lumps: 0 none, 1 grains on up to 60 percent of the surface where the coat reaches.");
 			ImGui::SliderFloat("Angle of Repose", &debugBodyCoatRepose, 20.0f, 85.0f, "%.0f deg");
 			if (auto _ttRepose = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. The slope where snowfall starts sliding off: flatter surfaces hold all of it, and it is gone 20 degrees steeper. The armour's own relief counts, so the walls of its folds and cracks shed snow first.");
-			ImGui::SliderFloat("Graininess", &debugBodyCoatGrain, 0.0f, 1.0f, "%.2f");
+			ImGui::SliderFloat("Graininess", &debugBodyCoatGraininess, 0.0f, 1.0f, "%.2f");
 			if (auto _ttGrain = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. How far loose grains of snow spread past the clumps' edges and, for snowfall, past the slope where it slides off. 0: clumps only. 1: a wide halo of grains.");
+				ImGui::Text("%s", "Not saved. How far loose grains of snow spread past where the snow lumps and, for snowfall, past the slope where it slides off. 0: grains only among the lumps. 1: a wide halo of grains.");
+			ImGui::Checkbox("Hair Takes Grains Only", &debugBodyCoatHairGrainsOnly);
+			if (auto _ttHair = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes loose grains but never lumps.");
 			ImGui::Combo("Coat Look", &debugBodyCoatLook, "Crust\0Flat Paint\0");
 			if (auto _ttLook = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. S2's A/B. Crust: snow lies in solid clumps over a relief of its own, their number set by the coverage, with loose grains around them that thin out with distance and slope; it never fades to a grey film. Flat Paint: one even layer whose opacity equals the coverage, for comparison.");
+				ImGui::Text("%s", "Not saved. S2's A/B. Crust: solid lumps over a relief of their own, their number set by the coverage, with loose grains that thin out with distance and slope; it never fades to a grey film. Flat Paint: one even layer whose opacity equals the coverage times Lump Amount, for comparison.");
 			ImGui::Combo("Body Coat View", &debugBodyCoatView, "Off\0Canonical Bands\0Slot Pattern\0Slots and Frames\0");
 			if (auto _ttView = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Stage S1 of MD plans/BODY-SNOW-PLAN.md: paints every mapped skin of the player and the actors near them, so the coat's frames can be judged before any snow is written. Canonical Bands: coloured bands every 8 units of height and white lines every 16 across, in each actor's own rest frame; they must stay glued to the body and run unbroken from body to armour, boots, gloves and first person. Slot Pattern: the checks each actor's atlas slot holds, read back as the coat will read it; magenta means past the slot's bounds. Slots and Frames: one colour per slot, striped on a skin in a frame of its own (a bow, a tail). A view replaces the forced coat's look. Off, with Force Coat off too, empties the store.");

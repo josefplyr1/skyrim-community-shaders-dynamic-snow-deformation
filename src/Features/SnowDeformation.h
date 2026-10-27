@@ -4956,10 +4956,13 @@ public:
 		float4 Glint;
 		/** @brief The look's cranks: the cosines of the slope where snowfall starts sliding off, where it is gone, and where its grains end; the graininess, 0 to 1. */
 		float4 Look;
+		/** @brief S2's amounts of the forced coat: x lumps, y grains, 0 to 1. */
+		float4 Amounts;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
 	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
 	static constexpr uint32_t kBodyCoatFlagLiving = 2;
+	static constexpr uint32_t kBodyCoatFlagGrainsOnly = 4;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -5001,14 +5004,18 @@ public:
 	int debugBodyCoatView = 0;
 	/** @brief Runtime-only, S2: a synthetic coat in every slot until a writer exists: 0 off, 1 legs to the knee, 2 snowfall from above, 3 the left side, 4 everything. */
 	int debugBodyCoatForce = 0;
-	/** @brief Runtime-only, S2: the forced coat's strength, 0 to 1. */
-	float debugBodyCoatAmount = 1.0f;
+	/** @brief Runtime-only, S2: how much of the forced coat lies as lumps, 0 to 1. */
+	float debugBodyCoatLumps = 1.0f;
+	/** @brief Runtime-only, S2: how much of the forced coat lies as loose grains, 0 to 1. */
+	float debugBodyCoatGrains = 1.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (opacity from thickness and clumps), 1 flat paint (opacity = coverage). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the slope in degrees where snowfall starts sliding off; it is gone 20 degrees steeper. */
-	float debugBodyCoatRepose = 50.0f;
-	/** @brief Runtime-only, S2: how far snow grains spread past the clumps and the slope, 0 to 1. */
-	float debugBodyCoatGrain = 0.5f;
+	float debugBodyCoatRepose = 70.0f;
+	/** @brief Runtime-only, S2: how far snow grains spread past the lumps and the slope, 0 to 1. */
+	float debugBodyCoatGraininess = 1.0f;
+	/** @brief Runtime-only, S2: hair takes grains, never lumps. */
+	bool debugBodyCoatHairGrainsOnly = true;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

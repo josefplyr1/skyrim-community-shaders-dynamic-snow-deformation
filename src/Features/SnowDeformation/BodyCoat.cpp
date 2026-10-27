@@ -239,6 +239,7 @@ struct SnowDeformation::BodyCoatStore
 		const RE::NiSkinInstance* skin;
 		uint32_t frame;
 		RE::NiTransform toCanonical;
+		bool hair;
 	};
 	struct Actor
 	{
@@ -278,13 +279,14 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t pickFrame = 0;
 	int view = 0;
 	bool live = false;
-	/** @brief What the slots hold: S1's checks for the slot pattern view, otherwise the forced coat at this amount. */
+	/** @brief What the slots hold: S1's checks for the slot pattern view, otherwise the forced coat's pattern (its amounts ride the records). */
 	bool checks = false;
 	int force = -1;
-	float amount = -1.0f;
 	uint32_t lookFlags = 0;
 	float glint[4] = {};
 	float look[4] = {};
+	float amounts[2] = {};
+	bool hairGrainsOnly = false;
 
 	winrt::com_ptr<ID3D11Texture3D> atlas;
 	winrt::com_ptr<ID3D11ShaderResourceView> atlasSRV;
@@ -832,7 +834,7 @@ struct SnowDeformation::BodyCoatStore
 					default:
 						break;
 					}
-					texel = pack(contact * amount, fall * amount, 1.0f, 1.0f);
+					texel = pack(contact, fall, 1.0f, 1.0f);
 				}
 		const D3D11_BOX box{ x0, 0, z0, x0 + w, h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, texels.data(), w * 4, w * h * 4);
@@ -900,9 +902,10 @@ struct SnowDeformation::BodyCoatStore
 				r.View = uint(view);
 				r.Slot = uint(f.slot * 2 + std::max(f.half, 0));
 				r.Component = shape.frame;
-				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving);
+				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving) | (shape.hair && hairGrainsOnly ? kBodyCoatFlagGrainsOnly : 0u);
 				r.Glint = float4(glint[0], glint[1], glint[2], glint[3]);
 				r.Look = float4(look[0], look[1], look[2], look[3]);
+				r.Amounts = float4(amounts[0], amounts[1], 0.0f, 0.0f);
 				recordOf[shape.geometry] = uint32_t(records.size());
 				records.push_back(r);
 				recordSkin.push_back(shape.skin);
@@ -979,11 +982,9 @@ void SnowDeformation::TickBodyCoatStore()
 		store.recordsDirty = true;
 	}
 	const bool checks = view == 2;
-	const float amount = std::clamp(debugBodyCoatAmount, 0.0f, 1.0f);
-	if (store.checks != checks || store.force != force || store.amount != amount) {
+	if (store.checks != checks || store.force != force) {
 		store.checks = checks;
 		store.force = force;
-		store.amount = amount;
 		store.RefillAll();
 	}
 	// The record's look: the A/B, and the shell's sparkle as Lighting's
@@ -995,13 +996,18 @@ void SnowDeformation::TickBodyCoatStore()
 	// snowfall starts sliding off, is gone (20 degrees on), and its grains end
 	// (graininess x 20 degrees further, never past vertical).
 	const float repose = std::clamp(debugBodyCoatRepose, 0.0f, 89.0f);
-	const float grain = std::clamp(debugBodyCoatGrain, 0.0f, 1.0f);
+	const float grain = std::clamp(debugBodyCoatGraininess, 0.0f, 1.0f);
 	const float look[4] = { std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f, 90.0f))), std::cos(DirectX::XMConvertToRadians(repose)),
 		std::cos(DirectX::XMConvertToRadians(std::min(repose + 20.0f + 20.0f * grain, 90.0f))), grain };
-	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0) {
+	// The forced coat's lumps and grains, apart (S2's cranks).
+	const float amounts[2] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) };
+	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
+		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairGrainsOnly != debugBodyCoatHairGrainsOnly) {
 		store.lookFlags = lookFlags;
 		memcpy(store.glint, glint, sizeof(glint));
 		memcpy(store.look, look, sizeof(look));
+		memcpy(store.amounts, amounts, sizeof(amounts));
+		store.hairGrainsOnly = debugBodyCoatHairGrainsOnly;
 		store.recordsDirty = true;
 	}
 	auto* player = globals::game::player;
@@ -1086,7 +1092,7 @@ void SnowDeformation::TickBodyCoatStore()
 			// chains the frames, so gloves and boots map through the body's bones.
 			const bool bareSkin = s.feature == int(RE::BSShaderMaterial::Feature::kFaceGen) || s.feature == int(RE::BSShaderMaterial::Feature::kFaceGenRGBTint);
 			if (s.frame >= 0 && !bareSkin)
-				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor });
+				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor, s.feature == int(RE::BSShaderMaterial::Feature::kHairTint) });
 			else
 				a.skipped.push_back(s.geometry);
 		}
@@ -1420,8 +1426,8 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body coat: {}; forced coat {} at {:.2f}, {}. {}", kViews[std::clamp(store.view, 0, 3)], kForces[std::clamp(store.force, 0, 4)],
-			std::max(store.amount, 0.0f), (store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
+		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} and grains {:.2f}, {}. {}", kViews[std::clamp(store.view, 0, 3)], kForces[std::clamp(store.force, 0, 4)],
+			store.amounts[0], store.amounts[1], (store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",
 			store.actors.size(), refused, components, full, halves, kBodyCoatSlots, store.records.size(), store.context1 ? "bound by offset" : "written per draw",
