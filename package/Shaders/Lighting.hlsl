@@ -1986,8 +1986,8 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
 	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
 	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
-		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN), screenNoise,
-		projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
+		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
+		TexNormalSampler, SampNormalSampler, uv, uvOriginal, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)
 	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
 #		endif

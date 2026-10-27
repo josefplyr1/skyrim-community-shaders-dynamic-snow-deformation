@@ -4973,15 +4973,17 @@ public:
 		uint Flags;
 		/** @brief The shell's glint, as Lighting's glintParameters: screen-space scale, 40 - log density, microfacet roughness, density randomization. */
 		float4 Glint;
-		/** @brief The look's cranks: one over the angle of repose in radians; the graininess as its three hole octaves' noise thresholds, coarsest first (10 = no holes). */
+		/** @brief The look's cranks: one over the angle of repose in radians; the graininess as the lumps' three hole octaves' noise thresholds, coarsest first (10 = no holes). */
 		float4 Look;
-		/** @brief S2's amounts of the forced coat: x lumps, y the coat (hair: its specks), 0 to 1. */
+		/** @brief S2's amounts of the forced coat: x lumps, y specks, 0 to 1. */
 		float4 Amounts;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
 	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
 	static constexpr uint32_t kBodyCoatFlagLiving = 2;
 	static constexpr uint32_t kBodyCoatFlagHairSpecks = 4;
+	static constexpr uint32_t kBodyCoatFlagRelief = 8;
+	static constexpr uint32_t kBodyCoatFlagReliefView = 16;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -5025,16 +5027,20 @@ public:
 	int debugBodyCoatForce = 0;
 	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1. */
 	float debugBodyCoatLumps = 0.5f;
-	/** @brief Runtime-only, S2: how far the forced coat's solid layer spreads, in the same order, 0 to 1. */
+	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to a quarter of a surface, in the same order, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
-	/** @brief Runtime-only, S2's A/B: 0 the crust (lumps and the holed coat), 1 flat paint (the coat's extent, its edge a ramp). */
+	/** @brief Runtime-only, S2's A/B: 0 the crust (lumps and specks), 1 flat paint (the specks' share as one even layer). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the steepest slope in degrees snowfall holds on. */
 	float debugBodyCoatRepose = 40.0f;
-	/** @brief Runtime-only, S2: holes in the snow, more and smaller as it rises, 0 to 1. */
+	/** @brief Runtime-only, S2: holes at the lumps' rims, more and smaller as it rises, 0 to 1. */
 	float debugBodyCoatGraininess = 1.0f;
-	/** @brief Runtime-only, S2: hair takes specks of snow along its strands, never the coat or lumps. */
+	/** @brief Runtime-only, S2: hair takes specks of snow along its strands, never lumps. */
 	bool debugBodyCoatHairSpecks = true;
+	/** @brief Runtime-only, S2's A/B: the armour's own normal map steers the specks into its grooves and off its rims. */
+	bool debugBodyCoatRelief = true;
+	/** @brief Runtime-only, S2: paints the relief the specks read (grooves blue, rims red) instead of the snow. */
+	bool debugBodyCoatReliefView = false;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

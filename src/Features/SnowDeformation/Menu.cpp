@@ -2045,19 +2045,25 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", "Not saved. How far the forced coat's lumps spread. They start on the surfaces facing the snowfall most squarely and spread out to the sides, reaching the angle of repose at 1 (contact snow: from where it presses hardest). Single lumps lead the way and close into a lumpy blanket behind them. 0: none.");
 			ImGui::SliderFloat("Grain Amount", &debugBodyCoatGrains, 0.0f, 1.0f, "%.2f");
 			if (auto _ttGrains = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. How far the forced coat's even layer spreads, in the same order as the lumps: from the surfaces facing the snowfall out to the angle of repose at 1. It is solid wherever it lies; only Graininess opens holes in it. On hair it sets how far down the strands the specks spread. 0: none.");
+				ImGui::Text("%s", "Not saved. How many specks of snow land: a few at 0.1, more as it rises, densest at 1 (a quarter of the surface, never a coat of paint). They lie where snow holds: full on surfaces within half the angle of repose, thinning to none at it, more in the armour's grooves and fewer on its rims. They keep a size you can see from up close out to the farthest third-person zoom. On hair they spread down the strands. 0: none.");
 			ImGui::SliderFloat("Angle of Repose", &debugBodyCoatRepose, 20.0f, 85.0f, "%.0f deg");
 			if (auto _ttRepose = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. The steepest slope snowfall holds on: both amounts spread toward it and stop there. The armour's own relief counts, so the walls of its folds and cracks shed snow first.");
+				ImGui::Text("%s", "Not saved. The steepest slope snowfall holds on: lumps spread toward it, and specks thin out to none at it. The armour's own relief counts, so the walls of its folds and cracks shed snow first.");
 			ImGui::SliderFloat("Graininess", &debugBodyCoatGraininess, 0.0f, 1.0f, "%.2f");
 			if (auto _ttGrain = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Opens tiny holes in the snow, the gaps between the flakes it is made of: more of them as it rises, and smaller ones joining in (about 7, 4 and 2 mm across, each up to 11 % of the coat). The coat thins into holes at its edge, and lumps at their rims. Far off, where the holes are too small to see, they fill in rather than flicker. 0: solid snow.");
+				ImGui::Text("%s", "Not saved. Opens tiny holes at the rims of the lumps, the gaps between the flakes they are made of: more of them as it rises, and smaller ones joining in (about 7, 4 and 2 mm across). The specks are Grain Amount's alone. 0: solid lumps.");
 			ImGui::Checkbox("Hair Takes Specks", &debugBodyCoatHairSpecks);
 			if (auto _ttHair = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes tiny specks of snow on its strands instead of the coat and lumps, from the crown down as Grain Amount rises, at most a quarter of the hair. Off, hair takes the coat and lumps like armour.");
+				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes only specks of snow on its strands, from the crown down to its sides, as many as Grain Amount sets. Off, hair takes lumps and specks like armour.");
+			ImGui::Checkbox("Relief Steers the Specks", &debugBodyCoatRelief);
+			if (auto _ttRelief = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. A/B for round 8. On: each armour's own normal map steers the specks, up to twice as many in its grooves, engraving and seams, fewer to none on its rims, rivets and buckles. Off: the specks ignore the relief beyond its slope.");
+			ImGui::Checkbox("Show Relief", &debugBodyCoatReliefView);
+			if (auto _ttReliefView = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. With Force Coat on, paints what the specks read from each armour's normal map instead of the snow: grooves blue, rims and rivets red, flat green. Hair is not read.");
 			ImGui::Combo("Coat Look", &debugBodyCoatLook, "Crust\0Flat Paint\0");
 			if (auto _ttLook = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. S2's A/B. Crust: lumps and a solid coat, with Graininess's holes. Flat Paint: the coat's extent as one even layer, its edge a soft ramp, for comparison.");
+				ImGui::Text("%s", "Not saved. S2's A/B. Crust: lumps and specks. Flat Paint: the specks' share as one even layer, for comparison.");
 			ImGui::Combo("Body Coat View", &debugBodyCoatView, "Off\0Canonical Bands\0Slot Pattern\0Slots and Frames\0");
 			if (auto _ttView = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Stage S1 of MD plans/BODY-SNOW-PLAN.md: paints every mapped skin of the player and the actors near them, so the coat's frames can be judged before any snow is written. Canonical Bands: coloured bands every 8 units of height and white lines every 16 across, in each actor's own rest frame; they must stay glued to the body and run unbroken from body to armour, boots, gloves and first person. Slot Pattern: the checks each actor's atlas slot holds, read back as the coat will read it; magenta means past the slot's bounds. Slots and Frames: one colour per slot, striped on a skin in a frame of its own (a bow, a tail). A view replaces the forced coat's look. Off, with Force Coat off too, empties the store.");

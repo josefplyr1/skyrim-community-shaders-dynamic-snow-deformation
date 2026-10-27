@@ -823,18 +823,22 @@ namespace SnowLighting
 	static const uint kCoatFlatPaint = 1u;
 	static const uint kCoatLiving = 2u;
 	static const uint kCoatHairSpecks = 4u;
+	static const uint kCoatRelief = 8u;
+	static const uint kCoatReliefView = 16u;
 	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
-	// Round 7 (section 5.14; derivations in CODE-NOTES). CoatLook: x one over the
-	// angle of repose in radians, yzw the hole octaves' noise thresholds (10 none);
-	// CoatAmounts: x the lumps, y the coat. Lumps: patches 8 units, clumps 2.5,
-	// flakes 0.5; 8 cm deep on an average crown, as opaque as r d / (1 + r d) at
-	// r = 1.4 per cm (Perovich 2007), domed 1.5 units, single over the outer 0.35
-	// of their order. The coat's edge wanders 0.05 rad per spread of the clump
-	// and flake octaves and thins into holes over the outer 0.15. Holes at 0.8, 0.4 and 0.2
-	// units, open by two spreads more at an edge. Hair specks: the two finer hole
-	// octaves split 1:3, a quarter of the hair at most, from the crown to 105
-	// degrees, full over half their order. CoatNoise spreads 0.27 and slopes 0.56
-	// per cell (measured). An edge is never sharper than 0.05 of the relief.
+	// Round 8 (section 5.16; derivations in CODE-NOTES). CoatLook: x one over the
+	// angle of repose in radians, yzw the lumps' hole octaves' noise thresholds (10
+	// none); CoatAmounts: x the lumps, y the specks. Lumps: patches 8 units, clumps
+	// 2.5, flakes 0.5; 8 cm deep on an average crown, as opaque as r d / (1 + r d)
+	// at r = 1.4 per cm (Perovich 2007), domed 1.5 units, single over the outer
+	// 0.35 of their order, holed at their rims at 0.8, 0.4 and 0.2 units. Specks:
+	// a quarter of the surface at most, full over half their order (hair: out to
+	// 105 degrees), in octaves from 0.2 units, split 3:1 between the two finest a
+	// pixel resolves (a quarter of a period), out to 10x the footprint at which
+	// round 7's 0.4-unit specks closed. CoatNoise slopes 0.56 per cell; its upper
+	// tail is the Tukey lambda quantile 0.2112 (q^0.235 - p^0.235) / 0.235
+	// (measured, within 0.007 from 0.05 % to 50 %). An edge is never sharper
+	// than 0.05 of the relief.
 	static const float kCoatReliefShare = 0.5;
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
@@ -845,15 +849,16 @@ namespace SnowLighting
 	static const float kCoatEdge = 0.05;
 	static const float kCoatLumpUnits = 1.5;
 	static const float kCoatLumpFront = 0.35;
-	static const float kCoatWobble = 0.05;
-	static const float kCoatThinning = 0.15;
 	static const float3 kCoatHoleFreq = float3(1.0 / 0.8, 1.0 / 0.4, 1.0 / 0.2);
 	static const float kCoatHoleOpen = 0.54;
 	static const float kCoatSpeckMax = 0.25;
 	static const float2 kCoatSpeckSplit = float2(0.25, 0.75);
 	static const float kCoatSpeckReach = 1.8326;
 	static const float kCoatSpeckFront = 0.5;
-	static const float kCoatNoiseSpread = 0.27;
+	static const float kCoatSpeckFine = 0.2;
+	static const float kCoatSpeckResolve = 0.25;
+	static const float kCoatSpeckLevels = 5.321928;
+	static const float2 kCoatNoiseTail = float2(0.235, 0.8987234);
 	static const float kCoatNoiseSlope = 0.56;
 
 	float3 CoatDebugHue(float h)
@@ -920,21 +925,86 @@ namespace SnowLighting
 			u.z);
 	}
 
-	// S2's coat, rounds 3 to 7 (sections 5.10-5.14, after Josef's reads and
+	// How many times the finest speck octave doubles before a pixel spans at most
+	// a quarter of its period, unclamped.
+	float CoatSpeckLevel(float footprint)
+	{
+		return log2(max(footprint, 1e-6) / (kCoatSpeckResolve * kCoatSpeckFine));
+	}
+
+	// Specks covering a share of the surface: three octaves from the pixel's level
+	// up, the share sliding from the finer two to the coarser two as a pixel grows,
+	// so each speck stays crisp at any distance. Past the last level they give way
+	// to their share over one more doubling.
+	float CoatSpecks(float3 c, float footprint, float share)
+	{
+		const float level = CoatSpeckLevel(footprint);
+		const float k = floor(clamp(level, 0.0, kCoatSpeckLevels));
+		const float t = clamp(level, 0.0, kCoatSpeckLevels) - k;
+		const float3 weights = float3(kCoatSpeckSplit.y * (1.0 - t), kCoatSpeckSplit.x * (1.0 - t) + kCoatSpeckSplit.y * t, kCoatSpeckSplit.x * t);
+		const float fade = saturate(1.0 + kCoatSpeckLevels - level);
+		float keep = 1.0;
+		[unroll] for (uint i = 0; i < 3; ++i)
+		{
+			[branch] if (weights[i] > 0.0)
+			{
+				const float j = k + i;
+				const float f = exp2(-j) / kCoatSpeckFine;
+				const float p = clamp(share * weights[i], 1e-4, 0.5);
+				const float cut = kCoatNoiseTail.y * (pow(1.0 - p, kCoatNoiseTail.x) - pow(p, kCoatNoiseTail.x));
+				const float speck = saturate((CoatNoise(c * f + (17.1 + 26.3 * j)) - cut) / max(kCoatNoiseSlope * f * footprint, 1e-4) + 0.5);
+				keep *= 1.0 - lerp(p, speck, fade);
+			}
+		}
+		return 1.0 - keep;
+	}
+
+	// The armour's relief around a pixel: its normal map read at three points a
+	// radius (rest units) away, each normal's lean toward its point measured in
+	// world. Positive where they lean in (a groove, an engraving), negative where
+	// they lean out (a rim, a rivet); a groove whose walls rise at a reads 0.87a to a.
+	float CoatPocket(Texture2D<float4> normalTex, SamplerState normalSampler, float2 uv, float2 duvdx, float2 duvdy,
+		float3 dcdx, float3 dcdy, float3 worldDx, float3 worldDy, float3x3 world, float radius)
+	{
+		const float det = duvdx.x * duvdy.y - duvdy.x * duvdx.y;
+		const float valid = abs(det) > 1e-14 ? 1.0 : 0.0;
+		const float inv = valid / (valid > 0.0 ? det : 1.0);
+		const float3 dcdu = (dcdx * duvdy.y - dcdy * duvdx.y) * inv;
+		const float3 dcdv = (dcdy * duvdx.x - dcdx * duvdy.x) * inv;
+		const float3 dPdu = (worldDx * duvdy.y - worldDy * duvdx.y) * inv;
+		const float3 dPdv = (worldDy * duvdx.x - worldDx * duvdy.x) * inv;
+		float2 dims;
+		normalTex.GetDimensions(dims.x, dims.y);
+		const float pixelLod = log2(max(max(length(duvdx * dims), length(duvdy * dims)), 1.0));
+		float flux = 0.0;
+		[unroll] for (uint i = 0; i < 3; ++i)
+		{
+			float2 d;
+			sincos(2.0943951 * i, d.y, d.x);
+			const float2 offset = d * (radius / max(length(dcdu * d.x + dcdv * d.y), 1e-6));
+			const float lod = max(pixelLod, log2(max(length(offset * dims), 1.0)) - 1.0);
+			const float3 n = normalTex.SampleLevel(normalSampler, uv + offset, lod).xyz * 2.0 - 1.0;
+			flux += dot(CoatSafeNormalize(n.x * world[0] + n.y * world[1] + n.z * world[2]), CoatSafeNormalize(dPdu * d.x + dPdv * d.y));
+		}
+		return valid * asin(clamp(-0.5 * flux, -1.0, 1.0));
+	}
+
+	// S2's coat, rounds 3 to 8 (sections 5.10-5.16, after Josef's reads and
 	// the study of snow on people). Smooth across triangles and glued to the
 	// body: the rest-space normals come from the bind pose's own tangent frame,
 	// which the coat's vertex shader passes down, the surface's shape straight
 	// and its relief (the shading normal) un-skinned through the world and bind
-	// frames. Each amount spreads its snow from the surfaces facing the snowfall
-	// out to the angle of repose: lumps over a relief of their own in rest space,
-	// single at their front and closing behind it, and a solid coat the graininess
-	// holes, more where it thins at its edge; hair takes specks instead. The
-	// material is the shell's own set in rest space: its
-	// albedo convention, grain and RMAOS, as projected snow takes them. TruePBR
-	// pixels blend the material; vanilla pixels hand the snow fraction to
-	// RelightProjected, which lights it as the ground's. Returns the opacity, for
-	// the glint and the SSS mask.
-	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3x3 worldFrame, float3x3 bindFrame, float screenNoise,
+	// frames. Lumps spread from the surfaces facing the snowfall out to the angle
+	// of repose over a relief of their own in rest space, single at their front
+	// and closing behind it. Specks, as many as Grain Amount sets, lie in the same
+	// order, steered by the armour's own relief, at a size the eye can see at any
+	// distance; hair takes specks only. The material is the shell's own set in
+	// rest space: its albedo convention, grain and RMAOS, as projected snow takes
+	// them. TruePBR pixels blend the material; vanilla pixels hand the snow
+	// fraction to RelightProjected, which lights it as the ground's. Returns the
+	// opacity, for the glint and the SSS mask.
+	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3x3 worldFrame, float3x3 bindFrame, Texture2D<float4> normalTex,
+		SamplerState normalSampler, float2 uv, float2 uvMesh, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		float alpha = 0.0;
@@ -953,6 +1023,8 @@ namespace SnowLighting
 				const float3 dcdy = ddy(c);
 				const float3 worldDx = ddx(worldPos);
 				const float3 worldDy = ddy(worldPos);
+				const float2 duvdx = ddx(uvMesh);
+				const float2 duvdy = ddy(uvMesh);
 				const float3x3 toCanonical = float3x3(CoatModelToCanonical[0].xyz, CoatModelToCanonical[1].xyz, CoatModelToCanonical[2].xyz);
 				const float3x3 world = float3x3(CoatSafeNormalize(worldFrame[0]), CoatSafeNormalize(worldFrame[1]), CoatSafeNormalize(worldFrame[2]));
 				const float3x3 bind = float3x3(CoatSafeNormalize(bindFrame[0]), CoatSafeNormalize(bindFrame[1]), CoatSafeNormalize(bindFrame[2]));
@@ -969,57 +1041,62 @@ namespace SnowLighting
 				const float fall = inside ? voxel.g : 0.0;
 				const bool hairSpecks = (CoatFlags & kCoatHairSpecks) != 0;
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
-				// The clumps; hair has none. An octave fades once a pixel spans half of
-				// it, so far off the flakes fold into the cover instead of shimmering.
 				const float footprint = max(length(dcdx), length(dcdy));
-				float3 octaves = 0.0;
-				[branch] if (!hairSpecks)
-					octaves = kCoatClumpWeight * saturate(1.0 - 2.0 * footprint * kCoatClumpFreq) *
-							  float3(CoatNoise(c * kCoatClumpFreq.x), CoatNoise(c * kCoatClumpFreq.y), CoatNoise(c * kCoatClumpFreq.z));
-				const float clump = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y + octaves.z));
-				const float crown = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y));
-				// The order both amounts spread in: 1 facing the snowfall, 0 at the angle
-				// of repose, below 0 past it; contact snow by its strength.
-				const float lumpSlope = acos(clamp(dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), deposit), -1.0, 1.0));
-				const float coatSlope = max(acos(clamp(dot(restRelief, deposit), -1.0, 1.0)) + kCoatWobble * (octaves.y + octaves.z) / (length(kCoatClumpWeight.yz) * kCoatNoiseSpread), 0.0);
-				const float lumpOrder = max(contact - 1e-3, 1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall));
-				const float coatOrder = max(contact - 1e-3, 1.0 - coatSlope * CoatLook.x - 2.0 * (1.0 - fall));
-				// The graininess's holes, three octaves. One fades once a pixel spans a
-				// quarter of it, its holes closing rather than flickering.
-				const float3 holeFade = saturate(0.5 / max(footprint * kCoatHoleFreq, 1e-6) - 1.0);
-				const float3 holeNoise = holeFade * float3(CoatNoise(c * kCoatHoleFreq.x + 17.1), CoatNoise(c * kCoatHoleFreq.y + 43.7), CoatNoise(c * kCoatHoleFreq.z + 71.3));
-				const float3 holeStep = max(kCoatNoiseSlope * kCoatHoleFreq * footprint * holeFade, 1e-4);
-				// Lumps lie where their cover drowns the relief, deep however few, holed
-				// only at their rims.
-				const float cover = hairSpecks ? 0.0 : saturate((lumpOrder - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
-				const float lie = cover * (1.0 + kCoatEdge) - (1.0 - clump);
-				const float rim = saturate(lie / kCoatRimSpan);
-				const float depthCm = kCoatFullCm * (0.5 + clump) * rim;
-				const float3 lumpHoles = saturate((holeNoise - CoatLook.yzw - lerp(-kCoatHoleOpen, kCoatHoleOpen, rim)) / holeStep + 0.5);
-				const float lumpAlpha = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm) *
-										(1.0 - lumpHoles.x) * (1.0 - lumpHoles.y) * (1.0 - lumpHoles.z);
-				// The coat: solid, holed, and more where it thins at its edge.
-				const float coatLie = coatOrder - (1.0 - CoatAmounts.y);
-				const float3 coatHoles = saturate((holeNoise - CoatLook.yzw + (1.0 - saturate(coatLie / kCoatThinning)) * kCoatHoleOpen) / holeStep + 0.5);
-				const float coatAlpha = (CoatAmounts.y > 0.0 ? saturate(coatLie / max(fwidth(coatLie), 1e-4) + 0.5) : 0.0) *
-										(1.0 - coatHoles.x) * (1.0 - coatHoles.y) * (1.0 - coatHoles.z);
-				// Hair: specks of the two finer octaves, from the crown down as the coat's
-				// amount grows. The noise's upper tail as a logistic of its spread; an
-				// unresolved octave keeps its share as a frost.
-				const float speckOrder = max(contact - 1e-3, 1.0 - acos(clamp(dot(restShape, deposit), -1.0, 1.0)) / kCoatSpeckReach - 2.0 * (1.0 - fall));
-				const float speckShare = kCoatSpeckMax * saturate((speckOrder - (1.0 - CoatAmounts.y)) / kCoatSpeckFront);
-				const float2 speckP = clamp(speckShare * kCoatSpeckSplit, 1e-4, 0.5);
-				const float2 speckCut = (kCoatNoiseSpread / 1.702) * log((1.0 - speckP) / speckP);
-				const float2 specks = lerp(speckP, saturate((holeNoise.yz - speckCut) / holeStep.yz + 0.5), holeFade.yz);
-				const float speckAlpha = speckShare > 0.0 ? 1.0 - (1.0 - specks.x) * (1.0 - specks.y) : 0.0;
-				if (hairSpecks)
-					alpha = flatPaint ? speckShare : speckAlpha;
-				else
-					alpha = flatPaint ? (CoatAmounts.y > 0.0 ? saturate(coatLie / kCoatThinning) : 0.0) : max(lumpAlpha, coatAlpha);
+				// The order the snow spreads in: 1 facing the snowfall, 0 at the angle of
+				// repose, below 0 past it; contact snow by its strength. Lumps (hair has
+				// none) lie where their cover drowns the relief, deep however few, holed
+				// only at their rims; a clump octave fades once a pixel spans half of it,
+				// a hole octave a quarter.
+				float cover = 0.0;
+				float crown = 0.0;
+				float lumpAlpha = 0.0;
+				[branch] if (!hairSpecks && CoatAmounts.x > 0.0)
+				{
+					const float3 octaves = kCoatClumpWeight * saturate(1.0 - 2.0 * footprint * kCoatClumpFreq) *
+										   float3(CoatNoise(c * kCoatClumpFreq.x), CoatNoise(c * kCoatClumpFreq.y), CoatNoise(c * kCoatClumpFreq.z));
+					const float clump = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y + octaves.z));
+					crown = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y));
+					const float lumpSlope = acos(clamp(dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), deposit), -1.0, 1.0));
+					const float lumpOrder = max(contact - 1e-3, 1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall));
+					const float3 holeFade = saturate(0.5 / max(footprint * kCoatHoleFreq, 1e-6) - 1.0);
+					const float3 holeNoise = holeFade * float3(CoatNoise(c * kCoatHoleFreq.x + 17.1), CoatNoise(c * kCoatHoleFreq.y + 43.7), CoatNoise(c * kCoatHoleFreq.z + 71.3));
+					const float3 holeStep = max(kCoatNoiseSlope * kCoatHoleFreq * footprint * holeFade, 1e-4);
+					cover = saturate((lumpOrder - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
+					const float lie = cover * (1.0 + kCoatEdge) - (1.0 - clump);
+					const float rim = saturate(lie / kCoatRimSpan);
+					const float depthCm = kCoatFullCm * (0.5 + clump) * rim;
+					const float3 lumpHoles = saturate((holeNoise - CoatLook.yzw - lerp(-kCoatHoleOpen, kCoatHoleOpen, rim)) / holeStep + 0.5);
+					lumpAlpha = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm) *
+								(1.0 - lumpHoles.x) * (1.0 - lumpHoles.y) * (1.0 - lumpHoles.z);
+				}
+				// The specks: Grain Amount's share of the surface in the same order, full
+				// over half of it (hair: its shape, out to 105 degrees). The armour's
+				// relief steers them, up to twice the share in its grooves and none on
+				// its rims, read at half the coarser speck octave's period.
+				const float speckSlope = acos(clamp(dot(hairSpecks ? restShape : restRelief, deposit), -1.0, 1.0));
+				const float speckOrder = max(contact - 1e-3, 1.0 - speckSlope * (hairSpecks ? 1.0 / kCoatSpeckReach : CoatLook.x) - 2.0 * (1.0 - fall));
+				float pocket = 0.0;
+				[branch] if (!hairSpecks && (CoatFlags & (kCoatRelief | kCoatReliefView)) != 0)
+					pocket = (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) *
+							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world,
+								 kCoatSpeckFine * exp2(clamp(CoatSpeckLevel(footprint), 0.0, kCoatSpeckLevels)));
+				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
+				const float speckShare = kCoatSpeckMax * CoatAmounts.y * saturate(speckOrder / kCoatSpeckFront) * steer;
+				float speckAlpha = 0.0;
+				[branch] if (speckShare > 0.0 && !flatPaint)
+					speckAlpha = CoatSpecks(c, footprint, speckShare);
+				alpha = flatPaint ? speckShare : max(lumpAlpha, speckAlpha);
 				const float snowCover = max(0.75 * alpha, flatPaint ? 0.0 : lumpAlpha);
 				// The snow's surface domes over each lump, steepest at its rim, so a full
-				// cover stays lumpy; the coat and specks stay flat.
+				// cover stays lumpy; the specks stay flat.
 				const float height = kCoatLumpUnits * sqrt(saturate(cover * (1.0 + kCoatEdge) - (1.0 - crown)));
+				[branch] if ((CoatFlags & kCoatReliefView) != 0)
+				{
+					// Show Relief: grooves blue, rims red, full at 30 degrees; no snow.
+					const float v = clamp(pocket / 0.5235988, -1.0, 1.0);
+					baseColor = float3(saturate(-v), 0.15 * (1.0 - abs(v)), saturate(v));
+					alpha = 0.0;
+				}
 				const float bevelDx = ddx(height);
 				const float bevelDy = ddy(height);
 				const float3 setDx = dcdx / SnowDeformation::SnowUVTile;
