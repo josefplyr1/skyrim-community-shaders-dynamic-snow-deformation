@@ -731,7 +731,7 @@ groupshared uint gClusterFootprint[4];
 		idxStart = asuint(cmin.w);
 		idxCount = asuint(cmax.w);
 		float grow = b.LiftMargin / max(length(b.WorldRow0.xyz), 1e-6);
-		float2 lo, hi;
+		float2 lo = 0.0, hi = 0.0;
 		float zn;
 		bool drawsOnScreen = true;
 		if (BoxPastFadeEnd(cmin.xyz - grow, cmax.xyz + grow, b.WorldRow0, b.WorldRow1, b.FadeEnd))
