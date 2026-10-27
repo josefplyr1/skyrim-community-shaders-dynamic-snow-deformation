@@ -5006,15 +5006,15 @@ public:
 	int debugBodyCoatForce = 0;
 	/** @brief Runtime-only, S2: how much of the forced coat lies as lumps, 0 to 1. */
 	float debugBodyCoatLumps = 1.0f;
-	/** @brief Runtime-only, S2: how much of the forced coat lies as loose grains, 0 to 1. */
+	/** @brief Runtime-only, S2: how much of the forced coat lies as a dusting that breaks into grains at its edges, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (opacity from thickness and clumps), 1 flat paint (opacity = coverage). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the slope in degrees where snowfall starts sliding off; it is gone 20 degrees steeper. */
 	float debugBodyCoatRepose = 70.0f;
-	/** @brief Runtime-only, S2: how far snow grains spread past the lumps and the slope, 0 to 1. */
+	/** @brief Runtime-only, S2: how grainy the dusting's edges are and how far its grains spread past them and the slope, 0 to 1. */
 	float debugBodyCoatGraininess = 1.0f;
-	/** @brief Runtime-only, S2: hair takes grains, never lumps. */
+	/** @brief Runtime-only, S2: hair takes the dusting, never lumps. */
 	bool debugBodyCoatHairGrainsOnly = true;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;

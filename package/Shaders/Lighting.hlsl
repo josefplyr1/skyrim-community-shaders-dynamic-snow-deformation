@@ -3063,9 +3063,25 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+#		if defined(SNOW_BODY_COAT) && defined(CS_HAIR_SHADING)
+	// Hair shading lights along the strand (worldNormal holds the tangent): the coat's snow
+	// takes the surface's own normal, which the hair block kept in vertexNormal.
+	DirectContext coatLightContext = dirLightContext;
+	float3 coatLightNormal = worldNormal.xyz;
+	[branch] if (SharedData::hairSpecularSettings.Enabled)
+	{
+		coatLightNormal = vertexNormal.xyz;
+		coatLightContext = CreateDirectLightingContext(coatLightNormal, coatLightNormal, viewDirection, DirLightDirection, dirLightColor, dirDetailedShadow, dirSoftShadow);
+		coatLightContext.hairShadow = dirLightContext.hairShadow;
+	}
+	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, coatLightContext, indirectContext, directionalAmbientColor,
+		dirLightColor, coatLightNormal, dirDetailedShadow,
+		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
+#		else
 	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, dirLightContext, indirectContext, directionalAmbientColor,
 		dirLightColor, worldNormal.xyz, dirDetailedShadow,
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
+#		endif
 #	endif
 
 	directionalAmbientColor *= outputAlbedo;
