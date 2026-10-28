@@ -525,6 +525,17 @@ float3 SampleTerrain(float2 gridLocal)
 	return result;
 }
 
+// Holds a tap inside the loaded square. Past the seam the window carries only
+// the far fill (TerrainWindowFillCS: the Terrain Shadows heightmap, BC4 over
+// +-262136 units, about 2000 units a step), not the land, so taps the ground
+// snow takes for its own surface stay on its side.
+float2 ShellSeamClamp(float2 gridLocal)
+{
+	[flatten] if (SeamRampInv > 0.0)
+		gridLocal = clamp(gridLocal, SeamBounds.xy - GridOrigin, SeamBounds.zw - GridOrigin);
+	return gridLocal;
+}
+
 // Bilinear helper at fractional texel coordinates (Load-based).
 float SampleDeformationBilinear(float2 t, float2 dims)
 {
@@ -1127,14 +1138,18 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 
 // The vertex normal's two height differences: wide 32-unit differences bridge
 // the 128-unit data texels, and interpolation removes the faceting of the
-// per-pixel piecewise-constant gradient.
+// per-pixel piecewise-constant gradient. At the seam a tap stops on it and
+// the one-sided difference is scaled to the 64-unit span.
 float2 ShellVertexSlope(float2 gridLocal)
 {
-	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
-	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
-	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
-	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
-	return float2(hxp - hxn, hyp - hyn);
+	const float2 c = ShellSeamClamp(gridLocal);
+	const float2 p = ShellSeamClamp(c + 32.0);
+	const float2 n = ShellSeamClamp(c - 32.0);
+	float hxp = SampleTerrain(float2(p.x, c.y)).x;
+	float hxn = SampleTerrain(float2(n.x, c.y)).x;
+	float hyp = SampleTerrain(float2(c.x, p.y)).x;
+	float hyn = SampleTerrain(float2(c.x, n.y)).x;
+	return float2(hxp - hxn, hyp - hyn) * (64.0 / max(p - n, 1.0));
 }
 
 // Shared with the raised landscape (LandscapeSnow.hlsl). Macros: as called
@@ -1210,11 +1225,8 @@ VS_OUTPUT FinishShellVertexSloped(float2 gridLocal, float z, float coverage, flo
 
 VS_OUTPUT FinishShellVertex(float2 gridLocal, float z, float coverage, float terrainHeight)
 {
-	float hxp = SampleTerrain(gridLocal + float2(32.0, 0.0)).x;
-	float hxn = SampleTerrain(gridLocal - float2(32.0, 0.0)).x;
-	float hyp = SampleTerrain(gridLocal + float2(0.0, 32.0)).x;
-	float hyn = SampleTerrain(gridLocal - float2(0.0, 32.0)).x;
-	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, hxp - hxn, hyp - hyn);
+	const float2 slope = ShellVertexSlope(gridLocal);
+	return FinishShellVertexSloped(gridLocal, z, coverage, terrainHeight, slope.x, slope.y);
 }
 #endif
 
@@ -2510,9 +2522,11 @@ cbuffer MarchCacheCB : register(b2)
 // wall; the unbaked A/B path leaves the term out), and the dunes. No object
 // term: every object under the shell is geometry the cascades already shadow
 // with its real silhouette, and the shell draped over it casts through its
-// own caster.
-float MarchTapHeight(float2 gridLocal)
+// own caster. Past the seam the surface continues level from the seam: the far
+// fill there would stand up to ~2000 units off the land as phantom walls.
+float MarchTapHeight(float2 a_gridLocal)
 {
+	const float2 gridLocal = ShellSeamClamp(a_gridLocal);
 	const float3 st = SampleTerrain(gridLocal);
 	float depth = max(st.y, 0.0);
 	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
