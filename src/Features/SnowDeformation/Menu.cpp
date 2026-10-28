@@ -2045,7 +2045,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", "Not saved. How far the forced coat's lumps spread. They start on the surfaces facing the snowfall most squarely and spread out to the sides, reaching the angle of repose at 1 (contact snow: from where it presses hardest). Single lumps lead the way and close into a lumpy blanket behind them. 0: none.");
 			ImGui::SliderFloat("Grain Amount", &debugBodyCoatGrains, 0.0f, 1.0f, "%.2f");
 			if (auto _ttGrains = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. How many specks of snow land: a few at 0.1, more as it rises, densest at 1 (a quarter of the surface, never a coat of paint). They lie where snow holds: full on surfaces within half the angle of repose, thinning to none at it, more in the armour's grooves and fewer on its rims. They keep a size you can see from up close out to the farthest third-person zoom. On hair they spread down the strands. 0: none.");
+				ImGui::Text("%s", "Not saved. How many specks of snow land: a few at 0.1, more as it rises, densest at 1 (half the surface). They lie where snow holds: full on surfaces within half the angle of repose, thinning to none at it, more in the armour's grooves and fewer on its rims. Each keeps its size (Speck Size) at any distance; once a speck is under two pixels across, they blend into an even dusting just as bright. Hair has its own amount. 0: none.");
+			ImGui::SliderFloat("Speck Size", &debugBodyCoatSpeckSize, 0.5f, 10.0f, "%.1f mm", ImGuiSliderFlags_Logarithmic);
+			if (auto _ttSize = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. How big the specks are: the largest across, in mm. They vary below it. The amounts set how much of the surface they cover, so smaller specks come in greater numbers. A speck shows as a dot while it is at least two pixels across, so bigger specks stay visible farther off before they blend into a dusting. Lumps are not affected.");
 			ImGui::SliderFloat("Angle of Repose", &debugBodyCoatRepose, 20.0f, 85.0f, "%.0f deg");
 			if (auto _ttRepose = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. The steepest slope snowfall holds on: lumps spread toward it, and specks thin out to none at it. The armour's own relief counts, so the walls of its folds and cracks shed snow first.");
@@ -2054,7 +2057,10 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", "Not saved. Opens tiny holes at the rims of the lumps, the gaps between the flakes they are made of: more of them as it rises, and smaller ones joining in (about 7, 4 and 2 mm across). The specks are Grain Amount's alone. 0: solid lumps.");
 			ImGui::Checkbox("Hair Takes Specks", &debugBodyCoatHairSpecks);
 			if (auto _ttHair = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes only specks of snow on its strands, from the crown down to its sides, as many as Grain Amount sets. Off, hair takes lumps and specks like armour.");
+				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes only specks of snow on its strands, from the crown down to its sides, as many as Hair Speck Amount sets. Off, hair takes lumps and specks like armour.");
+			ImGui::SliderFloat("Hair Speck Amount", &debugBodyCoatHairAmount, 0.0f, 1.0f, "%.2f");
+			if (auto _ttHairAmount = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. How many specks land on hair (with Hair Takes Specks on), on Grain Amount's scale: 1 covers half the hair at its crown. 0: none.");
 			ImGui::Checkbox("Relief Steers the Specks", &debugBodyCoatRelief);
 			if (auto _ttRelief = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. A/B for round 8. On: each armour's own normal map steers the specks, up to twice as many in its grooves, engraving and seams, fewer to none on its rims, rivets and buckles. Off: the specks ignore the relief beyond its slope.");

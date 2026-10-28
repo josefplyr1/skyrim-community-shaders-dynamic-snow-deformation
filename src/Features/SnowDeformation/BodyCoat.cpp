@@ -302,7 +302,7 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t lookFlags = 0;
 	float glint[4] = {};
 	float look[4] = {};
-	float amounts[2] = {};
+	float amounts[4] = {};
 	bool hairSpecks = false;
 
 	winrt::com_ptr<ID3D11Texture3D> atlas;
@@ -922,7 +922,7 @@ struct SnowDeformation::BodyCoatStore
 				r.Flags = lookFlags | (actor.dead ? 0u : kBodyCoatFlagLiving) | (shape.hair && hairSpecks ? kBodyCoatFlagHairSpecks : 0u);
 				r.Glint = float4(glint[0], glint[1], glint[2], glint[3]);
 				r.Look = float4(look[0], look[1], look[2], look[3]);
-				r.Amounts = float4(amounts[0], amounts[1], 0.0f, 0.0f);
+				r.Amounts = float4(amounts[0], amounts[1], amounts[2], amounts[3]);
 				recordOf[shape.geometry] = uint32_t(records.size());
 				records.push_back(r);
 				recordSkin.push_back(shape.skin);
@@ -1018,8 +1018,10 @@ void SnowDeformation::TickBodyCoatStore()
 	float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose) };
 	for (int k = 0; k < 3; ++k)
 		look[1 + k] = NoiseCut(kHoleShare * std::clamp(3.0f * grain - float(k), 0.0f, 1.0f));
-	// The forced coat's lumps and specks, apart (S2's cranks).
-	const float amounts[2] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) };
+	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and a
+	// speck's radius in units (Speck Size is a diameter in mm, 14.2875 mm a unit).
+	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f),
+		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), std::clamp(debugBodyCoatSpeckSize, 0.5f, 10.0f) * 0.5f / 14.2875f };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
 		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairSpecks != debugBodyCoatHairSpecks) {
 		store.lookFlags = lookFlags;
@@ -1445,8 +1447,9 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} and specks {:.2f}, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)], kForces[std::clamp(store.force, 0, 4)],
-			store.amounts[0], store.amounts[1], (store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
+		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks {:.2f} and hair's {:.2f} at {:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
+			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1], store.amounts[2], store.amounts[3] * 2.0f * 14.2875f,
+			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			(store.lookFlags & kBodyCoatFlagReliefView) ? "shown" : ((store.lookFlags & kBodyCoatFlagRelief) ? "on" : "off"),
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",

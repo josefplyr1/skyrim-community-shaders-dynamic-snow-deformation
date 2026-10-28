@@ -4975,7 +4975,7 @@ public:
 		float4 Glint;
 		/** @brief The look's cranks: one over the angle of repose in radians; the graininess as the lumps' three hole octaves' noise thresholds, coarsest first (10 = no holes). */
 		float4 Look;
-		/** @brief S2's amounts of the forced coat: x lumps, y specks, 0 to 1. */
+		/** @brief S2's amounts of the forced coat: x lumps, y specks, z hair's specks, 0 to 1; w a speck's radius in units. */
 		float4 Amounts;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
@@ -5027,8 +5027,12 @@ public:
 	int debugBodyCoatForce = 0;
 	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1. */
 	float debugBodyCoatLumps = 0.5f;
-	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to a quarter of a surface, in the same order, 0 to 1. */
+	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
+	/** @brief Runtime-only, S2: how many specks land on hair, on the same scale, 0 to 1. */
+	float debugBodyCoatHairAmount = 0.25f;
+	/** @brief Runtime-only, S2: the specks' size, the largest across in mm (0.5 to 10). */
+	float debugBodyCoatSpeckSize = 3.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (lumps and specks), 1 flat paint (the specks' share as one even layer). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the steepest slope in degrees snowfall holds on. */
