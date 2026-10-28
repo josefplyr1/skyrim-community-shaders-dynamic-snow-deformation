@@ -4973,9 +4973,9 @@ public:
 		uint Flags;
 		/** @brief The shell's glint, as Lighting's glintParameters: screen-space scale, 40 - log density, microfacet roughness, density randomization. */
 		float4 Glint;
-		/** @brief The look's cranks: one over the angle of repose in radians; the lumps' three rim-hole octaves' noise thresholds, coarsest first (10 = no holes). */
+		/** @brief The look's cranks: one over the angle of repose in radians; the smallest and largest speck radius in units; the balls a share needs per the sizes' mean volume. */
 		float4 Look;
-		/** @brief S2's amounts of the forced coat: x lumps, y specks, z hair's specks, 0 to 1; w a speck's radius in units. */
+		/** @brief S2's amounts of the forced coat: x lumps, y specks, z hair's specks, 0 to 1. */
 		float4 Amounts;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
@@ -4984,7 +4984,6 @@ public:
 	static constexpr uint32_t kBodyCoatFlagHairSpecks = 4;
 	static constexpr uint32_t kBodyCoatFlagRelief = 8;
 	static constexpr uint32_t kBodyCoatFlagReliefView = 16;
-	static constexpr uint32_t kBodyCoatFlagClumps = 32;
 	static constexpr uint32_t kBodyCoatFlagHairBeads = 64;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
@@ -5012,6 +5011,10 @@ public:
 	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
 	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned with tangent-space normals, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
 	[[nodiscard]] bool BodyCoatPixelKey(uint32_t a_rawTechnique) const;
+	/** @brief From BeginTechnique, when a coat draw's shaders were not ready: remembers its keys so later launches compile them with the game's own. */
+	void NoteBodyCoatShaders(uint32_t a_vertexDescriptor, uint32_t a_pixelDescriptor);
+	/** @brief At BSShader::LoadShaders: queues the coat shaders earlier sessions drew (SnowBodyCoatShaders.txt), so a cleared ShaderCache compiles them at startup. */
+	virtual void GenerateShaderPermutations(RE::BSShader* a_shader) override;
 	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
 	std::vector<std::string> BodyCoatProbeLines() const;
@@ -5032,23 +5035,23 @@ public:
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
 	/** @brief Runtime-only, S2: how many specks land on hair, on the same scale, 0 to 1. */
-	float debugBodyCoatHairAmount = 0.1f;
-	/** @brief Runtime-only, S2: the specks' size, the largest across in mm (0.5 to 10). */
-	float debugBodyCoatSpeckSize = 3.0f;
+	float debugBodyCoatHairAmount = 0.05f;
+	/** @brief Runtime-only, S2: the smallest a speck is across, in mm (0.5 to 10); each speck takes a size between it and the largest. */
+	float debugBodyCoatSpeckMin = 2.0f;
+	/** @brief Runtime-only, S2: the largest a speck is across, in mm (0.5 to 10). */
+	float debugBodyCoatSpeckMax = 3.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (lumps and specks), 1 flat paint (the specks' share as one even layer). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the steepest slope in degrees snowfall holds on. */
-	float debugBodyCoatRepose = 40.0f;
+	float debugBodyCoatRepose = 70.0f;
 	/** @brief Runtime-only, S2: hair takes specks of snow along its strands, never lumps. */
 	bool debugBodyCoatHairSpecks = true;
 	/** @brief Runtime-only, S2's A/B: the armour's own normal map steers the specks into its grooves and off its rims. */
 	bool debugBodyCoatRelief = true;
 	/** @brief Runtime-only, S2: paints the relief the specks read (grooves blue, rims red) instead of the snow. */
 	bool debugBodyCoatReliefView = false;
-	/** @brief Runtime-only, S2's A/B: half the specks gather in random clumps about a centimetre across; off, they scatter evenly. */
-	bool debugBodyCoatClumps = true;
 	/** @brief Runtime-only, S2's A/B: hair's specks, 0 round, 1 beads along the strands. */
-	int debugBodyCoatHairShape = 1;
+	int debugBodyCoatHairShape = 0;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

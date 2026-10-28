@@ -862,25 +862,23 @@ namespace SnowLighting
 	static const uint kCoatHairSpecks = 4u;
 	static const uint kCoatRelief = 8u;
 	static const uint kCoatReliefView = 16u;
-	static const uint kCoatClumps = 32u;
 	static const uint kCoatHairBeads = 64u;
 	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
-	// Round 10 (section 5.19; derivations in CODE-NOTES). CoatLook: x one over the
-	// angle of repose in radians, yzw the lumps' hole octaves' noise thresholds (10
-	// none); CoatAmounts: x the lumps, y the specks, z hair's specks, w a speck's
-	// radius in units. Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep
-	// on an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm
-	// (Perovich 2007), domed 1.5 units, single over the outer 0.35 of their order,
-	// holed at their rims at 0.8, 0.4 and 0.2 units. Specks: half the surface at
-	// most, full over half their order (hair: out to 105 degrees). Balls cover 70 %
-	// all on; a share takes q = L (0.9212 - 0.0764 L) of them, L = -ln(1 - share)
-	// (measured, within 1 % of q); an edge ramp a pixel wide adds 0.0587 (pixel /
-	// radius)^2 of the cover (measured). Speck clumps: balls of 0.5 units (about
-	// 7 mm; estimate), 0.6 of them on, soft over 0.3 of their radius, covering
-	// 0.342 of a surface (measured); halfway between even and clumped, specks are
-	// half as dense outside a clump and 1.962 times inside. Hair beads: 1.2 by
-	// 0.45 speck radii. The relief is read at 0.2 units, or the pixel when larger.
-	// CoatNoise slopes 0.56 per cell. An edge is never sharper than 0.05 of the relief.
+	// Round 11 (section 5.20; derivations in CODE-NOTES). CoatLook: x one over the
+	// angle of repose in radians, y and z the smallest and largest speck radius in
+	// units, w the balls a share needs per the sizes' mean volume, 4 / ((1 + p)(1 +
+	// p^2)) at p = smallest / largest; CoatAmounts: x the lumps, y the specks, z
+	// hair's specks. Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
+	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
+	// 2007), domed 1.5 units, single over the outer 0.35 of their order, holed at
+	// their rims at 0.8, 0.4 and 0.2 units, each to 11 % (CoatNoise's measured cut
+	// 0.3406). Specks: half the surface at most, full over half their order (hair:
+	// out to 105 degrees). Equal balls cover 70 % all on; a share takes q = L
+	// (0.9212 - 0.0764 L) of them, L = -ln(1 - share) (measured, within 1 % of q);
+	// an edge ramp a pixel wide adds 0.0587 (pixel / smallest radius)^2 of the cover
+	// (measured with 2 to 3 mm). Hair beads: 1.2 by 0.45 speck radii. The relief
+	// is read at 0.2 units, or the pixel when larger. CoatNoise slopes 0.56 per
+	// cell. An edge is never sharper than 0.05 of the relief.
 	static const float kCoatReliefShare = 0.5;
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
@@ -900,11 +898,8 @@ namespace SnowLighting
 	static const float2 kCoatDotRank = float2(0.9212, -0.0764);
 	static const float kCoatDotInflate = 0.0587;
 	static const float kCoatSpeckLevels = 7.0;
-	static const float kCoatClumpRadius = 0.5;
-	static const float kCoatClumpOn = 0.6;
-	static const float kCoatClumpSoft = 0.3;
-	static const float2 kCoatClumpMix = float2(0.5, 1.962);
 	static const float2 kCoatBead = float2(1.2, 0.45);
+	static const float kCoatRimCut = 0.3406;
 	static const float kCoatPocketRadius = 0.2;
 	static const float kCoatNoiseSlope = 0.56;
 
@@ -973,83 +968,69 @@ namespace SnowLighting
 	}
 
 	// One cell's two balls: jitter and rank in ten-bit fields from the top of each word.
-	void CoatCellBalls(int3 cell, out float4 ball0, out float4 ball1)
+	// One cell's two balls: jitter and rank in ten-bit fields from the top of each
+	// word, and a size fraction each in five bits of the last.
+	void CoatCellBalls(int3 cell, out float4 ball0, out float4 ball1, out float2 size)
 	{
 		const uint3 h = Random::pcg3d(asuint(cell));
 		ball0 = float4((h.xxx >> uint3(22, 12, 2)) & 1023u, (h.y >> 22) & 1023u) / 1024.0;
 		ball1 = float4((h.yy >> uint2(12, 2)) & 1023u, (h.zz >> uint2(22, 12)) & 1023u) / 1024.0;
+		size = (float2((h.zz >> uint2(7, 2)) & 31u) + 0.5) / 32.0;
 	}
 
 	// The fraction of balls a share needs at a level (fitted to the measured cover),
-	// less the area a pixel-wide edge ramp adds, and aspect^2 more for ellipsoids.
-	float CoatBallFraction(float share, float footprint, float radius, float aspect)
+	// less the area a pixel-wide edge ramp adds at the smallest size, aspect^2 more
+	// for ellipsoids, and more again as the sizes' mean volume falls below the largest's.
+	float CoatBallFraction(float share, float footprint, float smallest, float aspect)
 	{
-		const float s = min(share / (1.0 + kCoatDotInflate * footprint * footprint / (radius * radius)), kCoatDotCover);
+		const float s = min(share / (1.0 + kCoatDotInflate * footprint * footprint / (smallest * smallest)), kCoatDotCover);
 		const float L = -log(1.0 - s);
-		return L * (kCoatDotRank.x + kCoatDotRank.y * L) * aspect * aspect;
+		return L * (kCoatDotRank.x + kCoatDotRank.y * L) * aspect * aspect * CoatLook.w;
 	}
 
-	// One level of specks: two balls to each lattice cell through rest space, the
-	// cell twice the longest semi-axis, so a point meets only the eight cells about
-	// its nearest corner; the surface cuts each ball into a disc. With a strand
-	// (unit, rest space) they are ellipsoids aspect times longer along it. A ball
-	// shows while its rank is below q, so specks appear or go and never shift; each
-	// edge gives back the area its ramp adds.
-	float CoatBalls(float3 c, float footprint, float q, float radius, float3 strand, float aspect)
+	// One level of specks: two balls to each lattice cell through rest space, each
+	// its own size between the smallest and the largest, the cell twice the largest's
+	// longest semi-axis, so a point meets only the eight cells about its nearest
+	// corner; the surface cuts each ball into a disc. With a strand (unit, rest
+	// space) they are ellipsoids aspect times longer along it. A ball shows while its
+	// rank is below q, so specks appear or go and never shift; each edge gives back
+	// the area its ramp adds.
+	float CoatBalls(float3 c, float footprint, float q, float smallest, float largest, float3 strand, float aspect)
 	{
-		const float along = radius * aspect;
-		const float g = 2.0 * along;
-		const float edge = sqrt(max(1.0 - footprint * footprint / (12.0 * radius * radius), 0.0));
-		const float2 inv = float2(1.0 / (along * along), 1.0 / (radius * radius));
+		const float g = 2.0 * largest * aspect;
 		const int3 base = int3(floor(c / g - 0.5));
 		float keep = 1.0;
 		[unroll] for (uint o = 0; o < 8; ++o)
 		{
 			const int3 cell = base + int3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
 			float4 ball0, ball1;
-			CoatCellBalls(cell, ball0, ball1);
+			float2 size;
+			CoatCellBalls(cell, ball0, ball1, size);
+			const float2 radius = lerp(smallest, largest, size);
 			const float3 d0 = c - (cell + ball0.xyz) * g;
 			const float3 d1 = c - (cell + ball1.xyz) * g;
 			const float2 al = float2(dot(d0, strand), dot(d1, strand));
-			const float2 e = sqrt(al * al * inv.x + max(float2(dot(d0, d0), dot(d1, d1)) - al * al, 0.0) * inv.y);
+			const float2 e = sqrt(al * al / (radius * radius * aspect * aspect) + max(float2(dot(d0, d0), dot(d1, d1)) - al * al, 0.0) / (radius * radius));
+			const float2 edge = sqrt(max(1.0 - footprint * footprint / (12.0 * radius * radius), 0.0));
 			const float2 a = saturate((edge - e) * radius / max(footprint, 1e-6) + 0.5);
 			keep *= (ball0.w < q ? 1.0 - a.x : 1.0) * (ball1.w < q ? 1.0 - a.y : 1.0);
 		}
 		return 1.0 - keep;
 	}
 
-	// Specks never drawn under a pixel: past that, a level up holds fewer that are
-	// twice the size (the lattice keeps its cover at any scale), blended across the
-	// level as a texture's mips are. They never turn see-through.
-	float CoatSpecks(float3 c, float footprint, float share, float radius, float3 strand, float aspect)
+	// Specks never drawn under a pixel: once the smallest would be, a level up holds
+	// fewer that are twice the size (the lattice keeps its cover at any scale),
+	// blended across the level as a texture's mips are. They never turn see-through.
+	float CoatSpecks(float3 c, float footprint, float share, float smallest, float largest, float3 strand, float aspect)
 	{
-		const float m = clamp(log2(max(footprint, 1e-6) / (2.0 * radius)), 0.0, kCoatSpeckLevels);
+		const float m = clamp(log2(max(footprint, 1e-6) / (2.0 * smallest)), 0.0, kCoatSpeckLevels);
 		const float k = floor(m);
 		const float t = m - k;
-		const float r0 = radius * exp2(k);
-		float alpha = (1.0 - t) * CoatBalls(c, footprint, CoatBallFraction(share, footprint, r0, aspect), r0, strand, aspect);
+		const float scale = exp2(k);
+		float alpha = (1.0 - t) * CoatBalls(c, footprint, CoatBallFraction(share, footprint, smallest * scale, aspect), smallest * scale, largest * scale, strand, aspect);
 		[branch] if (t > 0.0)
-			alpha += t * CoatBalls(c, footprint, CoatBallFraction(share, footprint, 2.0 * r0, aspect), 2.0 * r0, strand, aspect);
+			alpha += t * CoatBalls(c, footprint, CoatBallFraction(share, footprint, 2.0 * smallest * scale, aspect), 2.0 * smallest * scale, 2.0 * largest * scale, strand, aspect);
 		return alpha;
-	}
-
-	// Clumps: soft balls one scale up on the same lattice, hashed apart, a share of
-	// them on; how far a point is inside one, 0 to 1.
-	float CoatClumps(float3 c)
-	{
-		const float g = 2.0 * kCoatClumpRadius;
-		const int3 base = int3(floor(c / g - 0.5));
-		float keep = 1.0;
-		[unroll] for (uint o = 0; o < 8; ++o)
-		{
-			const int3 cell = base + int3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
-			float4 ball0, ball1;
-			CoatCellBalls(cell + int3(0, 0, 7919), ball0, ball1);
-			const float a0 = saturate((kCoatClumpRadius - length(c - (cell + ball0.xyz) * g)) / (kCoatClumpSoft * kCoatClumpRadius));
-			const float a1 = saturate((kCoatClumpRadius - length(c - (cell + ball1.xyz) * g)) / (kCoatClumpSoft * kCoatClumpRadius));
-			keep *= (ball0.w < kCoatClumpOn ? 1.0 - a0 : 1.0) * (ball1.w < kCoatClumpOn ? 1.0 - a1 : 1.0);
-		}
-		return 1.0 - keep;
 	}
 
 	// The armour's relief around a pixel: its normal map read at three points a
@@ -1082,17 +1063,17 @@ namespace SnowLighting
 		return valid * asin(clamp(-0.5 * flux, -1.0, 1.0));
 	}
 
-	// S2's coat, rounds 3 to 9 (sections 5.10-5.17, after Josef's reads and
+	// S2's coat, rounds 3 to 11 (sections 5.10-5.20, after Josef's reads and
 	// the study of snow on people). Smooth across triangles and glued to the
 	// body: the rest-space normals come from the bind pose's own tangent frame,
 	// which the coat's vertex shader passes down, the surface's shape straight
 	// and its relief (the shading normal) un-skinned through the world and bind
 	// frames. Lumps spread from the surfaces facing the snowfall out to the angle
 	// of repose over a relief of their own in rest space, single at their front
-	// and closing behind it. Specks, dots of a set size as many as Grain Amount
-	// sets, lie in the same order, steered by the armour's own relief; too small
-	// to draw, they become an even dusting. Hair takes specks only, as many as its
-	// own amount sets. The material is the shell's own set in
+	// and closing behind it. Specks, each its own size between two set sizes and
+	// as many as Grain Amount sets, lie in the same order, steered by the armour's
+	// own relief, and never draw smaller than a pixel. Hair takes specks only (round,
+	// or beads along its strands), as many as its own amount sets. The material is the shell's own set in
 	// rest space: its albedo convention, grain and RMAOS, as projected snow takes
 	// them. TruePBR pixels blend the material; vanilla pixels hand the snow
 	// fraction to RelightProjected, which lights it as the ground's. Returns the
@@ -1159,7 +1140,7 @@ namespace SnowLighting
 					const float lie = cover * (1.0 + kCoatEdge) - (1.0 - clump);
 					const float rim = saturate(lie / kCoatRimSpan);
 					const float depthCm = kCoatFullCm * (0.5 + clump) * rim;
-					const float3 lumpHoles = saturate((holeNoise - CoatLook.yzw - lerp(-kCoatHoleOpen, kCoatHoleOpen, rim)) / holeStep + 0.5);
+					const float3 lumpHoles = saturate((holeNoise - kCoatRimCut - lerp(-kCoatHoleOpen, kCoatHoleOpen, rim)) / holeStep + 0.5);
 					lumpAlpha = saturate(lie / max(fwidth(lie), kCoatEdge)) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm) *
 								(1.0 - lumpHoles.x) * (1.0 - lumpHoles.y) * (1.0 - lumpHoles.z);
 				}
@@ -1174,9 +1155,7 @@ namespace SnowLighting
 					pocket = (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) *
 							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world, max(kCoatPocketRadius, footprint));
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
-				float speckShare = kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * saturate(speckOrder / kCoatSpeckFront) * steer;
-				[branch] if (!hairSpecks && (CoatFlags & kCoatClumps) != 0 && speckShare > 0.0)
-					speckShare *= lerp(kCoatClumpMix.x, kCoatClumpMix.y, CoatClumps(c));
+				const float speckShare = kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * saturate(speckOrder / kCoatSpeckFront) * steer;
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{
@@ -1184,15 +1163,15 @@ namespace SnowLighting
 					// into rest space like the relief and laid in the surface.
 					float3 restStrand = 0.0;
 					float aspect = 1.0;
-					float radius = CoatAmounts.w;
+					float2 sizes = CoatLook.yz;
 					[branch] if (hairSpecks && (CoatFlags & kCoatHairBeads) != 0)
 					{
 						restStrand = mul(toCanonical, mul(CoatFrameSolve(world, strand), bind));
 						restStrand = CoatSafeNormalize(restStrand - restShape * dot(restStrand, restShape));
 						aspect = kCoatBead.x / kCoatBead.y;
-						radius *= kCoatBead.y;
+						sizes *= kCoatBead.y;
 					}
-					speckAlpha = CoatSpecks(c, footprint, speckShare, radius, restStrand, aspect);
+					speckAlpha = CoatSpecks(c, footprint, speckShare, sizes.x, sizes.y, restStrand, aspect);
 				}
 				alpha = flatPaint ? speckShare : max(lumpAlpha, speckAlpha);
 				const float snowCover = max(0.75 * alpha, flatPaint ? 0.0 : lumpAlpha);

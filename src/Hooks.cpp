@@ -30,6 +30,7 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
+#include "Features/SnowDeformation.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
@@ -195,6 +196,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		state->ModifyShaderLookup(*shader, probeVertexDescriptor, probePixelDescriptor);
 		if (shaderCache->GetVertexShader(*shader, probeVertexDescriptor) == nullptr ||
 			shaderCache->GetPixelShader(*shader, probePixelDescriptor) == nullptr) {
+			globals::features::snowDeformation.NoteBodyCoatShaders(vertexDescriptor, pixelDescriptor);
 			vertexDescriptor &= ~bodyCoatFlag;
 			pixelDescriptor &= ~bodyCoatFlag;
 		}

@@ -10,6 +10,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/D3D.h"
+#include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 
 // Snow on bodies (MD plans/BODY-SNOW-PLAN.md): R0's probes and S1's store and
@@ -17,6 +18,18 @@
 
 namespace
 {
+	// Coat shader keys (vertex << 32 | pixel) this and earlier sessions had to
+	// compile on demand, kept beside SettingsUser.json so a ShaderCache clear
+	// leaves them; LoadShaders queues them with the game's own.
+	std::mutex coatKeyLock;
+	std::set<uint64_t> coatKeys;
+	bool coatKeysDirty = false;
+
+	std::filesystem::path CoatKeyPath()
+	{
+		return Util::PathHelpers::GetCommunityShaderPath() / "SnowBodyCoatShaders.txt";
+	}
+
 	constexpr uint32_t kDumpLinesMax = 900;
 	// S1's cadence (estimates): the near tier is picked every kPickFrames, an
 	// actor keeps its slots kKeepFrames past its last pick, its 3D is walked
@@ -28,23 +41,6 @@ namespace
 	constexpr uint32_t kWalksPerFrame = 4;
 	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
-	// Each hole octave's share of a lump's rim (estimate; 30 % together).
-	constexpr float kHoleShare = 0.11f;
-
-	// CoatNoise's upper tail (SnowLighting.hlsli, measured over 2e6 samples): the
-	// threshold that leaves a share of it above; 10 leaves none.
-	float NoiseCut(float a_share)
-	{
-		static constexpr float kShare[] = { 0.0f, 0.01f, 0.02f, 0.05f, 0.08f, 0.11f, 0.15f };
-		static constexpr float kCut[] = { 0.99f, 0.587f, 0.533f, 0.447f, 0.3875f, 0.3406f, 0.2919f };
-		if (a_share <= 0.0f)
-			return 10.0f;
-		for (size_t i = 1; i < std::size(kShare); ++i)
-			if (a_share <= kShare[i])
-				return std::lerp(kCut[i - 1], kCut[i], (a_share - kShare[i - 1]) / (kShare[i] - kShare[i - 1]));
-		return kCut[std::size(kCut) - 1];
-	}
-
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
 		return a_property && a_property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get();
@@ -942,8 +938,54 @@ struct SnowDeformation::BodyCoatStore
 	}
 };
 
+void SnowDeformation::NoteBodyCoatShaders(uint32_t a_vertexDescriptor, uint32_t a_pixelDescriptor)
+{
+	const std::lock_guard lock(coatKeyLock);
+	coatKeysDirty |= coatKeys.insert((uint64_t(a_vertexDescriptor) << 32) | a_pixelDescriptor).second;
+}
+
+void SnowDeformation::GenerateShaderPermutations(RE::BSShader* a_shader)
+{
+	if (a_shader->shaderType.get() != RE::BSShader::Type::Lighting)
+		return;
+	std::vector<uint64_t> keys;
+	{
+		const std::lock_guard lock(coatKeyLock);
+		std::ifstream file(CoatKeyPath());
+		uint32_t vertex = 0;
+		uint32_t pixel = 0;
+		while (file >> std::hex >> vertex >> pixel)
+			coatKeys.insert((uint64_t(vertex) << 32) | pixel);
+		keys.assign(coatKeys.begin(), coatKeys.end());
+	}
+	// As LoadShaders queues the game's own: the vertex shader, and the pixel
+	// shader forward and deferred.
+	auto state = globals::state;
+	auto shaderCache = globals::shaderCache;
+	for (const uint64_t key : keys) {
+		for (const bool deferred : { false, true }) {
+			auto vertex = uint32_t(key >> 32);
+			auto pixel = uint32_t(key);
+			state->ModifyShaderLookup(*a_shader, vertex, pixel, deferred);
+			if (!deferred)
+				std::ignore = shaderCache->GetVertexShader(*a_shader, vertex);
+			std::ignore = shaderCache->GetPixelShader(*a_shader, pixel);
+		}
+	}
+	logger::info("Snow on bodies: queued {} coat shader pairs drawn in earlier sessions", keys.size());
+}
+
 void SnowDeformation::TickBodyCoat()
 {
+	{
+		const std::lock_guard lock(coatKeyLock);
+		if (coatKeysDirty) {
+			coatKeysDirty = false;
+			std::ofstream file(CoatKeyPath(), std::ios::trunc);
+			for (const uint64_t key : coatKeys)
+				file << std::format("{:08X} {:08X}\n", uint32_t(key >> 32), uint32_t(key));
+		}
+	}
 	if (!debugBodyCoatDrawProbe && bodyCoatProbeBound) {
 		ID3D11ShaderResourceView* none = nullptr;
 		globals::d3d::context->PSSetShaderResources(kBodyCoatAtlasSlot, 1, &none);
@@ -1006,21 +1048,23 @@ void SnowDeformation::TickBodyCoatStore()
 	// The record's look: the A/B, and the shell's sparkle as Lighting's
 	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
 	const uint32_t lookFlags = (debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u) | (debugBodyCoatRelief ? kBodyCoatFlagRelief : 0u) |
-	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatClumps ? kBodyCoatFlagClumps : 0u) |
-	                           (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u);
+	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u);
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
 	// The cranks as the shader reads them: one over the angle of repose in
-	// radians, and the lumps' three rim-hole octaves' noise thresholds, each
-	// at kHoleShare (Graininess, retired, at its full setting).
+	// radians; the smallest and largest speck radius in units (the sizes are
+	// diameters in mm, 14.2875 mm a unit); and how many more balls a share needs
+	// as the sizes' mean volume falls below the largest's, sizes spread evenly
+	// between: E[(r / largest)^3] = (1 + p)(1 + p^2) / 4 at p = smallest / largest.
 	const float repose = std::clamp(debugBodyCoatRepose, 1.0f, 89.0f);
-	float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose) };
-	for (int k = 0; k < 3; ++k)
-		look[1 + k] = NoiseCut(kHoleShare);
-	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and a
-	// speck's radius in units (Speck Size is a diameter in mm, 14.2875 mm a unit).
+	const float sizeLo = std::clamp(std::min(debugBodyCoatSpeckMin, debugBodyCoatSpeckMax), 0.5f, 10.0f);
+	const float sizeHi = std::clamp(std::max(debugBodyCoatSpeckMin, debugBodyCoatSpeckMax), 0.5f, 10.0f);
+	const float sizeRatio = sizeLo / sizeHi;
+	const float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose), sizeLo * 0.5f / 14.2875f, sizeHi * 0.5f / 14.2875f,
+		4.0f / ((1.0f + sizeRatio) * (1.0f + sizeRatio * sizeRatio)) };
+	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks).
 	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f),
-		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), std::clamp(debugBodyCoatSpeckSize, 0.5f, 10.0f) * 0.5f / 14.2875f };
+		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), 0.0f };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
 		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairSpecks != debugBodyCoatHairSpecks) {
 		store.lookFlags = lookFlags;
@@ -1446,8 +1490,8 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks {:.2f} and hair's {:.2f} at {:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
-			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1], store.amounts[2], store.amounts[3] * 2.0f * 14.2875f,
+		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks {:.2f} and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
+			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1], store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
 			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			(store.lookFlags & kBodyCoatFlagReliefView) ? "shown" : ((store.lookFlags & kBodyCoatFlagRelief) ? "on" : "off"),
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
