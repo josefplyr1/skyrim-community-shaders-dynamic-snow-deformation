@@ -1241,6 +1241,9 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
+		// The cut dates its prints glaze by (Wet Snow and Ice).
+		ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
+		context->PSSetShaderResources(kLandBermSlot, 1, &bermSRV);
 	}
 }
 

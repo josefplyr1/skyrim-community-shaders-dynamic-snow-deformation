@@ -558,7 +558,15 @@ namespace SharedData
 		// under projected snow and a band around it (SnowLighting
 		// ParallaxUnderSnow). Mirror in SnowDeformation.h.
 		float ParallaxFlatten;
-		float3 padParallaxFlatten;
+		// Wet Snow and Ice: the ageing clock IceHistory was written at, in the
+		// track dates' frame. Was a pad. Mirror in SnowDeformation.h.
+		float IceClock;
+		float2 padIceClock;
+
+		// Wet Snow and Ice: the climate rows' ice (xyz) when each ageing-clock
+		// unit ended, the current unit's now (SnowColor.hlsli SnowIce::AtCut).
+		// Appended last. Mirror in SnowDeformation.h, kIceHistoryBins.
+		float4 IceHistory[128];
 	};
 
 	cbuffer FeatureData : register(b6)

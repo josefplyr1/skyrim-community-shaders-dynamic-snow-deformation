@@ -2795,7 +2795,7 @@ float2 PatchConditionTrack(float2 a_trenchGridLocal, float2 a_worldXY, float a_d
 		track = float2(lerp(TrackAgeOf(field.w), TrackAgeOf(field.z), smoothstep(0.0, 0.1, a_deform)), saturate(10.0 * max(a_deform, field.x)));
 	}
 	else
-		track.x = SnowIceLook(a_deform, saturate(SampleExclusionField(a_worldXY).y), a_worldZ);
+		track.x = SnowIceLook(a_deform, saturate(SampleExclusionField(a_worldXY).y), a_worldZ, a_trenchGridLocal, true);
 	return track;
 }
 #endif
@@ -2895,9 +2895,9 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	// ground; a coat is never pressed.
 #ifdef PATCH
 	const float patchMelt = saturate(SampleExclusionField(worldXY).y);
-	const float iceParallax = SnowIceParallax(pixelDeform, patchMelt, input.WorldPos.z + ShellCameraPosAdjust.z);
+	const float iceParallax = SnowIceParallax(pixelDeform, patchMelt, input.WorldPos.z + ShellCameraPosAdjust.z, trenchGridLocal, true);
 #elif defined(SNOW_OBJECT_PRINTS)
-	const float iceParallax = SnowIceParallax(print.x, 0.0, input.WorldPos.z + ShellCameraPosAdjust.z);
+	const float iceParallax = SnowIceParallax(print.x, 0.0, input.WorldPos.z + ShellCameraPosAdjust.z, 0.0, false);
 #else
 	const float iceParallax = 1.0;
 #endif
@@ -3178,7 +3178,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		input.WorldPos.z + ShellCameraPosAdjust.z, input.trenchGridLocal, true);
 #elif defined(SNOW_OBJECT_PRINTS)
 	// The pressed rim, the ground's thin-snow print in a dusting of the dent's
-	// depth. Prints on objects keep no dates.
+	// depth. Prints on objects keep no dates, so the ice reads them as just cut.
 	const float2 wetLook = SnowWetPrint(kSnowAlbedo, print.x, 0.0, kPrintDentDepth, input.WorldPos.z + ShellCameraPosAdjust.z, 0.0, false);
 #else
 	// No prints on a coat; wet snow and its sparkle as the ground's.
@@ -5046,7 +5046,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (SnowClimate2.z > 0.5)
 	{
 		const float viewZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(viewZ), SnowClimate2.z, float2(SnowIceLook(0.0, 0.0, viewZ), 0.0)) * 2.0;
+		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(viewZ), SnowClimate2.z, float2(SnowIceLook(0.0, 0.0, viewZ, 0.0, false), 0.0)) * 2.0;
 		psout.Albedo.rgb = 0.0;
 		psout.Specular.rgb = 0.0;
 		psout.Reflectance.rgb = 0.0;

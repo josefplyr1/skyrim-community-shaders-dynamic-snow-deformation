@@ -679,6 +679,9 @@ public:
 
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
 	struct alignas(16) SettingsGPU
+	/** @brief Ageing-clock units the ice history keeps (SettingsGPU::IceHistory); divides kAgeingClockStart, so a clock wrap leaves every entry in place. Mirror in SnowColor.hlsli. */
+	static constexpr uint32_t kIceHistoryBins = 128;
+
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
@@ -732,11 +735,18 @@ public:
 
 		/** @brief Settings::FlattenParallaxUnderSnow as 0/1. Mirror in SharedData.hlsli. */
 		float ParallaxFlatten;
-		float padParallaxFlatten[3];
+		/** @brief The ageing clock IceHistory was written at, in the track dates' frame (TrackDateClock). Was a pad. Mirror in SharedData.hlsli. */
+		float IceClock;
+		float padIceClock[2];
+
+		/** @brief The rows' ice (xyz) when each ageing-clock unit ended, entry = unit & (kIceHistoryBins - 1), the current unit's now; x Snow Climate x Wet Snow and Ice. A track glazes by what froze after it was cut (SnowColor.hlsli SnowIce::AtCut). Appended last; mirror in SharedData.hlsli. */
+		float4 IceHistory[kIceHistoryBins];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
 
 	/**
+	static_assert(offsetof(SettingsGPU, IceClock) == 132 && offsetof(SettingsGPU, IceHistory) == 144 && sizeof(SettingsGPU) == 2192,
+		"SettingsGPU must match the fxc-reflected SnowDeformationSettings in SharedData.hlsli");
 	 * @brief Returns this frame's GPU settings for the shared FeatureData buffer.
 	 *
 	 * Also advances the deformation window when a_inWorld is true. The origin
@@ -4706,6 +4716,10 @@ protected:
 		float temperature;
 		float wetness;
 		float stickiness;
+		/** @brief Per ageing-clock unit (entry = unit & (kIceHistoryBins - 1)): the rows' shown ice when the unit ended, thawed and buried since; the current unit's is now. Co-saved in 'SNIC'. */
+		std::array<std::array<float, kClimateLUTRows>, kIceHistoryBins> iceHistory{};
+		/** @brief The unit iceHistory's newest entry belongs to (floor of ageingClock); -1 = not started. */
+		int32_t iceHistoryUnit = -1;
 		float firmness;
 		float density;
 		float freshness;
@@ -4719,8 +4733,9 @@ protected:
 	/** @brief Snow Climate x Wet Snow and Ice: what every Stage 4 term is scaled by. */
 	float SnowWetIceStrength() const;
 	static constexpr uint32_t kIceRecord = 'SNIC';
-	static constexpr uint32_t kIceRecordVersion = 1;
-	/** @brief Claims 'SNIC': the rows' meltwater and ice. */
+	/** @brief 2: the ice history after the rows. Version 1 loads with an empty history, so every track already made reads as cut before the ice. */
+	static constexpr uint32_t kIceRecordVersion = 2;
+	/** @brief Claims 'SNIC': the rows' meltwater and ice, and the ice history. */
 	void RegisterSnowIceCoSave();
 	/** @brief The snow at the player had the air there this temperature: wetness moves with it as height moves it per pixel, overrides apply. */
 	SnowCondition SnowConditionAt(float a_temperature) const;
@@ -4737,6 +4752,8 @@ protected:
 		float lip = 1.0f;
 		float teeth = 1.0f;
 		/** @brief Wall softness: how far loose snow falls back into a print, toward the berm field's short blur. */
+	/** @brief Ice in row a_row that froze after a cut a_units clock units ago (iceHistory), as the shells read it before Snow Climate. */
+	float SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const;
 		float slough = 0.0f;
 		std::array<float4, kClimateLUTRows> lut{};
 	};
@@ -5285,6 +5302,8 @@ protected:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PrintFrameCB);
 	static_assert(sizeof(PrintFrameCB) == 64, "PrintFrameCB must match the fxc-reflected PrintFrame");
+	/** @brief The berm field on land recolor draws, for the cut dates of Wet Snow and Ice. Bound per draw on the shells' kBodyReachSlot: DrawShell binds its own there and nulls it, and Prepass nulls it before the berm bake writes the field. */
+	static constexpr UINT kLandBermSlot = kBodyReachSlot;
 
 	/** @brief One spell's mark on object snow this frame. A surface mark lies at a.z: a disc at a, a capsule from b to a, or with kPrintSpellCone a wedge from its apex b to a, radius its half-width there. With kPrintSpellRay it is a ray from a to b that PrintRayCS follows to the first object top it enters. Mirrors PrintSpells in DeformationUpdateCS.hlsl. */
 	struct PrintSpellMark

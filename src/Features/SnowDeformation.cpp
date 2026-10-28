@@ -790,7 +790,15 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
-	data.LandIce = SnowWetIceStrength() * SnowIceShown(1);
+	const float wetIce = SnowWetIceStrength();
+	data.LandIce = wetIce * SnowIceShown(1);
+	// What froze before each track was cut, scaled as the rows' ice is, on the
+	// clock the dates stand in.
+	data.IceClock = TrackDateClock();
+	for (uint32_t k = 0; k < kIceHistoryBins; ++k) {
+		const auto& entry = snowClimate.iceHistory[k];
+		data.IceHistory[k] = { wetIce * entry[0], wetIce * entry[1], wetIce * entry[2], 0.0f };
+	}
 	// Snow Trenches on Objects: after the window advance above, which the print window follows.
 	data.PrintFullDepth = BodyPrintScale();
 	data.PrintRect = PrintRectForFrame();
@@ -1603,6 +1611,8 @@ void SnowDeformation::PrepassSimulation()
 			// Prepass as before.
 			ID3D11ShaderResourceView* nullPS = nullptr;
 			context->PSSetShaderResources(101, 1, &nullPS);
+			// The berm field the land recolor read last frame; the bake writes it below.
+			context->PSSetShaderResources(kLandBermSlot, 1, &nullPS);
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);

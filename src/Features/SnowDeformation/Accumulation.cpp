@@ -362,6 +362,8 @@ void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
 	const float playerT = debugClimateTemperatureOn ? debugClimateTemperature : climate.temperature;
 	// Snowfall buries the glaze as it buries a track.
 	const float bury = std::exp(-a_elapsed * kSnowfallAgeing * a_snowing / kTrackAgeSpan);
+	// The override holds its ice still, and the history with it.
+	const bool overridden = debugClimateIceOverride >= 0.0f;
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const float t = playerT + (float(i) - 1.0f) * kClimateLUTStep;
 		const float wet = SnowConditionAt(t).wetness;
@@ -376,12 +378,32 @@ void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
 		} else {
 			water -= excess * (1.0f - std::exp(-a_elapsed / kDrainHours));
 		}
-		const float thawed = ice * (1.0f - std::exp(-a_elapsed * wet));
+		const float unthawed = std::exp(-a_elapsed * wet);
+		const float thawed = ice * (1.0f - unthawed);
 		ice -= thawed;
 		water += thawed;
 		ice = std::clamp(ice * bury, 0.0f, 1.0f);
 		water = std::clamp(water * bury, 0.0f, 1.0f);
+		// Ice frozen before a cut thaws and is buried like the rest.
+		if (!overridden)
+			for (auto& entry : climate.iceHistory)
+				entry[i] *= unthawed * bury;
 	}
+
+	// The shown ice when each clock unit ended; the current unit's is now. Units
+	// a jump skips take the ice it arrived at. A clock wrap is kAgeingClockStart
+	// units, a whole number of histories.
+	const int32_t unit = static_cast<int32_t>(std::floor(climate.ageingClock));
+	int32_t passed = climate.iceHistoryUnit < 0 ? 0 : unit - climate.iceHistoryUnit;
+	if (passed < 0)
+		passed += static_cast<int32_t>(kAgeingClockStart);
+	passed = std::clamp(passed, 1, static_cast<int32_t>(kIceHistoryBins));
+	std::array<float, kClimateLUTRows> shown;
+	for (uint32_t i = 0; i < kClimateLUTRows; ++i)
+		shown[i] = SnowIceShown(i);
+	for (int32_t u = 0; u < passed; ++u)
+		climate.iceHistory[static_cast<uint32_t>(unit - u) & (kIceHistoryBins - 1)] = shown;
+	climate.iceHistoryUnit = unit;
 }
 
 float SnowDeformation::SnowIceShown(uint32_t a_row) const
@@ -389,6 +411,15 @@ float SnowDeformation::SnowIceShown(uint32_t a_row) const
 	if (debugClimateIceOverride >= 0.0f)
 		return std::min(debugClimateIceOverride, 1.0f);
 	return a_row < kClimateLUTRows ? snowClimate.rowIce[a_row] : 0.0f;
+}
+
+float SnowDeformation::SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const
+{
+	const auto& climate = snowClimate;
+	if (a_row >= kClimateLUTRows || climate.iceHistoryUnit < 0)
+		return 0.0f;
+	const int32_t cut = climate.iceHistoryUnit - static_cast<int32_t>(std::min(a_units, kIceHistoryBins - 1));
+	return std::max(SnowIceShown(a_row) - climate.iceHistory[static_cast<uint32_t>(cut) & (kIceHistoryBins - 1)][a_row], 0.0f);
 }
 
 float SnowDeformation::SnowWetIceStrength() const
@@ -497,12 +528,16 @@ void SnowDeformation::RegisterSnowIceCoSave()
 				values[i] = snowClimate.rowWater[i];
 				values[kClimateLUTRows + i] = snowClimate.rowIce[i];
 			}
-			if (!a_intfc->WriteRecordData(values, sizeof(values)))
+			const int32_t unit = snowClimate.iceHistoryUnit;
+			if (!a_intfc->WriteRecordData(values, sizeof(values)) || !a_intfc->WriteRecordData(&unit, sizeof(unit)) ||
+				!a_intfc->WriteRecordData(snowClimate.iceHistory.data(), sizeof(snowClimate.iceHistory)))
 				logger::warn("[SNOW DEFORMATION] snow ice co-save write failed");
 		},
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) {
 			float values[2 * kClimateLUTRows];
-			if (a_version != kIceRecordVersion || a_length != sizeof(values) || a_intfc->ReadRecordData(values, sizeof(values)) != sizeof(values)) {
+			decltype(snowClimate.iceHistory) history{};
+			const bool withHistory = a_version == kIceRecordVersion && a_length == sizeof(values) + sizeof(int32_t) + sizeof(history);
+			if (!(withHistory || (a_version == 1 && a_length == sizeof(values))) || a_intfc->ReadRecordData(values, sizeof(values)) != sizeof(values)) {
 				logger::warn("[SNOW DEFORMATION] snow ice co-save is version {} / {} bytes; dropped", a_version, a_length);
 				return;
 			}
@@ -510,12 +545,26 @@ void SnowDeformation::RegisterSnowIceCoSave()
 				snowClimate.rowWater[i] = std::isfinite(values[i]) ? std::clamp(values[i], 0.0f, 1.0f) : 0.0f;
 				snowClimate.rowIce[i] = std::isfinite(values[kClimateLUTRows + i]) ? std::clamp(values[kClimateLUTRows + i], 0.0f, 1.0f) : 0.0f;
 			}
-			logger::info("[SNOW DEFORMATION] snow ice restored: water {:.2f}/{:.2f}/{:.2f}, ice {:.2f}/{:.2f}/{:.2f}", values[0], values[1], values[2],
-				values[3], values[4], values[5]);
+			// Without a history every track already made reads as cut before the ice.
+			int32_t unit = -1;
+			if (withHistory && (a_intfc->ReadRecordData(&unit, sizeof(unit)) != sizeof(unit) || a_intfc->ReadRecordData(history.data(), sizeof(history)) != sizeof(history) ||
+								   unit < static_cast<int32_t>(kAgeingClockStart) || unit >= static_cast<int32_t>(2.0f * kAgeingClockStart))) {
+				unit = -1;
+				history = {};
+			}
+			for (auto& entry : history)
+				for (float& ice : entry)
+					ice = std::isfinite(ice) ? std::clamp(ice, 0.0f, 1.0f) : 0.0f;
+			snowClimate.iceHistory = history;
+			snowClimate.iceHistoryUnit = unit;
+			logger::info("[SNOW DEFORMATION] snow ice restored: water {:.2f}/{:.2f}/{:.2f}, ice {:.2f}/{:.2f}/{:.2f}, {}", values[0], values[1], values[2],
+				values[3], values[4], values[5], unit < 0 ? "no history: tracks already made read as cut before the ice" : "history kept");
 		},
 		[this]() {
 			snowClimate.rowWater = {};
 			snowClimate.rowIce = {};
+			snowClimate.iceHistory = {};
+			snowClimate.iceHistoryUnit = -1;
 		});
 }
 

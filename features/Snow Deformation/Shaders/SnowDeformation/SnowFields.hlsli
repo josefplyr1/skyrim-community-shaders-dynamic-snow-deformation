@@ -688,6 +688,13 @@ float4 SnowClimateRow(float worldZ)
 	return lerp(SnowClimateLUT[1], dT < 0.0 ? SnowClimateLUT[0] : SnowClimateLUT[2], abs(dT) * 0.5);
 }
 
+// SnowClimateRow's lerp of one value per row (xyz).
+float SnowClimateRowOf(float3 a_rows, float worldZ)
+{
+	const float dT = clamp(SnowClimate.y * (SnowClimate.z - worldZ), -2.0, 2.0);
+	return lerp(a_rows.y, dT < 0.0 ? a_rows.x : a_rows.z, abs(dT) * 0.5);
+}
+
 #ifdef PSHADER
 // Thin-snow print: a boot through a dusting (thin classes) has no wall to
 // light, so it reads by material - pressed wet, darker and smoother. Gone by
@@ -700,11 +707,11 @@ float4 SnowClimateRow(float worldZ)
 // is read only where a print darkens.
 // Wet Snow and Ice (the rows' y and x): wet snow darkens by Community
 // Shaders' wetness rule (Lighting.hlsl, snow fully porous) and stops
-// sparkling; pressed snow whose meltwater froze glazes, and the rest of the
-// surface takes kIceSurfaceGlaze of that glaze (the sun crust a thaw and a
-// freeze leave). Mirror kIceTint, kIceRoughCut and kIceSurfaceGlaze in
-// SnowLighting.hlsli. Darkens a_albedo; returns x the roughness cut, y the
-// share of glints left.
+// sparkling; pressed snow glazes by the meltwater that froze in it after it
+// was cut (SnowIceSince), and the rest of the surface takes kIceSurfaceGlaze
+// of the rows' ice (the sun crust a thaw and a freeze leave). Mirror kIceTint,
+// kIceRoughCut and kIceSurfaceGlaze in SnowLighting.hlsli. Darkens a_albedo;
+// returns x the roughness cut, y the share of glints left.
 static const float3 kIceTint = float3(0.93, 0.955, 0.985);
 static const float kIceRoughCut = 0.8;
 static const float kIceSurfaceGlaze = 0.1;
@@ -722,24 +729,41 @@ bool SnowIceInView()
 	return SnowClimateLUT[0].z > 0.001;
 }
 
-// The pressed snow's glaze, which softens the parallax.
-float SnowIceGlaze(float a_carve, float a_melt, float a_worldZ)
+// The ice that froze in a track after it was cut, of a_rowIce (the point's
+// row's x): the date is the carve's (BermFieldBaked), the ice then
+// SnowIce::AtCut's. A cut in frozen snow breaks the crust and holds no water
+// to glaze until the next thaw and freeze. No date (a print on an object, no
+// bake) reads as just cut.
+float SnowIceSince(float a_rowIce, float2 a_gridLocal, bool a_dated, float a_worldZ)
 {
-	return SnowClimateRow(a_worldZ).x * SnowPressed(a_carve, a_melt);
+	float since = 0.0;
+	[branch] if (a_dated && BermBakeActive > 0.5)
+		since = max(a_rowIce - SnowClimateRowOf(SnowIce::AtCut(BermFieldBaked(a_gridLocal).z), a_worldZ), 0.0);
+	return since;
+}
+
+// The pressed snow's glaze, which softens the parallax.
+float SnowIceGlaze(float a_carve, float a_melt, float a_worldZ, float2 a_gridLocal, bool a_dated)
+{
+	const float pressed = SnowPressed(a_carve, a_melt);
+	float glaze = 0.0;
+	[branch] if (pressed > 0.001)
+		glaze = SnowIceSince(SnowClimateRow(a_worldZ).x, a_gridLocal, a_dated, a_worldZ) * pressed;
+	return glaze;
 }
 
 // The glaze SnowWetPrint draws: the pressed snow's, and the surface crust.
-float SnowIceLook(float a_carve, float a_melt, float a_worldZ)
+float SnowIceLook(float a_carve, float a_melt, float a_worldZ, float2 a_gridLocal, bool a_dated)
 {
-	return SnowClimateRow(a_worldZ).x * max(SnowPressed(a_carve, a_melt), kIceSurfaceGlaze);
+	return max(SnowIceGlaze(a_carve, a_melt, a_worldZ, a_gridLocal, a_dated), kIceSurfaceGlaze * SnowClimateRow(a_worldZ).x);
 }
 
 // The sliders' share on glazed snow: 1 off the ice, kIceParallax on it.
-float SnowIceParallax(float a_carve, float a_melt, float a_worldZ)
+float SnowIceParallax(float a_carve, float a_melt, float a_worldZ, float2 a_gridLocal, bool a_dated)
 {
 	float share = 1.0;
 	[branch] if (SnowIceInView())
-		share = lerp(1.0, kIceParallax, SnowIceGlaze(a_carve, a_melt, a_worldZ));
+		share = lerp(1.0, kIceParallax, SnowIceGlaze(a_carve, a_melt, a_worldZ, a_gridLocal, a_dated));
 	return share;
 }
 
@@ -752,7 +776,10 @@ float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_
 	{
 		const float4 row = SnowClimateRow(a_worldZ);
 		a_albedo = lerp(a_albedo, pow(abs(a_albedo), 1.0 + row.y), 0.5);
-		const float glaze = row.x * max(wetPress, kIceSurfaceGlaze);
+		float pressGlaze = 0.0;
+		[branch] if (wetPress > 0.001 && row.x > 0.001)
+			pressGlaze = SnowIceSince(row.x, a_gridLocal, a_dated, a_worldZ) * wetPress;
+		const float glaze = max(pressGlaze, kIceSurfaceGlaze * row.x);
 		look.y = (1.0 - row.y) * (1.0 - glaze);
 		look.x = glaze * kIceRoughCut;
 		a_albedo *= lerp(1.0, kIceTint, glaze);

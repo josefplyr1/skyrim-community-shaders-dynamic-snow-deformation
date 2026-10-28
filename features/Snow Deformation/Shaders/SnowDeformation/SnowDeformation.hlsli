@@ -23,6 +23,10 @@ namespace SnowDeformation
 	Texture2D<float> WaterWindow : register(t63);
 	// Shell snow RMAOS, for the land recolor (bound with the set on land draws).
 	Texture2D<float4> HorizonSnowRmaos : register(t68);
+	// The shells' berm field, for the land recolor's cut dates (bound with the
+	// set on land draws, SnowDeformation.h kLandBermSlot): y the carve's short
+	// blur, z its date times that (BermFieldCS).
+	Texture2D<float4> BermField : register(t56);
 
 	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
 	// Bilinear over the four texels: a sloped plane is linear, so this
@@ -147,3 +151,28 @@ namespace SnowDeformation
 		return deformation;
 	}
 }
+
+	// The carve's date at a point on the ageing clock, as the shells read it
+	// (SnowFields.hlsli BermFieldBaked): bilinear in the map's torus, the
+	// weighted date over its weight; 0 where nothing is cut.
+	float GetCutDate(float2 absWorldXY)
+	{
+		float2 mapDim;
+		BermField.GetDimensions(mapDim.x, mapDim.y);
+		float2 t = clamp(GetDeformationUV(absWorldXY) * mapDim - 0.5, 0.0, mapDim - 1.001);
+		int2 t0 = (int2)t;
+		float2 f = t - t0;
+		int2 t1 = min(t0 + 1, int2(mapDim) - 1);
+
+		const int2 mask = int2(mapDim) - 1;
+		const int2 origin = SharedData::snowDeformationSettings.DeformMapOrigin;
+		int2 q0 = (t0 + origin) & mask;
+		int2 q1 = (t1 + origin) & mask;
+
+		float2 s00 = BermField.Load(int3(q0.x, q0.y, 0)).yz;
+		float2 s10 = BermField.Load(int3(q1.x, q0.y, 0)).yz;
+		float2 s01 = BermField.Load(int3(q0.x, q1.y, 0)).yz;
+		float2 s11 = BermField.Load(int3(q1.x, q1.y, 0)).yz;
+		float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+		return v.x > 1e-5 ? v.y / v.x : 0.0;
+	}

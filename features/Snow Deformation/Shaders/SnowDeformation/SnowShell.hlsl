@@ -2011,7 +2011,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	// fetch, and shifts the tap set rather than rebuilding it, so albedo,
 	// normal, RMAOS and the parallax shadow all ride the displaced position.
 	// Glazed snow takes less of Parallax Depth and Parallax Shadow.
-	const float iceParallax = SnowIceParallax(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z);
+	const float iceParallax = SnowIceParallax(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		// bumpT/bumpB ARE the uv axes (world-XY planar projection); EM's
@@ -2422,7 +2422,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	{
 		const float4 trackField = BermFieldPair(gridLocal);
 		const float2 track = SnowClimate2.z < 6.5 ? float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter))) :
-		                                             float2(SnowIceLook(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z), 0.0);
+		                                             float2(SnowIceLook(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true), 0.0);
 		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
 		psout.Diffuse.rgb = conditionColor * 2.0;
 		psout.Albedo.rgb = 0.0;

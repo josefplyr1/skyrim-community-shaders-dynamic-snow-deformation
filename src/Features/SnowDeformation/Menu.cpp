@@ -890,7 +890,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("wet_snow_ice"), "Wet Snow and Ice"), &settings.WetSnowAndIce);
 		if (auto _ttWetIce = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, until a thaw or fresh snow ends the ice. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
+			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, until a thaw or fresh snow ends the ice. Only prints that were there while the water froze glaze; a print made in snow that has already frozen breaks the crust and stays unglazed until the next thaw and freeze. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
 
 		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
 		if (auto _ttFresh = Util::HoverTooltipWrapper())
@@ -1929,6 +1929,8 @@ void SnowDeformation::DrawSettings()
 			WrapTextF("Meltwater held (2 C colder / here / 2 C warmer): %.2f / %.2f / %.2f | ice %.2f / %.2f / %.2f%s%s", climate.rowWater[0], climate.rowWater[1],
 				climate.rowWater[2], climate.rowIce[0], climate.rowIce[1], climate.rowIce[2], debugClimateIceOverride >= 0.0f ? " (shown: override)" : "",
 				settings.WetSnowAndIce ? "" : " | Wet Snow and Ice is off");
+			WrapTextF("Ice that froze in a track cut 1 / 6 / 24 clock units ago (here): %.2f / %.2f / %.2f", SnowIceSinceCut(1, 1), SnowIceSinceCut(1, 6),
+				SnowIceSinceCut(1, 24));
 			WrapTextF("Stickiness: %.2f%s", condition.stickiness, debugClimateStickinessOverride >= 0.0f ? " (override)" : "");
 			WrapTextF("Firmness: %.2f%s | density %.0f kg/m3, hand hardness %s", condition.firmness,
 				debugClimateFirmnessOverride >= 0.0f ? " (override)" : "", condition.density, hardness);
@@ -1964,7 +1966,7 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("climate_condition_override_tooltip"), "Not saved. Below 0 the value is derived; at 0 or above it replaces it at the player and in the view."));
 			ImGui::SliderFloat(T(TKEY("climate_ice_override"), "Ice Override"), &debugClimateIceOverride, -1.0f, 1.0f, debugClimateIceOverride < 0.0f ? "live" : "%.2f");
 			if (auto _ttIce = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("climate_ice_override_tooltip"), "Not saved. Below 0 the ice is what the weather has frozen; at 0 or above it replaces it everywhere, without touching the meltwater the snow holds."));
+				ImGui::Text("%s", T(TKEY("climate_ice_override_tooltip"), "Not saved. Below 0 the ice is what the weather has frozen; at 0 or above it replaces it everywhere, as a freeze that happened when it was set: prints cut in an earlier clock unit glaze, prints cut since do not. It does not touch the meltwater the snow holds."));
 			ImGui::SliderFloat(T(TKEY("ageing_rate_override"), "Ageing Clock Rate Override"), &debugAgeingRateOverride, -1.0f, 60.0f, debugAgeingRateOverride < 0.0f ? "live" : "%.1f per hour");
 			if (auto _ttAge = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("ageing_rate_override_tooltip"), "Not saved. How fast tracks age, in clock units per game hour: about 1 in calm cold weather, over 20 while it snows. At Track Ageing 1 a track is fully aged after 24 units."));
