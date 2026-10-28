@@ -383,17 +383,23 @@ namespace SnowLighting
 	// shell's geometry hands off to identically-dressed terrain beyond its
 	// reach. No normal map: the shell's own fades out by 2200 units.
 	// Classification runs on the raw (gamma) bake, matching the window fill's
-	// thresholds; LOD meshes carry model-space normals ~ world space, so
-	// normal.z gates cliffs back to rock even where the bake is pale. Shading
-	// happens at the write tail (RelightLOD, the shell's recipe on the OUTPUTS).
-	void LODRecolor(inout State s, float3 rawBaseColor, float2 worldXYRel, float3 normal)
+	// thresholds; the world-space normal.z gates cliffs back to rock even where
+	// the bake is pale. Shading happens at the write tail (RelightLOD, the
+	// shell's recipe on the OUTPUTS).
+	void LODRecolor(inout State s, float3 rawBaseColor, float2 uv, float2 worldXYRel, float3 normal)
 	{
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 		// Plain object-LOD batches flagged by the statics hook: their baked snow
 		// (drifts, roads, piles in the atlas) takes the horizon recipe. The
-		// bake covers the mesh whole, so only undersides are kept out.
+		// bake covers the mesh whole, so only undersides are kept out, and only
+		// solid texels: a texture cut out within two mips of the drawn texel
+		// (tree cards, leaves, fences) is never snow.
 		bool snowLodOn = SharedData::snowDeformationSettings.LODObjectEnable > 0.5 &&
 		                 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0;
+		// Two mips past the draw's own sample; the gradients stay out of flow control.
+		const float coverScale = exp2(SharedData::MipBias + 2.0);
+		const float2 coverDx = ddx(uv) * coverScale;
+		const float2 coverDy = ddy(uv) * coverScale;
 #	else
 		bool snowLodOn = SharedData::snowDeformationSettings.LODReplaceEnable > 0.5;
 #	endif
@@ -403,6 +409,9 @@ namespace SnowLighting
 			float lodReplaceT = saturate((length(worldXYRel) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);
+			// Opaque at 8 bits.
+			[branch] if (lodReplaceW > 0.003)
+				lodReplaceW *= TexColorSampler.SampleGrad(SampColorSampler, uv, coverDx, coverDy).a >= 254.5 / 255.0 ? 1.0 : 0.0;
 #	else
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
 #	endif

@@ -1672,7 +1672,12 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif  // MODELSPACENORMALS
 
 #	if defined(SNOW_DEFORMATION) && (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	SnowLighting::LODRecolor(snowState, sampledBaseColor.rgb, input.WorldPosition.xy, normal.xyz);
+	// The recolor faces by the world normal: a tangent-space map reads up on every face.
+#		if defined(MODELSPACENORMALS)
+	SnowLighting::LODRecolor(snowState, sampledBaseColor.rgb, diffuseUv, input.WorldPosition.xy, normal.xyz);
+#		else
+	SnowLighting::LODRecolor(snowState, sampledBaseColor.rgb, diffuseUv, input.WorldPosition.xy, normalize(mul(tbn, normal.xyz)));
+#		endif
 #	endif
 
 #	if defined(WORLD_MAP)
