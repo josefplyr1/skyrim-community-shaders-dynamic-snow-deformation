@@ -1433,6 +1433,9 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		[branch] if (doTerrainPom)
 		{
 			uv = ExtendedMaterials::GetParallaxCoords(input, viewPosition.z, uv, mipLevels, terrainMaxTexDim, viewDirection, tbnTr, screenNoise, displacementParams, sharedOffset, pixelOffset, weights);
+#			if defined(SNOW_DEFORMATION) && defined(DEFERRED)
+			SnowLighting::LandSnowEdgeBlend(input, viewPosition.z, screenNoise, uv, mipLevels, displacementParams, sharedOffset, weights);
+#			endif
 		}
 		else if (SharedData::extendedMaterialSettings.EnableHeightBlending)
 		{
