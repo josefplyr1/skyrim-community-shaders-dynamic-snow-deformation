@@ -4984,6 +4984,8 @@ public:
 	static constexpr uint32_t kBodyCoatFlagHairSpecks = 4;
 	static constexpr uint32_t kBodyCoatFlagRelief = 8;
 	static constexpr uint32_t kBodyCoatFlagReliefView = 16;
+	static constexpr uint32_t kBodyCoatFlagClumps = 32;
+	static constexpr uint32_t kBodyCoatFlagHairBeads = 64;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -5043,6 +5045,10 @@ public:
 	bool debugBodyCoatRelief = true;
 	/** @brief Runtime-only, S2: paints the relief the specks read (grooves blue, rims red) instead of the snow. */
 	bool debugBodyCoatReliefView = false;
+	/** @brief Runtime-only, S2's A/B: half the specks gather in random clumps about a centimetre across; off, they scatter evenly. */
+	bool debugBodyCoatClumps = true;
+	/** @brief Runtime-only, S2's A/B: hair's specks, 0 round, 1 beads along the strands. */
+	int debugBodyCoatHairShape = 1;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

@@ -1006,7 +1006,8 @@ void SnowDeformation::TickBodyCoatStore()
 	// The record's look: the A/B, and the shell's sparkle as Lighting's
 	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
 	const uint32_t lookFlags = (debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u) | (debugBodyCoatRelief ? kBodyCoatFlagRelief : 0u) |
-	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u);
+	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatClumps ? kBodyCoatFlagClumps : 0u) |
+	                           (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u);
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
 	// The cranks as the shader reads them: one over the angle of repose in

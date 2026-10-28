@@ -1992,10 +1992,15 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #	endif
 
 #	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
+	// The strand's direction as CS Hair shading takes it: its flow map, else the card's bitangent.
+	float3 coatStrand = float3(input.TBN0.y, input.TBN1.y, input.TBN2.y);
+#		if defined(CS_HAIR_SHADING)
+	coatStrand = useHairFlowMap ? mul(tbn, sampledHairFlow) : coatStrand;
+#		endif
 	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
 	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
 		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
-		TexNormalSampler, SampNormalSampler, uv, uvOriginal, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
+		TexNormalSampler, SampNormalSampler, uv, uvOriginal, coatStrand, screenNoise, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)
 	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
 #		endif
