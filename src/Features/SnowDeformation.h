@@ -5030,8 +5030,8 @@ public:
 	int debugBodyCoatView = 0;
 	/** @brief Runtime-only, S2: a synthetic coat in every slot until a writer exists: 0 off, 1 legs to the knee, 2 snowfall from above, 3 the left side, 4 everything. */
 	int debugBodyCoatForce = 0;
-	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1. */
-	float debugBodyCoatLumps = 0.5f;
+	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's stop at 0.2. */
+	float debugBodyCoatLumps = 1.0f;
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
 	/** @brief Runtime-only, S2: how many specks land on hair, on the same scale, 0 to 1. */
@@ -5039,11 +5039,11 @@ public:
 	/** @brief Runtime-only, S2: the smallest a speck is across, in mm (0.5 to 10); each speck takes a size between it and the largest. */
 	float debugBodyCoatSpeckMin = 2.0f;
 	/** @brief Runtime-only, S2: the largest a speck is across, in mm (0.5 to 10). */
-	float debugBodyCoatSpeckMax = 3.0f;
+	float debugBodyCoatSpeckMax = 4.0f;
 	/** @brief Runtime-only, S2's A/B: 0 the crust (lumps and specks), 1 flat paint (the specks' share as one even layer). */
 	int debugBodyCoatLook = 0;
 	/** @brief Runtime-only, S2: the steepest slope in degrees snowfall holds on. */
-	float debugBodyCoatRepose = 70.0f;
+	float debugBodyCoatRepose = 60.0f;
 	/** @brief Runtime-only, S2: hair takes specks of snow along its strands, never lumps. */
 	bool debugBodyCoatHairSpecks = true;
 	/** @brief Runtime-only, S2's A/B: the armour's own normal map steers the specks into its grooves and off its rims. */
