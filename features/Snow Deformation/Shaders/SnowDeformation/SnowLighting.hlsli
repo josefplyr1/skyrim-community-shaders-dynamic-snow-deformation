@@ -890,6 +890,8 @@ namespace SnowLighting
 	static const float kCoatLumpUnits = 1.5;
 	static const float kCoatLumpFront = 0.35;
 	static const float kCoatContactLumps = 0.2;
+	static const float kCoatNoiseSd = 0.2698;
+	static const float2 kCoatNormalQuantile = float2(4.91, 0.14);
 	static const float3 kCoatHoleFreq = float3(1.0 / 0.8, 1.0 / 0.4, 1.0 / 0.2);
 	static const float kCoatHoleOpen = 0.54;
 	static const float kCoatSpeckMax = 0.5;
@@ -1119,25 +1121,32 @@ namespace SnowLighting
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
 				const float footprint = max(length(dcdx), length(dcdy));
 				// The order the snow spreads in: 1 facing the snowfall, 0 at the angle of
-				// repose, below 0 past it; contact snow by its strength, its lumps never
-				// past Lump Amount kCoatContactLumps. Lumps (hair has none) lie where their
-				// cover drowns the relief, deep however few, holed only at their rims; a
-				// clump octave fades once a pixel spans half of it, a hole octave a quarter.
+				// repose, below 0 past it; contact snow by its strength. Lumps (hair has
+				// none) lie where their cover drowns the relief, deep however few, holed
+				// only at their rims; a clump octave fades once a pixel spans half of it,
+				// a hole octave a quarter. Contact snow lays its lumps at random spots
+				// instead: Lump Amount's share of the surface (at most kCoatContactLumps),
+				// thinning with its strength as the specks do, cut at the clump field's own
+				// quantile (near normal, the spread of the octaves left; Tukey's quantile).
 				float cover = 0.0;
 				float crown = 0.0;
 				float lumpAlpha = 0.0;
 				[branch] if (!hairSpecks && CoatAmounts.x > 0.0)
 				{
-					const float3 octaves = kCoatClumpWeight * saturate(1.0 - 2.0 * footprint * kCoatClumpFreq) *
+					const float3 clumpFade = saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
+					const float3 octaves = kCoatClumpWeight * clumpFade *
 										   float3(CoatNoise(c * kCoatClumpFreq.x), CoatNoise(c * kCoatClumpFreq.y), CoatNoise(c * kCoatClumpFreq.z));
 					const float clump = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y + octaves.z));
 					crown = saturate(0.5 + kCoatClumpContrast * (octaves.x + octaves.y));
 					const float lumpSlope = acos(clamp(dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), deposit), -1.0, 1.0));
-					const float lumpOrder = max(contact - 1e-3 - (1.0 - min(CoatAmounts.x, kCoatContactLumps)), 1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x));
+					const float contactShare = min(CoatAmounts.x, kCoatContactLumps) * saturate((contact - 1e-3) / kCoatSpeckFront);
+					const float contactCut = 0.5 + kCoatClumpContrast * kCoatNoiseSd * length(kCoatClumpWeight * clumpFade) * kCoatNormalQuantile.x *
+												   (pow(saturate(1.0 - contactShare), kCoatNormalQuantile.y) - pow(saturate(contactShare), kCoatNormalQuantile.y));
 					const float3 holeFade = saturate(0.5 / max(footprint * kCoatHoleFreq, 1e-6) - 1.0);
 					const float3 holeNoise = holeFade * float3(CoatNoise(c * kCoatHoleFreq.x + 17.1), CoatNoise(c * kCoatHoleFreq.y + 43.7), CoatNoise(c * kCoatHoleFreq.z + 71.3));
 					const float3 holeStep = max(kCoatNoiseSlope * kCoatHoleFreq * footprint * holeFade, 1e-4);
-					cover = saturate(lumpOrder / kCoatLumpFront);
+					cover = max(saturate((1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront),
+								saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
 					const float lie = cover * (1.0 + kCoatEdge) - (1.0 - clump);
 					const float rim = saturate(lie / kCoatRimSpan);
 					const float depthCm = kCoatFullCm * (0.5 + clump) * rim;
