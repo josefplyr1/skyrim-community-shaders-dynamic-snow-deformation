@@ -28,8 +28,7 @@ namespace
 	constexpr uint32_t kWalksPerFrame = 4;
 	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
-	// Each hole octave's share of the coat at full graininess (estimate; 30 %
-	// together).
+	// Each hole octave's share of a lump's rim (estimate; 30 % together).
 	constexpr float kHoleShare = 0.11f;
 
 	// CoatNoise's upper tail (SnowLighting.hlsli, measured over 2e6 samples): the
@@ -1011,13 +1010,12 @@ void SnowDeformation::TickBodyCoatStore()
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
 	// The cranks as the shader reads them: one over the angle of repose in
-	// radians, and the graininess as the lumps' three hole octaves' noise
-	// thresholds, the coarsest opening first, each to kHoleShare of a rim.
+	// radians, and the lumps' three rim-hole octaves' noise thresholds, each
+	// at kHoleShare (Graininess, retired, at its full setting).
 	const float repose = std::clamp(debugBodyCoatRepose, 1.0f, 89.0f);
-	const float grain = std::clamp(debugBodyCoatGraininess, 0.0f, 1.0f);
 	float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose) };
 	for (int k = 0; k < 3; ++k)
-		look[1 + k] = NoiseCut(kHoleShare * std::clamp(3.0f * grain - float(k), 0.0f, 1.0f));
+		look[1 + k] = NoiseCut(kHoleShare);
 	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and a
 	// speck's radius in units (Speck Size is a diameter in mm, 14.2875 mm a unit).
 	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f),

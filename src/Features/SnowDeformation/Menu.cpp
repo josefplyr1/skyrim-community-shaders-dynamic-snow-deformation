@@ -2052,9 +2052,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat("Angle of Repose", &debugBodyCoatRepose, 20.0f, 85.0f, "%.0f deg");
 			if (auto _ttRepose = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. The steepest slope snowfall holds on: lumps spread toward it, and specks thin out to none at it. The armour's own relief counts, so the walls of its folds and cracks shed snow first.");
-			ImGui::SliderFloat("Graininess", &debugBodyCoatGraininess, 0.0f, 1.0f, "%.2f");
-			if (auto _ttGrain = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Opens tiny holes at the rims of the lumps, the gaps between the flakes they are made of: more of them as it rises, and smaller ones joining in (about 7, 4 and 2 mm across). The specks are Grain Amount's alone. 0: solid lumps.");
 			ImGui::Checkbox("Hair Takes Specks", &debugBodyCoatHairSpecks);
 			if (auto _ttHair = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Hair (the hair shader: head hair, beards, hairlines) takes only specks of snow on its strands, from the crown down to its sides, as many as Hair Speck Amount sets. Off, hair takes lumps and specks like armour.");
