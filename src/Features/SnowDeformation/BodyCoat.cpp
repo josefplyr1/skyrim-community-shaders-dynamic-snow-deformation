@@ -30,6 +30,11 @@ namespace
 		return Util::PathHelpers::GetCommunityShaderPath() / "SnowBodyCoatShaders.txt";
 	}
 
+	// The shader's speck fit (SnowLighting.hlsli kCoatDotRank, kCoatSpeckMax):
+	// a share q of the balls on covers 1 - e^-L, where q = L (x + y L).
+	constexpr float kSpeckRank[2] = { 0.9212f, -0.0764f };
+	constexpr float kSpeckMax = 0.5f;
+
 	constexpr uint32_t kDumpLinesMax = 900;
 	// S1's cadence (estimates): the near tier is picked every kPickFrames, an
 	// actor keeps its slots kKeepFrames past its last pick, its 3D is walked
@@ -1062,8 +1067,13 @@ void SnowDeformation::TickBodyCoatStore()
 	const float sizeRatio = sizeLo / sizeHi;
 	const float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose), sizeLo * 0.5f / 14.2875f, sizeHi * 0.5f / 14.2875f,
 		4.0f / ((1.0f + sizeRatio) * (1.0f + sizeRatio * sizeRatio)) };
+	// Grain 1 is half a surface, or as many specks as the lattice holds when
+	// that is less (sizes spread wider than 1.5 : 1): every ball on covers
+	// 1 - e^-L at L (x + y L) = the sizes' mean volume.
+	const float roomL = (kSpeckRank[0] - std::sqrt(kSpeckRank[0] * kSpeckRank[0] + 4.0f * kSpeckRank[1] / look[3])) / (-2.0f * kSpeckRank[1]);
+	const float grainScale = std::min(1.0f, (1.0f - std::exp(-roomL)) / kSpeckMax);
 	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks).
-	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f),
+	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) * grainScale,
 		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), 0.0f };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
 		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairSpecks != debugBodyCoatHairSpecks) {
@@ -1490,8 +1500,8 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks {:.2f} and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
-			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1], store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
+		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
+			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1] * kSpeckMax * 100.0f, store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
 			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			(store.lookFlags & kBodyCoatFlagReliefView) ? "shown" : ((store.lookFlags & kBodyCoatFlagRelief) ? "on" : "off"),
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
