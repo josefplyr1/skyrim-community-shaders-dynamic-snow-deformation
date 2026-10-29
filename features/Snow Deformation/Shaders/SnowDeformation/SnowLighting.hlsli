@@ -914,7 +914,6 @@ namespace SnowLighting
 	static const float kCoatEdge = 0.05;
 	static const float kCoatLumpUnits = 1.5;
 	static const float kCoatLumpFront = 0.35;
-	static const float kCoatContactLumps = 0.2;
 	static const float kCoatNoiseSd = 0.2698;
 	static const float2 kCoatNormalQuantile = float2(4.91, 0.14);
 	static const float3 kCoatHoleFreq = float3(1.0 / 0.8, 1.0 / 0.4, 1.0 / 0.2);
@@ -1224,9 +1223,9 @@ namespace SnowLighting
 				// none) lie where their cover drowns the relief, deep however few, holed
 				// only at their rims; a clump octave fades once a pixel spans half of it,
 				// a hole octave a quarter. Contact snow lays its lumps at random spots
-				// instead: Lump Amount's share of the surface (at most kCoatContactLumps),
-				// thinning with its strength as the specks do, cut at the clump field's own
-				// quantile (near normal, the spread of the octaves left; Tukey's quantile).
+				// instead: Lump Amount's share of the surface, thinning with its strength as
+				// the specks do, cut at the clump field's own quantile (near normal, the
+				// spread of the octaves left; Tukey's quantile).
 				float cover = 0.0;
 				float crown = 0.0;
 				float lumpAlpha = 0.0;
@@ -1234,18 +1233,21 @@ namespace SnowLighting
 				[branch] if (!hairSpecks && CoatAmounts.x > 0.0)
 				{
 					const float lumpSlope = acos(clamp(dot(CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare)), deposit), -1.0, 1.0));
-					const float contactShare = min(CoatAmounts.x, kCoatContactLumps) * saturate((contact - 1e-3) / kCoatSpeckFront);
+					const float contactShare = CoatAmounts.x * saturate((contact - 1e-3) / kCoatSpeckFront);
 					const float fallCover = saturate((1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
 					[branch] if ((CoatFlags & kCoatLumpTiles) != 0)
 					{
 						// Lump tiles: whole lumps over a share of the surface, contact's as above and
 						// snowfall's its spread; clods for contact and pillows for snowfall unless one
 						// is forced. Past two layers' cover a sheet rises to the lumps' mean height.
-						// No dome bevel: the armour beside a lump keeps its own shading.
-						const float share = max(contactShare, fallCover);
+						// No dome bevel: the armour beside a lump keeps its own shading. A lump is far
+						// larger than the armour's relief, so its snowfall spreads by the surface's
+						// shape alone: chainmail rings and weave on a hanging piece take none.
+						const float shapeCover = saturate((1.0 - acos(clamp(dot(restShape, deposit), -1.0, 1.0)) * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
+						const float share = max(contactShare, shapeCover);
 						[branch] if (share > 0.0)
 						{
-							const bool pillows = (CoatFlags & kCoatLumpForce) != 0 ? (CoatFlags & kCoatLumpPillows) != 0 : fallCover > contactShare;
+							const bool pillows = (CoatFlags & kCoatLumpForce) != 0 ? (CoatFlags & kCoatLumpPillows) != 0 : shapeCover > contactShare;
 							const float slice = pillows ? 1.0 : 0.0;
 							const float layer = pillows ? kCoatLumpCover.y : kCoatLumpCover.x;
 							const float cap = 1.0 - (1.0 - layer) * (1.0 - layer);

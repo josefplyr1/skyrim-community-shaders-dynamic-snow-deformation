@@ -5051,7 +5051,7 @@ public:
 	int debugBodyCoatView = 0;
 	/** @brief Runtime-only, S2: a synthetic coat in every slot until a writer exists: 0 off, 1 legs to the knee, 2 snowfall from above, 3 the left side, 4 everything. */
 	int debugBodyCoatForce = 0;
-	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's lie at random spots over this share of the surface, at most 0.2. */
+	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's lie at random spots over this share of the surface. */
 	float debugBodyCoatLumps = 1.0f;
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
 	float debugBodyCoatGrains = 1.0f;
