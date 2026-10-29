@@ -949,6 +949,18 @@ void SnowDeformation::NoteBodyCoatShaders(uint32_t a_vertexDescriptor, uint32_t 
 	coatKeysDirty |= coatKeys.insert((uint64_t(a_vertexDescriptor) << 32) | a_pixelDescriptor).second;
 }
 
+void SnowDeformation::EnsureBodyCoatLumps()
+{
+	if (std::exchange(bodyCoatLumpAttempted, true))
+		return;
+	if (!LoadGameDDS("Shaders\\SnowDeformation\\BodyCoatLumps.dds", bodyCoatLumpSRV)) {
+		bodyCoatLumpSRV = nullptr;
+		logger::info("[SNOW DEFORMATION] body coat lump tiles not found; the lumps stay on the clump field");
+		return;
+	}
+	logger::info("[SNOW DEFORMATION] body coat lump tiles loaded");
+}
+
 void SnowDeformation::GenerateShaderPermutations(RE::BSShader* a_shader)
 {
 	if (a_shader->shaderType.get() != RE::BSShader::Type::Lighting)
@@ -1052,8 +1064,13 @@ void SnowDeformation::TickBodyCoatStore()
 	}
 	// The record's look: the A/B, and the shell's sparkle as Lighting's
 	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
+	const int lumpLook = std::clamp(debugBodyCoatLumpLook, 0, 3);
+	if (lumpLook != 0)
+		EnsureBodyCoatLumps();
+	const uint32_t lumpFlags = lumpLook == 0 || !bodyCoatLumpSRV ? 0u :
+	                                                               kBodyCoatFlagLumpTiles | (lumpLook >= 2 ? kBodyCoatFlagLumpForce : 0u) | (lumpLook == 3 ? kBodyCoatFlagLumpPillows : 0u);
 	const uint32_t lookFlags = (debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u) | (debugBodyCoatRelief ? kBodyCoatFlagRelief : 0u) |
-	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u);
+	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u) | lumpFlags;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
 	// The cranks as the shader reads them: one over the angle of repose in
@@ -1232,6 +1249,10 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
+		if (store->lookFlags & kBodyCoatFlagLumpTiles) {
+			ID3D11ShaderResourceView* lumpSRV = bodyCoatLumpSRV.get();
+			context->PSSetShaderResources(kBodyCoatLumpSlot, 1, &lumpSRV);
+		}
 	}
 	if (store->context1) {
 		ID3D11Buffer* buffer = store->recordCB[store->parity & 1].get();
@@ -1500,8 +1521,12 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f}, specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
-			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], store.amounts[1] * kSpeckMax * 100.0f, store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
+		const char* lumpLook = !(store.lookFlags & kBodyCoatFlagLumpTiles) ? "today's" :
+		                       !(store.lookFlags & kBodyCoatFlagLumpForce) ? "tiles by source" :
+		                       (store.lookFlags & kBodyCoatFlagLumpPillows)  ? "pillows everywhere" :
+		                                                                       "clods everywhere";
+		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} ({}), specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
+			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], lumpLook, store.amounts[1] * kSpeckMax * 100.0f, store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
 			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
 			(store.lookFlags & kBodyCoatFlagReliefView) ? "shown" : ((store.lookFlags & kBodyCoatFlagRelief) ? "on" : "off"),
 			store.gpuFailed ? "The atlas could not be made; see CommunityShaders.log." : ""));
