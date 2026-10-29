@@ -955,10 +955,10 @@ void SnowDeformation::EnsureBodyCoatLumps()
 		return;
 	if (!LoadGameDDS("Shaders\\SnowDeformation\\BodyCoatLumps.dds", bodyCoatLumpSRV)) {
 		bodyCoatLumpSRV = nullptr;
-		logger::info("[SNOW DEFORMATION] body coat lump tiles not found; the lumps stay on the clump field");
+		logger::info("[SNOW DEFORMATION] body coat lump field not found; the lumps stay flat");
 		return;
 	}
-	logger::info("[SNOW DEFORMATION] body coat lump tiles loaded");
+	logger::info("[SNOW DEFORMATION] body coat lump field loaded");
 }
 
 void SnowDeformation::GenerateShaderPermutations(RE::BSShader* a_shader)
@@ -1064,11 +1064,9 @@ void SnowDeformation::TickBodyCoatStore()
 	}
 	// The record's look: the A/B, and the shell's sparkle as Lighting's
 	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
-	const int lumpLook = std::clamp(debugBodyCoatLumpLook, 0, 3);
-	if (lumpLook != 0)
+	if (debugBodyCoatLumpLook != 0)
 		EnsureBodyCoatLumps();
-	const uint32_t lumpFlags = lumpLook == 0 || !bodyCoatLumpSRV ? 0u :
-	                                                               kBodyCoatFlagLumpTiles | (lumpLook >= 2 ? kBodyCoatFlagLumpForce : 0u) | (lumpLook == 3 ? kBodyCoatFlagLumpPillows : 0u);
+	const uint32_t lumpFlags = debugBodyCoatLumpLook != 0 && bodyCoatLumpSRV ? kBodyCoatFlagLumpDepth : 0u;
 	const uint32_t lookFlags = (debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u) | (debugBodyCoatRelief ? kBodyCoatFlagRelief : 0u) |
 	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u) | lumpFlags;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
@@ -1249,7 +1247,7 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
-		if (store->lookFlags & kBodyCoatFlagLumpTiles) {
+		if (store->lookFlags & kBodyCoatFlagLumpDepth) {
 			ID3D11ShaderResourceView* lumpSRV = bodyCoatLumpSRV.get();
 			context->PSSetShaderResources(kBodyCoatLumpSlot, 1, &lumpSRV);
 		}
@@ -1521,10 +1519,7 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		const char* lumpLook = !(store.lookFlags & kBodyCoatFlagLumpTiles) ? "today's" :
-		                       !(store.lookFlags & kBodyCoatFlagLumpForce) ? "tiles by source" :
-		                       (store.lookFlags & kBodyCoatFlagLumpPillows)  ? "pillows everywhere" :
-		                                                                       "clods everywhere";
+		const char* lumpLook = (store.lookFlags & kBodyCoatFlagLumpDepth) ? "in depth" : "today's";
 		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} ({}), specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
 			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], lumpLook, store.amounts[1] * kSpeckMax * 100.0f, store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
 			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",

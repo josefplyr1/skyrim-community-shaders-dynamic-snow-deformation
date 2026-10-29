@@ -5002,10 +5002,8 @@ public:
 	static constexpr uint32_t kBodyCoatFlagRelief = 8;
 	static constexpr uint32_t kBodyCoatFlagReliefView = 16;
 	static constexpr uint32_t kBodyCoatFlagHairBeads = 64;
-	/** @brief Lumps from the lump tiles (BodyCoatLumps.dds) instead of the clump field; Force takes one tile for every source, Pillows says which. */
-	static constexpr uint32_t kBodyCoatFlagLumpTiles = 32;
-	static constexpr uint32_t kBodyCoatFlagLumpForce = 128;
-	static constexpr uint32_t kBodyCoatFlagLumpPillows = 256;
+	/** @brief Lumps drawn in depth: the clump field baked (BodyCoatLumps.dds), its dome by parallax. */
+	static constexpr uint32_t kBodyCoatFlagLumpDepth = 32;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -5073,13 +5071,13 @@ public:
 	bool debugBodyCoatReliefView = false;
 	/** @brief Runtime-only, S2's A/B: hair's specks, 0 round, 1 beads along the strands. */
 	int debugBodyCoatHairShape = 0;
-	/** @brief Runtime-only, S2's A/B of the lumps: 0 today's clump field, 1 the lump tiles by source (clods for contact, pillows for snowfall), 2 clods everywhere, 3 pillows everywhere. */
+	/** @brief Runtime-only, S2's A/B of the lumps: 0 today's (a shading bevel), 1 in depth (the same field, its dome by parallax). */
 	int debugBodyCoatLumpLook = 1;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */
 	static constexpr UINT kBodyCoatAtlasSlot = 41;
-	/** @brief The lump tiles' slot: in no Lighting permutation; the objects shell's own passes bind it and clear it after, so coat draws bind it each draw. */
+	/** @brief The lumps' baked field's slot: in no Lighting permutation; the objects shell's own passes bind it and clear it after, so coat draws bind it each draw. */
 	static constexpr UINT kBodyCoatLumpSlot = 44;
 	/** @brief The record's slot: free in every Lighting PS (b0-b7 and b9-b12 are taken). */
 	static constexpr UINT kBodyCoatRecordSlot = 8;
@@ -5095,7 +5093,7 @@ public:
 protected:
 	void RunBodyCoatCensus(bool a_dump);
 	void TickBodyCoatStore();
-	/** @brief Loads BodyCoatLumps.dds once, the first time a lump tile look is on. */
+	/** @brief Loads BodyCoatLumps.dds once, the first time the lumps are drawn in depth. */
 	void EnsureBodyCoatLumps();
 	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatLumpSRV;
 	bool bodyCoatLumpAttempted = false;

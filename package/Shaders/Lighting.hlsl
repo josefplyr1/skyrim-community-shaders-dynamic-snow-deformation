@@ -2000,7 +2000,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
 	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
 		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
-		TexNormalSampler, SampNormalSampler, uv, uvOriginal, coatStrand, screenNoise, viewDirection, DirLightDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
+		TexNormalSampler, SampNormalSampler, uv, uvOriginal, coatStrand, screenNoise, viewDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)
 	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
 #		endif
@@ -2538,11 +2538,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		endif  // LANDSCAPE
 	}
 #	endif  // defined(EMAT) && (defined(SKINNED) || !defined(MODELSPACENORMALS))
-
-#	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
-	// The body coat's lumps shade themselves: the sun through the lump tiles.
-	dirDetailedShadow *= snowState.coatShadow;
-#	endif
 
 #	if defined(CS_HAIR_SHADING)
 	if (SharedData::hairSpecularSettings.Enabled) {
