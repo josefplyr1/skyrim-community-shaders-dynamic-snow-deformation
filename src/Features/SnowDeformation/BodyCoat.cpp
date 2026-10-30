@@ -1809,6 +1809,20 @@ void SnowDeformation::ProbeBodyCoatDraw(RE::BSRenderPass* a_pass)
 	}
 }
 
+std::string SnowDeformation::BodyCoatWriterLine() const
+{
+	if (!bodyCoatStore)
+		return debugBodyCoatContact ? "Contact writer (S3): no store yet." : "Contact writer (S3): off.";
+	const auto& store = *bodyCoatStore;
+	const char* writer = !debugBodyCoatContact ? "off" :
+	                     store.force != 0      ? "off while Force Coat is on" :
+	                     !store.writerTried    ? "waiting for an actor in snow" :
+	                     store.writerReady     ? "on" :
+	                                             "failed (see CommunityShaders.log)";
+	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}.",
+		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size());
+}
+
 std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 {
 	std::vector<std::string> lines;
@@ -1838,13 +1852,6 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",
 			store.actors.size(), refused, components, full, halves, kBodyCoatSlots, store.records.size(), store.context1 ? "bound by offset" : "written per draw",
 			store.coatedLast, store.missesLast, store.walksLast));
-		const char* writer = !debugBodyCoatContact ? "off" :
-		                     store.force != 0      ? "off while Force Coat is on" :
-		                     !store.writerTried    ? "waiting for an actor in snow" :
-		                     store.writerReady     ? "on" :
-		                                             "failed (see CommunityShaders.log)";
-		lines.push_back(std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}.",
-			writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size()));
 	}
 
 	if (!bodyCoatCensusRan) {

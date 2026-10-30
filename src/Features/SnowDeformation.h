@@ -5043,6 +5043,8 @@ public:
 	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
 	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
 	std::vector<std::string> BodyCoatProbeLines() const;
+	/** @brief The S3 tree's readout: the contact writer's state and its last update. */
+	std::string BodyCoatWriterLine() const;
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
 	/** @brief Runtime-only: run the census every kBodyCoatCensusFrames. */
