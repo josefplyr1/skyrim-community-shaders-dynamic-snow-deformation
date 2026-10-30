@@ -5065,6 +5065,8 @@ public:
 	float debugBodyCoatContactCap = 0.5f;
 	/** @brief Runtime-only, S3 (estimate): seconds of contact at full adhesion that build a coat from nothing to the cap. */
 	float debugBodyCoatBuildUp = 10.0f;
+	/** @brief Runtime-only, S3: the share of the cap kept for the parts pushing into fresh snow as the body moves (Josef, 2026-10-30: about half). */
+	float debugBodyCoatImpactShare = 0.5f;
 	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's lie at random spots over this share of the surface. */
 	float debugBodyCoatLumps = 1.0f;
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
@@ -5115,10 +5117,10 @@ protected:
 	bool bodyCoatLumpAttempted = false;
 	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). */
 	bool BodyCoatWriteBegin();
-	/** @brief The actor is due a contact update this frame, with the atlas levels its touches grow by this update. */
-	bool BodyCoatWriteDue(uint32_t a_formID, float& a_growth) const;
+	/** @brief The actor is due a contact update this frame, with its write: x the atlas levels its touches grow by, yz its heading, w its impact share. */
+	bool BodyCoatWriteDue(uint32_t a_formID, float4& a_write) const;
 	/** @brief Uploads a shape's write constants; false when it has no record. */
-	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_growth);
+	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, const float4& a_write);
 	/** @brief Binds the writer's stages around an actor's coat pass, or puts the capture's back. */
 	void BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on);
 	/** @brief Folds this frame's touches into the atlas, and reads the readout's count back. */

@@ -141,18 +141,19 @@ float2 main(VS_OUTPUT input) : SV_Target
 #	endif
 #else
 // A vertex's atlas texel (fractional), how far it lies under the drawn snow
-// (positive: under), whether it is under the water, and the levels a touch
-// grows the coat by this update.
+// (positive: under), whether it is under the water, the levels a touch grows
+// the coat by this update, and the share of the cap it may keep.
 struct VS_OUTPUT_COAT
 {
 	float3 Texel : TEXCOORD0;
 	float Below : TEXCOORD1;
 	float Wet : TEXCOORD2;
 	float Growth : TEXCOORD3;
+	float Target : TEXCOORD4;
 };
 
 // One voxel to raise: the atlas texel, and flags (1 contact, 2 wash) with the
-// growth in bits 8-23, in 1/256 levels.
+// growth in bits 8-23, in 1/256 levels, and the share of the cap in bits 24-31.
 struct GS_OUTPUT_COAT
 {
 	float4 Position : SV_POSITION;
@@ -166,14 +167,17 @@ struct GS_OUTPUT_COAT
 #		include "SnowDeformation/SnowDeformation.hlsli"
 
 // The draw's shape (BodyCoat.cpp BodyCoatWriteCB): its record's model-to-atlas
-// rows and slot box, and the levels the actor's touches grow by this update.
+// rows and slot box, the levels the actor's touches grow by this update, its
+// heading since the last (world xy, unit) and the share of the cap kept for the
+// parts pushing into fresh snow (0 while it stands).
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
 	float4 WriteAtlasLo;
 	float4 WriteAtlasHi;
 	float WriteGrowth;
-	float3 WritePad;
+	float2 WriteHeading;
+	float WriteImpactShare;
 }
 
 // The drawn snow's top at a point, without the berm (the spoil beside a
@@ -189,23 +193,29 @@ float CoatSnowTop(float2 worldXY)
 	return top;
 }
 
-// How far a point lies under the snow that touches it, a quarter texel of
+// How far a point lies under the snow that touches it (x), a quarter texel of
 // slack included: the snow one deformation texel out, the highest of four
 // sides. Its own column holds the print it carved; the snow beside it is what
-// it pushes against (section 2.3). Above the highest the layer can stand there
-// (its class depth plus undulation), nothing is read.
-float CoatBelowSnow(float3 world)
+// it pushes against (section 2.3). And how squarely it moves into that snow
+// (y, 0-1): how far the snow stands over it ahead along the heading, past the
+// side behind, against the most it stands over it on any side (fresh snow
+// ahead, the trench behind). Above the highest the layer can stand there (its
+// class depth plus undulation), nothing is read.
+float2 CoatBelowSnow(float3 world)
 {
 	const float texel = 1.0 / max(DeformInvWorldSize * FieldDims.x, 1e-6);
 	const float3 terrain = SampleTerrain(world.xy - GridOrigin);
 	const float2 road = RoadRasterAt(world.xy);
 	const float reach = max(terrain.x + max(terrain.y, 0.0) + UndulationAmp, road.y + road.x) + texel;
-	float below = -1e6;
+	float2 below = float2(-1e6, 0.0);
 	[branch] if (world.z < reach)
 	{
-		const float top = max(max(CoatSnowTop(world.xy + float2(texel, 0.0)), CoatSnowTop(world.xy - float2(texel, 0.0))),
-			max(CoatSnowTop(world.xy + float2(0.0, texel)), CoatSnowTop(world.xy - float2(0.0, texel))));
-		below = top + 0.25 * texel - world.z;
+		const float4 tops = float4(CoatSnowTop(world.xy + float2(texel, 0.0)), CoatSnowTop(world.xy - float2(texel, 0.0)),
+			CoatSnowTop(world.xy + float2(0.0, texel)), CoatSnowTop(world.xy - float2(0.0, texel)));
+		const float4 over = max(tops - world.z, 0.0);
+		const float most = max(max(over.x, over.y), max(over.z, over.w));
+		const float2 push = float2(over.x - over.y, over.z - over.w);
+		below = float2(max(max(tops.x, tops.y), max(tops.z, tops.w)) + 0.25 * texel - world.z, saturate(dot(push, WriteHeading) / max(most, 1e-3)));
 	}
 	return below;
 }
@@ -218,9 +228,12 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 	// Clamped into the slot as Lighting clamps its read.
 	output.Texel = clamp(float3(dot(WriteModelToAtlas[0], model), dot(WriteModelToAtlas[1], model), dot(WriteModelToAtlas[2], model)),
 		WriteAtlasLo.xyz + 0.5, WriteAtlasHi.xyz - 0.5);
-	output.Below = CoatBelowSnow(world);
+	const float2 below = CoatBelowSnow(world);
+	output.Below = below.x;
 	output.Wet = SnowDeformation::UnderWater(world) ? 1.0 : 0.0;
 	output.Growth = WriteGrowth;
+	// All of the cap pushing into fresh snow, Impact Share less of it elsewhere.
+	output.Target = 1.0 - WriteImpactShare * (1.0 - below.y);
 	return output;
 }
 #	endif
@@ -230,7 +243,7 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 // closer, up to this many steps an edge; (6 + 1)(6 + 2) / 2 points at most.
 static const uint kCoatLatticeSteps = 6;
 
-void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_growth, inout PointStream<GS_OUTPUT_COAT> a_stream)
+void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, uint a_growth, inout PointStream<GS_OUTPUT_COAT> a_stream)
 {
 	const uint flags = (a_below > 0.0 ? 1u : 0u) | (a_wet >= 0.5 ? 2u : 0u);
 	[branch] if (flags != 0)
@@ -238,7 +251,7 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_growth, inout 
 		GS_OUTPUT_COAT o;
 		// Pixel (0, 0) of the capture's target: every point is one PS invocation.
 		o.Position = float4(-1.0 + 1.0 / 2048.0, 1.0 - 1.0 / 2048.0, 0.5, 1.0);
-		o.Voxel = uint4(uint3(a_texel), flags | (a_growth << 8));
+		o.Voxel = uint4(uint3(a_texel), flags | (a_growth << 8) | (uint(saturate(a_target) * 255.0 + 0.5) << 24));
 		a_stream.Append(o);
 	}
 }
@@ -255,7 +268,7 @@ void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stre
 		{
 			const float3 b = float3(i, j, steps - i - j) / float(steps);
 			CoatPoint(b.x * tri[0].Texel + b.y * tri[1].Texel + b.z * tri[2].Texel, b.x * tri[0].Below + b.y * tri[1].Below + b.z * tri[2].Below,
-				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, growth, stream);
+				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, b.x * tri[0].Target + b.y * tri[1].Target + b.z * tri[2].Target, growth, stream);
 		}
 	}
 }
@@ -300,9 +313,10 @@ cbuffer BodyCoatResolveCB : register(b0)
 
 groupshared uint changedInGroup;
 
-// Contact grows R toward the cap by the touch's growth, a fraction of a level
-// rounded up at random in proportion, so slow growth still adds up; water
-// clears R and G. The scratch is left at zero for the next update.
+// Contact grows R toward the point's share of the cap by the touch's growth, a
+// fraction of a level rounded up at random in proportion, so slow growth still
+// adds up; water clears R and G. The scratch is left at zero for the next
+// update.
 [numthreads(8, 8, 4)]
 void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 {
@@ -320,8 +334,9 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 			const uint was = CoatAtlasWords[t];
 			uint r = was & 0xFFu;
 			uint g = (was >> 8) & 0xFFu;
-			[branch] if (contact != 0 && r < ResolveCap)
-				r = min(r + uint(float(contact) / 256.0 + float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0), ResolveCap);
+			const uint target = (ResolveCap * (contact >> 16) + 127u) / 255u;
+			[branch] if (contact != 0 && r < target)
+				r = min(r + uint(float(contact & 0xFFFFu) / 256.0 + float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0), target);
 			[flatten] if (wash != 0)
 			{
 				r = 0;

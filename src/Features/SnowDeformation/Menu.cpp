@@ -2048,6 +2048,9 @@ void SnowDeformation::DrawSettings()
 			ImGui::SliderFloat("Build-up Time", &debugBodyCoatBuildUp, 1.0f, 60.0f, "%.0f s");
 			if (auto _ttBuildUp = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. Seconds of contact that build a coat from nothing to Contact Cap when the snow sticks at its most (wet snow, or a landing, knockdown or sprint on top). Less sticky snow takes longer in proportion: dry powder about five times as long.");
+			ImGui::SliderFloat("Impact Share", &debugBodyCoatImpactShare, 0.0f, 1.0f, "%.2f");
+			if (auto _ttImpact = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. How much of the coat goes by the direction of travel: the parts pushing into fresh snow as a body moves (the front of a walking leg) build to the full Contact Cap, everything else to this much less of it. 0.5: half for direction, half at random. Standing still, every part builds alike.");
 			if (ImGui::Button("Clear Body Coats"))
 				debugBodyCoatClear = true;
 			WrapTextF("%s", BodyCoatWriterLine().c_str());

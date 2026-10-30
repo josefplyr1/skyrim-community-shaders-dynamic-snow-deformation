@@ -56,6 +56,9 @@ namespace
 	// kCoatContactFront as a full coat (SnowLighting.hlsli kCoatSpeckFront).
 	constexpr float kWriteGapMax = 0.5f;
 	constexpr float kCoatContactFront = 0.5f;
+	// Round 3: Snow Climate's moist snow (ClimateStickiness). Contact snow holds
+	// its full share of lumps from here up, drier snow fewer, as grains instead.
+	constexpr float kCoatMoistStickiness = 0.7f;
 
 	// SnowContactCapture.hlsl BodyCoatWriteCB (VS b3) and BodyCoatResolveCB (CS b0).
 	struct alignas(16) BodyCoatWriteCB
@@ -64,7 +67,8 @@ namespace
 		float4 AtlasLo;
 		float4 AtlasHi;
 		float Growth;
-		float pad[3];
+		float Heading[2];
+		float ImpactShare;
 	};
 	static_assert(sizeof(BodyCoatWriteCB) == 96);
 	struct alignas(16) BodyCoatResolveCB
@@ -305,9 +309,12 @@ struct SnowDeformation::BodyCoatStore
 		bool walk = true;
 		bool refused = false;
 		bool dead = false;
-		// S3: the time since its last coat update, and the largest jolt in it.
+		// S3: the time since its last coat update, the largest jolt in it, and
+		// where it stood at that update.
 		float sinceWrite = 0.0f;
 		float joltHeld = 0.0f;
+		RE::NiPoint3 lastPos;
+		bool hasLastPos = false;
 	};
 	struct Pick
 	{
@@ -356,7 +363,8 @@ struct SnowDeformation::BodyCoatStore
 	struct Due
 	{
 		uint32_t formID;
-		float growth;
+		// x the growth in atlas levels, yz the heading, w the impact share.
+		float4 write;
 	};
 	std::vector<Due> due;
 	uint32_t roundRobin = 0;
@@ -1240,9 +1248,13 @@ void SnowDeformation::TickBodyCoatStore()
 	// 1 - e^-L at L (x + y L) = the sizes' mean volume.
 	const float roomL = (kSpeckRank[0] - std::sqrt(kSpeckRank[0] * kSpeckRank[0] + 4.0f * kSpeckRank[1] / look[3])) / (-2.0f * kSpeckRank[1]);
 	const float grainScale = std::min(1.0f, (1.0f - std::exp(-roomL)) / kSpeckMax);
-	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks).
+	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and
+	// contact snow's cohesion, its share of lumps (round 3), in steps of 0.05 so
+	// the records rebuild only on a step. The forced coat keeps its full share.
+	const float stickiness = GetSnowCondition().stickiness;
+	const float cohesion = force != 0 ? 1.0f : std::round(std::clamp(stickiness / kCoatMoistStickiness, 0.0f, 1.0f) * 20.0f) / 20.0f;
 	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) * grainScale,
-		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), 0.0f };
+		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), cohesion };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
 		memcmp(store.amounts, amounts, sizeof(amounts)) != 0 || store.hairSpecks != debugBodyCoatHairSpecks) {
 		store.lookFlags = lookFlags;
@@ -1354,19 +1366,30 @@ void SnowDeformation::TickBodyCoatStore()
 	// S3: who the contact writer updates this frame, each with how far its
 	// touches grow the coat (section 5.31): adhesion (Snow Climate's stickiness,
 	// raised by the largest jolt since its last update, section 2.3) over the
-	// time since then, the cap reached in Build-up Time at full adhesion. Force
-	// Coat owns the atlas while it is on.
+	// time since then, the cap reached in Build-up Time at full adhesion. And its
+	// heading since then (round 3): Impact Share of the cap is kept for the parts
+	// pushing into fresh snow, counted in full once it has moved a deformation
+	// texel, the taps' reach. Force Coat owns the atlas while it is on.
 	store.due.clear();
 	if (contact && force == 0 && store.live && store.atlasUAV) {
 		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.0f;
-		const float stickiness = GetSnowCondition().stickiness;
 		const float cap = std::clamp(debugBodyCoatContactCap, 0.0f, 1.0f) * kCoatContactFront * 255.0f;
 		store.capLevel = uint32_t(cap + 0.5f);
 		const float perSecond = cap / std::max(debugBodyCoatBuildUp, 0.1f);
-		const auto make = [&](uint32_t a_formID, Store::Actor& a_actor) {
-			store.due.push_back({ a_formID, std::min(1.0f, stickiness + a_actor.joltHeld) * perSecond * a_actor.sinceWrite });
+		const float texel = deformationTextures[0] && deformationTextures[0]->srv ? deformWorldSize / float(deformationTextures[0]->desc.Width) : 0.0f;
+		const float impactShare = std::clamp(debugBodyCoatImpactShare, 0.0f, 1.0f);
+		const auto make = [&](uint32_t a_formID, Store::Actor& a_actor, const RE::NiPoint3& a_pos) {
+			float4 write{ std::min(1.0f, stickiness + a_actor.joltHeld) * perSecond * a_actor.sinceWrite, 0.0f, 0.0f, 0.0f };
+			const float dx = a_pos.x - a_actor.lastPos.x;
+			const float dy = a_pos.y - a_actor.lastPos.y;
+			const float moved = std::sqrt(dx * dx + dy * dy);
+			if (a_actor.hasLastPos && texel > 0.0f && moved > 1e-3f)
+				write = float4(write.x, dx / moved, dy / moved, impactShare * std::min(moved / texel, 1.0f));
+			store.due.push_back({ a_formID, write });
 			a_actor.sinceWrite = 0.0f;
 			a_actor.joltHeld = 0.0f;
+			a_actor.lastPos = a_pos;
+			a_actor.hasLastPos = true;
 		};
 		std::vector<uint32_t> others;
 		for (auto& [formID, a] : store.actors) {
@@ -1378,7 +1401,7 @@ void SnowDeformation::TickBodyCoatStore()
 			if (!a.player)
 				others.push_back(formID);
 			else if (frame % kWritePlayerFrames == 0 && player && player->Is3DLoaded())
-				make(formID, a);
+				make(formID, a, player->GetPosition());
 		}
 		std::sort(others.begin(), others.end());
 		const uint32_t count = uint32_t(others.size());
@@ -1388,7 +1411,7 @@ void SnowDeformation::TickBodyCoatStore()
 			taken = i + 1;
 			auto& a = store.actors[formID];
 			if (auto actor = a.handle.get(); actor && actor->Is3DLoaded())
-				make(formID, a);
+				make(formID, a, actor->GetPosition());
 		}
 		store.roundRobin = count ? (store.roundRobin + taken) % count : 0;
 	}
@@ -1425,25 +1448,26 @@ bool SnowDeformation::BodyCoatWriteBegin()
 	return true;
 }
 
-bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float& a_growth) const
+bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float4& a_write) const
 {
 	if (bodyCoatStore)
 		for (const auto& d : bodyCoatStore->due)
 			if (d.formID == a_formID) {
-				a_growth = d.growth;
+				a_write = d.write;
 				return true;
 			}
 	return false;
 }
 
-bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_growth)
+bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, const float4& a_write)
 {
 	auto& store = *bodyCoatStore;
 	const auto it = store.recordOf.find(a_geometry);
 	if (it == store.recordOf.end() || store.recordSkin[it->second] != a_geometry->GetGeometryRuntimeData().skinInstance.get())
 		return false;
 	const BodyCoatRecordCB& record = store.records[it->second];
-	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_growth, {} };
+	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
+		a_write.w };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		return false;
@@ -1876,8 +1900,8 @@ std::string SnowDeformation::BodyCoatWriterLine() const
 	                     !store.writerTried    ? "waiting for an actor in snow" :
 	                     store.writerReady     ? "on" :
 	                                             "failed (see CommunityShaders.log)";
-	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}.",
-		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size());
+	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}. Contact lumps at {:.2f} of their share (stickiness {:.2f}; the rest sits as grains).",
+		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size(), store.amounts[3], GetSnowCondition().stickiness);
 }
 
 std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const

@@ -884,7 +884,8 @@ namespace SnowLighting
 	// angle of repose in radians, y and z the smallest and largest speck radius in
 	// units, w the balls a share needs per the sizes' mean volume, 4 / ((1 + p)(1 +
 	// p^2)) at p = smallest / largest; CoatAmounts: x the lumps, y the specks, z
-	// hair's specks. Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
+	// hair's specks, w contact snow's cohesion (round 3: its share of lumps).
+	// Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
 	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
 	// 2007), domed 1.5 units, single over the outer 0.35 of their order, holed at
 	// their rims at 0.8, 0.4 and 0.2 units, each to 11 %, opening two spreads over the
@@ -1199,9 +1200,19 @@ namespace SnowLighting
 				// only at their rims; a clump octave fades once a pixel spans half of it,
 				// a hole octave a quarter. Contact snow lays its lumps at random spots
 				// instead: Lump Amount's share of the surface, thinning with its strength as
-				// the specks do, cut at the clump field's own quantile (near normal, the
-				// spread of the octaves left; Tukey's quantile).
+				// the specks do and with how little the snow coheres (drier snow sits as
+				// grains), cut at the clump field's own quantile (near normal, the spread of
+				// the octaves left; Tukey's quantile). On fur and other alpha-cut pieces a
+				// lump up close would paint the cards flat, so the lumps' share passes to
+				// the specks (snow balled in the fur) as specks come to cover a pixel: none
+				// while the largest is under one, all once the smallest covers one.
+#	if defined(DO_ALPHA_TEST)
+				const float furSpecks = saturate((2.0 * CoatLook.z - footprint) / max(2.0 * (CoatLook.z - CoatLook.y), 1e-4));
+#	else
+				const float furSpecks = 0.0;
+#	endif
 				float cover = 0.0;
+				float lumpShare = 0.0;
 				float dome = 0.0;
 				float lumpAlpha = 0.0;
 				float3 lumpNormal = restShape;
@@ -1215,13 +1226,15 @@ namespace SnowLighting
 					const bool inDepth = (CoatFlags & kCoatLumpDepth) != 0;
 					const float3 fallNormal = inDepth ? restShape : CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare));
 					const float lumpSlope = acos(clamp(dot(fallNormal, deposit), -1.0, 1.0));
-					const float contactShare = CoatAmounts.x * saturate((contact - 1e-3) / kCoatSpeckFront);
+					const float contactShare = CoatAmounts.x * CoatAmounts.w * saturate((contact - 1e-3) / kCoatSpeckFront);
 					const float fallCover = saturate((1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
 					const float3 clumpFade = saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
 					const float3 octaveSd = inDepth ? kCoatFieldSd : kCoatNoiseSd;
 					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
 												   (pow(saturate(1.0 - contactShare), kCoatNormalQuantile.y) - pow(saturate(contactShare), kCoatNormalQuantile.y));
 					cover = max(fallCover, saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
+					lumpShare = cover;
+					cover *= 1.0 - furSpecks;
 					const float cut = 1.0 - cover * (1.0 + kCoatEdge);
 					float3 lumpPoint = c;
 					float clump;
@@ -1283,7 +1296,8 @@ namespace SnowLighting
 					pocket = (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) *
 							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world, max(kCoatPocketRadius, footprint));
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
-				const float speckShare = kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * saturate(speckOrder / kCoatSpeckFront) * steer;
+				const float speckShare =
+					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * saturate(speckOrder / kCoatSpeckFront) * steer, kCoatSpeckMax * lumpShare * furSpecks);
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{
