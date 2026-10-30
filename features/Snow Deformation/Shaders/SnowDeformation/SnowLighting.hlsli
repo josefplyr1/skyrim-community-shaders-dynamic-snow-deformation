@@ -874,8 +874,8 @@ namespace SnowLighting
 	// The clump field baked (BodyCoatLumps.dds from tools/lump-tiles/pack_field.py; section
 	// 5.26): CoatNoise periodic over 12 cells at 6 texels a cell, each axis's first texel
 	// repeated last, so the lookup wraps by hand and no address mode matters. R the noise,
-	// GBA its gradient per cell over 3.2. Read at the clump octaves' two coarse scales, its
-	// spread there 0.2577; the flakes keep CoatNoise's.
+	// GBA its gradient per cell over 3.2. The lumps read it at every scale, flakes and
+	// holes too: spread 0.2577, 11 % above 0.3236, slope 0.537 a cell (measured).
 	static const float kCoatFieldCells = 12.0;
 	static const float kCoatFieldTexels = 72.0;
 	static const float kCoatFieldGrad = 3.2;
@@ -887,14 +887,14 @@ namespace SnowLighting
 	// hair's specks. Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
 	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
 	// 2007), domed 1.5 units, single over the outer 0.35 of their order, holed at
-	// their rims at 0.8, 0.4 and 0.2 units, each to 11 % (CoatNoise's measured cut
-	// 0.3406). Specks: half the surface at most, full over half their order (hair:
+	// their rims at 0.8, 0.4 and 0.2 units, each to 11 %, opening two spreads over the
+	// rim. Specks: half the surface at most, full over half their order (hair:
 	// out to 105 degrees). Equal balls cover 70 % all on; a share takes q = L
 	// (0.9212 - 0.0764 L) of them, L = -ln(1 - share) (measured, within 1 % of q);
 	// an edge ramp a pixel wide adds 0.0587 (pixel / smallest radius)^2 of the cover
 	// (measured with 2 to 3 mm). Hair beads: 1.2 by 0.45 speck radii. The relief
-	// is read at 0.2 units, or the pixel when larger. CoatNoise slopes 0.56 per
-	// cell. An edge is never sharper than 0.05 of the relief.
+	// is read at 0.2 units, or the pixel when larger. An edge is never sharper than
+	// 0.05 of the relief.
 	static const float kCoatReliefShare = 0.5;
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
@@ -908,7 +908,7 @@ namespace SnowLighting
 	static const float kCoatNoiseSd = 0.2698;
 	static const float2 kCoatNormalQuantile = float2(4.91, 0.14);
 	static const float3 kCoatHoleFreq = float3(1.0 / 0.8, 1.0 / 0.4, 1.0 / 0.2);
-	static const float kCoatHoleOpen = 0.54;
+	static const float kCoatHoleOpen = 0.5156;
 	static const float kCoatSpeckMax = 0.5;
 	static const float kCoatSpeckReach = 1.8326;
 	static const float kCoatSpeckFront = 0.5;
@@ -917,9 +917,9 @@ namespace SnowLighting
 	static const float kCoatDotInflate = 0.0587;
 	static const float kCoatSpeckLevels = 7.0;
 	static const float2 kCoatBead = float2(1.2, 0.45);
-	static const float kCoatRimCut = 0.3406;
+	static const float kCoatRimCut = 0.3236;
 	static const float kCoatPocketRadius = 0.2;
-	static const float kCoatNoiseSlope = 0.56;
+	static const float kCoatNoiseSlope = 0.537;
 
 	float3 CoatDebugHue(float h)
 	{
@@ -1106,30 +1106,35 @@ namespace SnowLighting
 	}
 
 	// The lumps' dome along the view ray, as the trench detail's parallax occlusion:
-	// N the surface and V the view, in rest space. Returns the rest point the ray
-	// meets, and the crown there.
-	float3 CoatLumpMarch(float3 c, float3 N, float3 V, float2 fade, float cut, out float4 crown)
+	// N the surface and V the view, in rest space, a pixel footprint units across.
+	// Returns the rest point the ray meets, and the crown there.
+	float3 CoatLumpMarch(float3 c, float3 N, float3 V, float2 fade, float cut, float footprint, out float4 crown)
 	{
 		const float vn = max(dot(V, N), 0.2);
 		const float3 per = (V - N * dot(V, N)) / vn;
 		const float top = CoatDome(1.0, cut);
-		const float steps = floor(lerp(8.0, 16.0, saturate(1.0 - vn)));
-		const float stepH = top / steps;
-		float rayH = top;
-		float surf = CoatDome(CoatCrown(c + per * rayH, fade).x, cut);
-		float prevRay = rayH;
-		float prevSurf = surf;
-		[loop] for (float i = 0.0; i < steps && surf < rayH; i += 1.0)
+		float3 hit = c;
+		// A shift under half a pixel would draw nothing: the dome is read where the pixel is.
+		[branch] if (length(per) * top >= 0.5 * footprint)
 		{
-			prevRay = rayH;
-			prevSurf = surf;
-			rayH -= stepH;
-			surf = CoatDome(CoatCrown(c + per * rayH, fade).x, cut);
+			const float steps = floor(lerp(8.0, 16.0, saturate(1.0 - vn)));
+			const float stepH = top / steps;
+			float rayH = top;
+			float surf = CoatDome(CoatCrown(c + per * rayH, fade).x, cut);
+			float prevRay = rayH;
+			float prevSurf = surf;
+			[loop] for (float i = 0.0; i < steps && surf < rayH; i += 1.0)
+			{
+				prevRay = rayH;
+				prevSurf = surf;
+				rayH -= stepH;
+				surf = CoatDome(CoatCrown(c + per * rayH, fade).x, cut);
+			}
+			// Where the ray met the dome between the last two steps.
+			const float before = prevRay - prevSurf;
+			const float after = surf - rayH;
+			hit = c + per * lerp(prevRay, rayH, saturate(before / max(before + after, 1e-5)));
 		}
-		// Where the ray met the dome between the last two steps.
-		const float before = prevRay - prevSurf;
-		const float after = surf - rayH;
-		const float3 hit = c + per * lerp(prevRay, rayH, saturate(before / max(before + after, 1e-5)));
 		crown = CoatCrown(hit, fade);
 		return hit;
 	}
@@ -1213,7 +1218,7 @@ namespace SnowLighting
 					const float contactShare = CoatAmounts.x * saturate((contact - 1e-3) / kCoatSpeckFront);
 					const float fallCover = saturate((1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
 					const float3 clumpFade = saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
-					const float3 octaveSd = inDepth ? float3(kCoatFieldSd, kCoatFieldSd, kCoatNoiseSd) : kCoatNoiseSd;
+					const float3 octaveSd = inDepth ? kCoatFieldSd : kCoatNoiseSd;
 					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
 												   (pow(saturate(1.0 - contactShare), kCoatNormalQuantile.y) - pow(saturate(contactShare), kCoatNormalQuantile.y));
 					cover = max(fallCover, saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
@@ -1224,18 +1229,26 @@ namespace SnowLighting
 					float3 domeNormal = restShape;
 					[branch] if (inDepth)
 					{
-						const float3 restView = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, viewDirection), bind)));
-						float4 crown;
-						lumpPoint = CoatLumpMarch(c, restShape, restView, clumpFade.xy, cut, crown);
-						clump = saturate(crown.x + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * CoatNoise(lumpPoint * kCoatClumpFreq.z));
-						// The dome's slope, never past 45 degrees as today's bevel; flat where the crown clamps.
-						const float3 slope = crown.yzw - restShape * dot(crown.yzw, restShape);
-						const float lie2 = saturate(crown.x) - cut;
-						float3 tilt = crown.x > 0.0 && crown.x < 1.0 && lie2 > 0.0 ? slope * (0.5 * kCoatLumpUnits * rsqrt(max(lie2, 1e-4))) : 0.0;
-						tilt *= rsqrt(max(1.0, dot(tilt, tilt)));
-						domeNormal = CoatSafeNormalize(restShape - tilt);
-						// An edge as wide as the field moves across a pixel, the flakes by their mean slope.
-						edge = max(footprint * (length(slope) + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * kCoatNoiseSlope * kCoatClumpFreq.z), kCoatEdge);
+						// Nothing to draw where there is no cover: the field never passes a cut of 1.
+						clump = 0.0;
+						[branch] if (cover > 0.0)
+						{
+							const float3 restView = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, viewDirection), bind)));
+							float4 crown;
+							lumpPoint = CoatLumpMarch(c, restShape, restView, clumpFade.xy, cut, footprint, crown);
+							float flakes = 0.0;
+							[branch] if (clumpFade.z > 0.0)
+								flakes = CoatFieldRead(lumpPoint.yzx * kCoatClumpFreq.z + 5.3).x;
+							clump = saturate(crown.x + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * flakes);
+							// The dome's slope, never past 45 degrees as today's bevel; flat where the crown clamps.
+							const float3 slope = crown.yzw - restShape * dot(crown.yzw, restShape);
+							const float lie2 = saturate(crown.x) - cut;
+							float3 tilt = crown.x > 0.0 && crown.x < 1.0 && lie2 > 0.0 ? slope * (0.5 * kCoatLumpUnits * rsqrt(max(lie2, 1e-4))) : 0.0;
+							tilt *= rsqrt(max(1.0, dot(tilt, tilt)));
+							domeNormal = CoatSafeNormalize(restShape - tilt);
+							// An edge as wide as the field moves across a pixel, the flakes by their mean slope.
+							edge = max(footprint * (length(slope) + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * kCoatNoiseSlope * kCoatClumpFreq.z), kCoatEdge);
+						}
 					}
 					else
 					{
@@ -1245,7 +1258,11 @@ namespace SnowLighting
 						dome = CoatDome(0.5 + kCoatClumpContrast * (octaves.x + octaves.y), cut);
 					}
 					const float3 holeFade = saturate(0.5 / max(footprint * kCoatHoleFreq, 1e-6) - 1.0);
-					const float3 holeNoise = holeFade * float3(CoatNoise(lumpPoint * kCoatHoleFreq.x + 17.1), CoatNoise(lumpPoint * kCoatHoleFreq.y + 43.7), CoatNoise(lumpPoint * kCoatHoleFreq.z + 71.3));
+					// The holes' octaves from the baked field, each turned to its own axes.
+					float3 holeNoise = 0.0;
+					[branch] if (cover > 0.0 && any(holeFade > 0.0))
+						holeNoise = holeFade * float3(CoatFieldRead(lumpPoint * kCoatHoleFreq.x + 17.1).x, CoatFieldRead(lumpPoint.zxy * kCoatHoleFreq.y + 43.7).x,
+												 CoatFieldRead(lumpPoint.yzx * kCoatHoleFreq.z + 71.3).x);
 					const float3 holeStep = max(kCoatNoiseSlope * kCoatHoleFreq * footprint * holeFade, 1e-4);
 					const float lie = clump - cut;
 					const float rim = saturate(lie / kCoatRimSpan);
