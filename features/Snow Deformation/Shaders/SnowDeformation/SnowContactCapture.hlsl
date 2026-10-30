@@ -8,7 +8,7 @@
 // COAT: the body coat's contact writer (BODY-SNOW-PLAN.md section 2.2), the
 // same skinned draw again for an actor due an update. The VS tests each vertex
 // against the drawn snow, the GS hands the results to the coat atlas's voxels,
-// the PS raises them, and a compute pass resolves them into the atlas.
+// the PS records them, and a compute pass builds them into the atlas.
 #ifndef COAT
 // Layout prefix of StaticsCB (SnowDeformation.h) - only these fields are
 // read, and a bound buffer may be larger than its declaration.
@@ -141,17 +141,18 @@ float2 main(VS_OUTPUT input) : SV_Target
 #	endif
 #else
 // A vertex's atlas texel (fractional), how far it lies under the drawn snow
-// (positive: under), whether it is under the water, and the actor's adhesion.
+// (positive: under), whether it is under the water, and the levels a touch
+// grows the coat by this update.
 struct VS_OUTPUT_COAT
 {
 	float3 Texel : TEXCOORD0;
 	float Below : TEXCOORD1;
 	float Wet : TEXCOORD2;
-	float Adhesion : TEXCOORD3;
+	float Growth : TEXCOORD3;
 };
 
 // One voxel to raise: the atlas texel, and flags (1 contact, 2 wash) with the
-// adhesion in bits 8-15.
+// growth in bits 8-23, in 1/256 levels.
 struct GS_OUTPUT_COAT
 {
 	float4 Position : SV_POSITION;
@@ -160,22 +161,24 @@ struct GS_OUTPUT_COAT
 
 #	if defined(VSHADER) && defined(SKINNED)
 #		define SNOW_SURFACE_ONLY
+#		define SNOW_SURFACE_NO_BERM
 #		include "SnowDeformation/SnowShell.hlsl"
 #		include "SnowDeformation/SnowDeformation.hlsli"
 
 // The draw's shape (BodyCoat.cpp BodyCoatWriteCB): its record's model-to-atlas
-// rows and slot box, and the actor's adhesion.
+// rows and slot box, and the levels the actor's touches grow by this update.
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
 	float4 WriteAtlasLo;
 	float4 WriteAtlasHi;
-	float WriteAdhesion;
+	float WriteGrowth;
 	float3 WritePad;
 }
 
-// The drawn snow's top at a point: the ground's, or a road's untouched layer
-// where the road raster carries one, the higher.
+// The drawn snow's top at a point, without the berm (the spoil beside a
+// trench is loose): the ground's, or a road's untouched layer where the road
+// raster carries one, the higher.
 float CoatSnowTop(float2 worldXY)
 {
 	float coverage, terrainHeight;
@@ -190,13 +193,13 @@ float CoatSnowTop(float2 worldXY)
 // slack included: the snow one deformation texel out, the highest of four
 // sides. Its own column holds the print it carved; the snow beside it is what
 // it pushes against (section 2.3). Above the highest the layer can stand there
-// (its class depth with the berm on top, plus undulation), nothing is read.
+// (its class depth plus undulation), nothing is read.
 float CoatBelowSnow(float3 world)
 {
 	const float texel = 1.0 / max(DeformInvWorldSize * FieldDims.x, 1e-6);
 	const float3 terrain = SampleTerrain(world.xy - GridOrigin);
 	const float2 road = RoadRasterAt(world.xy);
-	const float reach = max(terrain.x + max(terrain.y, 0.0) * (1.0 + BermHeightAmp) + UndulationAmp, road.y + road.x) + texel;
+	const float reach = max(terrain.x + max(terrain.y, 0.0) + UndulationAmp, road.y + road.x) + texel;
 	float below = -1e6;
 	[branch] if (world.z < reach)
 	{
@@ -217,7 +220,7 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 		WriteAtlasLo.xyz + 0.5, WriteAtlasHi.xyz - 0.5);
 	output.Below = CoatBelowSnow(world);
 	output.Wet = SnowDeformation::UnderWater(world) ? 1.0 : 0.0;
-	output.Adhesion = WriteAdhesion;
+	output.Growth = WriteGrowth;
 	return output;
 }
 #	endif
@@ -227,7 +230,7 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 // closer, up to this many steps an edge; (6 + 1)(6 + 2) / 2 points at most.
 static const uint kCoatLatticeSteps = 6;
 
-void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_adhesion, inout PointStream<GS_OUTPUT_COAT> a_stream)
+void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_growth, inout PointStream<GS_OUTPUT_COAT> a_stream)
 {
 	const uint flags = (a_below > 0.0 ? 1u : 0u) | (a_wet >= 0.5 ? 2u : 0u);
 	[branch] if (flags != 0)
@@ -235,7 +238,7 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_adhesion, inou
 		GS_OUTPUT_COAT o;
 		// Pixel (0, 0) of the capture's target: every point is one PS invocation.
 		o.Position = float4(-1.0 + 1.0 / 2048.0, 1.0 - 1.0 / 2048.0, 0.5, 1.0);
-		o.Voxel = uint4(uint3(a_texel), flags | (a_adhesion << 8));
+		o.Voxel = uint4(uint3(a_texel), flags | (a_growth << 8));
 		a_stream.Append(o);
 	}
 }
@@ -243,7 +246,7 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, uint a_adhesion, inou
 [maxvertexcount(28)]
 void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stream)
 {
-	const uint adhesion = uint(saturate(tri[0].Adhesion) * 255.0 + 0.5);
+	const uint growth = uint(clamp(tri[0].Growth, 0.0, 255.0) * 256.0 + 0.5);
 	const float span = max(max(length(tri[1].Texel - tri[0].Texel), length(tri[2].Texel - tri[1].Texel)), length(tri[0].Texel - tri[2].Texel));
 	const uint steps = clamp(uint(ceil(span)), 1u, kCoatLatticeSteps);
 	[loop] for (uint i = 0; i <= steps; ++i)
@@ -252,7 +255,7 @@ void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stre
 		{
 			const float3 b = float3(i, j, steps - i - j) / float(steps);
 			CoatPoint(b.x * tri[0].Texel + b.y * tri[1].Texel + b.z * tri[2].Texel, b.x * tri[0].Below + b.y * tri[1].Below + b.z * tri[2].Below,
-				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, adhesion, stream);
+				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, growth, stream);
 		}
 	}
 }
@@ -275,6 +278,8 @@ float2 main(GS_OUTPUT_COAT input) : SV_Target
 #	endif
 
 #	ifdef CSHADER
+#		include "Common/Random.hlsli"
+
 // The atlas as R8G8B8A8 words (R contact, G snowfall, BA the deposit direction).
 RWTexture3D<uint> CoatAtlasWords : register(u0);
 RWTexture3D<uint> CoatContact : register(u1);
@@ -282,18 +287,22 @@ RWTexture3D<uint> CoatWash : register(u2);
 // Voxels this resolve changed, for the readout.
 RWByteAddressBuffer CoatChanged : register(u3);
 
-// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into.
+// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into, the contact
+// cap in atlas levels, and this update's rounding seed.
 cbuffer BodyCoatResolveCB : register(b0)
 {
 	uint4 ResolveSlots[8];
 	uint ResolveCount;
-	uint3 ResolvePad;
+	uint ResolveCap;
+	uint ResolveSeed;
+	uint ResolvePad;
 }
 
 groupshared uint changedInGroup;
 
-// Contact raises R to the strongest touch; water clears R and G. The scratch
-// is left at zero for the next update.
+// Contact grows R toward the cap by the touch's growth, a fraction of a level
+// rounded up at random in proportion, so slow growth still adds up; water
+// clears R and G. The scratch is left at zero for the next update.
 [numthreads(8, 8, 4)]
 void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 {
@@ -309,8 +318,10 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 		[branch] if ((contact | wash) != 0)
 		{
 			const uint was = CoatAtlasWords[t];
-			uint r = max(was & 0xFFu, contact);
+			uint r = was & 0xFFu;
 			uint g = (was >> 8) & 0xFFu;
+			[branch] if (contact != 0 && r < ResolveCap)
+				r = min(r + uint(float(contact) / 256.0 + float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0), ResolveCap);
 			[flatten] if (wash != 0)
 			{
 				r = 0;

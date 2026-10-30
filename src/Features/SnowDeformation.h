@@ -5061,6 +5061,10 @@ public:
 	bool debugBodyCoatContact = true;
 	/** @brief Runtime-only, S3: set by Clear Body Coats; the next tick empties every slot (nothing fades before S4). */
 	bool debugBodyCoatClear = false;
+	/** @brief Runtime-only, S3: the most snow contact leaves, as a share of a full coat (Josef, 2026-10-30: 0.5). */
+	float debugBodyCoatContactCap = 0.5f;
+	/** @brief Runtime-only, S3 (estimate): seconds of contact at full adhesion that build a coat from nothing to the cap. */
+	float debugBodyCoatBuildUp = 10.0f;
 	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's lie at random spots over this share of the surface. */
 	float debugBodyCoatLumps = 1.0f;
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
@@ -5111,10 +5115,10 @@ protected:
 	bool bodyCoatLumpAttempted = false;
 	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). */
 	bool BodyCoatWriteBegin();
-	/** @brief The actor is due a contact update this frame, with its adhesion: min(1, stickiness + jolt). */
-	bool BodyCoatWriteDue(uint32_t a_formID, float& a_adhesion) const;
+	/** @brief The actor is due a contact update this frame, with the atlas levels its touches grow by this update. */
+	bool BodyCoatWriteDue(uint32_t a_formID, float& a_growth) const;
 	/** @brief Uploads a shape's write constants; false when it has no record. */
-	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_adhesion);
+	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_growth);
 	/** @brief Binds the writer's stages around an actor's coat pass, or puts the capture's back. */
 	void BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on);
 	/** @brief Folds this frame's touches into the atlas, and reads the readout's count back. */
@@ -6435,6 +6439,8 @@ protected:
 		float landingSpeed = 0.0f;
 		bool seen = false;
 		bool wasInAir = false;
+		/** @brief The largest of the three: what packs snow onto a body's coat, and shakes it off. */
+		float Jolt() const { return std::max({ speedEnergy, landingEnergy, knockEnergy }); }
 	};
 	std::unordered_map<uint32_t, ImpactTrack> impactTracks;
 	/** @brief Speed Spoil: per foot ((formID << 8) | index), planted last visit, where, and when. */

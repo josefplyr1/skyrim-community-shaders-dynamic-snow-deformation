@@ -608,18 +608,16 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 		aging.rain = std::clamp(snowClimate.rainHeld, 0.0f, 1.0f);
 		aging.snowfall = std::max(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f);
 	}
-	float jolt = 0.0f;
 	if (auto it = impactTracks.find(a_actor->formID); it != impactTracks.end()) {
 		aging.speed = it->second.speed;
-		jolt = std::max({ it->second.speedEnergy, it->second.landingEnergy, it->second.knockEnergy });
+		aging.jolt = it->second.Jolt();
 	}
-	aging.jolt = jolt;
 
 	const float snowing = std::min(aging.snowfall, 1.0f);
 	const float warmIndoors = aging.interior && !aging.interiorSnow ? 1.0f : 0.0f;
 	const float outdoors = aging.interior ? 0.0f : std::max(aging.rain, aging.warm) * (1.0f - snowing);
 	aging.melt = std::max({ aging.heat, warmIndoors, outdoors });
-	aging.shake = (1.0f - aging.stickiness) * jolt;
+	aging.shake = (1.0f - aging.stickiness) * aging.jolt;
 	aging.growth = aging.interior ? 0.0f : snowing;
 	return aging;
 }

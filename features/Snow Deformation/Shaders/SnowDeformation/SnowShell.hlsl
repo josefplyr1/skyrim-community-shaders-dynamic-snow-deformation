@@ -1125,9 +1125,12 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			// The berm is spoil piled on snow that was NOT dug. Unmasked, the
 			// blurred field also lifted the trench floor and walls - a narrow
 			// trail's disc average is well above zero at its own centre, so
-			// raising Berm Height raised the whole trench with it.
-			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal, TrackCarveLook(TrackAgeOf(bermPair.z))) +
-			        BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
+			// raising Berm Height raised the whole trench with it. The body
+			// coat's writer reads the snow without it (SNOW_SURFACE_NO_BERM).
+			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal, TrackCarveLook(TrackAgeOf(bermPair.z)));
+#ifndef SNOW_SURFACE_NO_BERM
+			depth += BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
+#endif
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 		}
 

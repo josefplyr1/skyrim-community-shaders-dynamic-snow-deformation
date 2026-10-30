@@ -2041,7 +2041,13 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx("Snow on Bodies (S3 Contact)")) {
 			ImGui::Checkbox("Contact Coat", &debugBodyCoatContact);
 			if (auto _ttContact = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Stage S3 of MD plans/BODY-SNOW-PLAN.md: snow a body touches sticks to it (legs wading, a body that fell or lay in the snow) on the player and the actors near them. How much sticks follows how sticky the snow is (Snow Climate), more after a hard landing, a knockdown or a sprint; water washes it off. Up to four actors update a frame, the player every second frame. Force Coat replaces it while on. Nothing fades yet (that is S4): Clear Body Coats empties every coat.");
+				ImGui::Text("%s", "Not saved. Stage S3 of MD plans/BODY-SNOW-PLAN.md: snow a body touches sticks to it (legs wading, a body that fell or lay in the snow) on the player and the actors near them, building up while the contact lasts, up to Contact Cap. It builds faster the stickier the snow is (Snow Climate), and after a hard landing, a knockdown or a sprint. Only the settled snow beside a body counts, not the berm a trench throws up. Water washes it off. Up to four actors update a frame, the player every second frame. Force Coat replaces it while on. Nothing fades yet (that is S4): Clear Body Coats empties every coat.");
+			ImGui::SliderFloat("Contact Cap", &debugBodyCoatContactCap, 0.0f, 1.0f, "%.2f");
+			if (auto _ttCap = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. The most snow contact leaves on a body, as a share of a full coat: 0.5 covers about half the surface. Lump Amount and Grain Amount scale it as they scale the forced coat. Lowering it stops further growth only; Clear Body Coats starts over.");
+			ImGui::SliderFloat("Build-up Time", &debugBodyCoatBuildUp, 1.0f, 60.0f, "%.0f s");
+			if (auto _ttBuildUp = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Seconds of contact that build a coat from nothing to Contact Cap when the snow sticks at its most (wet snow, or a landing, knockdown or sprint on top). Less sticky snow takes longer in proportion: dry powder about five times as long.");
 			if (ImGui::Button("Clear Body Coats"))
 				debugBodyCoatClear = true;
 			WrapTextF("%s", BodyCoatWriterLine().c_str());
