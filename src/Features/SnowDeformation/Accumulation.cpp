@@ -613,6 +613,7 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 		aging.speed = it->second.speed;
 		jolt = std::max({ it->second.speedEnergy, it->second.landingEnergy, it->second.knockEnergy });
 	}
+	aging.jolt = jolt;
 
 	const float snowing = std::min(aging.snowfall, 1.0f);
 	const float warmIndoors = aging.interior && !aging.interiorSnow ? 1.0f : 0.0f;

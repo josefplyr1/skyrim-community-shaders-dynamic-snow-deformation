@@ -37,8 +37,7 @@ namespace
 	constexpr uint32_t kLsMaxTargets = 8;
 	constexpr uint32_t kLsSlots = 6;
 	constexpr uint32_t kLsMaxDraws = 1024;
-	// Every SRV slot the surface reads, t0..t58.
-	constexpr uint32_t kLsSRVCount = 59;
+	constexpr uint32_t kLsSRVCount = SnowDeformation::kShellSurfaceSRVs;
 
 	bool LsShadowPass(uint32_t a_cat) { return a_cat == kLsShadowSun || a_cat == kLsShadowLocal || a_cat == kLsSkyOcclusion; }
 
@@ -747,24 +746,8 @@ bool SnowDeformation::LandscapeSnowRefresh()
 			cb.CameraPreviousPosAdjust = cb.CameraPosAdjust;
 		}
 	}
-	RefreshShellGridPlacement(cb, &cb.CameraPosAdjust);
+	PlaceShellFields(cb);
 	ls.camUsed[cat] = cb.CameraPosAdjust;
-	cb.SeamRampInv = 0.0f;
-	int seamMinX, seamMinY, seamMaxX, seamMaxY;
-	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY))
-		SetShellSeamBounds(cb, seamMinX, seamMinY, seamMaxX, seamMaxY);
-	cb.DeformInvWorldSize = 1.0f / deformWorldSize;
-	cb.ObjectHeightCenter = heightWindowCenter;
-	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
-	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
-	cb.TrackAge = TrackAgeConstants();
-	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y, 1.0f / kUndulationFieldHalfExtent,
-		undulationFieldValid ? 1.0f : 0.0f };
-	cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,
-		exclusionFieldValid ? 1.0f : 0.0f };
-	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
-	cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
-	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
 
 	if (!ls.shellCB)
 		ls.shellCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<ShellCB>(), "SnowDeformation::LandscapeShellCB");
@@ -776,6 +759,27 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	ls.liveRect = LsLiveRect(cb);
 	ls.cbValid = true;
 	return true;
+}
+
+void SnowDeformation::PlaceShellFields(ShellCB& a_cb)
+{
+	RefreshShellGridPlacement(a_cb, &a_cb.CameraPosAdjust);
+	a_cb.SeamRampInv = 0.0f;
+	int seamMinX, seamMinY, seamMaxX, seamMaxY;
+	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY))
+		SetShellSeamBounds(a_cb, seamMinX, seamMinY, seamMaxX, seamMaxY);
+	a_cb.DeformInvWorldSize = 1.0f / deformWorldSize;
+	a_cb.ObjectHeightCenter = heightWindowCenter;
+	a_cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
+	a_cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
+	a_cb.TrackAge = TrackAgeConstants();
+	a_cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y, 1.0f / kUndulationFieldHalfExtent,
+		undulationFieldValid ? 1.0f : 0.0f };
+	a_cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,
+		exclusionFieldValid ? 1.0f : 0.0f };
+	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
+	a_cb.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
+	a_cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, 0.0f };
 }
 
 void SnowDeformation::LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs)

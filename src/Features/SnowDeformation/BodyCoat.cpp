@@ -3,6 +3,7 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 #include "Features/SnowDeformation.h"
+#include "Features/SnowDeformation/AlphaBuild.h"
 
 #include "Deferred.h"
 #include "Features/Skylighting.h"
@@ -46,6 +47,29 @@ namespace
 	constexpr uint32_t kWalksPerFrame = 4;
 	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
+	// S3's cadence (section 2.2, estimates): the player every kWritePlayerFrames,
+	// at most kWritesPerFrame actors' coat passes a frame, the rest in turn.
+	constexpr uint32_t kWritePlayerFrames = 2;
+	constexpr uint32_t kWritesPerFrame = 4;
+
+	// SnowContactCapture.hlsl BodyCoatWriteCB (VS b3) and BodyCoatResolveCB (CS b0).
+	struct alignas(16) BodyCoatWriteCB
+	{
+		float4 ModelToAtlas[3];
+		float4 AtlasLo;
+		float4 AtlasHi;
+		float Adhesion;
+		float pad[3];
+	};
+	static_assert(sizeof(BodyCoatWriteCB) == 96);
+	struct alignas(16) BodyCoatResolveCB
+	{
+		uint32_t Slots[32];
+		uint32_t Count;
+		uint32_t pad[3];
+	};
+	static_assert(sizeof(BodyCoatResolveCB) == 144);
+	constexpr auto kWritePath = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
 		return a_property && a_property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get();
@@ -313,6 +337,36 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t parity = 0;
 	uint32_t atlasBoundFrame = UINT32_MAX;
 	bool gpuFailed = false;
+	/** @brief The atlas as R8G8B8A8 words, for the writer's resolve. */
+	winrt::com_ptr<ID3D11UnorderedAccessView> atlasUAV;
+
+	// S3's contact writer (SnowContactCapture.hlsl, COAT): who it updates this
+	// frame, the touches in two scratch volumes the atlas's size, its shaders
+	// and constants, and the readout.
+	struct Due
+	{
+		uint32_t formID;
+		float adhesion;
+	};
+	std::vector<Due> due;
+	uint32_t roundRobin = 0;
+	uint32_t touched = 0;
+	winrt::com_ptr<ID3D11Texture3D> contactScratch, washScratch;
+	winrt::com_ptr<ID3D11UnorderedAccessView> contactUAV, washUAV;
+	winrt::com_ptr<ID3D11Buffer> raisedBuffer, raisedStaging[3];
+	winrt::com_ptr<ID3D11UnorderedAccessView> raisedUAV;
+	bool raisedPending[3] = {};
+	uint32_t raisedRing = 0;
+	winrt::com_ptr<ID3D11VertexShader> writeVS;
+	winrt::com_ptr<ID3D11GeometryShader> writeGS;
+	winrt::com_ptr<ID3D11PixelShader> writePS;
+	winrt::com_ptr<ID3D11ComputeShader> resolveCS;
+	winrt::com_ptr<ID3D11Buffer> writeCB, resolveCB;
+	std::unique_ptr<ConstantBuffer> shellCB;
+	ID3D11ShaderResourceView* shellSRVs[SnowDeformation::kShellSurfaceSRVs] = {};
+	ID3D11ShaderResourceView* waterSRV = nullptr;
+	bool writerTried = false, writerReady = false;
+	uint32_t writtenActorsLast = 0, writtenTrianglesLast = 0, raisedLast = 0;
 
 	uint32_t drawFrame = UINT32_MAX;
 	uint32_t coatedBuilding = 0, coatedLast = 0, walksLast = 0, missesLast = 0;
@@ -739,10 +793,16 @@ struct SnowDeformation::BodyCoatStore
 		gpuFailed = true;
 		if (!device || !context)
 			return false;
-		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R8G8B8A8_UNORM, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE, 0, 0 };
+		// Typeless: Lighting reads it as UNORM, the writer's resolve as R32 words.
+		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT,
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
 		D3D11_SUBRESOURCE_DATA init{ zero.data(), desc.Width * 4, desc.Width * desc.Height * 4 };
-		if (FAILED(device->CreateTexture3D(&desc, &init, atlas.put())) || FAILED(device->CreateShaderResourceView(atlas.get(), nullptr, atlasSRV.put()))) {
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+		srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+		srvDesc.Texture3D.MipLevels = 1;
+		if (FAILED(device->CreateTexture3D(&desc, &init, atlas.put())) || FAILED(device->CreateShaderResourceView(atlas.get(), &srvDesc, atlasSRV.put()))) {
 			logger::warn("[SNOW DEFORMATION] body coat: could not create the atlas");
 			atlas = nullptr;
 			atlasSRV = nullptr;
@@ -750,6 +810,14 @@ struct SnowDeformation::BodyCoatStore
 		}
 		Util::SetResourceName(atlas.get(), "SnowDeformation::BodyCoatAtlas");
 		Util::SetResourceName(atlasSRV.get(), "SnowDeformation::BodyCoatAtlas SRV");
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+		uavDesc.Format = DXGI_FORMAT_R32_UINT;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+		uavDesc.Texture3D.WSize = desc.Depth;
+		if (SUCCEEDED(device->CreateUnorderedAccessView(atlas.get(), &uavDesc, atlasUAV.put())))
+			Util::SetResourceName(atlasUAV.get(), "SnowDeformation::BodyCoatAtlas UAV");
+		else
+			logger::warn("[SNOW DEFORMATION] body coat: no R32 view of the atlas; the contact writer stays off");
 		// Records by 11.1 offset where the runtime has them, two copies
 		// alternating per draw (the redundancy filter ignores offsets on a
 		// rebound buffer); one block written per draw otherwise.
@@ -774,6 +842,73 @@ struct SnowDeformation::BodyCoatStore
 		gpuFailed = false;
 		logger::info("[SNOW DEFORMATION] body coat: atlas {}x{}x{} RGBA8, {} slots; records {}", desc.Width, desc.Height, desc.Depth, kBodyCoatSlots,
 			context1 ? "by D3D11.1 offset" : "written per draw");
+		return true;
+	}
+
+	// The contact writer's shaders and buffers, made the first time an actor is
+	// due. A failure is logged once and leaves the writer off.
+	bool EnsureWriter()
+	{
+		if (writerTried)
+			return writerReady;
+		writerTried = true;
+		auto* device = globals::d3d::device;
+		if (!atlasUAV || !device)
+			return false;
+		auto blob = [](const char* a_target, const char* a_stage, const char* a_extra, const char* a_extra2 = nullptr) {
+			winrt::com_ptr<ID3DBlob> b;
+			b.attach(SD_CompileShaderBlob(kWritePath, a_target, a_stage, a_extra, a_extra2));
+			return b;
+		};
+		auto vs = blob("vs_5_0", "VSHADER", "SKINNED", "COAT");
+		auto gs = blob("gs_5_0", "GSHADER", "COAT");
+		auto ps = blob("ps_5_0", "PSHADER", "COAT");
+		auto cs = blob("cs_5_0", "CSHADER", "COAT");
+		if (!vs || !gs || !ps || !cs || FAILED(device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, writeVS.put())) ||
+			FAILED(device->CreateGeometryShader(gs->GetBufferPointer(), gs->GetBufferSize(), nullptr, writeGS.put())) ||
+			FAILED(device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, writePS.put())) ||
+			FAILED(device->CreateComputeShader(cs->GetBufferPointer(), cs->GetBufferSize(), nullptr, resolveCS.put()))) {
+			logger::warn("[SNOW DEFORMATION] body coat: the contact writer's shaders did not compile; it stays off");
+			return false;
+		}
+		Util::SetResourceName(writeVS.get(), "SnowDeformation::BodyCoatWriteVS");
+		Util::SetResourceName(writeGS.get(), "SnowDeformation::BodyCoatWriteGS");
+		Util::SetResourceName(writePS.get(), "SnowDeformation::BodyCoatWritePS");
+		Util::SetResourceName(resolveCS.get(), "SnowDeformation::BodyCoatResolveCS");
+		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R32_UINT, D3D11_USAGE_DEFAULT,
+			D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
+		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
+		D3D11_SUBRESOURCE_DATA init{ zero.data(), desc.Width * 4, desc.Width * desc.Height * 4 };
+		auto scratch = [&](winrt::com_ptr<ID3D11Texture3D>& a_texture, winrt::com_ptr<ID3D11UnorderedAccessView>& a_uav, const char* a_name) {
+			if (FAILED(device->CreateTexture3D(&desc, &init, a_texture.put())) || FAILED(device->CreateUnorderedAccessView(a_texture.get(), nullptr, a_uav.put())))
+				return false;
+			Util::SetResourceName(a_texture.get(), "SnowDeformation::%s", a_name);
+			return true;
+		};
+		D3D11_BUFFER_DESC raw{ 16, D3D11_USAGE_DEFAULT, D3D11_BIND_UNORDERED_ACCESS, 0, D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS, 0 };
+		D3D11_UNORDERED_ACCESS_VIEW_DESC rawView{};
+		rawView.Format = DXGI_FORMAT_R32_TYPELESS;
+		rawView.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		rawView.Buffer.NumElements = 4;
+		rawView.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
+		D3D11_BUFFER_DESC staging{ 16, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0 };
+		D3D11_BUFFER_DESC writeDesc{ sizeof(BodyCoatWriteCB), D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0 };
+		D3D11_BUFFER_DESC resolveDesc{ sizeof(BodyCoatResolveCB), D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0 };
+		bool ok = scratch(contactScratch, contactUAV, "BodyCoatContactScratch") && scratch(washScratch, washUAV, "BodyCoatWashScratch") &&
+		          SUCCEEDED(device->CreateBuffer(&raw, nullptr, raisedBuffer.put())) && SUCCEEDED(device->CreateUnorderedAccessView(raisedBuffer.get(), &rawView, raisedUAV.put())) &&
+		          SUCCEEDED(device->CreateBuffer(&writeDesc, nullptr, writeCB.put())) && SUCCEEDED(device->CreateBuffer(&resolveDesc, nullptr, resolveCB.put()));
+		for (auto& s : raisedStaging)
+			ok = ok && SUCCEEDED(device->CreateBuffer(&staging, nullptr, s.put()));
+		if (!ok) {
+			logger::warn("[SNOW DEFORMATION] body coat: could not create the contact writer's buffers; it stays off");
+			return false;
+		}
+		Util::SetResourceName(raisedBuffer.get(), "SnowDeformation::BodyCoatRaised");
+		Util::SetResourceName(writeCB.get(), "SnowDeformation::BodyCoatWriteCB");
+		Util::SetResourceName(resolveCB.get(), "SnowDeformation::BodyCoatResolveCB");
+		shellCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<ShellCB>(), "SnowDeformation::BodyCoatShellCB");
+		writerReady = true;
+		logger::info("[SNOW DEFORMATION] body coat: contact writer ready");
 		return true;
 	}
 
@@ -1033,7 +1168,9 @@ void SnowDeformation::TickBodyCoatStore()
 	bodyCoatLive = false;
 	const int view = std::clamp(debugBodyCoatView, 0, 3);
 	const int force = std::clamp(debugBodyCoatForce, 0, 4);
-	if ((view == 0 && force == 0) || !settings.EnableSnowDeformation) {
+	// Testers' packages leave the writer off until body snow ships.
+	const bool contact = debugBodyCoatContact && !SNOW_ALPHA_BUILD;
+	if ((view == 0 && force == 0 && !contact) || !settings.EnableSnowDeformation) {
 		if (bodyCoatStore) {
 			if (bodyCoatStore->live && !bodyCoatProbeBound) {
 				ID3D11ShaderResourceView* none = nullptr;
@@ -1195,6 +1332,179 @@ void SnowDeformation::TickBodyCoatStore()
 	}
 	store.live = !store.records.empty();
 	bodyCoatLive = store.live;
+	if (std::exchange(debugBodyCoatClear, false))
+		store.RefillAll();
+
+	// S3: who the contact writer updates this frame, each with its adhesion
+	// (section 2.3): Snow Climate's stickiness, raised by the impact energy.
+	// Force Coat owns the atlas while it is on.
+	store.due.clear();
+	if (contact && force == 0 && store.live && store.atlasUAV) {
+		const auto adhesion = [&](RE::Actor* a_actor) {
+			const CoatAging aging = ComputeCoatAging(a_actor);
+			return std::min(1.0f, aging.stickiness + aging.jolt);
+		};
+		std::vector<uint32_t> others;
+		for (const auto& [formID, a] : store.actors) {
+			if (a.refused || a.shapes.empty())
+				continue;
+			if (!a.player)
+				others.push_back(formID);
+			else if (frame % kWritePlayerFrames == 0 && player && player->Is3DLoaded())
+				store.due.push_back({ formID, adhesion(player) });
+		}
+		std::sort(others.begin(), others.end());
+		const uint32_t count = uint32_t(others.size());
+		uint32_t taken = 0;
+		for (uint32_t i = 0; i < count && store.due.size() < kWritesPerFrame; ++i) {
+			const uint32_t formID = others[(store.roundRobin + i) % count];
+			taken = i + 1;
+			if (auto actor = store.actors[formID].handle.get(); actor && actor->Is3DLoaded())
+				store.due.push_back({ formID, adhesion(actor.get()) });
+		}
+		store.roundRobin = count ? (store.roundRobin + taken) % count : 0;
+	}
+}
+
+void SnowDeformation::PrimeBodyCoatWriter()
+{
+#if !SNOW_ALPHA_BUILD
+	const char* variants[4][4] = { { "vs_5_0", "VSHADER", "SKINNED", "COAT" }, { "gs_5_0", "GSHADER", "COAT", nullptr }, { "ps_5_0", "PSHADER", "COAT", nullptr },
+		{ "cs_5_0", "CSHADER", "COAT", nullptr } };
+	for (const auto& v : variants)
+		if (auto* blob = SD_CompileShaderBlob(kWritePath, v[0], v[1], v[2], v[3]))
+			blob->Release();
+#endif
+}
+
+bool SnowDeformation::BodyCoatWriteBegin()
+{
+	if (!bodyCoatStore || bodyCoatStore->due.empty() || !contactHeight || !contactSkinVS || !contactPS)
+		return false;
+	auto& store = *bodyCoatStore;
+	if (!lastShellCBData || !shellTerrainTexture || !shellTerrainTexture->srv || !GetDeformationSRV() || !heightBottomFiltered ||
+		!heightTopRaw[heightCurrent] || !heightSkinDepth || !ShellFootprintHasSnow() || !store.EnsureWriter())
+		return false;
+	// The snow as the shell draws it, placed for this frame (LandscapeSnowRefresh's recipe).
+	auto& fb = globals::game::frameBufferCached;
+	ShellCB cb = *lastShellCBData;
+	cb.CameraPosAdjust = fb.GetCameraPosAdjust();
+	cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
+	PlaceShellFields(cb);
+	store.shellCB->Update(cb);
+	LandscapeSurfaceSRVs(store.shellSRVs);
+	store.waterSRV = waterFineTexture && waterFineTexture->srv ? waterFineTexture->srv.get() : nullptr;
+	return true;
+}
+
+bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float& a_adhesion) const
+{
+	if (bodyCoatStore)
+		for (const auto& d : bodyCoatStore->due)
+			if (d.formID == a_formID) {
+				a_adhesion = d.adhesion;
+				return true;
+			}
+	return false;
+}
+
+bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_adhesion)
+{
+	auto& store = *bodyCoatStore;
+	const auto it = store.recordOf.find(a_geometry);
+	if (it == store.recordOf.end() || store.recordSkin[it->second] != a_geometry->GetGeometryRuntimeData().skinInstance.get())
+		return false;
+	const BodyCoatRecordCB& record = store.records[it->second];
+	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_adhesion, {} };
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+		return false;
+	memcpy(mapped.pData, &cb, sizeof(cb));
+	a_context->Unmap(store.writeCB.get(), 0);
+	store.touched |= 1u << (record.Slot >> 1);
+	return true;
+}
+
+void SnowDeformation::BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on)
+{
+	auto& store = *bodyCoatStore;
+	// The capture's target stays bound: the coat's points leave it as it is.
+	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
+	if (a_on) {
+		a_context->VSSetShader(store.writeVS.get(), nullptr, 0);
+		a_context->GSSetShader(store.writeGS.get(), nullptr, 0);
+		a_context->PSSetShader(store.writePS.get(), nullptr, 0);
+		ID3D11Buffer* shell = store.shellCB->CB();
+		a_context->VSSetConstantBuffers(0, 1, &shell);
+		ID3D11Buffer* write = store.writeCB.get();
+		a_context->VSSetConstantBuffers(3, 1, &write);
+		auto* state = globals::state;
+		ID3D11Buffer* shared[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
+		a_context->VSSetConstantBuffers(4, 3, shared);
+		a_context->VSSetShaderResources(0, kShellSurfaceSRVs, store.shellSRVs);
+		a_context->VSSetShaderResources(kWaterWindowSlot, 1, &store.waterSRV);
+		ID3D11UnorderedAccessView* uavs[2] = { store.contactUAV.get(), store.washUAV.get() };
+		a_context->OMSetRenderTargetsAndUnorderedAccessViews(1, &rtv, nullptr, 1, 2, uavs, nullptr);
+	} else {
+		ID3D11UnorderedAccessView* noUAV[2] = {};
+		a_context->OMSetRenderTargetsAndUnorderedAccessViews(1, &rtv, nullptr, 1, 2, noUAV, nullptr);
+		a_context->GSSetShader(nullptr, nullptr, 0);
+		a_context->PSSetShader(contactPS, nullptr, 0);
+		a_context->VSSetShader(contactSkinVS, nullptr, 0);
+		ID3D11ShaderResourceView* noSRV[kShellSurfaceSRVs] = {};
+		a_context->VSSetShaderResources(0, kShellSurfaceSRVs, noSRV);
+		a_context->VSSetShaderResources(kWaterWindowSlot, 1, noSRV);
+		ID3D11Buffer* noCB = nullptr;
+		a_context->VSSetConstantBuffers(0, 1, &noCB);
+		a_context->VSSetConstantBuffers(3, 1, &noCB);
+	}
+}
+
+void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint32_t a_triangles, uint32_t a_actors)
+{
+	auto& store = *bodyCoatStore;
+	store.writtenTrianglesLast = a_triangles;
+	store.writtenActorsLast = a_actors;
+	// The readout: the copy two resolves back, if the GPU has it.
+	const uint32_t oldest = (store.raisedRing + 1) % 3;
+	if (store.raisedPending[oldest]) {
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(a_context->Map(store.raisedStaging[oldest].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped))) {
+			store.raisedLast = *static_cast<const uint32_t*>(mapped.pData);
+			a_context->Unmap(store.raisedStaging[oldest].get(), 0);
+			store.raisedPending[oldest] = false;
+		}
+	}
+	if (!store.touched)
+		return;
+	globals::profiler->BeginPass("SnowDeformation::Bodies - Coat Update");
+	BodyCoatResolveCB cb{};
+	for (uint32_t k = 0; k < kBodyCoatSlots; ++k)
+		if (store.touched & (1u << k))
+			cb.Slots[cb.Count++] = k;
+	store.touched = 0;
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	if (SUCCEEDED(a_context->Map(store.resolveCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+		memcpy(mapped.pData, &cb, sizeof(cb));
+		a_context->Unmap(store.resolveCB.get(), 0);
+		const UINT zero[4] = {};
+		a_context->ClearUnorderedAccessViewUint(store.raisedUAV.get(), zero);
+		a_context->CSSetShader(store.resolveCS.get(), nullptr, 0);
+		ID3D11Buffer* resolve = store.resolveCB.get();
+		a_context->CSSetConstantBuffers(0, 1, &resolve);
+		ID3D11UnorderedAccessView* uavs[4] = { store.atlasUAV.get(), store.contactUAV.get(), store.washUAV.get(), store.raisedUAV.get() };
+		a_context->CSSetUnorderedAccessViews(0, 4, uavs, nullptr);
+		a_context->Dispatch(kBodyCoatSlotDim[0] / 8, kBodyCoatSlotDim[1] / 8, kBodyCoatSlotDim[2] / 4 * cb.Count);
+		ID3D11UnorderedAccessView* noUAV[4] = {};
+		a_context->CSSetUnorderedAccessViews(0, 4, noUAV, nullptr);
+		a_context->CSSetShader(nullptr, nullptr, 0);
+		store.raisedRing = (store.raisedRing + 1) % 3;
+		a_context->CopyResource(store.raisedStaging[store.raisedRing].get(), store.raisedBuffer.get());
+		store.raisedPending[store.raisedRing] = true;
+		// The UAV unbound the atlas from Lighting's t41: the hook binds it again.
+		store.atlasBoundFrame = UINT32_MAX;
+	}
+	globals::profiler->EndPass();
 }
 
 bool SnowDeformation::BodyCoatPixelKey(uint32_t a_rawTechnique) const
@@ -1505,7 +1815,7 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 	static constexpr const char* kViews[] = { "the look", "canonical bands", "slot pattern from the atlas", "slots and frames" };
 	static constexpr const char* kForces[] = { "off", "legs to the knee", "snowfall from above", "left half", "everything" };
 	if (!bodyCoatStore) {
-		lines.push_back("Body coat: off (Force Coat and Body Coat View are both off). The store is empty and nothing is bound.");
+		lines.push_back("Body coat: off (Force Coat, Body Coat View and Contact Coat are all off). The store is empty and nothing is bound.");
 	} else {
 		const auto& store = *bodyCoatStore;
 		uint32_t full = 0, halves = 0, refused = 0, components = 0;
@@ -1528,6 +1838,13 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",
 			store.actors.size(), refused, components, full, halves, kBodyCoatSlots, store.records.size(), store.context1 ? "bound by offset" : "written per draw",
 			store.coatedLast, store.missesLast, store.walksLast));
+		const char* writer = !debugBodyCoatContact ? "off" :
+		                     store.force != 0      ? "off while Force Coat is on" :
+		                     !store.writerTried    ? "waiting for an actor in snow" :
+		                     store.writerReady     ? "on" :
+		                                             "failed (see CommunityShaders.log)";
+		lines.push_back(std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}.",
+			writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size()));
 	}
 
 	if (!bodyCoatCensusRan) {

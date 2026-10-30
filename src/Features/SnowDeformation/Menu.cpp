@@ -2038,6 +2038,15 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx("Snow on Bodies (S3 Contact)")) {
+			ImGui::Checkbox("Contact Coat", &debugBodyCoatContact);
+			if (auto _ttContact = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Stage S3 of MD plans/BODY-SNOW-PLAN.md: snow a body touches sticks to it (legs wading, a body that fell or lay in the snow) on the player and the actors near them. How much sticks follows how sticky the snow is (Snow Climate), more after a hard landing, a knockdown or a sprint; water washes it off. Up to four actors update a frame, the player every second frame. Force Coat replaces it while on. Nothing fades yet (that is S4): Clear Body Coats empties every coat.");
+			if (ImGui::Button("Clear Body Coats"))
+				debugBodyCoatClear = true;
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx("Snow on Bodies (S2 Look)")) {
 			ImGui::Combo("Force Coat", &debugBodyCoatForce, "Off\0Legs to the Knee\0Snowfall from Above\0Left Half\0Everything\0");
 			if (auto _ttForce = Util::HoverTooltipWrapper())

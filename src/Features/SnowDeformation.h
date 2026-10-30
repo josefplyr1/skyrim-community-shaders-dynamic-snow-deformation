@@ -4067,7 +4067,11 @@ public:
 	void NoteMainViewport();
 	/** @brief Rebuilds the landscape's ShellCB copy and SRV set from the live fields; false while one is missing or the footprint holds no snow. */
 	bool LandscapeSnowRefresh();
+	/** @brief The shell surface's grid and field windows for this frame, around a_cb's camera: DrawShellEarlyPrepass's recipe. */
+	void PlaceShellFields(ShellCB& a_cb);
 	/** @brief The surface's SRV set t0-t58 (the slots ShellVertexZ and the landscape hull read), from the fields as they stand now. */
+	/** @brief Every SRV slot the shell surface reads, t0..t58: what LandscapeSurfaceSRVs fills. */
+	static constexpr uint32_t kShellSurfaceSRVs = 59;
 	void LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs);
 	/** @brief The ground snow can draw this frame: the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and drew no ground. */
 	bool LandscapeShadeReady();
@@ -4898,6 +4902,8 @@ protected:
 		float stickiness = 0.0f;
 		/** @brief Smoothed ground speed from the impact track, units per second. */
 		float speed = 0.0f;
+		/** @brief The impact track's largest energy (speed, landing, knockdown): it packs snow on. */
+		float jolt = 0.0f;
 		float melt = 0.0f;
 		float shake = 0.0f;
 		float growth = 0.0f;
@@ -5049,6 +5055,10 @@ public:
 	int debugBodyCoatView = 0;
 	/** @brief Runtime-only, S2: a synthetic coat in every slot until a writer exists: 0 off, 1 legs to the knee, 2 snowfall from above, 3 the left side, 4 everything. */
 	int debugBodyCoatForce = 0;
+	/** @brief Runtime-only, S3: the contact writer, snow the body touches sticking to it. Force Coat overrides it. */
+	bool debugBodyCoatContact = true;
+	/** @brief Runtime-only, S3: set by Clear Body Coats; the next tick empties every slot (nothing fades before S4). */
+	bool debugBodyCoatClear = false;
 	/** @brief Runtime-only, S2: how far the forced coat's lumps spread, from the surfaces facing the snow out to the angle of repose, 0 to 1; contact snow's lie at random spots over this share of the surface. */
 	float debugBodyCoatLumps = 1.0f;
 	/** @brief Runtime-only, S2: how many specks of snow the forced coat lays, up to half a surface, in the same order, 0 to 1. */
@@ -5097,6 +5107,18 @@ protected:
 	void EnsureBodyCoatLumps();
 	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatLumpSRV;
 	bool bodyCoatLumpAttempted = false;
+	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). */
+	bool BodyCoatWriteBegin();
+	/** @brief The actor is due a contact update this frame, with its adhesion: min(1, stickiness + jolt). */
+	bool BodyCoatWriteDue(uint32_t a_formID, float& a_adhesion) const;
+	/** @brief Uploads a shape's write constants; false when it has no record. */
+	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, float a_adhesion);
+	/** @brief Binds the writer's stages around an actor's coat pass, or puts the capture's back. */
+	void BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on);
+	/** @brief Folds this frame's touches into the atlas, and reads the readout's count back. */
+	void BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint32_t a_triangles, uint32_t a_actors);
+	/** @brief The shader prime's step: compiles the contact writer's blobs into the cache. */
+	void PrimeBodyCoatWriter();
 	std::shared_ptr<BodyCoatStore> bodyCoatStore;
 	/** @brief The store holds records this frame: skinned Lighting techniques take the coat's pixel key. */
 	bool bodyCoatLive = false;

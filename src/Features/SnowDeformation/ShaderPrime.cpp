@@ -296,6 +296,9 @@ void SnowDeformation::RunShaderPrime()
 		return;
 	if (!runGroup(effectSteps, std::size(effectSteps), 3, "effects"))
 		return;
+	// The body coat's contact writer into the blob cache only: its shaders are
+	// built on the render thread when an actor is first due (BodyCoat.cpp).
+	PrimeBodyCoatWriter();
 
 	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	const auto hits = snowShaderCacheHits.load(std::memory_order_relaxed);
