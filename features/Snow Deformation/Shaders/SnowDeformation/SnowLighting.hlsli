@@ -856,6 +856,7 @@ namespace SnowLighting
 		float4 CoatGlint;
 		float4 CoatLook;
 		float4 CoatAmounts;
+		float4 CoatFall;
 	};
 	Texture3D<float4> CoatAtlas : register(t41);
 	Texture3D<float4> CoatField : register(t44);
@@ -884,7 +885,9 @@ namespace SnowLighting
 	// angle of repose in radians, y and z the smallest and largest speck radius in
 	// units, w the balls a share needs per the sizes' mean volume, 4 / ((1 + p)(1 +
 	// p^2)) at p = smallest / largest; CoatAmounts: x the lumps, y the specks, z
-	// hair's specks, w contact snow's cohesion (round 3: its share of lumps).
+	// hair's specks, w contact snow's cohesion (round 3: its share of lumps);
+	// CoatFall (S5, D20-D22): x the stored snowfall that fills the specks, y and z
+	// the angle of repose their reach rises from and to, in radians.
 	// Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
 	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
 	// 2007), domed 1.5 units, single over the outer 0.35 of their order, holed at
@@ -1188,9 +1191,16 @@ namespace SnowLighting
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
 				// Half a texel inside the slot, so the filter never reads a neighbour.
 				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5) / kCoatAtlasSize, 0);
-				const float3 deposit = GBuffer::DecodeNormal(voxel.ba);
+				// The writer stores the way down's encoding, so up sits at the
+				// octahedron's centre and the filter between voxels stays near it.
+				const float3 deposit = -GBuffer::DecodeNormal(voxel.ba);
 				const float contact = inside ? voxel.r : 0.0;
 				const float fall = inside ? voxel.g : 0.0;
+				// S5 (D20, D21): the stored snowfall fills the specks first, their share
+				// and reach rising together from the angle of repose to the ramp's top,
+				// then the lumps over the rest, never the live storm.
+				const float fallSpecks = saturate(fall / CoatFall.x);
+				const float fallLumps = saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
 				const bool hairSpecks = (CoatFlags & kCoatHairSpecks) != 0;
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
 				const float footprint = max(length(dcdx), length(dcdy));
@@ -1227,7 +1237,7 @@ namespace SnowLighting
 					const float3 fallNormal = inDepth ? restShape : CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare));
 					const float lumpSlope = acos(clamp(dot(fallNormal, deposit), -1.0, 1.0));
 					const float contactShare = CoatAmounts.x * CoatAmounts.w * saturate((contact - 1e-3) / kCoatSpeckFront);
-					const float fallCover = saturate((1.0 - lumpSlope * CoatLook.x - 2.0 * (1.0 - fall) - (1.0 - CoatAmounts.x)) / kCoatLumpFront);
+					const float fallCover = saturate((CoatAmounts.x * fallLumps - lumpSlope / CoatFall.z) / kCoatLumpFront);
 					const float3 clumpFade = saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
 					const float3 octaveSd = inDepth ? kCoatFieldSd : kCoatNoiseSd;
 					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
@@ -1290,14 +1300,15 @@ namespace SnowLighting
 				// degrees). The armour's relief steers them, up to twice the share in its
 				// grooves and none on its rims.
 				const float speckSlope = acos(clamp(dot(hairSpecks ? restShape : restRelief, deposit), -1.0, 1.0));
-				const float speckOrder = max(contact - 1e-3, 1.0 - speckSlope * (hairSpecks ? 1.0 / kCoatSpeckReach : CoatLook.x) - 2.0 * (1.0 - fall));
+				const float fallOrder = fall > 0.0 ? 1.0 - speckSlope / (hairSpecks ? kCoatSpeckReach : lerp(CoatFall.y, CoatFall.z, fallSpecks)) : -1.0;
+				const float speckCover = max(saturate((contact - 1e-3) / kCoatSpeckFront), fallSpecks * saturate(fallOrder / kCoatSpeckFront));
 				float pocket = 0.0;
 				[branch] if (!hairSpecks && (CoatFlags & (kCoatRelief | kCoatReliefView)) != 0)
 					pocket = (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) *
 							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world, max(kCoatPocketRadius, footprint));
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
-					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * saturate(speckOrder / kCoatSpeckFront) * steer, kCoatSpeckMax * lumpShare * furSpecks);
+					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * lumpShare * furSpecks);
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{

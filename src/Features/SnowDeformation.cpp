@@ -1020,7 +1020,7 @@ static bool FallsAsSnow(RE::TESWeather* a_weather)
 	return verdict.snow;
 }
 
-float SnowDeformation::ComputeSnowfallIntensity() const
+float SnowDeformation::ComputeSnowfallIntensity(float a_cap) const
 {
 	// Blackreach's weather is snow-flagged.
 	if (auto* worldSpace = NoSkyWorldspace()) {
@@ -1030,10 +1030,57 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 				worldSpace->GetFormID(), worldSpace->GetFormEditorID() ? worldSpace->GetFormEditorID() : "");
 		return 0.0f;
 	}
-	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow);
+	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow, a_cap);
 }
 
-float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const
+// The load order's snowfalls (BODY-SNOW-PLAN.md D22): a living body's coat
+// climbs no higher than its storm's share of the heaviest, and its lumps begin
+// past the heaviest snowfall below the storms, where the widest step in
+// intensity among the snowfalls above reference density lies. Weathers a No Sky
+// worldspace's climate draws on snow on nobody, so they are left out.
+const SnowDeformation::SnowWeatherRange& SnowDeformation::SnowWeathers()
+{
+	auto& range = snowWeatherRange;
+	auto* data = range.scanned ? nullptr : RE::TESDataHandler::GetSingleton();
+	if (!data)
+		return range;
+	range.scanned = true;
+	std::unordered_set<const RE::TESWeather*> skyless;
+	for (auto* world : data->GetFormArray<RE::TESWorldSpace>())
+		if (world && world->flags.any(RE::TESWorldSpace::Flag::kNoSky) && world->climate)
+			for (auto* entry : world->climate->weatherList)
+				if (entry && entry->weather)
+					skyless.insert(entry->weather);
+	std::vector<std::pair<float, const RE::TESWeather*>> snows;
+	for (auto* weather : data->GetFormArray<RE::TESWeather>()) {
+		if (!weather || !weather->data.flags.any(RE::TESWeather::WeatherDataFlag::kSnow) || skyless.contains(weather) || !FallsAsSnow(weather))
+			continue;
+		const float density = weather->precipitationData ? weather->precipitationData->GetSettingValue(RE::BGSShaderParticleGeometryData::DataID::kParticleDensity).f : 0.0f;
+		snows.emplace_back(density > 0.0f ? density / kReferenceSnowDensity : 1.0f, weather);
+	}
+	std::sort(snows.begin(), snows.end(), [](const auto& a_a, const auto& a_b) { return a_a.first < a_b.first; });
+	auto name = [](const RE::TESWeather* a_weather) { return std::string(a_weather->GetFormEditorID() ? a_weather->GetFormEditorID() : std::format("{:08X}", a_weather->GetFormID())); };
+	range.weathers = uint32_t(snows.size());
+	if (snows.empty())
+		return range;
+	range.heaviest = snows.back().first;
+	range.heaviestName = name(snows.back().second);
+	float widest = 0.0f;
+	for (size_t i = 1; i < snows.size(); ++i)
+		if (snows[i - 1].first > 1.0f && snows[i].first > snows[i - 1].first && snows[i].first / snows[i - 1].first > widest) {
+			widest = snows[i].first / snows[i - 1].first;
+			range.split = snows[i - 1].first / range.heaviest;
+			range.splitName = name(snows[i - 1].second);
+		}
+	std::string list;
+	for (const auto& [intensity, weather] : snows)
+		list += std::format("{}{} {:.2f}", list.empty() ? "" : ", ", name(weather), intensity);
+	logger::info("[SNOW DEFORMATION] body coat: {} snowfalls ({}); the heaviest '{}' {:.2f}; lumps on the living past {:.2f} of it{}", snows.size(), list, range.heaviestName,
+		range.heaviest, range.split, range.splitName.empty() ? " (no step among the heavy ones: half)" : std::format(" ('{}')", range.splitName));
+	return range;
+}
+
+float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag, float a_cap) const
 {
 	auto* sky = globals::game::sky;
 	if (!sky)
@@ -1075,7 +1122,7 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 		float fadeOut = sky->lastWeather->data.precipitationEndFadeOut / 255.0f;
 		intensity = std::max(intensity, last * (1.0f - linearstep(fadeOut, 1.0f, pct)));
 	}
-	return std::min(intensity, kMaxSnowfallIntensity);
+	return std::min(intensity, a_cap);
 }
 
 void SnowDeformation::Prepass()

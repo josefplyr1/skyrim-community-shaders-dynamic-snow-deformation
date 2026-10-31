@@ -6153,7 +6153,9 @@ bool SnowDeformation::EnsureContactResources()
 void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 {
 	contactDrawsLast = 0;
-	if ((contactProps.empty() && contactActors.empty()) || !EnsureContactResources())
+	// S5: snowfall on bodies walks actors even with nobody in the snow.
+	const bool coatFall = BodyCoatFallDue();
+	if ((contactProps.empty() && contactActors.empty() && !coatFall) || !EnsureContactResources())
 		return;
 	auto* context = a_context;
 
@@ -6311,7 +6313,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	contactSweepFrame++;
 	if (contactSweepStates.size() > 512)
 		contactSweepStates.clear();
-	if (!contactActors.empty() && contactSkinVS && contactSkinCB) {
+	if ((!contactActors.empty() || coatFall) && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 		context->OMSetBlendState(contactMinBlendBodies.get(), nullptr, 0xFFFFFFFF);
 		context->VSSetShader(contactSkinVS, nullptr, 0);
@@ -6319,14 +6321,24 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		context->VSSetConstantBuffers(2, 1, &skinCB);
 		// Tracks the bound VS across actors: a rigid part leaves contactVS bound for the next actor.
 		bool skinnedVSBound = true;
-		// S3: the body coat's contact writer rides this walk (BodyCoat.cpp).
+		// S3: the body coat's contact writer rides this walk (BodyCoat.cpp). S5:
+		// snowfall draws the parts above the snow too, an actor's own highest
+		// surface first (its tops, the capture's draw from above at the actor's
+		// own scale), and actors the capture does not draw are walked for it alone.
 		const bool coatWrite = BodyCoatWriteBegin();
 		bool coatPass = false;
+		bool coatTopPass = false;
+		bool coatAll = false;
 		float4 coatParams{};
+		float4 coatTop{};
 		uint32_t coatTriangles = 0, coatActors = 0;
 		const auto* playerCamera = RE::PlayerCamera::GetSingleton();
 		const bool firstPerson = playerCamera && playerCamera->IsInFirstPerson();
-		for (const auto& actor : contactActors) {
+		const auto& coatOnly = BodyCoatCoatOnly();
+		const size_t walks = contactActors.size() + (coatWrite ? coatOnly.size() : 0);
+		for (size_t walk = 0; walk < walks; ++walk) {
+			const bool coatOnlyWalk = walk >= contactActors.size();
+			const auto& actor = coatOnlyWalk ? coatOnly[walk - contactActors.size()] : contactActors[walk];
 			auto ref = actor.ref.get();
 			auto* root = ref ? ref->Get3D(false) : nullptr;
 			if (!root)
@@ -6350,7 +6362,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// boots and calves, and a sheathed sword at the hip stays out until
 				// a swing brings it down. Corpses lie low and keep everything. Every
 				// test here only rejects, so this cheapest one goes first.
-				{
+				if (!coatAll) {
 					const auto& gb = a_geometry->worldBound;
 					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin) {
 						tally.above++;
@@ -6412,7 +6424,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// bone. It prints by its own world transform when it dips into the
 				// snow: a low sword swing cuts a slash.
 				if (!skin) {
-					if (coatPass)
+					if (coatPass || coatTopPass)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					if (skinnedVSBound) {
 						context->VSSetShader(contactVS, nullptr, 0);
@@ -6658,8 +6670,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// The constant buffer is uploaded once per DISTINCT bone list: the
 				// partitions of one garment usually share theirs.
 				ContactSkinCB cb{};
-				cb.SkinWindowCenter = contactCenter;
-				cb.SkinHalfExtent = kContactHalfExtent;
+				cb.SkinWindowCenter = coatTopPass ? float2(coatTop.x, coatTop.y) : contactCenter;
+				cb.SkinHalfExtent = coatTopPass ? coatTop.z : kContactHalfExtent;
 				const uint16_t* paletteBones = nullptr;
 				uint16_t paletteCount = 0;
 				if (contactSkinLogged.size() < 16 && contactSkinLogged.insert(skin).second) {
@@ -6775,11 +6787,12 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 			};
 			// By reference: the walk copies its std::function at every node, and
 			// this closure is past the small buffer, so each copy was a heap one.
-			RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
+			if (!coatOnlyWalk)
+				RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
 			// Nothing printed from a body the game draws: hand the actor to the bone
 			// stamps for a while rather than leave it carving nothing at all.
 			const bool rootHidden = root->GetAppCulled() && !firstPersonPlayer;
-			if (!actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
+			if (!coatOnlyWalk && !actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
 				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
 					auto& cache = it->second;
 					cache.contactStarved = kContactStarveFrames;
@@ -6793,17 +6806,28 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				}
 			}
 			// S3: an actor due a coat update is walked again with the writer bound,
-			// its own row; the capture's counters stay the capture's.
-			if (coatWrite && BodyCoatWriteDue(ref->GetFormID(), coatParams)) {
+			// its own row; the capture's counters stay the capture's. S5: snowfall
+			// lays the actor's tops first, and both walks keep the parts above the snow.
+			if (coatWrite && BodyCoatWriteDue(ref->GetFormID(), coatParams, coatTop)) {
 				const auto counts = std::tuple{ contactOverlaysLast, contactShellsLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast, contactSkinDrawsLast };
 				globals::profiler->EndPass();
 				globals::profiler->BeginPass("SnowDeformation::Bodies - Coat Update");
+				coatAll = coatTop.z > 0.0f;
+				if (coatAll) {
+					BodyCoatTopBind(context, true);
+					coatTopPass = true;
+					geometryIndex = -1;
+					RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
+					coatTopPass = false;
+					BodyCoatTopBind(context, false);
+				}
 				BodyCoatWriteBind(context, true);
 				skinnedVSBound = true;
 				coatPass = true;
 				geometryIndex = -1;
 				RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
 				coatPass = false;
+				coatAll = false;
 				coatActors++;
 				BodyCoatWriteBind(context, false);
 				std::tie(contactOverlaysLast, contactShellsLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast, contactSkinDrawsLast) = counts;

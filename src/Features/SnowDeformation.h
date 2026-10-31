@@ -862,10 +862,23 @@ public:
 	/** @brief Intensity ceiling; keeps extreme weather-mod densities from erasing trails outright. */
 	static constexpr float kMaxSnowfallIntensity = 4.0f;
 
-	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall; 0 for ash and in a No Sky worldspace. */
-	float ComputeSnowfallIntensity() const;
-	/** @brief The same transition-faded precipitation density for any weather class (snow, rain). */
-	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const;
+	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions, up to a_cap. 1.0 = reference-density snowfall; 0 for ash and in a No Sky worldspace. */
+	float ComputeSnowfallIntensity(float a_cap = kMaxSnowfallIntensity) const;
+	/** @brief The same transition-faded precipitation density for any weather class (snow, rain), up to a_cap. */
+	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag, float a_cap = kMaxSnowfallIntensity) const;
+	/** @brief The load order's snowfalls, read once (BODY-SNOW-PLAN.md D22): the heaviest one's intensity, uncapped, and the share of it past which a living body's snowfall coat lumps (the heaviest snowfall below the storms). */
+	struct SnowWeatherRange
+	{
+		bool scanned = false;
+		uint32_t weathers = 0;
+		float heaviest = 1.0f;
+		float split = 0.5f;
+		std::string heaviestName;
+		std::string splitName;
+	};
+	/** @brief Scans the loaded weathers the first time it is asked, after the data has loaded. */
+	const SnowWeatherRange& SnowWeathers();
+	SnowWeatherRange snowWeatherRange;
 	/** @brief The player's worldspace when it is flagged No Sky (Blackreach), else null. Outdoor weather state holds there as it does indoors. */
 	static RE::TESWorldSpace* NoSkyWorldspace();
 	/** @brief The first kNotSnowKeywords entry (the MATO and LOD batch vetoes' list) found in a name, case-insensitive, or null. */
@@ -5019,6 +5032,8 @@ public:
 		float4 Look;
 		/** @brief S2's amounts of the forced coat: x lumps, y specks, z hair's specks, 0 to 1. */
 		float4 Amounts;
+		/** @brief S5, what the stored snowfall shows (D20, D21): x the share that fills the specks, y and z the angle of repose their reach rises from and to, in radians. */
+		float4 Fall;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
 	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
@@ -5066,6 +5081,8 @@ public:
 	std::string BodyCoatWriterLine() const;
 	/** @brief The S4 tree's readout: the coat's clock, and per coated actor what fades it and how soon it is bare. */
 	std::vector<std::string> BodyCoatFadeLines() const;
+	/** @brief The S5 tree's readout: the snowfall here, the load order's range, and per actor its ceiling and last snowfall update. */
+	std::vector<std::string> BodyCoatFallLines() const;
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
 	/** @brief Runtime-only: run the census every kBodyCoatCensusFrames. */
@@ -5086,6 +5103,8 @@ public:
 	bool debugBodyCoatFade = true;
 	/** @brief Runtime-only, S4 (estimate): seconds of running that would shed a coat of perfectly loose snow to 1/e; snow sheds in proportion to 1 - stickiness. Walking sheds by its speed over a run's (Josef, 2026-10-31: movement and jolts). */
 	float debugBodyCoatShakeTime = 10.0f;
+	/** @brief Runtime-only, S5: snowfall builds on bodies (BODY-SNOW-PLAN.md section 2.4), riding the contact writer. */
+	bool debugBodyCoatFall = true;
 	/** @brief Runtime-only, S3: the most snow contact leaves, as a share of a full coat (Josef, 2026-10-30: 0.5). */
 	float debugBodyCoatContactCap = 0.5f;
 	/** @brief Runtime-only, S3 (estimate): seconds of contact at full adhesion that build a coat from nothing to the cap. */
@@ -5142,12 +5161,18 @@ protected:
 	bool bodyCoatLumpAttempted = false;
 	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). */
 	bool BodyCoatWriteBegin();
-	/** @brief The actor is due a contact update this frame, with its write: x the atlas levels its touches grow by, yz its heading, w its impact share. */
-	bool BodyCoatWriteDue(uint32_t a_formID, float4& a_write) const;
+	/** @brief The actor is due a coat update this frame, with its write: x the atlas levels its touches grow by, yz its heading, w its impact share; and, when it measures snowfall (S5), its tops' window first (z > 0: xy the centre, z the half extent). */
+	bool BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float4& a_top) const;
 	/** @brief Uploads a shape's write constants; false when it has no record. */
 	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, const float4& a_write);
 	/** @brief Binds the writer's stages around an actor's coat pass, or puts the capture's back. */
 	void BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on);
+	/** @brief S5: points the capture's own draw at the due actor's tops (its row, the blend that keeps the highest) around its tops pass, or back at the contact field. */
+	void BodyCoatTopBind(ID3D11DeviceContext* a_context, bool a_on);
+	/** @brief S5: some actor is due a snowfall update this frame, so the capture walks actors even with nobody in the snow. */
+	[[nodiscard]] bool BodyCoatFallDue() const;
+	/** @brief S5: the due actors the capture does not draw itself, walked for their coat only (BodyCoatWriteBegin fills it). */
+	[[nodiscard]] const std::vector<ContactProp>& BodyCoatCoatOnly() const;
 	/** @brief Folds this frame's touches into the atlas, and reads the readout's count back. */
 	void BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint32_t a_triangles, uint32_t a_actors);
 	/** @brief The shader prime's step: compiles the contact writer's blobs into the cache. */

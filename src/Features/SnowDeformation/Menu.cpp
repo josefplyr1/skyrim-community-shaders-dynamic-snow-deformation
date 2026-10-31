@@ -2069,6 +2069,15 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+		if (ImGui::TreeNodeEx("Snow on Bodies (S5 Snowfall)")) {
+			ImGui::Checkbox("Snowfall", &debugBodyCoatFall);
+			if (auto _ttFall = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Stage S5 of MD plans/BODY-SNOW-PLAN.md: falling snow builds on the player and the actors near them, on what faces up and lies open to the sky (Skylighting, as rain wets the ground), never under a roof, in a mouth, or under a hood's brim or a cloak. A full coat fills in about 70 s of snowfall at intensity 1, the ground's refill clock, faster in a heavier storm, and a wait outdoors fills it at once. On the living it climbs no higher than the storm's share of the heaviest snowfall in the load order; a corpse buries with no ceiling. It fills the specks first, their reach rising from the Angle of Repose to 85 degrees, then the lumps, which on the living only the storms reach. Snow stays on the side it fell on. Movement and jolts shake it off as they do contact snow, and Unrelenting Force blows it off. People met outdoors in a storm are already snowy, by how long it has snowed. It rides Contact Coat, and fades by Snow on Bodies (S4 Fading).");
+			for (const auto& line : BodyCoatFallLines())
+				WrapTextF("%s", line.c_str());
+			ImGui::TreePop();
+		}
+
 		if (ImGui::TreeNodeEx("Snow on Bodies (S2 Look)")) {
 			ImGui::Combo("Force Coat", &debugBodyCoatForce, "Off\0Legs to the Knee\0Snowfall from Above\0Left Half\0Everything\0");
 			if (auto _ttForce = Util::HoverTooltipWrapper())
