@@ -120,7 +120,6 @@ static constexpr float kFallSpeedGate = 300.0f;
 // the snow. Units per second, seconds.
 static constexpr float kImpactSpeedSpan = 600.0f;
 static constexpr float kImpactSpeedMax = 0.75f;
-static constexpr float kImpactSpeedSmoothing = 0.1f;
 static constexpr float kImpactFallFloor = 250.0f;
 static constexpr float kImpactFallSpan = 600.0f;
 static constexpr float kImpactKnockedDown = 0.6f;

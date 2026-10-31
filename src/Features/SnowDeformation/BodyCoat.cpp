@@ -67,10 +67,8 @@ namespace
 	// Round 3: Snow Climate's moist snow (ClimateStickiness). Contact snow holds
 	// its full share of lumps from here up, drier snow fewer, as grains instead.
 	constexpr float kCoatMoistStickiness = 0.7f;
-	// S4 (section 2.5). A full coat is the object coat's pinned 3 units, a tenth
-	// of the reference layer (Snow 01's 30) the melt rates are given in; in the
-	// atlas, contact draws full at kCoatContactFront and snowfall at 1.
-	constexpr float kCoatsPerLayer = 30.0f / 3.0f;
+	// S4 (section 2.5): a full coat in atlas levels; contact draws full at
+	// kCoatContactFront, snowfall at 1.
 	constexpr float kCoatFullLevels[2] = { kCoatContactFront * 255.0f, 255.0f };
 	// Packed contact snow sheds half of what a jolt knocks off loose snow (estimate).
 	constexpr float kCoatPackedShed = 0.5f;
@@ -352,6 +350,8 @@ struct SnowDeformation::BodyCoatStore
 		bool active = false;
 		CoatAging aging;
 		bool burning = false;
+		/** @brief A corpse lying settled in the snow: the weather does not take its coat. */
+		bool inSnow = false;
 		/** @brief Full coats melted a second (the clear-weather clock, heat, fire spells), and the share shaken off a second. */
 		float melt = 0.0f;
 		float shake = 0.0f;
@@ -400,6 +400,11 @@ struct SnowDeformation::BodyCoatStore
 		Fading fading;
 		std::string changeLine;
 		double changeAt = -1.0;
+		// Round 2: its own ground speed, measured as the impact track measures it,
+		// which sleeps off the snow with the deformation passes.
+		RE::NiPoint3 speedPos;
+		bool hasSpeedPos = false;
+		float speed = 0.0f;
 	};
 	struct Pick
 	{
@@ -1590,6 +1595,15 @@ void SnowDeformation::TickBodyCoatStore()
 			a.dead = dead;
 			store.recordsDirty = true;
 		}
+		// S4 round 2: its ground speed for the shake-off, off the snow too.
+		if (const RE::NiPoint3 at = actor->GetPosition(); a.hasSpeedPos && realDelta > 0.0f) {
+			const float step = std::hypot(at.x - a.speedPos.x, at.y - a.speedPos.y);
+			a.speed = step > kFootTeleportSpeed * realDelta ? 0.0f : a.speed + (step / realDelta - a.speed) * (1.0f - std::exp(-realDelta / kImpactSpeedSmoothing));
+			a.speedPos = at;
+		} else {
+			a.speedPos = at;
+			a.hasSpeedPos = true;
+		}
 		const RE::NiAVObject* root = actor->Get3D(false);
 		const RE::NiAVObject* first = a.player ? actor->Get3D(true) : nullptr;
 		const RE::TESRace* race = actor->GetRace();
@@ -1733,9 +1747,11 @@ void SnowDeformation::TickBodyCoatStore()
 		const float texel = deformationTextures[0] && deformationTextures[0]->srv ? deformWorldSize / float(deformationTextures[0]->desc.Width) : 0.0f;
 		const float impactShare = std::clamp(debugBodyCoatImpactShare, 0.0f, 1.0f);
 		const auto make = [&](uint32_t a_formID, Store::Actor& a_actor, const RE::NiPoint3& a_pos) {
-			// A0 per actor (S4): the snow's stickiness at its own height.
+			// A0 per actor (S4): the snow's stickiness at its own height. A corpse
+			// takes it at once (S4 round 2): its weight lays it in the snow, and it is
+			// drawn only while it falls and settles.
 			const float adhesion = std::min(1.0f, SnowConditionAtHeight(a_pos.z).stickiness + a_actor.joltHeld);
-			float4 write{ adhesion * perSecond * a_actor.sinceWrite, 0.0f, 0.0f, 0.0f };
+			float4 write{ a_actor.dead ? cap : adhesion * perSecond * a_actor.sinceWrite, 0.0f, 0.0f, 0.0f };
 			const float dx = a_pos.x - a_actor.lastPos.x;
 			const float dy = a_pos.y - a_actor.lastPos.y;
 			const float moved = std::sqrt(dx * dx + dy * dy);
@@ -1841,16 +1857,30 @@ void SnowDeformation::TickBodyCoatStore()
 		fading.aging = ComputeCoatAging(actor.get());
 		const auto& aging = fading.aging;
 		fading.burning = burning;
-		const float heat = (aging.heat * meltRate + aging.fire + (burning ? meltRate : 0.0f)) * kCoatsPerLayer;
-		fading.melt = aging.clearClock * store.timescale / (meltHours * 3600.0f) + heat;
-		const float coats = aging.clearClock * coatHours / meltHours + heat * coatSeconds;
+		// Round 2 (Josef: gradual, by the fire's intensity). A heat source warms the
+		// air on the melt clock, its core as warm as +3 C and in any weather. A
+		// fire spell melts a coat at the pace it melts the snow under it, a layer
+		// for a layer. A corpse lying settled in the snow is still in it: the
+		// weather does not take its coat (E0's body-drop test against the snow).
+		fading.inSnow = false;
+		if (a.dead)
+			if (const auto rest = corpseRestStates.find(formID); rest != corpseRestStates.end() && rest->second.settled)
+				if (const auto* root = actor->Get3D(false)) {
+					const auto& b = root->worldBound;
+					float surface = 0.0f;
+					fading.inSnow = SampleShellSurface(b.center.x, b.center.y, surface) && b.center.z - b.radius < surface;
+				}
+		const float clock = (fading.inSnow ? 0.0f : aging.clearClock) + aging.heatClock;
+		const float fire = aging.fire + (burning ? meltRate : 0.0f);
+		fading.melt = clock * store.timescale / (meltHours * 3600.0f) + fire;
+		const float coats = clock * coatHours / meltHours + fire * coatSeconds;
 		for (int c = 0; c < 2; ++c)
 			a.meltOwed[c] += coats * kCoatFullLevels[c];
 		fading.motion = 0.0f;
 		fading.shake = 0.0f;
 		if (!a.dead) {
 			const float loose = 1.0f - aging.stickiness;
-			fading.motion = debugBodyCoatShakeBy == 0 ? std::clamp(aging.speed / kImpactSpeedFloor, 0.0f, 1.0f) : aging.jolt;
+			fading.motion = std::clamp(a.speed / kImpactSpeedFloor, 0.0f, 1.0f);
 			fading.shake = loose * fading.motion / shakeTime;
 			a.keep[0] *= std::exp(-fading.shake * coatSeconds);
 			if (jolt > 0.0f) {
@@ -2487,13 +2517,14 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 			for (const auto& part : a.parts)
 				bound = part.slot >= 0 ? std::max(bound, part.bound[0]) : bound;
 			const auto& g = a.fading.aging;
-			std::string why = g.interior ? std::string(g.interiorSnow ? "indoors, cold (snow drawn here): x1" : "indoors, warm (no snow drawn here): x7") :
-			                               std::format("clear-weather clock x{:.2f} (snowing {:.2f}, rain {:.2f}, wind {:.2f}, warm {:.2f} at {:+.1f} C)", g.clearClock,
+			std::string why = a.fading.inSnow ? std::string("lying settled in the snow, so the weather does not take it") :
+			                  g.interior      ? std::string(g.interiorSnow ? "indoors, cold (snow drawn here): x1" : "indoors, warm (no snow drawn here): x7") :
+			                                    std::format("clear-weather clock x{:.2f} (snowing {:.2f}, rain {:.2f}, wind {:.2f}, warm {:.2f} at {:+.1f} C)", g.clearClock,
 												 std::min(g.snowfall, 1.0f), g.rain, g.wind, g.warm, g.temperature);
 			if (g.heat > 0.0f)
-				why += std::format("; heat {:.2f}, {:.0f} units from a heat source (bowl {:.0f})", g.heat, g.heatDistance, g.heatRadius);
+				why += std::format("; heat {:.2f}, {:.0f} units from a heat source (bowl {:.0f}), x{:.1f} more", g.heat, g.heatDistance, g.heatRadius, g.heatClock);
 			if (g.fire > 0.0f)
-				why += std::format("; fire spells {:.2f} layers/s", g.fire);
+				why += std::format("; fire spells {:.2f} coats a second", g.fire);
 			if (a.fading.burning)
 				why += "; struck by fire";
 			const float coat = bound / kCoatFullLevels[0];
@@ -2503,7 +2534,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 			if (a.dead)
 				line += ". No shake-off: a corpse";
 			else
-				line += std::format(". Shake-off {:.1f} % a second (motion {:.2f}, stickiness {:.2f})", 100.0f * a.fading.shake, a.fading.motion, g.stickiness);
+				line += std::format(". Shake-off {:.1f} % a second (moving {:.0f} units/s, {:.2f} of a run; stickiness {:.2f})", 100.0f * a.fading.shake, a.speed, a.fading.motion, g.stickiness);
 			if (a.fading.joltAt >= 0.0)
 				line += std::format("; the last jolt shed {:.0f} %, {} ago", 100.0f * a.fading.jolt, ago(a.fading.joltAt));
 			line += std::format(". {} fade resolves.", a.fading.resolves);

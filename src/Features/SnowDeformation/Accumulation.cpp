@@ -661,6 +661,7 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	aging.growth = aging.interior ? 0.0f : snowing;
 	aging.clearClock = aging.interior ? 1.0f + kWarmAgeing * warmIndoors :
 	                                    (1.0f - snowing) * (1.0f + kRainAgeing * aging.rain + kWindAgeing * aging.wind * (1.0f - snowing) + kWarmAgeing * aging.warm);
+	aging.heatClock = kWarmAgeing * aging.heat;
 	return aging;
 }
 
@@ -690,7 +691,7 @@ std::vector<std::string> SnowDeformation::CoatAgingLines() const
 	lines.push_back(std::format("Melt {:.2f}: the largest of heat, a warm interior, and rain or warmth outdoors times (1 - snowfall)", aging.melt));
 	lines.push_back(std::format("Shake-off {:.2f}: (1 - stickiness) x the impact energy", aging.shake));
 	lines.push_back(std::format("Growth {:.2f}: snowfall outdoors", aging.growth));
-	lines.push_back(std::format("Clear-weather clock x{:.2f}: outdoors (1 - snowfall)(1 + 8 rain + 4 wind (1 - snowfall) + 6 warm), indoors 7 if warm and 1 if cold", aging.clearClock));
+	lines.push_back(std::format("Clear-weather clock x{:.2f}: outdoors (1 - snowfall)(1 + 8 rain + 4 wind (1 - snowfall) + 6 warm), indoors 7 if warm and 1 if cold; heat adds x{:.2f} (6 x heat) in any weather", aging.clearClock, aging.heatClock));
 	lines.push_back(std::format("Fire spells {:.2f} layers/s from their melt emitters here{}", aging.fire,
 		aging.fireHit >= 0.0f ? std::format("; struck by fire, {:.1f} s of that memory left", aging.fireHit) : std::string()));
 	lines.push_back("Not measured yet: shelter from snowfall. The game's precipitation occlusion map is on the GPU; stage A1 reads it there.");

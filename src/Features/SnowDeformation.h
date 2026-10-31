@@ -4909,6 +4909,8 @@ protected:
 		float growth = 0.0f;
 		/** @brief S4 (BODY-SNOW-PLAN.md section 2.5): how fast the clear-weather clock runs. Outdoors (1 - snowing)(1 + 8 rain + 4 wind (1 - snowing) + 6 warm), the ground's ageing weights; 7 in a warm interior, 1 in a cold one. */
 		float clearClock = 0.0f;
+		/** @brief S4: a heat source's warmth on the same clock, 6 x heat: its core as warm as +3 C, in any weather. */
+		float heatClock = 0.0f;
 		/** @brief The climate's wind packing outdoors, 0-1. */
 		float wind = 0.0f;
 		/** @brief Fire spells' melt here, in layers per second: each fire melt emitter's rate x strength x the ground melt stamp's falloff, summed as the stamp pass sums them. */
@@ -5082,9 +5084,7 @@ public:
 	bool debugBodyCoatClear = false;
 	/** @brief Runtime-only, S4: coats fade (BODY-SNOW-PLAN.md section 2.5): clear weather, rain, wind, warmth, interiors, heat, fire spells and the shake-off, on game time. Off, they keep what they hold as in S3. */
 	bool debugBodyCoatFade = true;
-	/** @brief Runtime-only, S4's A/B of the shake-off: 0 by movement (a walk sheds a little, a run in full) and jolts, 1 by the impact energy alone (the plan's (1 - stickiness) x jolt). */
-	int debugBodyCoatShakeBy = 0;
-	/** @brief Runtime-only, S4 (estimate): seconds of running that would shed a coat of perfectly loose snow to 1/e; snow sheds in proportion to 1 - stickiness. */
+	/** @brief Runtime-only, S4 (estimate): seconds of running that would shed a coat of perfectly loose snow to 1/e; snow sheds in proportion to 1 - stickiness. Walking sheds by its speed over a run's (Josef, 2026-10-31: movement and jolts). */
 	float debugBodyCoatShakeTime = 10.0f;
 	/** @brief Runtime-only, S3: the most snow contact leaves, as a share of a full coat (Josef, 2026-10-30: 0.5). */
 	float debugBodyCoatContactCap = 0.5f;
@@ -6454,6 +6454,10 @@ protected:
 
 	/** @brief Impact energy's speed term starts past a run, in units per second; the body coat's shake-off takes it as a run. */
 	static constexpr float kImpactSpeedFloor = 400.0f;
+	/** @brief Seconds over which a ground speed is smoothed (the impact track's, and the body coat's own). */
+	static constexpr float kImpactSpeedSmoothing = 0.1f;
+	/** @brief Faster than any limb moves, units per second: a step past it is a teleport or a new 3D. */
+	static constexpr float kFootTeleportSpeed = 4000.0f;
 	/** @brief E0's rush: the speed energy of a dodge or gallop (0.5-0.75; a sprint is near 0.2), and the level it must fall below before it fires again. Read by the body coat's shake-off too. */
 	static constexpr float kRushEnergy = 0.5f;
 	static constexpr float kRushRearm = 0.4f;
