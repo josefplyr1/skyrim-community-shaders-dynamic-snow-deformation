@@ -401,10 +401,12 @@ struct SnowDeformation::BodyCoatStore
 		std::string changeLine;
 		double changeAt = -1.0;
 		// Round 2: its own ground speed, measured as the impact track measures it,
-		// which sleeps off the snow with the deformation passes.
+		// which sleeps off the snow with the deformation passes. Round 3: a
+		// corpse's at its bound's centre, and whether it lay settled last frame.
 		RE::NiPoint3 speedPos;
 		bool hasSpeedPos = false;
 		float speed = 0.0f;
+		bool wasSettled = false;
 	};
 	struct Pick
 	{
@@ -1573,6 +1575,7 @@ void SnowDeformation::TickBodyCoatStore()
 		a_actor.worn.clear();
 		a_actor.wornKnown = a_actor.wornChanging = false;
 		a_actor.fading = {};
+		a_actor.hasSpeedPos = a_actor.wasSettled = false;
 	};
 	if (reloaded) {
 		store.RefillAll();
@@ -1593,10 +1596,13 @@ void SnowDeformation::TickBodyCoatStore()
 			continue;
 		if (const bool dead = actor->IsDead(); dead != a.dead) {
 			a.dead = dead;
+			a.hasSpeedPos = false;
 			store.recordsDirty = true;
 		}
-		// S4 round 2: its ground speed for the shake-off, off the snow too.
-		if (const RE::NiPoint3 at = actor->GetPosition(); a.hasSpeedPos && realDelta > 0.0f) {
+		// S4 round 2: its ground speed for the shake-off, off the snow too; a
+		// corpse's at its bound's centre, which follows the ragdoll (round 3).
+		const RE::NiAVObject* body = a.dead ? actor->Get3D(false) : nullptr;
+		if (const RE::NiPoint3 at = body ? body->worldBound.center : actor->GetPosition(); a.hasSpeedPos && realDelta > 0.0f) {
 			const float step = std::hypot(at.x - a.speedPos.x, at.y - a.speedPos.y);
 			a.speed = step > kFootTeleportSpeed * realDelta ? 0.0f : a.speed + (step / realDelta - a.speed) * (1.0f - std::exp(-realDelta / kImpactSpeedSmoothing));
 			a.speedPos = at;
@@ -1834,6 +1840,14 @@ void SnowDeformation::TickBodyCoatStore()
 				a.knocked = track.knockEnergy > 0.0f;
 				a.rushing = track.speedEnergy >= kRushEnergy || (a.rushing && track.speedEnergy >= kRushRearm);
 			}
+		// Round 3: a corpse moved off its rest (the capture's settle latch woken)
+		// is jolted as a body knocked into the snow is.
+		if (current && a.dead)
+			if (const auto rest = corpseRestStates.find(formID); rest != corpseRestStates.end()) {
+				if (a.wasSettled && !rest->second.settled)
+					jolt = std::max(jolt, kImpactKnockedDown);
+				a.wasSettled = rest->second.settled;
+			}
 		float bound[2] = {};
 		auto widen = [&](const Store::Frame& a_frame) {
 			if (a_frame.slot >= 0)
@@ -1876,18 +1890,15 @@ void SnowDeformation::TickBodyCoatStore()
 		const float coats = clock * coatHours / meltHours + fire * coatSeconds;
 		for (int c = 0; c < 2; ++c)
 			a.meltOwed[c] += coats * kCoatFullLevels[c];
-		fading.motion = 0.0f;
-		fading.shake = 0.0f;
-		if (!a.dead) {
-			const float loose = 1.0f - aging.stickiness;
-			fading.motion = std::clamp(a.speed / kImpactSpeedFloor, 0.0f, 1.0f);
-			fading.shake = loose * fading.motion / shakeTime;
-			a.keep[0] *= std::exp(-fading.shake * coatSeconds);
-			if (jolt > 0.0f) {
-				fading.jolt = kCoatPackedShed * loose * std::min(jolt, 1.0f);
-				fading.joltAt = store.realClock;
-				a.keep[0] *= 1.0f - fading.jolt;
-			}
+		// The shake-off, a moved corpse's too (round 3; a still one has no motion).
+		const float loose = 1.0f - aging.stickiness;
+		fading.motion = std::clamp(a.speed / kImpactSpeedFloor, 0.0f, 1.0f);
+		fading.shake = loose * fading.motion / shakeTime;
+		a.keep[0] *= std::exp(-fading.shake * coatSeconds);
+		if (jolt > 0.0f) {
+			fading.jolt = kCoatPackedShed * loose * std::min(jolt, 1.0f);
+			fading.joltAt = store.realClock;
+			a.keep[0] *= 1.0f - fading.jolt;
 		}
 		for (int c = 0; c < 2; ++c)
 			if (bound[c] > 0.0f)
@@ -2531,10 +2542,8 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 			const float bare = a.fading.melt > 0.0f ? coat / a.fading.melt : -1.0f;
 			line += std::format("coat at most {:.2f} of a full one ({:.0f} % of Contact Cap). Melt: {}, so bare in {}", coat, 100.0f * coat / std::max(capShare, 1e-3f), why,
 				bare < 0.0f ? std::string("never (no melt)") : (bare >= 120.0f ? std::format("{:.1f} min", bare / 60.0f) : std::format("{:.1f} s", bare)));
-			if (a.dead)
-				line += ". No shake-off: a corpse";
-			else
-				line += std::format(". Shake-off {:.1f} % a second (moving {:.0f} units/s, {:.2f} of a run; stickiness {:.2f})", 100.0f * a.fading.shake, a.speed, a.fading.motion, g.stickiness);
+			line += std::format(". Shake-off {:.1f} % a second ({} {:.0f} units/s, {:.2f} of a run; stickiness {:.2f})", 100.0f * a.fading.shake,
+				a.dead ? "a corpse moved at" : "moving", a.speed, a.fading.motion, g.stickiness);
 			if (a.fading.joltAt >= 0.0)
 				line += std::format("; the last jolt shed {:.0f} %, {} ago", 100.0f * a.fading.jolt, ago(a.fading.joltAt));
 			line += std::format(". {} fade resolves.", a.fading.resolves);

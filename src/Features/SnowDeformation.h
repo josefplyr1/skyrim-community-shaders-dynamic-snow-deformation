@@ -6458,6 +6458,8 @@ protected:
 	static constexpr float kImpactSpeedSmoothing = 0.1f;
 	/** @brief Faster than any limb moves, units per second: a step past it is a teleport or a new 3D. */
 	static constexpr float kFootTeleportSpeed = 4000.0f;
+	/** @brief Impact energy of a body down in the snow (knocked down or getting up); the body coat jolts a corpse moved off its rest by it too. */
+	static constexpr float kImpactKnockedDown = 0.6f;
 	/** @brief E0's rush: the speed energy of a dodge or gallop (0.5-0.75; a sprint is near 0.2), and the level it must fall below before it fires again. Read by the body coat's shake-off too. */
 	static constexpr float kRushEnergy = 0.5f;
 	static constexpr float kRushRearm = 0.4f;

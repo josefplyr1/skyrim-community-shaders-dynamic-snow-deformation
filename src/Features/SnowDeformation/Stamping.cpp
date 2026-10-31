@@ -122,7 +122,6 @@ static constexpr float kImpactSpeedSpan = 600.0f;
 static constexpr float kImpactSpeedMax = 0.75f;
 static constexpr float kImpactFallFloor = 250.0f;
 static constexpr float kImpactFallSpan = 600.0f;
-static constexpr float kImpactKnockedDown = 0.6f;
 static constexpr float kImpactStampMin = 0.03f;
 static constexpr float kImpactTrackGap = 0.25f;
 // Speed Spoil (an estimate, as the impact terms are): a foot leaving its print
