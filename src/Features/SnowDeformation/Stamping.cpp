@@ -115,10 +115,9 @@ static constexpr float kMinPropStampRadius = 5.0f;
 // snow drifts) sit far above the land, and a land-height band starves
 // their stamps there.
 static constexpr float kFallSpeedGate = 300.0f;
-// Impact energy (kStampImpactScale): ground speed past a run, up to a dodge or
-// a gallop's share; a landing by its fall speed; a body down in the snow.
-// Units per second, seconds.
-static constexpr float kImpactSpeedFloor = 400.0f;
+// Impact energy (kStampImpactScale): ground speed past a run (kImpactSpeedFloor),
+// up to a dodge or a gallop's share; a landing by its fall speed; a body down in
+// the snow. Units per second, seconds.
 static constexpr float kImpactSpeedSpan = 600.0f;
 static constexpr float kImpactSpeedMax = 0.75f;
 static constexpr float kImpactSpeedSmoothing = 0.1f;

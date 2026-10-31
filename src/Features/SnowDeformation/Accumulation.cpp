@@ -233,6 +233,11 @@ namespace
 
 	// Ageing-clock units a game hour of full snowfall adds.
 	constexpr float kSnowfallAgeing = 20.0f;
+	// How much faster the clock runs in full rain, in full wind packing out of
+	// snowfall, and warm (+3 C). The body coat's clear-weather clock takes them too.
+	constexpr float kRainAgeing = 8.0f;
+	constexpr float kWindAgeing = 4.0f;
+	constexpr float kWarmAgeing = 6.0f;
 	// Held water freezes at a rate of one per hour from this many degrees of frost.
 	constexpr float kFreezeColdness = 3.0f;
 	// Above freezing, water the snow no longer holds drains over this many hours.
@@ -343,7 +348,7 @@ void SnowDeformation::TickSnowClimate()
 	// cold keeps a track crisp for a day or two.
 	const float warm = ClimateWarmth(climate.temperature);
 	climate.ageingRate = debugAgeingRateOverride >= 0.0f ? debugAgeingRateOverride :
-	                                                       1.0f + kSnowfallAgeing * snowing + 8.0f * raining + 4.0f * climate.windPacking * (1.0f - snowing) + 6.0f * warm;
+	                                                       1.0f + kSnowfallAgeing * snowing + kRainAgeing * raining + kWindAgeing * climate.windPacking * (1.0f - snowing) + kWarmAgeing * warm;
 	if (elapsed > 0.0f) {
 		climate.ageingClock += climate.ageingRate * elapsed;
 		climate.ageingTotal += (double)climate.ageingRate * elapsed;
@@ -570,6 +575,13 @@ void SnowDeformation::RegisterSnowIceCoSave()
 
 // ---- Snow coat aging inputs (SSPP-SNOW-PLAN.md section 7, stage A0) ----
 
+SnowDeformation::SnowCondition SnowDeformation::SnowConditionAtHeight(float a_z) const
+{
+	auto* player = globals::game::player;
+	const float playerZ = player ? player->GetPosition().z : a_z;
+	return SnowConditionAt((debugClimateTemperatureOn ? debugClimateTemperature : snowClimate.temperature) - kClimateLapse * (a_z - playerZ));
+}
+
 SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor) const
 {
 	CoatAging aging;
@@ -599,7 +611,8 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	auto* tes = globals::game::tes;
 	aging.interior = tes && (tes->interiorCell || NoSkyWorldspace());
 	aging.interiorSnow = aging.interior && capturedLoadedPrev > 0;
-	const SnowCondition condition = GetSnowCondition();
+	// Snow Climate at the character's own height.
+	const SnowCondition condition = SnowConditionAtHeight(position.z);
 	aging.temperature = condition.temperature;
 	aging.warm = ClimateWarmth(condition.temperature);
 	aging.wetness = condition.wetness;
@@ -607,10 +620,37 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	if (!aging.interior) {
 		aging.rain = std::clamp(snowClimate.rainHeld, 0.0f, 1.0f);
 		aging.snowfall = std::max(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f);
+		aging.wind = std::clamp(snowClimate.windPacking, 0.0f, 1.0f);
 	}
-	if (auto it = impactTracks.find(a_actor->formID); it != impactTracks.end()) {
-		aging.speed = it->second.speed;
-		aging.jolt = it->second.Jolt();
+	// The stamp gather keeps these; asleep (no snow near), they hold old values.
+	if (globals::state->frameCount - stampGatherFrame <= 1u) {
+		if (auto it = impactTracks.find(a_actor->formID); it != impactTracks.end()) {
+			const auto& track = it->second;
+			aging.speed = track.speed;
+			aging.jolt = track.Jolt();
+			aging.speedEnergy = track.speedEnergy;
+			aging.landingEnergy = track.landingEnergy;
+			aging.knockEnergy = track.knockEnergy;
+			aging.trackTime = track.time;
+		}
+		// Fire spells' melt emitters as the stamp pass melts the ground under them:
+		// the capsule's falloff from Melt Bowl Floor, strength x rate, summed.
+		const float floorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
+		for (const auto& emitter : spellEmitters) {
+			if (emitter.element != SpellElement::Fire || emitter.mark != SpellMark::Melt || emitter.cone)
+				continue;
+			const float sx = emitter.previous.x - emitter.position.x;
+			const float sy = emitter.previous.y - emitter.position.y;
+			const float length2 = sx * sx + sy * sy;
+			const float along = length2 > 1e-4f ? std::clamp(((position.x - emitter.position.x) * sx + (position.y - emitter.position.y) * sy) / length2, 0.0f, 1.0f) : 0.0f;
+			const float dx = position.x - (emitter.position.x + sx * along);
+			const float dy = position.y - (emitter.position.y + sy * along);
+			const float edge = std::sqrt(dx * dx + dy * dy) / std::max(emitter.radius, 4.0f);
+			if (edge < 1.0f)
+				aging.fire += emitter.strength * emitter.rate * (1.0f - ClimateSmoothstep(floorStart, 1.0f, edge));
+		}
+		if (auto it = lastElementalHit.find(a_actor->formID); it != lastElementalHit.end() && it->second.element == SpellElement::Fire)
+			aging.fireHit = it->second.remaining;
 	}
 
 	const float snowing = std::min(aging.snowfall, 1.0f);
@@ -619,6 +659,8 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	aging.melt = std::max({ aging.heat, warmIndoors, outdoors });
 	aging.shake = (1.0f - aging.stickiness) * aging.jolt;
 	aging.growth = aging.interior ? 0.0f : snowing;
+	aging.clearClock = aging.interior ? 1.0f + kWarmAgeing * warmIndoors :
+	                                    (1.0f - snowing) * (1.0f + kRainAgeing * aging.rain + kWindAgeing * aging.wind * (1.0f - snowing) + kWarmAgeing * aging.warm);
 	return aging;
 }
 
@@ -631,14 +673,14 @@ std::vector<std::string> SnowDeformation::CoatAgingLines() const
 		return lines;
 	}
 	const CoatAging aging = ComputeCoatAging(player);
-	lines.push_back("The player, as a coating update pass would read it. Rates are shares of a full rate; stage A1 sets their speed in the coat's own units.");
+	lines.push_back("The player, as the body coat reads it. Rates are shares of a full rate; Snow on Bodies (S4 Fading) turns them into the coat's own speeds.");
 	if (aging.heatDistance < 0.0f)
 		lines.push_back(std::format("Heat 0.00: no heat source within reach ({} gathered)", heatSources.size()));
 	else
 		lines.push_back(std::format("Heat {:.2f}: governing heat source {:.0f} units away, melt bowl radius {:.0f} ({} gathered)",
 			aging.heat, aging.heatDistance, aging.heatRadius, heatSources.size()));
 	if (!aging.interior)
-		lines.push_back(std::format("Outdoors | rain {:.2f} | snowfall {:.2f}", aging.rain, aging.snowfall));
+		lines.push_back(std::format("Outdoors | rain {:.2f} | snowfall {:.2f} | wind {:.2f}", aging.rain, aging.snowfall, aging.wind));
 	else
 		lines.push_back(aging.interiorSnow ? "Indoors, snow-projected objects drawn here: a cold place, no warm melt" :
 		                                     "Indoors, no snow drawn here: a warm place");
@@ -648,6 +690,9 @@ std::vector<std::string> SnowDeformation::CoatAgingLines() const
 	lines.push_back(std::format("Melt {:.2f}: the largest of heat, a warm interior, and rain or warmth outdoors times (1 - snowfall)", aging.melt));
 	lines.push_back(std::format("Shake-off {:.2f}: (1 - stickiness) x the impact energy", aging.shake));
 	lines.push_back(std::format("Growth {:.2f}: snowfall outdoors", aging.growth));
+	lines.push_back(std::format("Clear-weather clock x{:.2f}: outdoors (1 - snowfall)(1 + 8 rain + 4 wind (1 - snowfall) + 6 warm), indoors 7 if warm and 1 if cold", aging.clearClock));
+	lines.push_back(std::format("Fire spells {:.2f} layers/s from their melt emitters here{}", aging.fire,
+		aging.fireHit >= 0.0f ? std::format("; struck by fire, {:.1f} s of that memory left", aging.fireHit) : std::string()));
 	lines.push_back("Not measured yet: shelter from snowfall. The game's precipitation occlusion map is on the GPU; stage A1 reads it there.");
 	return lines;
 }

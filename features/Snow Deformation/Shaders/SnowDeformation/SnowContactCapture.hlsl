@@ -9,7 +9,8 @@
 // same skinned draw again for an actor due an update. A compute pass first
 // samples the drawn snow around each due actor (COAT_TILE); the VS tests each
 // vertex against it, the GS hands the results to the coat atlas's voxels, the
-// PS records them, and a compute pass builds them into the atlas.
+// PS records them, and a compute pass builds them into the atlas. The same
+// pass fades the coats (S4) with no point pass.
 #ifndef COAT
 // Layout prefix of StaticsCB (SnowDeformation.h) - only these fields are
 // read, and a bound buffer may be larger than its declaration.
@@ -340,8 +341,11 @@ RWTexture3D<uint> CoatWash : register(u2);
 // Voxels this resolve changed, for the readout.
 RWByteAddressBuffer CoatChanged : register(u3);
 
-// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into, the contact
-// cap in atlas levels, and this update's rounding seed.
+// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into or that fade,
+// the contact cap in atlas levels, this update's rounding seed, and each slot
+// half's fade (S4, index slot x 2 + half): bits 0-7 the contact levels
+// melted, 8-15 the snowfall's, 16-23 the share of contact shaken off in
+// 1/255, 24-31 the snowfall's.
 cbuffer BodyCoatResolveCB : register(b0)
 {
 	uint4 ResolveSlots[8];
@@ -349,14 +353,16 @@ cbuffer BodyCoatResolveCB : register(b0)
 	uint ResolveCap;
 	uint ResolveSeed;
 	uint ResolvePad;
+	uint4 ResolveFade[16];
 }
 
 groupshared uint changedInGroup;
 
 // Contact grows R toward the point's share of the cap by the touch's growth, a
 // fraction of a level rounded up at random in proportion, so slow growth still
-// adds up; water clears R and G. The scratch is left at zero for the next
-// update.
+// adds up. A fade shakes off its share of R and G, rounded the same way, then
+// melts its whole levels. Water clears R and G. The scratch is left at zero
+// for the next update.
 [numthreads(8, 8, 4)]
 void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 {
@@ -366,17 +372,29 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 	const uint k = id.z / 48u;
 	[branch] if (k < ResolveCount)
 	{
-		const uint3 t = uint3(id.xy, ResolveSlots[k >> 2][k & 3] * 48u + id.z % 48u);
+		const uint slot = ResolveSlots[k >> 2][k & 3];
+		const uint3 t = uint3(id.xy, slot * 48u + id.z % 48u);
+		// A component holds half a slot, 16 texels across.
+		const uint side = slot * 2u + (id.x >> 4);
+		const uint fade = ResolveFade[side >> 2][side & 3];
 		const uint contact = CoatContact[t];
 		const uint wash = CoatWash[t];
-		[branch] if ((contact | wash) != 0)
+		[branch] if ((contact | wash | fade) != 0)
 		{
 			const uint was = CoatAtlasWords[t];
 			uint r = was & 0xFFu;
 			uint g = (was >> 8) & 0xFFu;
+			const float dither = float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0;
 			const uint target = (ResolveCap * (contact >> 16) + 127u) / 255u;
 			[branch] if (contact != 0 && r < target)
-				r = min(r + uint(float(contact & 0xFFFFu) / 256.0 + float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0), target);
+				r = min(r + uint(float(contact & 0xFFFFu) / 256.0 + dither), target);
+			[branch] if (fade != 0)
+			{
+				r -= min(r, uint(float(r * ((fade >> 16) & 0xFFu)) / 255.0 + dither));
+				g -= min(g, uint(float(g * (fade >> 24)) / 255.0 + dither));
+				r -= min(r, fade & 0xFFu);
+				g -= min(g, (fade >> 8) & 0xFFu);
+			}
 			[flatten] if (wash != 0)
 			{
 				r = 0;

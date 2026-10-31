@@ -4907,9 +4907,26 @@ protected:
 		float melt = 0.0f;
 		float shake = 0.0f;
 		float growth = 0.0f;
+		/** @brief S4 (BODY-SNOW-PLAN.md section 2.5): how fast the clear-weather clock runs. Outdoors (1 - snowing)(1 + 8 rain + 4 wind (1 - snowing) + 6 warm), the ground's ageing weights; 7 in a warm interior, 1 in a cold one. */
+		float clearClock = 0.0f;
+		/** @brief The climate's wind packing outdoors, 0-1. */
+		float wind = 0.0f;
+		/** @brief Fire spells' melt here, in layers per second: each fire melt emitter's rate x strength x the ground melt stamp's falloff, summed as the stamp pass sums them. */
+		float fire = 0.0f;
+		/** @brief Seconds left of the spell system's memory of a fire hit on the character; -1 if fire was not the last element to strike it. */
+		float fireHit = -1.0f;
+		/** @brief The impact track's terms and when it last moved (the pass clock; -1 without one). The track, the emitters and the hit memory are read only while the stamp gather runs, else they hold old values. */
+		float speedEnergy = 0.0f;
+		float landingEnergy = 0.0f;
+		float knockEnergy = 0.0f;
+		double trackTime = -1.0;
 	};
 	CoatAging ComputeCoatAging(RE::Actor* a_actor) const;
 	std::vector<std::string> CoatAgingLines() const;
+	/** @brief Snow Climate's condition at a world height: the player's temperature less the lapse over the height above them, as the creature sink reads it. */
+	SnowCondition SnowConditionAtHeight(float a_z) const;
+	/** @brief The frame the stamp gather last ran: the impact tracks, the spell emitters and the fire-hit memory are current only from it, as it sleeps with the deformation passes. */
+	uint32_t stampGatherFrame = UINT32_MAX;
 
 public:
 	// ---- Snow on bodies (MD plans/BODY-SNOW-PLAN.md) ----
@@ -5045,6 +5062,8 @@ public:
 	std::vector<std::string> BodyCoatProbeLines() const;
 	/** @brief The S3 tree's readout: the contact writer's state and its last update. */
 	std::string BodyCoatWriterLine() const;
+	/** @brief The S4 tree's readout: the coat's clock, and per coated actor what fades it and how soon it is bare. */
+	std::vector<std::string> BodyCoatFadeLines() const;
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
 	/** @brief Runtime-only: run the census every kBodyCoatCensusFrames. */
@@ -5059,8 +5078,14 @@ public:
 	int debugBodyCoatForce = 0;
 	/** @brief Runtime-only, S3: the contact writer, snow the body touches sticking to it. Force Coat overrides it. */
 	bool debugBodyCoatContact = true;
-	/** @brief Runtime-only, S3: set by Clear Body Coats; the next tick empties every slot (nothing fades before S4). */
+	/** @brief Runtime-only, S3: set by Clear Body Coats; the next tick empties every slot. */
 	bool debugBodyCoatClear = false;
+	/** @brief Runtime-only, S4: coats fade (BODY-SNOW-PLAN.md section 2.5): clear weather, rain, wind, warmth, interiors, heat, fire spells and the shake-off, on game time. Off, they keep what they hold as in S3. */
+	bool debugBodyCoatFade = true;
+	/** @brief Runtime-only, S4's A/B of the shake-off: 0 by movement (a walk sheds a little, a run in full) and jolts, 1 by the impact energy alone (the plan's (1 - stickiness) x jolt). */
+	int debugBodyCoatShakeBy = 0;
+	/** @brief Runtime-only, S4 (estimate): seconds of running that would shed a coat of perfectly loose snow to 1/e; snow sheds in proportion to 1 - stickiness. */
+	float debugBodyCoatShakeTime = 10.0f;
 	/** @brief Runtime-only, S3: the most snow contact leaves, as a share of a full coat (Josef, 2026-10-30: 0.5). */
 	float debugBodyCoatContactCap = 0.5f;
 	/** @brief Runtime-only, S3 (estimate): seconds of contact at full adhesion that build a coat from nothing to the cap. */
@@ -6427,6 +6452,11 @@ protected:
 	};
 	std::unordered_map<uint32_t, CorpseRest> corpseRestStates;
 
+	/** @brief Impact energy's speed term starts past a run, in units per second; the body coat's shake-off takes it as a run. */
+	static constexpr float kImpactSpeedFloor = 400.0f;
+	/** @brief E0's rush: the speed energy of a dodge or gallop (0.5-0.75; a sprint is near 0.2), and the level it must fall below before it fires again. Read by the body coat's shake-off too. */
+	static constexpr float kRushEnergy = 0.5f;
+	static constexpr float kRushRearm = 0.4f;
 	/** @brief Impact energy per living actor (formID): where its root was and when, its smoothed ground speed, and the fastest fall since it left the ground. */
 	struct ImpactTrack
 	{

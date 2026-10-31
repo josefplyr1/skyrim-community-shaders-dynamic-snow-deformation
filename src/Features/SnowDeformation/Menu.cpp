@@ -2041,7 +2041,7 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx("Snow on Bodies (S3 Contact)")) {
 			ImGui::Checkbox("Contact Coat", &debugBodyCoatContact);
 			if (auto _ttContact = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", "Not saved. Stage S3 of MD plans/BODY-SNOW-PLAN.md: snow a body touches sticks to it (legs wading, a body that fell or lay in the snow) on the player and the actors near them, building up while the contact lasts, up to Contact Cap. It builds faster the stickier the snow is (Snow Climate), and after a hard landing, a knockdown or a sprint. Only the settled snow beside a body counts, not the berm a trench throws up. Water washes it off. Up to two actors update a frame, the player every fourth frame; the snow builds by the time between, so the coat comes out the same. Force Coat replaces it while on. Nothing fades yet (that is S4): Clear Body Coats empties every coat.");
+				ImGui::Text("%s", "Not saved. Stage S3 of MD plans/BODY-SNOW-PLAN.md: snow a body touches sticks to it (legs wading, a body that fell or lay in the snow) on the player and the actors near them, building up while the contact lasts, up to Contact Cap. It builds faster the stickier the snow is (Snow Climate), and after a hard landing, a knockdown or a sprint. Only the settled snow beside a body counts, not the berm a trench throws up. Water washes it off. Up to two actors update a frame, the player every fourth frame; the snow builds by the time between, so the coat comes out the same. Force Coat replaces it while on. It fades by Snow on Bodies (S4 Fading); Clear Body Coats empties every coat at once.");
 			ImGui::SliderFloat("Contact Cap", &debugBodyCoatContactCap, 0.0f, 1.0f, "%.2f");
 			if (auto _ttCap = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", "Not saved. The most snow contact leaves on a body, as a share of a full coat: 0.5 covers about half the surface. Lump Amount and Grain Amount scale it as they scale the forced coat. Lowering it stops further growth only; Clear Body Coats starts over.");
@@ -2054,6 +2054,21 @@ void SnowDeformation::DrawSettings()
 			if (ImGui::Button("Clear Body Coats"))
 				debugBodyCoatClear = true;
 			WrapTextF("%s", BodyCoatWriterLine().c_str());
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNodeEx("Snow on Bodies (S4 Fading)")) {
+			ImGui::Checkbox("Fading", &debugBodyCoatFade);
+			if (auto _ttFade = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Stage S4 of MD plans/BODY-SNOW-PLAN.md: the snow on bodies goes again, on game time, so a wait, a sleep or a fast travel lands at once. In clear weather a full coat goes in Melt Time (one at Contact Cap in its share of it), whatever the cold; rain, wind and warmth speed it as they age the ground's tracks, and nothing melts while it snows. A warm interior (no snow drawn there) melts it seven times as fast, a cold one at the clear-weather pace. A campfire, forge, brazier or dropped torch melts it as it melts the ground, in a moment at the fire and in seconds at the edge of its bowl; so do fire spells, a fire cloak, and a fire spell striking the body. On the living, movement and jolts shake loose snow off: dry powder falls away, wet snow stays. Water washes it off as before. A piece of armour or clothing taken off or put on clears its region, and a race change (a werewolf, a Vampire Lord) empties the coat. A loaded save empties every coat until they are saved with the game (S8). Off: coats keep what they hold.");
+			ImGui::Combo("Shake-off By", &debugBodyCoatShakeBy, "Movement and Jolts\0Jolts Only\0");
+			if (auto _ttShakeBy = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. A/B for what shakes loose snow off a living body. Movement and Jolts: walking sheds a little, running or faster in full, and a landing, the start of a knockdown or a dodge knocks some off at once. Jolts Only: the impact energy alone, as the plan wrote it: a sprint, a dodge, a gallop, a landing or a knockdown, so walking and running at an ordinary pace shed nothing. Either way the stickier the snow, the less comes off.");
+			ImGui::SliderFloat("Shake-off Time", &debugBodyCoatShakeTime, 1.0f, 60.0f, "%.0f s");
+			if (auto _ttShakeTime = Util::HoverTooltipWrapper())
+				ImGui::Text("%s", "Not saved. Seconds of running that would shed a coat of perfectly loose snow to about a third. Snow sheds in proportion to how loose it is (1 - stickiness): dry powder nearly at this pace, moist snow (0.7) a third as fast. A jolt at full strength knocks off at once half of the loose share.");
+			for (const auto& line : BodyCoatFadeLines())
+				WrapTextF("%s", line.c_str());
 			ImGui::TreePop();
 		}
 

@@ -14,9 +14,6 @@ namespace
 	constexpr float kGravityMetres = 9.8f;
 	// Faster than any limb moves: a foot step past it is a teleport or a new 3D.
 	constexpr float kFootTeleportSpeed = 4000.0f;
-	// The impact energy's speed term: a sprint near 0.2, a dodge or gallop 0.5-0.75.
-	constexpr float kRushEnergy = 0.5f;
-	constexpr float kRushRearm = 0.4f;
 	// A descent ends when the body falls slower than this share of its peak.
 	constexpr float kDropSettleShare = 0.25f;
 	constexpr uint32_t kCensusLogLinesPerSecond = 20;
