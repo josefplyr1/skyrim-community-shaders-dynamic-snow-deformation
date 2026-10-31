@@ -6,9 +6,10 @@
 // culling off: the underside is the surface that touches the snow.
 //
 // COAT: the body coat's contact writer (BODY-SNOW-PLAN.md section 2.2), the
-// same skinned draw again for an actor due an update. The VS tests each vertex
-// against the drawn snow, the GS hands the results to the coat atlas's voxels,
-// the PS records them, and a compute pass builds them into the atlas.
+// same skinned draw again for an actor due an update. A compute pass first
+// samples the drawn snow around each due actor (COAT_TILE); the VS tests each
+// vertex against it, the GS hands the results to the coat atlas's voxels, the
+// PS records them, and a compute pass builds them into the atlas.
 #ifndef COAT
 // Layout prefix of StaticsCB (SnowDeformation.h) - only these fields are
 // read, and a bound buffer may be larger than its declaration.
@@ -160,16 +161,19 @@ struct GS_OUTPUT_COAT
 	nointerpolation uint4 Voxel : TEXCOORD0;
 };
 
+// The side of a due actor's snow-top tile, in nodes (BodyCoat.cpp kCoatTileDim).
+static const uint kCoatTileDim = 64;
+
 #	if defined(VSHADER) && defined(SKINNED)
-#		define SNOW_SURFACE_ONLY
-#		define SNOW_SURFACE_NO_BERM
-#		include "SnowDeformation/SnowShell.hlsl"
+#		include "Common/SharedData.hlsli"
 #		include "SnowDeformation/SnowDeformation.hlsli"
 
 // The draw's shape (BodyCoat.cpp BodyCoatWriteCB): its record's model-to-atlas
 // rows and slot box, the levels the actor's touches grow by this update, its
-// heading since the last (world xy, unit) and the share of the cap kept for the
-// parts pushing into fresh snow (0 while it stands).
+// heading since the last (world xy, unit), the share of the cap kept for the
+// parts pushing into fresh snow (0 while it stands), its snow-top tile (xy its
+// first node in world, z the node spacing, w its first row in CoatTile) and
+// the deformation texel, the taps' reach.
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
@@ -178,19 +182,24 @@ cbuffer BodyCoatWriteCB : register(b3)
 	float WriteGrowth;
 	float2 WriteHeading;
 	float WriteImpactShare;
+	float4 WriteTile;
+	float WriteTexel;
+	float3 WritePad;
 }
 
-// The drawn snow's top at a point, without the berm (the spoil beside a
-// trench is loose): the ground's, or a road's untouched layer where the road
-// raster carries one, the higher.
-float CoatSnowTop(float2 worldXY)
+// The drawn snow's top around the actor, sampled on a grid this update (the
+// COAT_TILE pass): the taps read it instead of the surface itself.
+Texture2D<float> CoatTile : register(t0);
+
+// The tile's snow top at a point, bilinear between its nodes.
+float CoatTileTop(float2 worldXY)
 {
-	float coverage, terrainHeight;
-	float top = ShellSurfaceZ(worldXY - GridOrigin, coverage, terrainHeight);
-	const float2 road = RoadRasterAt(worldXY);
-	[flatten] if (road.y > kNoRoadTop * 0.5 && road.x >= 1.0)
-		top = max(top, road.y + road.x);
-	return top;
+	const float2 g = clamp((worldXY - WriteTile.xy) / WriteTile.z, 0.0, kCoatTileDim - 1.001);
+	const int2 i = int2(g);
+	const float2 f = g - float2(i);
+	const int row = int(WriteTile.w) + i.y;
+	return lerp(lerp(CoatTile.Load(int3(i.x, row, 0)), CoatTile.Load(int3(i.x + 1, row, 0)), f.x),
+		lerp(CoatTile.Load(int3(i.x, row + 1, 0)), CoatTile.Load(int3(i.x + 1, row + 1, 0)), f.x), f.y);
 }
 
 // How far a point lies under the snow that touches it (x), a quarter texel of
@@ -199,25 +208,16 @@ float CoatSnowTop(float2 worldXY)
 // it pushes against (section 2.3). And how squarely it moves into that snow
 // (y, 0-1): how far the snow stands over it ahead along the heading, past the
 // side behind, against the most it stands over it on any side (fresh snow
-// ahead, the trench behind). Above the highest the layer can stand there (its
-// class depth plus undulation), nothing is read.
+// ahead, the trench behind).
 float2 CoatBelowSnow(float3 world)
 {
-	const float texel = 1.0 / max(DeformInvWorldSize * FieldDims.x, 1e-6);
-	const float3 terrain = SampleTerrain(world.xy - GridOrigin);
-	const float2 road = RoadRasterAt(world.xy);
-	const float reach = max(terrain.x + max(terrain.y, 0.0) + UndulationAmp, road.y + road.x) + texel;
-	float2 below = float2(-1e6, 0.0);
-	[branch] if (world.z < reach)
-	{
-		const float4 tops = float4(CoatSnowTop(world.xy + float2(texel, 0.0)), CoatSnowTop(world.xy - float2(texel, 0.0)),
-			CoatSnowTop(world.xy + float2(0.0, texel)), CoatSnowTop(world.xy - float2(0.0, texel)));
-		const float4 over = max(tops - world.z, 0.0);
-		const float most = max(max(over.x, over.y), max(over.z, over.w));
-		const float2 push = float2(over.x - over.y, over.z - over.w);
-		below = float2(max(max(tops.x, tops.y), max(tops.z, tops.w)) + 0.25 * texel - world.z, saturate(dot(push, WriteHeading) / max(most, 1e-3)));
-	}
-	return below;
+	const float texel = WriteTexel;
+	const float4 tops = float4(CoatTileTop(world.xy + float2(texel, 0.0)), CoatTileTop(world.xy - float2(texel, 0.0)),
+		CoatTileTop(world.xy + float2(0.0, texel)), CoatTileTop(world.xy - float2(0.0, texel)));
+	const float4 over = max(tops - world.z, 0.0);
+	const float most = max(max(over.x, over.y), max(over.z, over.w));
+	const float2 push = float2(over.x - over.y, over.z - over.w);
+	return float2(max(max(tops.x, tops.y), max(tops.z, tops.w)) + 0.25 * texel - world.z, saturate(dot(push, WriteHeading) / max(most, 1e-3)));
 }
 
 VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
@@ -290,7 +290,47 @@ float2 main(GS_OUTPUT_COAT input) : SV_Target
 }
 #	endif
 
-#	ifdef CSHADER
+#	if defined(CSHADER) && defined(COAT_TILE)
+#		define SNOW_SURFACE_ONLY
+#		define SNOW_SURFACE_NO_BERM
+#		include "SnowDeformation/SnowShell.hlsl"
+
+// BodyCoat.cpp BodyCoatTileCB: each due actor's tile, its first node (world
+// xy), node spacing and first row in CoatTileOut.
+cbuffer BodyCoatTileCB : register(b1)
+{
+	float4 TileOrigin[4];
+	uint TileCount;
+	uint3 TilePad;
+}
+
+RWTexture2D<float> CoatTileOut : register(u0);
+
+// The drawn snow's top at a point, without the berm (the spoil beside a
+// trench is loose): the ground's, or a road's untouched layer where the road
+// raster carries one, the higher.
+float CoatSnowTop(float2 worldXY)
+{
+	float coverage, terrainHeight;
+	float top = ShellSurfaceZ(worldXY - GridOrigin, coverage, terrainHeight);
+	const float2 road = RoadRasterAt(worldXY);
+	[flatten] if (road.y > kNoRoadTop * 0.5 && road.x >= 1.0)
+		top = max(top, road.y + road.x);
+	return top;
+}
+
+// One node of a due actor's tile: the surface the coat's four taps read,
+// sampled once an update instead of four times a vertex.
+[numthreads(8, 8, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+	[branch] if (id.z < TileCount)
+	{
+		const float4 o = TileOrigin[id.z];
+		CoatTileOut[uint2(id.x, uint(o.w) + id.y)] = CoatSnowTop(o.xy + float2(id.xy) * o.z);
+	}
+}
+#	elif defined(CSHADER)
 #		include "Common/Random.hlsli"
 
 // The atlas as R8G8B8A8 words (R contact, G snowfall, BA the deposit direction).
