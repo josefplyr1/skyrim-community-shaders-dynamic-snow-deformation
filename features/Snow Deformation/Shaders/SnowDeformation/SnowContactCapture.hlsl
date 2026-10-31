@@ -10,9 +10,10 @@
 // samples the drawn snow around each due actor (COAT_TILE); the VS tests each
 // vertex against it, the GS hands the results to the coat atlas's voxels, the
 // PS records them, and a compute pass builds them into the atlas. The same
-// pass fades the coats (S4) with no point pass. Snowfall (S5) rides it: the
-// capture's own draw from above, at the actor's own scale and blended to the
-// highest surface, first lays the actor's tops for its self-cover.
+// pass fades the coats (S4) with no point pass. Snowfall (S5) rides it: a
+// draw of the actor along the snow's way (COAT_TOP), at its own scale and
+// blended to the surface nearest the snow, first lays its tops for its
+// self-cover.
 #ifndef COAT
 // Layout prefix of StaticsCB (SnowDeformation.h) - only these fields are
 // read, and a bound buffer may be larger than its declaration.
@@ -152,7 +153,8 @@ float2 main(VS_OUTPUT input) : SV_Target
 // (positive: under), whether it is under the water, the levels a touch grows
 // the coat by this update, and the share of the cap it may keep. Snowfall
 // (S5): its world position, whether falling snow reaches it (the sky open
-// above it, its own body not over it), and the way up in its canonical frame.
+// that way, its own body not in the way), and the way the snow comes from in
+// its canonical frame.
 struct VS_OUTPUT_COAT
 {
 	float3 Texel : TEXCOORD0;
@@ -162,7 +164,7 @@ struct VS_OUTPUT_COAT
 	float Target : TEXCOORD4;
 	float3 World : TEXCOORD5;
 	float Open : TEXCOORD6;
-	float3 Up : TEXCOORD7;
+	float3 Deposit : TEXCOORD7;
 };
 
 // One voxel to raise: the atlas texel, and flags (1 contact, 2 wash) with the
@@ -184,7 +186,9 @@ static const uint kCoatTileDim = 64;
 #		include "SnowDeformation/SnowDeformation.hlsli"
 #		define SKYLIGHTING_PROBE_REGISTER t2
 #		include "Skylighting/Skylighting.hlsli"
+#	endif
 
+#	if (defined(VSHADER) && defined(SKINNED)) || defined(GSHADER)
 // The draw's shape (BodyCoat.cpp BodyCoatWriteCB): its record's model-to-atlas
 // rows and slot box, the levels the actor's touches grow by this update, its
 // heading since the last (world xy, unit), the share of the cap kept for the
@@ -194,7 +198,9 @@ static const uint kCoatTileDim = 64;
 // contact and measures snowfall, and whether Skylighting's probes are bound;
 // the record's model-to-canonical rows; the actor's tops (xy the centre of
 // its window, z its half extent, w its first row in CoatTop); the eye the
-// probes are placed about; and a voxel's size, the self-cover's slack.
+// probes are placed about; a voxel's size, the self-cover's slack; the way
+// the snow comes from (world, unit; round 2: tilted by the wind as the game's
+// own falling snow is); and the height of the tops' centre.
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
@@ -212,13 +218,17 @@ cbuffer BodyCoatWriteCB : register(b3)
 	float4 WriteTop;
 	float3 WriteEye;
 	float WriteVoxel;
+	float3 WriteFrom;
+	float WriteTopZ;
 }
+#	endif
 
+#	if defined(VSHADER) && defined(SKINNED)
 // The drawn snow's top around the actor, sampled on a grid this update (the
 // COAT_TILE pass): the taps read it instead of the surface itself.
 Texture2D<float> CoatTile : register(t0);
-// The actor's own highest surface over each column, drawn from above this
-// update (S5's self-cover).
+// The actor's own surface nearest the snow over each column, drawn along the
+// snow's way this update (S5's self-cover).
 Texture2D<float> CoatTop : register(t1);
 
 // The tile's snow top at a point, bilinear between its nodes.
@@ -250,15 +260,43 @@ float2 CoatBelowSnow(float3 world)
 	return float2(max(max(tops.x, tops.y), max(tops.z, tops.w)) + 0.25 * texel - world.z, saturate(dot(push, WriteHeading) / max(most, 1e-3)));
 }
 
-// The highest surface of the actor's own body over a point: its tops' texel,
-// laid as the capture lays its field (+y up the texture, v = 0 at the top).
-float CoatTopAt(float2 worldXY)
+// A point in the actor's tops: across the snow's way over its window (xy, -1
+// to 1, on two axes made alike in both passes) and how far along the way the
+// snow comes from it lies (z).
+float3 CoatTopPlace(float3 world)
 {
-	const float2 local = (worldXY - WriteTop.xy) / WriteTop.z;
+	const float3 across = normalize(cross(float3(1.0, 0.0, 0.0), WriteFrom));
+	const float3 along = cross(WriteFrom, across);
+	const float3 r = world - float3(WriteTop.xy, WriteTopZ);
+	return float3(float2(dot(r, across), dot(r, along)) / WriteTop.z, dot(world, WriteFrom));
+}
+
+// The highest the actor's own body reaches toward the snow at a place in its
+// tops: the texel, laid as the capture lays its field (v = 0 at the top).
+float CoatTopAt(float2 local)
+{
 	const int2 p = clamp(int2(floor(float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5) * kCoatTileDim)), 0, int(kCoatTileDim) - 1);
 	return CoatTop.Load(int3(p.x, int(WriteTop.w) + p.y, 0));
 }
 
+#		if defined(COAT_TOP)
+// S5's tops pass: the actor drawn along the snow's way, the blend keeping the
+// highest per texel; the capture's own PS writes the height it is handed.
+struct VS_OUTPUT_TOP
+{
+	float4 Position : SV_POSITION;
+	float WorldZ : TEXCOORD0;
+};
+
+VS_OUTPUT_TOP main(VS_INPUT_SKIN input)
+{
+	const float3 place = CoatTopPlace(SkinnedWorld(input));
+	VS_OUTPUT_TOP output;
+	output.Position = float4(place.xy, 0.5, 1.0);
+	output.WorldZ = place.z;
+	return output;
+}
+#		else
 VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 {
 	const float3x4 skin = SkinnedMatrix(input);
@@ -281,22 +319,26 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 	output.Growth = WriteGrowth;
 	output.World = world;
 	output.Open = 0.0;
-	output.Up = 0.0;
+	output.Deposit = 0.0;
 	[branch] if (WriteFall > 0.5)
 	{
-		// Snow reaches a point its own body stands no more than a voxel over (not
-		// a mouth, nor under a hood's brim or a cloak; BODY-SNOW-PLAN.md section
-		// 2.4), where the sky above it is open as Wetness Effects reads it for rain.
-		float open = world.z >= CoatTopAt(world.xy) - WriteVoxel ? 1.0 : 0.0;
+		// Snow reaches a point its own body is no more than a voxel in front of
+		// along the snow's way (not a mouth, nor under a hood's brim or a cloak;
+		// BODY-SNOW-PLAN.md section 2.4), where the sky is open that way as
+		// Wetness Effects reads it for rain.
+		const float3 place = CoatTopPlace(world);
+		float open = place.z >= CoatTopAt(place.xy) - WriteVoxel ? 1.0 : 0.0;
 		[branch] if (open > 0.0 && WriteSky > 0.5)
-			open = SphericalHarmonics::Unproject(Skylighting::Sample(world - WriteEye, float3(0.0, 0.0, 1.0)), float3(0.0, 0.0, 1.0)) > 0.5 ? 1.0 : 0.0;
+			open = SphericalHarmonics::Unproject(Skylighting::Sample(world - WriteEye, WriteFrom), WriteFrom) > 0.5 ? 1.0 : 0.0;
 		output.Open = open;
-		// World up in the shape's own space is the skin's third row (its rotation
-		// taken back), then on into the canonical frame.
-		output.Up = float3(dot(WriteModelToCanonical[0].xyz, skin[2].xyz), dot(WriteModelToCanonical[1].xyz, skin[2].xyz), dot(WriteModelToCanonical[2].xyz, skin[2].xyz));
+		// The way the snow comes from, in the shape's own space through the skin's
+		// rotation taken back (its transpose), then on into the canonical frame.
+		const float3 from = WriteFrom.x * skin[0].xyz + WriteFrom.y * skin[1].xyz + WriteFrom.z * skin[2].xyz;
+		output.Deposit = float3(dot(WriteModelToCanonical[0].xyz, from), dot(WriteModelToCanonical[1].xyz, from), dot(WriteModelToCanonical[2].xyz, from));
 	}
 	return output;
 }
+#		endif
 #	endif
 
 #	ifdef GSHADER
@@ -335,10 +377,11 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, uint 
 void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stream)
 {
 	const uint growth = uint(clamp(tri[0].Growth, 0.0, 255.0) * 256.0 + 0.5);
-	// Snow settles on a face by how squarely it faces up, on either side: the
-	// deposit keeps the side it lay on, and its own body covers the underside.
+	// Snow settles on a face by how squarely it faces the way the snow comes
+	// from, on either side: the deposit keeps the side it lay on, and its own
+	// body covers the far side.
 	const float3 n = cross(tri[1].World - tri[0].World, tri[2].World - tri[0].World);
-	const float facing = max(max(tri[0].Open, tri[1].Open), tri[2].Open) > 0.0 ? abs(n.z) * rsqrt(max(dot(n, n), 1e-12)) : 0.0;
+	const float facing = max(max(tri[0].Open, tri[1].Open), tri[2].Open) > 0.0 ? abs(dot(n, WriteFrom)) * rsqrt(max(dot(n, n), 1e-12)) : 0.0;
 	const float span = max(max(length(tri[1].Texel - tri[0].Texel), length(tri[2].Texel - tri[1].Texel)), length(tri[0].Texel - tri[2].Texel));
 	const uint steps = clamp(uint(ceil(span)), 1u, kCoatLatticeSteps);
 	[loop] for (uint i = 0; i <= steps; ++i)
@@ -346,7 +389,7 @@ void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stre
 		[loop] for (uint j = 0; j <= steps - i; ++j)
 		{
 			const float3 b = float3(i, j, steps - i - j) / float(steps);
-			const uint fall = facing > 0.0 ? CoatFallWord(facing * (b.x * tri[0].Open + b.y * tri[1].Open + b.z * tri[2].Open), b.x * tri[0].Up + b.y * tri[1].Up + b.z * tri[2].Up) : 0u;
+			const uint fall = facing > 0.0 ? CoatFallWord(facing * (b.x * tri[0].Open + b.y * tri[1].Open + b.z * tri[2].Open), b.x * tri[0].Deposit + b.y * tri[1].Deposit + b.z * tri[2].Deposit) : 0u;
 			CoatPoint(b.x * tri[0].Texel + b.y * tri[1].Texel + b.z * tri[2].Texel, b.x * tri[0].Below + b.y * tri[1].Below + b.z * tri[2].Below,
 				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, b.x * tri[0].Target + b.y * tri[1].Target + b.z * tri[2].Target, growth, fall, stream);
 		}
@@ -430,9 +473,9 @@ RWByteAddressBuffer CoatChanged : register(u3);
 // the contact cap in atlas levels, this update's rounding seed, and each slot
 // half's fade (S4, index slot x 2 + half): bits 0-7 the contact levels
 // melted, 8-15 the snowfall's, 16-23 the share of contact shaken off in
-// 1/255, 24-31 the snowfall's. S5: each half's snowfall this update, two
-// halves to a register: the fill's exponent at full exposure (intensity x
-// the game time since its last / the fill time), then its ceiling in levels.
+// 1/255, 24-31 the snowfall's. S5: each half's snowfall this update, the
+// fill's exponent at full exposure (intensity x the game time since its last
+// / the fill time), four halves to a register.
 cbuffer BodyCoatResolveCB : register(b0)
 {
 	uint4 ResolveSlots[8];
@@ -441,7 +484,7 @@ cbuffer BodyCoatResolveCB : register(b0)
 	uint ResolveSeed;
 	uint ResolvePad;
 	uint4 ResolveFade[16];
-	float4 ResolveFall[32];
+	float4 ResolveFall[16];
 }
 
 groupshared uint changedInGroup;
@@ -462,11 +505,10 @@ uint CoatDepositBytes(float3 a_up)
 // Contact grows R toward the point's share of the cap by the touch's growth, a
 // fraction of a level rounded up at random in proportion, so slow growth still
 // adds up. Snowfall fills G by the room left, exactly over the time since the
-// actor's last (BODY-SNOW-PLAN.md section 2.4), never past the ceiling and
-// never lowered by it, and the deposit leans toward the new snow's by its
-// share of what lies there. A fade shakes off its share of R and G, rounded
-// the same way, then melts its whole levels. Water clears R and G. The
-// scratch is left at zero for the next update.
+// actor's last (BODY-SNOW-PLAN.md section 2.4), and the deposit leans toward
+// the new snow's by its share of what lies there. A fade shakes off its share
+// of R and G, rounded the same way, then melts its whole levels. Water clears
+// R and G. The scratch is left at zero for the next update.
 [numthreads(8, 8, 4)]
 void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 {
@@ -496,10 +538,8 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 			const uint fall = fallWord & 0xFFFFFFu;
 			[branch] if (fall != 0)
 			{
-				const float4 pair = ResolveFall[side >> 1];
-				const float2 f = (side & 1u) != 0 ? pair.zw : pair.xy;
-				const float grown = 255.0 - (255.0 - float(g)) * exp(-f.x * float(fall >> 16) / 255.0);
-				const uint add = uint(max(min(grown, max(float(g), f.y)) - float(g), 0.0) + dither);
+				const float grown = 255.0 - (255.0 - float(g)) * exp(-ResolveFall[side >> 2][side & 3] * float(fall >> 16) / 255.0);
+				const uint add = uint(max(grown - float(g), 0.0) + dither);
 				[branch] if (add != 0)
 				{
 					deposit = CoatDepositBytes(normalize(CoatDeposit(deposit) * float(g) + CoatDeposit(fall) * float(add)));

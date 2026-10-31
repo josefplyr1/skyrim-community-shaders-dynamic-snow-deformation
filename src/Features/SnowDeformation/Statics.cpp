@@ -6323,8 +6323,9 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		bool skinnedVSBound = true;
 		// S3: the body coat's contact writer rides this walk (BodyCoat.cpp). S5:
 		// snowfall draws the parts above the snow too, an actor's own highest
-		// surface first (its tops, the capture's draw from above at the actor's
-		// own scale), and actors the capture does not draw are walked for it alone.
+		// surface toward the snow first (its tops, drawn along the snow's way at
+		// the actor's own scale), and actors the capture does not draw are walked
+		// for it alone.
 		const bool coatWrite = BodyCoatWriteBegin();
 		bool coatPass = false;
 		bool coatTopPass = false;
@@ -6670,8 +6671,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				// The constant buffer is uploaded once per DISTINCT bone list: the
 				// partitions of one garment usually share theirs.
 				ContactSkinCB cb{};
-				cb.SkinWindowCenter = coatTopPass ? float2(coatTop.x, coatTop.y) : contactCenter;
-				cb.SkinHalfExtent = coatTopPass ? coatTop.z : kContactHalfExtent;
+				cb.SkinWindowCenter = contactCenter;
+				cb.SkinHalfExtent = kContactHalfExtent;
 				const uint16_t* paletteBones = nullptr;
 				uint16_t paletteCount = 0;
 				if (contactSkinLogged.size() < 16 && contactSkinLogged.insert(skin).second) {
@@ -6815,6 +6816,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 				coatAll = coatTop.z > 0.0f;
 				if (coatAll) {
 					BodyCoatTopBind(context, true);
+					skinnedVSBound = true;
 					coatTopPass = true;
 					geometryIndex = -1;
 					RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));

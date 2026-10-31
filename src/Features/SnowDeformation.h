@@ -862,11 +862,11 @@ public:
 	/** @brief Intensity ceiling; keeps extreme weather-mod densities from erasing trails outright. */
 	static constexpr float kMaxSnowfallIntensity = 4.0f;
 
-	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions, up to a_cap. 1.0 = reference-density snowfall; 0 for ash and in a No Sky worldspace. */
-	float ComputeSnowfallIntensity(float a_cap = kMaxSnowfallIntensity) const;
-	/** @brief The same transition-faded precipitation density for any weather class (snow, rain), up to a_cap. */
-	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag, float a_cap = kMaxSnowfallIntensity) const;
-	/** @brief The load order's snowfalls, read once (BODY-SNOW-PLAN.md D22): the heaviest one's intensity, uncapped, and the share of it past which a living body's snowfall coat lumps (the heaviest snowfall below the storms). */
+	/** @brief Snowfall intensity from the weather records' precipitation density, faded across weather transitions. 1.0 = reference-density snowfall; 0 for ash and in a No Sky worldspace. */
+	float ComputeSnowfallIntensity() const;
+	/** @brief The same transition-faded precipitation density for any weather class (snow, rain). */
+	float ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const;
+	/** @brief The load order's snowfalls, read once (BODY-SNOW-PLAN.md D22): the heaviest one's intensity, uncapped, and the share of it past which a body's snowfall coat lumps (the heaviest snowfall below the storms). */
 	struct SnowWeatherRange
 	{
 		bool scanned = false;
@@ -5044,6 +5044,8 @@ public:
 	static constexpr uint32_t kBodyCoatFlagHairBeads = 64;
 	/** @brief Lumps drawn in depth: the clump field baked (BodyCoatLumps.dds), its dome by parallax. */
 	static constexpr uint32_t kBodyCoatFlagLumpDepth = 32;
+	/** @brief S5 round 2: lumps blended, the baked field read where the surface is (no parallax), shaded by its dome, their edges breaking into grains. */
+	static constexpr uint32_t kBodyCoatFlagLumpBlend = 128;
 	/** @brief S1's store: per-actor frames, slots, records and the atlas. Complete in BodyCoat.cpp. */
 	struct BodyCoatStore;
 	/** @brief Lighting draws over one probe window: their owners, and the owned draws the probe bind did not reach. */
@@ -5081,7 +5083,7 @@ public:
 	std::string BodyCoatWriterLine() const;
 	/** @brief The S4 tree's readout: the coat's clock, and per coated actor what fades it and how soon it is bare. */
 	std::vector<std::string> BodyCoatFadeLines() const;
-	/** @brief The S5 tree's readout: the snowfall here, the load order's range, and per actor its ceiling and last snowfall update. */
+	/** @brief The S5 tree's readout: the snowfall here and its slant, the load order's range, and per actor the most its snowfall can reach and its last snowfall update. */
 	std::vector<std::string> BodyCoatFallLines() const;
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
@@ -5105,6 +5107,8 @@ public:
 	float debugBodyCoatShakeTime = 10.0f;
 	/** @brief Runtime-only, S5: snowfall builds on bodies (BODY-SNOW-PLAN.md section 2.4), riding the contact writer. */
 	bool debugBodyCoatFall = true;
+	/** @brief Runtime-only, S5 round 2 (D10): the share of the game's own falling-snow slant the coat's snow comes in at; 1 is the game's, 0 straight down. */
+	float debugBodyCoatWindTilt = 1.0f;
 	/** @brief Runtime-only, S3: the most snow contact leaves, as a share of a full coat (Josef, 2026-10-30: 0.5). */
 	float debugBodyCoatContactCap = 0.5f;
 	/** @brief Runtime-only, S3 (estimate): seconds of contact at full adhesion that build a coat from nothing to the cap. */
@@ -5133,8 +5137,8 @@ public:
 	bool debugBodyCoatReliefView = false;
 	/** @brief Runtime-only, S2's A/B: hair's specks, 0 round, 1 beads along the strands. */
 	int debugBodyCoatHairShape = 0;
-	/** @brief Runtime-only, S2's A/B of the lumps: 0 today's (a shading bevel), 1 in depth (the same field, its dome by parallax). */
-	int debugBodyCoatLumpLook = 1;
+	/** @brief Runtime-only, S2's A/B of the lumps: 0 today's (a shading bevel), 1 in depth (the same field, its dome by parallax), 2 blended (S5 round 2: the field where the surface is, its dome's normal, grains at the edges). */
+	int debugBodyCoatLumpLook = 2;
 	static constexpr uint32_t kBodyCoatCensusFrames = 120;
 	static constexpr uint32_t kBodyCoatDrawWindow = 300;
 	/** @brief The atlas's slot, and the probe's: in no Lighting permutation, read by no pixel shader (the volume's VoxelBricks is a vertex-stage input), bound at the pixel stage by nothing else. */

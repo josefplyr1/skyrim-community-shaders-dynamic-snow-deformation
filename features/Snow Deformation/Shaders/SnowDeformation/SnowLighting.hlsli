@@ -871,6 +871,7 @@ namespace SnowLighting
 	static const uint kCoatReliefView = 16u;
 	static const uint kCoatHairBeads = 64u;
 	static const uint kCoatLumpDepth = 32u;
+	static const uint kCoatLumpBlend = 128u;
 	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
 	// The clump field baked (BodyCoatLumps.dds from tools/lump-tiles/pack_field.py; section
 	// 5.26): CoatNoise periodic over 12 cells at 6 texels a cell, each axis's first texel
@@ -924,6 +925,11 @@ namespace SnowLighting
 	static const float kCoatRimCut = 0.3236;
 	static const float kCoatPocketRadius = 0.2;
 	static const float kCoatNoiseSlope = 0.537;
+	// S5 round 2: a full snowfall coat breaks into single lumps over the last tenth
+	// of the angle of repose (estimate); Blended's grains thin out over half a
+	// clump past a lump's edge.
+	static const float kCoatReposeBreak = 0.1;
+	static const float kCoatGrainUnits = 0.5 / kCoatClumpFreq.y;
 
 	float3 CoatDebugHue(float h)
 	{
@@ -1225,6 +1231,7 @@ namespace SnowLighting
 				float lumpShare = 0.0;
 				float dome = 0.0;
 				float lumpAlpha = 0.0;
+				float grainShare = 0.0;
 				float3 lumpNormal = restShape;
 				[branch] if (!hairSpecks && CoatAmounts.x > 0.0)
 				{
@@ -1232,14 +1239,24 @@ namespace SnowLighting
 					// the armour beside them its own shading; their snowfall spreads by the
 					// surface's shape alone, a lump being far larger than the armour's relief
 					// (chainmail rings and weave on a hanging piece take none). Today's lean half
-					// toward the relief and bevel their dome.
+					// toward the relief and bevel their dome. Blended (S5 round 2) reads the same
+					// field where the surface is, so a lump keeps its shape from any angle and
+					// distance: its two coarse octaves never fade, only the flakes as they come
+					// under a pixel. It keeps In Depth's dome normal, and its edges break into
+					// grains, specks thinning out over half a clump.
 					const bool inDepth = (CoatFlags & kCoatLumpDepth) != 0;
-					const float3 fallNormal = inDepth ? restShape : CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare));
+					const bool blended = (CoatFlags & kCoatLumpBlend) != 0;
+					const bool baked = inDepth || blended;
+					const float3 fallNormal = baked ? restShape : CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare));
 					const float lumpSlope = acos(clamp(dot(fallNormal, deposit), -1.0, 1.0));
 					const float contactShare = CoatAmounts.x * CoatAmounts.w * saturate((contact - 1e-3) / kCoatSpeckFront);
-					const float fallCover = saturate((CoatAmounts.x * fallLumps - lumpSlope / CoatFall.z) / kCoatLumpFront);
-					const float3 clumpFade = saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
-					const float3 octaveSd = inDepth ? kCoatFieldSd : kCoatNoiseSd;
+					// Snowfall's lumps run out from the surfaces facing the snowfall, single ones
+					// leading, and a full coat covers all the way to the angle of repose (S5 round
+					// 2, Josef), breaking into single lumps over its last tenth.
+					const float order = lumpSlope / CoatFall.z;
+					const float fallCover = saturate((CoatAmounts.x * fallLumps * (1.0 + kCoatLumpFront) - order) / kCoatLumpFront) * saturate((1.0 - order) / kCoatReposeBreak);
+					const float3 clumpFade = blended ? float3(1.0, 1.0, saturate(1.0 - 2.0 * footprint * kCoatClumpFreq.z)) : saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
+					const float3 octaveSd = baked ? kCoatFieldSd : kCoatNoiseSd;
 					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
 												   (pow(saturate(1.0 - contactShare), kCoatNormalQuantile.y) - pow(saturate(contactShare), kCoatNormalQuantile.y));
 					cover = max(fallCover, saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
@@ -1250,15 +1267,22 @@ namespace SnowLighting
 					float clump;
 					float edge = kCoatEdge;
 					float3 domeNormal = restShape;
-					[branch] if (inDepth)
+					[branch] if (baked)
 					{
 						// Nothing to draw where there is no cover: the field never passes a cut of 1.
 						clump = 0.0;
 						[branch] if (cover > 0.0)
 						{
-							const float3 restView = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, viewDirection), bind)));
 							float4 crown;
-							lumpPoint = CoatLumpMarch(c, restShape, restView, clumpFade.xy, cut, footprint, crown);
+							[branch] if (inDepth)
+							{
+								const float3 restView = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, viewDirection), bind)));
+								lumpPoint = CoatLumpMarch(c, restShape, restView, clumpFade.xy, cut, footprint, crown);
+							}
+							else
+							{
+								crown = CoatCrown(c, clumpFade.xy);
+							}
 							float flakes = 0.0;
 							[branch] if (clumpFade.z > 0.0)
 								flakes = CoatFieldRead(lumpPoint.yzx * kCoatClumpFreq.z + 5.3).x;
@@ -1271,6 +1295,10 @@ namespace SnowLighting
 							domeNormal = CoatSafeNormalize(restShape - tilt);
 							// An edge as wide as the field moves across a pixel, the flakes by their mean slope.
 							edge = max(footprint * (length(slope) + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * kCoatNoiseSlope * kCoatClumpFreq.z), kCoatEdge);
+							// Blended's grains past a lump's edge, by the distance to it along the
+							// field's own slope, wherever some lump stands.
+							[branch] if (blended && cut < 1.0)
+								grainShare = saturate(1.0 - (cut - clump) / max(length(slope), 1e-3) / kCoatGrainUnits);
 						}
 					}
 					else
@@ -1291,7 +1319,7 @@ namespace SnowLighting
 					const float rim = saturate(lie / kCoatRimSpan);
 					const float depthCm = kCoatFullCm * (0.5 + clump) * rim;
 					const float3 lumpHoles = saturate((holeNoise - kCoatRimCut - lerp(-kCoatHoleOpen, kCoatHoleOpen, rim)) / holeStep + 0.5);
-					lumpAlpha = saturate(lie / (inDepth ? edge : max(fwidth(lie), kCoatEdge))) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm) *
+					lumpAlpha = saturate(lie / (baked ? edge : max(fwidth(lie), kCoatEdge))) * kCoatPerCm * depthCm / (1.0 + kCoatPerCm * depthCm) *
 								(1.0 - lumpHoles.x) * (1.0 - lumpHoles.y) * (1.0 - lumpHoles.z);
 					lumpNormal = CoatSafeNormalize(lerp(restShape, domeNormal, lumpAlpha));
 				}
@@ -1308,7 +1336,7 @@ namespace SnowLighting
 							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world, max(kCoatPocketRadius, footprint));
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
-					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * lumpShare * furSpecks);
+					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * max(lumpShare * furSpecks, grainShare));
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{

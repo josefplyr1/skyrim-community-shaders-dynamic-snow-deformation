@@ -1020,7 +1020,7 @@ static bool FallsAsSnow(RE::TESWeather* a_weather)
 	return verdict.snow;
 }
 
-float SnowDeformation::ComputeSnowfallIntensity(float a_cap) const
+float SnowDeformation::ComputeSnowfallIntensity() const
 {
 	// Blackreach's weather is snow-flagged.
 	if (auto* worldSpace = NoSkyWorldspace()) {
@@ -1030,14 +1030,14 @@ float SnowDeformation::ComputeSnowfallIntensity(float a_cap) const
 				worldSpace->GetFormID(), worldSpace->GetFormEditorID() ? worldSpace->GetFormEditorID() : "");
 		return 0.0f;
 	}
-	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow, a_cap);
+	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow);
 }
 
-// The load order's snowfalls (BODY-SNOW-PLAN.md D22): a living body's coat
-// climbs no higher than its storm's share of the heaviest, and its lumps begin
-// past the heaviest snowfall below the storms, where the widest step in
-// intensity among the snowfalls above reference density lies. Weathers a No Sky
-// worldspace's climate draws on snow on nobody, so they are left out.
+// The load order's snowfalls (BODY-SNOW-PLAN.md D22): a body's snowfall coat
+// lumps past the heaviest non-storm snowfall's share of the heaviest; the
+// storms begin at the widest step in intensity among the snowfalls above
+// reference density. Weathers a No Sky worldspace's climate draws on snow on
+// nobody, so they are left out.
 const SnowDeformation::SnowWeatherRange& SnowDeformation::SnowWeathers()
 {
 	auto& range = snowWeatherRange;
@@ -1080,7 +1080,7 @@ const SnowDeformation::SnowWeatherRange& SnowDeformation::SnowWeathers()
 	return range;
 }
 
-float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag, float a_cap) const
+float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag a_flag) const
 {
 	auto* sky = globals::game::sky;
 	if (!sky)
@@ -1122,7 +1122,7 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 		float fadeOut = sky->lastWeather->data.precipitationEndFadeOut / 255.0f;
 		intensity = std::max(intensity, last * (1.0f - linearstep(fadeOut, 1.0f, pct)));
 	}
-	return std::min(intensity, a_cap);
+	return std::min(intensity, kMaxSnowfallIntensity);
 }
 
 void SnowDeformation::Prepass()

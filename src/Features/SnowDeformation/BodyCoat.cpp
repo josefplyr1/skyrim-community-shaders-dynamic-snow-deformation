@@ -115,8 +115,10 @@ namespace
 		float4 Top;
 		float Eye[3];
 		float Voxel;
+		float From[3];
+		float TopZ;
 	};
-	static_assert(sizeof(BodyCoatWriteCB) == 208);
+	static_assert(sizeof(BodyCoatWriteCB) == 224);
 	struct alignas(16) BodyCoatTileCB
 	{
 		float4 Origin[kCoatTiles];
@@ -134,11 +136,10 @@ namespace
 		// S4: each slot half's fade (slot x 2 + half): the levels melted from R and
 		// G, then the shares of R and G shaken off, in 1/255, a byte each.
 		uint32_t Fade[64];
-		// S5: each slot half's snowfall, two to a register: the fill's exponent at
-		// full exposure, then the ceiling in levels.
-		float Fall[64][2];
+		// S5: each slot half's snowfall, the fill's exponent at full exposure.
+		float Fall[64];
 	};
-	static_assert(sizeof(BodyCoatResolveCB) == 912);
+	static_assert(sizeof(BodyCoatResolveCB) == 656);
 	constexpr auto kWritePath = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
@@ -434,13 +435,12 @@ struct SnowDeformation::BodyCoatStore
 		// S5: the real time since its last snowfall update, the fill owed since
 		// (intensity x game seconds over the fill time), whether its next update
 		// seeds it (first seen outdoors while it snows), and the last shout cone
-		// that blew on it; for the readout, its last update's ceiling and seed,
-		// and the last shout's share.
+		// that blew on it; for the readout, its last update's seed and the last
+		// shout's share.
 		float sinceFall = 0.0f;
 		float fallDose = 0.0f;
 		bool fallSeed = false;
 		uint64_t lastShout = 0;
-		float fallCeiling = 0.0f;
 		float fallSeeded = 0.0f;
 		double fallAt = -1.0;
 		double shoutAt = -1.0;
@@ -500,8 +500,8 @@ struct SnowDeformation::BodyCoatStore
 		// Its snow-top tile: xy the first node in world, z the node spacing (0:
 		// none), w the first row.
 		float4 tile;
-		// S5: x the fill's exponent at full exposure, y the ceiling in levels, z 1
-		// when this update measures snowfall, w the seed's share of x.
+		// S5: x the fill's exponent at full exposure, y the seed's share of it, z 1
+		// when this update measures snowfall.
 		float4 fall;
 		// Its tops: xy the centre of its window, z the window's half extent (0:
 		// none), w the first row.
@@ -510,6 +510,8 @@ struct SnowDeformation::BodyCoatStore
 		bool seed = false;
 		// A shape of it was drawn: the snowfall it owed is paid.
 		bool drawn = false;
+		// The tops' centre height.
+		float topZ = 0.0f;
 	};
 	size_t currentDue = 0;
 	std::vector<Due> due;
@@ -536,29 +538,34 @@ struct SnowDeformation::BodyCoatStore
 	ID3D11ShaderResourceView* waterSRV = nullptr;
 	// What a coat pass changes on the VS and GS, put back after it: features
 	// bind some of these once a frame (Grass Collision's constants at VS b5).
-	// VS b3, b5, b6; t0, t1, t2, t63.
-	winrt::com_ptr<ID3D11Buffer> savedCB[3];
+	// VS b3, b5, b6; t0, t1, t2, t63; GS b3.
+	winrt::com_ptr<ID3D11Buffer> savedCB[4];
 	winrt::com_ptr<ID3D11ShaderResourceView> savedSRV[4];
 	winrt::com_ptr<ID3D11GeometryShader> savedGS;
-	// S5: each fall-due actor's tops, its own highest surface over each column
-	// drawn from above (64 x 64 a row), the blend that keeps the highest, and
-	// the actor drawn now; the eye Skylighting placed its probes about, and
-	// its probes when it runs.
+	// S5: each fall-due actor's tops, the highest its own body reaches toward
+	// the snow over each texel across the snow's way (64 x 64 a row), drawn by
+	// their own VS, the blend that keeps the highest, and the actor drawn now;
+	// the eye Skylighting placed its probes about, and its probes when it runs.
 	winrt::com_ptr<ID3D11Texture2D> topTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> topRTV;
 	winrt::com_ptr<ID3D11ShaderResourceView> topSRV;
 	winrt::com_ptr<ID3D11BlendState> topBlend;
+	winrt::com_ptr<ID3D11VertexShader> topVS;
+	winrt::com_ptr<ID3D11Buffer> savedTopCB;
 	float4 currentFall{};
 	float4 currentTop{};
+	float currentTopZ = 0.0f;
 	bool currentContact = false;
 	float eye[3] = {};
 	ID3D11ShaderResourceView* skySRV = nullptr;
-	// S5's readout: this frame's snowfall here (capped as the ground's refill
-	// reads it), its share of the heaviest weather, the fill time, fall passes
-	// in the last second.
+	// S5: this frame's snowfall here (capped as the ground's refill reads it),
+	// the way it comes from (round 2: the game's own falling snow, tilted by the
+	// wind), and for the readout the fill time, that way's tilt from straight
+	// up and the game's own, and fall passes in the last second.
 	float fallIntensity = 0.0f;
-	float fallShare = 0.0f;
+	float fallFrom[3] = { 0.0f, 0.0f, 1.0f };
 	float fillTime = 0.0f;
+	float fallTilt = 0.0f, gameTilt = 0.0f;
 	uint32_t fallPasses = 0, fallPassesLast = 0;
 	// The snow-top tiles (round 4), the tile of the actor drawn now, and the
 	// deformation texel, the taps' reach.
@@ -1090,7 +1097,10 @@ struct SnowDeformation::BodyCoatStore
 		auto ps = blob("ps_5_0", "PSHADER", "COAT");
 		auto cs = blob("cs_5_0", "CSHADER", "COAT");
 		auto tile = blob("cs_5_0", "CSHADER", "COAT", "COAT_TILE");
-		if (!vs || !gs || !ps || !cs || !tile || FAILED(device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, writeVS.put())) ||
+		winrt::com_ptr<ID3DBlob> top;
+		top.attach(SD_CompileShaderBlob(kWritePath, "vs_5_0", "VSHADER", "SKINNED", "COAT", "COAT_TOP"));
+		if (!vs || !gs || !ps || !cs || !tile || !top || FAILED(device->CreateVertexShader(top->GetBufferPointer(), top->GetBufferSize(), nullptr, topVS.put())) ||
+			FAILED(device->CreateVertexShader(vs->GetBufferPointer(), vs->GetBufferSize(), nullptr, writeVS.put())) ||
 			FAILED(device->CreateGeometryShader(gs->GetBufferPointer(), gs->GetBufferSize(), nullptr, writeGS.put())) ||
 			FAILED(device->CreatePixelShader(ps->GetBufferPointer(), ps->GetBufferSize(), nullptr, writePS.put())) ||
 			FAILED(device->CreateComputeShader(cs->GetBufferPointer(), cs->GetBufferSize(), nullptr, resolveCS.put())) ||
@@ -1103,6 +1113,7 @@ struct SnowDeformation::BodyCoatStore
 		Util::SetResourceName(writePS.get(), "SnowDeformation::BodyCoatWritePS");
 		Util::SetResourceName(resolveCS.get(), "SnowDeformation::BodyCoatResolveCS");
 		Util::SetResourceName(tileCS.get(), "SnowDeformation::BodyCoatTileCS");
+		Util::SetResourceName(topVS.get(), "SnowDeformation::BodyCoatTopVS");
 		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R32_UINT, D3D11_USAGE_DEFAULT,
 			D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
@@ -1585,7 +1596,10 @@ void SnowDeformation::TickBodyCoatStore()
 	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
 	if (debugBodyCoatLumpLook != 0)
 		EnsureBodyCoatLumps();
-	const uint32_t lumpFlags = debugBodyCoatLumpLook != 0 && bodyCoatLumpSRV ? kBodyCoatFlagLumpDepth : 0u;
+	const uint32_t lumpFlags = !bodyCoatLumpSRV          ? 0u :
+	                           debugBodyCoatLumpLook == 1 ? kBodyCoatFlagLumpDepth :
+	                           debugBodyCoatLumpLook == 2 ? kBodyCoatFlagLumpBlend :
+	                                                        0u;
 	const uint32_t lookFlags = (debugBodyCoatLook == 1 ? kBodyCoatFlagFlatPaint : 0u) | (debugBodyCoatRelief ? kBodyCoatFlagRelief : 0u) |
 	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u) | lumpFlags;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
@@ -1630,13 +1644,22 @@ void SnowDeformation::TickBodyCoatStore()
 	}
 	auto* player = globals::game::player;
 	// S5: the snowfall here, read every frame (the module's own sleeps with the
-	// deformation passes): none indoors, under No Sky or for ash; its share of
-	// the load order's heaviest, uncapped.
+	// deformation passes): none indoors, under No Sky or for ash. Round 2 (D10):
+	// it comes the way the game's own falling snow comes, the precipitation's
+	// fall speed against 500 units a second of wind at full (Precipitation
+	// GetDirection), its slant scaled by Wind Tilt.
 	{
 		auto* tes = globals::game::tes;
-		const bool outdoors = tes && !tes->interiorCell;
-		store.fallIntensity = outdoors ? ComputeSnowfallIntensity() : 0.0f;
-		store.fallShare = outdoors ? std::clamp(ComputeSnowfallIntensity(std::numeric_limits<float>::max()) / std::max(SnowWeathers().heaviest, 1e-3f), 0.0f, 1.0f) : 0.0f;
+		store.fallIntensity = tes && !tes->interiorCell ? ComputeSnowfallIntensity() : 0.0f;
+		const RE::NiPoint3 fall = RE::Precipitation::GetDirection();
+		const float drift = fall.z < -1e-3f ? std::hypot(fall.x, fall.y) / -fall.z : 0.0f;
+		const float tilt = drift > 0.0f ? std::clamp(debugBodyCoatWindTilt, 0.0f, 1.0f) / -fall.z : 0.0f;
+		const float from[3] = { -fall.x * tilt, -fall.y * tilt, 1.0f };
+		const float length = std::sqrt(from[0] * from[0] + from[1] * from[1] + 1.0f);
+		for (int i = 0; i < 3; ++i)
+			store.fallFrom[i] = from[i] / length;
+		store.gameTilt = DirectX::XMConvertToDegrees(std::atan(drift));
+		store.fallTilt = DirectX::XMConvertToDegrees(std::acos(std::clamp(store.fallFrom[2], -1.0f, 1.0f)));
 	}
 	const bool snowing = store.fallIntensity > 0.0f;
 
@@ -1908,9 +1931,9 @@ void SnowDeformation::TickBodyCoatStore()
 		// refill's own (70 s at Refill Rate x1). An actor first seen outdoors in a
 		// storm is seeded with what the time it has snowed would have laid (the
 		// ground's accumulation, Accumulation Time when full), so people met in a
-		// storm are already snowy and at a storm's start as bare as the ground. A
-		// living coat climbs no higher than the storm's share of the load order's
-		// heaviest (D22); a corpse's has no ceiling (D23).
+		// storm are already snowy and at a storm's start as bare as the ground.
+		// Round 2 (Josef): any snowfall fills a coat in time; the weather sets the
+		// pace only.
 		store.fillTime = settings.RefillRateMultiplier > 0.0f ? kBaseRefillTime * kCoatFillShare / settings.RefillRateMultiplier : 0.0f;
 		if (debugBodyCoatFall) {
 			const float dose = store.fillTime > 0.0f ? store.fallIntensity * coatSeconds / store.fillTime : 0.0f;
@@ -1945,11 +1968,11 @@ void SnowDeformation::TickBodyCoatStore()
 				}
 				// Paid once a pass draws it (BodyCoatWriteResolve): the capture can sleep.
 				const float seed = a.fallSeed ? seedDose : 0.0f;
-				const float ceiling = a.dead ? 255.0f : std::min(store.fallShare, 1.0f) * 255.0f;
-				it->fall = float4(a.fallDose + seed, ceiling, 1.0f, seed);
+				it->fall = float4(a.fallDose + seed, seed, 1.0f, 0.0f);
 				it->seed = a.fallSeed;
 				const auto& b = root->worldBound;
 				it->top = float4(b.center.x, b.center.y, b.radius, 0.0f);
+				it->topZ = b.center.z;
 				a.sinceFall = 0.0f;
 				return true;
 			};
@@ -2181,10 +2204,11 @@ void SnowDeformation::TickBodyCoatStore()
 void SnowDeformation::PrimeBodyCoatWriter()
 {
 #if !SNOW_ALPHA_BUILD
-	const char* variants[5][4] = { { "vs_5_0", "VSHADER", "SKINNED", "COAT" }, { "gs_5_0", "GSHADER", "COAT", nullptr }, { "ps_5_0", "PSHADER", "COAT", nullptr },
-		{ "cs_5_0", "CSHADER", "COAT", nullptr }, { "cs_5_0", "CSHADER", "COAT", "COAT_TILE" } };
+	const char* variants[6][5] = { { "vs_5_0", "VSHADER", "SKINNED", "COAT", nullptr }, { "gs_5_0", "GSHADER", "COAT", nullptr, nullptr },
+		{ "ps_5_0", "PSHADER", "COAT", nullptr, nullptr }, { "cs_5_0", "CSHADER", "COAT", nullptr, nullptr }, { "cs_5_0", "CSHADER", "COAT", "COAT_TILE", nullptr },
+		{ "vs_5_0", "VSHADER", "SKINNED", "COAT", "COAT_TOP" } };
 	for (const auto& v : variants)
-		if (auto* blob = SD_CompileShaderBlob(kWritePath, v[0], v[1], v[2], v[3]))
+		if (auto* blob = SD_CompileShaderBlob(kWritePath, v[0], v[1], v[2], v[3], v[4]))
 			blob->Release();
 #endif
 }
@@ -2311,6 +2335,7 @@ bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float
 			store.currentContact = contact;
 			store.currentFall = d.fall;
 			store.currentTop = d.top;
+			store.currentTopZ = d.topZ;
 			return true;
 		}
 	return false;
@@ -2330,13 +2355,36 @@ const std::vector<SnowDeformation::ContactProp>& SnowDeformation::BodyCoatCoatOn
 void SnowDeformation::BodyCoatTopBind(ID3D11DeviceContext* a_context, bool a_on)
 {
 	auto& store = *bodyCoatStore;
-	// The actor's row of tops, its window over the whole row, the highest kept.
+	// The actor's row of tops, its window over the whole row, the highest kept;
+	// the tops' own VS reads its window and the snow's way from the write CB
+	// (VS b3, put back after).
 	ID3D11RenderTargetView* rtv = a_on ? store.topRTV.get() : contactHeight->rtv.get();
 	a_context->OMSetRenderTargets(1, &rtv, nullptr);
 	a_context->OMSetBlendState(a_on ? store.topBlend.get() : contactMinBlendBodies.get(), nullptr, 0xFFFFFFFF);
 	const D3D11_VIEWPORT viewport = a_on ? D3D11_VIEWPORT{ 0.0f, store.currentTop.w, float(kCoatTileDim), float(kCoatTileDim), 0.0f, 1.0f } :
 	                                       D3D11_VIEWPORT{ 0.0f, 0.0f, float(kContactDim), float(kContactDim), 0.0f, 1.0f };
 	a_context->RSSetViewports(1, &viewport);
+	if (a_on) {
+		BodyCoatWriteCB cb{};
+		cb.Top = store.currentTop;
+		cb.TopZ = store.currentTopZ;
+		for (int i = 0; i < 3; ++i)
+			cb.From[i] = store.fallFrom[i];
+		D3D11_MAPPED_SUBRESOURCE mapped{};
+		if (SUCCEEDED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+			memcpy(mapped.pData, &cb, sizeof(cb));
+			a_context->Unmap(store.writeCB.get(), 0);
+		}
+		a_context->VSGetConstantBuffers(3, 1, store.savedTopCB.put());
+		ID3D11Buffer* write = store.writeCB.get();
+		a_context->VSSetConstantBuffers(3, 1, &write);
+		a_context->VSSetShader(store.topVS.get(), nullptr, 0);
+	} else {
+		ID3D11Buffer* saved = store.savedTopCB.get();
+		a_context->VSSetConstantBuffers(3, 1, &saved);
+		store.savedTopCB = nullptr;
+		a_context->VSSetShader(contactSkinVS, nullptr, 0);
+	}
 }
 
 bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, const float4& a_write)
@@ -2353,7 +2401,8 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 			voxel = std::max(voxel, 1.0f / length);
 	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
 		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV ? 1.0f : 0.0f,
-		{ record.ModelToCanonical[0], record.ModelToCanonical[1], record.ModelToCanonical[2] }, store.currentTop, { store.eye[0], store.eye[1], store.eye[2] }, voxel };
+		{ record.ModelToCanonical[0], record.ModelToCanonical[1], record.ModelToCanonical[2] }, store.currentTop, { store.eye[0], store.eye[1], store.eye[2] }, voxel,
+		{ store.fallFrom[0], store.fallFrom[1], store.fallFrom[2] }, store.currentTopZ };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		return false;
@@ -2372,13 +2421,14 @@ void SnowDeformation::BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_o
 	// The capture's target stays bound: the coat's points leave it as it is. The
 	// coat VS reads its tile (t0), its tops (t1, S5), Skylighting's probes (t2),
 	// the water (t63), its constants (b3), SharedData (b5: Grass Collision's slot
-	// the rest of the frame) and FeatureData (b6); what was bound there is put
-	// back after.
+	// the rest of the frame) and FeatureData (b6); the GS its constants (b3,
+	// round 2: the snow's way). What was bound there is put back after.
 	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
 	if (a_on) {
 		a_context->VSGetConstantBuffers(3, 1, store.savedCB[0].put());
 		a_context->VSGetConstantBuffers(5, 1, store.savedCB[1].put());
 		a_context->VSGetConstantBuffers(6, 1, store.savedCB[2].put());
+		a_context->GSGetConstantBuffers(3, 1, store.savedCB[3].put());
 		for (UINT s = 0; s < 3; ++s)
 			a_context->VSGetShaderResources(s, 1, store.savedSRV[s].put());
 		a_context->VSGetShaderResources(kWaterWindowSlot, 1, store.savedSRV[3].put());
@@ -2388,6 +2438,7 @@ void SnowDeformation::BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_o
 		a_context->PSSetShader(store.writePS.get(), nullptr, 0);
 		ID3D11Buffer* write = store.writeCB.get();
 		a_context->VSSetConstantBuffers(3, 1, &write);
+		a_context->GSSetConstantBuffers(3, 1, &write);
 		ID3D11Buffer* shared[2] = { globals::state->sharedDataCB->CB(), globals::state->featureDataCB->CB() };
 		a_context->VSSetConstantBuffers(5, 2, shared);
 		ID3D11ShaderResourceView* srvs[3] = { store.tileSRV.get(), store.topSRV.get(), store.skySRV };
@@ -2409,6 +2460,8 @@ void SnowDeformation::BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_o
 		a_context->VSSetConstantBuffers(3, 1, &write);
 		ID3D11Buffer* shared[2] = { store.savedCB[1].get(), store.savedCB[2].get() };
 		a_context->VSSetConstantBuffers(5, 2, shared);
+		ID3D11Buffer* geometry = store.savedCB[3].get();
+		a_context->GSSetConstantBuffers(3, 1, &geometry);
 		for (auto& cb : store.savedCB)
 			cb = nullptr;
 		for (auto& srv : store.savedSRV)
@@ -2443,8 +2496,8 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 	cb.Seed = globals::state->frameCount;
 	store.touched = 0;
 	// S5: each fall-due actor's halves fill by its snowfall, and may then hold up
-	// to what the fill brings at full exposure, below the ceiling.
-	std::vector<std::pair<BodyCoatStore::Frame*, float4>> fallen;
+	// to what the fill brings at full exposure.
+	std::vector<std::pair<BodyCoatStore::Frame*, float>> fallen;
 	for (const auto& d : store.due) {
 		if (d.fall.z <= 0.0f || !d.drawn)
 			continue;
@@ -2453,21 +2506,18 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 			continue;
 		// What it owed is paid, the seed once.
 		auto& a = it->second;
-		a.fallDose = std::max(a.fallDose - (d.fall.x - d.fall.w), 0.0f);
+		a.fallDose = std::max(a.fallDose - (d.fall.x - d.fall.y), 0.0f);
 		a.fallSeed = a.fallSeed && !d.seed;
-		a.fallCeiling = d.fall.y / 255.0f;
-		a.fallSeeded = d.fall.w;
+		a.fallSeeded = d.fall.y;
 		a.fallAt = store.realClock;
 		store.fallPasses++;
 		auto fill = [&](BodyCoatStore::Frame& a_frame) {
 			if (a_frame.slot < 0)
 				return;
 			for (int h = 0; h < 2; ++h)
-				if (a_frame.half < 0 || a_frame.half == h) {
-					cb.Fall[a_frame.slot * 2 + h][0] = d.fall.x;
-					cb.Fall[a_frame.slot * 2 + h][1] = d.fall.y;
-				}
-			fallen.emplace_back(&a_frame, d.fall);
+				if (a_frame.half < 0 || a_frame.half == h)
+					cb.Fall[a_frame.slot * 2 + h] = d.fall.x;
+			fallen.emplace_back(&a_frame, d.fall.x);
 		};
 		fill(it->second.body);
 		for (auto& part : it->second.parts)
@@ -2506,10 +2556,8 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 		if (halves & (1ull << half))
 			if (auto* coat = store.FrameAt(half >> 1, half & 1u))
 				coat->bound[0] = std::max(coat->bound[0], float(store.capLevel));
-	for (auto& [coat, fall] : fallen) {
-		const float grown = 255.0f - (255.0f - coat->bound[1]) * std::exp(-fall.x);
-		coat->bound[1] = std::max(coat->bound[1], std::min(std::min(grown, std::max(coat->bound[1], fall.y)) + 1.0f, 255.0f));
-	}
+	for (auto& [coat, fall] : fallen)
+		coat->bound[1] = std::min(255.0f - (255.0f - coat->bound[1]) * std::exp(-fall) + 1.0f, 255.0f);
 	globals::profiler->EndPass();
 }
 
@@ -2563,7 +2611,7 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
-		if (store->lookFlags & kBodyCoatFlagLumpDepth) {
+		if (store->lookFlags & (kBodyCoatFlagLumpDepth | kBodyCoatFlagLumpBlend)) {
 			ID3D11ShaderResourceView* lumpSRV = bodyCoatLumpSRV.get();
 			context->PSSetShaderResources(kBodyCoatLumpSlot, 1, &lumpSRV);
 		}
@@ -2902,9 +2950,9 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 	if (!range.scanned)
 		lines.push_back("The load order's snowfalls are not read yet.");
 	else
-		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. On the living, specks fill a coat up to {:.2f} of a full one{}; lumps only past it.",
+		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. Specks fill a coat up to {:.2f} of a full one ({}), lumps the rest.",
 			range.weathers, range.heaviestName, range.heaviest, range.split,
-			range.splitName.empty() ? " (half: no step between heavy snowfalls)" : std::format(", the share '{}' reaches", range.splitName)));
+			range.splitName.empty() ? std::string("half: no step between heavy snowfalls") : std::format("'{}' over the heaviest", range.splitName)));
 	if (!bodyCoatStore) {
 		lines.push_back("Snowfall (S5): no store (Contact Coat is off).");
 		return lines;
@@ -2916,9 +2964,12 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 	                    !store.writerReady    ? "waiting for the writer (an actor in or near snow)" :
 	                                            "on";
 	const auto& sky = globals::features::skylighting;
-	lines.push_back(std::format("Snowfall (S5): {}. Snowing here at {:.2f}, {:.2f} of the heaviest (the living's ceiling). A full coat fills {} at full exposure. {}. Snowfall updates in the last second: {}.",
-		state, store.fallIntensity, store.fallShare, store.fallIntensity > 0.0f && store.fillTime > 0.0f ? std::format("to 63 % in {:.0f} s", store.fillTime / store.fallIntensity) : std::string("not now"),
+	lines.push_back(std::format("Snowfall (S5): {}. Snowing here at {:.2f}. A coat fills {} at full exposure. {}. Snowfall updates in the last second: {}.",
+		state, store.fallIntensity, store.fallIntensity > 0.0f && store.fillTime > 0.0f ? std::format("to 63 % in {:.0f} s", store.fillTime / store.fallIntensity) : std::string("not now"),
 		sky.loaded ? "Shelter from Skylighting" : "Skylighting is off, so roofs give no shelter", store.fallPassesLast));
+	lines.push_back(std::format("The game's falling snow slants {:.0f} degrees from straight down in this wind; the coat's comes {:.0f} degrees off vertical (Wind Tilt {:.2f}), from {:.0f} degrees of the compass.",
+		store.gameTilt, store.fallTilt, std::clamp(debugBodyCoatWindTilt, 0.0f, 1.0f),
+		DirectX::XMConvertToDegrees(std::atan2(store.fallFrom[0], store.fallFrom[1])) + (store.fallFrom[0] < 0.0f ? 360.0f : 0.0f)));
 	auto ago = [&](double a_at) {
 		const double s = store.realClock - a_at;
 		return s >= 120.0 ? std::format("{:.1f} min", s / 60.0) : std::format("{:.1f} s", s);
@@ -2935,7 +2986,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 			bound = part.slot >= 0 ? std::max(bound, part.bound[1]) : bound;
 		line += std::format("snowfall at most {:.2f} of a full coat", bound / 255.0f);
 		if (a.fallAt >= 0.0)
-			line += std::format("; last update {} ago, ceiling {:.2f}{}", ago(a.fallAt), a.fallCeiling, a.dead ? " (a corpse: none)" : "");
+			line += std::format("; last update {} ago", ago(a.fallAt));
 		if (a.fallSeeded > 0.0f)
 			line += std::format(", seeded with {:.1f} fill times of snowfall at first sight", a.fallSeeded);
 		if (a.shoutAt >= 0.0)
@@ -2965,7 +3016,7 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
 		}
-		const char* lumpLook = (store.lookFlags & kBodyCoatFlagLumpDepth) ? "in depth" : "today's";
+		const char* lumpLook = (store.lookFlags & kBodyCoatFlagLumpDepth) ? "in depth" : (store.lookFlags & kBodyCoatFlagLumpBlend) ? "blended" : "today's";
 		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} ({}), specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
 			kForces[std::clamp(store.force, 0, 4)], store.amounts[0], lumpLook, store.amounts[1] * kSpeckMax * 100.0f, store.amounts[2], store.look[1] * 2.0f * 14.2875f, store.look[2] * 2.0f * 14.2875f,
 			(store.lookFlags & kBodyCoatFlagFlatPaint) ? "flat paint" : "crust",
