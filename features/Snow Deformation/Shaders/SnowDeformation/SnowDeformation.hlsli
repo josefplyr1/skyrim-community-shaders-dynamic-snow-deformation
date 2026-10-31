@@ -150,7 +150,6 @@ namespace SnowDeformation
 		}
 		return deformation;
 	}
-}
 
 	// The carve's date at a point on the ageing clock, as the shells read it
 	// (SnowFields.hlsli BermFieldBaked): bilinear in the map's torus, the
@@ -176,3 +175,4 @@ namespace SnowDeformation
 		float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 		return v.x > 1e-5 ? v.y / v.x : 0.0;
 	}
+}
