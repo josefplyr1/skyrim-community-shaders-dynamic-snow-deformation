@@ -677,11 +677,11 @@ public:
 		float VolumeSkyExposurePct = 0.0f;
 	};
 
-	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
-	struct alignas(16) SettingsGPU
 	/** @brief Ageing-clock units the ice history keeps (SettingsGPU::IceHistory); divides kAgeingClockStart, so a clock wrap leaves every entry in place. Mirror in SnowColor.hlsli. */
 	static constexpr uint32_t kIceHistoryBins = 128;
 
+	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
+	struct alignas(16) SettingsGPU
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
@@ -743,10 +743,10 @@ public:
 		float4 IceHistory[kIceHistoryBins];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
-
-	/**
 	static_assert(offsetof(SettingsGPU, IceClock) == 132 && offsetof(SettingsGPU, IceHistory) == 144 && sizeof(SettingsGPU) == 2192,
 		"SettingsGPU must match the fxc-reflected SnowDeformationSettings in SharedData.hlsli");
+
+	/**
 	 * @brief Returns this frame's GPU settings for the shared FeatureData buffer.
 	 *
 	 * Also advances the deformation window when a_inWorld is true. The origin
@@ -4712,6 +4712,10 @@ protected:
 		/** @brief Per climate row: meltwater the snow holds, and how much of it has frozen (TickSnowIce). Co-saved as 'SNIC'. */
 		std::array<float, kClimateLUTRows> rowWater{};
 		std::array<float, kClimateLUTRows> rowIce{};
+		/** @brief Per ageing-clock unit (entry = unit & (kIceHistoryBins - 1)): the rows' shown ice when the unit ended, thawed and buried since; the current unit's is now. Co-saved in 'SNIC'. */
+		std::array<std::array<float, kClimateLUTRows>, kIceHistoryBins> iceHistory{};
+		/** @brief The unit iceHistory's newest entry belongs to (floor of ageingClock); -1 = not started. */
+		int32_t iceHistoryUnit = -1;
 		float ageingClock = kAgeingClockStart;
 		/** @brief Clock units per game hour, last tick. */
 		float ageingRate = 0.0f;
@@ -4733,10 +4737,6 @@ protected:
 		float temperature;
 		float wetness;
 		float stickiness;
-		/** @brief Per ageing-clock unit (entry = unit & (kIceHistoryBins - 1)): the rows' shown ice when the unit ended, thawed and buried since; the current unit's is now. Co-saved in 'SNIC'. */
-		std::array<std::array<float, kClimateLUTRows>, kIceHistoryBins> iceHistory{};
-		/** @brief The unit iceHistory's newest entry belongs to (floor of ageingClock); -1 = not started. */
-		int32_t iceHistoryUnit = -1;
 		float firmness;
 		float density;
 		float freshness;
@@ -4747,6 +4747,8 @@ protected:
 	void TickSnowIce(float a_elapsed, float a_snowing);
 	/** @brief Ice in climate row a_row as the shells show it: the override, or the live value. */
 	float SnowIceShown(uint32_t a_row) const;
+	/** @brief Ice in row a_row that froze after a cut a_units clock units ago (iceHistory), as the shells read it before Snow Climate. */
+	float SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const;
 	/** @brief Snow Climate x Wet Snow and Ice: what every Stage 4 term is scaled by. */
 	float SnowWetIceStrength() const;
 	static constexpr uint32_t kIceRecord = 'SNIC';
@@ -4769,8 +4771,6 @@ protected:
 		float lip = 1.0f;
 		float teeth = 1.0f;
 		/** @brief Wall softness: how far loose snow falls back into a print, toward the berm field's short blur. */
-	/** @brief Ice in row a_row that froze after a cut a_units clock units ago (iceHistory), as the shells read it before Snow Climate. */
-	float SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const;
 		float slough = 0.0f;
 		std::array<float4, kClimateLUTRows> lut{};
 	};
@@ -5375,6 +5375,8 @@ protected:
 	static constexpr UINT kHorizonSnowNormalSlot = 23;
 	static constexpr UINT kWaterWindowSlot = 63;
 	static constexpr UINT kHorizonSnowRmaosSlot = 68;
+	/** @brief The berm field on land recolor draws, for the cut dates of Wet Snow and Ice. Bound per draw on the shells' kBodyReachSlot: DrawShell binds its own there and nulls it, and Prepass nulls it before the berm bake writes the field. */
+	static constexpr UINT kLandBermSlot = kBodyReachSlot;
 	/** @brief Print texels a rim reaches past its print at most. Mirrors PRINT_RIM_APRON and kRimApron. */
 	static constexpr int kPrintRimApron = 5;
 
@@ -5396,8 +5398,6 @@ protected:
 	};
 	STATIC_ASSERT_ALIGNAS_16(PrintFrameCB);
 	static_assert(sizeof(PrintFrameCB) == 64, "PrintFrameCB must match the fxc-reflected PrintFrame");
-	/** @brief The berm field on land recolor draws, for the cut dates of Wet Snow and Ice. Bound per draw on the shells' kBodyReachSlot: DrawShell binds its own there and nulls it, and Prepass nulls it before the berm bake writes the field. */
-	static constexpr UINT kLandBermSlot = kBodyReachSlot;
 
 	/** @brief One spell's mark on object snow this frame. A surface mark lies at a.z: a disc at a, a capsule from b to a, or with kPrintSpellCone a wedge from its apex b to a, radius its half-width there. With kPrintSpellRay it is a ray from a to b that PrintRayCS follows to the first object top it enters. Mirrors PrintSpells in DeformationUpdateCS.hlsl. */
 	struct PrintSpellMark
