@@ -1998,9 +1998,11 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	coatStrand = useHairFlowMap ? mul(tbn, sampledHairFlow) : coatStrand;
 #		endif
 	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
+	// The alpha test's scale and reference, as the test below applies them.
 	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
 		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
-		TexNormalSampler, SampNormalSampler, uv, uvOriginal, coatStrand, screenNoise, viewDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
+		TexNormalSampler, SampNormalSampler, TexColorSampler, SampColorSampler, float2(MaterialData.z * input.Color.w, AlphaTestRefRS),
+		uv, uvOriginal, coatStrand, screenNoise, viewDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)
 	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
 #		endif

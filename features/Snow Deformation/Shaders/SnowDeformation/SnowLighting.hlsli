@@ -1162,11 +1162,13 @@ namespace SnowLighting
 	// or beads along its strands), as many as its own amount sets. The material is the shell's own set in
 	// rest space: its albedo convention, grain and RMAOS, as projected snow takes
 	// them. TruePBR pixels blend the material; vanilla pixels hand the snow
-	// fraction to RelightProjected, which lights it as the ground's. Returns the
-	// opacity, for the glint and the SSS mask.
+	// fraction to RelightProjected, which lights it as the ground's. The base
+	// texture and the alpha test (x the alpha's scale, y its reference) say where an
+	// alpha-cut piece is see-through. Returns the opacity, for the glint and the SSS
+	// mask.
 	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3x3 worldFrame, float3x3 bindFrame, Texture2D<float4> normalTex,
-		SamplerState normalSampler, float2 uv, float2 uvMesh, float3 strand, float screenNoise, float3 viewDirection,
-		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
+		SamplerState normalSampler, Texture2D<float4> colorTex, SamplerState colorSampler, float2 alphaTest, float2 uv, float2 uvMesh, float3 strand,
+		float screenNoise, float3 viewDirection, inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
 		float alpha = 0.0;
 		[branch] if ((Permutation::ExtraFeatureDescriptor & kSnowBodyCoatBit) != 0)
@@ -1218,12 +1220,20 @@ namespace SnowLighting
 				// instead: Lump Amount's share of the surface, thinning with its strength as
 				// the specks do and with how little the snow coheres (drier snow sits as
 				// grains), cut at the clump field's own quantile (near normal, the spread of
-				// the octaves left; Tukey's quantile). On fur and other alpha-cut pieces a
-				// lump up close would paint the cards flat, so the lumps' share passes to
-				// the specks (snow balled in the fur) as specks come to cover a pixel: none
-				// while the largest is under one, all once the smallest covers one.
+				// the octaves left; Tukey's quantile). On fur, hair and other see-through
+				// alpha-cut pieces a lump up close would paint the cards flat, so the lumps'
+				// share passes to the specks (snow balled in the fur) as specks come to cover
+				// a pixel: none while the largest is under one, all once the smallest covers
+				// one. See-through is the share of a grain's reach around the point the alpha
+				// test cuts away, from four taps of the alpha it reads at this pixel's mip; a
+				// plate, cloth or body it leaves whole keeps its lumps at any distance.
 #	if defined(DO_ALPHA_TEST)
-				const float furSpecks = saturate((2.0 * CoatLook.z - footprint) / max(2.0 * (CoatLook.z - CoatLook.y), 1e-4));
+				const float2 tapU = duvdx * (0.5 * kCoatGrainUnits / max(length(dcdx), 1e-6));
+				const float2 tapV = duvdy * (0.5 * kCoatGrainUnits / max(length(dcdy), 1e-6));
+				const float4 tapAlpha = alphaTest.x * float4(colorTex.SampleGrad(colorSampler, uvMesh + tapU, duvdx, duvdy).a, colorTex.SampleGrad(colorSampler, uvMesh - tapU, duvdx, duvdy).a,
+														 colorTex.SampleGrad(colorSampler, uvMesh + tapV, duvdx, duvdy).a, colorTex.SampleGrad(colorSampler, uvMesh - tapV, duvdx, duvdy).a);
+				const float cutAway = dot(float4(tapAlpha < alphaTest.y), 0.25);
+				const float furSpecks = cutAway * saturate((2.0 * CoatLook.z - footprint) / max(2.0 * (CoatLook.z - CoatLook.y), 1e-4));
 #	else
 				const float furSpecks = 0.0;
 #	endif
