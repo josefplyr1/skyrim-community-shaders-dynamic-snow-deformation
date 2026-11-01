@@ -1262,9 +1262,14 @@ namespace SnowLighting
 					const float contactShare = CoatAmounts.x * CoatAmounts.w * saturate((contact - 1e-3) / kCoatSpeckFront);
 					// Snowfall's lumps run out from the surfaces facing the snowfall, single ones
 					// leading, and a full coat covers all the way to the angle of repose (S5 round
-					// 2, Josef), breaking into single lumps over its last tenth.
+					// 2, Josef), breaking into single lumps over its last tenth. Past full cover it
+					// deepens by up to a rim span (round 4), so even the field's lowest valleys lie
+					// inside, without rims or their holes.
 					const float order = lumpSlope / CoatFall.z;
-					const float fallCover = saturate((CoatAmounts.x * fallLumps * (1.0 + kCoatLumpFront) - order) / kCoatLumpFront) * saturate((1.0 - order) / kCoatReposeBreak);
+					const float fallFront = (CoatAmounts.x * fallLumps * (1.0 + kCoatLumpFront) - order) / kCoatLumpFront;
+					const float fallBreak = saturate((1.0 - order) / kCoatReposeBreak);
+					const float fallCover = saturate(fallFront) * fallBreak;
+					const float fallDeep = saturate(fallFront - 1.0) * fallBreak;
 					const float3 clumpFade = blended ? float3(1.0, 1.0, saturate(1.0 - 2.0 * footprint * kCoatClumpFreq.z)) : saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
 					const float3 octaveSd = baked ? kCoatFieldSd : kCoatNoiseSd;
 					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
@@ -1272,7 +1277,7 @@ namespace SnowLighting
 					cover = max(fallCover, saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
 					lumpShare = cover;
 					cover *= 1.0 - furSpecks;
-					const float cut = 1.0 - cover * (1.0 + kCoatEdge);
+					const float cut = 1.0 - cover * (1.0 + kCoatEdge) - kCoatRimSpan * fallDeep * (1.0 - furSpecks);
 					float3 lumpPoint = c;
 					float clump;
 					float edge = kCoatEdge;

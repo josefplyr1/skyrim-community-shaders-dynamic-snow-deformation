@@ -170,12 +170,15 @@ struct VS_OUTPUT_COAT
 // One voxel to raise: the atlas texel, and flags (1 contact, 2 wash) with the
 // growth in bits 8-23, in 1/256 levels, and the share of the cap in bits 24-31.
 // Fall: the snowfall's exposure in bits 16-23 over the deposit's two bytes,
-// as the atlas holds B and A; 0 for none.
+// as the atlas holds B and A; 0 for none. Cell: the low corner of the voxels
+// the look's filter reads at the point, and in w along each axis (bits 0-2)
+// whether the far corner stays inside the slot's box.
 struct GS_OUTPUT_COAT
 {
 	float4 Position : SV_POSITION;
 	nointerpolation uint4 Voxel : TEXCOORD0;
 	nointerpolation uint Fall : TEXCOORD1;
+	nointerpolation uint4 Cell : TEXCOORD2;
 };
 
 // The side of a due actor's snow-top tile, in nodes (BodyCoat.cpp kCoatTileDim).
@@ -369,6 +372,10 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, uint 
 		o.Position = float4(-1.0 + 1.0 / 2048.0, 1.0 - 1.0 / 2048.0, 0.5, 1.0);
 		o.Voxel = uint4(uint3(a_texel), flags | (a_growth << 8) | (uint(saturate(a_target) * 255.0 + 0.5) << 24));
 		o.Fall = a_fall;
+		// The texel lies at least half a voxel inside the box, as the look clamps it.
+		const float3 low = floor(a_texel - 0.5);
+		const uint3 reach = low + 1.0 < WriteAtlasHi.xyz ? 1u : 0u;
+		o.Cell = uint4(uint3(low), reach.x | (reach.y << 1) | (reach.z << 2));
 		a_stream.Append(o);
 	}
 }
@@ -403,16 +410,26 @@ RWTexture3D<uint> CoatContact : register(u1);
 // and the wash in bit 31, which clears the voxel whatever fell.
 RWTexture3D<uint> CoatFall : register(u2);
 
-// Under the capture's MIN blend the field keeps what it holds.
+// Under the capture's MIN blend the field keeps what it holds. Contact raises
+// the point's own voxel; the wash and the snowfall go to every voxel the look's
+// filter reads at the point, so a full coat reads full (S5 round 4).
 float2 main(GS_OUTPUT_COAT input) : SV_Target
 {
-	const uint3 t = input.Voxel.xyz;
 	[branch] if ((input.Voxel.w & 1u) != 0)
-		InterlockedMax(CoatContact[t], input.Voxel.w >> 8);
-	[branch] if ((input.Voxel.w & 2u) != 0)
-		InterlockedOr(CoatFall[t], 0x80000000u);
-	[branch] if (input.Fall != 0)
-		InterlockedMax(CoatFall[t], input.Fall);
+		InterlockedMax(CoatContact[input.Voxel.xyz], input.Voxel.w >> 8);
+	const bool wash = (input.Voxel.w & 2u) != 0;
+	[branch] if (wash || input.Fall != 0)
+	{
+		const uint3 reach = uint3(input.Cell.w, input.Cell.w >> 1, input.Cell.w >> 2) & 1u;
+		[unroll] for (uint i = 0; i < 8; ++i)
+		{
+			const uint3 v = input.Cell.xyz + reach * uint3(i & 1u, (i >> 1) & 1u, i >> 2);
+			[branch] if (wash)
+				InterlockedOr(CoatFall[v], 0x80000000u);
+			[branch] if (input.Fall != 0)
+				InterlockedMax(CoatFall[v], input.Fall);
+		}
+	}
 	return float2(1.0e30, 1.0e30);
 }
 #	endif
