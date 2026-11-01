@@ -485,6 +485,8 @@ struct SnowDeformation::BodyCoatStore
 	winrt::com_ptr<ID3D11Buffer> fallbackCB;
 	uint32_t parity = 0;
 	uint32_t atlasBoundFrame = UINT32_MAX;
+	/** @brief S5: the last Lighting draw was a corpse's model-space-normal skin, drawn with the coat's pixel shader in place of its technique's. */
+	bool swappedPixelShader = false;
 	bool gpuFailed = false;
 	/** @brief The atlas as R8G8B8A8 words, for the writer's resolve. */
 	winrt::com_ptr<ID3D11UnorderedAccessView> atlasUAV;
@@ -672,11 +674,13 @@ struct SnowDeformation::BodyCoatStore
 		// Eyes by their head part (section 5.5): an eye mod's eyes wear the
 		// environment-map material, not the eye one. A facegen head names each
 		// part's geometry after its editor ID: the NPC's own eyes, or its race's.
-		// Brows and scars sit on the bare face with them (section 5.10).
+		// Brows and scars sit on the bare face with them (section 5.10), and on a
+		// corpse take the coat with its face (S5).
+		const bool corpse = a_actor->IsDead();
 		std::vector<const char*> eyeParts;
 		auto addEyes = [&](const RE::BGSHeadPart* a_part) {
 			using Type = RE::BGSHeadPart::HeadPartType;
-			if (a_part && (a_part->type == Type::kEyes || a_part->type == Type::kEyebrows || a_part->type == Type::kScar) && a_part->formEditorID.c_str())
+			if (a_part && (a_part->type == Type::kEyes || (!corpse && (a_part->type == Type::kEyebrows || a_part->type == Type::kScar))) && a_part->formEditorID.c_str())
 				eyeParts.push_back(a_part->formEditorID.c_str());
 		};
 		if (auto* npc = a_actor->GetActorBase()) {
@@ -1730,6 +1734,8 @@ void SnowDeformation::TickBodyCoatStore()
 			a.dead = dead;
 			a.hasSpeedPos = false;
 			store.recordsDirty = true;
+			// S5: a corpse's skin, brows and scars join its coat; brought back, they leave it.
+			a.walk = true;
 		}
 		// S4 round 2: its ground speed for the shake-off, off the snow too; a
 		// corpse's at its bound's centre, which follows the ragdoll (round 3).
@@ -1801,10 +1807,11 @@ void SnowDeformation::TickBodyCoatStore()
 		a.skipped = std::move(walked.skipped);
 		std::vector<Store::Worn> worn;
 		for (const auto& s : walked.skins) {
-			// Skin takes no coat until skin snow looks right (Josef, S2 round 2): facegen
+			// Living skin takes no coat (Josef, S2 round 2; D4 melts it, S7): facegen
 			// heads and tinted body skin, beast races' fur included. It still seeds and
-			// chains the frames, so gloves and boots map through the body's bones.
-			const bool bareSkin = s.feature == int(RE::BSShaderMaterial::Feature::kFaceGen) || s.feature == int(RE::BSShaderMaterial::Feature::kFaceGenRGBTint);
+			// chains the frames, so gloves and boots map through the body's bones. A
+			// corpse's skin takes the coat with the rest of it (S5).
+			const bool bareSkin = !a.dead && (s.feature == int(RE::BSShaderMaterial::Feature::kFaceGen) || s.feature == int(RE::BSShaderMaterial::Feature::kFaceGenRGBTint));
 			if (s.frame >= 0 && !bareSkin) {
 				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor, s.feature == int(RE::BSShaderMaterial::Feature::kHairTint) });
 				if (!s.firstPerson) {
@@ -2572,9 +2579,14 @@ bool SnowDeformation::BodyCoatPixelKey(uint32_t a_rawTechnique) const
 
 void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 {
-	auto& permutation = globals::state->permutationData;
+	auto* state = globals::state;
+	auto& permutation = state->permutationData;
 	permutation.ExtraFeatureDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowBodyCoat);
 	BodyCoatStore* store = bodyCoatStore.get();
+	// S5: the draw after a corpse's skin takes its technique's own pixel shader back.
+	if (store && std::exchange(store->swappedPixelShader, false))
+		if (auto* own = state->customPixelShader ? state->customPixelShader : *globals::game::currentPixelShader)
+			globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(own->shader), nullptr, 0);
 	if (!store || !store->live || !a_pass || !a_pass->geometry)
 		return;
 	// Reflections and the inventory's 3D take no coat (section 2.6).
@@ -2593,8 +2605,23 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 			store->missed.insert(owner->formID);
 		return;
 	}
-	permutation.ExtraFeatureDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowBodyCoat);
 	auto* context = globals::d3d::context;
+	// S5 (skin on corpses): a model-space-normal skin's technique keys its plain pixel
+	// shader, so living faces and bodies keep theirs; a corpse's skin draw takes the
+	// coat's for itself alone, and the plain one draws while it compiles.
+	using Flags = SIE::ShaderCache::LightingShaderFlags;
+	if ((state->currentPixelDescriptor & uint32_t(Flags::ModelSpaceNormals)) != 0) {
+		if ((store->records[it->second].Flags & kBodyCoatFlagLiving) != 0)
+			return;
+		auto* coat = globals::shaderCache->GetPixelShader(*state->currentShader, state->modifiedPixelDescriptor | uint32_t(Flags::SnowBodyCoat));
+		if (!coat) {
+			NoteBodyCoatShaders(state->currentVertexDescriptor, state->currentPixelDescriptor | uint32_t(Flags::SnowBodyCoat));
+			return;
+		}
+		context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(coat->shader), nullptr, 0);
+		store->swappedPixelShader = true;
+	}
+	permutation.ExtraFeatureDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowBodyCoat);
 	// Once a frame: R0 measured the t41 bind reaching every actor draw (BODY-SNOW-PLAN.md section 5.4).
 	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	if (store->atlasBoundFrame != frame) {

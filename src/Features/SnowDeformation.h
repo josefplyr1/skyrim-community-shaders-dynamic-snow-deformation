@@ -5068,7 +5068,7 @@ public:
 	};
 	/** @brief Per frame, from PrepassSimulation: the census on its cadence, the probe unbound once it is switched off, and the coat store (near tier, frames, slots, records). */
 	void TickBodyCoat();
-	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame. */
+	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame; a corpse's model-space-normal skin draws with the coat's pixel shader, the next pass with its technique's own again. */
 	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
 	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned with tangent-space normals, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
 	[[nodiscard]] bool BodyCoatPixelKey(uint32_t a_rawTechnique) const;

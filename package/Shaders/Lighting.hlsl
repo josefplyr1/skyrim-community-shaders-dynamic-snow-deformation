@@ -20,8 +20,9 @@
 #	define SKIN
 #endif
 
-// Snow on bodies reads the bind pose's tangent frame, which a model-space-normal skin lacks.
-#if defined(SNOW_BODY_COAT) && defined(MODELSPACENORMALS)
+// Snow on bodies reads the bind pose's tangent frame, which the coat's vertex shader passes down. A
+// model-space-normal skin's coat (a corpse's) reads its model's own axes and keeps the plain vertex shader.
+#if defined(SNOW_BODY_COAT) && defined(MODELSPACENORMALS) && (defined(VSHADER) || !defined(SKINNED))
 #	undef SNOW_BODY_COAT
 #endif
 
@@ -98,7 +99,7 @@ struct VS_OUTPUT
 	float4 FogParam: COLOR1;
 
 	float3 ModelPosition: TEXCOORD12;
-#if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT)
+#if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(MODELSPACENORMALS)
 	// Snow on bodies: the bind pose's tangent frame, for the coat's rest-space normals.
 	float3 CoatBindT: TEXCOORD13;
 	float3 CoatBindB: TEXCOORD14;
@@ -1998,9 +1999,14 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	coatStrand = useHairFlowMap ? mul(tbn, sampledHairFlow) : coatStrand;
 #		endif
 	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
+	// A model-space skin's rest frame is its model's own axes, which that frame carries to world.
 	// The alpha test's scale and reference, as the test below applies them.
 	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
+#		if defined(MODELSPACENORMALS)
+		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
+#		else
 		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
+#		endif
 		TexNormalSampler, SampNormalSampler, TexColorSampler, SampColorSampler, float2(MaterialData.z * input.Color.w, AlphaTestRefRS),
 		uv, uvOriginal, coatStrand, screenNoise, viewDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
 #		if defined(TRUE_PBR)

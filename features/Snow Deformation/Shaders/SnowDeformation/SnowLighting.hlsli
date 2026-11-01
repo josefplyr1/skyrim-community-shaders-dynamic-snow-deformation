@@ -1085,7 +1085,11 @@ namespace SnowLighting
 			sincos(2.0943951 * i, d.y, d.x);
 			const float2 offset = d * (radius / max(length(dcdu * d.x + dcdv * d.y), 1e-6));
 			const float lod = max(pixelLod, log2(max(length(offset * dims), 1.0)) - 1.0);
+#	if defined(MODELSPACENORMALS)
+			const float3 n = normalTex.SampleLevel(normalSampler, uv + offset, lod).xzy * 2.0 - 1.0;
+#	else
 			const float3 n = normalTex.SampleLevel(normalSampler, uv + offset, lod).xyz * 2.0 - 1.0;
+#	endif
 			flux += dot(CoatSafeNormalize(n.x * world[0] + n.y * world[1] + n.z * world[2]), CoatSafeNormalize(dPdu * d.x + dPdv * d.y));
 		}
 		return valid * asin(clamp(-0.5 * flux, -1.0, 1.0));
@@ -1154,7 +1158,8 @@ namespace SnowLighting
 	// body: the rest-space normals come from the bind pose's own tangent frame,
 	// which the coat's vertex shader passes down, the surface's shape straight
 	// and its relief (the shading normal) un-skinned through the world and bind
-	// frames. Lumps spread from the surfaces facing the snowfall out to the angle
+	// frames. A model-space-normal skin (a corpse's, S5) has its model's own axes
+	// for that frame and its map for the shape. Lumps spread from the surfaces facing the snowfall out to the angle
 	// of repose over a relief of their own in rest space, single at their front
 	// and closing behind it. Specks, each its own size between two set sizes and
 	// as many as Grain Amount sets, lie in the same order, steered by the armour's
@@ -1192,8 +1197,19 @@ namespace SnowLighting
 				const float3x3 world = float3x3(CoatSafeNormalize(worldFrame[0]), CoatSafeNormalize(worldFrame[1]), CoatSafeNormalize(worldFrame[2]));
 				const float3x3 bind = float3x3(CoatSafeNormalize(bindFrame[0]), CoatSafeNormalize(bindFrame[1]), CoatSafeNormalize(bindFrame[2]));
 				const float3 restRelief = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, worldNormal), bind)));
+				// The surface's shape in the bind frame and in world. A model-space skin's map
+				// holds it, in the model's own axes.
+#	if defined(MODELSPACENORMALS)
+				const float3 bindShape = CoatSafeNormalize(normalTex.SampleGrad(normalSampler, uv, duvdx, duvdy).xzy * 2.0 - 1.0);
+				const float3 worldShape = CoatSafeNormalize(mul(bindShape, world));
+#		define COAT_BIND_SHAPE bindShape
+#		define COAT_WORLD_SHAPE worldShape
+#	else
+#		define COAT_BIND_SHAPE bind[2]
+#		define COAT_WORLD_SHAPE world[2]
+#	endif
 				// A back face's shading normal is turned to the viewer; its shape turns with it.
-				float3 restShape = CoatSafeNormalize(mul(toCanonical, bind[2]));
+				float3 restShape = CoatSafeNormalize(mul(toCanonical, COAT_BIND_SHAPE));
 				restShape = dot(restShape, restRelief) < 0.0 ? -restShape : restShape;
 				const float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
@@ -1347,7 +1363,7 @@ namespace SnowLighting
 				const float speckCover = max(saturate((contact - 1e-3) / kCoatSpeckFront), fallSpecks * saturate(fallOrder / kCoatSpeckFront));
 				float pocket = 0.0;
 				[branch] if (!hairSpecks && (CoatFlags & (kCoatRelief | kCoatReliefView)) != 0)
-					pocket = (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) *
+					pocket = (dot(worldNormal, COAT_WORLD_SHAPE) < 0.0 ? -1.0 : 1.0) *
 							 CoatPocket(normalTex, normalSampler, uv, duvdx, duvdy, dcdx, dcdy, worldDx, worldDy, world, max(kCoatPocketRadius, footprint));
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
@@ -1400,11 +1416,11 @@ namespace SnowLighting
 					// The rim stands up by its surface gradient (Mikkelsen 2010), from screen
 					// derivatives, so it does not depend on the mesh's uv layout; turned with
 					// a back face, and never past 45 degrees.
-					const float3 r1 = cross(worldDy, world[2]);
-					const float3 r2 = cross(world[2], worldDx);
+					const float3 r1 = cross(worldDy, COAT_WORLD_SHAPE);
+					const float3 r2 = cross(COAT_WORLD_SHAPE, worldDx);
 					const float det = dot(worldDx, r1);
 					float3 surfaceGradient = (bevelDx * r1 + bevelDy * r2) * (det < 0.0 ? -1.0 : 1.0) / max(abs(det), 1e-8);
-					surfaceGradient *= (dot(worldNormal, world[2]) < 0.0 ? -1.0 : 1.0) * rsqrt(max(1.0, dot(surfaceGradient, surfaceGradient)));
+					surfaceGradient *= (dot(worldNormal, COAT_WORLD_SHAPE) < 0.0 ? -1.0 : 1.0) * rsqrt(max(1.0, dot(surfaceGradient, surfaceGradient)));
 					worldNormal = normalize(worldNormal - surfaceGradient);
 					const float3 setSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, c, weights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, setDx, setDy).xyz;
 					const float3 coatAlbedo = SnowColor::SetAlbedo(setSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
@@ -1429,6 +1445,8 @@ namespace SnowLighting
 		s.coatAlpha = alpha;
 		return alpha;
 	}
+#	undef COAT_BIND_SHAPE
+#	undef COAT_WORLD_SHAPE
 #endif
 }
 
