@@ -998,9 +998,9 @@ namespace SnowLighting
 	// One cell's two balls: jitter and rank in ten-bit fields from the top of each word.
 	// One cell's two balls: jitter and rank in ten-bit fields from the top of each
 	// word, and a size fraction each in five bits of the last.
-	void CoatCellBalls(int3 cell, out float4 ball0, out float4 ball1, out float2 size)
+	void CoatCellBalls(int3 cell, uint set, out float4 ball0, out float4 ball1, out float2 size)
 	{
-		const uint3 h = Random::pcg3d(asuint(cell));
+		const uint3 h = Random::pcg3d(asuint(cell) + uint3(0u, 0u, set * 0x9E3779B9u));
 		ball0 = float4((h.xxx >> uint3(22, 12, 2)) & 1023u, (h.y >> 22) & 1023u) / 1024.0;
 		ball1 = float4((h.yy >> uint2(12, 2)) & 1023u, (h.zz >> uint2(22, 12)) & 1023u) / 1024.0;
 		size = (float2((h.zz >> uint2(7, 2)) & 31u) + 0.5) / 32.0;
@@ -1022,8 +1022,8 @@ namespace SnowLighting
 	// corner; the surface cuts each ball into a disc. With a strand (unit, rest
 	// space) they are ellipsoids aspect times longer along it. A ball shows while its
 	// rank is below q, so specks appear or go and never shift; each edge gives back
-	// the area its ramp adds.
-	float CoatBalls(float3 c, float footprint, float q, float smallest, float largest, float3 strand, float aspect)
+	// the area its ramp adds. Each set hashes its own balls into the same cells.
+	float CoatBalls(float3 c, float footprint, float q, float smallest, float largest, float3 strand, float aspect, uint set)
 	{
 		const float g = 2.0 * largest * aspect;
 		const int3 base = int3(floor(c / g - 0.5));
@@ -1033,7 +1033,7 @@ namespace SnowLighting
 			const int3 cell = base + int3(o & 1, (o >> 1) & 1, (o >> 2) & 1);
 			float4 ball0, ball1;
 			float2 size;
-			CoatCellBalls(cell, ball0, ball1, size);
+			CoatCellBalls(cell, set, ball0, ball1, size);
 			const float2 radius = lerp(smallest, largest, size);
 			const float3 d0 = c - (cell + ball0.xyz) * g;
 			const float3 d1 = c - (cell + ball1.xyz) * g;
@@ -1049,15 +1049,15 @@ namespace SnowLighting
 	// Specks never drawn under a pixel: once the smallest would be, a level up holds
 	// fewer that are twice the size (the lattice keeps its cover at any scale),
 	// blended across the level as a texture's mips are. They never turn see-through.
-	float CoatSpecks(float3 c, float footprint, float share, float smallest, float largest, float3 strand, float aspect)
+	float CoatSpecks(float3 c, float footprint, float share, float smallest, float largest, float3 strand, float aspect, uint set)
 	{
 		const float m = clamp(log2(max(footprint, 1e-6) / (2.0 * smallest)), 0.0, kCoatSpeckLevels);
 		const float k = floor(m);
 		const float t = m - k;
 		const float scale = exp2(k);
-		float alpha = (1.0 - t) * CoatBalls(c, footprint, CoatBallFraction(share, footprint, smallest * scale, aspect), smallest * scale, largest * scale, strand, aspect);
+		float alpha = (1.0 - t) * CoatBalls(c, footprint, CoatBallFraction(share, footprint, smallest * scale, aspect), smallest * scale, largest * scale, strand, aspect, set);
 		[branch] if (t > 0.0)
-			alpha += t * CoatBalls(c, footprint, CoatBallFraction(share, footprint, 2.0 * smallest * scale, aspect), 2.0 * smallest * scale, 2.0 * largest * scale, strand, aspect);
+			alpha += t * CoatBalls(c, footprint, CoatBallFraction(share, footprint, 2.0 * smallest * scale, aspect), 2.0 * smallest * scale, 2.0 * largest * scale, strand, aspect, set);
 		return alpha;
 	}
 
@@ -1222,11 +1222,16 @@ namespace SnowLighting
 				const float fall = inside ? voxel.g : 0.0;
 				// S5 (D20, D21): the stored snowfall fills the specks first, their share
 				// and reach rising together from the angle of repose to the ramp's top,
-				// then the lumps over the rest, never the live storm.
-				const float fallSpecks = saturate(fall / CoatFall.x);
-				const float fallLumps = saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
+				// then the rest, never the live storm. A corpse's rest lumps; a living
+				// coat's thickens its specks with a second set, as many again by a full
+				// coat (D29), and hair keeps its own.
 				const bool hairSpecks = (CoatFlags & kCoatHairSpecks) != 0;
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
+				const bool living = (CoatFlags & kCoatLiving) != 0;
+				const float fallSpecks = saturate(fall / CoatFall.x);
+				const float fallRest = saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
+				const float fallLumps = living ? 0.0 : fallRest;
+				const float fallThick = living && !hairSpecks ? fallRest : 0.0;
 				const float footprint = max(length(dcdx), length(dcdy));
 				// The order the snow spreads in: 1 facing the snowfall, 0 at the angle of
 				// repose, below 0 past it; contact snow by its strength. Lumps (hair has
@@ -1368,6 +1373,8 @@ namespace SnowLighting
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
 					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * max(lumpShare * furSpecks, grainShare));
+				// D29: a living coat's second set, past the split, in the same order.
+				const float thickShare = kCoatSpeckMax * CoatAmounts.y * fallThick * saturate(fallOrder / kCoatSpeckFront) * steer;
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{
@@ -1383,9 +1390,11 @@ namespace SnowLighting
 						aspect = kCoatBead.x / kCoatBead.y;
 						sizes *= kCoatBead.y;
 					}
-					speckAlpha = CoatSpecks(c, footprint, speckShare, sizes.x, sizes.y, restStrand, aspect);
+					speckAlpha = CoatSpecks(c, footprint, speckShare, sizes.x, sizes.y, restStrand, aspect, 0u);
+					[branch] if (thickShare > 0.0)
+						speckAlpha = 1.0 - (1.0 - speckAlpha) * (1.0 - CoatSpecks(c, footprint, thickShare, sizes.x, sizes.y, restStrand, aspect, 1u));
 				}
-				alpha = flatPaint ? speckShare : max(lumpAlpha, speckAlpha);
+				alpha = flatPaint ? 1.0 - (1.0 - speckShare) * (1.0 - thickShare) : max(lumpAlpha, speckAlpha);
 				const float snowCover = max(0.75 * alpha, flatPaint ? 0.0 : lumpAlpha);
 				// The snow's surface domes over each lump, steepest at its rim, so a full
 				// cover stays lumpy; the specks stay flat.

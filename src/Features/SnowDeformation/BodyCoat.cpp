@@ -2977,7 +2977,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 	if (!range.scanned)
 		lines.push_back("The load order's snowfalls are not read yet.");
 	else
-		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. Specks fill a coat up to {:.2f} of a full one ({}), lumps the rest.",
+		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. Specks fill a coat up to {:.2f} of a full one ({}); past it a corpse's lumps, and a living coat's specks thicken to twice as many by a full one.",
 			range.weathers, range.heaviestName, range.heaviest, range.split,
 			range.splitName.empty() ? std::string("half: no step between heavy snowfalls") : std::format("'{}' over the heaviest", range.splitName)));
 	if (!bodyCoatStore) {
