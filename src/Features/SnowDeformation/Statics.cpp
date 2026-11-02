@@ -6150,7 +6150,7 @@ bool SnowDeformation::EnsureContactResources()
 // before the map update that reads it. Same per-geometry draw the height
 // capture uses; the rasterizer state is saved and put back because the
 // capture leaves the game's alone and so must this.
-void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
+void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly)
 {
 	contactDrawsLast = 0;
 	// S5: snowfall on bodies walks actors even with nobody in the snow.
@@ -6277,7 +6277,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 	};
 
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
-	for (const auto& prop : contactProps) {
+	static const std::vector<ContactProp> noProps;
+	for (const auto& prop : a_coatOnly ? noProps : contactProps) {
 		// Re-resolved, not held: see ContactProp. A body whose 3D went away
 		// this frame simply drops out.
 		auto ref = prop.ref.get();
@@ -6326,7 +6327,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		// surface toward the snow first (its tops, drawn along the snow's way at
 		// the actor's own scale), and actors the capture does not draw are walked
 		// for it alone.
-		const bool coatWrite = BodyCoatWriteBegin();
+		const bool coatWrite = BodyCoatWriteBegin(a_coatOnly);
 		bool coatPass = false;
 		bool coatTopPass = false;
 		bool coatAll = false;
@@ -6337,7 +6338,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context)
 		const bool firstPerson = playerCamera && playerCamera->IsInFirstPerson();
 		const auto& coatOnly = BodyCoatCoatOnly();
 		const size_t walks = contactActors.size() + (coatWrite ? coatOnly.size() : 0);
-		for (size_t walk = 0; walk < walks; ++walk) {
+		for (size_t walk = a_coatOnly ? contactActors.size() : 0; walk < walks; ++walk) {
 			const bool coatOnlyWalk = walk >= contactActors.size();
 			const auto& actor = coatOnlyWalk ? coatOnly[walk - contactActors.size()] : contactActors[walk];
 			auto ref = actor.ref.get();

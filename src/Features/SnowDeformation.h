@@ -4056,7 +4056,8 @@ public:
 	float2 contactViewBoundCenter{};
 	float contactViewBoundRadius = 0.0f;
 	bool EnsureContactResources();
-	void DrawContactCapture(ID3D11DeviceContext* a_context);
+	/** @brief The contact capture; a_coatOnly (S5 round 8, while the deformation passes sleep) walks only the actors the body coat's snowfall is due. */
+	void DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly = false);
 
 	/** @brief Compiles the statics skin VS (keeping bytecode) and PS on first use. Implemented in SnowDeformation/Statics.cpp. */
 	bool EnsureStaticsShaders();
@@ -4914,6 +4915,8 @@ protected:
 		bool interior = false;
 		/** @brief Interiors only: snow-projected objects were drawn here last frame, so the place is cold. */
 		bool interiorSnow = false;
+		/** @brief Interiors only, D31: why the place is cold by its kind, its location's type or Survival Mode's list of cold interiors; nullptr where it is warm. */
+		const char* interiorCold = nullptr;
 		float rain = 0.0f;
 		float snowfall = 0.0f;
 		float temperature = 0.0f;
@@ -5171,8 +5174,8 @@ protected:
 	void EnsureBodyCoatLumps();
 	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatLumpSRV;
 	bool bodyCoatLumpAttempted = false;
-	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). */
-	bool BodyCoatWriteBegin();
+	/** @brief S3's contact writer, inside DrawContactCapture: true when it draws this frame (actors due, the drawn snow's fields at hand). a_coatOnly: the capture draws no one, so every due actor's snowfall is walked for the coat alone. */
+	bool BodyCoatWriteBegin(bool a_coatOnly = false);
 	/** @brief The actor is due a coat update this frame, with its write: x the atlas levels its touches grow by, yz its heading, w its impact share; and, when it measures snowfall (S5), its tops' window first (z > 0: xy the centre, z the half extent). */
 	bool BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float4& a_top) const;
 	/** @brief Uploads a shape's write constants; false when it has no record. */

@@ -587,6 +587,49 @@ void SnowDeformation::RegisterSnowIceCoSave()
 
 // ---- Snow coat aging inputs (SSPP-SNOW-PLAN.md section 7, stage A0) ----
 
+namespace
+{
+	// D31 (Josef, 2026-11-02): an interior is cold by its location's type, as
+	// the vanilla interiors are typed (BODY-SNOW-PLAN.md section 5.51): caves,
+	// ruins, tombs and lairs, mines, jails, forts, ships and Halls of the Dead;
+	// or on Survival Mode's own list of cold interiors while it is loaded.
+	// Lived-in places and interiors without a type stay warm. Why, or nullptr.
+	const char* InteriorColdBy(const RE::TESObjectCELL* a_cell, const RE::BGSLocation* a_location)
+	{
+		static constexpr const char* kColdTypes[] = { "LocTypeDungeon", "LocTypeClearable", "LocTypeAnimalDen", "LocTypeBanditCamp", "LocTypeDragonLair",
+			"LocTypeDragonPriestLair", "LocTypeDraugrCrypt", "LocTypeDwarvenAutomatons", "LocTypeFalmerHive", "LocTypeForswornCamp", "LocTypeGiantCamp",
+			"LocTypeHagravenNest", "LocTypeSprigganGrove", "LocTypeVampireLair", "LocTypeWarlockLair", "LocTypeWerewolfLair", "LocTypeMine", "LocTypeJail",
+			"LocTypeMilitaryFort", "LocTypeCemetery", "LocTypeShip", "LocTypeShipwreck" };
+		static const RE::TESObjectCELL* cell = nullptr;
+		static const RE::BGSLocation* location = nullptr;
+		static const char* cold = nullptr;
+		static bool known = false;
+		if (known && a_cell == cell && a_location == location)
+			return cold;
+		static const auto survival = [] {
+			std::array<const RE::BGSListForm*, 2> lists{};
+			if (auto* data = RE::TESDataHandler::GetSingleton()) {
+				lists[0] = data->LookupForm<RE::BGSListForm>(0x92A, "ccQDRSSE001-SurvivalMode.esl");
+				lists[1] = data->LookupForm<RE::BGSListForm>(0x92C, "ccQDRSSE001-SurvivalMode.esl");
+			}
+			return lists;
+		}();
+		known = true;
+		cell = a_cell;
+		location = a_location;
+		cold = nullptr;
+		if (a_location)
+			for (const char* type : kColdTypes)
+				if (a_location->HasKeywordString(type)) {
+					cold = type;
+					return cold;
+				}
+		if ((survival[0] && a_cell && survival[0]->HasForm(a_cell)) || (survival[1] && a_location && survival[1]->HasForm(a_location)))
+			cold = "Survival Mode's cold interiors";
+		return cold;
+	}
+}
+
 SnowDeformation::SnowCondition SnowDeformation::SnowConditionAtHeight(float a_z) const
 {
 	auto* player = globals::game::player;
@@ -623,6 +666,8 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	auto* tes = globals::game::tes;
 	aging.interior = tes && (tes->interiorCell || NoSkyWorldspace());
 	aging.interiorSnow = aging.interior && capturedLoadedPrev > 0;
+	if (auto* player = globals::game::player; aging.interior && player)
+		aging.interiorCold = InteriorColdBy(player->GetParentCell(), player->GetCurrentLocation());
 	// Snow Climate at the character's own height.
 	const SnowCondition condition = SnowConditionAtHeight(position.z);
 	aging.temperature = condition.temperature;
@@ -666,7 +711,7 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	}
 
 	const float snowing = std::min(aging.snowfall, 1.0f);
-	const float warmIndoors = aging.interior && !aging.interiorSnow ? 1.0f : 0.0f;
+	const float warmIndoors = aging.interior && !aging.interiorSnow && !aging.interiorCold ? 1.0f : 0.0f;
 	const float outdoors = aging.interior ? 0.0f : std::max(aging.rain, aging.warm) * (1.0f - snowing);
 	aging.melt = std::max({ aging.heat, warmIndoors, outdoors });
 	aging.shake = (1.0f - aging.stickiness) * aging.jolt;
@@ -695,8 +740,9 @@ std::vector<std::string> SnowDeformation::CoatAgingLines() const
 	if (!aging.interior)
 		lines.push_back(std::format("Outdoors | rain {:.2f} | snowfall {:.2f} | wind {:.2f}", aging.rain, aging.snowfall, aging.wind));
 	else
-		lines.push_back(aging.interiorSnow ? "Indoors, snow-projected objects drawn here: a cold place, no warm melt" :
-		                                     "Indoors, no snow drawn here: a warm place");
+		lines.push_back(aging.interiorSnow ? std::string("Indoors, snow-projected objects drawn here: a cold place, no warm melt") :
+		                aging.interiorCold ? std::format("Indoors, a cold place by {}: no warm melt", aging.interiorCold) :
+		                                     std::string("Indoors, a warm place (no snow drawn here, and not a cold kind of place)"));
 	lines.push_back(std::format("Temperature {:+.1f} C, warm {:.2f}{} | wetness {:.2f} | stickiness {:.2f}", aging.temperature, aging.warm,
 		aging.interior ? " (held from outdoors, unused)" : "", aging.wetness, aging.stickiness));
 	lines.push_back(std::format("Ground speed {:.0f} units/s", aging.speed));

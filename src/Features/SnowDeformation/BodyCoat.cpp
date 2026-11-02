@@ -37,14 +37,27 @@ namespace
 	constexpr float kSpeckMax = 0.5f;
 
 	constexpr uint32_t kDumpLinesMax = 900;
-	// S1's cadence (estimates): the near tier is picked every kPickFrames, an
-	// actor keeps its slots kKeepFrames past its last pick, its 3D is walked
-	// again every kRewalkFrames (staggered by form ID), and at most
+	// S1's cadence (estimates): the tier is picked every kPickFrames, a bare
+	// actor out of it keeps its slots kKeepFrames past its last pick, its 3D is
+	// walked again every kRewalkFrames (staggered by form ID), and at most
 	// kWalksPerFrame walks run in one frame.
 	constexpr uint32_t kPickFrames = 30;
 	constexpr uint32_t kKeepFrames = 120;
 	constexpr uint32_t kRewalkFrames = 300;
 	constexpr uint32_t kWalksPerFrame = 4;
+	// Round 8 (section 2.7, estimates): a coat whose actor's 3D is gone waits
+	// kGoneSeconds for it (a load door, a follower coming through after the
+	// player), a teammate's as long as it lives. An actor waiting for a slot
+	// takes one from an actor out of the tier, a bare one, or one kEvictRatio as
+	// far away.
+	constexpr double kGoneSeconds = 10.0;
+	constexpr float kEvictRatio = 1.5f;
+	// Round 8 (estimates): one first seen indoors within kDoorReach of a door to
+	// the outside, kResidentSeconds or more after the player came in, came in
+	// from outside; a door's arrival marker stands a step inside it, and the
+	// residents' 3D is in by then.
+	constexpr float kDoorReach = 256.0f;
+	constexpr double kResidentSeconds = 3.0;
 	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
 	// S3's cadence (section 2.2, estimates): the player every kWritePlayerFrames,
@@ -447,6 +460,17 @@ struct SnowDeformation::BodyCoatStore
 		double fallAt = -1.0;
 		double shoutAt = -1.0;
 		float shoutShare = 0.0f;
+		// Round 8 (section 2.7): a teammate, among those the capture rasterizes
+		// (the only ones contact reaches), its distance squared at the last pick,
+		// when its 3D was last loaded, waiting for a slot; and a seed for one come
+		// in from a storm, laid under an open sky, and whether the last was one.
+		bool teammate = false;
+		bool nearTier = false;
+		float d2 = 0.0f;
+		double loadedAt = 0.0;
+		bool waiting = false;
+		bool seedIndoors = false;
+		bool seededAtDoor = false;
 	};
 	struct Pick
 	{
@@ -454,6 +478,8 @@ struct SnowDeformation::BodyCoatStore
 		RE::NiPointer<RE::Actor> actor;
 		RE::ActorHandle handle;
 		bool player;
+		bool teammate = false;
+		bool nearTier = false;
 	};
 
 	std::unordered_map<uint32_t, Actor> actors;
@@ -519,6 +545,8 @@ struct SnowDeformation::BodyCoatStore
 		// D30: how far it moved since, in deformation texels up to 1: its impacts'
 		// weight, the lumps' only source.
 		float moving = 0.0f;
+		// Round 8: a seed for one come in from a storm, under an open sky.
+		bool openSky = false;
 	};
 	size_t currentDue = 0;
 	std::vector<Due> due;
@@ -563,6 +591,7 @@ struct SnowDeformation::BodyCoatStore
 	float4 currentTop{};
 	float currentTopZ = 0.0f;
 	float currentMoving = 0.0f;
+	bool currentOpenSky = false;
 	bool currentContact = false;
 	float eye[3] = {};
 	ID3D11ShaderResourceView* skySRV = nullptr;
@@ -575,6 +604,19 @@ struct SnowDeformation::BodyCoatStore
 	float fillTime = 0.0f;
 	float fallTilt = 0.0f, gameTilt = 0.0f;
 	uint32_t fallPasses = 0, fallPassesLast = 0;
+	// Round 8: the way the snow last came outdoors, for a seed laid indoors; the
+	// interior the player is in, its doors to the outside and when the player
+	// came in; and for the readout, the actors that gave up a slot.
+	float fallFromHeld[3] = { 0.0f, 0.0f, 1.0f };
+	const RE::TESObjectCELL* doorCell = nullptr;
+	std::vector<RE::NiPoint3> doorsOut;
+	double doorsAt = 0.0;
+	uint32_t evictions = 0;
+	const float* From() const { return currentOpenSky ? fallFromHeld : fallFrom; }
+	bool NearDoorOut(const RE::NiPoint3& a_position) const
+	{
+		return std::ranges::any_of(doorsOut, [&](const RE::NiPoint3& a_door) { return a_door.GetSquaredDistance(a_position) <= kDoorReach * kDoorReach; });
+	}
 	// The snow-top tiles (round 4), the tile of the actor drawn now, and the
 	// deformation texel, the taps' reach.
 	winrt::com_ptr<ID3D11Texture2D> tileTexture;
@@ -603,10 +645,13 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t drawFrame = UINT32_MAX;
 	uint32_t coatedBuilding = 0, coatedLast = 0, walksLast = 0, missesLast = 0;
 
-	// The near tier, as the contact capture picks it: the player and the
-	// nearest living actors whose bound lies inside the contact window, then
-	// the nearest corpses, each list at the capture's own cap.
-	static void PickNearTier(std::vector<Pick>& a_living, std::vector<Pick>& a_dead)
+	// The tier (round 8, section 2.7): every actor whose bound lies inside the
+	// contact window, the player first, then teammates, then the nearest; the
+	// slots cap it. The near tier is the part the contact capture rasterizes,
+	// as it picks it (the player and the nearest living actors, then the
+	// nearest corpses, each at the capture's own cap): contact reaches no one
+	// else.
+	static void PickTier(std::vector<Pick>& a_picks)
 	{
 		auto* player = globals::game::player;
 		if (!player)
@@ -622,20 +667,24 @@ struct SnowDeformation::BodyCoatStore
 			if (b.radius <= 0.0f || std::abs(b.center.x - eye.x) + b.radius >= kContactHalfExtent ||
 				std::abs(b.center.y - eye.y) + b.radius >= kContactHalfExtent)
 				return;
-			(a_actor->IsDead() ? a_dead : a_living).push_back({ a_d2, a_actor, a_handle, a_player });
+			a_picks.push_back({ a_d2, a_actor, a_handle, a_player, !a_player && a_actor->IsPlayerTeammate() });
 		};
 		consider(RE::NiPointer<RE::Actor>(player), {}, -1.0f, true);
 		if (const auto processLists = RE::ProcessLists::GetSingleton())
 			for (auto& handle : processLists->highActorHandles)
 				if (auto actor = handle.get(); actor)
 					consider(actor, handle, eye.GetSquaredDistance(actor->GetPosition()), false);
-		auto byDistance = [](const Pick& a_a, const Pick& a_b) { return a_a.d2 < a_b.d2; };
-		std::sort(a_living.begin(), a_living.end(), byDistance);
-		std::sort(a_dead.begin(), a_dead.end(), byDistance);
-		if (a_living.size() > kContactMaxActors)
-			a_living.resize(kContactMaxActors);
-		if (a_dead.size() > kContactMaxCorpses)
-			a_dead.resize(kContactMaxCorpses);
+		std::sort(a_picks.begin(), a_picks.end(), [](const Pick& a_a, const Pick& a_b) { return a_a.d2 < a_b.d2; });
+		uint32_t living = 0, dead = 0;
+		for (auto& pick : a_picks)
+			pick.nearTier = pick.actor->IsDead() ? dead++ < kContactMaxCorpses : living++ < kContactMaxActors;
+		std::stable_sort(a_picks.begin(), a_picks.end(), [](const Pick& a_a, const Pick& a_b) { return (a_a.player || a_a.teammate) && !(a_b.player || a_b.teammate); });
+	}
+
+	static bool Bare(const Actor& a_actor)
+	{
+		auto empty = [](const Frame& a_frame) { return a_frame.slot < 0 || (a_frame.bound[0] <= 0.0f && a_frame.bound[1] <= 0.0f); };
+		return empty(a_actor.body) && std::ranges::all_of(a_actor.parts, empty);
 	}
 
 	// One actor's lit geometry, mapped into its frames. a_body is kept from
@@ -1412,28 +1461,66 @@ struct SnowDeformation::BodyCoatStore
 		globals::profiler->EndPass();
 	}
 
-	// Bounds fixed at the slot's birth (section 2.1), then the slot and its pattern.
-	void Slot(Frame& a_frame, const Walked& a_walked, int a_index, uint32_t a_formID)
+	// Bounds fixed at the slot's birth (section 2.1), then the slot and its
+	// pattern; true when it has bounds and no slot is free (round 8: it waits).
+	bool Slot(Frame& a_frame, const Walked& a_walked, int a_index, uint32_t a_formID)
 	{
 		if (a_frame.slot >= 0)
-			return;
+			return false;
+		if (!a_frame.bounded) {
+			float lo[3], hi[3];
+			BoundsOf(a_walked, a_index, lo, hi);
+			if (!(hi[0] > lo[0]))
+				return false;
+		}
 		int slot = -1, half = -1;
 		if (a_index == 0)
 			slot = AllocFull(a_formID);
 		else
 			std::tie(slot, half) = AllocHalf(a_formID);
 		if (slot < 0)
-			return;
+			return true;
 		if (!a_frame.bounded) {
 			BoundsOf(a_walked, a_index, a_frame.boundsMin, a_frame.boundsMax);
-			a_frame.bounded = a_frame.boundsMax[0] > a_frame.boundsMin[0];
-		}
-		if (!a_frame.bounded) {
-			Free(slot, half);
-			return;
+			a_frame.bounded = true;
 		}
 		Place(a_frame, slot, half);
 		FillSlot(a_frame);
+		return false;
+	}
+
+	// Round 8 (section 2.7): a slot for the first of the tier waiting for one,
+	// from the actor held least: out of the tier, then bare, then the farthest.
+	// Never the player or a teammate, and one in the tier only kEvictRatio as
+	// far as the one waiting. False when none gives way.
+	bool GiveWay(uint32_t a_frame)
+	{
+		Actor* waiting = nullptr;
+		for (auto& [formID, a] : actors)
+			if (a.waiting && a.lastPicked == a_frame && (!waiting || (a.teammate && !waiting->teammate) || (a.teammate == waiting->teammate && a.d2 < waiting->d2)))
+				waiting = &a;
+		if (!waiting)
+			return false;
+		const float reach2 = waiting->teammate ? 0.0f : waiting->d2 * kEvictRatio * kEvictRatio;
+		auto victim = actors.end();
+		auto rank = [&](const Actor& a_actor) { return std::make_tuple(a_actor.lastPicked != a_frame, Bare(a_actor), a_actor.d2); };
+		for (auto it = actors.begin(); it != actors.end(); ++it) {
+			const Actor& a = it->second;
+			if (a.player || a.teammate || a.body.slot < 0)
+				continue;
+			if (a.lastPicked == a_frame && !Bare(a) && a.d2 < reach2)
+				continue;
+			if (victim == actors.end() || rank(a) > rank(victim->second))
+				victim = it;
+		}
+		if (victim == actors.end())
+			return false;
+		FreeActor(victim->second);
+		actors.erase(victim);
+		evictions++;
+		waiting->waiting = false;
+		waiting->walk = true;
+		return true;
 	}
 
 	void BuildRecords()
@@ -1703,33 +1790,75 @@ void SnowDeformation::TickBodyCoatStore()
 			store.fallFrom[i] = from[i] / length;
 		store.gameTilt = DirectX::XMConvertToDegrees(std::atan(drift));
 		store.fallTilt = DirectX::XMConvertToDegrees(std::acos(std::clamp(store.fallFrom[2], -1.0f, 1.0f)));
+		if (store.fallIntensity > 0.0f)
+			std::copy_n(store.fallFrom, 3, store.fallFromHeld);
 	}
 	const bool snowing = store.fallIntensity > 0.0f;
+	// Round 8: the doors out of the interior the player is in, read once a cell.
+	if (auto* tes = globals::game::tes; tes && tes->interiorCell != store.doorCell) {
+		store.doorCell = tes->interiorCell;
+		store.doorsAt = store.realClock;
+		store.doorsOut.clear();
+		if (tes->interiorCell)
+			tes->interiorCell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+				if (a_ref)
+					if (const auto door = a_ref->extraList.GetTeleportLinkedDoor().get(); door && door->GetWorldspace())
+						store.doorsOut.push_back(a_ref->GetPosition());
+				return RE::BSContainer::ForEachResult::kContinue;
+			});
+	}
 
 	if (!store.picked || frame - store.pickFrame >= kPickFrames) {
 		store.picked = true;
 		store.pickFrame = frame;
-		std::vector<Store::Pick> living, dead;
-		Store::PickNearTier(living, dead);
-		for (auto* list : { &living, &dead })
-			for (const auto& pick : *list) {
-				auto [it, inserted] = store.actors.try_emplace(pick.actor->formID);
-				it->second.lastPicked = frame;
-				it->second.player = pick.player;
-				if (!pick.player)
-					it->second.handle = pick.handle;
-				// S5: first seen outdoors in a storm, so out in it a while.
-				if (inserted)
-					it->second.fallSeed = snowing;
-			}
+		std::vector<Store::Pick> picks;
+		Store::PickTier(picks);
+		for (auto& [formID, a] : store.actors)
+			a.nearTier = false;
+		// Round 8: indoors, Accumulation holds the storm the player came in from.
+		const bool stormOutside = store.doorCell && accumWeatherIntensity.load(std::memory_order_relaxed) > 0.0f;
+		for (const auto& pick : picks) {
+			auto [it, inserted] = store.actors.try_emplace(pick.actor->formID);
+			auto& a = it->second;
+			a.lastPicked = frame;
+			a.player = pick.player;
+			a.teammate = pick.teammate;
+			a.nearTier = pick.nearTier;
+			a.d2 = pick.d2;
+			if (!pick.player)
+				a.handle = pick.handle;
+			if (!inserted)
+				continue;
+			a.loadedAt = store.realClock;
+			// S5: first seen outdoors in a storm, so out in it a while. Round 8: or
+			// first seen at a door to the outside, come in from the storm there.
+			a.fallSeed = snowing;
+			if (!snowing && stormOutside && store.realClock - store.doorsAt >= kResidentSeconds && store.NearDoorOut(pick.actor->GetPosition()))
+				a.fallSeed = a.seedIndoors = true;
+		}
+		if (store.GiveWay(frame))
+			store.recordsDirty = true;
 	}
+	// Round 8 (sections 2.7, 2.8): a coat stays while its actor is loaded, and
+	// through a load door: kGoneSeconds for its 3D to come back, a teammate's as
+	// long as it lives. A bare one out of the tier frees its slots.
 	for (auto it = store.actors.begin(); it != store.actors.end();) {
-		if (!it->second.player && frame - it->second.lastPicked > kKeepFrames) {
-			store.FreeActor(it->second);
+		auto& a = it->second;
+		bool keep = a.player;
+		if (!keep) {
+			if (const RE::NiPointer<RE::Actor> actor = a.handle.get()) {
+				a.teammate = actor->IsPlayerTeammate();
+				if (actor->Is3DLoaded())
+					a.loadedAt = store.realClock;
+				keep = (a.teammate || store.realClock - a.loadedAt <= kGoneSeconds) && (frame - a.lastPicked <= kKeepFrames || !Store::Bare(a));
+			}
+		}
+		if (keep) {
+			++it;
+		} else {
+			store.FreeActor(a);
 			it = store.actors.erase(it);
 			store.recordsDirty = true;
-		} else {
-			++it;
 		}
 	}
 	// S4: what the writer and the fade hold for an actor, started over. S5: an
@@ -1818,14 +1947,18 @@ void SnowDeformation::TickBodyCoatStore()
 		}
 		if (a.wornChanging && frame - a.wornChangeFrame >= kWornWindowFrames)
 			a.wornChanging = false;
+		// Round 8: one waiting for a slot has no records, so its draws miss.
 		if (root != a.root3D || first != a.first3D || (frame + formID) % kRewalkFrames == 0 ||
-			(store.missed.contains(formID) && !a.refused && frame - a.lastWalked >= kMissFrames))
+			(store.missed.contains(formID) && !a.refused && !a.waiting && frame - a.lastWalked >= kMissFrames))
 			a.walk = true;
 		if (!a.walk || walks >= kWalksPerFrame || !root)
 			continue;
 		walks++;
 		a.walk = false;
 		a.lastWalked = frame;
+		// Round 8: a new 3D may stand past a load door: no heading across it.
+		if (root != a.root3D)
+			a.hasLastPos = false;
 		a.root3D = root;
 		a.first3D = first;
 		store.recordsDirty = true;
@@ -1839,8 +1972,8 @@ void SnowDeformation::TickBodyCoatStore()
 		Store::Walk(actor.get(), a.body, a.parts, walked, false);
 		for (const auto& [slot, half] : walked.freed)
 			store.Free(slot, half);
-		store.Slot(a.body, walked, 0, formID);
-		for (size_t p = 0; p < a.parts.size(); ++p)
+		a.waiting = store.Slot(a.body, walked, 0, formID);
+		for (size_t p = 0; p < a.parts.size() && !a.waiting; ++p)
 			store.Slot(a.parts[p], walked, int(p) + 1, formID);
 		a.shapes.clear();
 		a.skipped = std::move(walked.skipped);
@@ -1954,12 +2087,13 @@ void SnowDeformation::TickBodyCoatStore()
 		};
 		std::vector<uint32_t> others;
 		for (auto& [formID, a] : store.actors) {
-			if (a.refused || a.shapes.empty())
+			if (a.refused || a.shapes.empty() || a.body.slot < 0)
 				continue;
 			a.sinceWrite = std::min(a.sinceWrite + dt, kWriteGapMax);
 			if (const auto track = impactTracks.find(formID); track != impactTracks.end())
 				a.joltHeld = std::max(a.joltHeld, track->second.Jolt());
-			if (!a.player)
+			// Round 8: contact only for those the capture draws.
+			if (!a.player && a.nearTier)
 				others.push_back(formID);
 			else if (frame % kWritePlayerFrames == 0 && player && player->Is3DLoaded())
 				make(formID, a, player->GetPosition());
@@ -1989,15 +2123,21 @@ void SnowDeformation::TickBodyCoatStore()
 		if (debugBodyCoatFall) {
 			const float dose = store.fillTime > 0.0f ? store.fallIntensity * coatSeconds / store.fillTime : 0.0f;
 			const float accum = settings.EnableSnowAccumulation ? std::clamp(snowAccumulation.load(std::memory_order_relaxed), 0.0f, 1.0f) : 1.0f;
-			const float seedDose = store.fillTime > 0.0f ? store.fallIntensity * accum * std::max(settings.AccumulationHours, 0.0f) * 3600.0f / store.timescale / store.fillTime : 0.0f;
+			auto seedOf = [&](float a_intensity) {
+				return store.fillTime > 0.0f ? a_intensity * accum * std::max(settings.AccumulationHours, 0.0f) * 3600.0f / store.timescale / store.fillTime : 0.0f;
+			};
+			const float seedDose = seedOf(store.fallIntensity);
+			// Round 8: one come in from a storm, seeded with the storm outside.
+			const float seedIndoors = seedOf(std::clamp(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f, 1.0f));
 			std::vector<uint32_t> waiting;
 			uint32_t playerID = 0;
 			for (auto& [formID, a] : store.actors) {
-				if (a.refused || a.shapes.empty())
+				if (a.refused || a.shapes.empty() || a.body.slot < 0)
 					continue;
 				a.sinceFall += realDelta;
 				a.fallDose += dose;
-				if (!snowing || a.sinceFall < (a.dead && a.wasSettled ? kFallGapSettled : kFallGap))
+				a.seedIndoors = a.seedIndoors && a.fallSeed && !snowing;
+				if ((!snowing && !a.seedIndoors) || a.sinceFall < (a.dead && a.wasSettled ? kFallGapSettled : kFallGap))
 					continue;
 				if (a.player)
 					playerID = formID;
@@ -2017,10 +2157,11 @@ void SnowDeformation::TickBodyCoatStore()
 					store.due.push_back({ a_formID });
 					it = store.due.end() - 1;
 				}
-				// Paid once a pass draws it (BodyCoatWriteResolve): the capture can sleep.
-				const float seed = a.fallSeed ? seedDose : 0.0f;
+				// Paid once a pass draws it (BodyCoatWriteResolve).
+				const float seed = a.fallSeed ? (a.seedIndoors ? seedIndoors : seedDose) : 0.0f;
 				it->fall = float4(a.fallDose + seed, seed, 1.0f, 0.0f);
 				it->seed = a.fallSeed;
+				it->openSky = a.seedIndoors;
 				const auto& b = root->worldBound;
 				it->top = float4(b.center.x, b.center.y, b.radius, 0.0f);
 				it->topZ = b.center.z;
@@ -2264,7 +2405,7 @@ void SnowDeformation::PrimeBodyCoatWriter()
 #endif
 }
 
-bool SnowDeformation::BodyCoatWriteBegin()
+bool SnowDeformation::BodyCoatWriteBegin(bool a_coatOnly)
 {
 	if (!bodyCoatStore || bodyCoatStore->due.empty() || !contactHeight || !contactSkinVS || !contactPS)
 		return false;
@@ -2298,7 +2439,7 @@ bool SnowDeformation::BodyCoatWriteBegin()
 	// for a body wider than the tile), two texels beyond for the taps and their
 	// filter. Each fall-due actor's row of tops (S5); one the capture does not
 	// draw (on a road, a rock or a horse, or a settled corpse) is walked for its
-	// coat alone.
+	// coat alone, as is everyone while the capture sleeps (round 8).
 	BodyCoatTileCB tiles{};
 	uint32_t tops = 0;
 	bool any = false;
@@ -2306,11 +2447,12 @@ bool SnowDeformation::BodyCoatWriteBegin()
 	for (auto& d : store.due) {
 		d.tile = {};
 		const ContactProp* drawn = nullptr;
-		for (const auto& c : contactActors)
-			if (const auto ref = c.ref.get(); ref && ref->GetFormID() == d.formID) {
-				drawn = &c;
-				break;
-			}
+		if (!a_coatOnly)
+			for (const auto& c : contactActors)
+				if (const auto ref = c.ref.get(); ref && ref->GetFormID() == d.formID) {
+					drawn = &c;
+					break;
+				}
 		if (d.contact && shell && drawn && tiles.Count < kCoatTiles) {
 			const float margin = 2.0f * store.deformTexel;
 			const float extent = std::max(drawn->maxX - drawn->minX, drawn->maxY - drawn->minY) + 2.0f * margin;
@@ -2388,6 +2530,7 @@ bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float
 			store.currentTop = d.top;
 			store.currentTopZ = d.topZ;
 			store.currentMoving = contact ? d.moving : 0.0f;
+			store.currentOpenSky = d.openSky;
 			return true;
 		}
 	return false;
@@ -2421,7 +2564,7 @@ void SnowDeformation::BodyCoatTopBind(ID3D11DeviceContext* a_context, bool a_on)
 		cb.Top = store.currentTop;
 		cb.TopZ = store.currentTopZ;
 		for (int i = 0; i < 3; ++i)
-			cb.From[i] = store.fallFrom[i];
+			cb.From[i] = store.From()[i];
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
 			memcpy(mapped.pData, &cb, sizeof(cb));
@@ -2451,10 +2594,12 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 	for (const auto& row : record.ModelToAtlas)
 		if (const float length = std::sqrt(row.x * row.x + row.y * row.y + row.z * row.z); length > 0.0f)
 			voxel = std::max(voxel, 1.0f / length);
+	// Round 8: a seed laid indoors for one come in from a storm reads no roof.
+	const float* from = store.From();
 	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
-		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV ? 1.0f : 0.0f,
+		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV && !store.currentOpenSky ? 1.0f : 0.0f,
 		{ record.ModelToCanonical[0], record.ModelToCanonical[1], record.ModelToCanonical[2] }, store.currentTop, { store.eye[0], store.eye[1], store.eye[2] }, voxel,
-		{ store.fallFrom[0], store.fallFrom[1], store.fallFrom[2] }, store.currentTopZ, store.currentMoving };
+		{ from[0], from[1], from[2] }, store.currentTopZ, store.currentMoving };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		return false;
@@ -2560,7 +2705,9 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 		auto& a = it->second;
 		a.fallDose = std::max(a.fallDose - (d.fall.x - d.fall.y), 0.0f);
 		a.fallSeed = a.fallSeed && !d.seed;
+		a.seedIndoors = a.seedIndoors && a.fallSeed;
 		a.fallSeeded = d.fall.y;
+		a.seededAtDoor = d.seed && d.openSky;
 		a.fallAt = store.realClock;
 		store.fallPasses++;
 		auto fill = [&](BodyCoatStore::Frame& a_frame) {
@@ -2710,8 +2857,10 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 {
 	using Store = BodyCoatStore;
 	bodyCoatCensus.clear();
-	std::vector<Store::Pick> living, dead;
-	Store::PickNearTier(living, dead);
+	std::vector<Store::Pick> picks, living, dead;
+	Store::PickTier(picks);
+	for (auto& pick : picks)
+		(pick.actor->IsDead() ? dead : living).push_back(std::move(pick));
 
 	uint32_t dumpLines = 0;
 	auto dumpLine = [&](const std::string& a_line) {
@@ -2989,7 +3138,9 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 				bound = part.slot >= 0 ? std::max(bound, part.bound[0]) : bound;
 			const auto& g = a.fading.aging;
 			std::string why = a.fading.inSnow ? std::string("lying settled in the snow, so the weather does not take it") :
-			                  g.interior      ? std::string(g.interiorSnow ? "indoors, cold (snow drawn here): x1" : "indoors, warm (no snow drawn here): x7") :
+			                  g.interior      ? (g.interiorSnow ? std::string("indoors, cold (snow drawn here): x1") :
+			                                     g.interiorCold ? std::format("indoors, cold (by {}): x1", g.interiorCold) :
+			                                                      std::string("indoors, warm: x7")) :
 			                                    std::format("clear-weather clock x{:.2f} (snowing {:.2f}, rain {:.2f}, wind {:.2f}, warm {:.2f} at {:+.1f} C)", g.clearClock,
 												 std::min(g.snowfall, 1.0f), g.rain, g.wind, g.warm, g.temperature);
 			if (g.heat > 0.0f)
@@ -3033,7 +3184,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 	const char* state = !debugBodyCoatContact ? "off with Contact Coat" :
 	                    store.force != 0      ? "off while Force Coat is on" :
 	                    !debugBodyCoatFall    ? "off" :
-	                    !store.writerReady    ? "waiting for the writer (an actor in or near snow)" :
+	                    !store.writerReady    ? "waiting for the writer (it starts at the first coat update)" :
 	                                            "on";
 	const auto& sky = globals::features::skylighting;
 	lines.push_back(std::format("Snowfall (S5): {}. Snowing here at {:.2f}. A coat fills {} at full exposure. {}. Snowfall updates in the last second: {}.",
@@ -3060,7 +3211,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 		if (a.fallAt >= 0.0)
 			line += std::format("; last update {} ago", ago(a.fallAt));
 		if (a.fallSeeded > 0.0f)
-			line += std::format(", seeded with {:.1f} fill times of snowfall at first sight", a.fallSeeded);
+			line += std::format(", seeded with {:.1f} fill times of snowfall {}", a.fallSeeded, a.seededAtDoor ? "at the door, from the storm outside" : "at first sight");
 		if (a.shoutAt >= 0.0)
 			line += std::format("; a shout blew {:.0f} % off {} ago", 100.0f * a.shoutShare, ago(a.shoutAt));
 		lines.push_back(std::move(line) + ".");
@@ -3084,9 +3235,13 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 			else
 				halves += (store.slotOwner[k][0] ? 1u : 0u) + (store.slotOwner[k][1] ? 1u : 0u);
 		}
+		uint32_t teammates = 0, waiting = 0, nearTier = 0;
 		for (const auto& entry : store.actors) {
 			refused += entry.second.refused ? 1u : 0u;
 			components += uint32_t(entry.second.parts.size());
+			teammates += entry.second.teammate ? 1u : 0u;
+			waiting += entry.second.waiting ? 1u : 0u;
+			nearTier += entry.second.nearTier ? 1u : 0u;
 		}
 		const char* lumpLook = (store.lookFlags & kBodyCoatFlagLumpDepth) ? "in depth" : (store.lookFlags & kBodyCoatFlagLumpBlend) ? "blended" : "today's";
 		lines.push_back(std::format("Body coat: {}; forced coat {}, lumps {:.2f} ({}), specks over {:.0f} % of a surface and hair's {:.2f} at {:.1f}-{:.1f} mm, {}, relief {}. {}", kViews[std::clamp(store.view, 0, 3)],
@@ -3097,6 +3252,9 @@ std::vector<std::string> SnowDeformation::BodyCoatProbeLines() const
 		lines.push_back(std::format("Store: {} actors ({} refused as incorporeal), {} components; slots {} bodies + {} halves of {}; {} records ({}). Last frame: {} coated draws, {} draws found no record, {} walks.",
 			store.actors.size(), refused, components, full, halves, kBodyCoatSlots, store.records.size(), store.context1 ? "bound by offset" : "written per draw",
 			store.coatedLast, store.missesLast, store.walksLast));
+		lines.push_back(std::format("Tier (round 8): {} teammates, {} the capture draws (contact reaches only them), {} waiting for a slot; {} gave a slot up to a nearer one this session.{}",
+			teammates, nearTier, waiting, store.evictions,
+			store.doorCell ? std::format(" Indoors, {} doors out; those first seen at one {:.0f} s or more after you came in, while it snowed outside, arrive snowy.", store.doorsOut.size(), kResidentSeconds) : std::string()));
 	}
 
 	if (!bodyCoatCensusRan) {

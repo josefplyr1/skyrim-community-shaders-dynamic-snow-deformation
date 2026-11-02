@@ -1257,6 +1257,10 @@ void SnowDeformation::PrepassSimulation()
 			deformSuspended = true;
 			logger::debug("[SNOW DEFORMATION] Deformation passes suspended: no snow depth in window");
 		}
+		// S5 round 8: snowfall on bodies needs no snow on the ground, and a seed
+		// for one come in from a storm is laid indoors.
+		if (BodyCoatFallDue())
+			DrawContactCapture(globals::d3d::context, true);
 		return;
 	}
 	if (deformSuspended) {
