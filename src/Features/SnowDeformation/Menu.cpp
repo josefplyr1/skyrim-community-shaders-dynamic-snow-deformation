@@ -1883,7 +1883,7 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("Rate: %+.4f/game hour (grow %.4f, melt %.4f, fade %.4f)",
 					rate, growth, melt, fade);
 				WrapTextF("Clock: %.2f game hours, timescale %.0f",
-					gameClock.lastHours, gameClock.timescale);
+					weatherClock.lastHours, weatherClock.timescale);
 				WrapTextF("Co-save: %s", settings.PersistAccumulation ? "remembered" : "not written");
 			}
 

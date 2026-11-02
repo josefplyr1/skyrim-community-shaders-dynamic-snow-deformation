@@ -929,19 +929,19 @@ void SnowDeformation::EnsureActivityViewTexture()
 	activityViewDim = deformMapDim;
 }
 
-void SnowDeformation::TickGameClock()
+float SnowDeformation::GameClock::Read(std::atomic<bool>& a_unarm)
 {
-	gameClock.elapsedHours = 0.0f;
-	gameClock.reversed = false;
+	elapsedHours = 0.0f;
+	reversed = false;
 
 	auto* calendar = globals::game::calendar ? globals::game::calendar : RE::Calendar::GetSingleton();
 	if (!calendar)
-		return;
+		return -1.0f;
 
 	// The co-save callbacks land on the game thread. They ask rather than
 	// write, so the reading below stays owned by one thread.
-	if (gameClockUnarm.exchange(false, std::memory_order_acq_rel))
-		gameClock.lastHours = -1.0f;
+	if (a_unarm.exchange(false, std::memory_order_acq_rel))
+		lastHours = -1.0f;
 
 	// Waiting works by cranking the timescale enormously for its animation, so
 	// a live reading taken during one is the wait and not the player's setting.
@@ -949,28 +949,34 @@ void SnowDeformation::TickGameClock()
 	// same hours would have passed at if they had been played.
 	const float rawScale = calendar->GetTimescale();
 	if (rawScale >= 1.0f && rawScale <= 100.0f)
-		gameClock.timescale = rawScale;
+		timescale = rawScale;
 
 	// Elapsed hours telescope, so the calendar's float32 day quantisation
 	// (~2.6-second steps late game) cancels instead of accumulating. A wait,
 	// a sleep or a fast travel needs no special case: the next reading carries
 	// the whole elapsed span.
 	const float hours = calendar->GetHoursPassed();
-	gameClockHours.store(hours, std::memory_order_relaxed);
-	if (gameClock.lastHours < 0.0f) {
-		gameClock.lastHours = hours;
-		return;
+	if (lastHours < 0.0f) {
+		lastHours = hours;
+		return hours;
 	}
-	const float delta = hours - gameClock.lastHours;
-	gameClock.lastHours = hours;
+	const float delta = hours - lastHours;
+	lastHours = hours;
 
 	// Backwards is a loaded save: the consumers' state belongs to a timeline
 	// that no longer exists. Each decides what that means for itself.
 	if (delta < -1.0e-4f) {
-		gameClock.reversed = true;
-		return;
+		reversed = true;
+		return hours;
 	}
-	gameClock.elapsedHours = std::max(delta, 0.0f);
+	elapsedHours = std::max(delta, 0.0f);
+	return hours;
+}
+
+void SnowDeformation::TickGameClock()
+{
+	if (const float hours = gameClock.Read(gameClockUnarm); hours >= 0.0f)
+		gameClockHours.store(hours, std::memory_order_relaxed);
 }
 
 RE::TESWorldSpace* SnowDeformation::NoSkyWorldspace()
@@ -1196,7 +1202,12 @@ void SnowDeformation::PrepassSimulation()
 	statProjVetoedPrev = std::exchange(statProjVetoed, 0u);
 
 	UpdateActiveWorldspace();
-	// Above every early return: the body coat reads actors, not the snow.
+	// Above every early return: these read the sky, the calendar and actors, not the snow.
+	snowfallIntensity = ComputeSnowfallIntensity();
+	weatherClock.Read(weatherClockUnarm);
+	TickAccumulation();
+	TickSnowCondition();
+	TickSnowClimate();
 	TickBodyCoat();
 
 	// While the prime owns a group's shader members, its render paths skip;
@@ -1306,7 +1317,6 @@ void SnowDeformation::PrepassSimulation()
 	// Refill rate follows the weather's snowfall density; interiors have no
 	// snowing weather and do not refill. With RefillOnlyWhenSnowing off the
 	// weather is ignored and the baseline rate applies everywhere.
-	snowfallIntensity = ComputeSnowfallIntensity();
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
 	// Spent in GAME time, not render time. A wait or a sleep advances the
 	// calendar without rendering the hours it passes, so a render-second refill
@@ -1399,9 +1409,7 @@ void SnowDeformation::PrepassSimulation()
 	// the store before anything reads it.
 	spanClock.Lap(CpuCensus::kSpanPrepassPerFrame);
 	TickTrenchClock();
-	TickAccumulation();
-	TickSnowCondition();
-	TickSnowClimate();
+	TickSnowAgeing();
 	TickTrenchAgeing();
 	// Track dates are on the ageing clock: they move when it falls back.
 	perFrameData.AgeingClock = snowClimate.ageingClock;

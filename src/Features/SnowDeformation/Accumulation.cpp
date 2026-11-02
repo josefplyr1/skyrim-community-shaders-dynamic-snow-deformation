@@ -18,10 +18,10 @@ void SnowDeformation::TickAccumulation()
 {
 	// Loaded save: the co-save already supplied this timeline's value, so the
 	// calendar jump must not be integrated.
-	if (gameClock.reversed)
+	if (weatherClock.reversed)
 		return;
 
-	const float elapsed = gameClock.elapsedHours;
+	const float elapsed = weatherClock.elapsedHours;
 	if (elapsed <= 0.0f)
 		return;
 
@@ -118,6 +118,7 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 	// Gated on load as well as save: a record written while the toggle was on
 	// must not restore after it is turned off.
 	if (!settings.PersistAccumulation) {
+		weatherClockUnarm.store(true, std::memory_order_release);
 		gameClockUnarm.store(true, std::memory_order_release);
 		logger::info("[SNOW DEFORMATION] accumulation co-save ignored, Remember Snow Accumulation is off");
 		return;
@@ -126,8 +127,8 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 	snowAccumulation.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
 	// Held weather rides the record; an indoor save must not resume as clear sky.
 	accumWeatherIntensity.store(std::clamp(weather, 0.0f, 1.0f), std::memory_order_relaxed);
-	// Unarm the clock, or the first tick reads the loaded calendar as a
-	// backwards jump.
+	// Unarm both clocks, or the first tick reads the loaded calendar as a jump.
+	weatherClockUnarm.store(true, std::memory_order_release);
 	gameClockUnarm.store(true, std::memory_order_release);
 	logger::info("[SNOW DEFORMATION] accumulation restored at {:.3f}", value);
 }
@@ -142,6 +143,7 @@ void SnowDeformation::RegisterAccumulationCoSave()
 			// Fires before a load and on a new game; state must not cross timelines.
 			snowAccumulation.store(0.0f, std::memory_order_relaxed);
 			accumWeatherIntensity.store(0.0f, std::memory_order_relaxed);
+			weatherClockUnarm.store(true, std::memory_order_release);
 			gameClockUnarm.store(true, std::memory_order_release);
 		});
 }
@@ -153,9 +155,9 @@ void SnowDeformation::RegisterAccumulationCoSave()
 
 void SnowDeformation::TickSnowCondition()
 {
-	if (gameClock.reversed)
+	if (weatherClock.reversed)
 		return;
-	const float elapsed = gameClock.elapsedHours;
+	const float elapsed = weatherClock.elapsedHours;
 	if (elapsed <= 0.0f)
 		return;
 
@@ -282,11 +284,11 @@ namespace
 void SnowDeformation::TickSnowClimate()
 {
 	auto& climate = snowClimate;
-	if (gameClock.reversed) {
+	if (weatherClock.reversed) {
 		climate.primed = false;
 		return;
 	}
-	const float elapsed = gameClock.elapsedHours;
+	const float elapsed = weatherClock.elapsedHours;
 	auto* tes = globals::game::tes;
 	const bool indoors = !tes || tes->interiorCell || NoSkyWorldspace();
 	auto* sky = globals::game::sky;
@@ -349,16 +351,24 @@ void SnowDeformation::TickSnowClimate()
 	const float warm = ClimateWarmth(climate.temperature);
 	climate.ageingRate = debugAgeingRateOverride >= 0.0f ? debugAgeingRateOverride :
 	                                                       1.0f + kSnowfallAgeing * snowing + kRainAgeing * raining + kWindAgeing * climate.windPacking * (1.0f - snowing) + kWarmAgeing * warm;
-	if (elapsed > 0.0f) {
-		climate.ageingClock += climate.ageingRate * elapsed;
-		climate.ageingTotal += (double)climate.ageingRate * elapsed;
-		// Track dates follow the clock back (TrackRebaseCS).
-		while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
-			climate.ageingClock -= kAgeingClockStart;
-			climate.ageingRebase += kAgeingClockStart;
-		}
-		TickSnowIce(elapsed, snowing);
+}
+
+void SnowDeformation::TickSnowAgeing()
+{
+	auto& climate = snowClimate;
+	if (gameClock.reversed)
+		return;
+	const float elapsed = gameClock.elapsedHours;
+	if (elapsed <= 0.0f)
+		return;
+	climate.ageingClock += climate.ageingRate * elapsed;
+	climate.ageingTotal += (double)climate.ageingRate * elapsed;
+	// Track dates follow the clock back (TrackRebaseCS).
+	while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
+		climate.ageingClock -= kAgeingClockStart;
+		climate.ageingRebase += kAgeingClockStart;
 	}
+	TickSnowIce(elapsed, std::clamp(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f, 1.0f));
 }
 
 void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
@@ -510,11 +520,13 @@ void SnowDeformation::RegisterSnowConditionCoSave()
 				return;
 			}
 			snowFreshness.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
+			weatherClockUnarm.store(true, std::memory_order_release);
 			gameClockUnarm.store(true, std::memory_order_release);
 			logger::info("[SNOW DEFORMATION] snow freshness restored at {:.3f}", value);
 		},
 		[this]() {
 			snowFreshness.store(0.0f, std::memory_order_relaxed);
+			weatherClockUnarm.store(true, std::memory_order_release);
 			gameClockUnarm.store(true, std::memory_order_release);
 		});
 }

@@ -887,11 +887,11 @@ public:
 	float snowfallIntensity = 0.0f;
 
 	/**
-	 * @brief One game-time reading per frame, shared by every subsystem that
-	 * integrates it (trench decay, accumulation). Render-thread owned.
+	 * @brief A game-time reading, taken once per frame. Render-thread owned.
 	 *
-	 * Shared, not duplicated: a second copy would tie the accumulator's clock to
-	 * whether trenches are enabled, and two clocks on one calendar drift. Not
+	 * gameClock serves the consumers below the deformation suspend gate (trench
+	 * decay, refill, track ageing, ice), which take the whole span when the
+	 * passes wake; weatherClock serves the weather-driven state above it. Not
 	 * the spell system's drift accumulator, which corrects render-second timers.
 	 */
 	struct GameClock
@@ -904,6 +904,8 @@ public:
 		float elapsedHours = 0.0f;
 		/** @brief The calendar went backwards, which means a save was loaded: this timeline is not the one the consumers' state belongs to. */
 		bool reversed = false;
+		/** @brief Takes this frame's reading; a set a_unarm re-arms instead of measuring. @return The calendar's hours passed, negative without a calendar. */
+		float Read(std::atomic<bool>& a_unarm);
 	};
 	GameClock gameClock;
 	/** @brief Set by the co-save callbacks on the GAME thread; consumed by the next tick. An unarm request rather than a direct write, so the clock itself stays render-thread owned. */
@@ -912,6 +914,10 @@ public:
 	std::atomic<float> gameClockHours{ -1.0f };
 	/** @brief Takes this frame's reading. Call once, before anything that consumes it. */
 	void TickGameClock();
+	/** @brief Accumulation, freshness and the climate's weather, read above every early return in PrepassSimulation: an inn or a bare city holds no snow to wake gameClock. */
+	GameClock weatherClock;
+	/** @brief gameClockUnarm for weatherClock, set by the accumulation and freshness co-save callbacks. */
+	std::atomic<bool> weatherClockUnarm{ false };
 
 	ConstantBuffer* perFrame = nullptr;
 	/** @brief [0] = THE map (single canonical texture, toroidal layout); [1] = EvolveCS's snapshot scratch, copied from the map just before that pass. The ping-pong is retired: consumers always read [0]. */
@@ -939,7 +945,7 @@ public:
 	float4 TrackAgeConstants() const;
 	/** @brief The ageing clock in the frame the track dates stand in now: ahead of ageingClock by a rebase the next update has yet to apply. */
 	float TrackDateClock() const { return snowClimate.ageingClock + snowClimate.ageingRebase; }
-	/** @brief Mirrors the unwrapped ageing clock into the store, under its lock; after TickSnowClimate. */
+	/** @brief Mirrors the unwrapped ageing clock into the store, under its lock; after TickSnowAgeing. */
 	void TickTrenchAgeing();
 	/** @brief Ageing-clock units a date stays its own before it reads as ancient: the store's freshness span and the berm bake's clamp. Mirrored by TRACK_AGE_HORIZON (DeformationUpdateCS.hlsl) and kTrackAgeHorizon (BermFieldCS.hlsl). */
 	static constexpr float kTrackAgeHorizon = 128.0f;
@@ -4669,7 +4675,7 @@ protected:
 	 * store does, which is why that one has one.
 	 */
 	std::atomic<float> snowAccumulation{ 0.0f };
-	/** @brief Advances the layer off the shared clock. One signed rate, no thresholds: a weather cross-fade turns the curve instead of putting a kink in it. */
+	/** @brief Advances the layer off weatherClock. One signed rate, no thresholds: a weather cross-fade turns the curve instead of putting a kink in it. */
 	void TickAccumulation();
 	/** @brief What the shells multiply the authored depth by: 1.0 when accumulation is off or the layer is at rest, up to AccumulationPeak at full. Never below 1 - a peak under 1 would make snowfall THIN the snow. */
 	float GetAccumulationDepthScale() const;
@@ -4685,7 +4691,7 @@ protected:
 	std::atomic<float> snowFreshness{ 0.0f };
 	/** @brief Debug: >= 0 replaces the live freshness (not serialised). */
 	float debugFreshnessOverride = -1.0f;
-	/** @brief Advances freshness off the shared clock and the accumulator's held weather; call after TickAccumulation. */
+	/** @brief Advances freshness off weatherClock and the accumulator's held weather; call after TickAccumulation. */
 	void TickSnowCondition();
 	/** @brief Freshness x Settings::FreshSnowSoftness, 0-1: what the three levers ease by. */
 	float GetSnowSoftness() const;
@@ -4743,7 +4749,7 @@ protected:
 		float windPacking;
 	};
 	SnowCondition GetSnowCondition() const;
-	/** @brief Advances the meltwater and the ice per climate row: water the snow held freezes below 0 C, drains above it, thaws when wet again and is buried by snowfall as tracks are. Inside TickSnowClimate. */
+	/** @brief Advances the meltwater and the ice per climate row: water the snow held freezes below 0 C, drains above it, thaws when wet again and is buried by snowfall as tracks are. Inside TickSnowAgeing. */
 	void TickSnowIce(float a_elapsed, float a_snowing);
 	/** @brief Ice in climate row a_row as the shells show it: the override, or the live value. */
 	float SnowIceShown(uint32_t a_row) const;
@@ -4775,8 +4781,10 @@ protected:
 		std::array<float4, kClimateLUTRows> lut{};
 	};
 	SnowClimateLook ComputeSnowClimateLook() const;
-	/** @brief Advances the climate off the shared clock; call after TickSnowCondition. */
+	/** @brief Follows the weather off weatherClock: land snow share, rain, temperature, wetness, wind packing and the ageing rate. Call after TickSnowCondition. */
 	void TickSnowClimate();
+	/** @brief Runs the ageing clock and the ice off gameClock at the climate's rate: track dates and ice sleep with the deformation passes and take the whole span on waking. */
+	void TickSnowAgeing();
 	/** @brief Mean snow-texture weight of the loaded land around a point, from the baked cells; below 0 when none are baked. */
 	float LandSnowShareAround(float a_x, float a_y);
 	/** @brief Debug overrides, not saved. Temperature has its own switch; the others replace the live value at 0 or above. */
