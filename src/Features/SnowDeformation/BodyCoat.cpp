@@ -117,8 +117,10 @@ namespace
 		float Voxel;
 		float From[3];
 		float TopZ;
+		float Moving;
+		float pad[3];
 	};
-	static_assert(sizeof(BodyCoatWriteCB) == 224);
+	static_assert(sizeof(BodyCoatWriteCB) == 240);
 	struct alignas(16) BodyCoatTileCB
 	{
 		float4 Origin[kCoatTiles];
@@ -514,6 +516,9 @@ struct SnowDeformation::BodyCoatStore
 		bool drawn = false;
 		// The tops' centre height.
 		float topZ = 0.0f;
+		// D30: how far it moved since, in deformation texels up to 1: its impacts'
+		// weight, the lumps' only source.
+		float moving = 0.0f;
 	};
 	size_t currentDue = 0;
 	std::vector<Due> due;
@@ -557,6 +562,7 @@ struct SnowDeformation::BodyCoatStore
 	float4 currentFall{};
 	float4 currentTop{};
 	float currentTopZ = 0.0f;
+	float currentMoving = 0.0f;
 	bool currentContact = false;
 	float eye[3] = {};
 	ID3D11ShaderResourceView* skySRV = nullptr;
@@ -675,18 +681,39 @@ struct SnowDeformation::BodyCoatStore
 		// environment-map material, not the eye one. A facegen head names each
 		// part's geometry after its editor ID: the NPC's own eyes, or its race's.
 		// Brows and scars sit on the bare face with them (section 5.10), and on a
-		// corpse take the coat with its face (S5).
+		// corpse take the coat with its face (S5). A mouth (teeth and tongue: a
+		// misc part named or modelled as one) never takes it, nor its extra parts.
 		const bool corpse = a_actor->IsDead();
 		std::vector<const char*> eyeParts;
-		auto addEyes = [&](const RE::BGSHeadPart* a_part) {
+		auto mouth = [](const RE::BGSHeadPart* a_part) {
+			for (const char* text : { a_part->formEditorID.c_str(), a_part->model.c_str() }) {
+				std::string lower(text ? text : "");
+				std::ranges::transform(lower, lower.begin(), [](unsigned char a_c) { return char(std::tolower(a_c)); });
+				if (lower.find("mouth") != std::string::npos || lower.find("teeth") != std::string::npos || lower.find("tongue") != std::string::npos)
+					return true;
+			}
+			return false;
+		};
+		auto bare = [&](const RE::BGSHeadPart* a_part) {
 			using Type = RE::BGSHeadPart::HeadPartType;
-			if (a_part && (a_part->type == Type::kEyes || (!corpse && (a_part->type == Type::kEyebrows || a_part->type == Type::kScar))) && a_part->formEditorID.c_str())
+			return a_part && a_part->formEditorID.c_str() &&
+			       (a_part->type == Type::kEyes || (!corpse && (a_part->type == Type::kEyebrows || a_part->type == Type::kScar)) || (a_part->type == Type::kMisc && mouth(a_part)));
+		};
+		auto addEyes = [&](const RE::BGSHeadPart* a_part) {
+			if (!a_part)
+				return;
+			if (bare(a_part))
 				eyeParts.push_back(a_part->formEditorID.c_str());
+			for (const auto* extra : a_part->extraParts)
+				if (bare(extra))
+					eyeParts.push_back(extra->formEditorID.c_str());
 		};
 		if (auto* npc = a_actor->GetActorBase()) {
 			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kEyes));
 			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kEyebrows));
 			addEyes(npc->GetCurrentHeadPartByType(RE::BGSHeadPart::HeadPartType::kScar));
+			for (int i = 0; npc->headParts && i < npc->numHeadParts; ++i)
+				addEyes(npc->headParts[i]);
 			if (const auto* race = a_actor->GetRace())
 				if (const auto* face = race->faceRelatedData[npc->GetSex() == RE::SEX::kFemale ? 1 : 0]; face && face->headParts)
 					for (const auto* part : *face->headParts)
@@ -1030,7 +1057,8 @@ struct SnowDeformation::BodyCoatStore
 		if (!device || !context)
 			return false;
 		// Typeless: Lighting reads it as UNORM, the writer's resolve as R32 words.
-		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT,
+		// Twice a slot wide: the impact store (D30) lies beside the coat along x.
+		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0] * 2, kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT,
 			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
 		D3D11_SUBRESOURCE_DATA init{ zero.data(), desc.Width * 4, desc.Width * desc.Height * 4 };
@@ -1193,7 +1221,8 @@ struct SnowDeformation::BodyCoatStore
 	// straight up is 0.5, 0.5. Each voxel's pattern is taken at its canonical
 	// centre. Wading contact is whole to the ankle and thins up the shin, to
 	// about a sixth at the knee and none at 1.3 times its height (section 5.11);
-	// the left side ramps over four voxels.
+	// the left side ramps over four voxels. The impact store beside it (D30)
+	// takes the forced contact whole, so Force Coat's lumps can still be judged.
 	void FillSlot(Frame& a_frame)
 	{
 		const int slot = a_frame.slot, half = a_frame.half;
@@ -1215,10 +1244,12 @@ struct SnowDeformation::BodyCoatStore
 		};
 		const float midX = 0.5f * (a_frame.boundsMin[0] + a_frame.boundsMax[0]);
 		std::vector<uint32_t> texels(size_t(w) * h * d);
+		std::vector<uint32_t> impacts(texels.size(), 0u);
 		for (uint32_t z = 0; z < d; ++z)
 			for (uint32_t y = 0; y < h; ++y)
 				for (uint32_t x = 0; x < w; ++x) {
-					uint32_t& texel = texels[(size_t(z) * h + y) * w + x];
+					const size_t index = (size_t(z) * h + y) * w + x;
+					uint32_t& texel = texels[index];
 					if (checks) {
 						const bool edge = x == 0 || y == 0 || z == 0 || x == w - 1 || y == h - 1 || z == d - 1;
 						const float k = (((x >> 1) + (y >> 1) + (z >> 1)) & 1) ? 1.0f : 0.35f;
@@ -1247,9 +1278,12 @@ struct SnowDeformation::BodyCoatStore
 						break;
 					}
 					texel = pack(contact, fall, 0.5f, 0.5f);
+					impacts[index] = byte(contact);
 				}
 		const D3D11_BOX box{ x0, 0, z0, x0 + w, h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, texels.data(), w * 4, w * h * 4);
+		const D3D11_BOX impactBox{ x0 + kBodyCoatSlotDim[0], 0, z0, x0 + kBodyCoatSlotDim[0] + w, h, z0 + d };
+		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &impactBox, impacts.data(), w * 4, w * h * 4);
 	}
 
 	void RefillAll()
@@ -1298,7 +1332,8 @@ struct SnowDeformation::BodyCoatStore
 	}
 
 	// Empties a frame's coat over each sphere's box (R and G 0, the deposit
-	// straight up as FillSlot leaves it); the voxels written, for the readout.
+	// straight up as FillSlot leaves it) and its impacts beside it; the voxels
+	// written, for the readout.
 	uint32_t ClearSpheres(const Frame& a_frame, const std::vector<float4>& a_spheres)
 	{
 		if (a_frame.slot < 0)
@@ -1323,6 +1358,9 @@ struct SnowDeformation::BodyCoatStore
 			bare.assign(size_t(w) * h * d, 0x80800000u);
 			const D3D11_BOX box{ lo[0], lo[1], lo[2], hi[0], hi[1], hi[2] };
 			globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, bare.data(), w * 4, w * h * 4);
+			bare.assign(bare.size(), 0u);
+			const D3D11_BOX impactBox{ lo[0] + kBodyCoatSlotDim[0], lo[1], lo[2], hi[0] + kBodyCoatSlotDim[0], hi[1], hi[2] };
+			globals::d3d::context->UpdateSubresource(atlas.get(), 0, &impactBox, bare.data(), w * 4, w * h * 4);
 			written += w * h * d;
 		}
 		return written;
@@ -1625,15 +1663,16 @@ void SnowDeformation::TickBodyCoatStore()
 	const float roomL = (kSpeckRank[0] - std::sqrt(kSpeckRank[0] * kSpeckRank[0] + 4.0f * kSpeckRank[1] / look[3])) / (-2.0f * kSpeckRank[1]);
 	const float grainScale = std::min(1.0f, (1.0f - std::exp(-roomL)) / kSpeckMax);
 	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and
-	// contact snow's cohesion, its share of lumps (round 3), in steps of 0.05 so
-	// the records rebuild only on a step. The forced coat keeps its full share.
+	// the cohesion of the snow impacts bring, its share of lumps (round 3; D30),
+	// in steps of 0.05 so the records rebuild only on a step. The forced coat
+	// keeps its full share.
 	const float stickiness = GetSnowCondition().stickiness;
 	const float cohesion = force != 0 ? 1.0f : std::round(std::clamp(stickiness / kCoatMoistStickiness, 0.0f, 1.0f) * 20.0f) / 20.0f;
 	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) * grainScale,
 		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), cohesion };
-	// S5 (D20-D22): the stored snowfall fills the specks up to the share past
-	// which the load order's storms lump, their reach rising from the angle of
-	// repose to 85 degrees, then the lumps over the rest.
+	// S5 (D20-D22): the stored snowfall fills the specks up to the load order's
+	// storm split, their reach rising from the angle of repose to 85 degrees,
+	// then thickens them over the rest (D29, D30).
 	const float fallLook[4] = { std::clamp(SnowWeathers().split, 0.05f, 0.95f), DirectX::XMConvertToRadians(repose),
 		DirectX::XMConvertToRadians(std::max(kFallReposeTop, repose)), 0.0f };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
@@ -1882,7 +1921,8 @@ void SnowDeformation::TickBodyCoatStore()
 	// time since then, the cap reached in Build-up Time at full adhesion. And its
 	// heading since then (round 3): Impact Share of the cap is kept for the parts
 	// pushing into fresh snow, counted in full once it has moved a deformation
-	// texel, the taps' reach. Force Coat owns the atlas while it is on.
+	// texel, the taps' reach. That move weighs its impacts too, the lumps' only
+	// source (D30). Force Coat owns the atlas while it is on.
 	store.due.clear();
 	if (contact && force == 0 && store.live && store.atlasUAV) {
 		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.0f;
@@ -1900,9 +1940,13 @@ void SnowDeformation::TickBodyCoatStore()
 			const float dx = a_pos.x - a_actor.lastPos.x;
 			const float dy = a_pos.y - a_actor.lastPos.y;
 			const float moved = std::sqrt(dx * dx + dy * dy);
-			if (a_actor.hasLastPos && texel > 0.0f && moved > 1e-3f)
-				write = float4(write.x, dx / moved, dy / moved, impactShare * std::min(moved / texel, 1.0f));
+			float moving = 0.0f;
+			if (a_actor.hasLastPos && texel > 0.0f && moved > 1e-3f) {
+				moving = std::min(moved / texel, 1.0f);
+				write = float4(write.x, dx / moved, dy / moved, impactShare * moving);
+			}
 			store.due.push_back({ a_formID, write, {}, {}, {}, true });
+			store.due.back().moving = moving;
 			a_actor.sinceWrite = 0.0f;
 			a_actor.joltHeld = 0.0f;
 			a_actor.lastPos = a_pos;
@@ -2343,6 +2387,7 @@ bool SnowDeformation::BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float
 			store.currentFall = d.fall;
 			store.currentTop = d.top;
 			store.currentTopZ = d.topZ;
+			store.currentMoving = contact ? d.moving : 0.0f;
 			return true;
 		}
 	return false;
@@ -2409,7 +2454,7 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
 		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV ? 1.0f : 0.0f,
 		{ record.ModelToCanonical[0], record.ModelToCanonical[1], record.ModelToCanonical[2] }, store.currentTop, { store.eye[0], store.eye[1], store.eye[2] }, voxel,
-		{ store.fallFrom[0], store.fallFrom[1], store.fallFrom[2] }, store.currentTopZ };
+		{ store.fallFrom[0], store.fallFrom[1], store.fallFrom[2] }, store.currentTopZ, store.currentMoving };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		return false;
@@ -2900,7 +2945,7 @@ std::string SnowDeformation::BodyCoatWriterLine() const
 	                     !store.writerTried    ? "waiting for an actor in snow" :
 	                     store.writerReady     ? "on" :
 	                                             "failed (see CommunityShaders.log)";
-	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}. Contact lumps at {:.2f} of their share (stickiness {:.2f}; the rest sits as grains).",
+	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}. Lumps only from impacts, at {:.2f} of their share (stickiness {:.2f}; the rest sits as grains).",
 		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size(), store.amounts[3], GetSnowCondition().stickiness);
 }
 
@@ -2977,7 +3022,7 @@ std::vector<std::string> SnowDeformation::BodyCoatFallLines() const
 	if (!range.scanned)
 		lines.push_back("The load order's snowfalls are not read yet.");
 	else
-		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. Specks fill a coat up to {:.2f} of a full one ({}); past it a corpse's lumps, and a living coat's specks thicken to twice as many by a full one.",
+		lines.push_back(std::format("The load order's {} snowfalls: the heaviest '{}' at intensity {:.2f}. Specks fill a coat up to {:.2f} of a full one ({}); past it they thicken to twice as many by a full one, and snowfall lays no lumps.",
 			range.weathers, range.heaviestName, range.heaviest, range.split,
 			range.splitName.empty() ? std::string("half: no step between heavy snowfalls") : std::format("'{}' over the heaviest", range.splitName)));
 	if (!bodyCoatStore) {

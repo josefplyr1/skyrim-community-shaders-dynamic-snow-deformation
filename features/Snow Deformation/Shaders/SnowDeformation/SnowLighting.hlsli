@@ -863,7 +863,8 @@ namespace SnowLighting
 	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
 	// in Permutation.hlsli, so permutations without SNOW_BODY_COAT keep their text.
 	static const uint kSnowBodyCoatBit = (1u << 25);
-	// SnowDeformation.h kBodyCoatFlag bits, and the atlas (kBodyCoatSlotDim x kBodyCoatSlots).
+	// SnowDeformation.h kBodyCoatFlag bits, and the atlas (kBodyCoatSlotDim x kBodyCoatSlots)
+	// with the impact store beside it along x (D30).
 	static const uint kCoatFlatPaint = 1u;
 	static const uint kCoatLiving = 2u;
 	static const uint kCoatHairSpecks = 4u;
@@ -872,7 +873,8 @@ namespace SnowLighting
 	static const uint kCoatHairBeads = 64u;
 	static const uint kCoatLumpDepth = 32u;
 	static const uint kCoatLumpBlend = 128u;
-	static const float3 kCoatAtlasSize = float3(32.0, 16.0, 1536.0);
+	static const float3 kCoatAtlasSize = float3(64.0, 16.0, 1536.0);
+	static const float kCoatImpactX = 32.0;
 	// The clump field baked (BodyCoatLumps.dds from tools/lump-tiles/pack_field.py; section
 	// 5.26): CoatNoise periodic over 12 cells at 6 texels a cell, each axis's first texel
 	// repeated last, so the lookup wraps by hand and no address mode matters. R the noise,
@@ -891,7 +893,7 @@ namespace SnowLighting
 	// the angle of repose their reach rises from and to, in radians.
 	// Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
 	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
-	// 2007), domed 1.5 units, single over the outer 0.35 of their order, holed at
+	// 2007), domed 1.5 units, holed at
 	// their rims at 0.8, 0.4 and 0.2 units, each to 11 %, opening two spreads over the
 	// rim. Specks: half the surface at most, full over half their order (hair:
 	// out to 105 degrees). Equal balls cover 70 % all on; a share takes q = L
@@ -900,7 +902,6 @@ namespace SnowLighting
 	// (measured with 2 to 3 mm). Hair beads: 1.2 by 0.45 speck radii. The relief
 	// is read at 0.2 units, or the pixel when larger. An edge is never sharper than
 	// 0.05 of the relief.
-	static const float kCoatReliefShare = 0.5;
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
 	static const float kCoatClumpContrast = 1.6;
@@ -909,7 +910,6 @@ namespace SnowLighting
 	static const float kCoatRimSpan = 0.1;
 	static const float kCoatEdge = 0.05;
 	static const float kCoatLumpUnits = 1.5;
-	static const float kCoatLumpFront = 0.35;
 	static const float kCoatNoiseSd = 0.2698;
 	static const float2 kCoatNormalQuantile = float2(4.91, 0.14);
 	static const float3 kCoatHoleFreq = float3(1.0 / 0.8, 1.0 / 0.4, 1.0 / 0.2);
@@ -925,10 +925,7 @@ namespace SnowLighting
 	static const float kCoatRimCut = 0.3236;
 	static const float kCoatPocketRadius = 0.2;
 	static const float kCoatNoiseSlope = 0.537;
-	// S5 round 2: a full snowfall coat breaks into single lumps over the last tenth
-	// of the angle of repose (estimate); Blended's grains thin out over half a
-	// clump past a lump's edge.
-	static const float kCoatReposeBreak = 0.1;
+	// S5 round 2: Blended's grains thin out over half a clump past a lump's edge.
 	static const float kCoatGrainUnits = 0.5 / kCoatClumpFreq.y;
 
 	float3 CoatDebugHue(float h)
@@ -1159,11 +1156,11 @@ namespace SnowLighting
 	// which the coat's vertex shader passes down, the surface's shape straight
 	// and its relief (the shading normal) un-skinned through the world and bind
 	// frames. A model-space-normal skin (a corpse's, S5) has its model's own axes
-	// for that frame and its map for the shape. Lumps spread from the surfaces facing the snowfall out to the angle
-	// of repose over a relief of their own in rest space, single at their front
-	// and closing behind it. Specks, each its own size between two set sizes and
-	// as many as Grain Amount sets, lie in the same order, steered by the armour's
-	// own relief, and never draw smaller than a pixel. Hair takes specks only (round,
+	// for that frame and its map for the shape. Lumps come only from impacts
+	// (D30), at random spots over a relief of their own in rest space. Specks,
+	// each its own size between two set sizes and as many as Grain Amount sets,
+	// spread from the surfaces facing the snowfall out to the angle of repose,
+	// steered by the armour's own relief, and never draw smaller than a pixel. Hair takes specks only (round,
 	// or beads along its strands), as many as its own amount sets. The material is the shell's own set in
 	// rest space: its albedo convention, grain and RMAOS, as projected snow takes
 	// them. TruePBR pixels blend the material; vanilla pixels hand the snow
@@ -1214,34 +1211,35 @@ namespace SnowLighting
 				const float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
 				// Half a texel inside the slot, so the filter never reads a neighbour.
-				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5) / kCoatAtlasSize, 0);
+				const float3 at = clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5);
+				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, at / kCoatAtlasSize, 0);
 				// The writer stores the way down's encoding, so up sits at the
 				// octahedron's centre and the filter between voxels stays near it.
 				const float3 deposit = -GBuffer::DecodeNormal(voxel.ba);
 				const float contact = inside ? voxel.r : 0.0;
 				const float fall = inside ? voxel.g : 0.0;
+				// D30: how much of the contact came with an impact.
+				float impact = 0.0;
+				[branch] if (contact > 0.0)
+					impact = CoatAtlas.SampleLevel(SampColorSampler, (at + float3(kCoatImpactX, 0.0, 0.0)) / kCoatAtlasSize, 0).r;
 				// S5 (D20, D21): the stored snowfall fills the specks first, their share
 				// and reach rising together from the angle of repose to the ramp's top,
-				// then the rest, never the live storm. A corpse's rest lumps; a living
-				// coat's thickens its specks with a second set, as many again by a full
-				// coat (D29), and hair keeps its own.
+				// then the rest, never the live storm. The rest thickens the specks with a
+				// second set, as many again by a full coat (D29), on corpses too: snowfall
+				// lays no lumps (D30). Hair keeps its own.
 				const bool hairSpecks = (CoatFlags & kCoatHairSpecks) != 0;
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
-				const bool living = (CoatFlags & kCoatLiving) != 0;
 				const float fallSpecks = saturate(fall / CoatFall.x);
-				const float fallRest = saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
-				const float fallLumps = living ? 0.0 : fallRest;
-				const float fallThick = living && !hairSpecks ? fallRest : 0.0;
+				const float fallThick = hairSpecks ? 0.0 : saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
 				const float footprint = max(length(dcdx), length(dcdy));
-				// The order the snow spreads in: 1 facing the snowfall, 0 at the angle of
-				// repose, below 0 past it; contact snow by its strength. Lumps (hair has
-				// none) lie where their cover drowns the relief, deep however few, holed
-				// only at their rims; a clump octave fades once a pixel spans half of it,
-				// a hole octave a quarter. Contact snow lays its lumps at random spots
-				// instead: Lump Amount's share of the surface, thinning with its strength as
-				// the specks do and with how little the snow coheres (drier snow sits as
-				// grains), cut at the clump field's own quantile (near normal, the spread of
-				// the octaves left; Tukey's quantile). On fur, hair and other see-through
+				// Lumps (hair has none) come only from impacts (D30): Lump Amount's share
+				// of the surface at random spots, thinning with the impact's strength as
+				// the specks do with the contact's and with how little the snow coheres
+				// (drier snow sits as grains), cut at the clump field's own quantile (near
+				// normal, the spread of the octaves left; Tukey's quantile). They lie where
+				// their cover drowns the relief, deep however few, holed only at their
+				// rims; a clump octave fades once a pixel spans half of it, a hole octave a
+				// quarter. On fur, hair and other see-through
 				// alpha-cut pieces a lump up close would paint the cards flat, so the lumps'
 				// share passes to the specks (snow balled in the fur) as specks come to cover
 				// a pixel: none while the largest is under one, all once the smallest covers
@@ -1264,41 +1262,26 @@ namespace SnowLighting
 				float lumpAlpha = 0.0;
 				float grainShare = 0.0;
 				float3 lumpNormal = restShape;
-				[branch] if (!hairSpecks && CoatAmounts.x > 0.0)
+				[branch] if (!hairSpecks && CoatAmounts.x > 0.0 && impact > 0.0)
 				{
 					// In depth the lumps stand on the field's dome by parallax and keep its normal,
-					// the armour beside them its own shading; their snowfall spreads by the
-					// surface's shape alone, a lump being far larger than the armour's relief
-					// (chainmail rings and weave on a hanging piece take none). Today's lean half
-					// toward the relief and bevel their dome. Blended (S5 round 2) reads the same
-					// field where the surface is, so a lump keeps its shape from any angle and
-					// distance: its two coarse octaves never fade, only the flakes as they come
-					// under a pixel. It keeps In Depth's dome normal, and its edges break into
-					// grains, specks thinning out over half a clump.
+					// the armour beside them its own shading. Today's bevel their dome. Blended
+					// (S5 round 2) reads the same field where the surface is, so a lump keeps its
+					// shape from any angle and distance: its two coarse octaves never fade, only
+					// the flakes as they come under a pixel. It keeps In Depth's dome normal, and
+					// its edges break into grains, specks thinning out over half a clump.
 					const bool inDepth = (CoatFlags & kCoatLumpDepth) != 0;
 					const bool blended = (CoatFlags & kCoatLumpBlend) != 0;
 					const bool baked = inDepth || blended;
-					const float3 fallNormal = baked ? restShape : CoatSafeNormalize(lerp(restShape, restRelief, kCoatReliefShare));
-					const float lumpSlope = acos(clamp(dot(fallNormal, deposit), -1.0, 1.0));
-					const float contactShare = CoatAmounts.x * CoatAmounts.w * saturate((contact - 1e-3) / kCoatSpeckFront);
-					// Snowfall's lumps run out from the surfaces facing the snowfall, single ones
-					// leading, and a full coat covers all the way to the angle of repose (S5 round
-					// 2, Josef), breaking into single lumps over its last tenth. Past full cover it
-					// deepens by up to a rim span (round 4), so even the field's lowest valleys lie
-					// inside, without rims or their holes.
-					const float order = lumpSlope / CoatFall.z;
-					const float fallFront = (CoatAmounts.x * fallLumps * (1.0 + kCoatLumpFront) - order) / kCoatLumpFront;
-					const float fallBreak = saturate((1.0 - order) / kCoatReposeBreak);
-					const float fallCover = saturate(fallFront) * fallBreak;
-					const float fallDeep = saturate(fallFront - 1.0) * fallBreak;
+					const float impactShare = CoatAmounts.x * CoatAmounts.w * saturate((impact - 1e-3) / kCoatSpeckFront);
 					const float3 clumpFade = blended ? float3(1.0, 1.0, saturate(1.0 - 2.0 * footprint * kCoatClumpFreq.z)) : saturate(1.0 - 2.0 * footprint * kCoatClumpFreq);
 					const float3 octaveSd = baked ? kCoatFieldSd : kCoatNoiseSd;
-					const float contactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
-												   (pow(saturate(1.0 - contactShare), kCoatNormalQuantile.y) - pow(saturate(contactShare), kCoatNormalQuantile.y));
-					cover = max(fallCover, saturate((1.0 - contactCut) / (1.0 + kCoatEdge)));
+					const float impactCut = 0.5 + kCoatClumpContrast * length(kCoatClumpWeight * clumpFade * octaveSd) * kCoatNormalQuantile.x *
+												  (pow(saturate(1.0 - impactShare), kCoatNormalQuantile.y) - pow(saturate(impactShare), kCoatNormalQuantile.y));
+					cover = saturate((1.0 - impactCut) / (1.0 + kCoatEdge));
 					lumpShare = cover;
 					cover *= 1.0 - furSpecks;
-					const float cut = 1.0 - cover * (1.0 + kCoatEdge) - kCoatRimSpan * fallDeep * (1.0 - furSpecks);
+					const float cut = 1.0 - cover * (1.0 + kCoatEdge);
 					float3 lumpPoint = c;
 					float clump;
 					float edge = kCoatEdge;
@@ -1373,7 +1356,7 @@ namespace SnowLighting
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
 					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * max(lumpShare * furSpecks, grainShare));
-				// D29: a living coat's second set, past the split, in the same order.
+				// D29: the second set, past the split, in the same order.
 				const float thickShare = kCoatSpeckMax * CoatAmounts.y * fallThick * saturate(fallOrder / kCoatSpeckFront) * steer;
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)

@@ -151,10 +151,11 @@ float2 main(VS_OUTPUT input) : SV_Target
 #else
 // A vertex's atlas texel (fractional), how far it lies under the drawn snow
 // (positive: under), whether it is under the water, the levels a touch grows
-// the coat by this update, and the share of the cap it may keep. Snowfall
-// (S5): its world position, whether falling snow reaches it (the sky open
-// that way, its own body not in the way), and the way the snow comes from in
-// its canonical frame.
+// the coat by this update, the share of the cap it may keep, and the share
+// that comes with an impact (D30: pushing into fresh snow on the move, the
+// lumps' only source). Snowfall (S5): its world position, whether falling
+// snow reaches it (the sky open that way, its own body not in the way), and
+// the way the snow comes from in its canonical frame.
 struct VS_OUTPUT_COAT
 {
 	float3 Texel : TEXCOORD0;
@@ -165,14 +166,16 @@ struct VS_OUTPUT_COAT
 	float3 World : TEXCOORD5;
 	float Open : TEXCOORD6;
 	float3 Deposit : TEXCOORD7;
+	float Impact : TEXCOORD8;
 };
 
-// One voxel to raise: the atlas texel, and flags (1 contact, 2 wash) with the
-// growth in bits 8-23, in 1/256 levels, and the share of the cap in bits 24-31.
+// One voxel to raise: the atlas texel, and the growth in bits 0-15, in 1/256
+// levels, the share of the cap in bits 16-23 and the impact's in bits 24-31.
 // Fall: the snowfall's exposure in bits 16-23 over the deposit's two bytes,
 // as the atlas holds B and A; 0 for none. Cell: the low corner of the voxels
-// the look's filter reads at the point, and in w along each axis (bits 0-2)
-// whether the far corner stays inside the slot's box.
+// the look's filter reads at the point, in w along each axis (bits 0-2)
+// whether the far corner stays inside the slot's box, and flags (8 contact,
+// 16 wash).
 struct GS_OUTPUT_COAT
 {
 	float4 Position : SV_POSITION;
@@ -203,7 +206,8 @@ static const uint kCoatTileDim = 64;
 // its window, z its half extent, w its first row in CoatTop); the eye the
 // probes are placed about; a voxel's size, the self-cover's slack; the way
 // the snow comes from (world, unit; round 2: tilted by the wind as the game's
-// own falling snow is); and the height of the tops' centre.
+// own falling snow is); and the height of the tops' centre. D30: how far it
+// has moved since, in deformation texels up to 1, the weight of its impacts.
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
@@ -223,6 +227,7 @@ cbuffer BodyCoatWriteCB : register(b3)
 	float WriteVoxel;
 	float3 WriteFrom;
 	float WriteTopZ;
+	float WriteMoving;
 }
 #	endif
 
@@ -311,12 +316,14 @@ VS_OUTPUT_COAT main(VS_INPUT_SKIN input)
 		WriteAtlasLo.xyz + 0.5, WriteAtlasHi.xyz - 0.5);
 	output.Below = -1.0;
 	output.Target = 1.0;
+	output.Impact = 0.0;
 	[branch] if (WriteContact > 0.5)
 	{
 		const float2 below = CoatBelowSnow(world);
 		output.Below = below.x;
 		// All of the cap pushing into fresh snow, Impact Share less of it elsewhere.
 		output.Target = 1.0 - WriteImpactShare * (1.0 - below.y);
+		output.Impact = WriteMoving * below.y;
 	}
 	output.Wet = SnowDeformation::UnderWater(world) ? 1.0 : 0.0;
 	output.Growth = WriteGrowth;
@@ -362,20 +369,20 @@ uint CoatFallWord(float a_exposure, float3 a_up)
 	return exposure != 0 ? (exposure << 16) | (uint(e.y * 255.0 + 0.5) << 8) | uint(e.x * 255.0 + 0.5) : 0u;
 }
 
-void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, uint a_growth, uint a_fall, inout PointStream<GS_OUTPUT_COAT> a_stream)
+void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, float a_impact, uint a_growth, uint a_fall, inout PointStream<GS_OUTPUT_COAT> a_stream)
 {
-	const uint flags = (a_below > 0.0 ? 1u : 0u) | (a_wet >= 0.5 ? 2u : 0u);
+	const uint flags = (a_below > 0.0 ? 8u : 0u) | (a_wet >= 0.5 ? 16u : 0u);
 	[branch] if (flags != 0 || a_fall != 0)
 	{
 		GS_OUTPUT_COAT o;
 		// Pixel (0, 0) of the capture's target: every point is one PS invocation.
 		o.Position = float4(-1.0 + 1.0 / 2048.0, 1.0 - 1.0 / 2048.0, 0.5, 1.0);
-		o.Voxel = uint4(uint3(a_texel), flags | (a_growth << 8) | (uint(saturate(a_target) * 255.0 + 0.5) << 24));
+		o.Voxel = uint4(uint3(a_texel), a_growth | (uint(saturate(a_target) * 255.0 + 0.5) << 16) | (uint(saturate(a_impact) * 255.0 + 0.5) << 24));
 		o.Fall = a_fall;
 		// The texel lies at least half a voxel inside the box, as the look clamps it.
 		const float3 low = floor(a_texel - 0.5);
 		const uint3 reach = low + 1.0 < WriteAtlasHi.xyz ? 1u : 0u;
-		o.Cell = uint4(uint3(low), reach.x | (reach.y << 1) | (reach.z << 2));
+		o.Cell = uint4(uint3(low), reach.x | (reach.y << 1) | (reach.z << 2) | flags);
 		a_stream.Append(o);
 	}
 }
@@ -398,7 +405,8 @@ void main(triangle VS_OUTPUT_COAT tri[3], inout PointStream<GS_OUTPUT_COAT> stre
 			const float3 b = float3(i, j, steps - i - j) / float(steps);
 			const uint fall = facing > 0.0 ? CoatFallWord(facing * (b.x * tri[0].Open + b.y * tri[1].Open + b.z * tri[2].Open), b.x * tri[0].Deposit + b.y * tri[1].Deposit + b.z * tri[2].Deposit) : 0u;
 			CoatPoint(b.x * tri[0].Texel + b.y * tri[1].Texel + b.z * tri[2].Texel, b.x * tri[0].Below + b.y * tri[1].Below + b.z * tri[2].Below,
-				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, b.x * tri[0].Target + b.y * tri[1].Target + b.z * tri[2].Target, growth, fall, stream);
+				b.x * tri[0].Wet + b.y * tri[1].Wet + b.z * tri[2].Wet, b.x * tri[0].Target + b.y * tri[1].Target + b.z * tri[2].Target,
+				b.x * tri[0].Impact + b.y * tri[1].Impact + b.z * tri[2].Impact, growth, fall, stream);
 		}
 	}
 }
@@ -415,9 +423,9 @@ RWTexture3D<uint> CoatFall : register(u2);
 // filter reads at the point, so a full coat reads full (S5 round 4).
 float2 main(GS_OUTPUT_COAT input) : SV_Target
 {
-	[branch] if ((input.Voxel.w & 1u) != 0)
-		InterlockedMax(CoatContact[input.Voxel.xyz], input.Voxel.w >> 8);
-	const bool wash = (input.Voxel.w & 2u) != 0;
+	[branch] if ((input.Cell.w & 8u) != 0)
+		InterlockedMax(CoatContact[input.Voxel.xyz], input.Voxel.w);
+	const bool wash = (input.Cell.w & 16u) != 0;
 	[branch] if (wash || input.Fall != 0)
 	{
 		const uint3 reach = uint3(input.Cell.w, input.Cell.w >> 1, input.Cell.w >> 2) & 1u;
@@ -478,8 +486,12 @@ void main(uint3 id : SV_DispatchThreadID)
 #		include "Common/GBuffer.hlsli"
 #		include "Common/Random.hlsli"
 
-// The atlas as R8G8B8A8 words (R contact, G snowfall, BA the deposit direction).
+// The atlas as R8G8B8A8 words (R contact, G snowfall, BA the deposit direction),
+// and beside it along x the impact store (D30: R the contact that came with an
+// impact, the lumps' only source).
 RWTexture3D<uint> CoatAtlasWords : register(u0);
+// BodyCoat.cpp kBodyCoatSlotDim[0]: the impact store's offset.
+static const uint kCoatImpactX = 32;
 RWTexture3D<uint> CoatContact : register(u1);
 // Bits 0-23 the snowfall (exposure over deposit), bit 31 the wash.
 RWTexture3D<uint> CoatFall : register(u2);
@@ -521,11 +533,12 @@ uint CoatDepositBytes(float3 a_up)
 
 // Contact grows R toward the point's share of the cap by the touch's growth, a
 // fraction of a level rounded up at random in proportion, so slow growth still
-// adds up. Snowfall fills G by the room left, exactly over the time since the
-// actor's last (BODY-SNOW-PLAN.md section 2.4), and the deposit leans toward
-// the new snow's by its share of what lies there. A fade shakes off its share
-// of R and G, rounded the same way, then melts its whole levels. Water clears
-// R and G. The scratch is left at zero for the next update.
+// adds up, and the impact store toward the impact's share the same way (D30).
+// Snowfall fills G by the room left, exactly over the time since the actor's
+// last (BODY-SNOW-PLAN.md section 2.4), and the deposit leans toward the new
+// snow's by its share of what lies there. A fade shakes off its share of R and
+// G, the impact's with R, rounded the same way, then melts its whole levels.
+// Water clears them all. The scratch is left at zero for the next update.
 [numthreads(8, 8, 4)]
 void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 {
@@ -545,13 +558,20 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 		[branch] if ((contact | fallWord | fade) != 0)
 		{
 			const uint was = CoatAtlasWords[t];
+			const uint3 ti = t + uint3(kCoatImpactX, 0u, 0u);
+			const uint wasImpact = CoatAtlasWords[ti];
 			uint r = was & 0xFFu;
 			uint g = (was >> 8) & 0xFFu;
+			uint i = wasImpact & 0xFFu;
 			uint deposit = was >> 16;
 			const float dither = float(Random::murmur3(t, ResolveSeed) >> 8) / 16777216.0;
-			const uint target = (ResolveCap * (contact >> 16) + 127u) / 255u;
+			const uint target = (ResolveCap * ((contact >> 16) & 0xFFu) + 127u) / 255u;
+			const uint impactTarget = (ResolveCap * (contact >> 24) + 127u) / 255u;
+			const uint grow = uint(float(contact & 0xFFFFu) / 256.0 + dither);
 			[branch] if (contact != 0 && r < target)
-				r = min(r + uint(float(contact & 0xFFFFu) / 256.0 + dither), target);
+				r = min(r + grow, target);
+			[branch] if (contact != 0 && i < impactTarget)
+				i = min(i + grow, impactTarget);
 			const uint fall = fallWord & 0xFFFFFFu;
 			[branch] if (fall != 0)
 			{
@@ -566,20 +586,24 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 			[branch] if (fade != 0)
 			{
 				r -= min(r, uint(float(r * ((fade >> 16) & 0xFFu)) / 255.0 + dither));
+				i -= min(i, uint(float(i * ((fade >> 16) & 0xFFu)) / 255.0 + dither));
 				g -= min(g, uint(float(g * (fade >> 24)) / 255.0 + dither));
 				r -= min(r, fade & 0xFFu);
+				i -= min(i, fade & 0xFFu);
 				g -= min(g, (fade >> 8) & 0xFFu);
 			}
 			[flatten] if ((fallWord >> 31) != 0)
 			{
 				r = 0;
 				g = 0;
+				i = 0;
 			}
 			const uint now = (deposit << 16) | (g << 8) | r;
 			CoatAtlasWords[t] = now;
+			CoatAtlasWords[ti] = i;
 			CoatContact[t] = 0;
 			CoatFall[t] = 0;
-			[branch] if (now != was)
+			[branch] if (now != was || i != wasImpact)
 				InterlockedAdd(changedInGroup, 1u);
 		}
 	}
