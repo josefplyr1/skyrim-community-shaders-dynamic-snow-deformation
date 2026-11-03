@@ -1242,9 +1242,7 @@ void SnowDeformation::PostPostLoad()
 	InstallStaticsCaptureHook();
 	InstallLandscapeTimingHook();
 	InstallCameraHook();
-#if SD_WITH_API
 	InstallAPI();
-#endif
 	InstallLandscapeSnow();
 
 	CoSave::GetSingleton()->Install();
@@ -1252,9 +1250,6 @@ void SnowDeformation::PostPostLoad()
 	RegisterAccumulationCoSave();
 	RegisterSnowConditionCoSave();
 	RegisterSnowIceCoSave();
-#if SD_WITH_ITEMS
-	RegisterItemSinkCoSave();
-#endif
 	RegisterPrintCoSave();
 }
 
@@ -1835,19 +1830,6 @@ struct SD_PlayerCamera_Update
 		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
 			snowDeformation.ClampCameraAboveSnow();
-#if SD_WITH_ITEMS || SD_WITH_SPELLS
-		if (snowDeformation.loaded) {
-#	if SD_WITH_ITEMS
-			snowDeformation.ItemSinkUpdate();
-#	endif
-#	if SD_WITH_SPELLS
-			snowDeformation.ApplySpellLifts();
-#	endif
-#	if SD_WITH_ITEMS
-			snowDeformation.CreatureSinkUpdate();
-#	endif
-		}
-#endif
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
 };

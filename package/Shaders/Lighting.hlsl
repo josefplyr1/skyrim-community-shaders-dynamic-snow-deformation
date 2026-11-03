@@ -22,9 +22,6 @@
 
 // Snow on bodies reads the bind pose's tangent frame, which the coat's vertex shader passes down. A
 // model-space-normal skin's coat (a corpse's) reads its model's own axes and keeps the plain vertex shader.
-#if defined(SNOW_BODY_COAT) && defined(MODELSPACENORMALS) && (defined(VSHADER) || !defined(SKINNED))
-#	undef SNOW_BODY_COAT
-#endif
 
 #if !defined(DYNAMIC_CUBEMAPS) && defined(IBL)
 #	undef IBL
@@ -99,12 +96,6 @@ struct VS_OUTPUT
 	float4 FogParam: COLOR1;
 
 	float3 ModelPosition: TEXCOORD12;
-#if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(MODELSPACENORMALS)
-	// Snow on bodies: the bind pose's tangent frame, for the coat's rest-space normals.
-	float3 CoatBindT: TEXCOORD13;
-	float3 CoatBindB: TEXCOORD14;
-	float3 CoatBindN: TEXCOORD15;
-#endif
 };
 #ifdef VSHADER
 
@@ -292,11 +283,6 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.FogParam.w = fogColorParam;
 
 	vsout.ModelPosition = input.Position.xyz;
-#	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT)
-	vsout.CoatBindT = tbn[0];
-	vsout.CoatBindB = tbn[1];
-	vsout.CoatBindN = tbn[2];
-#	endif
 
 	return vsout;
 }
@@ -1992,28 +1978,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	SnowLighting::SnowTexturedRecolor(snowState, sampledBaseColor.rgb, tbnTr[2], input.WorldPosition.xyz, screenNoise, baseColor.xyz, rawRMAOS, worldNormal);
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
-	// The strand's direction as CS Hair shading takes it: its flow map, else the card's bitangent.
-	float3 coatStrand = float3(input.TBN0.y, input.TBN1.y, input.TBN2.y);
-#		if defined(CS_HAIR_SHADING)
-	coatStrand = useHairFlowMap ? mul(tbn, sampledHairFlow) : coatStrand;
-#		endif
-	// The world frame as the vertex shader wrote it, before the back-face flips: the coat un-skins through it.
-	// A model-space skin's rest frame is its model's own axes, which that frame carries to world.
-	// The alpha test's scale and reference, as the test below applies them.
-	float bodyCoatAlpha = SnowLighting::BodyCoat(snowState, input.ModelPosition, input.WorldPosition.xyz,
-#		if defined(MODELSPACENORMALS)
-		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0),
-#		else
-		transpose(float3x3(input.TBN0.xyz, input.TBN1.xyz, input.TBN2.xyz)), float3x3(input.CoatBindT, input.CoatBindB, input.CoatBindN),
-#		endif
-		TexNormalSampler, SampNormalSampler, TexColorSampler, SampColorSampler, float2(MaterialData.z * input.Color.w, AlphaTestRefRS),
-		uv, uvOriginal, coatStrand, screenNoise, viewDirection, projectedMaterialWeight, baseColor.xyz, rawRMAOS, worldNormal);
-#		if defined(TRUE_PBR)
-	glintParameters = lerp(glintParameters, SnowLighting::CoatGlint, bodyCoatAlpha);
-#		endif
-#	endif
-
 #	if defined(WORLD_MAP)
 	baseColor.xyz = GetWorldMapBaseColor(sampledBaseColor.xyz, baseColor.xyz, projWeight);
 #	endif  // WORLD_MAP
@@ -3004,7 +2968,7 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	color.xyz += diffuseColor * material.BaseColor;
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
+#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
 	snowState.projLightTotal = diffuseColor;
 #	endif
 
@@ -3083,26 +3047,10 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
 #	endif
 
-#	if defined(SNOW_DEFORMATION) && (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
-#		if defined(SNOW_BODY_COAT) && defined(CS_HAIR_SHADING)
-	// Hair shading lights along the strand (worldNormal holds the tangent): the coat's snow
-	// takes the surface's own normal, which the hair block kept in vertexNormal.
-	DirectContext coatLightContext = dirLightContext;
-	float3 coatLightNormal = worldNormal.xyz;
-	[branch] if (SharedData::hairSpecularSettings.Enabled)
-	{
-		coatLightNormal = vertexNormal.xyz;
-		coatLightContext = CreateDirectLightingContext(coatLightNormal, coatLightNormal, viewDirection, DirLightDirection, dirLightColor, dirDetailedShadow, dirSoftShadow);
-		coatLightContext.hairShadow = dirLightContext.hairShadow;
-	}
-	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, coatLightContext, indirectContext, directionalAmbientColor,
-		dirLightColor, coatLightNormal, dirDetailedShadow,
-		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
-#		else
+#	if defined(SNOW_DEFORMATION) && defined(PROJECTED_UV) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
 	SnowLighting::RelightProjected(snowState, projectedMaterialWeight, dirLightContext, indirectContext, directionalAmbientColor,
 		dirLightColor, worldNormal.xyz, dirDetailedShadow,
 		color.xyz, outputAlbedo, specularColor, indirectLobeWeights.specular, material.Roughness);
-#		endif
 #	endif
 
 	directionalAmbientColor *= outputAlbedo;
@@ -3377,10 +3325,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 
 #		if defined(SSS) && defined(SKIN)
 	psout.Masks = float4(saturate(baseColor.a), !(Permutation::ExtraShaderDescriptor & Permutation::ExtraFlags::IsBeastRace), masksZ, psout.Diffuse.w);
-#			if defined(SNOW_DEFORMATION) && defined(SNOW_BODY_COAT) && !defined(EYE)
-	// Subsurface scattering would blur the coat as skin.
-	psout.Masks.x *= 1.0 - snowState.coatAlpha;
-#			endif
 #		elif defined(LANDSCAPE) && defined(SNOW_DEFORMATION)
 	// Masks.y is dead for landscape (SSS reads it only where Masks.x > 0):
 	// carry the EM-resolved grain height (the terrain POM hit, 0.5-neutral in

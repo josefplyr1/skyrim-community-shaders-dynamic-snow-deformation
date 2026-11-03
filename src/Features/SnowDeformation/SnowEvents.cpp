@@ -232,40 +232,6 @@ void SnowDeformation::TickSnowEvents()
 		return;
 	}
 
-#if SD_WITH_SPELLS
-	const float stickiness = GetSnowCondition().stickiness;
-	for (const auto& blast : activeBlasts) {
-		if (blast.mark != SpellMark::Carve && blast.mark != SpellMark::Pit)
-			continue;
-		const float2 at = blast.cone ? blast.apex : blast.position;
-		const uint64_t key = ((uint64_t(uint32_t(int32_t(std::lround(at.x)))) << 32) | uint32_t(int32_t(std::lround(at.y)))) ^
-		                     (uint64_t(blast.element) << 56) ^ (uint64_t(blast.mark) << 60) ^ (blast.cone ? (1ull << 63) : 0ull);
-		auto [seen, fresh] = snowEventMarksSeen.try_emplace(key, frame);
-		seen->second = frame;
-		if (!fresh)
-			continue;
-		float surface = 0.0f;
-		if (!SampleShellSurface(at.x, at.y, surface))
-			continue;
-		float landZ = surface;
-		if (auto* tes = globals::game::tes)
-			tes->GetLandHeight({ at.x, at.y, surface }, landZ);
-		SnowEvent event;
-		event.kind = blast.cone ? SnowEventKind::Shout : (blast.mark == SpellMark::Pit ? SnowEventKind::Lightning : SnowEventKind::Blast);
-		event.position = { at.x, at.y, surface };
-		if (blast.cone)
-			event.velocity = { blast.coneDir.x * blast.coneSpeed, blast.coneDir.y * blast.coneSpeed, 0.0f };
-		event.strength = std::clamp(blast.strength, 0.0f, 1.0f);
-		event.amount = blast.cone ? blast.coneLength : blast.radius;
-		event.surfaceZ = surface;
-		event.snowDepth = std::max(surface - landZ, 0.0f);
-		event.stickiness = stickiness;
-		event.seed = MixSeed(key);
-		PushSnowEvent(event);
-	}
-	std::erase_if(snowEventMarksSeen, [frame](const auto& a_entry) { return a_entry.second != frame; });
-#endif
-
 	snowEventsPublished.swap(snowEventsBuilding);
 	snowEventsBuilding.clear();
 	const uint32_t dropped = snowEventsDroppedFrame;

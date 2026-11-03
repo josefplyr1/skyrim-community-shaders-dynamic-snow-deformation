@@ -13,7 +13,6 @@
 
 using json = nlohmann::json;
 
-#include "Features/SnowDeformation/SnowSwitches.h"
 #include "SharedData.h"
 #include <FeatureBuffer.h>
 
@@ -421,12 +420,6 @@ public:
 		// plain landscape snow set (snow01, snowrocks01), so the recolor takes
 		// every texel where the shape lies flat, rocks and dirt included.
 		SnowTexturedGround = 1 << 24,
-#if SD_WITH_BODY_COAT
-		// Set per pass by SnowDeformation's body coat: this skinned draw has a
-		// record at PS b8 and the coat atlas at t41. Read only in SKINNED
-		// permutations (SnowLighting.hlsli, kSnowBodyCoatBit).
-		SnowBodyCoat = 1 << 25
-#endif
 	};
 
 	bool inWorld = false;

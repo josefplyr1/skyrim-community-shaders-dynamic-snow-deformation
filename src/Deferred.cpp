@@ -429,15 +429,6 @@ void Deferred::DeferredPasses()
 		globals::features::effects11.DrawSunRays();
 	}
 
-#if SD_WITH_SPELLS
-	// Snow shell spell arcs: emissive, so they belong AFTER the composite has
-	// lit the scene rather than in the G-buffer the shell writes to.
-	{
-		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
-			snowDeformation.DrawLightningArcs();
-	}
-#endif
 }
 
 void Deferred::EndDeferred()

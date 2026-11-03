@@ -1584,13 +1584,6 @@ void SnowDeformation::DrawShell()
 	cbData.ShellFlags.y = capturedRoads > 0 ? 1 : 0;
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
-#if SD_WITH_BLOOD
-	cbData.BloodLook = { std::clamp(settings.BloodIntensity, 0.0f, 2.0f), bloodBurialClock,
-		gameClockHours.load(std::memory_order_relaxed), std::max(settings.BloodBurial, 0.01f) };
-	cbData.BloodLook2 = { std::max(settings.BloodAgeHours, 0.1f), std::clamp(settings.BloodSheen, 0.0f, 1.0f),
-		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, BloodTilesLive() ? 1.0f : 0.0f };
-	cbData.BloodLook3 = { 0.0f, 0.0f, BloodTileCell(), BloodTileTexel() };
-#endif
 
 	cbData.SeamRampInv = 0.0f;
 	int seamMinX, seamMinY, seamMaxX, seamMaxY;
@@ -1800,14 +1793,6 @@ void SnowDeformation::DrawShell()
 	spanClock.Lap(CpuCensus::kSpanWaterCover);
 	UpdateTerrainWet();
 	shellDrawTerrainVersion = shellTerrainVersion;
-#if SD_WITH_BLOOD
-	RenderBloodCapture();
-	spanClock.Lap(CpuCensus::kSpanBloodCapture);
-#endif
-#if SD_WITH_SPELLS
-	RenderRuneCapture();
-	spanClock.Lap(CpuCensus::kSpanRuneCapture);
-#endif
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	const bool mainRange = prevViewportCount && mainViewportFrame == globals::state->frameCount;
@@ -1842,13 +1827,6 @@ void SnowDeformation::DrawShell()
 		cbData.TessScreen = { ShellTessTargetRenderPx(), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
-#if SD_WITH_BLOOD
-	if (bloodMapWritten && (windowOrigin.x > bloodWrittenBox.z || windowOrigin.x + deformWorldSize < bloodWrittenBox.x ||
-							   windowOrigin.y > bloodWrittenBox.w || windowOrigin.y + deformWorldSize < bloodWrittenBox.y))
-		bloodMapWritten = false;
-	if (!bloodMapWritten && !bloodLatchOff)
-		cbData.BloodLook2.z = 0.0f;
-#endif
 	shellCB->Update(cbData);
 
 	if (!lastShellCBData)
@@ -1980,15 +1958,6 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(14, 1, &bermSRV);
 	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
-#if SD_WITH_BLOOD
-	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
-	context->PSSetShaderResources(30, 2, bloodSRVs);
-	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodTileAtlasSRV.get(), nullptr, bloodTileClockSRV.get() };
-	context->PSSetShaderResources(66, 4, bloodTileSRVs);
-#endif
-#if SD_WITH_SPELLS
-	BindMarkReaders(context, true);
-#endif
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
@@ -2217,9 +2186,6 @@ void SnowDeformation::DrawShell()
 		restoreShellSRVs[i] = prevShellSRVs[i].get();
 	context->PSSetShaderResources(0, 9, restoreShellSRVs);
 	ID3D11ShaderResourceView* nullFinePS[2] = {};
-#if SD_WITH_SPELLS
-	BindMarkReaders(context, false);
-#endif
 	context->PSSetShaderResources(13, 1, nullFinePS);
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);

@@ -95,85 +95,6 @@ ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
 	return printRimCS;
 }
 
-#if SD_WITH_SPELLS
-ID3D11ComputeShader* SnowDeformation::GetPrintRayCS()
-{
-	if (!printRayCS && !printRayFailed) {
-		printRayCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRayCS"));
-		if (!printRayCS) {
-			printRayFailed = true;
-			logger::warn("[SNOW DEFORMATION] print ray kernel failed to compile; spells that strike objects leave no print there");
-		}
-	}
-	return printRayCS;
-}
-
-void SnowDeformation::QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold, float a_speed, float a_seed)
-{
-	if (!(a_radius > 0.0f) || !(a_depth > 0.0f))
-		return;
-	const float reach = (a_flags & kPrintSpellCone) ? std::hypot(a_a.x - a_b.x, a_a.y - a_b.y) : 0.0f;
-	const PrintSpellMark mark{ a_a, a_b, a_radius, std::min(a_depth, 1.0f), std::max(a_rate, 0.0f), a_flags, reach, a_seed };
-	if (a_hold > 0.0f) {
-		if (heldPrintSpells.size() >= kPrintSpellCap)
-			return;
-		heldPrintSpells.push_back({ mark, 0.0f, a_hold, std::max(a_speed, 0.0f) });
-		if (printSpellMarks.size() < kPrintSpellCap)
-			printSpellMarks.push_back(HeldPrintFront(heldPrintSpells.back(), globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f));
-		return;
-	}
-	if (printSpellMarks.size() < kPrintSpellCap)
-		printSpellMarks.push_back(mark);
-}
-
-SnowDeformation::PrintSpellMark SnowDeformation::HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const
-{
-	PrintSpellMark mark = a_held.mark;
-	if ((mark.flags & kPrintSpellCone) && a_held.speed > 0.0f) {
-		const float extent = std::clamp(a_held.speed * (a_held.age + a_deltaTime) / std::max(mark.reach, 1.0f), 0.0f, 1.0f);
-		mark.a = mark.b + (mark.a - mark.b) * extent;
-	}
-	return mark;
-}
-
-void SnowDeformation::ReplayHeldObjectSpellMarks(float a_deltaTime)
-{
-	if (!settings.EnableSpellIntegration) {
-		heldPrintSpells.clear();
-		return;
-	}
-	for (auto it = heldPrintSpells.begin(); it != heldPrintSpells.end();) {
-		it->age += a_deltaTime;
-		if (it->age >= it->life) {
-			it = heldPrintSpells.erase(it);
-			continue;
-		}
-		if (printSpellMarks.size() < kPrintSpellCap)
-			printSpellMarks.push_back(HeldPrintFront(*it, a_deltaTime));
-		++it;
-	}
-}
-
-void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold, float a_speed, float a_seed)
-{
-	switch (a_mark) {
-	case SpellMark::Melt:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength, a_rate, a_flags, a_hold, a_speed, a_seed);
-		break;
-	case SpellMark::Pit:
-		QueueObjectSpellMark(a_a, a_b, (a_flags & kPrintSpellCone) ? std::max(a_radius, 4.0f) : std::max(settings.PitRadius, 4.0f) * a_pitScale,
-			a_strength * std::clamp(settings.PitDepth, 0.0f, 1.0f), 0.0f, a_flags, a_hold, a_speed, a_seed);
-		break;
-	case SpellMark::Carve:
-		QueueObjectSpellMark(a_a, a_b, std::max(a_radius, 4.0f), a_strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f), 0.0f,
-			(a_flags & kPrintSpellCone) ? a_flags | kPrintSpellChurn : a_flags, a_hold, a_speed, a_seed);
-		break;
-	default:
-		break;
-	}
-}
-#endif
-
 bool SnowDeformation::EnsurePrintShaders()
 {
 	if (printCSFailed)
@@ -281,47 +202,6 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 		DX::ThrowIfFailed(device->CreateShaderResourceView(printBlockBuffer.get(), &blockSrvDesc, printBlockSRV.put()));
 		Util::SetResourceName(printBlockSRV.get(), "SnowDeformation::PrintBlocks SRV");
 	}
-
-#if SD_WITH_SPELLS
-	if (!printSpellBuffer) {
-		D3D11_BUFFER_DESC spellDesc{};
-		spellDesc.ByteWidth = kPrintSpellCap * 3u * sizeof(float4);
-		spellDesc.Usage = D3D11_USAGE_DYNAMIC;
-		spellDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		spellDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		spellDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		spellDesc.StructureByteStride = sizeof(float4);
-		DX::ThrowIfFailed(device->CreateBuffer(&spellDesc, nullptr, printSpellBuffer.put()));
-		Util::SetResourceName(printSpellBuffer.get(), "SnowDeformation::PrintSpells");
-		D3D11_SHADER_RESOURCE_VIEW_DESC spellSrvDesc{};
-		spellSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		spellSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		spellSrvDesc.Buffer.NumElements = kPrintSpellCap * 3u;
-		DX::ThrowIfFailed(device->CreateShaderResourceView(printSpellBuffer.get(), &spellSrvDesc, printSpellSRV.put()));
-		Util::SetResourceName(printSpellSRV.get(), "SnowDeformation::PrintSpells SRV");
-
-		D3D11_BUFFER_DESC hitDesc{};
-		hitDesc.ByteWidth = kPrintSpellCap * sizeof(float4);
-		hitDesc.Usage = D3D11_USAGE_DEFAULT;
-		hitDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		hitDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		hitDesc.StructureByteStride = sizeof(float4);
-		DX::ThrowIfFailed(device->CreateBuffer(&hitDesc, nullptr, printRayHitBuffer.put()));
-		Util::SetResourceName(printRayHitBuffer.get(), "SnowDeformation::PrintRayHits");
-		D3D11_SHADER_RESOURCE_VIEW_DESC hitSrvDesc{};
-		hitSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		hitSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		hitSrvDesc.Buffer.NumElements = kPrintSpellCap;
-		DX::ThrowIfFailed(device->CreateShaderResourceView(printRayHitBuffer.get(), &hitSrvDesc, printRayHitSRV.put()));
-		Util::SetResourceName(printRayHitSRV.get(), "SnowDeformation::PrintRayHits SRV");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC hitUavDesc{};
-		hitUavDesc.Format = DXGI_FORMAT_UNKNOWN;
-		hitUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		hitUavDesc.Buffer.NumElements = kPrintSpellCap;
-		DX::ThrowIfFailed(device->CreateUnorderedAccessView(printRayHitBuffer.get(), &hitUavDesc, printRayHitUAV.put()));
-		Util::SetResourceName(printRayHitUAV.get(), "SnowDeformation::PrintRayHits UAV");
-	}
-#endif
 
 	if (!printWriteBuffer) {
 		constexpr uint32_t maxRow = 2048u / kPrintTileDim + 1u;
@@ -673,11 +553,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	}
 	cb.RefillQuanta = quanta;
 	cb.RimWidth = std::clamp(settings.ObjectPrintRimWidth, 0.0f, 15.0f);
-#if SD_WITH_SPELLS
-	const uint32_t spellCount = (printSpellBuffer && GetPrintRayCS()) ? (uint32_t)std::min<size_t>(printSpellMarks.size(), kPrintSpellCap) : 0u;
-#else
 	const uint32_t spellCount = 0;
-#endif
 	cb.SpellCount = spellCount;
 	printFrameCB->Update(cb);
 
@@ -795,13 +671,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			for (const auto& prop : contactProps)
 				stampRects.push_back(texelRect(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad));
 		}
-#if SD_WITH_SPELLS
-		for (uint32_t i = 0; i < spellCount; i++) {
-			const auto& mark = printSpellMarks[i];
-			const float r = mark.radius + pad;
-			stampRects.push_back(texelRect(std::min(mark.a.x, mark.b.x) - r, std::min(mark.a.y, mark.b.y) - r, std::max(mark.a.x, mark.b.x) + r, std::max(mark.a.y, mark.b.y) + r));
-		}
-#endif
 		for (const auto& rect : stampRects)
 			addBlocks(rect);
 		const uint32_t blocks = (uint32_t)printBlockScratch.size();
@@ -812,33 +681,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShaderResources(2, 1, &blockSRV);
 			a_context->CSSetShaderResources(7, 3, contactSRVs);
 			a_context->CSSetShaderResources(10, 2, topSRVs);
-#if SD_WITH_SPELLS
-			ID3D11ShaderResourceView* spellSRVs[2] = { printSpellSRV.get(), printRayHitSRV.get() };
-#else
 			ID3D11ShaderResourceView* spellSRVs[2] = {};
-#endif
-#if SD_WITH_SPELLS
-			if (spellCount > 0) {
-				D3D11_MAPPED_SUBRESOURCE mapped{};
-				if (SUCCEEDED(a_context->Map(printSpellBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-					auto* rows = static_cast<float4*>(mapped.pData);
-					for (uint32_t i = 0; i < spellCount; i++) {
-						const auto& mark = printSpellMarks[i];
-						rows[i * 3] = { mark.a.x, mark.a.y, mark.a.z, mark.radius };
-						rows[i * 3 + 1] = { mark.b.x, mark.b.y, mark.b.z, (float)mark.flags };
-						rows[i * 3 + 2] = { mark.depth, mark.rate, mark.reach, mark.seed };
-					}
-					a_context->Unmap(printSpellBuffer.get(), 0);
-				}
-				a_context->CSSetShaderResources(13, 1, &spellSRVs[0]);
-				ID3D11UnorderedAccessView* rayUAVs[5] = { nullptr, nullptr, nullptr, nullptr, printRayHitUAV.get() };
-				a_context->CSSetUnorderedAccessViews(0, 5, rayUAVs, nullptr);
-				a_context->CSSetShader(printRayCS, nullptr, 0);
-				a_context->Dispatch((spellCount + 31) / 32, 1, 1);
-				ID3D11UnorderedAccessView* nullRay = nullptr;
-				a_context->CSSetUnorderedAccessViews(4, 1, &nullRay, nullptr);
-			}
-#endif
 			a_context->CSSetShaderResources(13, 2, spellSRVs);
 			ID3D11UnorderedAccessView* stampUAVs[2] = { mapUAV, printWriteUAV.get() };
 			a_context->CSSetUnorderedAccessViews(0, 2, stampUAVs, nullptr);

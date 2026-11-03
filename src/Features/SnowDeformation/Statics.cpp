@@ -774,14 +774,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
 		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
 		CaptureDecalOverlay(a_pass);
-#if SD_WITH_SPELLS
-	if (!rec.bloodTex && ((settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) || (engineDecal && settings.FrostDecalsOnSnow))) {
-		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
-		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
-		if (decalMode && CaptureRuneDraw(a_pass, engineDecal))
-			return;
-	}
-#endif
 	if (engineDecal)
 		return;
 	if (rec.bloodTex) {
@@ -789,13 +781,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
 		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
 		if (decalMode || poolQuad) {
-#if SD_WITH_BLOOD
-			if (settings.BloodOnSnow) {
-				const bool skinnedBlood = a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr;
-				if (!skinnedBlood || poolQuad)
-					CaptureBloodDraw(a_pass, skinnedBlood);
-			}
-#endif
 			return;
 		}
 	}
@@ -1023,9 +1008,6 @@ struct SD_BSLightingShader_SetupGeometry
 		if (snowDeformation.loaded) {
 			snowDeformation.OnLightingDraw(a_pass);
 			snowDeformation.SetProjectedSnowBit(shader, a_pass);
-#if SD_WITH_BODY_COAT
-			snowDeformation.SetBodyCoatBit(a_pass);
-#endif
 		}
 
 		func(shader, a_pass, a_flags);
@@ -1033,9 +1015,6 @@ struct SD_BSLightingShader_SetupGeometry
 		if (snowDeformation.loaded) {
 			snowDeformation.BSLightingShader_SetupGeometry(a_pass, shader ? shader->currentRawTechnique : 0);
 			snowDeformation.LandscapeSnowSetup(a_pass, true);
-#if SD_WITH_BODY_COAT
-			snowDeformation.ProbeBodyCoatDraw(a_pass);
-#endif
 		}
 	}
 	static inline REL::Relocation<decltype(thunk)> func;
@@ -1634,24 +1613,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
 		}
 	}
-#if SD_WITH_VOLUME
-	if (!voxelShellVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "VOXEL"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &voxelShellVS)))
-				Util::SetResourceName(voxelShellVS, "SnowDeformation::VolumeSnowVS");
-		}
-	}
-	if (!voxelShellPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "VOXEL"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &voxelShellPS)))
-				Util::SetResourceName(voxelShellPS, "SnowDeformation::VolumeSnowPS");
-		}
-	}
-#endif
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
 		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
@@ -1667,10 +1628,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
 		objectConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
-#if SD_WITH_VOLUME
-	if (!objectSkyOpenCS)
-		objectSkyOpenCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectSkyOpenCS"));
-#endif
 	if (!objectConeDiffuseCS)
 		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
 	if (!objectConeFusedCS)
@@ -2335,11 +2292,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	sCaptureRecords.assign(size_t(farRecordBase) + farCount, StaticsCB{});
 	auto& captureRecords = sCaptureRecords;
 	std::vector<uint8_t> recordNeeded(captureRecords.size(), 0);
-#if SD_WITH_VOLUME
-	const bool volumeRecords = settings.VolumeSnow;
-	if (volumeRecords)
-		std::fill_n(recordNeeded.begin(), captureCount, uint8_t(1));
-#endif
 	std::fill(recordNeeded.begin() + farRecordBase, recordNeeded.end(), uint8_t(1));
 	float maxSeedDepth = 0.0f;
 	std::vector<ID3D11ShaderResourceView*> captureSmoothSRVs(captureCount, nullptr);
@@ -2770,40 +2722,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->EndPass();
 	}
 
-#if SD_WITH_VOLUME
-	if (settings.VolumeSnow && objectSkyOpenCS && !objectSkyOpen) {
-		D3D11_TEXTURE2D_DESC openDesc = heightTopRaw[0]->desc;
-		openDesc.Width = kHeightMapDim / 2;
-		openDesc.Height = kHeightMapDim / 2;
-		openDesc.Format = DXGI_FORMAT_R8_UNORM;
-		openDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		objectSkyOpen = new Texture2D(openDesc, "SnowDeformation::ObjectSkyOpen");
-		objectSkyOpen->CreateSRV({ .Format = openDesc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-		objectSkyOpen->CreateUAV({ .Format = openDesc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
-	}
-	const bool skyWanted = settings.VolumeSnow && objectSkyOpenCS && objectSkyOpen;
-	auto bakeSkyOpen = [&](Texture2D* a_top) {
-		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Sky"));
-		context->CSSetShader(objectSkyOpenCS, nullptr, 0);
-		ID3D11ShaderResourceView* openSRV = a_top->srv.get();
-		ID3D11UnorderedAccessView* openUAV = objectSkyOpen->uav.get();
-		context->CSSetShaderResources(0, 1, &openSRV);
-		context->CSSetUnorderedAccessViews(0, 1, &openUAV, nullptr);
-		const uint32_t openDim = (kHeightMapDim / 2 + 7) / 8;
-		context->Dispatch(openDim, openDim, 1);
-		context->CSSetShaderResources(0, 1, nullCsSRVs);
-		context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-		context->CSSetShader(nullptr, nullptr, 0);
-		globals::profiler->EndPass();
-	};
-	if (settings.VolumeSnow && skyWanted && !skyOpenCurrent && heightTopRaw[previous])
-		bakeSkyOpen(heightTopRaw[previous]);
-#endif
-
-#if SD_WITH_VOLUME
-	RenderVoxelVolume(captureRecords.data(), captureCount, captureRecordsLive && volumeRecords, captureParity);
-#endif
-
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
@@ -3008,15 +2926,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 	}
 
-#if SD_WITH_VOLUME
-	if (skyWanted && heightTopRaw[heightCurrent])
-		bakeSkyOpen(heightTopRaw[heightCurrent]);
-	else
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
-	skyOpenCurrent = skyWanted && heightTopRaw[heightCurrent];
-#else
 	globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
-#endif
 
 	ID3D11ShaderResourceView* nullTailSRVs[2] = { nullptr, nullptr };
 	context->CSSetShaderResources(2, 2, nullTailSRVs);
@@ -3758,36 +3668,6 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	bindSkinStages(tessellateSkins);
 
-#if SD_WITH_VOLUME
-	ID3D11Buffer* savedPSCB3 = nullptr;
-	const bool volumeSeedView = staticsDebugView == 10 && settings.VolumeSnow && voxelLevels[0].valid &&
-	                            voxelLevels[0].volume[voxelLevels[0].current] && voxelLevels[0].field && voxelLevels[0].heightMap && voxelLevels[0].heightMapUnder;
-	if (volumeSeedView) {
-		if (!voxelDebugCB) {
-			D3D11_BUFFER_DESC cbDesc{};
-			cbDesc.ByteWidth = sizeof(VoxelVolumeCB);
-			cbDesc.Usage = D3D11_USAGE_DYNAMIC;
-			cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-			cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-			voxelDebugCB = new ConstantBuffer(cbDesc, "SnowDeformation::VoxelSeedDebugCB");
-		}
-		VoxelVolumeCB vcb{};
-		FillVoxelCB(0, vcb);
-		voxelDebugCB->Update(vcb);
-		context->PSGetConstantBuffers(3, 1, &savedPSCB3);
-		ID3D11Buffer* cb3 = voxelDebugCB->CB();
-		context->PSSetConstantBuffers(3, 1, &cb3);
-		auto& lv = voxelLevels[0];
-		ID3D11ShaderResourceView* seedSRVs[4] = { lv.volume[lv.current]->srv.get(), lv.field->srv.get(), lv.heightMap->srv.get(),
-			(heightBottomFiltered && heightBottomFiltered->srv) ? heightBottomFiltered->srv.get() : nullptr };
-		context->PSSetShaderResources(46, 4, seedSRVs);
-		ID3D11ShaderResourceView* skySRV = (objectSkyOpen && objectSkyOpen->srv) ? objectSkyOpen->srv.get() : nullptr;
-		context->PSSetShaderResources(51, 1, &skySRV);
-		ID3D11ShaderResourceView* underSRV = lv.heightMapUnder->srv.get();
-		context->PSSetShaderResources(54, 1, &underSRV);
-	}
-#endif
-
 	globals::profiler->BeginPass("SnowDeformation::Objects - Setup & Cull");
 	static std::unordered_set<std::string> loggedSkips;
 	auto logSkip = [this](RE::BSGeometry* a_geometry, const char* a_reason) {
@@ -3830,10 +3710,6 @@ void SnowDeformation::DrawCapturedStatics()
 	context->HSSetShaderResources(40, 1, &farTopSRV);
 	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
 	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
-#if SD_WITH_BLOOD
-	ID3D11ShaderResourceView* skinBloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
-	context->PSSetShaderResources(30, 2, skinBloodSRVs);
-#endif
 	ID3D11ShaderResourceView* projNoiseSRV = SD_ProjNoiseMapSRV();
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
 	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
@@ -3843,9 +3719,6 @@ void SnowDeformation::DrawCapturedStatics()
 	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
 	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
 	BindPrintReaders(context);
-#if SD_WITH_SPELLS
-	BindMarkReaders(context, CoatPaintsMarks());
-#endif
 
 	ID3D11DepthStencilState* boundDepthState = nullptr;
 
@@ -4315,20 +4188,7 @@ void SnowDeformation::DrawCapturedStatics()
 		};
 
 		bloodPreSkinDepthThisFrame = false;
-#if SD_WITH_BLOOD
-		const D3D11_BOX skinExtent = ScreenRectBox(vpCount ? &vps[0] : nullptr, shellRasterDepth->desc.Width, shellRasterDepth->desc.Height, 0);
-		if (BloodTilesLive() && !bloodOverlays.empty() && GetPreSnowCopyCS() && depthSyncRectCB &&
-			EnsureBloodPreSkinDepth(std::max(skinExtent.right, 1u), std::max(skinExtent.bottom, 1u))) {
-			statsRow(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Depth Copy"));
-			const RECT& rc = bloodCopyRect;
-			CopyDepthRect(context, mainDepthSRV, D3D11_BOX{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 }, bloodPreSkinDepthUAV.get());
-			bloodPreSkinDepthThisFrame = true;
-		} else {
-			globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
-		}
-#else
 		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
-#endif
 		statsRow("SnowDeformation::Objects - Depth Prepass");
 		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch && bloodOverlays.empty() && staticsDebugView != 9;
 		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
@@ -4407,16 +4267,6 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(24, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(52, 1, &nullSmoothSRV);
-#if SD_WITH_VOLUME
-	if (volumeSeedView) {
-		ID3D11ShaderResourceView* nullSeedSRVs[6] = {};
-		context->PSSetShaderResources(46, 6, nullSeedSRVs);
-		context->PSSetShaderResources(54, 1, nullSeedSRVs);
-		context->PSSetConstantBuffers(3, 1, &savedPSCB3);
-		if (savedPSCB3)
-			savedPSCB3->Release();
-	}
-#endif
 	skinCullLogArmed = false;
 
 	const bool patchWanted = patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended();
@@ -4481,9 +4331,6 @@ void SnowDeformation::DrawCapturedStatics()
 		                                               heightSkinDepth->srv.get() :
 		                                               nullptr;
 		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
-#if SD_WITH_SPELLS
-		BindMarkReaders(context, true);
-#endif
 
 		StaticsCB scb{};
 		FillPatchDrawCB(scb);
@@ -4654,16 +4501,6 @@ void SnowDeformation::DrawCapturedStatics()
 		context->DSSetShaderResources(52, 1, nullHeightSRVs);
 		globals::profiler->EndPass();
 	}
-
-#if SD_WITH_SPELLS
-	BindMarkReaders(context, CoatPaintsMarks());
-#endif
-#if SD_WITH_VOLUME
-	DrawVoxelSnow();
-#endif
-#if SD_WITH_SPELLS
-	BindMarkReaders(context, false);
-#endif
 
 	ID3D11ShaderResourceView* nullUntouchedSRV = nullptr;
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullUntouchedSRV);
@@ -5211,11 +5048,7 @@ bool SnowDeformation::EnsureContactResources()
 void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly)
 {
 	contactDrawsLast = 0;
-#if SD_WITH_BODY_COAT
-	const bool coatFall = BodyCoatFallDue();
-#else
 	const bool coatFall = false;
-#endif
 	if ((contactProps.empty() && contactActors.empty() && !coatFall) || !EnsureContactResources())
 		return;
 	auto* context = a_context;
@@ -5359,28 +5192,16 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
 		bool skinnedVSBound = true;
-#if SD_WITH_BODY_COAT
-		const bool coatWrite = BodyCoatWriteBegin(a_coatOnly);
-#else
 		const bool coatWrite = false;
-#endif
 		bool coatPass = false;
 		bool coatTopPass = false;
 		bool coatAll = false;
 		float4 coatParams{};
 		float4 coatTop{};
-#if SD_WITH_BODY_COAT
-		uint32_t coatTriangles = 0, coatActors = 0;
-#else
 		uint32_t coatTriangles = 0;
-#endif
 		const auto* playerCamera = RE::PlayerCamera::GetSingleton();
 		const bool firstPerson = playerCamera && playerCamera->IsInFirstPerson();
-#if SD_WITH_BODY_COAT
-		const auto& coatOnly = BodyCoatCoatOnly();
-#else
 		const auto& coatOnly = noProps;
-#endif
 		const size_t walks = contactActors.size() + (coatWrite ? coatOnly.size() : 0);
 		for (size_t walk = a_coatOnly ? contactActors.size() : 0; walk < walks; ++walk) {
 			const bool coatOnlyWalk = walk >= contactActors.size();
@@ -5458,10 +5279,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					context->VSSetShader(contactSkinVS, nullptr, 0);
 					skinnedVSBound = true;
 				}
-#if SD_WITH_BODY_COAT
-				if (coatPass && !BodyCoatWriteShape(context, a_geometry, coatParams))
-					return RE::BSVisit::BSVisitControl::kContinue;
-#endif
 				++geometryIndex;
 				if (debugContactSolo >= 0) {
 					if (geometryIndex != debugContactSolo)
@@ -5770,41 +5587,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					}
 				}
 			}
-#if SD_WITH_BODY_COAT
-			if (coatWrite && BodyCoatWriteDue(ref->GetFormID(), coatParams, coatTop)) {
-				const auto counts = std::tuple{ contactOverlaysLast, contactShellsLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast, contactSkinDrawsLast };
-				globals::profiler->EndPass();
-				globals::profiler->BeginPass("SnowDeformation::Bodies - Coat Update");
-				coatAll = coatTop.z > 0.0f;
-				if (coatAll) {
-					BodyCoatTopBind(context, true);
-					skinnedVSBound = true;
-					coatTopPass = true;
-					geometryIndex = -1;
-					RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
-					coatTopPass = false;
-					BodyCoatTopBind(context, false);
-				}
-				BodyCoatWriteBind(context, true);
-				skinnedVSBound = true;
-				coatPass = true;
-				geometryIndex = -1;
-				RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
-				coatPass = false;
-				coatAll = false;
-				coatActors++;
-				BodyCoatWriteBind(context, false);
-				std::tie(contactOverlaysLast, contactShellsLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast, contactSkinDrawsLast) = counts;
-				globals::profiler->EndPass();
-				globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
-			}
-#endif
 		}
 		globals::profiler->EndPass();
-#if SD_WITH_BODY_COAT
-		if (coatWrite)
-			BodyCoatWriteResolve(context, coatTriangles, coatActors);
-#endif
 	}
 
 	ID3D11RenderTargetView* nullRTV = nullptr;

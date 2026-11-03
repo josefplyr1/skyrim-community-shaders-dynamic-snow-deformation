@@ -140,11 +140,7 @@ namespace SIE
 		static void GetLightingShaderDefines(uint32_t descriptor, std::span<D3D_SHADER_MACRO> defines)
 		{
 			static REL::Relocation<void(uint32_t, D3D_SHADER_MACRO*)> VanillaGetLightingShaderDefines(RELOCATION_ID(101631, 108698));
-#if SD_WITH_BODY_COAT
-			VanillaGetLightingShaderDefines(descriptor & ~static_cast<uint32_t>(ShaderCache::LightingShaderFlags::SnowBodyCoat), defines.data());
-#else
 			VanillaGetLightingShaderDefines(descriptor, defines.data());
-#endif
 
 			size_t lastIndex = std::ranges::find_if(defines, [](const D3D_SHADER_MACRO& macro) { return macro.Name == nullptr; }) - defines.begin();
 
@@ -160,11 +156,6 @@ namespace SIE
 			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::LandscapeSeams)) != 0) {
 				defines[lastIndex++] = { "LANDSCAPE_SEAMS", nullptr };
 			}
-#if SD_WITH_BODY_COAT
-			if ((descriptor & static_cast<uint32_t>(ShaderCache::LightingShaderFlags::SnowBodyCoat)) != 0) {
-				defines[lastIndex++] = { "SNOW_BODY_COAT", nullptr };
-			}
-#endif
 
 			for (auto* feature : Feature::GetFeatureList()) {
 				if (feature->loaded && feature->HasShaderDefine(RE::BSShader::Type::Lighting)) {

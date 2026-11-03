@@ -5,7 +5,6 @@
 #pragma once
 
 #include "Buffer.h"
-#include "Features/SnowDeformation/SnowSwitches.h"
 
 #include <d3d11_1.h>
 #include <deque>
@@ -60,10 +59,6 @@ public:
 	static constexpr float kStampModeBody = 40.0f;
 	static constexpr float kStampImpactScale = 0.45f;
 	static constexpr float kStampModeShove = kStampImpactScale;
-#if SD_WITH_SPELLS
-	static constexpr size_t kMaxSpellEmitters = 64;
-	static constexpr size_t kSpellEmitterCeiling = 192;
-#endif
 	static constexpr uint kSpellStampReserve = 48;
 
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -494,7 +489,6 @@ public:
 		float4 StampEnds[kMaxStamps];
 		float4 StampCones[kMaxStamps];
 
-
 		float2 ContactCenter;
 		float ContactHalfExtent;
 		float ContactDim;
@@ -598,10 +592,6 @@ public:
 
 	Texture2D* bloodMapTexture = nullptr;
 	Texture2D* bloodClockTexture = nullptr;
-#if SD_WITH_BLOOD
-	ID3D11ShaderResourceView* GetBloodMapSRV() const { return bloodMapTexture ? bloodMapTexture->srv.get() : nullptr; }
-	ID3D11ShaderResourceView* GetBloodClockSRV() const { return bloodClockTexture ? bloodClockTexture->srv.get() : nullptr; }
-#endif
 	bool bloodMapWritten = false;
 	float4 bloodWrittenBox = {};
 	bool bloodLatchOff = false;
@@ -722,10 +712,6 @@ public:
 	winrt::com_ptr<ID3D11Buffer> bloodDiscBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodDiscSRV;
 	static constexpr uint32_t kBloodMaxDiscs = 256;
-#if SD_WITH_BLOOD
-	ID3D11ComputeShader* bloodRingCS = nullptr;
-	ID3D11ComputeShader* GetBloodRingCS();
-#endif
 	bool bloodShadersFailed = false;
 	bool bloodResourcesLogged = false;
 	bool bloodDepositLogged = false;
@@ -735,17 +721,8 @@ public:
 	uint32_t bloodDepositsLast = 0;
 	uint32_t bloodDiscsLast = 0;
 	uint32_t bloodSeenLive = 0;
-#if SD_WITH_BLOOD
-	void CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc);
-#endif
 	bool EnsureBloodResources();
 	void ReleaseBloodShaders();
-#if SD_WITH_BLOOD
-	/** @brief From the capture hook: a decal-mode Lighting draw whose diffuse is a blood texture. */
-	void CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned);
-	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
-	void RenderBloodCapture();
-#endif
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_rigidVS / a_skinnedVS replace the map's vertex shaders, a_instances the map's four seam instances. */
 	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false, ID3D11VertexShader* a_skinnedVS = nullptr);
 	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
@@ -783,44 +760,8 @@ public:
 	std::unordered_set<std::string> decalOverlayNamesLogged;
 	uint32_t decalMasksLast = 0;
 	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
-#if SD_WITH_API
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
-#endif
 
-#if SD_WITH_BLOOD
-	static constexpr uint32_t kBloodTileDim = 512;
-	static constexpr uint32_t kBloodTilesAcross = 8;
-	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
-	static constexpr float kBloodTileTexel = 0.25f;
-	static constexpr uint32_t kBloodTileMips = 4;
-	static constexpr float kBloodTileApron = 4.0f;
-	static constexpr float kBloodTileCell = float(kBloodTileDim) * kBloodTileTexel - 2.0f * kBloodTileApron;
-	static constexpr float kBloodTileKeepUnits = 7000.0f;
-	static constexpr int32_t kBloodTileKeepCells = 59;
-	static constexpr int32_t kBloodTileIndexDim = 128;
-	static_assert(float(kBloodTileKeepCells) * kBloodTileCell >= kBloodTileKeepUnits && 2 * kBloodTileKeepCells + 1 <= kBloodTileIndexDim);
-	uint32_t BloodTilesAcross() const { return kBloodTilesAcross; }
-	uint32_t BloodTileCount() const { return kBloodMaxTiles; }
-	float BloodTileTexel() const { return kBloodTileTexel; }
-	float BloodTileCell() const { return kBloodTileCell; }
-	int32_t BloodCellOf(float a_world) const { return int32_t(std::floor(a_world / kBloodTileCell)); }
-	int32_t BloodTileKeepCells() const { return kBloodTileKeepCells; }
-	static constexpr uint32_t kBloodTileBlock = 8;
-	static constexpr uint32_t kBloodTileSnapDim = 80;
-	struct BloodTile
-	{
-		bool live = false;
-		int32_t cellX = 0;
-		int32_t cellY = 0;
-		uint32_t gen = 0;
-		float lastBurial = 0.0f;
-		std::vector<BloodCapture> draws;
-		bool discs = false;
-		float2 seedOrigin{ 0.0f, 0.0f };
-		int32_t snapLogical[2]{};
-		bool snapValid = false;
-	};
-#endif
 	struct BloodFineRequest
 	{
 		BloodCapture draw;
@@ -847,192 +788,13 @@ public:
 		int32_t SnapLogical[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
-#if SD_WITH_BLOOD
-	enum BloodTileShader : uint32_t
-	{
-		kBloodTileSeed,
-		kBloodTileMergeClock,
-		kBloodTileMergePigment,
-		kBloodTileMipDown,
-		kBloodTileCopyResidue,
-		kBloodTileShaderCount
-	};
-	BloodTile bloodTiles[kBloodMaxTiles];
-#endif
 	std::vector<BloodFineRequest> bloodFineQueue;
-#if SD_WITH_BLOOD
-	uint32_t bloodTileEpoch = 1;
-	uint32_t bloodTilesLive = 0;
-	uint32_t bloodTileMergesLast = 0;
-	uint32_t bloodTileBoundsRead = 0;
-	uint32_t bloodTileBoundsGuessed = 0;
-	bool bloodTileIndexDirty = true;
-	bool bloodTilesFailed = false;
-	bool bloodTilesLogged = false;
-	bool bloodTilesDrop = false;
-#endif
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodPreSkinDepthUAV;
 	bool bloodPreSkinDepthThisFrame = false;
 	/** @brief bloodPreSkinDepth at a_width x a_height (the skins' viewport extent), recreated when that changes. */
 	bool EnsureBloodPreSkinDepth(UINT a_width, UINT a_height);
-#if SD_WITH_BLOOD
-	winrt::com_ptr<ID3D11Texture2D> bloodTileSnapshot;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSnapshotSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileSnapshotUAV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileRedrawn;
-	winrt::com_ptr<ID3D11RenderTargetView> bloodTileRedrawnRTV;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileRedrawnSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileRedrawnUAV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileResidue;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileResidueSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileResidueUAV;
-	/** @brief The tile's own mip chain from its mip 0, through a scratch copy per level. Run with every merge: past a few metres the shell reads the mips, not mip 0. */
-	void BuildBloodTileMips(ID3D11DeviceContext* a_context, uint32_t a_slot);
-	winrt::com_ptr<ID3D11Texture2D> bloodTileAtlas;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileAtlasSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileAtlasUAV[kBloodTileMips];
-	uint32_t bloodTileAtlasRows = 0;
-	/** @brief Remakes the pigment atlas with a_rows rows (array slices), cleared, keeping the rows both sizes hold. False when the device refuses; the old atlas then stays. */
-	bool SizeBloodTileAtlas(uint32_t a_rows);
-	winrt::com_ptr<ID3D11Texture2D> bloodTileClock;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileClockSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileClockUAV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileIndex;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileIndexSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileScratch;
-	winrt::com_ptr<ID3D11RenderTargetView> bloodTileScratchRTV;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileScratchRawSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTileScratchClock;
-	winrt::com_ptr<ID3D11RenderTargetView> bloodTileScratchClockRTV;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileScratchClockSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTilePrev;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevRawSRV;
-	winrt::com_ptr<ID3D11Texture2D> bloodTilePrevClock;
-	winrt::com_ptr<ID3D11ShaderResourceView> bloodTilePrevClockSRV;
-	winrt::com_ptr<ID3D11Buffer> bloodTileCB;
-	ID3D11ComputeShader* bloodTileCS[kBloodTileShaderCount]{};
-	ID3D11ComputeShader* GetBloodTileCS(BloodTileShader a_which);
-	bool BloodTilesWanted() const { return settings.BloodOnSnow && !bloodTilesFailed; }
-	bool BloodTilesLive() const { return BloodTilesWanted() && bloodTilesLive > 0 && bloodTileAtlasSRV; }
-	bool EnsureBloodTileResources();
-	void ReleaseBloodTiles();
-	void DropBloodTiles();
-	/** @brief The mark's world XY bounds: its vertices where the CPU holds them, a guess around its bound otherwise. */
-	void BloodMarkBounds(const BloodCapture& a_capture, BloodSeen& a_seen);
-	int32_t FindBloodTile(int32_t a_cellX, int32_t a_cellY) const;
-	int32_t AllocateBloodTile(int32_t a_cellX, int32_t a_cellY, int32_t a_cameraCellX, int32_t a_cameraCellY);
-	void FillBloodTileCB(BloodTileCB& a_cb, uint32_t a_slot) const;
-	void SeedBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot);
-	void MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs);
-	/** @brief Draws this frame's detail requests into their tiles. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
-	void RenderBloodTiles(const std::vector<BloodDisc>& a_discs);
-#endif
-
-#if SD_WITH_SPELLS
-	static constexpr uint32_t kRuneMaxTiles = 4;
-	static constexpr uint32_t kRuneTileDim = 512;
-	static constexpr float kRuneTileHalf = 110.0f;
-	static constexpr uint32_t kFrostCells = 64;
-	static constexpr float kFrostCellSize = 128.0f;
-	static constexpr uint32_t kFrostTextures = 4;
-	static constexpr float kFrostDecalAboveSnow = 24.0f;
-	struct RuneSite
-	{
-		uint32_t formID = 0;
-		RE::NiPoint3 position;
-		std::string decalPath;
-		float distSq = 0.0f;
-	};
-	struct RuneCapture
-	{
-		BloodCapture draw;
-		winrt::com_ptr<ID3D11ShaderResourceView> normal;
-		winrt::com_ptr<ID3D11ShaderResourceView> glow;
-		float3 emissive{ 0.0f, 0.0f, 0.0f };
-		float emissiveMult = 1.0f;
-		bool glowMap = false;
-		float4 specular{ 0.0f, 0.0f, 0.0f, 0.0f };
-		RE::NiPoint3 centre;
-		float radius = 0.0f;
-	};
-	struct alignas(16) RuneCB
-	{
-		float4 RuneParams;
-		float4 RuneRects[kRuneMaxTiles];
-		float4 RuneTints[kRuneMaxTiles];
-		float4 FrostRect;
-		float4 FrostNormals;
-		float4 RuneSpecular[kRuneMaxTiles];
-		float4 RuneReach[kRuneMaxTiles];
-		float4 FrostSpecular[kFrostTextures];
-		float4 FrostTints[kFrostTextures];
-		float4 FrostEmissiveMults;
-	};
-	STATIC_ASSERT_ALIGNAS_16(RuneCB);
-	static_assert(kFrostTextures == 4, "RuneCB's frost rows and the shells' FrostDiffuse / FrostNormal / FrostGlow slots hold four");
-	std::mutex runeLock;
-	std::vector<RuneSite> runeSites;
-	std::atomic<uint32_t> runeSitesLive{ 0 };
-	std::vector<RuneSite> runeSitesScratch;
-	std::unordered_map<const RE::BGSProjectile*, std::string> runeDecalPathCache;
-	std::unordered_set<uint32_t> runeLifted;
-	std::vector<RuneCapture> runeCaptures;
-	std::unordered_set<const RE::BSGeometry*> runeCaptureSet;
-	std::vector<RuneCapture> frostCaptures;
-	std::unordered_set<std::string> runeDecalPathsLogged;
-	Texture2D* runeAtlasTexture = nullptr;
-	winrt::com_ptr<ID3D11Texture2D> runeDepthTexture;
-	winrt::com_ptr<ID3D11DepthStencilView> runeDepthDSV;
-	winrt::com_ptr<ID3D11DepthStencilState> runeDepthState;
-	winrt::com_ptr<ID3D11Buffer> frostPlaneBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> frostPlaneSRV;
-	uint32_t frostPlaneCapacity = 0;
-	winrt::com_ptr<ID3D11Buffer> frostCellBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> frostCellSRV;
-	winrt::com_ptr<ID3D11Buffer> frostListBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> frostListSRV;
-	uint32_t frostListCapacity = 0;
-	std::vector<uint32_t> frostCellCounts;
-	std::vector<uint32_t> frostListScratch;
-	std::vector<float4> frostMarkScratch;
-	winrt::com_ptr<ID3D11ShaderResourceView> frostDiffuse[kFrostTextures];
-	winrt::com_ptr<ID3D11ShaderResourceView> frostNormal[kFrostTextures];
-	winrt::com_ptr<ID3D11ShaderResourceView> frostGlow[kFrostTextures];
-	bool frostPlanesFailed = false;
-	winrt::com_ptr<ID3D11ShaderResourceView> runeTileDiffuse[kRuneMaxTiles];
-	winrt::com_ptr<ID3D11ShaderResourceView> runeTileNormal[kRuneMaxTiles];
-	winrt::com_ptr<ID3D11ShaderResourceView> runeTileGlow[kRuneMaxTiles];
-	std::unordered_set<const RE::BSGeometry*> markDecals;
-	ConstantBuffer* runeCB = nullptr;
-	ID3D11PixelShader* runePS = nullptr;
-	bool runeResourcesFailed = false;
-	bool runeAtlasDirty = false;
-	bool runePaintLogged = false;
-	bool frostPaintLogged = false;
-	bool frostFitMissLogged = false;
-	bool runeMissLogged = false;
-	uint32_t runeMissFrames = 0;
-	uint32_t runeStatSites = 0;
-	uint32_t runeStatCaptures = 0;
-	uint32_t runeStatTiles = 0;
-	ID3D11ShaderResourceView* GetRuneAtlasSRV() const { return runeAtlasTexture ? runeAtlasTexture->srv.get() : nullptr; }
-	/** @brief From the spell gather, per live projectile: a proximity record is a rune - lifted once, and listed as a site for its decal. */
-	void ConsiderRune(RE::Projectile* a_projectile, const RE::NiPoint3& a_camera, float a_cullRadius, RE::TES* a_tes);
-	void PublishRuneSites(const std::unordered_set<uint32_t>& a_present);
-	/** @brief From the capture hook: a decal-mode Lighting draw. True when its diffuse is a live rune's decal texture, or a frost impact decal (a_engineDecal, FrostDecalsOnSnow), and it was taken. */
-	bool CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal);
-	bool EnsureRuneResources();
-	/** @brief Room for a_marks frost marks and a_entries cell entries. */
-	bool EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries);
-	/** @brief The frost planes, textures and cell lists at t117-t127 and the glow maps, or null with a_bind false. */
-	void BindFrostField(ID3D11DeviceContext* a_context, bool a_bind);
-	/** @brief Everything the shells read the rune glyphs and frost marks from (RuneCB at b7, the atlas, each tile's and slot's textures, the frost field) for a pass that paints them - the landscape shell, the object snow, the road patch - or null with a_bind false. */
-	void BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bind);
-	/** @brief Clears the atlas and draws this frame's rune decals into their tiles, and finds each frost mark's uv plane and cells. After the blood capture, before the shells. */
-	void RenderRuneCapture();
-#endif
 
 	static constexpr uint32_t kUndulationFieldDim = 2048;
 	static constexpr float kUndulationFieldTexel = 16.0f;
@@ -1403,15 +1165,6 @@ public:
 	bool shellStatsIssued[kShellStatsRing] = {};
 	int shellStatsRing = 0;
 	ShellStatsResult shellStatsLast;
-#if SD_WITH_VOLUME
-	bool voxelPipelineStatsEnabled = false;
-	winrt::com_ptr<ID3D11Query> voxelStatsQuery[kShellStatsRing][2];
-	bool voxelStatsIssued[kShellStatsRing] = {};
-	int voxelStatsRing = 0;
-	ShellStatsResult voxelStatsLast;
-	bool EnsureVoxelStatsQueries();
-	void ReadVoxelStatsQueries(ID3D11DeviceContext* a_context);
-#endif
 	ShellStatsResult staticsStatsLast;
 	ShellStatsResult patchStatsLast;
 	bool EnsureShellStatsQueries();
@@ -1603,51 +1356,8 @@ public:
 
 	ConstantBuffer* shellCB = nullptr;
 
-#if SD_WITH_SPELLS
-	struct LightningArc
-	{
-		RE::NiPoint3 from;
-		RE::NiPoint3 to;
-		float age = 0.0f;
-		float life = 0.16f;
-		float seed = 0.0f;
-	};
-	static constexpr size_t kMaxLightningArcs = 24;
-	static constexpr uint kLightningArcSegments = 32;
-	std::vector<LightningArc> lightningArcs;
-	uint32_t lightningArcSeed = 0;
-
-	struct ArcCB
-	{
-		Matrix CameraViewProj;
-		float4 ArcCameraPosAdjust;
-		float4 ArcFrom;
-		float4 ArcTo;
-		float4 ArcParams;
-		float4 ArcTint;
-	};
-	ConstantBuffer* arcCB = nullptr;
-	ID3D11VertexShader* arcVS = nullptr;
-	ID3D11PixelShader* arcPS = nullptr;
-	winrt::com_ptr<ID3D11BlendState> arcBlendState;
-	winrt::com_ptr<ID3D11DepthStencilState> arcDepthState;
-	winrt::com_ptr<ID3D11RasterizerState> arcRasterState;
-#endif
-
 	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and trench detail textures - a second copy would drift. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
-#if SD_WITH_SPELLS
-	ID3D11VertexShader* GetLightningArcVS();
-	ID3D11PixelShader* GetLightningArcPS();
-	bool EnsureLightningArcResources();
-
-	/** @brief Records an arc for this frame's draw. Called from the shock cloak's own discharge, which already knows both ends. */
-	void EmitLightningArc(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to);
-	/** @brief Ages the live arcs and drops the spent ones. */
-	void UpdateLightningArcs(float a_deltaTime);
-	/** @brief Draws the live arcs. Called AFTER the deferred composite - an emissive overlay lit by nothing, which is what a bolt is. */
-	void DrawLightningArcs();
-#endif
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
 	/** @brief Skin draws' raster state: the shell's plus SkinDepthBias / SkinSlopeDepthBias, rebuilt when either slider moves. The decal variant adds the game's decal depth bias (-1, slope -0.65, clamp -100) for skins of decal-mode draws (CapturedSnowStatic::decalDepth). Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11RasterizerState* GetSkinRasterState(bool a_decal = false);
@@ -1833,7 +1543,6 @@ public:
 	void InstallStaticsCaptureHook();
 	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
 	void InstallCameraHook();
-#if SD_WITH_API
 	/** @brief Queues the Papyrus native registration. */
 	void InstallAPI();
 	/** @brief Loaded and switched on. */
@@ -1844,23 +1553,10 @@ public:
 	float APISnowDepthAtRef(RE::TESObjectREFR* a_ref);
 	/** @brief The accumulation scalar 0..1, 0 when accumulation or the feature is off. */
 	float APISnowAccumulation() const;
-#endif
 	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person, mount, bleedout (ragdoll, death), dragon and PCTransition, plus any non-free camera while the player is down: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would; while knocked down, ragdolled or dead, lift it straight up instead. */
 	void ClampCameraAboveSnow();
-#if SD_WITH_ITEMS
-	/** @brief Holds dropped items at their depth in the snow. From the camera-update hook: before the frame's first pass, main thread. */
-	void ItemSinkUpdate();
-#endif
-#if SD_WITH_SPELLS
-	/** @brief Raises the rune and frost pieces the spell scan queued. From the camera-update hook: main thread, before the frame's first pass. */
-	void ApplySpellLifts();
-#endif
-#if SD_WITH_ITEMS
-	/** @brief Draws creatures lighter than the player standing in the snow by weight. From the camera-update hook: main thread, before the frame's first pass. */
-	void CreatureSinkUpdate();
-#endif
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
 	uint32_t cameraProbeCamState = 0;
@@ -2476,21 +2172,6 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(HeightGhostCB);
 	ConstantBuffer* heightGhostCB = nullptr;
 
-#if SD_WITH_VOLUME
-	static constexpr uint kVoxelDim = 256;
-	static constexpr uint kVoxelDimWide = 512;
-	static constexpr uint kVoxelDimFlatZ = 128;
-	/** @brief Voxels a side per axis for a level: the shape's, halved per axis on the far rings. */
-	DirectX::XMUINT3 VoxelDimsForLevel(uint a_level) const;
-	/** @brief The largest dims any level uses (the shape's fine dims): the shared support volume's size. */
-	DirectX::XMUINT3 VoxelDimsMax() const;
-	/** @brief The window's extent in world units per axis: shape dims * base voxel * 2^L whatever the grid size. */
-	DirectX::XMFLOAT3 VoxelExtentForLevel(uint a_level) const;
-	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
-	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 1.0f, 24.0f); }
-	float voxelSizeBuilt = 0.0f;
-#endif
-
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
 	struct alignas(16) VoxelVolumeCB
 	{
@@ -2521,66 +2202,6 @@ public:
 		int Dims[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
-#if SD_WITH_VOLUME
-	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
-	/** @brief Frames between a level's rebuilds: 2^L. */
-	uint32_t VoxelLevelPeriod(uint a_level) const;
-	/** @brief The field's value at the snow top on this level: Coverage times a gain (up to 8) where air neighbours do not vote, so a far ring's third-of-a-voxel layer is not three R8 steps; capped so the threshold stays under 0.5. */
-	float VoxelThresholdForLevel(uint a_level) const;
-	uint32_t voxelFrame = 0;
-	static constexpr float kVoxelReachFrac = 0.9f;
-	static constexpr float kVoxelReachFracFar = 0.85f;
-	static constexpr uint kVoxelListArgsSeed = 0;
-	static constexpr uint kVoxelListArgsZ = 12;
-	static constexpr uint kVoxelListArgsX = 24;
-	static constexpr uint kVoxelListArgsY = 36;
-	static constexpr uint kVoxelListArgsFlags = 48;
-	static constexpr uint kVoxelListHeaderBytes = 64;
-	static constexpr uint kVoxelListBytes = 64 + 3 * 16384;
-	static constexpr uint32_t kVoxelFullRefreshRebuilds = 900;
-	ID3D11ComputeShader* voxelOccFlagsCS = nullptr;
-	ID3D11ComputeShader* voxelDecayCS = nullptr;
-	ID3D11ComputeShader* voxelDirtyColsCS = nullptr;
-	ID3D11ComputeShader* voxelBrickFlagsCS = nullptr;
-	static constexpr float kVoxelBandFrac = 0.2f;
-	static constexpr float kVoxelEdgeNoiseCell = 12.0f;
-	static constexpr float kVoxelHeadroomUnits = 8.0f;
-	static constexpr uint kVoxelUnderLayers = 4;
-	static constexpr uint kVoxelMaxLevels = 6;
-	struct VoxelLevel
-	{
-		Texture3D* volume[2] = { nullptr, nullptr };
-		Texture3D* field = nullptr;
-		Texture2D* heightMap = nullptr;
-		Texture2D* heightMapUnder = nullptr;
-		Buffer* bricks = nullptr;
-		Buffer* drawArgs = nullptr;
-		Buffer* dirty = nullptr;
-		Buffer* flags = nullptr;
-		Buffer* lists = nullptr;
-		uint32_t rebuilds = 0;
-		bool cleared = false;
-		uint current = 0;
-		DirectX::XMUINT3 dims = { 0, 0, 0 };
-		bool valid = false;
-		bool updated = false;
-		bool skipped = false;
-		uint64_t captureHashLast = 0;
-		uint32_t captureCountLast = 0;
-		uint64_t exclusionHashLast = 0;
-		uint64_t cbHashLast = 0;
-		uint32_t stableRebuilds = 0;
-		DirectX::XMINT3 origin = { 0, 0, 0 };
-	};
-	VoxelLevel voxelLevels[kVoxelMaxLevels];
-	uint VoxelLevelsLive() const { return (uint)std::clamp(settings.VolumeLevels, 1, (int)kVoxelMaxLevels); }
-	float VoxelSizeForLevel(uint a_level) const;
-	/** @brief Where a level's bricks and draw end (kVoxelReachFrac) and where its hand-over band starts (kVoxelBandFrac before that), Chebyshev units from the camera. */
-	void VoxelReachBand(uint a_level, float& a_start, float& a_end) const;
-	/** @brief Fills every per-level field of the volume CB from live state; ScrollDelta and the clear flag are the caller's. Implemented in SnowDeformation/Volume.cpp. */
-	void FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const;
-	int voxelSliceLevel = 0;
-#endif
 
 	/** @brief V1b draw constants (b2 on the VOXEL variant of SnowStaticsShell). Layout must match VoxelDrawCB there. */
 	struct alignas(16) VoxelDrawCB
@@ -2594,61 +2215,9 @@ public:
 		float4 VoxDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
-#if SD_WITH_VOLUME
-	static constexpr float kVoxelShelterDust = 0.1f;
-
-	ID3D11ComputeShader* voxelSeedCS = nullptr;
-	ID3D11ComputeShader* voxelBlurZCS = nullptr;
-	ID3D11ComputeShader* voxelBlurCS = nullptr;
-	ConstantBuffer* voxelDrawCB = nullptr;
-#endif
 	ConstantBuffer* voxelDebugCB = nullptr;
-#if SD_WITH_VOLUME
-	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;
-	ID3D11ComputeShader* voxelBrickListCS = nullptr;
-	ID3D11VertexShader* voxelShellVS = nullptr;
-	ID3D11PixelShader* voxelShellPS = nullptr;
-	/** @brief Draws the volume snow at the end of the statics pass (targets, depth and every skin binding still live). Implemented in SnowDeformation/Volume.cpp. */
-	void DrawVoxelSnow();
-	int voxelSliceSource = 2;
-	Texture2D* voxelSliceTexture = nullptr;
-	Texture3D* voxelSupport = nullptr;
-	DirectX::XMUINT3 voxelSupportDims = { 0, 0, 0 };
-	ConstantBuffer* voxelCB = nullptr;
-	winrt::com_ptr<ID3D11RasterizerState> voxelRasterState;
-	ID3D11VertexShader* voxelVS = nullptr;
-	ID3D11GeometryShader* voxelGS = nullptr;
-	ID3D11PixelShader* voxelPS = nullptr;
-	ID3D11ComputeShader* voxelScrollCS = nullptr;
-	ID3D11ComputeShader* voxelSliceCS = nullptr;
-	bool voxelShadersFailed = false;
-	bool showVoxelSlice = false;
-#endif
 	bool showVolumeRings = false;
 	bool debugForceVolumeRebuild = false;
-#if SD_WITH_VOLUME
-	bool voxelIdleSkipped = false;
-	uint32_t voxelIdleBlockers = 0;
-	float voxelSkipRate = -1.0f;
-	uint32_t voxelSkipTallyFrames = 0;
-	uint32_t voxelSkipTallySkipped = 0;
-	int voxelSliceAxis = 1;
-	float voxelSliceOffset = 0.0f;
-	float voxelMemorySeconds = 0.5f;
-	bool voxelSliceXray = true;
-	winrt::com_ptr<ID3D11Buffer> voxelCountBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> voxelCountUAV;
-	winrt::com_ptr<ID3D11Buffer> voxelCountStaging[2];
-	uint voxelCountCursor = 0;
-	uint32_t voxelOccupancy = 0;
-	bool voxelOccupancyValid = false;
-	/** @brief Creates the volumes, slice, CB, rasterizer and shaders on first use. Implemented in SnowDeformation/Volume.cpp. */
-	bool EnsureVoxelResources();
-	/** @brief Scrolls and decays the volume, then rasterises this frame's captured statics into it. Called inside RenderObjectHeightMap after the peel passes; a_records are the capture blocks it filled. Implemented in SnowDeformation/Volume.cpp. */
-	void RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity);
-	/** @brief Writes the selected plane of the current volume to voxelSliceTexture. Implemented in SnowDeformation/Volume.cpp. */
-	void UpdateVoxelSliceTexture();
-#endif
 
 	static constexpr uint kMaxExclusions = 256;
 	static constexpr float kTorchClearRadius = 40.0f;
@@ -3182,10 +2751,6 @@ public:
 	void TickEffectCostProbe();
 	/** @brief DevBench: applies ground measurement args (shellKill, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
-#if SD_WITH_VOLUME
-	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
-	json DevBenchVolumeArgs(const json& a_args);
-#endif
 	/** @brief DevBench: the reader gates' A/B switches (interior height maps, masks copy, march idle, blood latch, land-mask feature test, record growth) and their counters. Implemented in DevBenchTools.cpp. */
 	json DevBenchReaderGatesArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
@@ -3562,7 +3127,6 @@ protected:
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
-#if SD_WITH_EVENTS
 	enum class SnowEventKind : uint8_t
 	{
 		KickUp,
@@ -3596,8 +3160,6 @@ protected:
 	void PushSnowEvent(const SnowEvent& a_event);
 	void CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, const RE::NiPoint3& a_position, float a_groundZ,
 		const StampBones* a_bones, const RE::NiAVObject* a_root);
-#endif
-#if SD_WITH_EVENTS
 	void TickSnowEvents();
 	std::vector<std::string> SnowEventCensusLines() const;
 	bool debugSnowEventCensus = false;
@@ -3644,95 +3206,12 @@ protected:
 		double windowStart = -1.0;
 	};
 	SnowEventCensus snowEventCensus;
-#endif
 
-#if SD_WITH_BODY_COAT
-	struct CoatAging
-	{
-		float heat = 0.0f;
-		float heatDistance = -1.0f;
-		float heatRadius = 0.0f;
-		bool interior = false;
-		bool interiorSnow = false;
-		const char* interiorCold = nullptr;
-		float rain = 0.0f;
-		float snowfall = 0.0f;
-		float temperature = 0.0f;
-		float warm = 0.0f;
-		float wetness = 0.0f;
-		float stickiness = 0.0f;
-		float speed = 0.0f;
-		float jolt = 0.0f;
-		float melt = 0.0f;
-		float shake = 0.0f;
-		float growth = 0.0f;
-		float clearClock = 0.0f;
-		float heatClock = 0.0f;
-		float wind = 0.0f;
-		float fire = 0.0f;
-		float fireHit = -1.0f;
-		float speedEnergy = 0.0f;
-		float landingEnergy = 0.0f;
-		float knockEnergy = 0.0f;
-		double trackTime = -1.0;
-	};
-	CoatAging ComputeCoatAging(RE::Actor* a_actor) const;
-	std::vector<std::string> CoatAgingLines() const;
-#endif
 	SnowCondition SnowConditionAtHeight(float a_z) const;
 	uint32_t stampGatherFrame = UINT32_MAX;
 
 public:
 
-#if SD_WITH_BODY_COAT
-	struct BodyCoatActorCensus
-	{
-		std::string name;
-		uint32_t formID = 0;
-		float distance = 0.0f;
-		bool corpse = false;
-		bool weaponDrawn = false;
-		uint32_t skinned = 0;
-		uint32_t dynamic = 0;
-		uint32_t noNormals = 0;
-		uint32_t skinShapes = 0;
-		uint32_t eyeShapes = 0;
-		uint32_t fx = 0;
-		uint32_t decals = 0;
-		std::string seed;
-		std::string anchor;
-		uint32_t bindBones = 0;
-		bool sticky = false;
-		uint32_t chained = 0;
-		uint32_t components = 0;
-		uint32_t componentSkins = 0;
-		float worstResidual = 0.0f;
-		std::string worstShape;
-		uint32_t outlierBones = 0;
-		float rawOffsetMax = 0.0f;
-		uint32_t triangles = 0;
-		uint32_t gear = 0;
-		uint32_t gearSkinned = 0;
-		uint32_t rigidWorn = 0;
-		uint32_t sheaths = 0;
-		uint32_t attached = 0;
-		uint32_t gearTriangles = 0;
-		float gearRadiusMax = 0.0f;
-		uint32_t owned = 0;
-		uint32_t unowned = 0;
-		RE::NiPoint3 boundsMin{ 1e30f, 1e30f, 1e30f };
-		RE::NiPoint3 boundsMax{ -1e30f, -1e30f, -1e30f };
-		uint32_t outside = 0;
-		int slot = -1;
-		uint32_t halves = 0;
-		uint32_t records = 0;
-		uint32_t firstSkinned = 0;
-		uint32_t firstChained = 0;
-		float firstResidual = 0.0f;
-		uint32_t firstOwned = 0;
-		uint32_t firstUnowned = 0;
-	};
-#endif
 	/** @brief One mapped skin's block at Lighting PS b8, bound per draw by offset. Mirror: SnowLighting.hlsli BodyCoatRecord. */
 	struct alignas(16) BodyCoatRecordCB
 	{
@@ -3750,125 +3229,10 @@ public:
 		float4 Fall;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
-#if SD_WITH_BODY_COAT
-	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
-	static constexpr uint32_t kBodyCoatFlagLiving = 2;
-	static constexpr uint32_t kBodyCoatFlagHairSpecks = 4;
-	static constexpr uint32_t kBodyCoatFlagRelief = 8;
-	static constexpr uint32_t kBodyCoatFlagReliefView = 16;
-	static constexpr uint32_t kBodyCoatFlagHairBeads = 64;
-	static constexpr uint32_t kBodyCoatFlagLumpDepth = 32;
-	static constexpr uint32_t kBodyCoatFlagLumpBlend = 128;
-	struct BodyCoatStore;
-	struct BodyCoatDrawTally
-	{
-		uint64_t frames = 0;
-		uint64_t lightingDraws = 0;
-		uint64_t skinnedDraws = 0;
-		uint64_t skinnedOwned = 0;
-		uint64_t skinnedNoOwner = 0;
-		uint64_t skinnedOtherOwner = 0;
-		uint64_t rigidOwned = 0;
-		uint64_t ownedDeferred = 0;
-		uint64_t ownedForward = 0;
-		uint64_t ownedReflection = 0;
-		uint64_t lostDeferred = 0;
-		uint64_t lostForward = 0;
-		uint64_t lostReflection = 0;
-		uint64_t framesWithLoss = 0;
-	};
-	/** @brief Per frame, from PrepassSimulation: the census on its cadence, the probe unbound once it is switched off, and the coat store (near tier, frames, slots, records). */
-	void TickBodyCoat();
-	/** @brief Per Lighting pass, before the game's SetupGeometry: bit 25 and the record of a mapped skin's draw, the atlas once a frame; a corpse's model-space-normal skin draws with the coat's pixel shader, the next pass with its technique's own again. */
-	void SetBodyCoatBit(RE::BSRenderPass* a_pass);
-	/** @brief Per Lighting technique, from TruePBR's GetPixelTechnique: whether its pixel key takes SnowBodyCoat (skinned with tangent-space normals, not eyes, the coat live). The pixel key keeps Skinned only with model-space normals, so armour, clothing and hair otherwise share a static object's pixel shader. */
-	[[nodiscard]] bool BodyCoatPixelKey(uint32_t a_rawTechnique) const;
-	/** @brief From BeginTechnique, when a coat draw's shaders were not ready: remembers its keys so later launches compile them with the game's own. */
-	void NoteBodyCoatShaders(uint32_t a_vertexDescriptor, uint32_t a_pixelDescriptor);
-	/** @brief At BSShader::LoadShaders: queues the coat shaders earlier sessions drew (SnowBodyCoatShaders.txt), so a cleared ShaderCache compiles them at startup. */
-	virtual void GenerateShaderPermutations(RE::BSShader* a_shader) override;
-	/** @brief Per Lighting pass, after the game's SetupGeometry: owners, and whether the t41 bind still holds. */
-	void ProbeBodyCoatDraw(RE::BSRenderPass* a_pass);
-	std::vector<std::string> BodyCoatProbeLines() const;
-	/** @brief The S3 tree's readout: the contact writer's state and its last update. */
-	std::string BodyCoatWriterLine() const;
-	/** @brief The S4 tree's readout: the coat's clock, and per coated actor what fades it and how soon it is bare. */
-	std::vector<std::string> BodyCoatFadeLines() const;
-	/** @brief The S5 tree's readout: the snowfall here and its slant, the load order's range, and per actor the most its snowfall can reach and its last snowfall update. */
-	std::vector<std::string> BodyCoatFallLines() const;
-#endif
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
-#if SD_WITH_BODY_COAT
-	bool debugBodyCoatCensus = false;
-	bool debugBodyCoatCensusDump = false;
-	bool debugBodyCoatDrawProbe = false;
-	int debugBodyCoatView = 0;
-	int debugBodyCoatForce = 0;
-	bool debugBodyCoatContact = true;
-	bool debugBodyCoatClear = false;
-	bool debugBodyCoatFade = true;
-	float debugBodyCoatShakeTime = 10.0f;
-	bool debugBodyCoatFall = true;
-	float debugBodyCoatWindTilt = 1.0f;
-	float debugBodyCoatContactCap = 0.5f;
-	float debugBodyCoatBuildUp = 10.0f;
-	float debugBodyCoatImpactShare = 0.5f;
-	float debugBodyCoatLumps = 1.0f;
-	float debugBodyCoatGrains = 1.0f;
-	float debugBodyCoatHairAmount = 0.10f;
-	float debugBodyCoatSpeckMin = 1.0f;
-	float debugBodyCoatSpeckMax = 1.5f;
-	int debugBodyCoatLook = 0;
-	float debugBodyCoatRepose = 85.0f;
-	bool debugBodyCoatHairSpecks = true;
-	bool debugBodyCoatRelief = true;
-	bool debugBodyCoatReliefView = false;
-	int debugBodyCoatHairShape = 0;
-	int debugBodyCoatLumpLook = 2;
-	static constexpr uint32_t kBodyCoatCensusFrames = 120;
-	static constexpr uint32_t kBodyCoatDrawWindow = 300;
-	static constexpr UINT kBodyCoatAtlasSlot = 41;
-	static constexpr UINT kBodyCoatLumpSlot = 44;
-	static constexpr UINT kBodyCoatRecordSlot = 8;
-	static constexpr uint32_t kBodyCoatRecordStride = 256;
-	static constexpr uint32_t kBodyCoatRecordsMax = 1024;
-	static constexpr uint32_t kBodyCoatSlots = 64;
-	static constexpr uint32_t kBodyCoatSlotsPerRow = 32;
-	static constexpr uint32_t kBodyCoatSlotDim[3] = { 32, 16, 48 };
-	static constexpr float kBodyCoatVoxel = 2.5f;
-#endif
 
 protected:
-#if SD_WITH_BODY_COAT
-	void RunBodyCoatCensus(bool a_dump);
-	void TickBodyCoatStore();
-	void EnsureBodyCoatLumps();
-	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatLumpSRV;
-	bool bodyCoatLumpAttempted = false;
-	bool BodyCoatWriteBegin(bool a_coatOnly = false);
-	bool BodyCoatWriteDue(uint32_t a_formID, float4& a_write, float4& a_top) const;
-	bool BodyCoatWriteShape(ID3D11DeviceContext* a_context, const RE::BSGeometry* a_geometry, const float4& a_write);
-	void BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on);
-	void BodyCoatTopBind(ID3D11DeviceContext* a_context, bool a_on);
-	[[nodiscard]] bool BodyCoatFallDue() const;
-	[[nodiscard]] const std::vector<ContactProp>& BodyCoatCoatOnly() const;
-	void BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint32_t a_triangles, uint32_t a_actors);
-	void PrimeBodyCoatWriter();
-	std::shared_ptr<BodyCoatStore> bodyCoatStore;
-	bool bodyCoatLive = false;
-	std::vector<BodyCoatActorCensus> bodyCoatCensus;
-	uint32_t bodyCoatCensusFrame = 0;
-	bool bodyCoatCensusRan = false;
-	double bodyCoatCensusMs = 0.0;
-	BodyCoatDrawTally bodyCoatDrawBuilding;
-	BodyCoatDrawTally bodyCoatDrawLast;
-	uint32_t bodyCoatDrawFrame = UINT32_MAX;
-	bool bodyCoatDrawLostThisFrame = false;
-	winrt::com_ptr<ID3D11Texture3D> bodyCoatProbeTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatProbeSRV;
-	bool bodyCoatProbeBound = false;
-#endif
 
 	void LoadTraceBegin(const char* a_reason);
 	void LoadTraceMark(std::string_view a_what);
@@ -4022,11 +3386,6 @@ protected:
 		float reach = 0.0f;
 		float seed = 0.0f;
 	};
-#if SD_WITH_SPELLS
-	static constexpr uint32_t kPrintSpellCone = 1u;
-	static constexpr uint32_t kPrintSpellBowl = 2u;
-	static constexpr uint32_t kPrintSpellRay = 4u;
-#endif
 	static constexpr uint32_t kPrintSpellChurn = 8u;
 	static constexpr uint32_t kPrintSpellCap = 32;
 
@@ -4063,9 +3422,6 @@ protected:
 	ID3D11ComputeShader* printViewCS = nullptr;
 	ID3D11ComputeShader* printRimCS = nullptr;
 	ID3D11ComputeShader* printRayCS = nullptr;
-#if SD_WITH_SPELLS
-	std::vector<PrintSpellMark> printSpellMarks;
-#endif
 	struct HeldPrintSpell
 	{
 		PrintSpellMark mark;
@@ -4143,10 +3499,6 @@ protected:
 	ID3D11ComputeShader* GetPrintRimCS();
 	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
-#if SD_WITH_SPELLS
-	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f, float a_seed = 0.0f);
-	void ReplayHeldObjectSpellMarks(float a_deltaTime);
-#endif
 	PrintSpellMark HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const;
 	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
 	void PollPrintMirrors(ID3D11DeviceContext* a_context);
@@ -4181,47 +3533,7 @@ protected:
 		Force
 	};
 
-#if SD_WITH_SPELLS
-	enum class SpellMark
-	{
-		Melt,
-		Carve,
-		Pit,
-		Crust
-	};
-
-	struct SpellEmitter
-	{
-		float2 position{};
-		float2 previous{};
-		float radius = 0.0f;
-		float strength = 0.0f;
-		float rate = 0.0f;
-		SpellElement element = SpellElement::None;
-		SpellMark mark = SpellMark::Melt;
-		float pitScale = 1.0f;
-		float rateScale = 1.0f;
-		bool bowl = false;
-		bool cone = false;
-		float coneLength = 0.0f;
-		float coneSeed = 0.0f;
-	};
-
-	std::vector<SpellEmitter> spellEmitters;
-	void QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, SpellMark a_mark, float a_strength, float a_rate, float a_pitScale, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f, float a_seed = 0.0f);
-
-	std::unordered_map<uint32_t, float2> spellPrevPositions;
-
-	std::unordered_map<uint32_t, float2> spellTrailPrev;
-#endif
-
 	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
-
-#if SD_WITH_SPELLS
-	static SpellMark MarkForElement(SpellElement a_element);
-
-	void GatherSpellEmitters();
-#endif
 
 	float CrustBreakForce(float a_radius) const;
 
@@ -4231,320 +3543,12 @@ protected:
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
 	static bool IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property);
 
-#if SD_WITH_SPELLS
-	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ = -2.0f);
-	struct PendingLift
-	{
-		RE::ObjectRefHandle handle;
-		float lift = 0.0f;
-		float minUpZ = -2.0f;
-		uint32_t waited = 0;
-	};
-	std::mutex spellLiftLock;
-	std::vector<PendingLift> spellLiftQueue;
-
-	float SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes);
-#endif
-
-#if SD_WITH_ITEMS
-	static constexpr float kItemSinkRadius = 3000.0f;
-	static constexpr size_t kItemSinkMax = 32;
-	static constexpr uint32_t kItemSinkRecord = 'SNIS';
-	static constexpr uint32_t kItemSinkRecordVersion = 3;
-	struct ItemSinkCandidate
-	{
-		RE::ObjectRefHandle handle;
-		RE::NiPoint3 position;
-		uint32_t seenFrame = 0;
-	};
-	struct ItemSinkState
-	{
-		uint32_t formID = 0;
-		uint32_t baseID = 0;
-		uint32_t seenFrame = 0;
-		RE::NiAVObject* offsetRoot = nullptr;
-		bool offsetApplied = false;
-		RE::NiPoint3 childOffset;
-		float appliedLift = 0.0f;
-		bool undersideValid = false;
-		float undersideOffset = 0.0f;
-		float lyingHeight = 0.0f;
-		std::vector<std::pair<RE::NiAVObject*, RE::NiTransform>> lastWorlds;
-		uint32_t lastWorldFrame = 0;
-		uint32_t restPasses = 0;
-		bool restValid = false;
-		float restRise = 0.0f;
-		float restDepth = 0.0f;
-		float restCarve = 0.0f;
-		RE::NiPoint3 restPos;
-		float carveAround = 0.0f;
-		bool buried = false;
-		bool wasAsleep = false;
-		bool claimed = false;
-		float grip = 0.0f;
-		bool gripBaseKnown = false;
-		float gripBaseLinear = 0.0f;
-		float gripBaseAngular = 0.0f;
-	};
-	uint32_t itemSinkRestsLogged = 0;
-	struct ItemSinkRecord
-	{
-		uint32_t baseID = 0;
-		float x = 0.0f;
-		float y = 0.0f;
-		float rise = 0.0f;
-		float depth = 0.0f;
-		float carve = 0.0f;
-	};
-	uint32_t itemSinkFrame = 0;
-	std::unordered_map<uint32_t, ItemSinkCandidate> itemSinkCandidates;
-	std::atomic<bool> itemSinkCandidatesStale{ false };
-	std::mutex itemSinkLock;
-	std::unordered_map<uint32_t, ItemSinkState> itemSinkStates;
-	std::unordered_map<uint32_t, ItemSinkRecord> itemSinkLoaded;
-	static constexpr float kItemSinkLoadGrace = 60.0f;
-	std::chrono::steady_clock::time_point itemSinkLoadedAt{};
-	std::unordered_set<uint32_t> itemSinkFormsLogged;
-	std::string itemSinkReadout;
-	std::atomic<bool> itemSinkReadoutWanted{ false };
-	std::atomic<uint32_t> itemSinkHeld{ 0 };
-	std::atomic<uint32_t> itemSinkWatched{ 0 };
-	uint32_t itemSinkClaimsLogged = 0;
-	void ItemSinkNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3& a_position);
-	bool ItemSinkWantsPrint(RE::TESObjectREFR* a_ref);
-	void SaveItemSink(const SKSE::SerializationInterface* a_intfc);
-	void LoadItemSink(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
-	void RegisterItemSinkCoSave();
-#endif
-
-#if SD_WITH_SPELLS
-	std::unordered_set<uint32_t> liftedRefs;
-#endif
-
-#if SD_WITH_ITEMS
-	struct CreatureBuild
-	{
-		const RE::NiAVObject* root = nullptr;
-		float scale = 0.0f;
-		float volume = 0.0f;
-		float belly = 0.0f;
-		float height = 0.0f;
-		float largest = 0.0f;
-		float lowestRel = 0.0f;
-		uint32_t capsules = 0;
-		uint32_t simulated = 0;
-		uint32_t reads = 0;
-		uint32_t nextFrame = 0;
-	};
-	struct CreatureLift
-	{
-		const RE::NiAVObject* root = nullptr;
-		RE::NiAVObject* node = nullptr;
-		CreatureBuild build;
-		float lift = 0.0f;
-		float inBones = 0.0f;
-		float settleFrom = -1.0f;
-		float clearance = FLT_MAX;
-		float floorShare = 1.0f;
-		bool havokFollows = true;
-		bool havokKnown = false;
-		bool dead = false;
-		uint32_t seenFrame = 0;
-		float weight = 0.0f;
-		float byWeight = 0.0f;
-		float depth = 0.0f;
-		float density = 0.0f;
-		float support = 0.0f;
-		float target = 0.0f;
-		const char* gate = "";
-	};
-	std::unordered_map<uint32_t, CreatureLift> creatureLifts;
-	CreatureBuild playerBuild;
-	struct CreatureLiftDrawn
-	{
-		float inBones;
-		bool havokFollows;
-		float weight;
-	};
-	std::unordered_map<uint32_t, CreatureLiftDrawn> creatureLiftsDrawn;
-	std::mutex creatureLiftLock;
-	std::unordered_set<uint32_t> creatureRacesLogged;
-	std::string creatureSinkReadout;
-	std::atomic<bool> creatureSinkReadoutWanted{ false };
-	std::atomic<uint32_t> creatureSinkLifted{ 0 };
-	std::atomic<uint32_t> creatureSinkWatched{ 0 };
-	std::atomic<float> creatureSinkMicros{ 0.0f };
-	bool MeasureCreatureBuild(RE::NiAVObject* a_root, CreatureBuild& a_build, bool a_upright, uint32_t a_frame, float a_baseZ);
-	float CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows = nullptr, float* a_weight = nullptr);
-#endif
-
-#if SD_WITH_SPELLS
-	void ConsiderHazard(RE::TESObjectREFR* a_ref);
-
-	struct PendingBlast
-	{
-		RE::NiPoint3 position{};
-		RE::NiPoint3 direction{};
-		float heightAboveLand = 0.0f;
-		float radius = 0.0f;
-		float pitScale = 1.0f;
-		float landingReach = 0.0f;
-		SpellElement element = SpellElement::None;
-		bool proximity = false;
-		bool triggered = false;
-	};
-	std::unordered_map<uint32_t, PendingBlast> projectileBlasts;
-
-	std::unordered_set<uint32_t> hitscanBlasted;
-
-	void OpenProjectileBlast(const PendingBlast& a_blast, RE::TES* a_tes);
-
-	struct ActiveBlast
-	{
-		float2 position{};
-		float radius = 0.0f;
-		float strength = 0.0f;
-		float rate = 0.0f;
-		float remaining = 0.0f;
-		float age = 0.0f;
-		float pitScale = 1.0f;
-		bool diag = false;
-		SpellElement element = SpellElement::None;
-		SpellMark mark = SpellMark::Melt;
-		bool cone = false;
-		float2 apex{};
-		float2 coneDir{};
-		float coneLength = 0.0f;
-		float coneSpeed = 0.0f;
-		float coneSeed = 0.0f;
-	};
-	std::vector<ActiveBlast> activeBlasts;
-
-	class SpellCastSink : public RE::BSTEventSink<RE::TESSpellCastEvent>
-	{
-	public:
-		RE::BSEventNotifyControl ProcessEvent(const RE::TESSpellCastEvent* a_event,
-			RE::BSTEventSource<RE::TESSpellCastEvent>* a_source) override;
-	};
-	SpellCastSink spellCastSink;
-	bool spellCastSinkRegistered = false;
-
-	class DeathSink : public RE::BSTEventSink<RE::TESDeathEvent>
-	{
-	public:
-		RE::BSEventNotifyControl ProcessEvent(const RE::TESDeathEvent* a_event,
-			RE::BSTEventSource<RE::TESDeathEvent>* a_source) override;
-	};
-	DeathSink deathSink;
-
-	struct QueuedCone
-	{
-		RE::NiPoint3 position{};
-		RE::NiPoint3 direction{};
-		float length = 0.0f;
-		float speed = 0.0f;
-		float strength = 1.0f;
-		SpellElement element = SpellElement::None;
-	};
-	std::vector<QueuedCone> queuedCones;
-
-	void OpenShoutCone(const QueuedCone& a_cone, RE::TES* a_tes);
-
-	struct DashWatch
-	{
-		RE::ActorHandle actor;
-		float remaining = 0.0f;
-		float2 previous{};
-		bool hasPrevious = false;
-	};
-	std::vector<DashWatch> queuedDashes;
-	std::vector<DashWatch> dashWatches;
-#endif
-
-#if SD_WITH_SPELLS
-	void GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
-
-	static bool SpellShoves(const RE::MagicItem* a_spell, float& a_force);
-
-	bool ShoutLaysCone(const RE::MagicItem* a_spell) const;
-
-	static bool IsTravellingShove(const RE::BGSProjectile* a_projectile, float a_force);
-
-	void ConsiderShout(const RE::SpellItem* a_spell, RE::TESObjectREFR* a_caster);
-
-	struct QueuedDeath
-	{
-		uint32_t formID = 0;
-		RE::NiPoint3 position{};
-		SpellElement element = SpellElement::None;
-		RE::ActorHandle actor;
-	};
-	std::vector<QueuedDeath> queuedDeaths;
-
-	class MagicApplySink : public RE::BSTEventSink<RE::TESMagicEffectApplyEvent>
-	{
-	public:
-		RE::BSEventNotifyControl ProcessEvent(const RE::TESMagicEffectApplyEvent* a_event,
-			RE::BSTEventSource<RE::TESMagicEffectApplyEvent>* a_source) override;
-	};
-	MagicApplySink magicApplySink;
-
-	struct QueuedHit
-	{
-		uint32_t formID = 0;
-		SpellElement element = SpellElement::None;
-	};
-	std::vector<QueuedHit> queuedHits;
-#endif
-
 	struct ElementalHit
 	{
 		SpellElement element = SpellElement::None;
 		float remaining = 0.0f;
 	};
 	std::unordered_map<uint32_t, ElementalHit> lastElementalHit;
-
-#if SD_WITH_SPELLS
-	void RegisterSpellCastSink();
-	float spellGameHours = -1.0f;
-	float spellGameDrift = 0.0f;
-	struct PendingDeathBlast
-	{
-		uint32_t formID = 0;
-		SpellElement element = SpellElement::None;
-		RE::NiPoint3 position{};
-		float fuse = 0.0f;
-		RE::ActorHandle actor;
-	};
-	std::vector<PendingDeathBlast> pendingDeathBlasts;
-
-	struct QueuedCast
-	{
-		RE::NiPoint3 position{};
-		float radius = 0.0f;
-		SpellElement element = SpellElement::None;
-	};
-	std::vector<QueuedCast> queuedCasts;
-
-	struct CloakState
-	{
-		RE::ActorHandle actor;
-		SpellElement element = SpellElement::None;
-		float rateScale = 1.0f;
-		float remaining = 0.0f;
-		float strikeTimer = 0.0f;
-		uint32_t strikeSeed = 0;
-		float reachOverride = 0.0f;
-		float reachScale = 1.0f;
-		bool innate = false;
-		bool blasted = false;
-		float burnRemaining = 0.0f;
-		RE::NiPoint3 lastPosition{};
-		float unseenFor = 0.0f;
-	};
-	std::vector<CloakState> queuedCloaks;
-	std::unordered_map<uint32_t, CloakState> activeCloaks;
-#endif
 
 	struct InnateAuraRecord
 	{
@@ -4554,68 +3558,10 @@ protected:
 	};
 	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByRace;
 	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByBase;
-#if SD_WITH_SPELLS
-	std::unordered_map<uint32_t, CloakState> innateAuras;
-
-	std::unordered_map<uint32_t, CloakState> corpseEffects;
-
-	void ConsiderCorpseEffect(RE::Actor* a_actor, float a_deltaTime);
-#endif
 
 	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
 
-#if SD_WITH_SPELLS
-	static bool AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out);
-#endif
 	static bool AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out);
-
-#if SD_WITH_SPELLS
-	void GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
-
-	void OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position);
-	std::unordered_map<uint32_t, float2> spellAuraPrev;
-	std::unordered_map<uint32_t, float2> currentAuraPositions;
-
-	void ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak, float a_deltaTime);
-
-	std::mutex queuedCastLock;
-
-	struct SpellStats
-	{
-		uint projectiles = 0;
-		uint streams = 0;
-		uint hazards = 0;
-		uint detonations = 0;
-		uint armed = 0;
-		uint trails = 0;
-		uint casts = 0;
-		uint shouts = 0;
-		uint shoutDiscs = 0;
-		uint dashWatches = 0;
-		uint dashGouges = 0;
-		uint forceTracks = 0;
-		uint lifted = 0;
-		uint lastShoutElement = 0;
-		float lastShoutSpeed = 0.0f;
-		float lastShoutForce = 0.0f;
-		uint lastShoutVerdict = 0;
-		uint auras = 0;
-		uint innate = 0;
-		uint burning = 0;
-		uint emittersCulled = 0;
-		uint deathsSeen = 0;
-		uint deathBlasts = 0;
-		uint corpses = 0;
-		uint rejectedElement = 0;
-		uint rejectedNoBlast = 0;
-		uint groundContacts = 0;
-		uint emitters = 0;
-		uint pending = 0;
-		float lastStrength = 0.0f;
-		float lastRadius = 0.0f;
-	};
-	SpellStats spellStats;
-#endif
 
 	struct StampStats
 	{

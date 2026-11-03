@@ -792,7 +792,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			skeletonProbe.shellDepth = skeletonProbe.cellBaked ? probeDepth : -1.0f;
 		}
 
-
 		StampBones* bones = nullptr;
 		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
 			stampBoneCache.clear();
@@ -907,11 +906,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		bool liftInRagdoll = true;
 		float creatureWeight = 0.0f;
-#if SD_WITH_ITEMS
-		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll, &creatureWeight);
-#else
 		const float bodyLift = 0.0f;
-#endif
 		float floatingGap = 0.0f;
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
@@ -993,10 +988,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
-#if SD_WITH_EVENTS
 		if (SnowEventsWanted())
 			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
-#endif
 
 		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
 		footImpact = std::min(footImpact * impactWeight, 1.0f);
@@ -1168,7 +1161,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 							segStart = it->second;
 					}
 					currentPositions[key] = heel;
-
 
 					float4 stamp{};
 					stamp.x = tip.x;
@@ -1454,9 +1446,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
-#if SD_WITH_ITEMS
-		ItemSinkNote(a_ref, position);
-#endif
 		auto prevIt = propPrevPositions.find(formID);
 		if (prevIt == propPrevPositions.end()) {
 			propPrevPositions[formID] = { position, propScanCycle };
@@ -1473,13 +1462,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (scanning)
 				propScanMovers[phase].push_back(a_ref->CreateRefHandle());
 		}
-#if SD_WITH_ITEMS
-		if (!propMoved && !ItemSinkWantsPrint(a_ref))
-			return;
-#else
 		if (!propMoved)
 			return;
-#endif
 		if (stampCount >= actorCeiling) {
 			budgetCutRefs.insert(formID);
 			return;
@@ -1633,10 +1617,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (!a_ref || a_ref->As<RE::Actor>())
 					return RE::BSContainer::ForEachResult::kContinue;
 				if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
-#if SD_WITH_SPELLS
-					ConsiderHazard(a_ref);
-					propScanHazards[phase].push_back(a_ref->CreateRefHandle());
-#endif
 					return RE::BSContainer::ForEachResult::kContinue;
 				}
 				considerProp(a_ref);
@@ -1662,11 +1642,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		for (uint32_t slice = 0; slice < kPropScanInterval; slice++) {
 			if (scanAll || slice == phase)
 				continue;
-#if SD_WITH_SPELLS
-			for (const auto& handle : propScanHazards[slice])
-				if (auto ref = handle.get(); ref)
-					ConsiderHazard(ref.get());
-#endif
 			for (const auto& handle : propScanMovers[slice])
 				if (auto ref = handle.get(); ref)
 					considerProp(ref.get());
@@ -1676,60 +1651,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	}
 
 	stampStats.beforeSpells = stampCount;
-
-#if SD_WITH_SPELLS
-	if (spellEmitters.size() > kMaxSpellEmitters) {
-		spellStats.emittersCulled = static_cast<uint>(spellEmitters.size() - kMaxSpellEmitters);
-		std::partial_sort(spellEmitters.begin(), spellEmitters.begin() + kMaxSpellEmitters, spellEmitters.end(),
-			[&](const SpellEmitter& a_lhs, const SpellEmitter& a_rhs) {
-				const float lhsDx = a_lhs.position.x - cameraPosition.x, lhsDy = a_lhs.position.y - cameraPosition.y;
-				const float rhsDx = a_rhs.position.x - cameraPosition.x, rhsDy = a_rhs.position.y - cameraPosition.y;
-				return lhsDx * lhsDx + lhsDy * lhsDy < rhsDx * rhsDx + rhsDy * rhsDy;
-			});
-		spellEmitters.resize(kMaxSpellEmitters);
-	}
-
-	for (const auto& emitter : spellEmitters) {
-		if (stampCount >= kMaxStamps)
-			break;
-		const bool pits = emitter.mark == SpellMark::Pit;
-		const bool glazes = emitter.mark == SpellMark::Crust;
-		const bool shoves = emitter.mark == SpellMark::Carve;
-		float4 stamp{};
-		stamp.x = emitter.position.x;
-		stamp.y = emitter.position.y;
-		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) :
-		                 (shoves ? emitter.strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f) :
-								   emitter.strength);
-		stamp.w = (pits && !emitter.cone) ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
-		                                    std::max(emitter.radius, 4.0f);
-		perFrameData.Stamps[stampCount] = stamp;
-		if (emitter.cone)
-			perFrameData.StampCones[stampCount] = { emitter.coneLength, stamp.w, emitter.coneSeed, 0.0f };
-		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
-			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve + kStampModeShove : kStampModeMelt))) +
-				(emitter.cone ? kStampModeCone : 0.0f) + (emitter.bowl ? kStampModeBowl : 0.0f),
-			shoves ? 1.0f :
-					 (pits ? 0.0f :
-							 (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate)) };
-		stampCount++;
-		if (pits)
-			perFrameData.StampEnds[stampCount].z += kStampImpactScale * (0.6f + 0.4f * std::clamp(emitter.strength, 0.0f, 1.0f));
-		stampStats.spells++;
-	}
-
-	if (debugMeltEmitterActive && stampCount < kMaxStamps) {
-		float4 stamp{};
-		stamp.x = debugMeltEmitterPos.x;
-		stamp.y = debugMeltEmitterPos.y;
-		stamp.z = 1.0f;
-		stamp.w = debugMeltEmitterRadius;
-		perFrameData.Stamps[stampCount] = stamp;
-		perFrameData.StampEnds[stampCount] = { debugMeltEmitterPos.x, debugMeltEmitterPos.y,
-			kStampModeMelt, debugMeltEmitterRate };
-		stampCount++;
-	}
-#endif
 
 	if (!budgetCutRefs.empty()) {
 		for (const auto& [key, anchor] : stampPrevPositions) {

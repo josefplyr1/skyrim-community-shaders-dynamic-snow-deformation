@@ -221,9 +221,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetBermFieldTiledCS(); },
 		[&] { GetUntouchedTilesCS(); },
 		[&] { GetDeformationRingCS(); },
-#if SD_WITH_BLOOD
-		[&] { GetBloodRingCS(); },
-#endif
 		[&] { GetTrackRebaseCS(); },
 		[&] { GetDeformationEvolveCS(); },
 		[&] { GetDeformationStampCS(); },
@@ -247,19 +244,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { EnsureSmoothNormalsCS(); },
 	};
 	const std::function<void()> effectSteps[] = {
-#if SD_WITH_SPELLS
-		[&] { GetLightningArcVS(); },
-		[&] { GetLightningArcPS(); },
-#endif
-#if SD_WITH_BLOOD
-		[&] {
-			for (uint32_t i = 0; i < kBloodTileShaderCount; ++i)
-				GetBloodTileCS(BloodTileShader(i));
-		},
-#endif
-#if !SD_WITH_SPELLS && !SD_WITH_BLOOD
 		[] {},
-#endif
 	};
 
 	auto runGroup = [&](const std::function<void()>* a_steps, size_t a_count, int a_phase, const char* a_name) {
@@ -280,9 +265,6 @@ void SnowDeformation::RunShaderPrime()
 		return;
 	if (!runGroup(effectSteps, std::size(effectSteps), 3, "effects"))
 		return;
-#if SD_WITH_BODY_COAT
-	PrimeBodyCoatWriter();
-#endif
 
 	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	const auto hits = snowShaderCacheHits.load(std::memory_order_relaxed);

@@ -2,7 +2,6 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
-#include "SnowDeformation/SnowSwitches.hlsli"
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -264,9 +263,6 @@ Texture2D<float4> SnowHeightMap : register(t8);
 SamplerState SnowSampler : register(s0);
 #endif
 
-#if defined(PSHADER) && SD_WITH_SPELLS
-#	define SNOW_RUNE_GLYPHS
-#endif
 #if defined(PSHADER) && (defined(PATCH) || defined(SNOW_OBJECT_PRINTS))
 #	define SNOW_NOISE_TABLE
 #endif
@@ -280,7 +276,7 @@ static float gDeferredZDy;
 #	define SNOW_CONDITION_VIEW_RUNTIME
 #endif
 #include "SnowDeformation/SnowFields.hlsli"
-#if defined(PSHADER) && (defined(SNOW_OBJECT_PRINTS) || defined(VOXEL))
+#if defined(PSHADER) && defined(SNOW_OBJECT_PRINTS)
 #	define SNOW_PRINT_RIM
 #	include "SnowDeformation/SnowPrints.hlsli"
 #endif
@@ -1433,65 +1429,7 @@ float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
 }
 #endif
 
-#if defined(VOXEL)
-cbuffer VoxelDrawCB : register(b2)
-{
-	int4 VoxOrigin;
-	float4 VoxParams;
-	float4 VoxFade;
-	float4 VoxCentre;
-	float4 VoxInnerCentre;
-	float4 VoxDebug;
-	float4 VoxDims;
-}
-StructuredBuffer<uint> VoxelBricks : register(t41);
-Texture3D<float> VoxelFieldTex : register(t42);
-SamplerState VoxelWrapSampler : register(s3);
-
-struct VOXEL_VS_OUTPUT
-{
-	noperspective centroid float4 Position : SV_POSITION;
-	float3 WorldPos : TEXCOORD0;
-	nointerpolation float3 BrickMin : TEXCOORD1;
-	nointerpolation uint Mask : TEXCOORD2;
-};
-#endif
-
-#if defined(VSHADER) && defined(VOXEL)
-VOXEL_VS_OUTPUT main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
-{
-	static const uint kCube[36] = { 4, 6, 7, 4, 7, 5, 0, 1, 3, 0, 3, 2, 1, 5, 7, 1, 7, 3,
-		0, 2, 6, 0, 6, 4, 2, 3, 7, 2, 7, 6, 0, 4, 5, 0, 5, 1 };
-	static const float3 kFaceNormal[6] = { float3(0, 0, 1), float3(0, 0, -1), float3(1, 0, 0), float3(-1, 0, 0), float3(0, 1, 0), float3(0, -1, 0) };
-	uint packed = VoxelBricks[instanceID];
-	int3 brick = int3(packed & 0xFF, (packed >> 8) & 0xFF, (packed >> 16) & 0xFF);
-	float3 minAbs = (float3)(brick * 8 + VoxOrigin.xyz) * VoxParams.x;
-	uint corner = kCube[vertexID % 36];
-	float3 c = float3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
-	float brickSize = 8.0 * VoxParams.x;
-	float3 rel = minAbs + c * brickSize - ShellCameraPosAdjust.xyz;
-	VOXEL_VS_OUTPUT o;
-	o.Position = mul(CameraViewProj, float4(rel, 1.0));
-	float3 camLocal = ShellCameraPosAdjust.xyz - minAbs;
-	bool inside = all(camLocal > 0.0) && all(camLocal < brickSize);
-	float3 n = kFaceNormal[(vertexID % 36) / 6];
-	bool front = dot(n, camLocal) > max(dot(n, brickSize.xxx), 0.0);
-	[flatten] if (inside)
-		o.Position.z = 0.0;
-	else if (!front)
-		o.Position = float4(0.0, 0.0, 0.0, 1.0);
-	float halfBrick = 4.0 * VoxParams.x;
-	float3 fromInner = abs(minAbs + halfBrick - ShellCameraPosAdjust.xyz - VoxInnerCentre.xyz);
-	[flatten] if (all((fromInner + halfBrick) * float3(1.0, 1.0, VoxDims.w) < VoxFade.x))
-		o.Position = float4(0.0, 0.0, 0.0, 1.0);
-	o.WorldPos = rel;
-	o.BrickMin = minAbs - ShellCameraPosAdjust.xyz;
-	o.Mask = packed >> 24;
-	return o;
-}
-#endif
-
-#if defined(VSHADER) && !defined(PATCH) && !defined(VOXEL)
+#if defined(VSHADER) && !defined(PATCH)
 struct SkinVertex
 {
 	float3 WorldBase;
@@ -1771,11 +1709,7 @@ struct PS_OUTPUT
 	float4 Masks : SV_Target6;
 	float4 Masks2 : SV_Target7;
 #	if !defined(PATCH) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
-#		if defined(VOXEL)
-	float Depth : SV_DepthGreaterEqual;
-#		else
 	float Depth : SV_Depth;
-#		endif
 #	endif
 };
 
@@ -2126,18 +2060,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		normalWS = normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 	}
 
-#ifdef SNOW_RUNE_GLYPHS
-#ifdef SNOW_PATCH_DEFERRED
-	RuneGlyph rune = SampleRunes(worldXY, gDeferredGridDx, gDeferredGridDy, input.markBase);
-#else
-	RuneGlyph rune = SampleRunes(worldXY, ddx(worldXY), ddy(worldXY), input.markBase);
-#endif
-	[branch] if (rune.colour.a > 0.004)
-	{
-		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
-		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
-	}
-#endif
 	float3 viewNormal = normalize(mul((float3x3)CameraView, normalWS));
 
 	float3 kSnowAlbedo = float3(0.82, 0.84, 0.88);
@@ -2146,10 +2068,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		kSnowAlbedo = SnowColor::SetAlbedo(kSnowAlbedo, SnowTextureIsLinear != 0.0);
 	}
-#ifdef SNOW_RUNE_GLYPHS
-	[branch] if (rune.colour.a > 0.004)
-		kSnowAlbedo = lerp(kSnowAlbedo, rune.colour.rgb, rune.colour.a);
-#endif
 	{
 		float scorch = SampleScorch(input.GridLocal) * SpellShading.x;
 		[branch] if (scorch > 0.001)
@@ -2327,11 +2245,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	const float glintsHere = glintsLit ? EnableGlints * wetLook.y : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
-#ifdef SNOW_RUNE_GLYPHS
-	const float4 markSpec = rune.specular;
-#else
 	const float4 markSpec = 0.0;
-#endif
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy, markSpec);
 	float3 specularLobe = sunLit.specularLobe;
@@ -2366,12 +2280,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
 	float3 preLit = ambientPart + directDiffuse;
-#ifdef SNOW_RUNE_GLYPHS
-	directSpecular = lerp(directSpecular, markSpecular, rune.colour.a);
-	specularLobe *= 1.0 - rune.colour.a;
-	snowRoughness = lerp(snowRoughness, 1.0, rune.colour.a);
-	preLit += rune.emission;
-#endif
 
 	SkinShadeResult r;
 	r.normalWS = normalWS;
@@ -2393,206 +2301,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	return r;
 }
 
-#if defined(VOXEL)
-float VoxelFieldAt(float3 relPos)
-{
-	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
-	logical = clamp(logical, 0.5, VoxDims.xyz - 0.5);
-	float3 uvw = frac((logical + (float3)VoxOrigin.xyz) / VoxDims.xyz);
-	return VoxelFieldTex.SampleLevel(VoxelWrapSampler, uvw, 0.0);
-}
-
-float VoxelTri8(float3 ga, float3 gb, float3 ha, float3 hb)
-{
-	float v = 0.0;
-	v += ga.x * ga.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, ha.y, ha.z)), 0.0);
-	v += gb.x * ga.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, ha.y, ha.z)), 0.0);
-	v += ga.x * gb.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, hb.y, ha.z)), 0.0);
-	v += gb.x * gb.y * ga.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, hb.y, ha.z)), 0.0);
-	v += ga.x * ga.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, ha.y, hb.z)), 0.0);
-	v += gb.x * ga.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, ha.y, hb.z)), 0.0);
-	v += ga.x * gb.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(ha.x, hb.y, hb.z)), 0.0);
-	v += gb.x * gb.y * gb.z * VoxelFieldTex.SampleLevel(VoxelWrapSampler, frac(float3(hb.x, hb.y, hb.z)), 0.0);
-	return v;
-}
-
-float4 VoxelFieldCubicGrad(float3 relPos)
-{
-	float3 dim = VoxDims.xyz;
-	float3 logical = (relPos + ShellCameraPosAdjust.xyz) / VoxParams.x - (float3)VoxOrigin.xyz;
-	logical = clamp(logical, 1.5, dim - 1.5);
-	float3 x = logical - 0.5;
-	float3 i = floor(x);
-	float3 f = x - i;
-	float3 f2 = f * f;
-	float3 f3 = f2 * f;
-	float3 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
-	float3 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-	float3 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
-	float3 w3 = f3 / 6.0;
-	float3 g0 = w0 + w1;
-	float3 g1 = w2 + w3;
-	float3 o = (float3)VoxOrigin.xyz + 0.5;
-	float3 h0 = (i - 1.0 + w1 / g0 + o) / dim;
-	float3 h1 = (i + 1.0 + w3 / g1 + o) / dim;
-	float3 d0 = -0.5 * (1.0 - f) * (1.0 - f);
-	float3 d1 = 0.5 * (3.0 * f2 - 4.0 * f);
-	float3 d2 = 0.5 * (1.0 + 2.0 * f - 3.0 * f2);
-	float3 d3 = 0.5 * f2;
-	float3 dg0 = d0 + d1;
-	float3 dg1 = d2 + d3;
-	float3 dh0 = (i - 1.0 + d1 / dg0 + o) / dim;
-	float3 dh1 = (i + 1.0 + d3 / dg1 + o) / dim;
-	float4 r;
-	r.w = VoxelTri8(g0, g1, h0, h1);
-	r.x = VoxelTri8(float3(dg0.x, g0.y, g0.z), float3(dg1.x, g1.y, g1.z), float3(dh0.x, h0.y, h0.z), float3(dh1.x, h1.y, h1.z));
-	r.y = VoxelTri8(float3(g0.x, dg0.y, g0.z), float3(g1.x, dg1.y, g1.z), float3(h0.x, dh0.y, h0.z), float3(h1.x, dh1.y, h1.z));
-	r.z = VoxelTri8(float3(g0.x, g0.y, dg0.z), float3(g1.x, g1.y, dg1.z), float3(h0.x, h0.y, dh0.z), float3(h1.x, h1.y, dh1.z));
-	return r;
-}
-
-PS_OUTPUT main(VOXEL_VS_OUTPUT input)
-{
-	const float voxel = VoxParams.x;
-	const float brickSize = 8.0 * voxel;
-	float tFrag = length(input.WorldPos);
-	float3 rayDir = input.WorldPos / max(tFrag, 1e-4);
-	float3 dSafe = (abs(rayDir) < 1e-6) ? float3(1e-6, 1e-6, 1e-6) : rayDir;
-	float3 invD = 1.0 / dSafe;
-	float3 bmin = input.BrickMin;
-	float3 bmax = bmin + brickSize;
-	float3 t0 = bmin * invD;
-	float3 t1 = bmax * invD;
-	float tNearRaw = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
-	float tFar = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
-	float tNear = max(tNearRaw, 0.0);
-	float sceneZ = SharedData::GetScreenDepth(SceneDepth.Load(int3(input.Position.xy, 0)));
-	float rayViewZ = mul(CameraView, float4(rayDir, 0.0)).z;
-	float tScene = sceneZ / max(rayViewZ, 1e-4);
-	tFar = min(tFar, tScene);
-	[branch] if (tFar <= tNear)
-		discard;
-
-	float noise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-	const float threshold = VoxParams.z;
-	const float stepLen = max(VoxParams.w, 0.1) * voxel;
-	[branch] if (VoxelFieldAt(rayDir * tNear) >= threshold)
-		discard;
-	float tPrev = tNear;
-	float t = (floor(tNear / stepLen) + 1.0) * stepLen;
-	bool hit = false;
-	const bool skipEmpty = VoxCentre.w > 0.5;
-	const float cell = 4.0 * voxel;
-	[loop] for (int i = 0; i < 48; i++)
-	{
-		if (t > tFar + stepLen)
-			break;
-		[branch] if (skipEmpty)
-		{
-			float3 local = rayDir * t - bmin;
-			int3 sc = clamp((int3)floor(local / cell), 0, 1);
-			uint bit = 1u << (uint)(sc.x | (sc.y << 1) | (sc.z << 2));
-			[branch] if ((input.Mask & bit) == 0u)
-			{
-				float3 cmin = bmin + (float3)sc * cell;
-				float3 tb = (cmin + step(0.0, rayDir) * cell) * invD;
-				float tExit = min(tb.x, min(tb.y, tb.z));
-				t = (floor(max(tExit, t) / stepLen) + 1.0) * stepLen;
-				tPrev = t - stepLen;
-				continue;
-			}
-		}
-		if (VoxelFieldAt(rayDir * t) >= threshold) {
-			hit = true;
-			break;
-		}
-		tPrev = t;
-		t += stepLen;
-	}
-	[branch] if (!hit)
-		discard;
-	float a = tPrev;
-	float b = t;
-	[unroll] for (int k = 0; k < 4; k++)
-	{
-		float m = 0.5 * (a + b);
-		if (VoxelFieldAt(rayDir * m) >= threshold)
-			b = m;
-		else
-			a = m;
-	}
-	float tHit = 0.5 * (a + b);
-	float3 g;
-	{
-		float4 vg = VoxelFieldCubicGrad(rayDir * tHit);
-		g = vg.xyz / voxel;
-		float slope = dot(g, rayDir);
-		[flatten] if (slope > 1e-4)
-		{
-			float dt = (vg.w - threshold) / slope;
-			[flatten] if (abs(dt) <= 0.35 * voxel)
-				tHit -= dt;
-		}
-	}
-	float3 P = rayDir * tHit;
-	float3 rIn = abs(P - VoxInnerCentre.xyz) * float3(1.0, 1.0, VoxDims.w);
-	float3 rOut = abs(P - VoxCentre.xyz) * float3(1.0, 1.0, VoxDims.w);
-	float wIn = 1.0 - smoothstep(VoxFade.x, VoxFade.y, max(rIn.x, max(rIn.y, rIn.z)));
-	float wOut = 1.0 - smoothstep(VoxFade.z, VoxFade.w, max(rOut.x, max(rOut.y, rOut.z)));
-	wOut = min(wOut, 1.0 - smoothstep(VoxDebug.z, VoxDebug.z + VoxDebug.w, tHit));
-	[branch] if (noise >= wOut || noise < wIn)
-		discard;
-
-	float3 normalWS = normalize(-g + float3(0.0, 0.0, 1e-5));
-
-	float2 worldXY = P.xy + ShellCameraPosAdjust.xy;
-	float4 clip = mul(CameraViewProj, float4(P, 1.0));
-	float4 currentClip = mul(CameraViewProjUnjittered, float4(P, 1.0));
-	float3 prevRel = P + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz;
-	float4 previousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	float2 motionVector = float2(-0.5, 0.5) * (currentClip.xy / currentClip.w - previousClip.xy / previousClip.w);
-
-	SkinShadeInput ssi;
-	ssi.WorldPos = P;
-	ssi.Position = float4(input.Position.xy, clip.z / clip.w, clip.w);
-	ssi.CurrentClip = currentClip;
-	ssi.Flat = 0.0;
-	ssi.GridLocal = worldXY - GridOrigin;
-	ssi.trenchGridLocal = ssi.GridLocal;
-	ssi.worldXY = worldXY;
-	ssi.pixelDist = tHit;
-	ssi.pixelDeform = 0.0;
-	ssi.screenNoise = noise;
-	ssi.selfShadowReject = 0.0;
-	ssi.onObject = 0.0;
-	ssi.geoNz = -1.0;
-	ssi.detail = 1.0 - smoothstep(VoxInnerCentre.w, VoxInnerCentre.w * 1.5, tHit);
-	ssi.pom = 0.0;
-	ssi.markBase = P.z + ShellCameraPosAdjust.z - ObjectsDepth;
-	SkinShadeResult r = SkinShadeSurface(ssi, normalWS);
-
-	PS_OUTPUT psout;
-	psout.Depth = max(clip.z / clip.w, input.Position.z);
-	[branch] if (VoxDebug.y > 0.5)
-	{
-		static const float3 kRingTint[6] = { float3(0.5, 1.0, 0.5), float3(0.5, 0.6, 1.0), float3(1.0, 1.0, 0.4), float3(1.0, 0.5, 1.0), float3(0.4, 1.0, 1.0), float3(1.0, 0.5, 0.5) };
-		float3 tint = kRingTint[clamp((int)VoxDebug.x, 0, 5)];
-		r.preLit *= tint;
-		r.diffuseLobe *= tint;
-	}
-	psout.Diffuse = float4(r.preLit, 1.0);
-	psout.MotionVectors = float4(motionVector, 0.0, 1.0);
-	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(r.viewNormal), 1.0 - r.snowRoughness, 0.0);
-	psout.Albedo = float4(r.diffuseLobe, 1.0);
-	psout.Specular = float4(r.directSpecular, 1.0);
-	psout.Reflectance = float4(r.specularLobe, 1.0);
-	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(r.ambientPart).x, 1.0);
-	psout.Masks2 = float4(1.0 - r.landVertexAO, 0.0, 0.0, 1.0);
-	return psout;
-}
-#endif
-
-#if !defined(VOXEL) && !defined(PATCH)
+#if !defined(PATCH)
 float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixelDist, float3 groundData, float pixelAbsZ)
 {
 	float sheetMeet = 0.0;
@@ -2622,7 +2331,7 @@ float3 DrapeSheetMeet(float3 normalWS, VS_OUTPUT input, bool pdMode, float pixel
 }
 #endif
 
-#if !defined(VOXEL) && !defined(SNOW_PATCH_DEFERRED)
+#if !defined(SNOW_PATCH_DEFERRED)
 #ifdef SNOW_STATICS_DEPTH_PREPASS
 bool SkinQuadHidden(float z, float2 pixel)
 {
@@ -3064,9 +2773,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.pom = 1.0;
 #ifdef PATCH
 	ssi.geoNz = -1.0;
-#ifdef SNOW_RUNE_GLYPHS
-	ssi.markBase = kMarkAnyBase;
-#endif
 #else
 	ssi.geoNz = abs(geoFacing.z);
 	ssi.markBase = input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift;
@@ -3385,9 +3091,6 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	ssi.detail = 1.0;
 	ssi.pom = 1.0;
 	ssi.geoNz = -1.0;
-#ifdef SNOW_RUNE_GLYPHS
-	ssi.markBase = kMarkAnyBase;
-#endif
 	const SkinShadeResult ssr = SkinShadeSurface(ssi, float3(grid.zw, sqrt(saturate(1.0 - dot(grid.zw, grid.zw)))));
 
 	PS_OUTPUT psout;

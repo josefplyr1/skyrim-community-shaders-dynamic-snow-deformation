@@ -274,27 +274,6 @@ float2 main(VS_OUTPUT input) : SV_Target0
 	a = saturate(a);
 	return float2(Spread.y > 0.5 ? a : 0.0, a);
 }
-#elif defined(PSHADER) && defined(RUNE)
-struct RUNE_OUTPUT
-{
-	float4 Field : SV_Target0;
-	float Depth : SV_Depth;
-};
-
-RUNE_OUTPUT main(VS_OUTPUT input)
-{
-	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
-		discard;
-	if (input.NormalZ < NormalZMin)
-		discard;
-	const float a = Diffuse.Sample(LinearSampler, input.UV).a * saturate(MaterialAlpha);
-	if (a < 1.0 / 255.0)
-		discard;
-	RUNE_OUTPUT o;
-	o.Field = float4(saturate(input.UV), Spread.w / 65535.0, saturate(MaterialAlpha));
-	o.Depth = 1.0 - a;
-	return o;
-}
 #elif defined(PSHADER)
 struct PS_OUTPUT
 {
