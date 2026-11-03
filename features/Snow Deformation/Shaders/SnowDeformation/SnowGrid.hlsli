@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #define kWarpBands 5
 static const float kWarpBandVerts[kWarpBands] = { 192.0, 8.0, 8.0, 8.0, 104.0 };
 static const float kWarpBandMul[kWarpBands] = { 1.0, 2.0, 4.0, 8.0, 16.0 };

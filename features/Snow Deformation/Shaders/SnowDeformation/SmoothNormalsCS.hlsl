@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 ByteAddressBuffer SrcVerts : register(t0);
 RWByteAddressBuffer HashTable : register(u0);
 RWStructuredBuffer<float4> OutNormals : register(u1);

@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #pragma once
 
 #include <algorithm>
@@ -8,6 +12,7 @@
 
 namespace TrenchSimd
 {
+	/** @brief Every byte becomes max(0, byte - a_drop); returns whether any byte stays non-zero. a_drop >= 1. */
 	inline bool DecayBytes(uint8_t* a_bytes, size_t a_count, int a_drop)
 	{
 		const __m128i drop = _mm_set1_epi8((char)(uint8_t)std::min(a_drop, 255));
@@ -26,6 +31,7 @@ namespace TrenchSimd
 		return alive;
 	}
 
+	/** @brief Non-zero bytes, and pairs of the store's byte RLE (runs of equal bytes, a run longer than 255 split). */
 	inline void CountRuns(const uint8_t* a_bytes, size_t a_count, size_t& a_nonZero, size_t& a_pairs)
 	{
 		size_t zeros = 0;
@@ -59,6 +65,7 @@ namespace TrenchSimd
 		a_pairs = pairs;
 	}
 
+	/** @brief True if any of the eight RGBA16F texels at a_texels has a .x that is not negative and not below a_epsilonBits (bit compare). a_epsilonBits <= 0x7FFF. */
 	inline bool AnyAtLeast8(const uint16_t* a_texels, uint16_t a_epsilonBits)
 	{
 		const __m128i bound = _mm_set1_epi16((short)(a_epsilonBits - 1));

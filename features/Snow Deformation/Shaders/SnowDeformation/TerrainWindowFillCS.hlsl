@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 RWTexture2D<float4> TerrainWindow : register(u0);
 Texture2D<float> HeightMap : register(t0);
 Texture2D<float4> LODTile00 : register(t1);

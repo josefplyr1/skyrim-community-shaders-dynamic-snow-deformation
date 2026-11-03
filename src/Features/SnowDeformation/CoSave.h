@@ -1,3 +1,7 @@
+// Snow Deformation for Community Shaders.
+// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
+// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
+
 #pragma once
 
 class CoSave
@@ -15,8 +19,15 @@ public:
 
 	static constexpr uint32_t kUniqueID = 'CSHD';
 
+	/** @brief Installs the SKSE callbacks. Idempotent; called from the feature's PostPostLoad, before any save can be loaded. */
 	void Install();
 
+	/**
+	 * @brief Claims a record type for a feature.
+	 * @param a_recordType Four-character code, unique across features.
+	 * @param a_version Version written into the record. Bump it when the payload layout changes.
+	 * Registration must happen before the main menu; PostPostLoad is early enough.
+	 */
 	void Register(uint32_t a_recordType, uint32_t a_version, SaveCallback a_save, LoadCallback a_load, RevertCallback a_revert);
 
 private:
