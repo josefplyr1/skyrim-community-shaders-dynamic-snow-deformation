@@ -3113,10 +3113,25 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 	const char* state = !debugBodyCoatContact ? "off with Contact Coat" :
 	                    store.force != 0      ? "off while Force Coat is on" :
 	                    !debugBodyCoatFade    ? "off" :
-	                    !store.writerReady    ? "waiting for the writer (an actor in snow)" :
+	                    !store.writerReady    ? "waiting for the writer (it starts at the first coat update)" :
 	                                            "on";
 	lines.push_back(std::format("Fading (S4): {}. Melt Time {:.0f} game hours at timescale {:.0f}: in clear, calm, cold weather a full coat goes in {:.1f} real minutes, one at Contact Cap in {:.1f}. Fade resolves in the last second: {}.",
 		state, meltHours, timescale, fullMinutes, fullMinutes * capShare, store.fadeResolvesLast));
+	// Round 9: the place as the melt reads it, warm or cold and why (D31).
+	if (auto* player = globals::game::player) {
+		const CoatAging here = ComputeCoatAging(player);
+		const RE::BGSLocation* location = player->GetCurrentLocation();
+		const RE::TESObjectCELL* cell = player->GetParentCell();
+		const char* name = location && location->GetName() && *location->GetName() ? location->GetName() : cell && cell->GetName() ? cell->GetName() : "";
+		const std::string place = !here.interior ? std::format("outdoors, the clear-weather clock at x{:.2f}", here.clearClock) :
+		                          here.interiorSnow ? std::format("indoors and cold: snow-projected objects are drawn here ({} last frame)", capturedLoadedPrev) :
+		                          here.interiorCold ? std::format("indoors and cold, by {}", here.interiorCold) :
+		                                              std::string("indoors and warm: not a cold kind of place, and no snow drawn here");
+		const float seconds = here.clearClock > 0.0f ? meltHours * 3600.0f / timescale / here.clearClock : -1.0f;
+		lines.push_back(std::format("Here{}: {}. {}", *name ? std::format(" ({})", name) : std::string(), place,
+			seconds < 0.0f ? std::string("Nothing melts here while it snows, but near a fire.") :
+			                 std::format("A full coat melts here in {}, faster near a fire.", seconds >= 120.0f ? std::format("{:.1f} min", seconds / 60.0f) : std::format("{:.0f} s", seconds))));
+	}
 	auto ago = [&](double a_at) {
 		const double s = store.realClock - a_at;
 		return s >= 120.0 ? std::format("{:.1f} min", s / 60.0) : std::format("{:.0f} s", s);
