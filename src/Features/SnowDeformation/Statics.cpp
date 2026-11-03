@@ -121,8 +121,9 @@ static bool ContainsNoCase(const char* a_text, const char* a_needle)
 }
 
 // Non-snow materials, matched on MATO editor IDs, on DynDOLOD's LOD batch names
-// (objAsh on Solstheim) and on precipitation records (the ash storm).
-static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast" };
+// (objAsh on Solstheim) and on precipitation records (the ash storm). Falmer and
+// glow: the Falmer cave and Blackreach crystal glow (FalmerLightDirectionalShader01).
+static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast", "falmer", "glow", "sulfur", "leaves", "dust" };
 
 const char* SnowDeformation::NotSnowKeywordIn(const char* a_name)
 {
