@@ -1,34 +1,14 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #ifndef __SNOW_LIGHTS_DEPENDENCY_HLSL__
 #define __SNOW_LIGHTS_DEPENDENCY_HLSL__
-
-// Point lights for the snow shells, from Light Limit Fix's clustered
-// visible-light list. The shells draw in the deferred pass, outside the
-// game's per-geometry light plumbing, so the strict-light cbuffer (b3) is
-// not available; the cluster list carries every visible placed light and
-// is the sole source here. Shadow-casting lights sample their own shadow
-// maps via SnowShadow::GetPointLightShadow, so include SnowShadow.hlsli
-// first. Per-light shading routes through SnowEvaluateLightPBR, so
-// SnowShading.hlsli must ALSO be included first.
 
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/SharedData.hlsli"
 
-// LLF's own header: the cluster buffers (t35-37, the registers the CPU side
-// binds for the shell draws), structs, and GetClusterIndex - previously a
-// local copy, deleted once b12 was measured bound during the deferred pass
-// (its FrameBuffer read is the first-person fix). StrictLightData (b3) comes
-// along unbound; nothing here reads it - the cluster list is the sole source
-// in the deferred pass.
 #include "LightLimitFix/LightLimitFix.hlsli"
 
 namespace SnowLights
 {
-	// Lights listed for the pixel's cluster; 0 outside the cluster volume.
 	uint ClusterLightCount(float2 clusterUV, float viewZ)
 	{
 		uint clusterIndex = 0;
@@ -38,20 +18,6 @@ namespace SnowLights
 		return count;
 	}
 
-	// Adds the clustered point lights to the shell's direct lobes, each
-	// light shaded through the SAME routed PBR path as the sun
-	// (SnowEvaluateLightPBR - ROUTING-ROADMAP M3), so point lights carry
-	// glints and every future TruePBR lobe automatically. worldPos
-	// camera-relative, worldPosAbs absolute; clusterUV is the pixel's
-	// projection-space screen UV. Shadow-casting lights sample their own
-	// shadow map at the shell surface, so shadow length is correct for the
-	// raised snow. Room/portal culling is skipped: the shell only exists in
-	// exteriors. GetAttenuation self-selects inverse-square vs vanilla
-	// falloff per light flags, so ISL parity is automatic.
-	// gameShadowMask: the game's shadow mask at this pixel, one channel per
-	// shadow light, for a surface lying ON the geometry the mask was drawn
-	// for (the drape); x < 0 = none, sample the light's own map.
-	// markSpecular / markLit: a vanilla decal's specular, SnowEvaluateSunPBR's.
 	void AccumulatePointLights(
 		SnowMaterialCtx mtl,
 		float3 worldPos, float3 worldPosAbs, float3 normalWS, float3 V, float viewZ,
@@ -96,4 +62,4 @@ namespace SnowLights
 	}
 }
 
-#endif  //__SNOW_LIGHTS_DEPENDENCY_HLSL__
+#endif

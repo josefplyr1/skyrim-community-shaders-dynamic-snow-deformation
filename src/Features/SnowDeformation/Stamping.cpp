@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/HitchSampler.h"
 
@@ -13,22 +9,14 @@
 #include "Utils/ActorUtils.h"
 #include "Utils/Game.h"
 
-// Shapes whose bottom is further than this above ground level do not carve.
 static constexpr float kStampSurfaceBand = 40.0f;
-// Sanity clamp on extracted shape radii.
 static constexpr float kMinStampShapeRadius = 4.0f;
 static constexpr float kMaxStampShapeRadius = 128.0f;
-// Shape stamps scale Havok collision-shape radii by kStampRadius over
-// kStampRadiusNeutral (the shapes' actual size): half size, since full-size
-// prints read bloated.
 static constexpr float kStampRadius = 10.0f;
 static constexpr float kStampRadiusNeutral = 20.0f;
-// Per-frame movement beyond this (teleport, cell load) breaks the capsule trail.
 static constexpr float kTrailBreakDistance = 256.0f;
-// Movement below this counts as standing still.
 static constexpr float kStampMovementGate = 3.0f;
 
-// First rigid body's island: Havok's own verdict on whether the prop has settled.
 static bool PropBodyAwake(RE::NiAVObject* a_root)
 {
 	bool awake = false;
@@ -43,144 +31,51 @@ static bool PropBodyAwake(RE::NiAVObject* a_root)
 	});
 	return awake;
 }
-// Full reference scan cadence, in frames. Between scans only the movers and
-// hazards the last scan found are revisited; a prop's first motion waits at
-// most one interval (~100 ms), which no one has seen.
-// Corpse settled-latch: wake displacement and frames-still until settled.
 static constexpr float kCorpseWakeDistance = 50.0f;
 static constexpr uint16_t kCorpseSettleFrames = 90;
-// Per-frame speed below which an unsettled corpse shape counts as still for
-// the settle counter (ragdoll jitter sits below, real motion above).
 static constexpr float kCorpseStillSpeed = 0.5f;
-// Contact-drawn corpses wake when the body has left its resting place by this much: a loot jiggle stays under it, a drag or a kick does not.
 static constexpr float kCorpseRasterWake = 12.0f;
-// Depth-scaled stamps: the nominal snow depth at the mover's position
-// scales its stamp radii (shallow snow takes narrower trenches). The clamp
-// keeps bare and unbaked ground recording readable trails.
 static constexpr float kStampDepthReference = 30.0f;
 static constexpr float kStampDepthScaleMin = 0.65f;
 static constexpr float kStampDepthScaleMax = 1.2f;
-// Per-foot stamping: a foot bone higher than this above the actor's ground
-// reference is in swing phase and does not stamp. Scaled by the bone's world
-// scale (giants, scaled races). The ankle joint sits ~8 units above the sole
-// on humanoids, so the band leaves ~7 units of stride tolerance.
 static constexpr float kFootPlantBand = 15.0f;
-// Tall-ankle skeletons (mammoths) hold every foot bone above the absolute
-// band; when even the lowest foot misses it, the plant test switches to
-// relative-to-lowest-foot (the lowest foot of a grounded skeleton is
-// planted). Tighter than the absolute band: swing feet pass close by.
 static constexpr float kFootRelativeBand = 10.0f;
-// Big feet articulate proportionally higher (and spread across slopes), so
-// the relative band also grows with the foot's own length.
 static constexpr float kFootRelativeLenFactor = 0.6f;
-// The toe bone marks the ball of the foot; the print capsule extends past it
-// by this fraction of the heel-toe length (the capsule end caps add the
-// rounded heel and toe tips on top).
 static constexpr float kFootToeExtend = 0.2f;
-// Print half-width as a fraction of the extended heel-toe length.
 static constexpr float kFootWidthRatio = 0.22f;
-// Width multiplier on foot-bone stamps (length stays anatomical).
 static constexpr float kFootPrintScale = 1.0f;
-// Circular print radius (at bone scale 1) for feet without a toe bone (hooves).
 static constexpr float kHoofRadius = 7.0f;
-// Below ~1.5 deformation texels a print aliases away; snow prints collapse
-// wider than the foot anyway.
 static constexpr float kMinFootStampRadius = 5.0f;
-// Edited-skeleton failsafe. A healthy walker plants each foot every ~60 units
-// of travel; ground travel with zero prints past the first threshold buys one
-// bone re-collection (the editor may have replaced the nodes), past the second
-// it latches the actor onto collision stamping for this 3D.
 static constexpr float kFootDryRecollect = 150.0f;
 static constexpr float kFootDryFallback = 300.0f;
-// Per-frame travel above this is a teleport, not a stride.
 static constexpr float kFootDryTeleport = 200.0f;
-// Cadence for re-verifying cached feet are still attached to the root.
 static constexpr uint16_t kFootAttachRecheckFrames = 60;
-// Frames a fresh 3D gets before its bones are walked: gear and holsters attach
-// in the frames after the skeleton loads, and the walk must not race that.
 static constexpr uint16_t kBoneCollectSettleFrames = 15;
 static constexpr int kBoneWalkMaxDepth = 32;
-// Trail keys for foot/limb stamps set these bits so they never collide with
-// Havok shape traversal indices when an actor switches paths (death, fallback).
 static constexpr uint64_t kFootKeyBit = 0x8000;
 static constexpr uint64_t kLimbKeyBit = 0x4000;
-// Limb stamps below this carve fraction are invisible; skip them.
 static constexpr float kMinLimbCarve = 0.05f;
-// Prop stamps floor here so small dropped items (daggers, gems) stay visible
-// at deformation-texel resolution.
 static constexpr float kMinPropStampRadius = 5.0f;
-// Bodies descending faster than this are in flight and do not stamp (no
-// carving under a throw or a ragdoll arc). Support is judged by fall speed,
-// not land height: props and corpses resting on statics (roads, bridges,
-// snow drifts) sit far above the land, and a land-height band starves
-// their stamps there.
 static constexpr float kFallSpeedGate = 300.0f;
-// Impact energy (kStampImpactScale): ground speed past a run (kImpactSpeedFloor),
-// up to a dodge or a gallop's share; a landing by its fall speed; a body down in
-// the snow. Units per second, seconds.
 static constexpr float kImpactSpeedSpan = 600.0f;
 static constexpr float kImpactSpeedMax = 0.75f;
 static constexpr float kImpactFallFloor = 250.0f;
 static constexpr float kImpactFallSpan = 600.0f;
 static constexpr float kImpactStampMin = 0.03f;
 static constexpr float kImpactTrackGap = 0.25f;
-// Speed Spoil (an estimate, as the impact terms are): a foot leaving its print
-// past a run throws a wedge back from it, its two arms kSpoilSpread either side
-// of the way back, as long as the snow flies in kSpoilKickSeconds at the
-// actor's speed, each arm kSpoilArmWidth of that wide. Its energy reaches 1
-// kSpoilSpeedSpan past the run.
 static constexpr float kSpoilSpeedSpan = 300.0f;
 static constexpr float kSpoilKickSeconds = 0.15f;
 static constexpr float kSpoilSpreadCos = 0.906f;
 static constexpr float kSpoilSpreadSin = 0.423f;
 static constexpr float kSpoilArmWidth = 0.3f;
-// Skeletons carry bones that are hidden or never composed for this race
-// (tail bones on tailless races, XPMSSE style nodes): scale 0 and/or a
-// world transform at the origin. A capsule anchored on one combs a trench
-// across the world, so both segment endpoints must be live and near the
-// actor (dragons are the far-endpoint ceiling).
 static constexpr float kMaxLimbEndpointDistance = 1024.0f;
-// How far past its own rest length a limb segment may stretch before it stops
-// being a limb. Bones are rigid, so in principle this is 1.0; the slack is for
-// animated scale and for the pseudo-joints the ancestor walk produces. A frost
-// atronach SHATTERS on death and its pieces fly apart, and the capsule between
-// two of them combs a flat band across the snow - the endpoint test cannot see
-// it, because both ends stay within reach of the actor while being nowhere
-// near each other.
 static constexpr float kLimbStretchGate = 2.0f;
-// Floor under the gate, so terminal segments (a == b, rest length zero) and
-// very short bones are not held to a hair's breadth.
 static constexpr float kLimbStretchFloor = 24.0f;
-// Backstop on how long a segment may be against its own THICKNESS, for the
-// case the learned length cannot cover: a death that swaps the actor's 3D
-// rebuilds the bone cache, so the first length it ever measures is already the
-// shattered one and there is no intact frame left to correct it. Self-scaling
-// in the right direction - a mammoth's limbs are thick, so it stays permissive
-// where bones really are long, and tight on the small skeletons where a comb
-// across the snow is most visible.
 static constexpr float kLimbAspectGate = 10.0f;
-// Material alpha below which a skinned body counts as drawn see-through. Kept
-// well clear of 1 rather than near it: an ordinary body is authored at exactly
-// 1.0, and Skyrim's ghost shader sits far below this, so the gap between the
-// two cases is wide and nothing needs tuning in between.
 static constexpr float kIncorporealAlpha = 0.95f;
-// Frames between re-measurements of a body's alpha. The look can arrive after
-// the 3D does, so one early opaque reading must not stand for ever - but it
-// changes rarely enough that measuring every frame would be waste.
 static constexpr uint16_t kBodyAlphaRecheckFrames = 30;
-/**
- * @brief Early re-reads of an actor's body alpha, and how far apart.
- *
- * A ghost's see-through shader is applied AFTER its model loads, so the first
- * measurement of a freshly spawned one reads a solid 1.0 and it carves trenches
- * until the next check comes round - half a second of tracks no ghost should
- * leave. Cell loading races the same way, so this is not only a console-spawn
- * artefact. Twelve reads five frames apart covers the first second; after that
- * the answer is settled and the slow cadence is enough.
- */
 static constexpr uint16_t kBodyAlphaSettleReads = 12;
 static constexpr uint16_t kBodyAlphaSettleFrames = 5;
-// Runaway-skeleton caps on the bone cache.
 static constexpr size_t kMaxCachedFeet = 8;
 static constexpr size_t kMaxCachedLimbs = 32;
 
@@ -193,11 +88,6 @@ static bool LimbEndpointValid(const RE::NiTransform& a_world, const RE::NiPoint3
 	return dx * dx + dy * dy < kMaxLimbEndpointDistance * kMaxLimbEndpointDistance;
 }
 
-// Case-insensitive substring/prefix tests for skeleton bone names.
-// True when this segment has stretched past anything a bone could be. The rest
-// length is learned rather than configured: the shortest sighting is the honest
-// one, so a first sight that happened to catch a body mid-shatter corrects
-// itself as soon as an intact frame arrives.
 static bool LimbStretched(SnowDeformation::StampBones::Limb& a_limb, float a_length, float a_radius)
 {
 	if (a_limb.restLength < 0.0f || a_length < a_limb.restLength)
@@ -213,7 +103,6 @@ static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
 	if (!hay)
 		return false;
 	const size_t needleLen = strlen(a_needle);
-	// Outside the Turkish dotted/dotless i, every locale folds a byte onto the needle's first only from its other ASCII case.
 	const bool prefilter = needleLen && a_needle[0] != 'i' && a_needle[0] != 'I';
 	const char firstFolded = (char)(a_needle[0] | 0x20);
 	for (const char* p = hay; *p; ++p) {
@@ -231,8 +120,6 @@ static bool NameStartsWith(const RE::BSFixedString& a_name, const char* a_prefix
 	return hay && _strnicmp(hay, a_prefix, strlen(a_prefix)) == 0;
 }
 
-// Parent-walk: a cached node an editor detached no longer reaches the root,
-// and its world transform is frozen wherever it was left.
 static bool NodeAttachedTo(const RE::NiAVObject* a_node, const RE::NiAVObject* a_root)
 {
 	for (auto* p = a_node; p; p = p->parent)
@@ -241,8 +128,6 @@ static bool NodeAttachedTo(const RE::NiAVObject* a_node, const RE::NiAVObject* a
 	return false;
 }
 
-// A foot's print: heel to the toe extended by kFootToeExtend, kFootWidthRatio
-// of that wide, scaled by the snow depth.
 struct FootPrint
 {
 	float2 heel;
@@ -258,8 +143,6 @@ static FootPrint FootPrintOf(RE::NiAVObject* a_foot, RE::NiAVObject* a_toe, floa
 	FootPrint print{};
 	print.heel = { footWorld.translate.x, footWorld.translate.y };
 	print.tip = print.heel;
-	// Toeless feet size off the parent-bone distance: a fixed
-	// hoof radius turns mammoth feet into dots.
 	print.length = 2.0f * kHoofRadius * boneScale;
 	float radius = kHoofRadius * boneScale;
 	if (auto* parentNode = a_foot->parent) {
@@ -282,8 +165,6 @@ static FootPrint FootPrintOf(RE::NiAVObject* a_foot, RE::NiAVObject* a_toe, floa
 	return print;
 }
 
-// What a foot plants against: the actor's ground, or the lowest foot when even
-// that one misses the absolute band (tall-ankle skeletons).
 struct FootPlantRef
 {
 	float z;
@@ -309,14 +190,6 @@ static float FootPlantBand(const FootPlantRef& a_ref, float a_boneScale, float a
 	                        kFootPlantBand * a_boneScale;
 }
 
-// Non-flesh nodes that carry body-part substrings and stamped as limbs:
-// holsters ("Weapon L Calf" matches calf, "Ankle Dagger Offhand" matches
-// hand), IED/XPMSSE "Extra*" gear slots ("ExtraLThighFlute"), and HDT-SMP
-// physics bones (the auto-rename prefix itself contains "Head", so every
-// hair braid matched - and dangling cloth bones wobble every frame, which
-// also kept the stamp-quiet idle skip from ever engaging nearby). Gear
-// never touches snow while worn; physics bones are covered by the flesh
-// they hang from.
 static bool GearNodeName(const RE::BSFixedString& a_name)
 {
 	return NameStartsWith(a_name, "Extra") || NameStartsWith(a_name, "hdt") ||
@@ -328,15 +201,12 @@ static bool GearNodeName(const RE::BSFixedString& a_name)
 	       NameContains(a_name, "magicnode") || NameContains(a_name, "animobject");
 }
 
-// A children slot read while another plugin re-parents gear can hold anything.
 static bool PlausibleNode(const RE::NiAVObject* a_obj)
 {
 	const auto p = reinterpret_cast<uintptr_t>(a_obj);
 	return p >= 0x10000 && (p & 7) == 0;
 }
 
-// Children are walked to the engine's own bound (free_idx), not CommonLib's
-// end() = capacity.
 static RE::NiAVObject* FindToeBone(RE::NiNode* a_node, int a_depth = 0)
 {
 	if (a_depth > kBoneWalkMaxDepth)
@@ -356,11 +226,6 @@ static RE::NiAVObject* FindToeBone(RE::NiNode* a_node, int a_depth = 0)
 	return nullptr;
 }
 
-// Body bones stamped as joint-to-joint segments. A bone node sits at its
-// PROXIMAL joint, so the segment (nearest matched ancestor -> bone) spans the
-// ancestor's flesh; min() of the two class radii keeps shoulder/hip joins from
-// inheriting torso thickness. Terminal classes get an extra sphere for the
-// mass beyond the last joint (skull, fingers).
 struct LimbSpec
 {
 	const char* substr;
@@ -388,10 +253,6 @@ static const LimbSpec* MatchLimb(const RE::BSFixedString& a_name)
 	return nullptr;
 }
 
-// Bones only (NiNode): skinned geometry like "FemaleFeet" must not match.
-// CME/MOV prefixes are XPMSSE control nodes mirroring bone names, and gear
-// holster nodes carry body-part substrings; both fail the match but stay on
-// the recursion path (XPMSSE inserts control nodes as parents of real bones).
 static __declspec(noinline) void CollectStampBones(RE::NiAVObject* a_obj, RE::NiAVObject* a_ancestor, float a_ancestorRadius,
 	SnowDeformation::StampBones& a_out, int a_depth)
 {
@@ -405,7 +266,6 @@ static __declspec(noinline) void CollectStampBones(RE::NiAVObject* a_obj, RE::Ni
 		(NameContains(name, "foot") || NameContains(name, "hoof") || NameContains(name, "paw"))) {
 		if (a_out.feet.size() < kMaxCachedFeet)
 			a_out.feet.push_back({ RE::NiPointer<RE::NiAVObject>(node), RE::NiPointer<RE::NiAVObject>(FindToeBone(node)) });
-		// The shin: ancestor (calf) joint down to the ankle.
 		if (a_ancestor && a_out.limbs.size() < kMaxCachedLimbs)
 			a_out.limbs.push_back({ RE::NiPointer<RE::NiAVObject>(a_ancestor), RE::NiPointer<RE::NiAVObject>(node),
 				a_ancestorRadius });
@@ -432,9 +292,6 @@ static __declspec(noinline) void CollectStampBones(RE::NiAVObject* a_obj, RE::Ni
 		CollectStampBones(children[i].get(), a_ancestor, a_ancestorRadius, a_out, a_depth + 1);
 }
 
-// The tree is the game's, and other plugins re-parent gear on it from their own
-// threads; a slot freed under the walk faults instead of misprinting. Same
-// net as FidelityFX's dispatch. No C++ objects may live in this frame (C2712).
 static bool TryCollectStampBones(RE::NiAVObject* a_root, SnowDeformation::StampBones* a_out)
 {
 	__try {
@@ -447,8 +304,6 @@ static bool TryCollectStampBones(RE::NiAVObject* a_root, SnowDeformation::StampB
 
 static uint32_t boneWalkFaultsLogged = 0;
 
-// Full-tree dump for the skeleton probe: every node with its match
-// classification, so a tester's log shows exactly what the stamper saw.
 static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
 {
 	if (!a_obj || a_depth > 24)
@@ -475,9 +330,6 @@ static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
 			DumpSkeletonToLog(child.get(), a_depth + 1);
 }
 
-// Geometry census for the same dump: every mesh under the actor with what the
-// contact pass will make of it. A part the game draws but nobody sees, or a
-// bound nowhere near the body, names itself here.
 static void DumpGeometryToLog(RE::NiAVObject* a_root)
 {
 	if (!a_root)
@@ -494,8 +346,6 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 			uint32_t parts = si->skinPartition ? si->skinPartition->numPartitions : 0;
 			uint32_t bones = si->skinData ? si->skinData->GetBoneCount() : 0;
 			skin = std::format("skinned {} partitions / {} bones, {} matrices", parts, bones, si->numMatrices);
-			// Per bone: the node the skin resolved, or which of the two sources is
-			// empty. A creature whose belly moves on a null slot names it here.
 			uint32_t nullNodes = 0, nullPointers = 0;
 			for (uint32_t b = 0; b < bones && b < 96; ++b) {
 				auto* node = si->bones ? si->bones[b] : nullptr;
@@ -538,19 +388,12 @@ static void DumpGeometryToLog(RE::NiAVObject* a_root)
 
 bool SnowDeformation::IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property)
 {
-	// HDT-SMP collision shapes ship inside outfit and hair meshes under
-	// 'Virtual*' names; RaceMenu paints its overlays as 'X [Ovl#]' / 'X [SOvl#]'
-	// clones of the body at the overlay's own alpha.
 	if (a_geometry && (NameContains(a_geometry->name, "Virtual") ||
 	                      NameContains(a_geometry->name, "[Ovl") || NameContains(a_geometry->name, "[SOvl")))
 		return true;
 	return a_property && a_property->alpha < 0.01f;
 }
 
-// Weight a shape puts through a crust, from its size. Crust bears a boot and
-// gives under a mammoth, and the shapes a heavy skeleton carries are simply
-// bigger - there is no mass to read off a collision shape, but this tracks it
-// closely enough that the exceptions do not matter.
 bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root,
 	StampBones* a_bones, float* a_alphaOut, bool* a_flagOut) const
 {
@@ -562,19 +405,12 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 		return false;
 	const int mode = settings.IncorporealMode;
 
-	// The record flag. A static read of the base, so no relocation and no
-	// live-actor state - Bethesda's "Is Ghost" means invulnerable rather than
-	// incorporeal, so it catches more than ghosts, but it never misses one.
 	bool flagged = false;
 	if (const auto* base = a_actor->GetActorBase())
 		flagged = base->actorData.actorBaseFlags.all(RE::ACTOR_BASE_DATA::Flag::kIsGhost);
 	if (a_flagOut)
 		*a_flagOut = flagged;
 
-	// Translucency, through Community Shaders' own test for a see-through
-	// surface. Cached with the bones, which are already keyed by the 3D root,
-	// and re-measured on a slow timer because the shader can be applied after
-	// the model loads.
 	float alpha = a_bones ? a_bones->bodyAlpha : -1.0f;
 	const bool wantAlpha = mode == 1 || mode == 3;
 	if (wantAlpha && a_root) {
@@ -588,17 +424,11 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 			stale = true;
 		}
 		if (stale) {
-			// Most opaque body surface decides; a ghost fades its whole model.
-			// Proxies and overlays skipped; none left = most opaque of all.
 			float highest = 0.0f, highestAny = 0.0f, lowestAny = 1.0f;
 			RE::BSFixedString highestName, highestAnyName, lowestAnyName;
 			bool bodySeen = false, anySeen = false;
 			auto visitBody = [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
-				// SKINNED only. Plain alpha blending is no use on its own -
-				// every NPC's hair and eyes blend - so what is read is the
-				// body's own material alpha, which an ordinary actor authors
-				// at exactly 1.
 				if (!runtime.skinInstance)
 					return RE::BSVisit::BSVisitControl::kContinue;
 				auto* property = runtime.shaderProperty.get();
@@ -623,7 +453,6 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				bodySeen = true;
 				return RE::BSVisit::BSVisitControl::kContinue;
 			};
-			// By reference: the traversal copies its std::function at every node.
 			RE::BSVisit::TraverseScenegraphGeometries(a_root, std::ref(visitBody));
 			if (!bodySeen) {
 				highest = anySeen ? highestAny : 1.0f;
@@ -637,9 +466,6 @@ bool SnowDeformation::ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_r
 				a_bones->anyAlphaSource = lowestAnyName;
 				const bool settling = a_bones->alphaSettle < kBodyAlphaSettleReads;
 				a_bones->alphaRecheck = settling ? kBodyAlphaSettleFrames : kBodyAlphaRecheckFrames;
-				// Bodies that load together settle together: the last settle read
-				// gives each its own phase in the slow cadence, so they do not all
-				// re-walk their 3D on one frame.
 				if (settling && ++a_bones->alphaSettle == kBodyAlphaSettleReads)
 					a_bones->alphaRecheck += static_cast<uint16_t>((reinterpret_cast<uintptr_t>(a_root) >> 4) % kBodyAlphaRecheckFrames);
 			}
@@ -675,9 +501,6 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 	const float band = std::max(settings.FloatingActorBand, 0.0f);
 	float lowest = FLT_MAX;
 
-	// Whatever the stamping path below would use. Feet first, because an
-	// actor that has them stamps from them; then limb undersides; and only
-	// when a skeleton offers neither is the collision tree walked.
 	if (a_bones) {
 		if (a_useFeet)
 			for (const auto& foot : a_bones->feet)
@@ -693,12 +516,6 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 					std::min(nodeA->world.translate.z, nodeB->world.translate.z) - limb.radius * nodeA->world.scale);
 			}
 	}
-	// Feet decide alone; LIMBS do not. A skeleton that matched no foot bone
-	// offers only spines and necks, and a reindeer measured by its spine reads
-	// 71 units off the ground - past every wisp threshold - while standing
-	// flat-footed in the snow. So a footless skeleton is also measured by its
-	// COLLISION, which reaches its legs, and the lower of the two answers.
-	// Wisps stay caught: their collision is their floating body.
 	const bool measuredByFeet = lowest != FLT_MAX && a_bones && a_useFeet && !a_bones->feet.empty();
 	if (a_byFeetOut)
 		*a_byFeetOut = measuredByFeet;
@@ -711,7 +528,6 @@ bool SnowDeformation::ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
 
-	// Nothing to measure is not the same as hovering.
 	if (lowest == FLT_MAX)
 		return false;
 	const float gap = lowest - a_groundZ;
@@ -726,18 +542,11 @@ float SnowDeformation::CrustBreakForce(float a_radius) const
 	return std::clamp((a_radius - threshold) / threshold, 0.0f, 1.0f);
 }
 
-// A collision shape's stamp: its own silhouette on the ground (a capsule
-// along its longest horizontal extent, as wide as the next) when that covers
-// this frame's motion, else the sweep from where it was. Subtracting the
-// width from the length keeps the capsule's end caps inside the shape - a
-// sphere collapses to the point it always was.
 struct ShapeStamp
 {
 	float2 a;
 	float2 b;
 	float radius;
-	// Vertical half-extent in this orientation; the bound radius when the
-	// footprint is unavailable, which is what the old underside used.
 	float halfHeight;
 };
 static ShapeStamp ShapeStampFor(RE::bhkNiCollisionObject* a_object, float2 a_current, float2 a_previous,
@@ -763,32 +572,19 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 {
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 	uint stampCount = 0;
-	// Actors and props stop short of the pool so spells always have somewhere
-	// to land. They are read first and in engine order, so without this a
-	// ragdoll pile fills all 256 and the fight that caused the pile marks
-	// nothing. The slots go unused when no spell is active, which costs a few
-	// limb prints inside a heap nobody is reading.
 	const uint actorCeiling = kMaxStamps - kSpellStampReserve;
 	float nearestDistSq = FLT_MAX;
 	RE::NiPoint3 cameraPosition = Util::GetEyePosition();
-	// NPCs past the actor trench range neither stamp nor take a raster slot; the player always carves.
 	auto* const playerActor = globals::game::player;
 	const float windowReach = 0.5f * deformWorldSize;
 	const float actorReach = std::min(windowReach, std::max(settings.RangeActorTrenchesM, 0.0f) * kUnitsPerMeter);
 	const float actorReachSq = actorReach * actorReach;
 	std::unordered_map<uint64_t, float2> currentPositions;
-	// Refs the stamp budget cut short; their anchors carry to the next frame.
 	std::unordered_set<uint32_t> budgetCutRefs;
 	stampStats = {};
 	for (auto& cone : perFrameData.StampCones)
 		cone = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-	// The map is 2048 whatever the Trenches range, so past ~100 m a texel
-	// outgrows the minimum print and a min-size stamp can fall entirely
-	// between texel centres - NPC feet at the clamp floor sporadically write
-	// nothing. Floor every stamp at one texel; fatter prints at long range
-	// are the honest cost of the coarser map (raise Deformation Map
-	// Resolution to keep them sharp instead).
 	const float texelFloor = deformWorldSize / (float)deformMapDim;
 	const float footRadiusFloor = std::max(kMinFootStampRadius, texelFloor);
 	const float limbRadiusFloor = std::max(kMinStampShapeRadius, texelFloor);
@@ -799,12 +595,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	contactCorpseCount = 0;
 	contactCenter = { windowOrigin.x + deformWorldSize * 0.5f, windowOrigin.y + deformWorldSize * 0.5f };
 
-	// Living actors stamp heel-to-toe capsules from skeleton foot bones
-	// (discrete alternating prints); skeletons without foot bones, corpses
-	// and props stamp their Havok collision shapes (SnowShapes::GetShapeBound over
-	// TraverseScenegraphCollision), so ragdoll limbs still carve individually.
-	// Raster slots to the player and the nearest living actors inside the
-	// contact window, not the first in the process list.
 	contactPriority.clear();
 	if (!contactShadersFailed) {
 		struct Nearby
@@ -846,7 +636,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!actor || !actor->Is3DLoaded())
 			return;
 		auto position = actor->GetPosition();
-		// Cull to the deformation window, NPCs to the actor trench range.
 		const float reach = actor.get() == playerActor ? windowReach : actorReach;
 		if (cameraPosition.GetSquaredDistance(position) > reach * reach)
 			return;
@@ -863,8 +652,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			skeletonProbe.actorName = actor->GetName() ? actor->GetName() : "";
 			skeletonProbe.verdict = "processing";
 		}
-		// Counted per actor turned away whole, which is what the Trenches
-		// range slider risks: a wider gather radius against a fixed budget.
 		if (stampCount >= actorCeiling) {
 			budgetCutRefs.insert(formID);
 			stampStats.budgetTurnedAway++;
@@ -872,10 +659,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				skeletonProbe.verdict = "gated: stamp budget exhausted";
 			return;
 		}
-		// The dead carve every frame until they settle; once settled only a
-		// large displacement (dragging, explosions) wakes them and the
-		// refill buries their imprint. No first-sight waiver: decapitation
-		// swaps the 3D, and a waiver would re-trench under buried corpses.
 		const bool isDead = actor->IsDead();
 
 		CorpseRest* rest = nullptr;
@@ -884,22 +667,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				corpseRestStates.clear();
 			rest = &corpseRestStates[formID];
 		} else {
-			// Reanimated: back to living rules.
 			corpseRestStates.erase(formID);
 		}
 		bool anyShapeMoved = false;
 		bool anyShapeWoken = false;
 
-		// S4: an actor the contact pass will draw needs no height gate. The
-		// raster measures penetration - a body in the air, on a roof, on a
-		// bridge, or hovering by animation reaches no snow and prints
-		// nothing, by construction. The airborne, elevated and floating gates
-		// below were the bone path's substitutes for that measurement; they
-		// stay for the far field, and a raster candidate walks past them. The
-		// incorporeal gate is different: a ghost is solid geometry, and only
-		// its alpha says so, so it still refuses before the enqueue.
-		// A living body whose last contact draw printed nothing stamps by bones
-		// for a while: whatever refused its meshes, the actor must still carve.
 		bool contactStarved = false;
 		if (!isDead)
 			if (auto it = stampBoneCache.find(formID); it != stampBoneCache.end())
@@ -912,23 +684,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (probing)
 			skeletonProbe.rasterCandidate = rasterCandidate;
 
-		// Airborne living actors do not carve. Dead ragdolls are exempt:
-		// their controllers freeze in stale states (often kInAir).
-		//
-		// kFlying is the engine's own word for a creature that does not walk,
-		// which is the cleanest floating signal there is where a creature uses
-		// it - no measurement, no threshold. It does not cover everything: the
-		// atronach races are all authored Walks and hover by animation instead,
-		// which is what ActorIsFloating below is for.
 		auto* charController = actor->GetCharController();
-		// Impact energy, tracked before the gates below can return and stamped
-		// once the actor has passed them all: what the feet strike with (speed,
-		// a landing) and a body down in the snow.
 		float footImpact = 0.0f;
 		float knockImpact = 0.0f;
 		bool landed = false;
 		RE::NiPoint3 impactFrom = position;
-		// Ground speed for Speed Spoil, 0 in the air.
 		float spoilSpeed = 0.0f;
 		if (!isDead) {
 			if (impactTracks.size() > 512 && !impactTracks.contains(formID))
@@ -982,13 +742,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
-		// Living actors on ELEVATED structures (walkways, roofs, bridges) do
-		// not stamp either: the deformation map is 2D, so their trails would
-		// carve the ground shell below AND every snow surface above at the
-		// same XY (tracks on roofs from walking the walkway beneath).
-		// Interim gate until the stamp-height channel lands; drift tops
-		// (under the cutoff) keep their trails. Corpses keep the round-218
-		// elevated-surface behavior.
 		if (!isDead) {
 			float landZ = position.z;
 			if (const auto tesLand = globals::game::tes) {
@@ -997,7 +750,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
-			// The map is 2D: an impact on a walkway would churn the trenches below.
 			if (position.z - landZ > kElevatedStampCutoff) {
 				footImpact = 0.0f;
 				knockImpact = 0.0f;
@@ -1010,10 +762,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// Living actors use their own position as the ground reference. Dead
-		// ragdolls are exempt from the airborne gate above, so their ground
-		// is the land height: a corpse flung off a ledge must not carve the
-		// snow beneath its flight arc.
 		float groundZ = position.z;
 		if (isDead)
 			if (const auto tesGround = globals::game::tes) {
@@ -1022,7 +770,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 
 		if (rest) {
-			// Flight gate: a flung ragdoll must not carve under its arc.
 			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
 			const bool fallingCorpse = rest->hasPrevZ && (position.z - rest->prevZ) / dt < -kFallSpeedGate;
 			rest->prevZ = position.z;
@@ -1036,8 +783,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
 			kStampDepthScaleMin, kStampDepthScaleMax);
 		if (probing) {
-			// Sentinel far below any real blended depth: a baked bare-class
-			// cell legitimately reads small negative.
 			const float probeDepth = GetNominalSnowDepthAt(position.x, position.y, -10000.0f);
 			skeletonProbe.cellBaked = probeDepth > -9999.0f;
 			skeletonProbe.shellDepth = skeletonProbe.cellBaked ? probeDepth : -1.0f;
@@ -1080,9 +825,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (cache.collectDelay > 0 && --cache.collectDelay == 0)
 			recollectBones();
 
-		// Runtime skeleton editors (RaceMenu/NiOverride, IED, MuSkeletonEditor)
-		// edit the live tree without swapping the root, so the root key alone
-		// cannot vouch for a cached foot: re-verify attachment on a cadence.
 		if (!cache.feet.empty()) {
 			if (cache.attachRecheck > 0) {
 				cache.attachRecheck--;
@@ -1095,9 +837,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					}
 			}
 		}
-		// A matched foot detached or zero-scaled is not a foot this frame; an
-		// actor with none usable must not take the bone path, or the collision
-		// fallback its skeleton needs is unreachable.
 		uint usableFeet = 0;
 		for (const auto& foot : cache.feet) {
 			auto* n = foot.node.get();
@@ -1109,8 +848,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			bones = &cache;
 		const bool footPath = !isDead && usableFeet > 0 && !cache.collisionFallback;
 
-		// Watchdog: ground travel with zero foot prints. Only strides count -
-		// not teleports, and not frames off the ground or in a saddle.
 		float dryStep = 0.0f;
 		if (cache.hasPrevPos) {
 			const float dx = position.x - cache.prevPosX;
@@ -1164,15 +901,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// Floating actors carve nothing. Atronachs, wisps and ghosts never
-		// touch the ground, so every mark they leave today is one the snow
-		// should not have taken - and the foot path is what puts it there:
-		// when no foot reaches the ground it falls back to plumbing the
-		// LOWEST foot instead, which plants a hovering actor's sole no matter
-		// how high it is. Corpses are exempt: a body that has fallen is lying
-		// in the snow, and its dent is correct.
-		// A creature drawn standing in the snow (CreatureSink.cpp) carries the lift in
-		// its bones, and in its ragdoll when Havok drives that to them.
 		bool liftInRagdoll = true;
 		float creatureWeight = 0.0f;
 		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll, &creatureWeight);
@@ -1184,27 +912,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			skeletonProbe.floatingGap = floatingGap;
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
-		// A thing made of an element has a body however transparent it is, and
-		// the translucency test cannot tell ice from a ghost - a Frost Atronach
-		// reads 0.75 and carves nothing. The discriminator is an elemental
-		// affinity on the RACE (an aura cloak, or near-immunity to one element
-		// paired with a weakness to another): atronachs and ice wraiths carry
-		// one, wisps and ghosts do not. Derived rather than named, reusing the
-		// per-race cache the innate auras fill.
-		//
-		// NOT the kIsGhost flag: 72 of the 90 ghost-named actors in Skyrim.esm
-		// do not set it. The flag means invulnerable.
 		const bool elemental = ResolveInnateAura(actor.get()) != nullptr;
-		// Corpses are exempt from BOTH gates: a body that has fallen is lying
-		// in the snow whatever it was in life.
 		const bool incorporeal = !isDead && !elemental &&
 		                         ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
 
-		// Diagnostics for the nearest creature, so the clearance band can be
-		// read off a real wisp or ghost rather than guessed at. The gap to the
-		// LAND is reported beside it because the two references answer
-		// different questions: an actor lifted by its animation shows up in the
-		// first, one whose controller itself floats only in the second.
 		if (!actor->IsPlayerRef()) {
 			const float distSq = cameraPosition.GetSquaredDistance(position);
 			if (!stampStats.nearestValid || distSq < nearestDistSq) {
@@ -1236,16 +947,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// Counted apart. One number for both said "floating actors not carving"
-		// while incorporeal ones were in it too, which is a diagnostic that
-		// answers the wrong question: the two gates measure different things
-		// and are tuned by different settings, so a reading that cannot say
-		// which one fired sends you to the wrong slider.
 		if (floating && settings.NoCarveFloatingActors && !rasterCandidate) {
 			stampStats.floating++;
-			// A hover verdict cast by feet alone is the frozen-foot signature
-			// (foot z stuck, actor gone): dry travel accrues so the watchdog
-			// can break out of it. Collision-measured hovering is trusted.
 			if (floatingByFeet)
 				accumulateDry(dryStep);
 			if (probing)
@@ -1273,13 +976,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				bones->anyAlphaSource.c_str() ? bones->anyAlphaSource.c_str() : "", bones->anyAlpha,
 				bodyAlpha, bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "");
 		}
-		// A ghost's see-through look arrives by SCRIPT, frames after its model
-		// loads, and a carve is permanent until the refill buries it - so the
-		// stamps laid before the first honest alpha reading leave a trench no
-		// ghost should own. Re-reading faster (the previous fix) cannot close
-		// that window; not stamping until the readings settle does. Costs any
-		// newly seen actor its first second of prints, which nobody standing
-		// a hundred metres away has ever been close enough to miss.
 		const bool alphaGoverns = !elemental &&
 		                          (settings.IncorporealMode == 1 || settings.IncorporealMode == 3);
 		if (!isDead && alphaGoverns && bones && bones->alphaSettle < kBodyAlphaSettleReads) {
@@ -1292,15 +988,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (SnowEventsWanted())
 			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
 
-		// A creature hits the snow by its weight against the player's as it
-		// loads it (CreatureSink.cpp): the cube root, its weight over its feet.
-		// People and the unmeasured are the player's.
 		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
 		footImpact = std::min(footImpact * impactWeight, 1.0f);
 		knockImpact = std::min(knockImpact * impactWeight, 1.0f);
-		// Impact stamps carve nothing: their energy rides the mode, Impact Reach
-		// times the size of what struck. Feet strike at their own prints; a body
-		// down in the snow, or one with no feet to read, over its path this frame.
 		const float impactReach = std::clamp(settings.ImpactReach, 0.5f, 4.0f);
 		const bool footStrikes = footPath && bones;
 		const float bodyImpact = footStrikes ? knockImpact : std::max(footImpact, knockImpact);
@@ -1314,7 +1004,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * bodyImpact, 0.0f };
 			stampCount++;
 		}
-		// A run strikes with the feet on the ground, a landing with all of them.
 		if (footStrikes && footImpact > kImpactStampMin) {
 			const auto plantRef = FootPlantRefOf(*bones, groundZ + bodyLift);
 			for (const auto& foot : bones->feet) {
@@ -1332,8 +1021,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampCount++;
 			}
 		}
-		// Speed Spoil: a foot leaving its print past a run throws a wedge of
-		// impact energy back from it, carving nothing.
 		if (settings.SpeedSpoil && footPath && bones) {
 			if (spoilFeet.size() > 1024)
 				spoilFeet.clear();
@@ -1350,8 +1037,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (!spoilNode || spoilNode->world.scale < 0.01f)
 					continue;
 				auto& spoilState = spoilFeet[(uint64_t(formID) << 8) | (spoilKeyIndex & 0xFF)];
-				// The bone path's plant band and its release: a foot lifts when it
-				// clears 1.5x the band it planted in.
 				const float spoilBand = kFootPlantBand * spoilNode->world.scale * (spoilState.planted ? 1.5f : 1.0f);
 				const bool spoilPlanted = spoilNode->world.translate.z - (groundZ + bodyLift) <= spoilBand;
 				const bool spoilSeen = spoilState.frame != 0 && spoilFrame - spoilState.frame <= 2;
@@ -1375,15 +1060,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// S1: an actor inside the contact window carves by its skinned mesh
-		// instead of by bones. Placed AFTER the floating, incorporeal and
-		// settle gates, so a ghost is still refused; and it skips the bone
-		// stamps outright. The living and the dead draw from separate
-		// budgets: a corpse is drawn while its body translates and for the
-		// settle window after, then latched out on the same rest state the
-		// bone corpse path uses; a latched corpse takes NO path - its print
-		// is already in the map - until the body moves off its resting place
-		// again. The living draw every frame.
 		if (!contactShadersFailed && !contactStarved) {
 			const auto& bound = root->worldBound;
 			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
@@ -1396,8 +1072,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (rest->hasPrevCenter) {
 						const float step = center.GetDistance(rest->prevCenter);
 						if (step >= kFootDryTeleport) {
-							// A cell load or a physics wake moved the body wholesale:
-							// a new placement, printed afresh.
 							rest->settled = false;
 							rest->stillFrames = 0;
 						} else if (rest->settled) {
@@ -1434,10 +1108,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// Living actors need matched USABLE feet to take the bone path: a
-		// limbs-only match (creature spines/necks) would steal the
-		// collision-shape fallback while its high segments carve nothing, and
-		// so would feet an editor broke or a watchdog already gave up on.
 		if (footPath && bones) {
 			if (probing)
 				skeletonProbe.verdict = "carving: bone path";
@@ -1465,14 +1135,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					const float2 tip = print.tip;
 					const float radius = print.radius;
 
-					// Absence from the trail map is the lifted latch: a foot in
-					// swing phase drops out, so its next plant starts a fresh
-					// discrete print instead of dragging from the previous one.
-					// The band releases at 1.5x for a foot that stamped last
-					// frame: an idle foot hovering AT the band flickers its
-					// stamp in and out every frame or two, and each flicker is
-					// a real map input. A swing lift clears 1.5x instantly, so
-					// the trail-break latch is unaffected.
 					const float plantBand = FootPlantBand(plantRef, boneScale, print.length);
 					const uint64_t key = (uint64_t(formID) << 16) | (kFootKeyBit | uint64_t(thisIndex & 0x7FFF));
 					const bool wasPlanted = stampPrevPositions.find(key) != stampPrevPositions.end();
@@ -1488,8 +1150,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (!planted)
 						continue;
 
-					// A continuously planted heel can still slide (shuffles,
-					// slopes); the capsule then covers drag plus foot length.
 					float2 segStart = heel;
 					auto it = stampPrevPositions.find(key);
 					if (it != stampPrevPositions.end()) {
@@ -1506,10 +1166,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.z = footReach;
 					stamp.w = radius;
 					perFrameData.Stamps[stampCount] = stamp;
-					// StampEnds.w on a carve is the weight it puts through a
-					// crust: a boot prints shallow on ice, a mammoth goes
-					// through it. Radius stands in for mass - the shapes a
-					// heavy skeleton carries are simply bigger.
 					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, kStampModeBody,
 						CrustBreakForce(radius) };
 					stampCount++;
@@ -1520,10 +1176,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 			}
 
-			// Limb segments carve to the fraction their underside reaches
-			// into the nominal snow layer: wading legs connect the prints in
-			// deep snow, shallow snow keeps prints discrete. No trail latch:
-			// per-frame segment stamps stay continuous at any speed.
 			for (auto& limb : bones->limbs) {
 				if (stampCount >= actorCeiling)
 					break;
@@ -1580,12 +1232,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				skeletonProbe.verdict = "carving: collision shapes (feet unusable)";
 		}
 
-		// Corpses with cached bones imprint body-shaped: the same limb
-		// segments, run through the shape path's settle latch per limb.
 		const bool useCorpseBones = isDead && bones && !bones->limbs.empty();
 		if (useCorpseBones) {
-			// A corpse rests on whatever its lowest limb touches (statics
-			// included): that limb carves fully, higher ones taper.
 			float lowestLimbBottom = FLT_MAX;
 			for (const auto& limb : bones->limbs) {
 				auto* nA = limb.a.get();
@@ -1632,8 +1280,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
 				anyShapeWoken |= woken;
 				if (firstSight || (rest->settled && !woken)) {
-					// First sight baselines only; a settled corpse keeps its
-					// frozen anchor and stops carving.
 					currentPositions[key] = firstSight ? current : it->second;
 					continue;
 				}
@@ -1657,9 +1303,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		// Band reference: identical to groundZ for the living (their ground
-		// IS their position); for dead ragdolls it lifts to the body, so
-		// corpses on statics keep their shape stamps.
 		const float bandRefZ = std::max(groundZ, position.z) + (liftInRagdoll ? 0.0f : bodyLift);
 		uint32_t shapeIndex = 0;
 		if (!useCorpseBones)
@@ -1667,7 +1310,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				RE::NiPoint3 centerPos;
 				float radius;
 				if (SnowShapes::GetShapeBound(a_object, centerPos, radius)) {
-					// Stable per-skeleton traversal order keys the trail history.
 					const uint32_t thisIndex = shapeIndex++;
 					if (stampCount >= actorCeiling) {
 						budgetCutRefs.insert(formID);
@@ -1678,8 +1320,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (radius < kMinStampShapeRadius || radius > kMaxStampShapeRadius)
 						return RE::BSVisit::BSVisitControl::kContinue;
 
-					// Capsule stamp from the shape's previous position keeps
-					// fast movers' trails continuous.
 					float2 current = { centerPos.x, centerPos.y };
 					float2 previous = current;
 					const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
@@ -1692,31 +1332,18 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 							previous = it->second;
 					}
 					const bool firstSight = (it == stampPrevPositions.end());
-					// Against the frozen resting anchor: dragging accumulates
-					// past the wake distance, ragdoll jitter does not.
 					const bool woken = !firstSight && sqDelta > kCorpseWakeDistance * kCorpseWakeDistance;
 					if (isDead) {
-						// While unsettled the anchor follows every frame, so
-						// sqDelta is per-frame speed there; the epsilon separates
-						// real motion from jitter for the settle counter.
 						anyShapeMoved |= !firstSight && sqDelta > kCorpseStillSpeed * kCorpseStillSpeed;
 						anyShapeWoken |= woken;
 					}
 					if (isDead && (firstSight || (rest->settled && !woken))) {
-						// First sight baselines only; a settled corpse keeps
-						// its frozen anchor and stops carving.
 						currentPositions[key] = firstSight ? current : it->second;
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
-					// Unsettled dead stamp every frame, exactly like the living:
-					// the snow deforms as the body moves through it.
 					currentPositions[key] = current;
 
 					const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius);
-					// Carve to the fraction the underside reaches into the layer,
-					// as limbs do: a shape hovering over the shell must not print
-					// to the ground. After the trail and settle bookkeeping above,
-					// so a hovering shape keeps its anchor.
 					const float carve = std::clamp(
 						1.0f - (centerPos.z - shapeStamp.halfHeight - bandRefZ) / nominalDepth, 0.0f, 1.0f);
 					if (carve < kMinLimbCarve)
@@ -1725,8 +1352,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					stamp.x = shapeStamp.a.x;
 					stamp.y = shapeStamp.a.y;
 					stamp.z = carve;
-					// kStampRadius scales the shape's own radius; the crust reads the
-					// bound sphere, the mass proxy, unchanged.
 					stamp.w = std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale,
 						texelFloor);
 					perFrameData.Stamps[stampCount] = stamp;
@@ -1779,42 +1404,21 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		cpuCensus.lastStampSourceCount = cpuCensus.stampSourceCount;
 		cpuCensus.lastStampSourceFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	}
-	// One frame of lag: the probe follows whoever ended THIS gather nearest,
-	// and fills during the next, so the pick is settled before any row is
-	// written.
 	skeletonProbeTarget = stampStats.nearestValid ? stampStats.nearestFormID : 0;
 	globals::profiler->EndPass();
 
-	// The reference scan, timed apart from the actor walk above: it visits
-	// every reference in range each frame whether or not anything moves.
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
-	// Loose props carve while moving. The cheap root-position gate runs
-	// before any collision traversal. The reference scan itself is the cost
-	// (0.31 ms to visit 144 refs and find 0 movers, measured), so it runs
-	// every kPropScanInterval frames; between scans only the movers and
-	// hazards it found are revisited, and anchors update in place rather
-	// than being rebuilt. Hazards replay every frame from the cache because
-	// the emitter list is cleared per frame.
 	const auto tes = globals::game::tes;
 	auto* playerRef = globals::game::player;
-	// Hazards present means a wall or rune spell is live: those spawn a
-	// SERIES of hazard references as they spread, and a segment placed
-	// between scans is invisible until the next one - the wall's growing
-	// edge flickered. Scan every frame while any hazard stands; spell
-	// combat is brief, and the throttle holds for the rest of play.
 	const uint32_t phase = propScanFrame;
 	propScanFrame = (propScanFrame + 1) % kPropScanInterval;
 	if (phase == 0)
 		propScanCycle++;
-	// True inside the cell walk: a mover found there joins this phase's
-	// slice and is revisited every frame until its cell is walked again.
 	bool scanning = false;
 	auto considerProp = [&](RE::TESObjectREFR* a_ref) {
 		auto* base = a_ref->GetBaseObject();
 		if (!base)
 			return;
-		// Havok-movable base types only; projectiles must not carve
-		// under their flight path.
 		switch (base->GetFormType()) {
 		case RE::FormType::Misc:
 		case RE::FormType::Weapon:
@@ -1837,26 +1441,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!root)
 			return;
 
-		// Gate on the 3D root's world transform, not the reference
-		// position: Havok moves the scene graph every frame while the
-		// reference position lags until the body settles.
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
 		ItemSinkNote(a_ref, position);
-		// Anchors update in place; the cycle stamp says when the reference was
-		// last seen, and a whole cycle unseen retires it.
 		auto prevIt = propPrevPositions.find(formID);
 		if (prevIt == propPrevPositions.end()) {
 			propPrevPositions[formID] = { position, propScanCycle };
-			return;  // first sight: baseline only
+			return;
 		}
-		// Frozen anchor: slow motion accumulates toward the gate instead
-		// of resetting every frame.
 		const bool propTravelled = position.GetSquaredDistance(prevIt->second.pos) >= kStampMovementGate * kStampMovementGate;
-		// A prop that turns, rocks or rolls in place travels nowhere and printed
-		// once per 3 units: a trench that lagged the mesh by half a second.
-		// Once moving, it prints every frame until Havok puts it to sleep.
 		const bool propMoved = propTravelled || (prevIt->second.mover && PropBodyAwake(root));
 		prevIt->second.mover = propMoved;
 		prevIt->second.cycle = propScanCycle;
@@ -1867,42 +1461,25 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (scanning)
 				propScanMovers[phase].push_back(a_ref->CreateRefHandle());
 		}
-		// At rest the refill buries a prop - except an item the snow is holding
-		// up, whose trench is what shows it.
 		if (!propMoved && !ItemSinkWantsPrint(a_ref))
 			return;
 		if (stampCount >= actorCeiling) {
 			budgetCutRefs.insert(formID);
-			return;  // keep collecting anchors
+			return;
 		}
 
-		// Fast-falling props must not carve under their arc; supported
-		// ones stamp wherever they lie, including on top of statics.
 		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
 		if ((position.z - prevIt->second.pos.z) / dt < -kFallSpeedGate)
 			return;
 
 		float groundZ = position.z;
 		tes->GetLandHeight(position, groundZ);
-		// Props on ELEVATED surfaces, or simply hanging in the air, do not
-		// carve - the same gate the living have obeyed since the walkway
-		// rounds, and for the same reason. The band below measures against
-		// the prop's own root, so it can never find the prop too high;
-		// something dropped on a table or still falling therefore cut the
-		// ground a storey beneath it at full depth.
 		const bool elevated = position.z - groundZ > kElevatedStampCutoff;
-		// Inside the contact window a moving prop carves by its own render
-		// mesh (DrawContactCapture, per texel in the stamp pass); its
-		// collision shapes stay out of the stamp list. An elevated one is
-		// drawn too: each texel's height test keeps it off the ground, and the
-		// object it lands on takes its print (Snow Trenches on Objects).
 		if (!contactShadersFailed) {
 			const auto& bound = root->worldBound;
 			if (bound.radius > 0.0f &&
 				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
 				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
-				// Books are skinned (a hinged cover): the prop draw is rigid-only,
-				// the actor draw takes both.
 				bool skinned = false;
 				RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 					if (!a_geometry->GetGeometryRuntimeData().skinInstance)
@@ -1917,8 +1494,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		if (elevated)
 			return;
-		// Band reference: whichever is higher, the land or the prop's own
-		// root — elevated resting surfaces keep their stamps.
 		const float supportZ = std::max(groundZ, position.z);
 
 		const float nominalDepth = std::max(
@@ -1937,13 +1512,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				if (centerPos.z - radius > supportZ + kStampSurfaceBand)
 					return RE::BSVisit::BSVisitControl::kContinue;
-				// Small item shapes (daggers, gems) are real: floored at
-				// stamp time instead of skipped like actor shapes.
 				if (radius > kMaxStampShapeRadius)
 					return RE::BSVisit::BSVisitControl::kContinue;
 
-				// Props share the (formID << 16 | shape) keyspace with
-				// actors; formIDs are unique.
 				float2 current = { centerPos.x, centerPos.y };
 				float2 previous = current;
 				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
@@ -1956,7 +1527,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				currentPositions[key] = current;
 
 				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius);
-				// Depth from the underside, as limbs do - see the actor site.
 				const float carve = std::clamp(
 					1.0f - (centerPos.z - shapeStamp.halfHeight - supportZ) / nominalDepth, 0.0f, 1.0f);
 				if (carve < kMinLimbCarve)
@@ -1975,8 +1545,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return RE::BSVisit::BSVisitControl::kContinue;
 		});
 
-		// Shape types with no bound extractor (MOPP/list): one stamp from
-		// the root's bound sphere.
 		if (shapeIndex == 0 && stampCount >= actorCeiling)
 			budgetCutRefs.insert(formID);
 		if (shapeIndex == 0 && stampCount < actorCeiling) {
@@ -2013,10 +1581,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		return;
 	};
 	if (tes && playerRef) {
-		// The cells TES::ForEachReferenceInRange would walk, gathered the
-		// same way (the interior cell, else every attached grid cell whose
-		// extents reach the radius, plus the sky cell), then a sixth of them
-		// this frame. Hazards live: every cell every frame, as before.
 		const auto originPos = playerRef->GetPosition();
 		const float radius = 0.5f * deformWorldSize;
 		auto& cells = propScanCells;
@@ -2076,8 +1640,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 		scanning = false;
 		propScanRefs = stampStats.propRefs;
-		// The other slices' movers and hazards, revisited; this phase's were
-		// just found in the walk.
 		for (uint32_t slice = 0; slice < kPropScanInterval; slice++) {
 			if (scanAll || slice == phase)
 				continue;
@@ -2088,20 +1650,12 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (auto ref = handle.get(); ref)
 					considerProp(ref.get());
 		}
-		// A whole cycle unseen: the reference left the range or unloaded.
 		if (phase == 0 && propScanCycle >= 2)
 			std::erase_if(propPrevPositions, [&](const auto& a_kv) { return a_kv.second.cycle + 1 < propScanCycle; });
 	}
 
-	// Spell emitters melt rather than displace. Appended AFTER actors and
-	// props on purpose: a busy fight must not starve foot prints out of the
-	// stamp budget, and prints are the marks players read first.
 	stampStats.beforeSpells = stampCount;
 
-	// Overflow: keep the sources nearest the camera. The producers above run in
-	// a fixed order, so a cap enforced while gathering drops whichever ran last
-	// rather than whichever is furthest away. Sorted here rather than at the end
-	// of GatherSpellEmitters because hazards join during the prop scan above.
 	if (spellEmitters.size() > kMaxSpellEmitters) {
 		spellStats.emittersCulled = static_cast<uint>(spellEmitters.size() - kMaxSpellEmitters);
 		std::partial_sort(spellEmitters.begin(), spellEmitters.begin() + kMaxSpellEmitters, spellEmitters.end(),
@@ -2118,53 +1672,30 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			break;
 		const bool pits = emitter.mark == SpellMark::Pit;
 		const bool glazes = emitter.mark == SpellMark::Crust;
-		// Force. The only school that DISPLACES snow, so it is the only one
-		// that takes the trench path a boot takes - max-blended to a depth
-		// rather than approached at a rate - and the only one the berm field
-		// answers, since a carve never touches the melted channel it subtracts.
 		const bool shoves = emitter.mark == SpellMark::Carve;
 		float4 stamp{};
 		stamp.x = emitter.position.x;
 		stamp.y = emitter.position.y;
-		// A pit is thrown to a fixed depth rather than melted toward one, so
-		// its strength is the depth itself scaled by how much of the discharge
-		// reached the ground.
 		stamp.z = pits ? emitter.strength * std::clamp(settings.PitDepth, 0.0f, 1.0f) :
 		                 (shoves ? emitter.strength * std::clamp(settings.ForceCarveDepth, 0.0f, 1.0f) :
 								   emitter.strength);
-		// Crust uses the emitter's OWN reach, like every other mark. Forcing
-		// the crust radius here instead threw away whatever the source had
-		// worked out for itself - which is why Blizzard glazed 90 units after
-		// its record had said 840. The setting still governs the sources that
-		// have no reach of their own to state; a frost cloak takes it as its
-		// base reach before it ever becomes an emitter.
-		// A cone states its own half-width; the pit radius is for discharges
-		// that land at a point.
 		stamp.w = (pits && !emitter.cone) ? std::max(settings.PitRadius, 4.0f) * emitter.pitScale :
 		                                    std::max(emitter.radius, 4.0f);
 		perFrameData.Stamps[stampCount] = stamp;
 		if (emitter.cone)
 			perFrameData.StampCones[stampCount] = { emitter.coneLength, stamp.w, emitter.coneSeed, 0.0f };
-		// Pits carry 0 where a melt carries its rate: an instantaneous mark has
-		// no rate to give.
 		perFrameData.StampEnds[stampCount] = { emitter.previous.x, emitter.previous.y,
 			(pits ? kStampModePit : (glazes ? kStampModeCrust : (shoves ? kStampModeCarve + kStampModeShove : kStampModeMelt))) +
 				(emitter.cone ? kStampModeCone : 0.0f) + (emitter.bowl ? kStampModeBowl : 0.0f),
-			// A carve reads this as the weight it puts through a crust. A
-			// shout goes through: nothing survives being shoved that hard.
 			shoves ? 1.0f :
 					 (pits ? 0.0f :
 							 (glazes ? std::max(settings.CrustRate, 0.0f) * emitter.rateScale : emitter.rate)) };
 		stampCount++;
-		// A strike's impact energy by how much of it reached the ground; a shove
-		// carries the full share in kStampModeShove.
 		if (pits)
 			perFrameData.StampEnds[stampCount].z += kStampImpactScale * (0.6f + 0.4f * std::clamp(emitter.strength, 0.0f, 1.0f));
 		stampStats.spells++;
 	}
 
-	// Debug melt emitter: a stationary heat source, so the additive stamp path
-	// can be watched against a known shape with no spell involved.
 	if (debugMeltEmitterActive && stampCount < kMaxStamps) {
 		float4 stamp{};
 		stamp.x = debugMeltEmitterPos.x;
@@ -2177,8 +1708,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampCount++;
 	}
 
-	// Budget-cut refs keep their anchors so the next stamp bridges the skipped frames.
-	// Not feet: an unplanted foot must drop its anchor or it drags a line between prints.
 	if (!budgetCutRefs.empty()) {
 		for (const auto& [key, anchor] : stampPrevPositions) {
 			const bool footKey = (key & 0xFFFFull) != 0xFFFFull && (key & kFootKeyBit) != 0;
@@ -2191,13 +1720,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	globals::profiler->EndPass();
 }
 
-// Once per frame, from Prepass: the frame's accumulators into 30-frame
-// averages, then reset. The hash ring is kept; a dump request logs it oldest
-// first.
 void SnowDeformation::RollCpuCensus()
 {
 	SnowHitch::OnFrame();
-	// rdtsc -> ms, from the rdtsc and QPC deltas since the last roll.
 	static double ticksToMs = 0.0;
 	double periodMs = 0.0;
 	{

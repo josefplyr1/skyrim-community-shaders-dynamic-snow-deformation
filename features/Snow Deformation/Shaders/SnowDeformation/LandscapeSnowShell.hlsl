@@ -1,18 +1,7 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Ground snow on the landscape's own meshes (LANDSCAPE-SNOW-PLAN Phase 3): the
-// depth prepass's landscape draws, replayed through the ground snow's
-// prepass. The domain shader ends in SnowShell.hlsl's vertex tail, so the
-// prepass pixel shader, the deferred shading and everything after them are
-// SnowShell.hlsl's. One main per stage.
-
 #include "SnowDeformation/SnowShell.hlsl"
 
 #include "SnowDeformation/LandscapeSnowTess.hlsli"
 
-// Grid-local xy, absolute z of the land.
 struct LSS_CP
 {
 	float3 Local : LSSLOCAL;
@@ -34,8 +23,6 @@ LSS_CP main(float4 position : POSITION)
 #endif
 
 #if defined(HULLSHADER)
-// The box misses the open rectangle where ShellEdgeFade is above zero (the
-// snow's span, and the seam square when there is one).
 bool LssBeyondSeam(float2 lo, float2 hi)
 {
 	float2 liveLo = 0.0;
@@ -48,16 +35,11 @@ bool LssBeyondSeam(float2 lo, float2 hi)
 	return any(hi <= liveLo) || any(lo >= liveHi);
 }
 
-// Fully bare: the -8 floor over every texel the triangle reaches and no land
-// snow there (the land's snow keeps its film wherever it is painted, under
-// water too).
 bool LssFullyBare(float2 lo, float2 hi)
 {
 	return ShellTerrainAllBare(lo, hi) && LandRectNoSnow(lo, hi);
 }
 
-// Outside one camera clip plane from the land's 32-unit submerge floor up to
-// LsGeometry.w above it.
 bool LssOffView(float3 g0, float3 g1, float3 g2)
 {
 	const float3 camLocal = float3(GridOrigin, 0.0) - ShellCameraPosAdjust.xyz;
@@ -93,7 +75,6 @@ LSS_Const LSS_PatchConst(InputPatch<LSS_CP, 3> p)
 	bool culled = LssBeyondSeam(lo, hi);
 	[branch] if (!culled && LsTess.w > 0.5)
 		culled = LssOffView(g0, g1, g2);
-	// ShellTerrainAllBare reads at most 4x4 texels.
 	[branch] if (!culled && ShellCullBare > 0.5 && all(hi - lo <= 2.0 * TerrainTexelSize))
 		culled = LssFullyBare(lo, hi);
 	[branch] if (!culled)
@@ -132,7 +113,6 @@ VS_OUTPUT main(LSS_Const c, float3 uvw : SV_DomainLocation, const OutputPatch<LS
 	float coverage;
 	float terrainHeight;
 	float z = ShellVertexZ(gridLocal, coverage, terrainHeight);
-	// Land-blended edges: a film over the land wherever it has snow weight.
 	[branch] if (LandSnowWeight(gridLocal) > 0.002)
 		z = max(z, p[0].Local.z * uvw.x + p[1].Local.z * uvw.y + p[2].Local.z * uvw.z + kLandFilm);
 	return FinishShellVertex(gridLocal, z, coverage, terrainHeight);

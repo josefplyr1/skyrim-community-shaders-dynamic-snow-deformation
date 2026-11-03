@@ -1,39 +1,12 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Crisp cascaded shadows for the snow shell.
-//
-// Volumetric Shadows exposes the sun cascades only as a 512px blurred VSM,
-// which smudges branches and actors on the shell while the ground beside it
-// shows crisp cascades. This samples the game's raw shadow atlas instead:
-// cascade = array slice, per-slice [0,1] UVs matching the ShadowProj matrices
-// from DirectionalShadowLights (t98), hardware comparison PCF at full
-// resolution. Source is the game's own atlas, read in place through the view
-// taken at the shadow-mask pass (SnowDeformation::CaptureShadowAtlas).
-// Cascade selection, blend and distance fade mirror
-// VolumetricShadows::GetVSMShadow2D so the crisp and fallback paths agree
-// about where shadows exist.
-//
-// Include after Common/ShadowSampling.hlsli; needs DirectionalShadowLights,
-// SharedData and FrameBuffer from it.
-
 Texture2DArray<float> SnowShadowAtlas : register(t22);
 SamplerComparisonState SnowShadowCmpSampler : register(s2);
 
-// Shadow-casting local lights (fires, lanterns, torches). Their maps live
-// in the engine's own local map array, read in place (NOT the sun cascade
-// atlas: local slice indices collide with the cascades'); this table
-// carries each light's descriptor transform and slice, snapshot at the
-// local lights' mask passes, indexed by the light's shadow-mask channel.
-// LightType 0 marks an empty slot (the whole table is empty when the local
-// map array is unavailable this frame).
 struct PointShadowLight
 {
 	column_major float4x4 LightTransform;
 	uint SliceIndex;
-	uint LightType;      // 0 empty, 1 spot, 2 paraboloid, 3 dual paraboloid
-	float ShadowRadius;  // radius the map's radial depth was normalised by
+	uint LightType;
+	float ShadowRadius;
 	float padPSL;
 };
 StructuredBuffer<PointShadowLight> PointShadowLights : register(t38);
@@ -41,21 +14,11 @@ Texture2DArray<float> SnowPointShadowAtlas : register(t39);
 
 namespace SnowShadow
 {
-	// atlasSlice: the cascade's REAL slice in the SHARED sun atlas
-	// (BorderStyle.zw, captured from shadowmapIndex at mask time - the
-	// slices move as local shadow lights come and go with the view; round
-	// 22).
 	float SampleCascadeCmp(float3 posLS, uint atlasSlice)
 	{
 		return SnowShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(posLS.xy, atlasSlice), posLS.z);
 	}
 
-	// Center + 4 rotated taps, each hardware-bilinear 2x2 comparison; a
-	// small soft edge like the vanilla receiver, nothing like the VSM blur.
-	// a_spread widens the tap ring: >1 turns the far cascade's blocky texels
-	// into soft penumbra blobs without dropping the shadows (LOD trees cast
-	// into these cascades; fading them out erases their shadows from
-	// distant snow).
 	float SampleCascadePCF(float3 posLS, uint atlasSlice, float2 texel, float a_spread)
 	{
 		float shadow = SampleCascadeCmp(posLS, atlasSlice);
@@ -65,21 +28,12 @@ namespace SnowShadow
 		return shadow * 0.2;
 	}
 
-	// positionRel is camera-relative. The receiver is offset along the normal
-	// (instead of a large depth bias) so flat sunlit snow shows no acne while
-	// contact shadows stay attached.
-	// a_atlasSlices: the REAL shared-atlas slices of cascades 0/1
-	// (BorderStyle.zw at the call sites - this include precedes the ShellCB
-	// declaration, so the CB cannot be read here).
 	float GetCascadeShadow(float3 positionRel, float3 normalWS, float a_spread, uint2 a_atlasSlices)
 	{
 		DirectionalShadowLightData sd = DirectionalShadowLights[0];
 
 		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionRel));
 
-		// If/else result instead of an early out: fxc raises a false-positive
-		// X4000 (potentially uninitialized variable) on return-then-sample
-		// patterns, and CI requires warning-free shaders.
 		float result = 1.0;
 		[branch] if (shadowMapDepth < sd.EndSplitDistances.y)
 		{
@@ -89,7 +43,6 @@ namespace SnowShadow
 			SnowShadowAtlas.GetDimensions(atlasW, atlasH, atlasSlices);
 			float2 texel = 1.0 / float2(atlasW, atlasH);
 
-			// Cascade selection and blend; identical to GetVSMShadow2D.
 			float cascadeSelect = saturate((shadowMapDepth - sd.StartSplitDistances.y) / (sd.EndSplitDistances.x - sd.StartSplitDistances.y));
 			uint primaryCascade = uint(cascadeSelect);
 
@@ -98,9 +51,6 @@ namespace SnowShadow
 			posLS.z -= 0.0008 * (primaryCascade + 1.0);
 			float shadow = SampleCascadePCF(posLS, primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y, texel, a_spread);
 
-			// Blend band = primary cascade 0 with select > 0; the partner is
-			// cascade 1. Weight and partner carry the band test because fxc can
-			// drop the select < 1 half of a branch condition.
 			const float blendW = primaryCascade == 0 ? smoothstep(0, 1, cascadeSelect) : 0.0;
 			[branch] if (blendW > 0.0)
 			{
@@ -111,22 +61,12 @@ namespace SnowShadow
 				shadow = lerp(shadow, shadowBlend, blendW);
 			}
 
-			// Distance fade matching the VSM path: beyond the cascades the
-			// world shadows (terrain/cloud) carry on alone, with no visible
-			// boundary.
 			float fade = saturate(shadowMapDepth / sd.EndSplitDistances.y);
 			result = lerp(1.0, shadow, 1.0 - pow(fade * fade, 8));
 		}
 		return result;
 	}
 
-	// GetCascadeShadow with a near-occluder rejection: on the object shell's
-	// coat and edge lumps (zero lift, on the object's own surface) the
-	// raised shell's rim right above them is the caster, its silhouette the
-	// vertex footprint the pixel cut has already trimmed. An occluder closer
-	// than a_rejectDist along the light (the shell's own thickness) is that
-	// rim and does not shadow. Primary cascade only; the receiver's own
-	// texel decides.
 	float GetCascadeShadowReject(float3 positionRel, float3 normalWS, float a_spread, uint2 a_atlasSlices, float3 a_lightDir, float a_rejectDist)
 	{
 		DirectionalShadowLightData sd = DirectionalShadowLights[0];
@@ -160,7 +100,6 @@ namespace SnowShadow
 					shadow = 1.0;
 			}
 
-			// Blend band as in GetCascadeShadow.
 			const float blendW = primaryCascade == 0 ? smoothstep(0, 1, cascadeSelect) : 0.0;
 			[branch] if (blendW > 0.0)
 			{
@@ -177,16 +116,6 @@ namespace SnowShadow
 		return result;
 	}
 
-	// SSS handoff, shared by both shells. The
-	// exact complement of GetCascadeShadow's distance fade above
-	// (1 - pow(fade^2, 8) at :117), so the mask reaches full strength
-	// precisely as the cascades fade to nothing - at the user's own shadow
-	// distance, whatever it is. Fixed bands fail both ways: 4000-9000
-	// prints the half-strength mask under full cascades (faint
-	// ghosts through the shell), 7000+ left a shadowless ring past the
-	// cascades' end. Only the near floor is a constant: the mask was marched
-	// on the PRE-shell depth, so it never enters the contact field even on a
-	// tiny shadow distance.
 	static const float kSssNearFloorStart = 2500.0;
 	static const float kSssNearFloorEnd = 4000.0;
 
@@ -205,18 +134,9 @@ namespace SnowShadow
 		return SnowPointShadowAtlas.SampleCmpLevelZero(SnowShadowCmpSampler, float3(uv, slice), cmp);
 	}
 
-	// Local-light shadow evaluated at the receiver's REAL position (the
-	// raised snow surface), so shadow length is correct for the shell
-	// rather than the buried ground. The three projections transcribe the
-	// game's own shadow-mask passes (Utility.hlsl RENDER_SHADOWMASKSPOT /
-	// PB / DPB): spot = perspective map; paraboloid depth compares are
-	// RADIAL distance normalized by the light radius, not projected z.
-	// positionWS absolute; lightRadius from the light's cluster data.
 	float GetPointLightShadow(float3 positionWS, uint shadowLightIndex, float lightRadius)
 	{
 		PointShadowLight sl = PointShadowLights[shadowLightIndex];
-		// The map's own radius, not the cluster light's: ISL moves the latter
-		// with the intensity each frame, after the map was drawn.
 		lightRadius = sl.ShadowRadius > 1.0 ? sl.ShadowRadius : lightRadius;
 		float vis = 1.0;
 		[branch] if (sl.LightType == 1)
@@ -227,10 +147,6 @@ namespace SnowShadow
 				positionLS.xyz /= positionLS.w;
 				float2 uv = positionLS.xy * 0.5 + 0.5;
 				vis = SamplePointCmp(uv, sl.SliceIndex, positionLS.z - kSpotShadowBias);
-				// Cone edge falloff. Vanilla exponentiates by the light's
-				// authored falloff; a fixed exponent stands in (the final
-				// saturate makes outside-cone fully dark, matching the
-				// spot's illumination cone).
 				vis -= pow(2.0 * length(0.5 * positionLS.xy), 8.0) * vis;
 			}
 		}
@@ -248,8 +164,6 @@ namespace SnowShadow
 		}
 		else if (sl.LightType == 3)
 		{
-			// Dual paraboloid (torches, campfires): hemispheres packed into
-			// the slice's vertical halves.
 			float3 positionLS = mul(sl.LightTransform, float4(positionWS, 1.0)).xyz;
 			bool lowerHalf = positionLS.z * 0.5 + 0.5 < 0.0;
 			float3 lightDirection = normalize(normalize(positionLS) + (lowerHalf ? float3(0, 0, -1) : float3(0, 0, 1)));

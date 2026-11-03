@@ -1,193 +1,42 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Persistent snow deformation map update, split into three passes over a
-// TOROIDAL store.
-//
-// A square world-space window following the camera in whole-texel steps.
-// Texels never move: the map is addressed physically as
-// (logical + MapOrigin) & (dim - 1), and a scroll advances MapOrigin instead
-// of copying 4M texels through a ping-pong.
-//
-//   RingCS   - writes the ring of texels whose world assignment changed
-//              (tile-store inject or pristine zero). Dispatch sized to the
-//              ring, so a walking-speed scroll costs a few thousand threads.
-//   EvolveCS - the world acting on the map: wind-biased refill, melt/crust
-//              decay, unsupported-snow slump. The only pass that
-//              reads NEIGHBOUR texels, so it reads a snapshot copy taken
-//              after RingCS and writes the map in place.
-//   StampCS  - actors acting on the map: stamp capsules, read-modify-write
-//              on the texel EvolveCS just wrote.
-//              Per-texel only, so it can later be tile-dispatched over the
-//              stamps' bounding boxes.
-//
-// Splitting at the stamp boundary is safe because every stamp/wave term is a
-// function of the texel's own value; the one storage round between the passes
-// only touches texels a stamp is about to overwrite anyway.
-//
-// ClearMap rides in the CB for layout stability but the CPU expresses it as
-// a full-map ring rect; no pass branches on it.
-//
-// Stamp classes, selected per stamp by StampEnds[i].z:
-//   CARVE (0) - instantaneous depth, max-blended, so standing in a trench
-//               does not deepen it.
-//   MELT  (1) - additive and dt-scaled, so dwell time deepens the bowl.
-//   PIT   (2) - instantaneous like CARVE, and scorches. Scorched snow is
-//               displaced snow and keeps its berm; melted snow has none.
-//   CRUST (3) - sustained, approaching a target at a rate. Moves no snow.
-// Adding STAMP_MODE_CONE reinterprets the same three fields as a shout mark:
-// apex at the segment start, axis to the front's current position, radius =
-// the widest half-width. StampCones[i] carries the final reach, so the
-// outline (ShoutShape) and the depth fade are shaped against where the mark
-// ENDS, never against how far the front has got; the front only reveals.
-// Shouts only. A row of discs cannot stand in for it - each stamp holds
-// full depth across the inner tenth of its radius, so they read as craters.
-//
-// Melted ground refills SLOWER rather than carrying extra depth: depth is
-// capped at 1.0, and banking persistence as over-depth flattens the bowl into
-// a walled pit once consumers saturate.
-//
-// Channels:
-//   .x  total depression depth (0 = untouched, 1 = ground).
-//   .y  SIGNED surface state - the two are mutually exclusive.
-//         > 0  the portion of .x that was melted; the berm field subtracts it.
-//         < 0  scorch, which keeps its berm and darkens the shell.
-//       Berm reads x - max(y, 0); scorch reads max(-y, 0).
-//   .z  crust: refrozen snow, resists carving and shades as ice.
-//   .w  impact energy, 0-1: how hard something met the snow here (a sprint, a
-//       landing, a strike, a shove). The trench detail wears its wet (clod)
-//       set by it and its relief rises. Max-blended; fades with the refill;
-//       never stored (RingCS zeroes it).
-// Beside the map, TrackClock: the ageing clock when the texel was last cut
-// (0 = never), StampCS where a cut reaches the floor, RingCS from the store.
-// The berm bake turns it into the clocks the shells age tracks by.
-
 #include "SnowDeformation/SnowNoise.hlsli"
 
 #define MAX_STAMPS 256
 
-// Added to a stamp's mode to mark it a cone. Mirrored by kStampModeCone in
-// SnowDeformation.h.
 #define STAMP_MODE_CONE 10.0
-// Added to a stamp's mode to give a carve a BOWL cross-section instead of the
-// flat floor and standing walls a trench has. It reuses the melt bowl's own
-// floor setting, because that is already the shape of a hollow scooped out
-// rather than cut. Mirrored by kStampModeBowl in SnowDeformation.h.
 #define STAMP_MODE_BOWL 20.0
-// Added to a carve made by a body: Snow Resistance and its trampled fade
-// apply. Decoded before BOWL and CONE. Mirrored by kStampModeBody.
 #define STAMP_MODE_BODY 40.0
-// A stamp's impact energy rides its mode as a fraction, energy x this: under
-// every decode's 0.5 threshold, so each mode still reads as itself. Recorded
-// in .w. Mirrored by kStampImpactScale.
 #define STAMP_IMPACT_SCALE 0.45
-// Where a bowl carve stops holding full depth, as a fraction of its radius.
-// Zero: a scoured hollow has no floor at all, it curves from the middle. Its
-// own number rather than the melt bowl's, because that one is a FIRE knob and
-// a cyclone's gouge has no business changing shape when fire is retuned.
 #define CARVE_BOWL_FLOOR 0.0
-// A shout mark's outline, depth fade and churn are functions of the texel's
-// place against the FINAL reach (StampCones[i].x), so ground the front has
-// passed never changes shape again. The one term that reads the front's
-// current position is the lead-in below, and it only ever rises toward the
-// final value - carve is max-blended, so that is safe. Anything keyed to the
-// current length that could fall later reaches back and re-shapes snow the
-// front has already passed (the old wedge's mouth width did exactly that).
-// Fraction of the reach the front fades in over: the reveal is a soft edge
-// running just ahead of the front, not a wall sliding along the snow, and
-// it sits past the far end once the front is there.
 #define CONE_FRONT_LEAD 0.1
 
-// Upwind supply sample distance for wind-biased refill, in texels.
 #define DRIFT_FETCH_TEXELS 3.0
-// Melt bowls hold full strength across the inner third and then rise for a
-// long way, matching the campfire basins in SnowExclusions.hlsli. Carve uses
-// the much steeper StampFalloffStart instead: a trench has walls, a melt bowl
-// has shoulders.
-// Melt edge irregularity runs on these world-unit cells. Deliberately coarse:
-// a melt basin has a wandering OUTLINE and a smooth CROSS-SECTION, so the
-// noise must move the rim without chipping the surface. The trail noise is a
-// third of the finer cell here, which is what churns a footprint edge.
 #define MELT_NOISE_COARSE 80.0
 #define MELT_NOISE_FINE 24.0
-// Arc branches thrown off a strike. Lightning does not dig a hole, it forks,
-// so the mark is a small core with a handful of thin legs radiating out.
 #define PIT_LOBES 5
-// Lobe geometry as fractions of the stamp radius.
 #define PIT_LOBE_MIN 0.45
 #define PIT_LOBE_MAX 1.15
 #define PIT_LOBE_WIDTH 0.16
-// The pock mask cuts a pit into fragments. Its cell is a FRACTION of the pit
-// rather than a fixed size: at a fixed size a small strike spans barely two
-// cells and the mask can erase the whole mark, which is exactly how a bolt
-// ends up not marking at all most of the time it lands.
 #define PIT_POCK_CELLS_ACROSS 4.5
 #define PIT_POCK_CELL_MIN 6.0
-// Refill multiplier at full supply and full wind; interior texels with a
-// carved upwind neighbor stall, so the average fill rate stays near uniform.
 #define DRIFT_GAIN 2.0
 
-// Unsupported-snow slump (TRENCH-REALISM-PLAN.md Stage 3b): a support test,
-// not a blur. Per axis at radius R, support = min(carve at +R, carve at -R);
-// the settle target is the max over axes and radii. A strip dug on both sides
-// settles toward its neighbours' floor; a trench wall, carved on one side
-// only, reads ~0 and never moves. Fixed point by construction, and open snow
-// never starts, so the collapse cannot creep outward.
-//
-// Radii are world units via the live TexelSize. An axis contributes nothing
-// without SLUMP_MIN_SUPPORT inside the two GATE radii - that bound is what
-// confines the effect to trenches. The third, longer radius never gates; it
-// only reads the flanking floor depth for texels that already qualified.
-//
-// Support is displaced, unscorched depth (x - |y|), never raw x: counting
-// spell marks would let a campfire settle the snow around it. The berm field's
-// Displaced() keeps scorch instead - a berm is spoil thrown, this is ground
-// bearing weight.
 #define SLUMP_RADII 3
-// Radii up to this index gate; beyond it they only deepen. ONE radius: a fin
-// engages only with dug snow within 16 units on BOTH sides - a 32-unit fin
-// at most. Two radii let a 64-unit fin engage, which is not a fin between
-// two boot trails but the whole floor between a horse's left and right
-// hooves; standing still, the fill then counts as support for the next
-// ring and the body's entire hull settles as if the belly had pressed it.
-// A rasterized walker's trail is already continuous, so along-trail
-// merging no longer needs the longer gate.
 #define SLUMP_GATE_RADII 1
 static const float kSlumpRadius[SLUMP_RADII] = { 16.0, 32.0, 64.0 };
 static const float kSlumpReach[SLUMP_RADII] = { 1.0, 0.85, 0.7 };
-// A strip settles PARTWAY toward its neighbors' floor, not onto it - about
-// half: the fin survives as a low bump inside the channel rather than
-// melting to the bottom.
 #define SLUMP_SETTLE 0.5
-// Least min-support inside the gate radii that engages an axis. HALF depth:
-// a fin engages only between prints pressed to the floor - two boot trails -
-// never between the soft flanks a thick leg leaves as it flares out of the
-// snow, and never on slumped fill itself, which settles to half depth at
-// most and so can never serve as support for the next ring. That is what
-// stops a mammoth's four leg holes from settling into one hull.
 #define SLUMP_MIN_SUPPORT 0.5
-// Eight axes 22.5 degrees apart (taps go both ways, so 180 covers the
-// circle). Four showed up as a cross pattern on diagonal fins.
 #define SLUMP_AXES 8
 static const float2 kSlumpAxis[SLUMP_AXES] = {
 	float2(1.0, 0.0), float2(0.9239, 0.3827), float2(0.7071, 0.7071), float2(0.3827, 0.9239),
 	float2(0.0, 1.0), float2(-0.3827, 0.9239), float2(-0.7071, 0.7071), float2(-0.9239, 0.3827)
 };
-// Depth-fraction per second at slider 1: a fin sinks over a second or two
-// after the second walker passes, settling rather than popping.
 #define SLUMP_SPEED 0.5
-// The settled floor is UNEVEN on purpose - low bumps, not a plane. The
-// target wobbles on the coarse melt cells, which are already the scale of
-// a wandering outline rather than a chipped surface.
 #define SLUMP_FLOOR_NOISE 0.45
 
 cbuffer PerFrame : register(b0)
 {
 	float2 WindowOrigin;
-	// Toroidal store: where logical texel (0,0) sits physically. A scroll
-	// advances this instead of copying the map; only the reassigned ring of
-	// texels is rewritten (RingCS).
 	int2 MapOrigin;
 
 	float TexelSize;
@@ -195,218 +44,90 @@ cbuffer PerFrame : register(b0)
 	float RefillAmount;
 	uint ClearMap;
 
-	// Lower smoothstep edge of the stamp falloff (fraction of radius):
-	// higher = steeper trench walls.
 	float StampFalloffStart;
-	// 1 / Berm Steepness: the berm tap reach (the retired TrailIrregularity
-	// slot). Mirror in BermFieldCS.hlsl.
 	float BermReach;
-	// Unit wind direction (world XY, blowing toward) times wind strength
-	// 0-1; zero = uniform refill.
 	float2 WindBias;
 
-	// Seconds this frame; melt accumulates per second, not per frame.
 	float DeltaTime;
-	// How much slower melted ground refills, 0-1. 0 = it recovers exactly as
-	// fast as a footprint.
 	float MeltPersistence;
-	// Fraction of the radius held at full melt before the flank starts.
-	// 0 = a pure bowl curving from the centre; high = a flat floor with walls.
 	float MeltFloorStart;
-	// Fraction the melt radius wobbles by, on the coarse cells above.
 	float MeltEdgeNoise;
 
-	// Depth a boot still prints on fully crusted snow, as a fraction of what it
-	// would print on loose snow. NOT zero: actors stand on the terrain while
-	// the shell floats above them, so a crust that refuses to take a print at
-	// all puts feet inside apparently solid ice.
 	float CrustPrintDepth;
-	// Crust lost per second regardless of weather. Ice gives way to
-	// temperature, not to snowfall, so this is deliberately NOT folded into
-	// the refill - which stops entirely in clear weather and would otherwise
-	// leave a glaze standing for ever.
 	float CrustThaw;
-	// How completely carving through a crust destroys it, against how deep the
-	// cut went. Anything that cuts snow has broken the skin over it.
 	float CrustBreakOnCarve;
-	// Unsupported-snow slump speed, 0-1; 0 disables the pass entirely.
 	float SlumpRate;
 
-	// 1 = InjectDepth holds the tile store's memory of the texels arriving
-	// from outside the window. Its own row: Stamps must start 16-byte aligned.
 	uint InjectValid;
-	// This frame's span in GAME time, in the same seconds DeltaTime uses. Equal
-	// to DeltaTime in ordinary play; a wait or a sleep passes hours without
-	// rendering them, and the world's own clocks must not sit those hours out.
 	float GameDeltaTime;
-	// 1 = paint the per-texel activity view (u2).
 	uint DebugActivityView;
-	// The ageing clock (track age), kept in [1024, 2048) where half floats
-	// hold whole units.
 	float AgeingClock;
 
-	// Ring of texels whose world assignment changed this frame, in LOGICAL
-	// texel space (x0, y0, w, h). Two rects at most: the leading band per
-	// scrolled axis, or one full-map rect on a clear. RingCS covers their
-	// union by a flat texel index.
 	int4 RingRects[2];
 	uint RingRectCount;
 	uint RingTotalTexels;
-	// 1 = the tile scans list every tile (the "my trenches froze" one-click
-	// cross-check). Claimed a RingPad slot, layout unchanged.
 	uint ForceAllDirty;
-	// Clock units the ageing clock fell back by this frame (TrackRebaseCS).
 	float TrackRebase;
 
-	float4 Stamps[MAX_STAMPS];   // xy: world pos, z: depth (carve) or strength (melt), w: radius
-	float4 StampEnds[MAX_STAMPS];  // xy: previous world pos (capsule start), z: 0 carve / 1 melt, w: melt rate (depth per second)
-	// Cone stamps only: x final reach from the apex, y widest half-width, z
-	// churn seed (per shout). Zero for every other stamp.
+	float4 Stamps[MAX_STAMPS];
+	float4 StampEnds[MAX_STAMPS];
 	float4 StampCones[MAX_STAMPS];
 
-	// Rasterized prop contact (SnowContactCapture.hlsl): the field's world
-	// centre, half-extent and texel dim (0 = no field this frame), and the
-	// terrain window the carve measures against.
 	float2 ContactCenter;
 	float ContactHalfExtent;
 	float ContactDim;
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	float TerrainDim;
-	// Debug view crop centre (the player), world XY.
 	float2 ViewCenter;
-	// Debug view crop half-extent, world units.
 	float ViewHalf;
-	// Snow Resistance: the share of its reach a body's contact carves.
 	float BodyPrint;
-	// Object height window the road raster (t9) was captured in.
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
 	float HasRoadRaster;
-	// Body passes: the clock in half seconds (mod 1024), and how long a texel
-	// must be free of bodies before contact counts as a new pass.
 	uint PassClock;
 	uint PassGap;
 	uint2 PassPad;
-	// Shout mark outline and depth along the reach: x waist (fraction of the
-	// reach where it is widest), y roundness (superellipse exponent, 1 =
-	// pointed, 2 = oval), z fraction of the reach held at full depth, w depth
-	// left at the far end.
 	float4 ShoutShape;
-	// Shout mark churn (shoves only): x amount 0-1, y streak size across
-	// (units), z streak length as a multiple of y, w spare.
 	float4 ShoutChurn;
-	// The ground snow as drawn (ShellSurfaceZ), for the body carve: the dune
-	// amplitude and spacing, and the accumulation depth scale.
 	float UndulationAmp;
 	float UndulationScale;
 	float AccumulationScale;
 	float DrawnPad;
 }
 
-// EvolveCS's snapshot of the map, copied on the CPU just before the pass so
-// its neighbour reads (slump support, upwind supply) see one consistent
-// frame. Physical layout, like the map it was copied from.
 Texture2D<float4> PreviousDeformation : register(t0);
-// THE map - single texture, physical (toroidal) layout. RingCS writes the
-// reassigned band, EvolveCS rewrites in place from the snapshot, StampCS
-// read-modify-writes (typed UAV load - the codebase-wide assumption
-// GrassCollision's CollisionUpdateCS already relies on for the same RGBA16F
-// format).
 RWTexture2D<float4> CurrentDeformation : register(u0);
-// SnapshotCS's destination, evolve's scratch: depth and surface state.
 RWTexture2D<float2> EvolveSnapshot : register(u0);
-// Tile-store memory for the arriving ring, resampled on the CPU: x = depth,
-// y = freshness (1 just cut, 0 at TRACK_AGE_HORIZON or never). LOGICAL
-// layout - RingCS translates when it writes the map.
 Texture2D<float2> InjectStore : register(t1);
-// Ageing-clock units the store's freshness spans. Mirrored by
-// kTrackAgeHorizon in SnowDeformation.h.
 #define TRACK_AGE_HORIZON 128.0
-// When each texel was last cut, on the ageing clock; 0 = never. Physical
-// layout, like the map. RingCS and StampCS only.
 RWTexture2D<float> TrackClock : register(u4);
-// A cut dates a texel from this deep, and when it reaches within this of the
-// depth already there (fractions of the layer).
 static const float kTrackCutMin = 0.02;
 static const float kTrackFloorMargin = 0.1;
-// PHYSICAL tiles (x | y << 16, 8x8 texels each) the stamp pass must visit -
-// built on the CPU from the stamp capsules' and waves' bounding boxes, so
-// the dispatch covers actors' surroundings and nothing else.
 StructuredBuffer<uint> StampTiles : register(t2);
 
-// Per-tile (8x8) occupancy of the PHYSICAL map: 1 = some texel holds a
-// non-zero channel. Maintained by the passes themselves - an evolve or
-// stamp group writes the truth for its whole tile, the ring sets it where
-// inject lands - so the evolve scan needs no CPU readback and a stale mark
-// self-heals on the next visit. Seeded all-1 on map (re)creation: the safe
-// default is dirty.
 RWTexture2D<uint> Occupancy : register(u3);
 Texture2D<uint> OccupancyIn : register(t4);
-// Evolve tile list: [0] = count, then packed tiles (x | y<<16). Appended by
-// ScanEvolveCS, whose last group writes the count and the indirect args;
-// consumed by EvolveCS - count and list never touch the CPU.
 RWStructuredBuffer<uint> EvolveTiles : register(u4);
 StructuredBuffer<uint> EvolveTilesIn : register(t3);
-// Lowest surface over each column this frame from the moving props' own
-// render meshes, MIN-blended; CONTACT_NONE where nothing was drawn. The
-// terrain window gives the ground and the layer depth the contact is
-// measured into. Stamp pass only.
-// x = bodies, y = loose props.
 Texture2D<float2> ContactHeight : register(t7);
 Texture2D<float4> TerrainWindow : register(t8);
-// Object skin-depth raster (SnowHeightCapture RT2): x = class layer depth,
-// y = highest road top in the column, kNoRoadTop where no road drew.
 Texture2D<float2> ObjectSkinDepth : register(t9);
-// The body pass each texel last took (StampCS): bits 0-5 the carve it
-// started from in 63rds, bits 6-15 the PassClock of its last contact.
-// Physical layout, like the map.
 RWTexture2D<uint> PassState : register(u7);
-// The deepest a body has reached into the layer at each texel (StampCS),
-// which the shells measure trampled ground against; RingCS clears what it
-// reassigns. Physical layout, like the map.
 RWTexture2D<unorm float> BodyReachMax : register(u5);
 #define CONTACT_NONE 1.0e30
 static const float kNoRoadTop = -1000000.0;
-// A scan's indirect args (bytes 0-11), its append counter (12) and its
-// finished-group counter (16). Both counters are zero between scans.
 RWByteAddressBuffer TileArgs : register(u5);
 
-// Per-tile "the map changed here this frame" - the berm bake's dirty set,
-// marked by every writer (the ring unconditionally: departing ground zeroed
-// is as much a berm-input change as arriving ground injected). Accumulates
-// until a berm rebuild consumes it (each rebuilt tile clears its own mark),
-// so a berm A/B toggle re-enabling picks up exactly what it missed.
 RWTexture2D<uint> BermDirty : register(u6);
 Texture2D<uint> BermDirtyIn : register(t6);
-// Berm tile list, same shape as the evolve list.
 RWStructuredBuffer<uint> BermTiles : register(u7);
 
-// Logical -> physical texel. The dim is a power of two (1024/2048/4096), so
-// the wrap is a mask. Callers clamp in LOGICAL space first - the map border
-// is the window's world border; the physical seam is meaningless to the
-// simulation and must never see a neighbour read across it.
 int2 TorusPhys(int2 logical, int2 dims)
 {
 	return (logical + MapOrigin) & (dims - 1);
 }
 
-// Idle-skip activity flag: ORed to 1 when any texel's STORED value moved this
-// frame. Compared at the R16 map's own precision - a half quantum - or a
-// sub-quantum decay (slump parked a hair off its clamp, a thaw tail) would
-// read as activity for ever and the skip would never engage. An epsilon, not
-// f32tof16 bits: that intrinsic truncates while texture storage rounds to
-// nearest, so a result the stored map rounds straight back to compared as
-// "changed" every frame.
-// Raw layout mirrored in SnowDeformation.cpp: [0] flag, [4] count,
-// [8]/[12] complemented min X/Y (min as InterlockedMax of 65535-coord, so an
-// all-zero clear initializes every field), [16]/[20] max X/Y, [24]/[28]/[32]
-// per-channel counts (depth, melt/scorch, crust), [36] delta sum,
-// [40] evolve-only flag (EvolveCS changed something - its idle gate's own
-// verdict, meaningful only on frames evolve ran), [44] evolve tile count and
-// [48] berm tile count (the dispatch census).
-// Both passes OR into the same buffer; the CPU clears it once per executed
-// frame.
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
@@ -416,26 +137,12 @@ groupshared uint gCMinX;
 groupshared uint gCMinY;
 groupshared uint gMaxX;
 groupshared uint gMaxY;
-// Sum of the largest per-texel delta, fixed-point 1e6. The MEAN delta is a
-// term's fingerprint: the slump step is SlumpRate x 0.5 x dt and scales with
-// the slider; storage-precision creep is an order smaller and scales with
-// nothing.
 groupshared uint gDeltaSum;
-// Any texel of this group's tile non-zero after the pass - the occupancy
-// truth an aligned 8x8 group can write absolutely.
 groupshared uint gNonZero;
-// StampCS: a texel of this tile was re-dated (TrackClock), so its berm bake
-// is stale even where the map did not move.
 groupshared uint gClockMoved;
 
-// Debug: per-texel activity, painted only while the menu view is open.
-// R = depth, G = melt/scorch, B = crust or impact energy; brightness = how far past
-// stored precision the change is. Max-composed: the CPU clears it once per
-// frame and each executed pass folds its own delta in.
 RWTexture2D<float4> ActivityView : register(u2);
 
-// Per-channel excess beyond what the R16 map's storage precision can express;
-// zero everywhere = this pass rewrote the stored map byte-identically.
 float4 StoredDelta(float4 a, float4 b)
 {
 	float4 d = abs(a - b);
@@ -461,8 +168,6 @@ void ActivityReset(uint GIdx)
 	GroupMemoryBarrierWithGroupSync();
 }
 
-// Flag, counts and bbox via one groupshared reduction - 4M threads hammering
-// a single address serializes on the atomic unit.
 void ActivityAccumulate(float4 delta, uint2 pixel)
 {
 	if (any(delta > 0.0)) {
@@ -504,14 +209,8 @@ void ActivityPublish(uint GIdx)
 	}
 }
 
-// World-anchored value noise (8-unit cells at the call site) wobbling each
-// stamp's falloff distance, so trail edges read as churned snow instead of
-// swept circles.
 float StampNoiseHash(float2 cell)
 {
-	// Wrap the lattice so the hash's frac() math stays well inside float
-	// precision at world-scale inputs; the 512-cell repeat is invisible in
-	// edge wobble.
 	cell -= 512.0 * floor(cell / 512.0);
 	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
 	p3 += dot(p3, p3.yzx + 33.33);
@@ -527,11 +226,6 @@ float StampNoise(float2 p)
 		lerp(StampNoiseHash(i + float2(0, 1)), StampNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
-// Support depth of a snapshot texel for the slump test: displaced,
-// unscorched carve only (see the SLUMP_* block). Takes a LOGICAL texel;
-// outside the window counts as PRISTINE, not as carved: a border texel then
-// has one untouched side and stands, which errs toward doing nothing at the
-// edge.
 float SlumpTap(int2 p, int2 dims)
 {
 	if (any(p < 0) || any(p >= dims))
@@ -540,10 +234,6 @@ float SlumpTap(int2 p, int2 dims)
 	return saturate(t.x - abs(t.y));
 }
 
-// The scroll made free: texels whose world assignment changed this frame get
-// their stored memory (or pristine zero) written directly; every other texel
-// is simply left where it physically stands. Flat index over the rect union,
-// so the dispatch is sized to the ring and not the map.
 [numthreads(64, 1, 1)] void RingCS(uint3 DTid
 								   : SV_DispatchThreadID) {
 	uint id = DTid.x;
@@ -561,9 +251,6 @@ float SlumpTap(int2 p, int2 dims)
 	}
 	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
 
-	// Arriving ground is not pristine: the tile store remembers what was dug
-	// there, and when. Everything else - melt, crust - is not stored, exactly
-	// as the old scroll path's out-of-window seed behaved.
 	float2 stored = 0.0;
 	[branch] if (InjectValid)
 		stored = InjectStore[logical];
@@ -572,19 +259,11 @@ float SlumpTap(int2 p, int2 dims)
 	CurrentDeformation[phys] = float4(depth, 0.0, 0.0, 0.0);
 	TrackClock[phys] = stored.y > 0.0 ? AgeingClock - (1.0 - stored.y) * TRACK_AGE_HORIZON : 0.0;
 	BodyReachMax[phys] = 0.0;
-	// Injected ground occupies its tile; zeroed ground leaves any stale mark
-	// for the next evolve visit to heal (writes here are unordered across the
-	// band, so an absolute 0 could clobber a neighbour texel's 1).
 	if (depth > 0.0)
 		Occupancy[phys >> 3] = 1u;
-	// The berm bake's inputs changed either way.
 	BermDirty[phys >> 3] = 1u;
 }
 
-// The blood map and its clocks share the origin; the same ring is cleared.
-// Own entry point, own binding: u0/u1 here are the blood targets, bound in
-// place of the map table for this dispatch alone. Slots past u7 made
-// RenderDoc's device reject the create, which threw on the prime worker.
 RWTexture2D<float4> BloodMapRing : register(u0);
 RWTexture2D<float2> BloodClockRing : register(u1);
 
@@ -607,11 +286,6 @@ RWTexture2D<float2> BloodClockRing : register(u1);
 	BloodClockRing[phys] = float2(0.0, 0.0);
 }
 
-// The ageing clock fell back by TrackRebase to stay where half floats hold
-// whole units, so every date falls with it: the cut clocks and the berm
-// bake's (BermFieldCS .zw, each weighted by its .y / .x). Zero stays zero,
-// never cut; a date older than the clock's range stays a date, at 1. Own
-// entry point and binding, like BloodRingCS.
 RWTexture2D<float> TrackClockRebase : register(u0);
 RWTexture2D<float4> BermFieldRebase : register(u1);
 
@@ -632,36 +306,21 @@ RWTexture2D<float4> BermFieldRebase : register(u1);
 	}
 }
 
-// The world acting on the map: refill, decay, slump. The neighbour reads
-// (slump support, upwind refill supply) all go to the previous-frame
-// snapshot, so tile edges cannot see half-updated texels. No scroll: texels
-// never move, RingCS already rewrote the reassigned band. Returns whether
-// the texel holds anything, for the group's occupancy write.
 bool EvolveTexel(uint2 phys)
 {
 	uint2 dims;
 	PreviousDeformation.GetDimensions(dims.x, dims.y);
-	// Inverse of TorusPhys: world position, border tests and the activity
-	// bookkeeping live in logical space.
 	const uint2 pixel = uint2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
-	// What this texel would hold if the pass had not run - the activity
-	// comparison baseline.
 	const float4 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
-	// Melted portion of `deformation`, carried so the shells can tell a
-	// melt basin from a dug trench.
 	float melted = carried.y;
 	float crust = carried.z;
 	float impact = carried.w;
 
 	{
-		// Wind-biased refill: recovery scales with the intact snow a few
-		// texels upwind (the drift supply), so carved areas fill from their
-		// upwind edge and the fill front marches downwind. Calm weather
-		// falls back to uniform refill.
 		float refill = RefillAmount;
 		float windStrength = length(WindBias);
 		[branch] if (refill > 0.0 && windStrength > 0.001)
@@ -674,36 +333,14 @@ bool EvolveTexel(uint2 phys)
 			}
 			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
 		}
-		// Warm wet ground takes its time. Scaled by how much of this texel's
-		// depression was melted rather than dug, so a boot print through a
-		// melt basin still recovers at the boot print rate. Scorch (negative)
-		// gets none of this: burnt snow is still snow, and refills normally.
 		refill *= lerp(1.0, 1.0 - saturate(MeltPersistence), saturate(max(melted, 0.0) / max(deformation, 1e-4)));
 
 		deformation = max(deformation - refill, 0.0);
-		// Both states fade with the snow they describe: the melted portion can
-		// never exceed the depression it is part of, and scorch fades toward
-		// zero from the other side.
 		melted = melted >= 0.0 ? min(max(melted - refill, 0.0), deformation) :
 		                         min(melted + refill, 0.0);
-		// Fresh snow buries a crust as readily as it fills a trench, and ice
-		// gives way to temperature besides - so a glaze fades even under a
-		// clear sky, where the refill has stopped entirely.
-		// GAME time: this is the one decay that keeps running under a clear sky,
-		// so it is also the one a night spent waiting would otherwise skip
-		// entirely - the glaze was still there in the morning.
 		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
 		impact = max(impact - refill, 0.0);
 
-		// Unsupported-snow slump: see the SLUMP_* block up top for the
-		// design. Runs on the snapshot, like the drift fetch above, and
-		// RAISES deformation toward the settle target at a rate - so it
-		// composes with the refill (which is pulling the other way on both
-		// the strip and its neighbors) and with this frame's stamps, which
-		// max-blend over it in StampCS.
-		// The receiving texel is skipped outright while it carries any melt
-		// or scorch of its own: those marks are spell-authored shapes, and
-		// deepening one - even toward a correct neighbor floor - redraws it.
 		[branch] if (SlumpRate > 0.001 && deformation < 0.999 && abs(melted) < 0.005)
 		{
 			float slumpTarget = 0.0;
@@ -723,24 +360,9 @@ bool EvolveTexel(uint2 phys)
 				if (gate > SLUMP_MIN_SUPPORT)
 					slumpTarget = max(slumpTarget, axisTarget);
 			}
-			// Low bumps, not a plane: half-depth settle, wobbled on the
-			// coarse cells so the floor keeps an uneven remainder.
 			slumpTarget *= SLUMP_SETTLE * (1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / MELT_NOISE_COARSE));
-			// Crusted snow is frozen solid and holds its shape. The melted
-			// channel is left alone: raising depth only loosens its clamp,
-			// so the added depth reads as DISPLACED - which also sheds the
-			// strip's berm through the (1 - deformation) mask for free.
-			// Dead-zone at the R16 map's own resolution: chasing a
-			// sub-quantum gap cannot change what the stored map renders, but
-			// it holds the activity verdict hot - the settle front then
-			// crawls one ULP a frame for minutes and the idle skip never
-			// engages. One quantum short of target is pixel-identical.
 			[branch] if (slumpTarget - deformation > max(slumpTarget, deformation) * exp2(-10.0) + 1e-6)
 			{
-				// GAME time, like the refill and the thaw: settling is
-				// something the world does to itself over hours, and it is
-				// clamped to the target, so a night waited through arrives at
-				// the same place standing there for it would have.
 				deformation = min(deformation + SlumpRate * SLUMP_SPEED * (1.0 - crust) * GameDeltaTime,
 					slumpTarget);
 			}
@@ -754,16 +376,10 @@ bool EvolveTexel(uint2 phys)
 	return any(result != 0.0);
 }
 
-// Indirect over ScanEvolveCS's list: occupied tiles plus the slump-reach
-// halo (a pristine fin BETWEEN two carved trails is the receiving texel, so
-// zero tiles beside occupied ones must still be visited). Each group owns
-// one whole tile and writes its occupancy back absolutely - which is also
-// how a stale mark heals.
 [numthreads(8, 8, 1)] void EvolveCS(uint3 GTid
 									: SV_GroupThreadID, uint3 Gid
 									: SV_GroupID, uint GIdx
 									: SV_GroupIndex) {
-	// Uniform per group, so the early-out never splits a barrier.
 	const uint listIndex = Gid.y * 1024u + Gid.x;
 	if (listIndex >= EvolveTilesIn[0])
 		return;
@@ -778,20 +394,11 @@ bool EvolveTexel(uint2 phys)
 		Occupancy[tile] = gNonZero;
 		if (gActivity != 0) {
 			BermDirty[tile] = 1u;
-			// Evolve's own word: a run that changed nothing lets the CPU
-			// idle this pass until an external write (ring, stamps) or
-			// refill re-arms it.
 			ActivityFlag.InterlockedOr(40, 1u);
 		}
 	}
 }
 
-// A scan's last group to finish: true in its first thread, which takes the
-// final count (an atomic read; every other group's appends completed before
-// its own finish increment), zeroes both counters for the next scan and
-// writes the indirect args (x capped at 1024, the remainder in y -
-// 4096-dim full-dirty is 262144 tiles, past the 65535 one-dimension cap).
-// The caller stores the count at its list's [0]. Called by every thread.
 bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 {
 	count = 0;
@@ -812,19 +419,10 @@ bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 	return last;
 }
 
-// Lists the tiles evolve must visit: any occupancy within the slump reach,
-// tested in wrapped physical space (logical adjacency survives the seam;
-// the extra cross-border pairs are harmless over-inclusion). At extreme
-// range/resolution combos the halo grows to a few hundred taps per tile -
-// accepted, the scan is R8 reads against a 4M-texel pass saved.
 [numthreads(8, 8, 1)] void ScanEvolveCS(uint3 DTid
 										: SV_DispatchThreadID, uint GIdx
 										: SV_GroupIndex) {
 	uint2 dims;
-	// The SRV, not the UAV: the grid reaches this pass as OccupancyIn (u3 is
-	// deliberately unbound), and an unbound view's GetDimensions returns 0x0
-	// - which silently killed every scan thread at the bounds guard and
-	// dispatched an evolve of zero tiles. The census is what caught it.
 	OccupancyIn.GetDimensions(dims.x, dims.y);
 
 	bool need = false;
@@ -845,7 +443,6 @@ bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 		uint idx;
 		TileArgs.InterlockedAdd(12, 1u, idx);
 		EvolveTiles[1 + idx] = DTid.x | (DTid.y << 16);
-		// Census, riding the activity readback.
 		ActivityFlag.InterlockedAdd(44, 1u);
 	}
 	uint count;
@@ -853,10 +450,6 @@ bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 		EvolveTiles[0] = count;
 }
 
-// Lists the tiles of the snapshot evolve reads: within twice the evolve halo
-// of an occupied tile, as a listed tile's taps reach at most one halo past it.
-// Same wrapped-space dilation as the evolve scan, separable in groupshared;
-// past SNAPSHOT_MAX_APRON every tile is listed.
 #define SNAPSHOT_MAX_APRON 16
 #define SNAPSHOT_SIDE (8 + 2 * SNAPSHOT_MAX_APRON)
 groupshared uint gSnapOcc[SNAPSHOT_SIDE * SNAPSHOT_SIDE];
@@ -906,8 +499,6 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 		EvolveTiles[0] = count;
 }
 
-// Indirect over ScanSnapshotCS's list: those tiles of the map, bound at t0,
-// into evolve's snapshot, bound at u0.
 [numthreads(8, 8, 1)] void SnapshotCS(uint3 GTid
 									  : SV_GroupThreadID, uint3 Gid
 									  : SV_GroupID) {
@@ -919,14 +510,11 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 	EvolveSnapshot[texel] = PreviousDeformation[texel].xy;
 }
 
-// The whole map into evolve's snapshot, for evolveSnapshotOff.
 [numthreads(8, 8, 1)] void SnapshotFullCS(uint3 DTid
 										  : SV_DispatchThreadID) {
 	EvolveSnapshot[DTid.xy] = PreviousDeformation[DTid.xy].xy;
 }
 
-// Lists the tiles the berm bake must rebuild: the map changed within the
-// tap reach (40 units x BermReach). Same wrapped-space dilation as the evolve scan.
 [numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid
 									  : SV_DispatchThreadID, uint GIdx
 									  : SV_GroupIndex) {
@@ -958,16 +546,6 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 		BermTiles[0] = count;
 }
 
-// Actors acting on the map: stamp capsules, RMW on the
-// texel EvolveCS wrote this frame (or the standing map on frames where the
-// world had nothing to do). Every term is a function of the texel's own
-// value - no neighbour reads - which is what lets this pass run in place and
-// be dispatched over the stamps' bounding tiles only. Returns whether the
-// texel holds anything, for the group's occupancy write.
-// Ground height and nominal layer depth at a world XY, bilinear from the
-// shell's own terrain window. Missing terrain reads far below, so a
-// contact measured against it carves nothing. One helper for the carve and
-// the field view, so the two can never disagree.
 float2 TerrainGroundLayer(float2 worldPos)
 {
 	float2 t = (worldPos - TerrainWindowOrigin) / TerrainTexelSize;
@@ -985,25 +563,14 @@ float2 TerrainGroundLayer(float2 worldPos)
 
 float ContactAbove(float2 worldPos, float contact);
 
-// ContactAbove against the ground snow as drawn (ShellSurfaceZ): the
-// accumulated layer, with a dune crest (dune >= 0) riding on the depth the
-// carve leaves. Never higher, so a boot level with a walkway still cuts the
-// snow that shows above it.
 float ContactAboveDrawn(float2 worldPos, float contact, float dune)
 {
 	const float2 groundLayer = TerrainGroundLayer(worldPos);
 	const float h = contact - groundLayer.x;
-	// The depth whose drawn top, dune included, lies at the contact.
 	const float left = max(h - dune, h * 8.0 / (8.0 + dune));
 	return min(ContactAbove(worldPos, contact), left / (groundLayer.y * AccumulationScale));
 }
 
-// How far above its snow layer a contact stands, in layers: 0 = on the
-// surface, 1 = clear of it. Two candidate surfaces, the terrain window and
-// the road raster (same max-of-4 read as the patch's PatchSkinDepth), and
-// the boot is on whichever it is closest to: the terrain window sits below
-// a road standing proud of the land, and a road's buried skirt sits below
-// the land beside it. Either alone misreads the other's columns.
 float ContactAbove(float2 worldPos, float contact)
 {
 	float2 groundLayer = TerrainGroundLayer(worldPos);
@@ -1025,46 +592,30 @@ float ContactAbove(float2 worldPos, float contact)
 	return above;
 }
 
-// A shout's mark at a point (STAMP_MODE_CONE), shaped against the reach it
-// ends at; the front only reveals. x = the distance to the outline across
-// its half-width (1e6 behind the apex or past the end), y = the depth fade
-// times the front's reveal, z = y thinned by the churn's coverage, for a
-// shove, w = the distance along the axis. seg = apex to front, segLenSq its
-// length squared; cone = (final reach, widest half-width, churn seed).
 float4 ShoutMark(float2 worldPos, float2 apex, float2 seg, float segLenSq, float3 cone)
 {
 	float axisLen = sqrt(segLenSq);
 	float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
 	float2 rel = worldPos - apex;
 	float along = dot(rel, axis);
-	// Signed perpendicular offset, via the 2D cross product.
 	float perp = rel.x * axis.y - rel.y * axis.x;
 	float reach = max(cone.x, axisLen);
 	float u = along / reach;
-	// Outline: two half-superellipses meeting at the waist. t runs
-	// 0 at the waist to 1 at either end.
 	float waist = clamp(ShoutShape.x, 0.05, 0.95);
 	float t = u < waist ? (waist - u) / waist : (u - waist) / (1.0 - waist);
 	float m = max(ShoutShape.y, 1.0);
 	float env = pow(max(1.0 - pow(saturate(t), m), 0.0), 1.0 / m);
 	float halfWidth = max(cone.y * env, 1e-3);
-	// Churn: value noise in the shout's own frame, stretched along
-	// the axis so the breakup reads as streaks thrown forward.
 	float churn = saturate(ShoutChurn.x);
 	float2 np = float2(along / max(ShoutChurn.y * ShoutChurn.z, 1.0), perp / max(ShoutChurn.y, 1.0)) + cone.z;
 	float n = 0.7 * StampNoise(np) + 0.3 * StampNoise(np * 2.9 + 17.3);
 	float edgeCoord = abs(perp) / halfWidth / (1.0 + (n - 0.5) * 0.6 * churn);
-	// Behind the apex, or past the end, is outside the shape.
 	edgeCoord = (along < 0.0 || u > 1.0) ? 1e6 : edgeCoord;
-	// Deepest at the mouth, fading to ShoutShape.w at the end;
-	// revealed by the front as it travels.
 	float fade = lerp(1.0, saturate(ShoutShape.w), smoothstep(saturate(ShoutShape.z), 1.0, u));
 	float lead = reach * CONE_FRONT_LEAD;
 	float frontAlong = axisLen * (1.0 + CONE_FRONT_LEAD);
 	float reveal = 1.0 - smoothstep(frontAlong - lead, frontAlong, along);
 	float coneSoft = fade * reveal;
-	// Coverage thins with distance: near the mouth nearly every
-	// texel is thrown, at the end only the strongest streaks.
 	float band = max(0.2 * churn, 1e-3);
 	float thr = 0.9 * churn * u;
 	float cover = smoothstep(thr - band, thr + band, n);
@@ -1075,8 +626,6 @@ bool StampTexel(uint2 phys)
 {
 	uint2 dims;
 	CurrentDeformation.GetDimensions(dims.x, dims.y);
-	// Inverse of TorusPhys: the world position and the activity bookkeeping
-	// (bbox, view) live in logical space.
 	const uint2 pixel = uint2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
 	const float4 carried = CurrentDeformation[phys];
@@ -1085,24 +634,9 @@ bool StampTexel(uint2 phys)
 	float crust = carried.z;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
-	// The deepest a body reaches into the layer here this frame, before Snow
-	// Resistance; the pass rule below turns it into carve.
 	float bodyReach = 0.0;
-	// The deepest this frame's cuts reach here, bodies by their reach: where
-	// it meets the floor the track is fresh again (TrackClock).
 	float cutNow = 0.0;
 
-	// Carve, melt and scorch accumulate separately so the result cannot depend
-	// on the order stamps happen to sit in the buffer.
-	//
-	// Melt follows the campfire basins in SnowExclusions.hlsli, where the
-	// falloff IS the depth at a point rather than a speed toward one. That
-	// distinction is the whole shape: scaling the RATE lets every texel under
-	// the stamp keep deepening until it saturates - the rim merely arrives
-	// late - so a source left standing converges on a flat-floored cylinder.
-	// Scaling the TARGET gives each texel its own ceiling, so the bowl is
-	// permanent and a hotter source reaches the same bowl sooner instead of
-	// digging a deeper one.
 	float carve = deformation;
 	float meltTarget = 0.0;
 	float meltRate = 0.0;
@@ -1110,19 +644,13 @@ bool StampTexel(uint2 phys)
 	float impact = carried.w;
 	float crustTarget = 0.0;
 	float crustRate = 0.0;
-	// How much of the standing crust gets smashed through this frame.
 	float crustBreak = 0.0;
-	// Crust as it stands BEFORE this frame's stamps, which is what a boot
-	// landing on it has to get through.
 	const float standingCrust = crust;
 
-	// Gate reach in stamp radii: pit arc legs and melt edge noise both extend past the radius.
 	const float gateScale = max(PIT_LOBE_MAX + PIT_LOBE_WIDTH, 1.0 + MeltEdgeNoise);
 	const float gateScaleSq = gateScale * gateScale;
 
 	for (uint i = 0; i < StampCount; i++) {
-		// Capsule stamp: distance to the segment from the actor's previous
-		// position, so trails are continuous regardless of movement speed.
 		float2 p0 = StampEnds[i].xy;
 		float2 p1 = Stamps[i].xy;
 		float2 seg = p1 - p0;
@@ -1132,9 +660,6 @@ bool StampTexel(uint2 phys)
 		float distSq = dot(delta, delta);
 		float radius = Stamps[i].w;
 
-		// A cone is contained in the capsule of the same radius about the same
-		// axis, so the gate below needs no change at all - only the falloff
-		// coordinate inside it does.
 		float modeRaw = StampEnds[i].z;
 		bool isBody = modeRaw > STAMP_MODE_BODY - 0.5;
 		modeRaw = isBody ? modeRaw - STAMP_MODE_BODY : modeRaw;
@@ -1147,12 +672,7 @@ bool StampTexel(uint2 phys)
 		{
 			float dist = sqrt(distSq);
 
-			// Normalised distance to the edge of the shape: 0 on the axis, 1
-			// at the rim. Everything below shapes its falloff from this, so a
-			// cone and a capsule share every profile they have.
 			float edgeCoord = dist / max(radius, 1e-3);
-			// Cone only: depth scale along the reach (fade and reveal) for
-			// every mark, and the churn on top of it for a shove.
 			float coneSoft = 1.0;
 			float coneCarve = 1.0;
 			[branch] if (isCone)
@@ -1166,18 +686,8 @@ bool StampTexel(uint2 phys)
 			[branch] if (mode < 0.5)
 			{
 				float edgeDist = edgeCoord;
-				// Falloff from StampFalloffStart of the radius: low values keep a
-				// wide edge band coarser consumers of the map can still represent,
-				// high values hold full depth almost to the edge. A BOWL carve
-				// takes the melt bowl's floor instead, which begins falling away
-				// almost at the centre - so the cross-section curves the whole
-				// way rather than standing walls up around a flat floor.
 				float falloff = (1.0 - smoothstep(isBowl ? CARVE_BOWL_FLOOR : StampFalloffStart, 1.0, edgeDist)) * coneCarve;
 
-				// Crusted snow bears weight. A print on it is shallow rather
-				// than absent, and something heavy enough breaks through and
-				// takes the crust with it - StampEnds[i].w carries how much
-				// weight this shape puts through, unused by carves otherwise.
 		const float impactE = saturate((mode - floor(mode)) / STAMP_IMPACT_SCALE);
 				float force = saturate(StampEnds[i].w);
 				float resist = standingCrust * (1.0 - force);
@@ -1193,21 +703,11 @@ bool StampTexel(uint2 phys)
 					cutNow = max(cutNow, printed);
 				}
 
-				// Anything that CUTS a crust has broken the skin over it, not
-				// merely dented it - so the cut takes the glaze with it, in
-				// proportion to how deep it went. Without this a trench
-				// through ice keeps its polish all the way down and reads as
-				// a groove ploughed through ice cream.
-			// Impact energy over the stamp and the ring its throw lands in.
 			impact = max(impact, impactE * coneSoft * (1.0 - smoothstep(0.6, 1.3, edgeCoord)));
 				crustBreak = max(crustBreak, saturate(max(force, printed * CrustBreakOnCarve) * falloff));
 			}
 			else if (mode > 2.5)
 			{
-				// Crust: frost hardens the surface without moving any snow, so
-				// depth is left entirely alone. Sustained, so it approaches a
-				// target at a rate exactly as melt does - a wall glazing for
-				// ten seconds sets harder than one that flickered.
 				float glazeWobble = 1.0;
 				[branch] if (MeltEdgeNoise > 0.001)
 				{
@@ -1221,18 +721,9 @@ bool StampTexel(uint2 phys)
 			}
 			else if (mode > 1.5)
 			{
-				// Pit: a core with arc legs, all of it pocked. Everything is
-				// seeded from the stamp's own centre rather than from time, so
-				// a strike keeps the same shape frame after frame instead of
-				// boiling, and two strikes never share one.
 				float2 centre = Stamps[i].xy;
 				float shape = 1.0 - smoothstep(0.15, 1.0, edgeCoord);
 
-				// Arc legs fork from a POINT of discharge, so they mean nothing
-				// on a wedge - and their seed is the stamp centre, which for a
-				// cone is its far end rather than anywhere it struck. Branched
-				// around rather than given a loop count of zero: an unrolled
-				// loop needs a bound the compiler can see.
 				[branch] if (!isCone)
 				[unroll] for (int lobe = 0; lobe < PIT_LOBES; lobe++) {
 					float2 seed = centre * 0.05 + float2(lobe * 7.3, lobe * 3.1);
@@ -1241,7 +732,6 @@ bool StampTexel(uint2 phys)
 						StampNoiseHash(floor(seed + 31.7)));
 					float2 tip = centre + float2(cos(angle), sin(angle)) * legLength;
 
-					// Distance to the leg, which tapers to nothing at the tip.
 					float2 legVec = tip - centre;
 					float legLenSq = max(dot(legVec, legVec), 1e-4);
 					float legT = saturate(dot(worldPos - centre, legVec) / legLenSq);
@@ -1250,17 +740,10 @@ bool StampTexel(uint2 phys)
 					shape = max(shape, 1.0 - smoothstep(0.2, 1.0, length(legDelta) / max(legWidth, 1e-3)));
 				}
 
-				// Pocked, not scored: the mask cuts the shape into fragments so
-				// a strike reads as snow blasted apart rather than a drawn star.
 				float pockCell = max(radius / PIT_POCK_CELLS_ACROSS, PIT_POCK_CELL_MIN);
 				float pock = StampNoise(worldPos / pockCell);
-				// Floored well below 1 so the mask always leaves something: a
-				// strike that lands must mark, even where the pocking thins.
 				shape *= max(smoothstep(0.30, 0.62, pock), 0.45);
 
-				// CARVE's model, not melt's: the throw is instantaneous, so it
-				// is max-blended to an instant depth. Accumulating instead
-				// would let a standing lightning cloak bore a shaft.
 				float pitDepth = Stamps[i].z * shape * coneSoft;
 				carve = max(carve, pitDepth);
 				cutNow = max(cutNow, pitDepth);
@@ -1268,11 +751,6 @@ bool StampTexel(uint2 phys)
 			}
 			else
 			{
-				// Melt: the noise scales the RADIUS instead, so the rim
-				// wanders while the profile stays a smooth bowl. Perturbing
-				// the falloff distance here instead would pit the floor,
-				// because noise inside the flat core drags samples past the
-				// start of the flank.
 				float meltWobble = 1.0;
 				[branch] if (MeltEdgeNoise > 0.001)
 				{
@@ -1281,21 +759,12 @@ bool StampTexel(uint2 phys)
 					meltWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
 				}
 				float falloff = (1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(meltWobble, 1e-3))) * coneSoft;
-				// Depth this texel melts TO, and how fast it gets there. The
-				// rate carries the same falloff, so the whole basin reaches
-				// its profile together and the bowl is visible from the first
-				// second instead of opening outward from the middle.
 				meltTarget = max(meltTarget, Stamps[i].z * falloff);
 				meltRate += Stamps[i].z * StampEnds[i].w * falloff;
 			}
 		}
 	}
 
-	// Rasterized props: the lowest surface over this texel's own area, carved
-	// to the fraction it reaches into the layer (the limb rule, per texel) and
-	// to the share of the area it covers. The trench's edge then falls on the
-	// body's own, and a blade thinner than a texel prints shallow rather than
-	// a texel wide. Missing terrain reads far below and carves nothing.
 	[branch] if (ContactDim > 0.5)
 	{
 		float2 rel = (worldPos - ContactCenter) / ContactHalfExtent;
@@ -1303,7 +772,6 @@ bool StampTexel(uint2 phys)
 		{
 			int dim = (int)ContactDim;
 			const float2 cf = float2(rel.x * 0.5 + 0.5, 0.5 - rel.y * 0.5) * ContactDim;
-			// Half this texel's width in contact texels; the contact texels it overlaps.
 			const float span = TexelSize * ContactDim / (4.0 * ContactHalfExtent);
 			const int2 k0 = int2(floor(cf - span));
 			const int2 k1 = int2(ceil(cf + span)) - 1;
@@ -1320,9 +788,6 @@ bool StampTexel(uint2 phys)
 				}
 			}
 			cover = saturate(cover / (4.0 * span * span));
-			// Bodies go through the pass rule below; loose props carve all of
-			// their reach, the floor ItemSink rests them on. Crust bears both like
-			// any carve of unknown weight: no force.
 			const float crustDepth = lerp(1.0, CrustPrintDepth, standingCrust);
 			float dune = 0.0;
 			[branch] if (min(contact.x, contact.y) < CONTACT_NONE * 0.5)
@@ -1340,10 +805,6 @@ bool StampTexel(uint2 phys)
 		}
 	}
 
-	// Bodies pack the snow pass by pass: each pass carves the Snow Resistance
-	// share of what its reach finds left, from the depth the pass began at.
-	// A pass begins once the texel has been free of bodies for PassGap; a
-	// stored start deeper than the map (refill, a reused texel) is stale.
 	[branch] if (bodyReach > 0.0)
 	{
 		const uint state = PassState[phys];
@@ -1362,22 +823,8 @@ bool StampTexel(uint2 phys)
 		total = min(total + meltRate * DeltaTime, meltTarget);
 	total = min(total, 1.0);
 
-	// Melt-origin depth is recorded positive so the berm field can subtract it;
-	// scorch is recorded negative so it keeps its berm and can darken the
-	// shell. Melt wins the channel where both somehow land, since snow that
-	// has gone cannot also be burnt.
 	float meltedNow = min(melted + max(total - carve, 0.0), total);
 
-	// What was smashed this frame comes off the crust that was ALREADY there,
-	// and only then does this frame's frost set on what is left. The order is
-	// what lets a cold heavy thing trench snow and leave the trench frozen
-	// behind it - a frost atronach walking, which nothing else in the design
-	// produces, since fire removes snow and force displaces it. Growing first
-	// and breaking afterwards destroyed a glaze that had not existed when the
-	// foot landed, so the two cancelled and the trail came out bare.
-	//
-	// Carving still breaks a standing crust exactly as before: the break is
-	// applied to `crust`, which is the glaze the boot actually met.
 	float crustNow = saturate(crust * (1.0 - crustBreak));
 	[flatten] if (crustTarget > crustNow)
 		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
@@ -1387,9 +834,6 @@ bool StampTexel(uint2 phys)
 		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, saturate(impact));
 	CurrentDeformation[phys] = result;
 
-	// A cut that reaches the floor dates the texel: a walk along a packed path
-	// refreshes it, a print's soft edge over an older trench does not. Written
-	// only when the stored whole unit moves, so the berm bake re-dates only then.
 	[branch] if (cutNow > kTrackCutMin && cutNow >= deformation - kTrackFloorMargin)
 	{
 		[branch] if (abs(TrackClock[phys] - AgeingClock) > 0.5)
@@ -1403,8 +847,6 @@ bool StampTexel(uint2 phys)
 	return any(result != 0.0);
 }
 
-// One group per CPU-listed tile: actors' surroundings, nothing else. The
-// group owns its whole tile, so it writes occupancy absolutely.
 [numthreads(8, 8, 1)] void StampCS(uint3 GTid
 								   : SV_GroupThreadID, uint3 Gid
 								   : SV_GroupID, uint GIdx
@@ -1422,8 +864,6 @@ bool StampTexel(uint2 phys)
 	}
 }
 
-// Full-map fallback for a tile list past its cap; also the force-all-dirty
-// debug path, so "my trenches froze" has a one-click cross-check.
 [numthreads(8, 8, 1)] void StampAllCS(uint3 DTid
 									  : SV_DispatchThreadID, uint3 Gid
 									  : SV_GroupID, uint GIdx
@@ -1439,20 +879,12 @@ bool StampTexel(uint2 phys)
 	}
 }
 
-// Contact field view, cropped +-ViewHalf units around the player at 512 px
-// a side. Top half: the field as the carve pass samples it (red = carve
-// fraction, green = hovering). Bottom half: the deformation map over the
-// SAME ground (red = carve depth, faint blue = map texel edges). The two
-// crops share one world mapping, so a trench wider than its silhouette is
-// visible as such. Own dispatch; the RGBA8 view rides the ActivityView slot.
-#define VIEW_PX 512  // mirrors kContactViewPx
+#define VIEW_PX 512
 [numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
 										 : SV_DispatchThreadID) {
 	const uint dim = (uint)ContactDim;
 	if (any(DTid.xy >= uint2(VIEW_PX, 2 * VIEW_PX)))
 		return;
-	// No field this frame (nothing drew - a still crowd): the top half goes
-	// black rather than holding the last frame that had one.
 	if (dim == 0 && DTid.y < VIEW_PX)
 	{
 		ActivityView[DTid.xy] = float4(0.0, 0.0, 0.0, 1.0);
@@ -1465,23 +897,15 @@ bool StampTexel(uint2 phys)
 	float4 color = float4(0.0, 0.0, 0.0, 1.0);
 	[branch] if (!mapHalf)
 	{
-		// Same texel selection as StampTexel, minus its 3x3 MIN.
 		float2 crel = (worldPos - ContactCenter) / ContactHalfExtent;
 		[branch] if (all(abs(crel) < 1.0))
 		{
 			int2 ct = int2((crel.x * 0.5 + 0.5) * ContactDim, (0.5 - crel.y * 0.5) * ContactDim);
-			// Both channels, before Snow Resistance.
 			const float2 contactXY = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
 			const float contact = min(contactXY.x, contactXY.y);
 			[branch] if (contact < CONTACT_NONE * 0.5)
 			{
 				float above = ContactAboveDrawn(worldPos, contact, max(UndulationNorm(worldPos, UndulationScale) * UndulationAmp, 0.0));
-				// A surface UNDER the ground it is measured against is not a
-				// press: nothing a body carries can be there. The carve cannot
-				// tell it from a boot standing on the ground - both saturate to
-				// full depth - so the view says it, blue rising with the burial.
-				// Magenta beside a silhouette means that column's ground read
-				// high, not that something touched it.
 				color = float4(saturate(1.0 - above), saturate(above), saturate(-above), 1.0);
 			}
 		}
@@ -1502,41 +926,23 @@ bool StampTexel(uint2 phys)
 				color.b = 0.3;
 		}
 	}
-	// One-pixel cross at the crop centre (the player's bound centre).
 	if (px.x == VIEW_PX / 2 || px.y == VIEW_PX / 2)
 		color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
 	ActivityView[DTid.xy] = color;
 }
 
-// ---- Snow Trenches on Objects: the print map ----
-// World-anchored: print texel (x, y) of the world lives at physical
-// (x, y) & (dim - 1), and the window holds one world texel per physical one.
-// Two slices hold two surface levels per column. A texel packs the print's
-// world Z in quarter units (bits 31-10, offset PRINT_Z_OFFSET) and its depth
-// in 1023rds (bits 9-0); 0 is empty. Mirrors kPrintTexel in SnowDeformation.h.
 #define PRINT_TEXEL 3.0
 #define PRINT_Z_OFFSET 524288.0
-// One surface: a stored print within this of a new contact's Z.
 #define PRINT_SAME_SURFACE 12.0
-// A contact prints where an object top lies in [contact - ABOVE, contact +
-// BELOW]. The raster keeps each texel's highest point, so a sloped top reads
-// up to a texel's rise above the surface under the sole.
 #define PRINT_GATE_BELOW 16.0
 #define PRINT_GATE_ABOVE 6.0
-// ContactAbove under this is the ground layer's print, not an object's.
 #define PRINT_FROM_ABOVE 0.5
-// A print is the sole's own footprint. The sole is the lowest body surface
-// within two contact texels, ignoring any more than SOLE_REACH under the
-// texel's own (a foot on another level). A texel prints where its body is
-// within SOLE_LO to SOLE_HI of that sole and the sole within TOUCH_LO to
-// TOUCH_HI of an object top: a boot's raised edges and a swinging foot do not.
 #define PRINT_SOLE_REACH 4.0
 #define PRINT_SOLE_LO 1.0
 #define PRINT_SOLE_HI 2.5
 #define PRINT_TOUCH_LO 2.0
 #define PRINT_TOUCH_HI 4.0
 
-// Mirrors PrintFrameCB in SnowDeformation.h.
 cbuffer PrintFrame : register(b1)
 {
 	int2 PrintWindowMin;
@@ -1550,45 +956,24 @@ cbuffer PrintFrame : register(b1)
 }
 
 RWTexture2DArray<uint> PrintMap : register(u0);
-// The rim: how strongly the snow around a print is disturbed, the print's
-// depth fading to nothing PrintRimWidth units past its edge, with that print's
-// Z. One surface a texel, the strongest; packed and addressed as the map.
 RWTexture2D<uint> PrintRim : register(u3);
-// Texels the rim reaches past a print at most. Mirror kRimApron (SnowPrints.hlsli).
 #define PRINT_RIM_APRON 5
-// One uint per world tile of PRINT_TILE texels the window touches, row-major
-// from the window's first tile; 1 where the stamp changed a texel.
 RWByteAddressBuffer PrintWrites : register(u1);
 #define PRINT_TILE_SHIFT 5
-// Physical 8x8 blocks, x | y << 16, deduplicated on the CPU.
 StructuredBuffer<uint> PrintBlocks : register(t2);
-// The object top raster's layer 1 and peeled layer 2, last frame's.
 Texture2D<float> PrintTops1 : register(t10);
 Texture2D<float> PrintTops2 : register(t11);
 Texture2DArray<uint> PrintMapIn : register(t12);
-// This frame's spell marks on object snow, three float4s each (SnowDeformation.h
-// PrintSpellMark): (a.xyz, radius), (b.xyz, flags), (depth 0-1, rate per
-// second or 0 at once, a cone's final reach, its churn seed). A surface mark
-// lies at a.z, a disc or a capsule from b to a, or with PRINT_SPELL_CONE the
-// ground's shout mark from its apex b to its front a, radius its widest
-// half-width. A ray runs from a to b and marks where it first enters an object
-// top (PrintRayCS).
 StructuredBuffer<float4> PrintSpells : register(t13);
-// Per mark, where its ray entered a top (xyz, w = 1), else w = 0.
 StructuredBuffer<float4> PrintRayHitsIn : register(t14);
 RWStructuredBuffer<float4> PrintRayHits : register(u4);
 #define PRINT_SPELL_CONE 1u
 #define PRINT_SPELL_BOWL 2u
 #define PRINT_SPELL_RAY 4u
-// A cone that shoves: the churn thins it as on the ground.
 #define PRINT_SPELL_CHURN 8u
-// A surface mark takes a top within this of its own Z; a ray enters a top it
-// meets from above, no deeper than PRINT_RAY_THICK under it.
 #define PRINT_SPELL_BELOW 48.0
 #define PRINT_SPELL_ABOVE 16.0
 #define PRINT_RAY_THICK 24.0
-// A cone's band widens by this per unit of reach past its apex, both ways, so
-// the wedge follows a pitched roof away from the shouter's feet.
 #define PRINT_CONE_SLOPE 1.0
 
 uint PrintEncode(float a_z, uint a_depth)
@@ -1607,9 +992,6 @@ int2 PrintWorldTexel(uint2 a_phys, uint a_dim)
 	return PrintWindowMin + ((int2(a_phys) - PrintWindowMin) & int(a_dim - 1));
 }
 
-// The body over a point this frame (x: the contact texel holding the point,
-// no dilation) and its sole (y); where no body drew, a loose prop's underside
-// as both. CONTACT_NONE where neither did.
 float2 PrintContact(float2 a_worldPos)
 {
 	float2 contact = CONTACT_NONE;
@@ -1636,9 +1018,6 @@ float2 PrintContact(float2 a_worldPos)
 	return contact;
 }
 
-// How far the contact stands above the nearest object top it can be standing
-// on: the smallest max(contact - top, 0) over the 2x2 raster texels of both
-// layers whose top lies in the gate band. Negative where none does.
 float PrintTopGap(float2 a_worldPos, float a_contact)
 {
 	float gap = -1.0;
@@ -1668,8 +1047,6 @@ float PrintTopGap(float2 a_worldPos, float a_contact)
 	return gap;
 }
 
-// The object top nearest a_z within [a_z - a_below, a_z + a_above] over the
-// 2x2 raster texels of both layers; -1e9 where none lies in that band.
 float PrintTopNear(float2 a_worldPos, float a_z, float a_below, float a_above)
 {
 	float found = -1e9;
@@ -1701,9 +1078,6 @@ float PrintTopNear(float2 a_worldPos, float a_z, float a_below, float a_above)
 	return found;
 }
 
-// The strongest spell mark on an object top at a point this frame: x = the
-// top's Z, y = the depth it wants (0-1), z = its rate per second (0 = at
-// once), w = 1 where one lands.
 float4 PrintSpellVerdict(float2 a_worldPos)
 {
 	float4 best = 0.0;
@@ -1728,7 +1102,6 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 		float2 band = float2(PRINT_SPELL_BELOW, PRINT_SPELL_ABOVE);
 		[branch] if (live && (flags & PRINT_SPELL_CONE) != 0u)
 		{
-			// The ground's shout mark, with the ground's carve or melt falloff.
 			const float2 seg = at.xy - from;
 			const float4 shout = ShoutMark(a_worldPos, from, seg, dot(seg, seg), float3(s2.z, radius, s2.w));
 			band += max(shout.w, 0.0) * PRINT_CONE_SLOPE;
@@ -1737,8 +1110,6 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 		}
 		else [branch] if (live)
 		{
-			// A disc, or a capsule from its last point: full to half its radius,
-			// gone at it; a bowl slopes from its centre.
 			const float2 seg = at.xy - from;
 			const float t = saturate(dot(a_worldPos - from, seg) / max(dot(seg, seg), 1e-4));
 			const float d = length(a_worldPos - (from + seg * t));
@@ -1755,9 +1126,6 @@ float4 PrintSpellVerdict(float2 a_worldPos)
 	return best;
 }
 
-// The print a point takes this frame. x = the sole's Z, y = depth 0-1, z =
-// the verdict: 0 no body, 1 the ground layer's, 2 no object top at that
-// height, 3 prints.
 float3 PrintVerdict(float2 a_worldPos)
 {
 	const float2 contact = PrintContact(a_worldPos);
@@ -1777,9 +1145,6 @@ float3 PrintVerdict(float2 a_worldPos)
 	return verdict;
 }
 
-// Same surface merges (the deeper print keeps its Z), else an empty slot,
-// else the shallower slot is evicted by a deeper print. Returns the slot
-// written, or 2 when nothing changed.
 uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 {
 	const uint a = PrintMap[uint3(a_phys, 0)];
@@ -1802,7 +1167,6 @@ uint PrintWrite(uint2 a_phys, float a_z, uint a_depth)
 	return slot;
 }
 
-// The depth already printed at a texel on the surface at a_z, 0 if none.
 uint PrintDepthAt(uint2 a_phys, float a_z)
 {
 	const uint a = PrintMap[uint3(a_phys, 0)];
@@ -1815,7 +1179,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	return depth;
 }
 
-// This frame's prints over the CPU's block list: bodies and props, then spells.
 [numthreads(8, 8, 1)] void PrintStampCS(uint3 GTid
 										: SV_GroupThreadID, uint3 Gid
 										: SV_GroupID) {
@@ -1828,7 +1191,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	const float3 verdict = PrintVerdict(worldPos);
 	const uint depth = (uint)round(verdict.y * 1023.0);
 	bool wrote = verdict.z > 2.5 && depth > 0u && PrintWrite(phys, verdict.x, depth) < 2u;
-	// A melt approaches its target at its rate; a pit or a shove lands at once.
 	[branch] if (PrintSpellCount > 0u)
 	{
 		const float4 spell = PrintSpellVerdict(worldPos);
@@ -1848,9 +1210,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	}
 }
 
-// Where each ray mark first enters an object top from above: marched along
-// the top raster's two layers a texel at a time, a hit where the ray passes
-// from over a top to no deeper than PRINT_RAY_THICK under it.
 [numthreads(32, 1, 1)] void PrintRayCS(uint3 DTid
 									   : SV_DispatchThreadID) {
 	const uint i = DTid.x;
@@ -1891,8 +1250,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	}
 }
 
-// Empties the texels whose world assignment the window's move changed: the
-// union of PrintRingRects (world texels), by flat index.
 [numthreads(64, 1, 1)] void PrintRingCS(uint3 DTid
 										: SV_DispatchThreadID) {
 	uint id = DTid.x;
@@ -1915,8 +1272,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	}
 }
 
-// Refills every print in the listed blocks by PrintRefillQuanta 1023rds; a
-// print refilled to nothing empties its slot.
 [numthreads(8, 8, 1)] void PrintRefillCS(uint3 GTid
 										 : SV_GroupThreadID, uint3 Gid
 										 : SV_GroupID) {
@@ -1929,9 +1284,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	}
 }
 
-// The rim over the listed blocks, from the map as it stands: every print
-// within PrintRimWidth of a texel offers its depth, fading by smoothstep with
-// the distance past its own texel's edge; the strongest wins with its Z.
 [numthreads(8, 8, 1)] void PrintRimCS(uint3 GTid
 									  : SV_GroupThreadID, uint3 Gid
 									  : SV_GroupID) {
@@ -1976,10 +1328,6 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	PrintRim[phys] = strength > 0u ? (bestZ << 10) | strength : 0u;
 }
 
-// The field view's crop. Top half: each print texel's verdict this frame
-// (black no body, blue the ground layer's, magenta no object top at that
-// height, green to yellow printed by depth). Bottom half: the print map, slot
-// A red, slot B green, grey outside the window.
 [numthreads(8, 8, 1)] void PrintViewCS(uint3 DTid
 									   : SV_DispatchThreadID) {
 	[branch] if (all(DTid.xy < uint2(VIEW_PX, 2 * VIEW_PX)))

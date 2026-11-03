@@ -1,54 +1,20 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Sun BRDF + indirect lobes routed through CS's own PBR path
-// (PBR::GetDirectLightInput / GetIndirectLobeWeights via LightingEval),
-// shared by SnowShell.hlsl and SnowStaticsShell.hlsl. ROUTING-ROADMAP M1.
-//
-// MUST BE THE LAST INCLUDE of each shell's PSHADER block. TRUE_PBR is defined
-// here and only here: earlier includes must compile without it, and
-// LightingCommon/PBR below require it. Color.hlsli therefore compiles without
-// TRUE_PBR and its Light() applies no pi compensation, so this applies
-// Color::PBRLightingCompensation explicitly. See PI-CONVENTION-SPIKE.md.
-//
-// Units contract with the callers: outputs are Lighting.hlsl-internal
-// units. The write tail must multiply directDiffuse, directSpecular, the
-// ambient term and the Albedo RT payload by Color::PBRLightingScale, and
-// leave specularLobe (Reflectance RT) unscaled - mirroring
-// Lighting.hlsl:2766-2774.
-
 #define TRUE_PBR
 #define GLINT
 
-// PBR.hlsli reads Lighting.hlsl's per-material PBRFlags; the shells have no
-// per-material CB, so a zero global compiles the same code with every
-// optional lobe (subsurface, coat, fuzz, hair) off.
 static uint PBRFlags = 0;
 
 #include "Common/LightingEval.hlsli"
 
-// EHF is an addon, not CORE: the include only resolves when it is installed,
-// so the CPU side gates the define on the feature being loaded. Its volumetric
-// functions (uncalled here) sample through the host shader's SampColorSampler;
-// alias the shell's linear sampler for the parse.
 #if defined(SNOW_EXP_HEIGHT_FOG)
 #	define SampColorSampler ShellLinearSampler
 #	include "ExponentialHeightFog/ExponentialHeightFog.hlsli"
 #	undef SampColorSampler
 #endif
 
-// IBL is an addon like EHF; the CPU gates the define on the feature being
-// loaded and binds the SH textures at the include's forward slots (t76/t77).
 #if defined(SNOW_IBL)
 #	include "IBL/IBL.hlsli"
 #endif
 
-// Ambient parity with Lighting.hlsl:2601-2658: when IBL is enabled it
-// transforms the DALC - DALCMode >= 2 keeps it and ADDS the sky-cubemap SH
-// term (where the sky blue lives), modes 0-1 replace it with env IBL. The
-// shells always draw in-world, so Lighting's static-IBL branch (menus,
-// loading screens) never applies here.
 float3 SnowAmbientColor(float3 normalWS)
 {
 	float3 ambientColor = Color::Ambient(max(0, SharedData::GetAmbient(normalWS)));
@@ -61,34 +27,25 @@ float3 SnowAmbientColor(float3 normalWS)
 
 struct SnowSunLighting
 {
-	float3 directDiffuse;   // albedo-multiplied, incl. transmission
-	float3 directSpecular;  // GGX or glint NDF
-	float3 diffuseLobe;     // -> Albedo RT + ambient term
-	float3 specularLobe;    // -> Reflectance RT (composite expects unscaled)
-	float3 markSpecular;    // a vanilla decal's own (SnowVanillaSpecular)
+	float3 directDiffuse;
+	float3 directSpecular;
+	float3 diffuseLobe;
+	float3 specularLobe;
+	float3 markSpecular;
 };
 
-// A vanilla surface's direct specular for one light, as Lighting's non-PBR
-// path takes it (LightingEval.hlsli EvaluateLighting): specular.rgb =
-// SpecularColor x glossiness, specular.w = specular power. lightColor without
-// the PBR pi compensation; vanilla units, no PBRLightingScale.
 float3 SnowVanillaSpecular(float3 normalWS, float3 V, float3 L, float3 lightColor, float shadow, float4 specular)
 {
 	DirectContext context = CreateDirectLightingContext(normalWS, normalWS, normalWS, V, V, L, L, lightColor, shadow, shadow);
 	return VanillaSpecular(context, specular.w, true, 0.0, 0.0, 0.0) * specular.rgb * lightColor * shadow * Color::BRDFScale;
 }
 
-// The material + glint frame, built ONCE per pixel and shared by the sun and
-// every point light - the same reuse Lighting.hlsl gets from its single
-// MaterialProperties.
 struct SnowMaterialCtx
 {
 	MaterialProperties material;
 	float3x3 tbnTr;
 };
 
-// glintParams = (logMicrofacetDensity, microfacetRoughness,
-// densityRandomization, screenSpaceScale) - the ShellCB packing.
 SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	float3 albedo, float roughness, float3 F0, float ao,
 	float4 glintParams, float glintActive,
@@ -101,9 +58,6 @@ SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	material.AO = ao;
 	material.CoatColor = 1.0;
 
-	// Same clamps as Lighting.hlsl:1841-1844; the CPU-disabled convention
-	// (density 0) lands on the floor, below the >1.1 gate inside
-	// SpecularMicrofacetWithGlint, which then falls back to smooth GGX.
 	material.GlintScreenSpaceScale = max(1.0, glintParams.w);
 	material.GlintLogMicrofacetDensity = glintActive > 0.5 ? clamp(glintParams.x, PBR::Constants::MinGlintDensity, PBR::Constants::MaxGlintDensity) : PBR::Constants::MinGlintDensity;
 	material.GlintMicrofacetRoughness = clamp(glintParams.y, PBR::Constants::MinGlintRoughness, PBR::Constants::MaxGlintRoughness);
@@ -113,8 +67,6 @@ SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	[branch] if (material.GlintLogMicrofacetDensity > 1.1)
 		Glints::PrecomputeGlints(glintNoise, glintUV, uvDDX, uvDDY, material.GlintScreenSpaceScale, material.GlintCache);
 
-	// Snow has no authored uv tangents; the glint grid rides the same
-	// arbitrary-but-stable world-Y frame the hand-rolled path used.
 	float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
 	float3 glintB = cross(normalWS, glintT);
 
@@ -124,25 +76,16 @@ SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	return ctx;
 }
 
-// worldPos is camera-relative, camPosAdjust the camera's world offset - the
-// pair GetSunlightFogAttenuation expects (same as Lighting/RunGrass).
-// markSpecular: a vanilla decal's specular (SnowVanillaSpecular), 0 for none.
 SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V,
 	float3 worldPos, float3 camPosAdjust, float sunShadow,
 	float2 glintUV, float2 uvDDX, float2 uvDDY, float4 markSpecular)
 {
-	// Every direct term carries sunShadow as a factor (PBRFlags 0).
 	DirectLightingOutput lightingOutput = (DirectLightingOutput)0;
 	float3 markLit = 0.0;
 	[branch] if (sunShadow != 0.0)
 	{
-		// x pi (Linear Lighting uploads it in working space): exactly what
-		// Lighting.hlsl feeds its dir light context.
 		float3 sunColor = Color::DirectionalLight(SharedData::DirLightColor.xyz) * Color::PBRLightingCompensation;
 
-		// Ground dims its sun by the height-fog line integral (Lighting.hlsl:2202,
-		// RunGrass.hlsl:450); strongest at grazing sun, which is exactly where the
-		// shell read warmer than the ground beside it.
 #if defined(SNOW_EXP_HEIGHT_FOG)
 		[branch] if (SharedData::exponentialHeightFogSettings.enabled)
 			sunColor *= ExponentialHeightFog::GetSunlightFogAttenuation(worldPos, camPosAdjust);
@@ -168,9 +111,6 @@ SnowSunLighting SnowEvaluateSunPBR(SnowMaterialCtx mtl, float3 normalWS, float3 
 	return o;
 }
 
-// One point light through the same PBR path as the sun (ROUTING-ROADMAP M3).
-// lightColor arrives Color::PointLight-processed by the caller; the pi
-// compensation is applied here for the same reason as the sun's.
 void SnowEvaluateLightPBR(SnowMaterialCtx mtl, float3 normalWS, float3 V, float3 L,
 	float3 lightColor, float lightShadow,
 	float2 glintUV, float2 uvDDX, float2 uvDDY, float4 markSpecular,

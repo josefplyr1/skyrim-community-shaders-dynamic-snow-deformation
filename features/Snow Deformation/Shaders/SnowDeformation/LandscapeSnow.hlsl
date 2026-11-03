@@ -1,13 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Landscape snow: the sun cascades' landscape draws, raised onto the ground
-// snow's surface (SnowShell.hlsl in surface-only mode). CS's landscape VS
-// (Utility.hlsl, main renamed) runs per vertex: LS_VSRaise on the draw's own
-// vertices, LS_DS on the vertices LS_HS tessellates. Compiled per VS
-// descriptor with CS's defines.
-
 #ifndef VSHADER
 #	define VSHADER
 #endif
@@ -29,17 +19,12 @@
 #define LS_POS(v) (v).PositionMS
 
 #if defined(RENDER_SHADOWMAP)
-// Shadow maps cast the ground snow: its surface (no edge descent), its
-// visibility (SHELL_CAST_VIS) and, for the cascades, a push away from the
-// light (as Shadows.cpp kCasterDepthPush for the trench patch).
 #	define LS_CASTER
 static const float kLsCasterPush = 0.0008;
 #else
 #	error "landscape snow raises the shadow-map casters only"
 #endif
 
-// Model space is the draw's translate away from absolute world (landscape
-// draws carry no rotation or scale; the CPU checks).
 float3 LsRaise(float3 p, out bool a_raised)
 {
 	float2 gridLocal = p.xy + LsGeometry.xy;
@@ -118,14 +103,11 @@ struct LS_HSConst
 	float Inside : SV_InsideTessFactor;
 };
 
-// Clip position through the drawing pass's own constants (the copied VS b2/b12).
 float4 LsClip(float3 p)
 {
 	return mul(mul(FrameBuffer::CameraViewProj, World), float4(p, 1.0));
 }
 
-// Outside one clip plane at the land and at the fully raised height. Shadow
-// maps pancake z (RENDER_SHADOWMAP_CLAMPED), so only x and y cull there.
 bool LsOffView(float3 p0, float3 p1, float3 p2)
 {
 	const float3 lift = float3(0.0, 0.0, LsGeometry.w);
@@ -159,7 +141,6 @@ LS_HSConst LS_PatchConst(InputPatch<LS_CP, 3> p)
 	o.Inside = 0.0;
 	[branch] if (!off)
 	{
-		// Grid-local xy, camera-relative z off the land (screen cap only).
 		float3 g0 = float3(LS_POS(p[0]).xy + LsGeometry.xy, LS_POS(p[0]).z + LsGeometry.z);
 		float3 g1 = float3(LS_POS(p[1]).xy + LsGeometry.xy, LS_POS(p[1]).z + LsGeometry.z);
 		float3 g2 = float3(LS_POS(p[2]).xy + LsGeometry.xy, LS_POS(p[2]).z + LsGeometry.z);

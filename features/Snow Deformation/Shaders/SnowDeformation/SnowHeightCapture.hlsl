@@ -1,24 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Top-down height capture of snow statics.
-//
-// Captured statics are rasterized from above into R32F world-height maps
-// with MIN/MAX blending (no depth buffer needed; the highest/lowest surface
-// wins in any draw order): object TOPS, object BOTTOMS (together they tell
-// whether a texel's object is grounded or floating), and the snow-layer
-// depth the texel's model class wears; the surface description later snow
-// systems (the trench patch, sheltering, burial mounds) build on.
-//
-// Every target is written through SV_Target0 alone: layer 1's top and
-// negated bottom share one R32G32 target (both MAX), the roads' skin depth is
-// its own pass. Writes to SV_Target1+ were lost nondeterministically on the
-// MRT layout (CODE-NOTES "Height raster on RT0 only").
-//
-// StaticCB layout must match StaticsCB in SnowDeformation.h and StaticCB in
-// SnowStaticsShell.hlsl.
-
 cbuffer StaticCB : register(b1)
 {
 	float4 WorldRow0;
@@ -29,63 +8,49 @@ cbuffer StaticCB : register(b1)
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
 
-	float HasSmoothedNormals;  // layout sync with SnowStaticsShell; stats-only here
+	float HasSmoothedNormals;
 	float RoundedDepth;
 	float VertexCountF;
-	float HasObjectTop;  // layout sync with SnowStaticsShell; unused here
+	float HasObjectTop;
 
-	float DebugSkinId;        // layout sync with SnowStaticsShell; unused here
-	float LegacySkin;         // layout sync with SnowStaticsShell; unused here
-	float padMoundSteepness;  // layout sync with SnowStaticsShell
-	float AlphaTested;  // layout sync with SnowStaticsShell; unused here
+	float DebugSkinId;
+	float LegacySkin;
+	float padMoundSteepness;
+	float AlphaTested;
 
 	float FullCoat;
-	float FadeExempt;           // layout sync with SnowStaticsShell; unused here
-	// >0.5: this draw is a road; RT2.g carries the bit so the patch can own
-	// the column outright.
+	float FadeExempt;
 	float RoadField;
-	float ProjThreshold;     // layout sync with SnowStaticsShell; unused here
-	float ProjNoiseWeight;   // layout sync with SnowStaticsShell; unused here
-	float ParallaxFollow;    // layout sync with SnowStaticsShell; unused here
-	// Class override code, matching the skin VS: 0 = flat classifier,
-	// 1 = force ROUNDED (mountain/cliff family; every PD draw in
-	// authored-relief mode), 2 = force FLAT (plank family). Mirror in
-	// SnowDeformation.h.
+	float ProjThreshold;
+	float ProjNoiseWeight;
+	float ParallaxFollow;
 	float ClassOverride;
-	float ProjNoiseScale;   // layout sync with SnowStaticsShell; unused here
-	float SteepThin;            // layout sync with SnowStaticsShell; unused here
-	float ProjNoiseTiling;    // layout sync with SnowStaticsShell; unused here
-	float ProjPixelEnable;    // layout sync with SnowStaticsShell; unused here
-	float padSkinNormalCopy;  // layout sync with SnowStaticsShell
+	float ProjNoiseScale;
+	float SteepThin;
+	float ProjNoiseTiling;
+	float ProjPixelEnable;
+	float padSkinNormalCopy;
 	float padShellMinNz;
-	// Peel tolerance ("Plane Merge Height" knob): surfaces within this
-	// z-band of a layer's top belong to that layer's plane. Mirror in
-	// SnowStaticsShell.hlsl / SnowDeformation.h.
 	float PeelTol;
 	float SkinSssSeen;
-	float padMeldSk;       // layout sync with SnowStaticsShell
+	float padMeldSk;
 
-	float FarWindowCenterX;  // layout sync with SnowStaticsShell; unused here
-	float FarWindowCenterY;  // layout sync with SnowStaticsShell; unused here
-	float FarHalfExtent;     // layout sync with SnowStaticsShell; unused here
-	float FarRoadDepth;      // layout sync with SnowStaticsShell; unused here
+	float FarWindowCenterX;
+	float FarWindowCenterY;
+	float FarHalfExtent;
+	float FarRoadDepth;
 	float DecalMode;
 
-	float HasSkinMasksCopy;  // layout sync with SnowStaticsShell; unused here
-	float HasPreDecalMasks;  // layout sync with SnowStaticsShell; unused here
-	float EdgeFlankWidth;    // layout sync with SnowStaticsShell; unused here
-	float EdgeCoat;          // layout sync with SnowStaticsShell; unused here
-	float FineHalfExtent;  // layout sync with SnowStaticsShell; unused here
-	float LODBatch;  // layout sync with SnowStaticsShell; unused here
-	float TexturedSnow;  // layout sync with SnowStaticsShell; unused here
+	float HasSkinMasksCopy;
+	float HasPreDecalMasks;
+	float EdgeFlankWidth;
+	float EdgeCoat;
+	float FineHalfExtent;
+	float LODBatch;
+	float TexturedSnow;
 }
 
 #if defined(WATER)
-// Water planes top-down into the terrain window's frame (HeightWindowCenter /
-// HeightHalfExtent carry THAT window here), MAX-blended world z. Same +Y-up
-// mapping as the object raster, so the winding survives whatever cull state
-// the pass inherits; the shell flips the ROW when it reads (the terrain
-// window's rows grow with +Y).
 struct WATER_VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
@@ -126,19 +91,12 @@ struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
-	// x = class layer depth, y = >0.5 when this draw is a road (the PS turns
-	// it into the road's top height).
 	float2 SkinDepth : TEXCOORD1;
 	float2 WorldXY : TEXCOORD2;
-	// World-space normal z: the peel passes reject surfaces that cannot
-	// carry snow (undersides, walls) from owning a layer.
 	float NormalZ : TEXCOORD3;
 };
 
 #ifdef VSHADER
-// Flatness stats (element past the last vertex); the same GPU
-// classification the skin uses, so the skin-depth raster (RT2) reports the
-// class layer depth per texel.
 StructuredBuffer<float4> SmoothedNormals : register(t10);
 
 VS_OUTPUT main(VS_INPUT input)
@@ -149,23 +107,17 @@ VS_OUTPUT main(VS_INPUT input)
 		dot(WorldRow1.xyz, posMS) + WorldRow1.w,
 		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
 
-	// Ortho top-down: world XY window to NDC. +worldY maps to +ndcY, which
-	// rasterizes to texture v=0 at the top; the samplers mirror this.
 	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
 
 	float skinDepth = RoundedDepth;
 	[branch] if (HasSmoothedNormals > 0.5 && ClassOverride < 0.5)
 	{
-		// Same flat condition as the skin VS (divergence-only, with the
-		// same class overrides).
 		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
 		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
 			skinDepth = ObjectsDepth;
 	}
 	[flatten] if (ClassOverride > 1.5)
 		skinDepth = ObjectsDepth;
-	// Only roads carve: zero skin depth makes the patch's texels dead for
-	// everything else.
 	[flatten] if (LegacySkin < 0.5)
 		skinDepth = 0.0;
 
@@ -185,10 +137,6 @@ VS_OUTPUT main(VS_INPUT input)
 #endif
 
 #if defined(PSHADER) && defined(PEEL)
-// The layer-2 peel: re-rasterize the captures keeping only fragments a
-// peel tolerance BELOW this frame's accumulated layer-1 top; MAX blending
-// then yields the next-highest surface per column. The layer-1 cone seed
-// reads it for its plane-continuation test.
 Texture2D<float> Layer1Top : register(t3);
 
 struct PEEL_OUTPUT
@@ -198,11 +146,6 @@ struct PEEL_OUTPUT
 
 PEEL_OUTPUT main(VS_OUTPUT input)
 {
-	// Only up-facing surfaces may OWN a peeled layer. The capture
-	// rasterizes both faces (the bottoms map needs undersides), and a
-	// roof's own underside claiming layer 2 starved the real floor
-	// beneath it of any plane at all - the "no snow under roofs"
-	// remnant. Undersides and walls can never carry snow.
 	[branch] if (input.NormalZ < 0.05)
 		discard;
 	float2 dims;
@@ -218,27 +161,18 @@ PEEL_OUTPUT main(VS_OUTPUT input)
 	return o;
 }
 #elif defined(PSHADER) && defined(TOP_ONLY)
-// The fine and far rasters bind RT0 alone.
 float main(VS_OUTPUT input) : SV_Target0
 {
 	return input.WorldZ;
 }
 #elif defined(PSHADER) && defined(SKIN_DEPTH)
-// Mirror of SnowDeformation.h kNoRoadTop.
 static const float kNoRoadTop = -1000000.0;
 
-// The roads' skin depth, MAX on both channels: x = the snow-layer depth this
-// texel's class wears, y = the highest ROAD surface in the column (kNoRoadTop
-// where no road drew). The patch compares y against the layer-1 top to decide
-// whether the road actually owns the column, rather than merely reaching it.
 float2 main(VS_OUTPUT input) : SV_Target0
 {
 	return float2(input.SkinDepth.x, input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
 }
 #elif defined(PSHADER)
-// Prefix mirror of HeightProcessCB (SnowDeformation.h) - only the terrain
-// window addressing is read here; names carry an H so they cannot clash
-// with StaticCB's.
 cbuffer HeightProcessCB : register(b0)
 {
 	int2 ScrollDeltaH;
@@ -268,18 +202,11 @@ float CaptureTerrainHeight(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// Layer 1, MAX on both channels: x = the object top surface, y = the NEGATED
-// object bottom (max(-z) = -min(z)); the merge negates it back.
 float2 main(VS_OUTPUT input) : SV_Target0
 {
-	// Bottoms accept only genuinely ELEVATED undersides: grounded geometry
-	// (support posts, rocks, low clutter) min-blending into the channel
-	// vetoed the floating-structure shelter test under walkways and roofs,
-	// leaving unmelted snow plateaus beneath them. Grounded fragments write
-	// the bottom-empty sentinel, a no-op once negated under MAX.
 	float terrain = CaptureTerrainHeight(input.WorldXY);
 	float bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
 	return float2(input.WorldZ, -bottom);
 }
 #endif
-#endif  // !WATER
+#endif

@@ -1,76 +1,34 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Voxel occupancy of snow statics (VOLUME-SNOW-PLAN V0).
-//
-// Dominant-axis voxelisation: the GS projects each triangle along its
-// largest normal component, the PS marks every voxel the fragment spans
-// along that axis. The window is a camera-anchored torus (physical =
-// (logical + origin) & (Dim - 1), the deformation map's rule); VoxelScrollCS
-// decays it each frame and clears what scrolled in, the raster resets
-// covered voxels to 1. VoxelSliceCS writes one plane of it for the menu.
-//
-// VoxelCB layout must match VoxelVolumeCB in SnowDeformation.h.
-
 cbuffer VoxelCB : register(b0)
 {
-	// xyz = window origin in voxels (world = voxel * VoxelSize), w = clear all
 	int4 OriginVox;
-	// xyz = this frame's origin minus last frame's, in voxels
 	int4 ScrollDelta;
 	float VoxelSize;
 	float Decay;
 	int padDim;
 	int SliceAxis;
 	int SliceIndex;
-	// >0: the slice is a max over the whole axis (silhouettes), not one plane
 	int SliceXray;
-	// 0 = occupancy, 1 = the snow field, 2 = the field at the threshold
 	int SliceSource;
 	int BlurAxis;
-	// The top-down height window (SnowHeightCapture), for the seed gate's
-	// shelter and sky-openness maps; HalfExtent 0 = no maps, open sky.
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
-	// Seed weight where the column is sheltered (a dusting, not bare)
 	float ShelterDust;
-	// The snow depth in this level's voxels, unfloored: the field crosses
-	// the threshold at the true top, so a depth under a voxel still reads
-	// at height
 	float DepthVox;
-	// Coverage: the field's value at the snow top, and its crossing
 	float FieldThreshold;
-	// Sideways sigma in voxels: the shoulder's width at an edge
 	float RoundSigma;
-	// cos(max slope): the least up-ness a seed's own surface may have
 	float SlopeMinNz;
-	// xyz = this window's centre in voxel units (absolute), w = the bricks'
-	// reach from it in voxels, Chebyshev (the window is a cube, so are its
-	// rings). The centre sits AHEAD of the camera, not on it.
 	float4 CentreVox;
-	// Strength of the sky-openness weighting on the seed, 0-1.
 	float SkyStrength;
-	// >0.5: every brick column is dirty this rebuild
 	float ForceDirty;
-	// How many voxels past a snow column the snow may reach sideways
 	float OverhangVox;
-	// Air voxels a seed needs above it: a member's own inside is not sky
 	float HeadroomVox;
-	// x = the edge noise amplitude in world units, y = its cell size in world
-	// units, z = the field's exponential rate per voxel, w = the overhang in
-	// units
 	float4 EdgeParams;
-	// x = an air neighbour's weight in the sideways average, the rest spare
 	float4 LipParams;
-	// xyz = voxels a side, pow2 each; z may be shorter than x = y (a wide
-	// ring). Every torus mask is per axis.
 	int4 Dims;
 }
 
 struct VS_OUTPUT
 {
-	// Position in voxel units, relative to the window origin.
 	float3 Vox : TEXCOORD0;
 	float3 Normal : TEXCOORD1;
 };
@@ -80,27 +38,16 @@ struct GS_OUTPUT
 	float4 Position : SV_POSITION;
 	float3 Vox : TEXCOORD0;
 	nointerpolation uint Axis : TEXCOORD1;
-	// The surface's up-ness, stored with the voxel: the seed gate reads
-	// it instead of reconstructing a facing from the shell's neighbours,
-	// which was noise on rough walls and blind to undersides.
 	nointerpolation float Nz : TEXCOORD2;
-	// The triangle's plane in voxel space, xyz = geometric normal (unnormalised),
-	// w = its offset: the PS reads the surface's true z in each column it marks.
 	nointerpolation float4 Plane : TEXCOORD3;
-	// 0 = the dominant-axis copy (occupancy), 1 = the top-down copy into
-	// the heightmap, four sub-pixels a voxel.
 	nointerpolation uint Copy : TEXCOORD4;
 	uint Viewport : SV_ViewportArrayIndex;
 };
 
-// Layers the heightmap keeps under the top. Mirrors kVoxelUnderLayers.
 #define VOXEL_UNDER_LAYERS 4
-// BrickFlags bits above the sub-cell mask: any solid voxel in the brick;
-// any snow field in it.
 #define FLAG_OCC 0x100u
 #define FLAG_FIELD 0x200u
 
-// A brick's index in the per-brick buffers (dirty, flags): physical, z-major.
 uint BrickIndex(uint3 physBrick)
 {
 	uint3 bricks = (uint3)Dims.xyz >> 3;
@@ -108,7 +55,6 @@ uint BrickIndex(uint3 physBrick)
 }
 
 #if defined(VSHADER)
-// Prefix mirror of StaticsCB (SnowDeformation.h): only the transform is read.
 cbuffer StaticCB : register(b1)
 {
 	float4 WorldRow0;
@@ -142,9 +88,6 @@ VS_OUTPUT main(VS_INPUT input)
 	float3 gn = cross(tri[1].Vox - tri[0].Vox, tri[2].Vox - tri[0].Vox);
 	float3 n = abs(gn);
 	uint axis = (n.x > n.y && n.x > n.z) ? 0 : (n.y > n.z ? 1 : 2);
-	// The vertex normal's up-ness: it knows a top from an underside, which
-	// a winding-blind facing cannot. The geometric normal only for a mesh
-	// without one.
 	float3 vn = tri[0].Normal + tri[1].Normal + tri[2].Normal;
 	float nz = dot(vn, vn) > 1e-4 ? normalize(vn).z : (dot(gn, gn) > 1e-8 ? normalize(gn).z : 1.0);
 	[unroll] for (int i = 0; i < 3; i++)
@@ -152,8 +95,6 @@ VS_OUTPUT main(VS_INPUT input)
 		float3 v = tri[i].Vox;
 		float2 proj = axis == 0 ? v.yz : (axis == 1 ? v.xz : v.xy);
 		GS_OUTPUT o;
-		// The viewport is Dims.x square, so one pixel is one voxel column;
-		// a projection's z axis uses the top of that range and no more.
 		o.Position = float4(proj * (2.0 / Dims.x) - 1.0, 0.5, 1.0);
 		o.Vox = v;
 		o.Axis = axis;
@@ -164,13 +105,6 @@ VS_OUTPUT main(VS_INPUT input)
 		stream.Append(o);
 	}
 	stream.RestartStrip();
-	// THE HEIGHTMAP COPY: the same triangle top-down, into the second
-	// viewport at four pixels a voxel, where the PS keeps the highest
-	// surface per sub-pixel with an atomic max. Deterministic where the
-	// occupancy's height was a last write (the flicker with Dirty Bricks
-	// off on every ring), and four samples a voxel side where the column
-	// had one - the prefilter a far ring never had (Josef, 2026-09-07).
-	// A vertical face covers nothing from above and is not sent.
 	[branch] if (abs(gn.z) > 0.05 * length(gn))
 	{
 		[unroll] for (int i2 = 0; i2 < 3; i2++)
@@ -192,26 +126,8 @@ VS_OUTPUT main(VS_INPUT input)
 
 #elif defined(PSHADER)
 RWTexture3D<float> Volume : register(u0);
-// The topmost surface over each sub-pixel (four a voxel side), as the bits
-// of (world z + 32768): positive floats order as uints, so a max is a max.
-// The low four bits are the surface's up-ness (0..15 over -1..1, a 0.06 u
-// step of height given up): the max is deterministic, so the seed gate
-// reads the top surface's facing from here and not from the voxel's own
-// nibble, a plain store that whichever fragment landed last won (the
-// two-shape alternation, Josef, 2026-09-11).
 RWTexture2D<uint> HeightMap : register(u2);
-// THE LAYERS UNDER THE TOP: VOXEL_UNDER_LAYERS slices at two sub-pixels a voxel side,
-// slice k the highest up-facing surface a headroom or more below slice
-// k - 1 (the top being slice 0 of the map above), each judged against the
-// layer above AS IT STANDS - last rebuild's, or this one's so far. A layer
-// is never too high: it holds at most the surface that belongs there, and
-// the max raises it to that within a stagger period of the layer above.
-// So a sill under an eave, a porch under a roof under a sill under a roof
-// (Josef 2026-09-24), each has a facing that is a max's too, not the
-// nibble's last write - the residue under cover after the race fix.
 RWTexture2DArray<uint> HeightMapUnder : register(u1);
-// Marked where a layer's value rose, or an empty voxel turns solid: the
-// occupancy is written in place and nothing compares it afterwards.
 RWByteAddressBuffer DirtyBricks : register(u3);
 RWByteAddressBuffer BrickFlags : register(u4);
 
@@ -230,9 +146,6 @@ void main(GS_OUTPUT input)
 		uint was;
 		InterlockedMax(HeightMap[(uint2)sub], key, was);
 		bool rose = key > was;
-		// Down the layers: the first this surface is not a full headroom
-		// below takes it (its max keeps the highest), an empty one too. Up-
-		// facing only: an underside never seeds.
 		[branch] if (above != 0u && nzq > 7u && worldZ < asfloat(above & ~0xFu) - 32768.0 - gap)
 		{
 			int mask2 = Dims.x * 2 - 1;
@@ -255,16 +168,12 @@ void main(GS_OUTPUT input)
 		}
 		return;
 	}
-	// Extent of the fragment along the projection axis, from the screen
-	// derivatives: closes the crack a steep triangle leaves between voxels.
 	float d = input.Axis == 0 ? vox.x : (input.Axis == 1 ? vox.y : vox.z);
 	float spread = 0.5 * (abs(ddx(d)) + abs(ddy(d)));
 	int lo = (int)floor(d - spread);
 	int hi = min((int)floor(d + spread), lo + 3);
 	int3 base = (int3)floor(vox);
 	int3 mask = Dims.xyz - 1;
-	// Packed: high nibble = up-ness (-1..1 over 0..15), low nibble = life,
-	// 15 fresh. Any non-zero value is solid; the scroll counts life down.
 	float packed = (float)(nzq * 16u + 15u) / 255.0;
 	for (int k = lo; k <= hi; k++) {
 		int3 p = base;
@@ -277,8 +186,6 @@ void main(GS_OUTPUT input)
 		if (any(p < 0) || any(p >= Dims.xyz))
 			continue;
 		uint3 phys = (uint3)((p + OriginVox.xyz) & mask);
-		// IN PLACE: a voxel that was empty marks its brick dirty and
-		// occupied; a second fragment landing on it only over-marks.
 		float was = Volume[phys];
 		Volume[phys] = packed;
 		[branch] if (was <= 0.0)
@@ -292,41 +199,26 @@ void main(GS_OUTPUT input)
 
 #else
 Texture3D<float> VolumeIn : register(t0);
-// HeightMapProcessCS CombineCS mask: x = suppress (doors), y = melt (shelter, fires)
 Texture2D<float2> ShelterMask : register(t1);
-// ObjectSkyOpenCS: 1 = open sky
 Texture2D<float> SkyOpen : register(t2);
 Texture3D<float> FieldIn : register(t3);
-// The sideways blur's solid blocker: this frame's occupancy.
 Texture3D<float> OccupancyIn : register(t4);
-// The capture's heightmap: the topmost surface over each sub-pixel, four a
-// voxel side, as the bits of (world z + 32768) with the surface's up-ness
-// in the low four bits (see the capture PS); 0 = nothing captured.
 Texture2D<uint> HeightMapIn : register(t10);
-// The layers under the top, two sub-pixels a voxel side (the capture PS).
 Texture2DArray<uint> HeightMapUnderIn : register(t11);
 RWTexture2D<uint> HeightMapOut : register(u8);
 RWTexture2DArray<uint> HeightMapUnderOut : register(u9);
 RWTexture3D<float> VolumeOut : register(u0);
 RWTexture2D<float> SliceOut : register(u1);
-// Occupied-voxel count for the menu: one atomic per group, not per thread.
 RWByteAddressBuffer OccupancyCount : register(u2);
 
 groupshared uint gOccupied;
 
-// ---- Dirty bricks. Physical throughout: the window origin snaps to whole
-// bricks, so a physical brick is exactly one logical brick, and a scroll
-// moves nothing - the slots it reuses are simply marked. ----
-// A uint per brick, 1 = its field must be rebuilt this rebuild.
 RWByteAddressBuffer DirtyBricks : register(u5);
-// A uint per brick: its 8-bit sub-cell crossing mask, kept between rebuilds.
 RWByteAddressBuffer BrickFlags : register(u6);
-// Dispatch args for the partial passes, then three brick-column lists.
 RWByteAddressBuffer DirtyLists : register(u7);
 ByteAddressBuffer DirtyBricksIn : register(t6);
 ByteAddressBuffer DirtyListsIn : register(t7);
 ByteAddressBuffer BrickFlagsIn : register(t8);
-// Mirrors kVoxelListArgs* / kVoxelListBytes in SnowDeformation.h.
 #define LIST_ARGS_SEED 0
 #define LIST_ARGS_Z 12
 #define LIST_ARGS_X 24
@@ -342,19 +234,9 @@ uint2 ListColumn(uint offset, uint index)
 	return uint2(e & 0xFFFFu, e >> 16);
 }
 
-// ---- Active bricks. Bits above the sub-cell mask in BrickFlags: the
-// compare pass keeps OCC (any solid voxel in the brick) for every brick,
-// the Z sweep keeps FIELD (any snow field in it) for the columns it ran.
-// A dirty column is still a 32-brick stack of mostly air; a pass whose
-// inputs cannot reach a brick from any FIELD brick skips its loads and
-// writes the zeros its persistent outputs need. ----
 groupshared uint gNear;
 groupshared uint gZBrick[32];
 
-// Any brick within (rx, ry, rz) of `brick` with `bit` set - cooperative
-// loads through the UAV (the flags pass writes the same buffer), so every
-// thread of the group must call it. Physical wrap is the logical far edge:
-// conservative, never wrong.
 bool BricksNear(uint3 brick, int rx, int ry, int rz, uint bit, uint gi)
 {
 	if (gi == 0)
@@ -375,10 +257,6 @@ bool BricksNear(uint3 brick, int rx, int ry, int rz, uint bit, uint gi)
 	return gNear != 0u;
 }
 
-// On a whole rebuild (the 900-rebuild refresh, Dirty Bricks off): every
-// brick's OCC bit from the occupancy itself. Between those the raster, the
-// decay and the scroll keep it as they write - the compare against a copy
-// of the last rebuild's occupancy went with the copy (2026-09-24).
 groupshared uint gSolid;
 [numthreads(8, 8, 8)] void VoxelOccFlagsCS(uint3 p
 										   : SV_DispatchThreadID, uint gi
@@ -399,15 +277,6 @@ groupshared uint gSolid;
 	}
 }
 
-// One group. A brick column is dirty (D0) if any brick in its stack is; the
-// seed and Z passes run there, Z being per column anyway. X reads Z's
-// result up to 9 voxels aside, so it runs on D3; Y reads X's result, which
-// exists only where X ran, and Y's result is read by the flags a voxel
-// aside. So: D1 = D0 + 2 bricks in x; D2 = D1 + 2 in y (Y); D3 = D2 + 2 in
-// y + 1 in x (X, and the flags). Each list is the dispatch's group count.
-// Per 32 x 32 tile of brick columns, with a six-column halo loaded from
-// the torus (wrapping over-dilates at the window border, which is safe):
-// D3's reach is 3 in x and 4 in y. Two arrays of 44^2 alternate.
 #define COL_TILE 32
 #define COL_HALO 6
 #define COL_W 44
@@ -437,7 +306,6 @@ groupshared uint gColB[COL_W * COL_W];
 	GroupMemoryBarrierWithGroupSync();
 	uint own = (tid.y + COL_HALO) * COL_W + (tid.x + COL_HALO);
 	uint d0 = gColA[own];
-	// D1 = D0 + 2 in x -> B
 	[loop] for (uint e1 = li; e1 < (uint)(COL_W * COL_W); e1 += 1024u)
 	{
 		int x = (int)(e1 % (uint)COL_W);
@@ -451,7 +319,6 @@ groupshared uint gColB[COL_W * COL_W];
 		gColB[e1] = d;
 	}
 	GroupMemoryBarrierWithGroupSync();
-	// D2 = D1 + 2 in y -> A
 	[loop] for (uint e2 = li; e2 < (uint)(COL_W * COL_W); e2 += 1024u)
 	{
 		int y = (int)(e2 / (uint)COL_W);
@@ -466,7 +333,6 @@ groupshared uint gColB[COL_W * COL_W];
 	}
 	GroupMemoryBarrierWithGroupSync();
 	uint d2 = gColA[own];
-	// D3 = D2 + 2 in y -> B, then + 1 in x, read for the own column only
 	[loop] for (uint e3 = li; e3 < (uint)(COL_W * COL_W); e3 += 1024u)
 	{
 		int y = (int)(e3 / (uint)COL_W);
@@ -512,7 +378,6 @@ uint3 Phys(int3 logical)
 	return (uint3)((logical + OriginVox.xyz) & (Dims.xyz - 1));
 }
 
-// PatchTexel's mapping (SnowStaticsShell): +worldY is texture v = 0.
 bool InWindow(float2 worldXY)
 {
 	if (HeightHalfExtent <= 0.0)
@@ -562,30 +427,17 @@ float2 ShelterAt(float2 worldXY)
 	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
-// The up-ness the raster stored with the voxel (see the capture PS).
-// Two rounds of reconstructing a facing from the shell's neighbours - the
-// empty-neighbour direction, then the seed layer's rise - were noise on a
-// rough wall and blind to an underside; the mesh knows both. A plain
-// store, so where two faces share a voxel it is whichever landed last:
-// the seed gate reads it only for a voxel with something captured above
-// it (sheltered), where the heightmap cannot speak.
 float OccNz(float v)
 {
 	uint q = (uint)round(v * 255.0);
 	return (float)(q >> 4) / 15.0 * 2.0 - 1.0;
 }
 
-// Snow seeds: occupied voxels facing up enough, with open air above, and
-// weighted by the column's sky openness and shelter the way the 2D
-// pipeline weights the skin, doors suppressing.
-// Indirect over the D0 column list: group x = list entry, group y = brick z.
 [numthreads(8, 8, 8)] void VoxelSeedCS(uint3 gid
 									   : SV_GroupID, uint3 tid
 									   : SV_GroupThreadID) {
 	uint2 col = ListColumn(LIST0_OFF, gid.x);
 	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
-	// A seed is an occupied voxel: a brick with none has none. Zero, since
-	// the Z sweep reads this volume through the whole column.
 	uint gi = tid.x + tid.y * 8 + tid.z * 64;
 	[branch] if (!BricksNear(uint3(col, gid.y), 0, 0, 0, FLAG_OCC, gi))
 	{
@@ -596,9 +448,6 @@ float OccNz(float v)
 	int3 logical = ((int3)p - OriginVox.xyz) & mask;
 	float occ = VolumeIn[p];
 	float seed = 0.0;
-	// Open air above, HeadroomVox deep. The underside shell of a roof or a
-	// beam has one air voxel above it - the member's own inside - and its
-	// seeded snow grew out through the eave as a fringe (Josef, 2026-09-07).
 	bool open = occ > 0.0;
 	int headroom = (int)HeadroomVox;
 	[loop] for (int k = 1; k <= headroom && open; k++)
@@ -608,11 +457,6 @@ float OccNz(float v)
 	}
 	[branch] if (open)
 	{
-		// THE FACING, from the heightmap where this voxel is the column's
-		// top: nothing captured above it, so the topmost samples are this
-		// surface, and their up-ness is a max's, the same every rebuild. A
-		// voxel with a surface over it (a sill under an eave) keeps the
-		// raster's own nibble. An underside is nz -1 and never seeds.
 		uint2 hb = p.xy * 4;
 		float hmax = -1.0e4;
 		uint keys[16];
@@ -643,10 +487,6 @@ float OccNz(float v)
 		}
 		else
 		{
-			// UNDER COVER: the layer holding this voxel's top, among those under
-			// the top (four samples a voxel each). A surface below the last
-			// layer, or a member whose top no layer's columns carry, still reads
-			// the nibble.
 			uint2 hb2 = p.xy * 2;
 			float h2max = -1.0e4;
 			uint keys2[4 * VOXEL_UNDER_LAYERS];
@@ -692,33 +532,12 @@ float OccNz(float v)
 	VolumeOut[p] = seed;
 }
 
-// The field, in three passes over logical space (past the window edge is
-// empty): Z, then X, then Y.
-//
-// Z IS A COLUMN SWEEP, bottom to top, one thread per column. A voxel takes
-// the seed of the first solid beneath it - nothing past that solid, nothing
-// from above, so no seed reaches under the surface it sits on (no snow
-// under a beam, a rail or an eave, however thin the member).
-//
-// THE FIELD IS A RAMP ABOUT THE SNOW TOP, not a gaussian off the voxel
-// centre: 0.5 + (top - z) / 2 over a voxel either side, top = the surface's
-// height within its voxel (the raster's) plus the depth. Between the two
-// centres that bracket it the ramp is linear, so the draw's interpolation
-// puts the crossing AT the top, on any ring - the gaussian needed a sigma
-// of at least a voxel to be visible at all, and on the 32-unit ring that
-// made a 12-unit layer a 78-unit lump, and the hand-over between rings a
-// gap with a shadow (Josef, 2026-09-07). The seed weight scales the depth.
-// The top never sits under the voxel centre, so the crossing is always
-// between this centre and the next, never under the surface.
-// Indirect over the D0 column list, one group per entry.
 [numthreads(8, 8, 1)] void VoxelBlurZCS(uint3 gid
 										: SV_GroupID, uint3 tid
 										: SV_GroupThreadID) {
 	uint2 col = ListColumn(LIST0_OFF, gid.x);
 	uint2 p = col * 8 + tid.xy;
 	uint gi = tid.x + tid.y * 8;
-	// FIELD per brick of this stack, for the passes after: set or cleared,
-	// since the sweep rewrites the whole column.
 	if (gi < 32u)
 		gZBrick[gi] = 0u;
 	GroupMemoryBarrierWithGroupSync();
@@ -728,12 +547,6 @@ float OccNz(float v)
 	float top = -1.0e4;
 	bool prevSolid = false;
 	int runStart = 0;
-	// THE COLUMN'S SURFACE, from the capture's heightmap: sixteen sub-samples
-	// of the topmost surface over this column, a max rather than a last
-	// write, four a voxel side. Their mean inside a seed's solid run is the
-	// surface prefiltered over the column - the average every voxel LOD
-	// takes and the point sample never did (Josef's magenta bands,
-	// 2026-09-07). Read once; each seed takes the ones in its own run.
 	float hs[16];
 	uint2 hb = p * 4;
 	[unroll] for (int i = 0; i < 16; i++)
@@ -741,15 +554,6 @@ float OccNz(float v)
 		uint key = HeightMapIn[hb + uint2(i & 3, i >> 2)];
 		hs[i] = key != 0u ? (asfloat(key & ~0xFu) - 32768.0) / VoxelSize - (float)OriginVox.z : -1.0e4;
 	}
-	// THE FIELD IS EXPONENTIAL IN HEIGHT: Coverage * exp(rate * (top - z)),
-	// so it crosses Coverage AT the top on every ring (near-linear over the
-	// two centres that bracket the top while the rate stays under ~0.35 a
-	// voxel, which the C++ side caps), and an air neighbour that dilutes it
-	// by k lowers the crossing by ln(1/k) / rate - the gaussian's own log
-	// response, which is what made its domes round and its lips long, and
-	// what the linear ramp lost (Josef, 2026-09-07: "rectangular", a lifted
-	// plateau). The rate is ln 2 over the Rounding in voxels: a half-air
-	// neighbourhood drops the snow by the Rounding.
 	float rate = EdgeParams.z;
 	[loop] for (int z = 0; z < Dims.z; z++)
 	{
@@ -759,16 +563,10 @@ float OccNz(float v)
 		float zc = (float)z + 0.5;
 		[flatten] if (solid && !prevSolid)
 			runStart = z;
-		// A solid that is no seed (an underside, a wall's inside) still cuts
-		// the field: nothing grows through it from below.
 		[flatten] if (solid)
 			carry = s;
 		[branch] if (solid && s > 0.01)
 		{
-			// The surface: the mean of the sub-samples inside this run - the
-			// run is the object here and the surface is in it. A seed under
-			// an overhang sees only the overhang's samples, above its window,
-			// and keeps the capture's own per-voxel height.
 			float sum = 0.0;
 			float n = 0.0;
 			[unroll] for (int k = 0; k < 16; k++)
@@ -780,21 +578,8 @@ float OccNz(float v)
 					n += 1.0;
 				}
 			}
-			// No sub-sample in the run (a seed under an overhang, whose
-			// samples are the overhang's): the voxel's centre. The raster's
-			// per-voxel height was a plain store, racy, and is gone.
 			float surf = n > 0.0 ? sum / n : (float)z + 0.5;
-			// THE FLOOR UNDER THE TOP. A crossing needs a sample over the
-			// threshold beneath it, and only the run's own voxels may carry
-			// one - never the air under a thin member. So the top may sit
-			// down to the run's bottom centre, and the run beneath this voxel
-			// is refilled with the field: the old one-voxel floor raised a
-			// crack-closing seed by up to a voxel on the outer rings (the
-			// sawtooth Depth 64 made vanish), and the one-voxel deferral
-			// after it still clamped a spread of two or three.
 			top = max(surf + DepthVox * s, (float)runStart + 0.52);
-			// Six at most: the spread caps at three voxels over the surface and
-			// three more carry the crossing's sample and the cubic's support.
 			int zFrom = max(runStart, (int)floor(top) - 3);
 			[unroll] for (int q = 1; q <= 6; q++)
 			{
@@ -814,10 +599,6 @@ float OccNz(float v)
 		[flatten] if (carry > 0.01)
 		{
 			f = saturate(FieldThreshold * exp(rate * (top - zc)));
-			// The support epsilon (one R8 step, under everything's threshold):
-			// for a few voxels over its top a snow column still says "mine,
-			// nothing at this height", so the sideways passes average it
-			// against a taller neighbour instead of ignoring it.
 			[flatten] if (zc < top + 4.0)
 				f = max(f, 1.0 / 255.0);
 		}
@@ -838,10 +619,8 @@ float OccNz(float v)
 	}
 }
 
-// Support for the overhang cap, built with the sideways passes.
 RWTexture3D<float> SupportOut : register(u4);
 Texture3D<float> SupportIn : register(t5);
-// World-anchored value noise in [-1, 1] for the snow's edge.
 float EdgeHash(float2 c)
 {
 	return frac(sin(dot(c, float2(127.1, 311.7))) * 43758.5453);
@@ -859,34 +638,12 @@ float EdgeValueNoise(float2 q)
 	return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 2.0 - 1.0;
 }
 
-// Two octaves, the second off-axis: one octave of value noise reads as a
-// grid of blobs (Josef, 2026-09-07: "too patterned").
 float EdgeNoise(float2 q)
 {
 	float2 q2 = float2(q.x * 2.3 + q.y * 1.1, q.y * 2.7 - q.x * 0.9) + 17.3;
 	return 0.65 * EdgeValueNoise(q) + 0.35 * EdgeValueNoise(q2);
 }
 
-// SIDEWAYS IS A NORMALISED AVERAGE THAT STOPS AT SOLID, with an overhang
-// cap on top. The average over RoundSigma is the shoulder: a slab's inside
-// stays at 1, its rim falls to a half, so the surface rounds off over the
-// kernel's width toward the edge, and a narrow member carries less - snow
-// on a post is a small cap, as it is. (A max kept every lone seed at full
-// height: the 20-u spikes and the fringe of teeth Josef saw.) Normalised
-// over what was reached, so snow piles against a wall instead of thinning
-// beside it; walking outward it stops at the first occupied voxel, so a
-// step riser or a wall blocks one plane's snow from melding into the next.
-//
-// THE CAP is the Chebyshev distance to the nearest column with snow, built
-// separably: X stores its 1D distance in Support, Y takes min over j of
-// max(dx, |j|), and the field is cut past OverhangVox with a one-voxel
-// ramp. So the shoulder's width and the reach past an edge are two
-// settings: deep, rounded snow that still stops at the step's edge.
-// Indirect: X over the D3 column list, Y over D2.
-// A column's top in logical voxels, from the capture's heightmap: the mean
-// of the four diagonal sub-samples that hold a key. No key at all reads as
-// infinitely high, so a solid with no top-down capture (an open-topped
-// board) still blocks.
 float ColumnTop(uint2 ph)
 {
 	uint2 hb = ph * 4;
@@ -912,12 +669,6 @@ float ColumnTop(uint2 ph)
 	uint3 p = uint3(col.x * 8 + tid.x, col.y * 8 + tid.y, gid.y * 8 + tid.z);
 	uint gi = tid.x + tid.y * 8 + tid.z * 64;
 	uint3 brick = uint3(col, gid.y);
-	// X's output is non-zero only within 2 bricks (9 voxels) in x of a
-	// FIELD brick; Y reads it, and the support, up to 2 bricks in y from
-	// where ITS output can be non-zero - within 2 in x and 2 in y of FIELD.
-	// So X computes within (2, 0), writes the zero and the "no support"
-	// distance within (2, 4), and skips the rest; Y computes within (2, 2)
-	// and zeroes the rest, the field being persistent.
 	[branch] if (alongY)
 	{
 		[branch] if (!BricksNear(brick, 2, 2, 0, FLAG_FIELD, gi))
@@ -928,8 +679,6 @@ float ColumnTop(uint2 ph)
 	}
 	else
 	{
-		// Both lookups unconditionally: a group sync inside a branch on
-		// the first one's result is X4026 (fxc cannot see it is uniform).
 		bool nearXY = BricksNear(brick, 2, 4, 0, FLAG_FIELD, gi);
 		bool nearX = BricksNear(brick, 2, 0, 0, FLAG_FIELD, gi);
 		[branch] if (!nearX)
@@ -949,24 +698,12 @@ float ColumnTop(uint2 ph)
 	float invTwoS2 = 0.5 / (sigma * sigma);
 	int reach = (int)OverhangVox + 1;
 	int span = min(max((int)ceil(sigma * 2.5), reach), 9);
-	// DILUTION IS THE SHAPE. An air neighbour weighs AirWeight (1 on rings
-	// whose voxel is small against the Rounding, 0 on the far ones): where
-	// it votes, the field beside an edge is diluted and the exponential
-	// turns that into a smooth, log-shaped drop - the dome and the lip;
-	// where it does not, a far ring's rim keeps its full slab instead of
-	// eroding a whole voxel at every edge. Snow columns (the sweep's
-	// epsilon included) always vote, so a lone post keeps its cap. The
-	// weights run out to the overhang, so a lip can reach it.
 	float airWeight = LipParams.x;
 	float v0 = VolumeIn[p];
 	float sum = v0;
 	float wsum = v0 > 0.0 ? 1.0 : airWeight;
 	bool anySnow = v0 > 0.0;
 	float dist = alongY ? round(SupportIn[p] * 8.0) : (v0 > 0.0 ? 0.0 : (float)reach);
-	// A solid neighbour blocks only as a RISER: its column's top more than
-	// 1.5 voxels over this voxel's centre. A solid within that is the same
-	// slope one voxel on and is averaged through; stopping at every solid
-	// terraced a slope at each whole-voxel rise (2026-09-11).
 	float zc = (float)logical.z + 0.5;
 	[unroll] for (int dir = -1; dir <= 1; dir += 2)
 	{
@@ -997,14 +734,9 @@ float ColumnTop(uint2 ph)
 	float avg = anySnow ? max(sum / max(wsum, 1e-6), 1.0 / 255.0) : 0.0;
 	[branch] if (alongY)
 	{
-		// The overhang: cut one voxel past it, the cut wandering with a
-		// world-anchored noise that also raises and lowers the lip - and
-		// ONLY the lip: inside the edge (dist 0) neither term reaches.
 		float2 worldXY = ((float2)(logical.xy + OriginVox.xy) + 0.5) * VoxelSize;
 		float n = EdgeNoise(worldXY / max(EdgeParams.y, 1.0));
 		float dU = dist * VoxelSize - n * EdgeParams.x;
-		// A snow column (dist 0) is never cut: with an amplitude past the
-		// Overhang the noise reached inside the edge (Josef, 2026-09-07).
 		float cut = dist > 0.5 ? saturate((EdgeParams.w + VoxelSize - dU) / VoxelSize) : 1.0;
 		float wobble = 1.0 + 0.35 * n * saturate(dist);
 		VolumeOut[p] = avg * wobble * cut;
@@ -1016,19 +748,8 @@ float ColumnTop(uint2 ph)
 	}
 }
 
-// V1b: the draw's brick list. One thread per 8^3 brick, listed when the
-// threshold crosses inside its one-voxel-dilated neighbourhood (a crossing
-// between two bricks' voxel centres lands in either, so both must draw)
-// and it lies within the draw's reach. The append counter is the instance
-// count.
 AppendStructuredBuffer<uint> BrickList : register(u3);
 
-// The flags: per PHYSICAL brick, its 8-bit sub-cell crossing mask, kept
-// between rebuilds and recomputed only on the D3 column list (indirect, one
-// group per brick, 512 threads over the 1000 dilated voxels). Per 4^3
-// sub-cell (bit = sx | sy << 1 | sz << 2): a crossing inside its own one-
-// voxel-dilated range; a voxel at local 3 or 4 on an axis is in both of
-// that axis's sub-cells. The draw's march skips sub-cells with no bit.
 groupshared uint gAnyIn;
 groupshared uint gAllIn;
 [numthreads(8, 8, 8)] void VoxelBrickFlagsCS(uint3 gid
@@ -1043,10 +764,6 @@ groupshared uint gAllIn;
 	uint2 col = ListColumn(LIST3_OFF, gid.x);
 	uint3 phys = uint3(col, gid.y);
 	int3 bricks = Dims.xyz >> 3;
-	// The field (Y's output) is non-zero within 2 bricks in x and y of a
-	// FIELD brick, and the crossing test reads a voxel past the brick: a
-	// brick beyond (3, 3, 1) of any FIELD brick has no crossing - its mask
-	// is cleared without the loads.
 	[branch] if (!BricksNear(phys, 3, 3, 1, FLAG_FIELD, gi))
 	{
 		if (gi == 0)
@@ -1068,7 +785,6 @@ groupshared uint gAllIn;
 			InterlockedAnd(gAllIn, ~cells);
 	}
 	GroupMemoryBarrierWithGroupSync();
-	// The mask only; OCC and FIELD above it belong to the other passes.
 	if (gi == 0)
 	{
 		uint idx = BrickIndex(phys) * 4;
@@ -1077,11 +793,6 @@ groupshared uint gAllIn;
 	}
 }
 
-// The draw list, every rebuild: each flagged physical brick in reach, as a
-// LOGICAL brick for the draw VS. Chebyshev: the reach is a cube, as the
-// rings are. (A radial reach against a cubic hole left the corners of every
-// ring to nobody - the borders Josef saw, 2026-09-07.) Half a brick of
-// slack. The hole for the finer level is cut in the draw VS, per frame.
 [numthreads(8, 8, 8)] void VoxelBrickListCS(uint3 b
 											: SV_DispatchThreadID) {
 	int3 bricks = Dims.xyz >> 3;
@@ -1093,14 +804,12 @@ groupshared uint gAllIn;
 	int3 logical = ((int3)b - (OriginVox.xyz >> 3)) & (bricks - 1);
 	float3 centre = (float3)(logical * 8 + OriginVox.xyz) + 4.0;
 	float3 fromCentre = abs(centre - CentreVox.xyz);
-	// The reach is the window's shape: a wide ring reaches less in z.
 	float3 reach = CentreVox.w * float3(1.0, 1.0, (float)Dims.z / (float)Dims.x);
 	if (any(fromCentre - 4.0 > reach))
 		return;
 	BrickList.Append((uint)logical.x | ((uint)logical.y << 8) | ((uint)logical.z << 16) | (mask << 24));
 }
 
-// Single return: an early return inside a branch reads as X4000 to fxc.
 float SliceRead(int3 logical)
 {
 	uint3 ph = Phys(logical);
@@ -1110,16 +819,6 @@ float SliceRead(int3 logical)
 	return SliceSource == 0 ? occ : (SliceSource == 1 ? f : cut);
 }
 
-// Physical voxels never move; the origin does. A voxel whose logical
-// position was inside last frame's window keeps its value, decayed; one
-// that scrolled in is cleared.
-// THE WINDOW MOVES IN PLACE. A physical slot is one world voxel until the
-// window has moved a whole extent past it, so a move copies nothing: the
-// slots it brings in from the far side hold the old world and are zeroed,
-// marked dirty and unoccupied - one brick-aligned slab per moved axis
-// (ScrollDelta.w = the axis this dispatch covers, thread x along it; 3 =
-// every slot, a clear). The copy of every voxel every rebuild was the
-// volume's largest standing cost (2026-09-24).
 [numthreads(8, 8, 8)] void VoxelScrollCS(uint3 tid
 										 : SV_DispatchThreadID, uint gi
 										 : SV_GroupIndex) {
@@ -1139,8 +838,6 @@ float SliceRead(int3 logical)
 		return;
 	uint3 ph = Phys(logical);
 	VolumeOut[ph] = 0.0;
-	// The heightmap holds absolute z, so only an XY move (or a clear) retires
-	// a column's sub-pixels; one thread per column does it.
 	[branch] if (axis != 2 && logical.z == 0)
 	{
 		uint2 hb = ph.xy * 4;
@@ -1150,7 +847,6 @@ float SliceRead(int3 logical)
 		[unroll] for (int j = 0; j < 4 * VOXEL_UNDER_LAYERS; j++)
 			HeightMapUnderOut[uint3(hb2 + uint2(j & 1, (j >> 1) & 1), j >> 2)] = 0u;
 	}
-	// The group is one brick: the slabs and the origin are brick-aligned.
 	if (gi == 0)
 	{
 		uint idx = BrickIndex(ph >> 3) * 4;
@@ -1159,10 +855,6 @@ float SliceRead(int3 logical)
 	}
 }
 
-// THE MEMORY TICK, in place: on a tick rebuild the life nibble counts down
-// over the bricks that hold anything, one group a brick, the rest leaving
-// on their flag. A voxel that expires marks its brick dirty; OCC follows
-// what is left. Level 0's tick also counts the occupied voxels for the menu.
 groupshared uint gTick;
 groupshared uint gExpired;
 [numthreads(8, 8, 8)] void VoxelDecayCS(uint3 p
@@ -1213,13 +905,8 @@ groupshared uint gExpired;
 	}
 }
 
-// One plane of the window for the menu, world-aligned: image top is north
-// (axis 0) or up (axes 1 and 2). X-ray: the max over the whole fixed axis,
-// so objects read as silhouettes.
 [numthreads(8, 8, 1)] void VoxelSliceCS(uint3 id
 										: SV_DispatchThreadID) {
-	// The image's axes: (x, y), (x, z) or (y, z) of the window; the rest of
-	// the texture is cleared here rather than by the CPU.
 	int2 img = SliceAxis == 0 ? Dims.xy : (SliceAxis == 1 ? int2(Dims.x, Dims.z) : int2(Dims.y, Dims.z));
 	int fixedDim = SliceAxis == 0 ? Dims.z : (SliceAxis == 1 ? Dims.y : Dims.x);
 	if (any(id.xy >= (uint2)img))

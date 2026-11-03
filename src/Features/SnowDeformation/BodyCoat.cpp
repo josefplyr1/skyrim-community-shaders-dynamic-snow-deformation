@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/AlphaBuild.h"
 
@@ -16,14 +12,8 @@
 
 #include <bitset>
 
-// Snow on bodies (MD plans/BODY-SNOW-PLAN.md): R0's probes and S1's store and
-// mapping. Rationale in CODE-NOTES.md, "Snow on bodies".
-
 namespace
 {
-	// Coat shader keys (vertex << 32 | pixel) this and earlier sessions had to
-	// compile on demand, kept beside SettingsUser.json so a ShaderCache clear
-	// leaves them; LoadShaders queues them with the game's own.
 	std::mutex coatKeyLock;
 	std::set<uint64_t> coatKeys;
 	bool coatKeysDirty = false;
@@ -33,90 +23,41 @@ namespace
 		return Util::PathHelpers::GetCommunityShaderPath() / "SnowBodyCoatShaders.txt";
 	}
 
-	// The shader's speck fit (SnowLighting.hlsli kCoatDotRank, kCoatSpeckMax):
-	// a share q of the balls on covers 1 - e^-L, where q = L (x + y L).
 	constexpr float kSpeckRank[2] = { 0.9212f, -0.0764f };
 	constexpr float kSpeckMax = 0.5f;
 
 	constexpr uint32_t kDumpLinesMax = 900;
-	// S1's cadence (estimates): the tier is picked every kPickFrames, a bare
-	// actor out of it keeps its slots kKeepFrames past its last pick, its 3D is
-	// walked again every kRewalkFrames (staggered by form ID), and at most
-	// kWalksPerFrame walks run in one frame.
 	constexpr uint32_t kPickFrames = 30;
 	constexpr uint32_t kKeepFrames = 120;
 	constexpr uint32_t kRewalkFrames = 300;
 	constexpr uint32_t kWalksPerFrame = 4;
-	// Round 8 (section 2.7, estimates): a coat whose actor's 3D is gone waits
-	// kGoneSeconds for it (a load door, a follower coming through after the
-	// player), a teammate's as long as it lives. An actor waiting for a slot
-	// takes one from an actor out of the tier, a bare one, or one kEvictRatio as
-	// far away.
 	constexpr double kGoneSeconds = 10.0;
 	constexpr float kEvictRatio = 1.5f;
-	// Round 8 (estimates): one first seen indoors within kDoorReach of a door to
-	// the outside, kResidentSeconds or more after the player came in, came in
-	// from outside; a door's arrival marker stands a step inside it, and the
-	// residents' 3D is in by then.
 	constexpr float kDoorReach = 256.0f;
 	constexpr double kResidentSeconds = 3.0;
-	// A draw without a record walks its actor again, at most this often.
 	constexpr uint32_t kMissFrames = 10;
-	// S3's cadence (section 2.2, estimates): the player every kWritePlayerFrames,
-	// at most kWritesPerFrame actors' coat passes a frame, the rest in turn.
-	// Round 4 halved both for the update's cost: the growth integrates the time
-	// between updates, so the coat comes out the same.
 	constexpr uint32_t kWritePlayerFrames = 4;
 	constexpr uint32_t kWritesPerFrame = 2;
-	// Round 2: the time between an actor's updates builds its coat, counted up
-	// to kWriteGapMax (estimate: past a turn of the rotation at a low frame
-	// rate). The look draws a stored contact of kCoatContactFront as a full coat
-	// (SnowLighting.hlsli kCoatSpeckFront).
 	constexpr float kWriteGapMax = 1.0f;
 	constexpr float kCoatContactFront = 0.5f;
-	// Round 4: each due actor's snow-top tile, kCoatTileDim nodes a side
-	// (SnowContactCapture.hlsl), stacked in rows for up to kCoatTiles actors.
 	constexpr uint32_t kCoatTileDim = 64;
 	constexpr uint32_t kCoatTiles = 4;
 	static_assert(kWritesPerFrame <= kCoatTiles);
-	// Round 10: the writer's two scratch volumes hold only the slots a frame's
-	// due actors draw into, not the whole atlas: four actors a frame, a body and
-	// a component each (estimate). A draw past them waits for the next update.
 	constexpr uint32_t kCoatScratchSlots = 8;
-	// Round 3: Snow Climate's moist snow (ClimateStickiness). Contact snow holds
-	// its full share of lumps from here up, drier snow fewer, as grains instead.
 	constexpr float kCoatMoistStickiness = 0.7f;
-	// S4 (section 2.5): a full coat in atlas levels; contact draws full at
-	// kCoatContactFront, snowfall at 1.
 	constexpr float kCoatFullLevels[2] = { kCoatContactFront * 255.0f, 255.0f };
-	// Packed contact snow sheds half of what a jolt knocks off loose snow (estimate).
 	constexpr float kCoatPackedShed = 0.5f;
-	// Slots that only fade resolve about twice a second (section 2.2), at once
-	// when one owes kFadeSoon levels (a fire's melt).
 	constexpr float kFadeGap = 0.5f;
 	constexpr float kFadeSoon = 8.0f;
-	// A frame that brings this many game hours is a wait, a sleep or a fast travel.
 	constexpr float kJumpHours = 0.25f;
-	// After an equipment change, walks compare what is worn for this many frames.
-	// A 3D still loading can show a piece missing, so walks outside it only add.
 	constexpr uint32_t kWornWindowFrames = 90;
-	// S5's cadence (section 2.4, estimates): a living actor's snowfall about
-	// every kFallGap of real time, a settled corpse's every kFallGapSettled (its
-	// exposure cannot change), at most kFallsPerFrame a frame. The fill
-	// integrates the game time between, so the coat comes out the same.
 	constexpr float kFallGap = 0.5f;
 	constexpr float kFallGapSettled = 2.0f;
 	constexpr uint32_t kFallsPerFrame = 1;
 	static_assert(kWritesPerFrame + kFallsPerFrame <= kCoatTiles);
-	// The fill time (section 2.4, D11): the ground refills Snow 01's 30-unit
-	// layer in kBaseRefillTime at intensity 1, and a full coat is the object
-	// coat's 3 units, so 70 s.
 	constexpr float kCoatFillShare = 3.0f / 30.0f;
-	// D20 (Josef, 2026-10-31): the snowfall's reach rises from the angle of
-	// repose to 85 degrees, whatever the snow's stickiness.
 	constexpr float kFallReposeTop = 85.0f;
 
-	// SnowContactCapture.hlsl BodyCoatWriteCB (VS b3) and BodyCoatResolveCB (CS b0).
 	struct alignas(16) BodyCoatWriteCB
 	{
 		float4 ModelToAtlas[3];
@@ -137,7 +78,6 @@ namespace
 		float From[3];
 		float TopZ;
 		float Moving;
-		// Round 10: atlas texel to scratch texel, the slot's own scratch slot.
 		int32_t ScratchShift[3];
 	};
 	static_assert(sizeof(BodyCoatWriteCB) == 240);
@@ -150,16 +90,12 @@ namespace
 	static_assert(sizeof(BodyCoatTileCB) == 80);
 	struct alignas(16) BodyCoatResolveCB
 	{
-		// Bits 0-7 the slot, 8-15 its scratch slot (0xFF: none, a fade alone).
 		uint32_t Slots[SnowDeformation::kBodyCoatSlots];
 		uint32_t Count;
 		uint32_t Cap;
 		uint32_t Seed;
 		uint32_t pad;
-		// S4: each slot half's fade (slot x 2 + half): the levels melted from R and
-		// G, then the shares of R and G shaken off, in 1/255, a byte each.
 		uint32_t Fade[2 * SnowDeformation::kBodyCoatSlots];
-		// S5: each slot half's snowfall, the fill's exponent at full exposure.
 		float Fall[2 * SnowDeformation::kBodyCoatSlots];
 	};
 	static_assert(sizeof(BodyCoatResolveCB) == 1296);
@@ -213,7 +149,6 @@ namespace
 		std::string name;
 		const RE::NiAVObject* node;
 		RE::NiTransform skinToBone;
-		/** @brief The bone's bind pose in the skin's own space; its translate is the bone's origin there. */
 		RE::NiTransform boneToSkin;
 		RE::NiBound bound;
 	};
@@ -233,27 +168,19 @@ namespace
 		return bones;
 	}
 
-	/** @brief Each bone's bind pose in a frame's space, by name. */
 	using BindMap = std::unordered_map<std::string, RE::NiTransform>;
 
 	struct SkinMap
 	{
 		bool chained = false;
-		/** @brief The skin's space into the frame's: bind(via) x skinToBone(via). */
 		RE::NiTransform toAnchor;
 		std::string via;
 		uint32_t shared = 0;
 		uint32_t agree = 0;
 		float residual = 0.0f;
-		/** @brief Shared bones the chosen map puts more than a voxel off: name, distance, bone-sphere radius. */
 		std::vector<std::tuple<std::string, float, float>> outliers;
 	};
 
-	// The transform skinning itself applies: a vertex bound to bone b lands at
-	// bone world x skinToBone(b) x v, so bind(b) x skinToBone(b) maps the skin
-	// into the frame whatever its rootParentToSkin claims. Every shared bone
-	// proposes one; the proposal most of them agree with wins, so a bone a
-	// skin lists but never weights cannot pull it off.
 	SkinMap MapSkin(const std::vector<SkinBone>& a_bones, const BindMap& a_bind, float a_voxel)
 	{
 		SkinMap best;
@@ -304,7 +231,6 @@ namespace
 		return text;
 	}
 
-	/** @brief A slot's colour in the debug views: golden-angle hues, so neighbours differ. */
 	RE::NiPoint3 SlotColour(int a_slot, int a_half)
 	{
 		const float h = std::fmod(0.618034f * float(a_slot) + (a_half > 0 ? 0.5f : 0.0f), 1.0f) * 6.0f;
@@ -315,11 +241,8 @@ namespace
 	}
 }
 
-// The coat's frames, slots and records (S1). Render thread only: Prepass
-// fills it, the Lighting hook reads it.
 struct SnowDeformation::BodyCoatStore
 {
-	/** @brief A frame: every bone's bind in one skin's own space, the seed's. The body's is kept for the actor's life. */
 	struct Frame
 	{
 		std::string seed;
@@ -330,17 +253,14 @@ struct SnowDeformation::BodyCoatStore
 		float boundsMax[3] = {};
 		int slot = -1;
 		int half = -1;
-		/** @brief Atlas axis a reads canonical axis axisOf[a]: texel = canonical x scale + offset. */
 		int axisOf[3] = { 0, 1, 2 };
 		float scale[3] = { 1.0f, 1.0f, 1.0f };
 		float offset[3] = {};
 		float lo[3] = {};
 		float hi[3] = {};
 		bool seen = false;
-		/** @brief S4: the most its R (contact) and G (snowfall) can hold, in levels, from what writes and fades it; 0 is bare, known without a readback. */
 		float bound[2] = {};
 	};
-	/** @brief One lit skin of a walk, and where it maps. */
 	struct Skin
 	{
 		RE::BSGeometry* geometry = nullptr;
@@ -350,12 +270,10 @@ struct SnowDeformation::BodyCoatStore
 		uint32_t triangles = 0;
 		int feature = 0;
 		int slot = -1;
-		/** @brief The form ID of the item equipped in its biped slot, 0 outside one. */
 		uint32_t item = 0;
 		bool dynamic = false;
 		bool hidden = false;
 		bool firstPerson = false;
-		/** @brief 0 the body frame, 1 and up a component, -1 unmapped. */
 		int frame = -1;
 		SkinMap map;
 		bool outside = false;
@@ -364,9 +282,7 @@ struct SnowDeformation::BodyCoatStore
 	{
 		std::vector<Skin> skins;
 		std::vector<std::string> gearLines;
-		/** @brief Component halves a walk dropped: slot, half. */
 		std::vector<std::pair<int, int>> freed;
-		/** @brief Skinned geometry left out (overlays, proxies, decals, FX, eyes, brows, scars), so its draws are not taken for new gear. */
 		std::vector<const RE::BSGeometry*> skipped;
 		uint32_t owned = 0, unowned = 0, firstOwned = 0, firstUnowned = 0;
 		uint32_t decals = 0, fx = 0, eyes = 0, noNormals = 0;
@@ -381,7 +297,6 @@ struct SnowDeformation::BodyCoatStore
 		RE::NiTransform toCanonical;
 		bool hair;
 	};
-	/** @brief S4: a worn shape as an equipment change sees it (section 2.8): keyed by name, biped slot and item, never by pointer, with its bone spheres in its frame (xyz, radius) and the coat half that frame held. */
 	struct Worn
 	{
 		std::string name;
@@ -393,19 +308,15 @@ struct SnowDeformation::BodyCoatStore
 		std::vector<float4> spheres;
 		bool Same(const Worn& a_other) const { return slot == a_other.slot && item == a_other.item && name == a_other.name; }
 	};
-	/** @brief S4's readout: what faded an actor's coat at its last tick, and why. Rates per real second at the current timescale. */
 	struct Fading
 	{
 		bool active = false;
 		CoatAging aging;
 		bool burning = false;
-		/** @brief A corpse lying settled in the snow: the weather does not take its coat. */
 		bool inSnow = false;
-		/** @brief Full coats melted a second (the clear-weather clock, heat, fire spells), and the share shaken off a second. */
 		float melt = 0.0f;
 		float shake = 0.0f;
 		float motion = 0.0f;
-		/** @brief The last jolt's share shed at once, and when (the store's clock). */
 		float jolt = 0.0f;
 		double joltAt = -1.0;
 		uint32_t resolves = 0;
@@ -426,15 +337,10 @@ struct SnowDeformation::BodyCoatStore
 		bool walk = true;
 		bool refused = false;
 		bool dead = false;
-		// S3: the time since its last coat update, the largest jolt in it, and
-		// where it stood at that update.
 		float sinceWrite = 0.0f;
 		float joltHeld = 0.0f;
 		RE::NiPoint3 lastPos;
 		bool hasLastPos = false;
-		// S4: the fade owed since the last fade resolve (levels of R and G), the
-		// share of each a shake-off would leave, the impact track as E0 last read
-		// it, the fire-hit memory as last read, what it wears, and the readout.
 		float meltOwed[2] = {};
 		float keep[2] = { 1.0f, 1.0f };
 		double trackTime = -1.0;
@@ -449,18 +355,10 @@ struct SnowDeformation::BodyCoatStore
 		Fading fading;
 		std::string changeLine;
 		double changeAt = -1.0;
-		// Round 2: its own ground speed, measured as the impact track measures it,
-		// which sleeps off the snow with the deformation passes. Round 3: a
-		// corpse's at its bound's centre, and whether it lay settled last frame.
 		RE::NiPoint3 speedPos;
 		bool hasSpeedPos = false;
 		float speed = 0.0f;
 		bool wasSettled = false;
-		// S5: the real time since its last snowfall update, the fill owed since
-		// (intensity x game seconds over the fill time), whether its next update
-		// seeds it (first seen outdoors while it snows), and the last shout cone
-		// that blew on it; for the readout, its last update's seed and the last
-		// shout's share.
 		float sinceFall = 0.0f;
 		float fallDose = 0.0f;
 		bool fallSeed = false;
@@ -469,10 +367,6 @@ struct SnowDeformation::BodyCoatStore
 		double fallAt = -1.0;
 		double shoutAt = -1.0;
 		float shoutShare = 0.0f;
-		// Round 8 (section 2.7): a teammate, among those the capture rasterizes
-		// (the only ones contact reaches), its distance squared at the last pick,
-		// when its 3D was last loaded, waiting for a slot; and a seed for one come
-		// in from a storm, laid under an open sky, and whether the last was one.
 		bool teammate = false;
 		bool nearTier = false;
 		float d2 = 0.0f;
@@ -504,14 +398,12 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t pickFrame = 0;
 	int view = 0;
 	bool live = false;
-	/** @brief What the slots hold: S1's checks for the slot pattern view, otherwise the forced coat's pattern (its amounts ride the records). */
 	bool checks = false;
 	int force = -1;
 	uint32_t lookFlags = 0;
 	float glint[4] = {};
 	float look[4] = {};
 	float amounts[4] = {};
-	/** @brief S5: what the stored snowfall shows (D20, D21): x the share that fills the specks, y and z the angle of repose it rises from and to, in radians. */
 	float fallLook[4] = {};
 	bool hairSpecks = false;
 
@@ -522,51 +414,30 @@ struct SnowDeformation::BodyCoatStore
 	winrt::com_ptr<ID3D11Buffer> fallbackCB;
 	uint32_t parity = 0;
 	uint32_t atlasBoundFrame = UINT32_MAX;
-	/** @brief S5: the last Lighting draw was a corpse's model-space-normal skin, drawn with the coat's pixel shader in place of its technique's. */
 	bool swappedPixelShader = false;
 	bool gpuFailed = false;
-	/** @brief The atlas as R8G8B8A8 words, for the writer's resolve. */
 	winrt::com_ptr<ID3D11UnorderedAccessView> atlasUAV;
 
-	// S3's contact writer (SnowContactCapture.hlsl, COAT): who it updates this
-	// frame, the touches in two scratch volumes the atlas's size (contact; the
-	// snowfall with the wash), its shaders and constants, and the readout.
 	struct Due
 	{
 		uint32_t formID;
-		// x the growth in atlas levels, yz the heading, w the impact share.
 		float4 write;
-		// Its snow-top tile: xy the first node in world, z the node spacing (0:
-		// none), w the first row.
 		float4 tile;
-		// S5: x the fill's exponent at full exposure, y the seed's share of it, z 1
-		// when this update measures snowfall.
 		float4 fall;
-		// Its tops: xy the centre of its window, z the window's half extent (0:
-		// none), w the first row.
 		float4 top;
 		bool contact = false;
 		bool seed = false;
-		// A shape of it was drawn: the snowfall it owed is paid.
 		bool drawn = false;
-		// The tops' centre height.
 		float topZ = 0.0f;
-		// D30: how far it moved since, in deformation texels up to 1: its impacts'
-		// weight, the lumps' only source.
 		float moving = 0.0f;
-		// Round 8: a seed for one come in from a storm, under an open sky.
 		bool openSky = false;
 	};
 	size_t currentDue = 0;
 	std::vector<Due> due;
-	// S5: the due actors the capture does not draw (on a road, a rock or a
-	// horse, or a settled corpse), walked for their coat only.
 	std::vector<ContactProp> coatOnly;
 	uint32_t fallRobin = 0;
 	uint32_t roundRobin = 0;
 	std::bitset<kBodyCoatSlots> touched;
-	// Round 10: each slot's scratch slot this frame (-1: none), how many are
-	// taken, and the draws that found none (this frame, and for the readout).
 	int8_t scratchOf[kBodyCoatSlots] = {};
 	uint32_t scratchUsed = 0;
 	uint32_t scratchMissed = 0, scratchMissedLast = 0;
@@ -585,16 +456,9 @@ struct SnowDeformation::BodyCoatStore
 	std::unique_ptr<ConstantBuffer> shellCB;
 	ID3D11ShaderResourceView* shellSRVs[SnowDeformation::kShellSurfaceSRVs] = {};
 	ID3D11ShaderResourceView* waterSRV = nullptr;
-	// What a coat pass changes on the VS and GS, put back after it: features
-	// bind some of these once a frame (Grass Collision's constants at VS b5).
-	// VS b3, b5, b6; t0, t1, t2, t63; GS b3.
 	winrt::com_ptr<ID3D11Buffer> savedCB[4];
 	winrt::com_ptr<ID3D11ShaderResourceView> savedSRV[4];
 	winrt::com_ptr<ID3D11GeometryShader> savedGS;
-	// S5: each fall-due actor's tops, the highest its own body reaches toward
-	// the snow over each texel across the snow's way (64 x 64 a row), drawn by
-	// their own VS, the blend that keeps the highest, and the actor drawn now;
-	// the eye Skylighting placed its probes about, and its probes when it runs.
 	winrt::com_ptr<ID3D11Texture2D> topTexture;
 	winrt::com_ptr<ID3D11RenderTargetView> topRTV;
 	winrt::com_ptr<ID3D11ShaderResourceView> topSRV;
@@ -609,18 +473,11 @@ struct SnowDeformation::BodyCoatStore
 	bool currentContact = false;
 	float eye[3] = {};
 	ID3D11ShaderResourceView* skySRV = nullptr;
-	// S5: this frame's snowfall here (capped as the ground's refill reads it),
-	// the way it comes from (round 2: the game's own falling snow, tilted by the
-	// wind), and for the readout the fill time, that way's tilt from straight
-	// up and the game's own, and fall passes in the last second.
 	float fallIntensity = 0.0f;
 	float fallFrom[3] = { 0.0f, 0.0f, 1.0f };
 	float fillTime = 0.0f;
 	float fallTilt = 0.0f, gameTilt = 0.0f;
 	uint32_t fallPasses = 0, fallPassesLast = 0;
-	// Round 8: the way the snow last came outdoors, for a seed laid indoors; the
-	// interior the player is in, its doors to the outside and when the player
-	// came in; and for the readout, the actors that gave up a slot.
 	float fallFromHeld[3] = { 0.0f, 0.0f, 1.0f };
 	const RE::TESObjectCELL* doorCell = nullptr;
 	std::vector<RE::NiPoint3> doorsOut;
@@ -631,8 +488,6 @@ struct SnowDeformation::BodyCoatStore
 	{
 		return std::ranges::any_of(doorsOut, [&](const RE::NiPoint3& a_door) { return a_door.GetSquaredDistance(a_position) <= kDoorReach * kDoorReach; });
 	}
-	// The snow-top tiles (round 4), the tile of the actor drawn now, and the
-	// deformation texel, the taps' reach.
 	winrt::com_ptr<ID3D11Texture2D> tileTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> tileSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> tileUAV;
@@ -642,9 +497,6 @@ struct SnowDeformation::BodyCoatStore
 	float deformTexel = 0.0f;
 	bool writerTried = false, writerReady = false;
 	uint32_t writtenActorsLast = 0, writtenTrianglesLast = 0, raisedLast = 0;
-	// S4: the coat's own reading of the calendar, the store's real-time clock,
-	// the slot halves the writer drew into this frame, the fade's cadence, and
-	// the readout's jumps, reloads and resolves a second.
 	float clockHours = -1.0f;
 	float timescale = 20.0f;
 	double realClock = 0.0;
@@ -659,12 +511,6 @@ struct SnowDeformation::BodyCoatStore
 	uint32_t drawFrame = UINT32_MAX;
 	uint32_t coatedBuilding = 0, coatedLast = 0, walksLast = 0, missesLast = 0;
 
-	// The tier (round 8, section 2.7): every actor whose bound lies inside the
-	// contact window, the player first, then teammates, then the nearest; the
-	// slots cap it. The near tier is the part the contact capture rasterizes,
-	// as it picks it (the player and the nearest living actors, then the
-	// nearest corpses, each at the capture's own cap): contact reaches no one
-	// else.
 	static void PickTier(std::vector<Pick>& a_picks)
 	{
 		auto* player = globals::game::player;
@@ -701,10 +547,6 @@ struct SnowDeformation::BodyCoatStore
 		return empty(a_actor.body) && std::ranges::all_of(a_actor.parts, empty);
 	}
 
-	// One actor's lit geometry, mapped into its frames. a_body is kept from
-	// walk to walk: only an empty one is seeded, by the biggest worn skin, so
-	// the frame never moves with the outfit (BODY-SNOW-PLAN.md section 5.4).
-	// A skin that shares no bone with it seeds, or joins, a component.
 	static void Walk(RE::Actor* a_actor, Frame& a_body, std::vector<Frame>& a_parts, Walked& a_out, bool a_dump)
 	{
 		auto* player = globals::game::player;
@@ -713,7 +555,6 @@ struct SnowDeformation::BodyCoatStore
 			return;
 		const bool firstPersonPlayer = a_actor == player && RE::PlayerCamera::GetSingleton() && RE::PlayerCamera::GetSingleton()->IsInFirstPerson();
 
-		// What the actor has equipped, by biped slot: each item's attached 3D.
 		struct Part
 		{
 			const RE::NiAVObject* clone;
@@ -740,12 +581,6 @@ struct SnowDeformation::BodyCoatStore
 		};
 		auto carried = [](int a_slot) { return a_slot >= int(RE::BIPED_OBJECTS::kEditorTotal) || a_slot == int(RE::BIPED_OBJECTS::kShield); };
 
-		// Eyes by their head part (section 5.5): an eye mod's eyes wear the
-		// environment-map material, not the eye one. A facegen head names each
-		// part's geometry after its editor ID: the NPC's own eyes, or its race's.
-		// Brows and scars sit on the bare face with them (section 5.10), and on a
-		// corpse take the coat with its face (S5). A mouth (teeth and tongue: a
-		// misc part named or modelled as one) never takes it, nor its extra parts.
 		const bool corpse = a_actor->IsDead();
 		std::vector<const char*> eyeParts;
 		auto mouth = [](const RE::BGSHeadPart* a_part) {
@@ -819,7 +654,6 @@ struct SnowDeformation::BodyCoatStore
 			const uint32_t triangles = TrianglesOf(a_geometry);
 			const Part* part = a_first ? nullptr : partOf(a_geometry);
 			const int slot = part ? int(part->slot) : -1;
-			// Heat haze and spell planes: refraction, never a coat (section 2.6).
 			if (IsRefraction(property)) {
 				a_out.fx++;
 				if (a_dump)
@@ -829,8 +663,6 @@ struct SnowDeformation::BodyCoatStore
 				return;
 			}
 			if (!skin) {
-				// Rigid: carried gear (section 2.11). S1 maps none of it; the census
-				// sorts it by where it hangs, for the gear stage.
 				if (a_first)
 					return;
 				const char* kind = "attached, not equipped";
@@ -897,9 +729,6 @@ struct SnowDeformation::BodyCoatStore
 				RE::BSVisit::TraverseScenegraphGeometries(first, std::ref(firstVisit));
 			}
 
-		// A frame starts as one skin's own space: its bones' bind poses are
-		// their boneToSkin. The body's seed is the biggest worn skin, so a
-		// displayed bow or a long tail never becomes the body.
 		auto seed = [&](Frame& a_frame, bool a_preferWorn) {
 			Skin* best = nullptr;
 			auto rank = [&](const Skin& a_s) { return std::make_tuple(a_preferWorn && a_s.slot >= 0 && !carried(a_s.slot), a_s.triangles); };
@@ -921,8 +750,6 @@ struct SnowDeformation::BodyCoatStore
 			}
 			return true;
 		};
-		// Skins join a frame through the bones they share with it, the
-		// biggest first; each adds the bones only it names.
 		auto chain = [&](Frame& a_frame, int a_index) {
 			uint32_t joined = 0;
 			std::vector<Skin*> order;
@@ -962,7 +789,6 @@ struct SnowDeformation::BodyCoatStore
 			a_parts.push_back(std::move(part));
 			a_parts.back().seen = chain(a_parts.back(), int(a_parts.size())) > 0;
 		}
-		// Components no skin joined this walk go, and their halves with them.
 		std::vector<int> renumber(a_parts.size() + 1, -1);
 		renumber[0] = 0;
 		size_t kept = 0;
@@ -982,8 +808,6 @@ struct SnowDeformation::BodyCoatStore
 			if (s.frame > 0)
 				s.frame = renumber[s.frame];
 
-		// First person: the same bones on the first-person skeleton, mapped by
-		// name through the third-person bind, which they never extend.
 		for (auto& s : a_out.skins)
 			if (s.firstPerson) {
 				s.map = MapSkin(s.bones, a_body.bind, kBodyCoatVoxel);
@@ -991,7 +815,6 @@ struct SnowDeformation::BodyCoatStore
 			}
 	}
 
-	// A frame's skins' bone spheres, in its space.
 	static void BoundsOf(const Walked& a_walked, int a_frame, float a_min[3], float a_max[3])
 	{
 		for (int a = 0; a < 3; ++a) {
@@ -1080,14 +903,9 @@ struct SnowDeformation::BodyCoatStore
 		}
 	}
 
-	// Round 10: a slot's first texel, kBodyCoatSlotsPerRow to a row along z, the
-	// rows along y.
 	static uint32_t OriginY(int a_slot) { return uint32_t(a_slot) / kBodyCoatSlotsPerRow * kBodyCoatSlotDim[1]; }
 	static uint32_t OriginZ(int a_slot) { return uint32_t(a_slot) % kBodyCoatSlotsPerRow * kBodyCoatSlotDim[2]; }
 
-	// The frame's bounds over its slot's texels: its longest axis along the
-	// slot's 48, the next along its 32 (16 for a half), the shortest along 16.
-	// A voxel of margin each side, so nothing at the surface clamps.
 	static void Place(Frame& a_frame, int a_slot, int a_half)
 	{
 		a_frame.slot = a_slot;
@@ -1124,8 +942,6 @@ struct SnowDeformation::BodyCoatStore
 		gpuFailed = true;
 		if (!device || !context)
 			return false;
-		// Typeless: Lighting reads it as UNORM, the writer's resolve as R32 words.
-		// Twice a slot wide: the impact store (D30) lies beside the coat along x.
 		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0] * 2, kBodyCoatSlotDim[1] * (kBodyCoatSlots / kBodyCoatSlotsPerRow), kBodyCoatSlotDim[2] * kBodyCoatSlotsPerRow, 1,
 			DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
@@ -1150,9 +966,6 @@ struct SnowDeformation::BodyCoatStore
 			Util::SetResourceName(atlasUAV.get(), "SnowDeformation::BodyCoatAtlas UAV");
 		else
 			logger::warn("[SNOW DEFORMATION] body coat: no R32 view of the atlas; the contact writer stays off");
-		// Records by 11.1 offset where the runtime has them, two copies
-		// alternating per draw (the redundancy filter ignores offsets on a
-		// rebound buffer); one block written per draw otherwise.
 		D3D11_FEATURE_DATA_D3D11_OPTIONS options{};
 		if (SUCCEEDED(device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) && options.ConstantBufferOffsetting &&
 			SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(context1.put())))) {
@@ -1177,8 +990,6 @@ struct SnowDeformation::BodyCoatStore
 		return true;
 	}
 
-	// The contact writer's shaders and buffers, made the first time an actor is
-	// due. A failure is logged once and leaves the writer off.
 	bool EnsureWriter()
 	{
 		if (writerTried)
@@ -1244,7 +1055,6 @@ struct SnowDeformation::BodyCoatStore
 		          SUCCEEDED(device->CreateUnorderedAccessView(tileTexture.get(), nullptr, tileUAV.put()));
 		for (auto& s : raisedStaging)
 			ok = ok && SUCCEEDED(device->CreateBuffer(&staging, nullptr, s.put()));
-		// S5's tops, blended to the highest surface (R only, as the capture's field is).
 		D3D11_TEXTURE2D_DESC tops = tiles;
 		tops.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
 		D3D11_BLEND_DESC highest{};
@@ -1267,9 +1077,6 @@ struct SnowDeformation::BodyCoatStore
 		return true;
 	}
 
-	// The knee joint's height in a frame: its calf bones' bind origin. A
-	// skeleton without them (a creature, a bow) takes its bound's lower 30
-	// percent, an estimate.
 	static float KneeHeight(const Frame& a_frame)
 	{
 		float sum = 0.0f;
@@ -1282,15 +1089,6 @@ struct SnowDeformation::BodyCoatStore
 		return count ? sum / float(count) : a_frame.boundsMin[2] + 0.3f * (a_frame.boundsMax[2] - a_frame.boundsMin[2]);
 	}
 
-	// No writer before S3: a slot holds a pattern. The slot pattern view gets
-	// S1's checks (two voxels, the slot's colour, a white border); otherwise the
-	// forced coat in the atlas's own channels: R contact, G snowfall, B/A the
-	// deposit direction as GBuffer::EncodeNormal writes the way down (S5), so
-	// straight up is 0.5, 0.5. Each voxel's pattern is taken at its canonical
-	// centre. Wading contact is whole to the ankle and thins up the shin, to
-	// about a sixth at the knee and none at 1.3 times its height (section 5.11);
-	// the left side ramps over four voxels. The impact store beside it (D30)
-	// takes the forced contact whole, so Force Coat's lumps can still be judged.
 	void FillSlot(Frame& a_frame)
 	{
 		const int slot = a_frame.slot, half = a_frame.half;
@@ -1366,8 +1164,6 @@ struct SnowDeformation::BodyCoatStore
 		}
 	}
 
-	// S4: what an actor has equipped, by biped slot (both of the player's
-	// bipeds); a change opens an equipment change's window.
 	static uint64_t WornSignature(RE::Actor* a_actor)
 	{
 		uint64_t hash = 14695981039346656037ull;
@@ -1385,9 +1181,6 @@ struct SnowDeformation::BodyCoatStore
 		return hash;
 	}
 
-	// A skin's bone spheres in its frame, the region a piece taken off or put on
-	// clears. Each bone's own box: one box over a pair of gloves would span the
-	// body between the hands.
 	static std::vector<float4> SpheresOf(const Skin& a_skin)
 	{
 		std::vector<float4> spheres;
@@ -1400,9 +1193,6 @@ struct SnowDeformation::BodyCoatStore
 		return spheres;
 	}
 
-	// Empties a frame's coat over each sphere's box (R and G 0, the deposit
-	// straight up as FillSlot leaves it) and its impacts beside it; the voxels
-	// written, for the readout.
 	uint32_t ClearSpheres(const Frame& a_frame, const std::vector<float4>& a_spheres)
 	{
 		if (a_frame.slot < 0)
@@ -1435,7 +1225,6 @@ struct SnowDeformation::BodyCoatStore
 		return written;
 	}
 
-	// The frame holding a slot half (the body's slot holds both), or none.
 	Frame* FrameAt(uint32_t a_slot, uint32_t a_half)
 	{
 		if (a_slot >= kBodyCoatSlots || !slotOwner[a_slot][a_half])
@@ -1451,8 +1240,6 @@ struct SnowDeformation::BodyCoatStore
 		return nullptr;
 	}
 
-	// S4: one resolve over the slots that owe a fade, the writer's pass with
-	// nothing touched; its count is left out (the readout's is the writer's).
 	void FadeResolve(ID3D11DeviceContext* a_context, const BodyCoatResolveCB& a_cb)
 	{
 		D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -1476,13 +1263,10 @@ struct SnowDeformation::BodyCoatStore
 		a_context->CSSetShader(savedCS.get(), nullptr, 0);
 		ID3D11Buffer* cb0 = savedCB0.get();
 		a_context->CSSetConstantBuffers(0, 1, &cb0);
-		// The UAV unbound the atlas from Lighting's t41: the hook binds it again.
 		atlasBoundFrame = UINT32_MAX;
 		globals::profiler->EndPass();
 	}
 
-	// Bounds fixed at the slot's birth (section 2.1), then the slot and its
-	// pattern; true when it has bounds and no slot is free (round 8: it waits).
 	bool Slot(Frame& a_frame, const Walked& a_walked, int a_index, uint32_t a_formID)
 	{
 		if (a_frame.slot >= 0)
@@ -1509,10 +1293,6 @@ struct SnowDeformation::BodyCoatStore
 		return false;
 	}
 
-	// Round 8 (section 2.7): a slot for the first of the tier waiting for one,
-	// from the actor held least: out of the tier, then bare, then the farthest.
-	// Never the player or a teammate, and one in the tier only kEvictRatio as
-	// far as the one waiting. False when none gives way.
 	bool GiveWay(uint32_t a_frame)
 	{
 		Actor* waiting = nullptr;
@@ -1627,8 +1407,6 @@ void SnowDeformation::GenerateShaderPermutations(RE::BSShader* a_shader)
 			coatKeys.insert((uint64_t(vertex) << 32) | pixel);
 		keys.assign(coatKeys.begin(), coatKeys.end());
 	}
-	// As LoadShaders queues the game's own: the vertex shader, and the pixel
-	// shader forward and deferred.
 	auto state = globals::state;
 	auto shaderCache = globals::shaderCache;
 	for (const uint64_t key : keys) {
@@ -1685,7 +1463,6 @@ void SnowDeformation::TickBodyCoatStore()
 	bodyCoatLive = false;
 	const int view = std::clamp(debugBodyCoatView, 0, 3);
 	const int force = std::clamp(debugBodyCoatForce, 0, 4);
-	// Testers' packages leave the writer off until body snow ships.
 	const bool contact = debugBodyCoatContact && !SNOW_ALPHA_BUILD;
 	if ((view == 0 && force == 0 && !contact) || !settings.EnableSnowDeformation) {
 		if (bodyCoatStore) {
@@ -1710,10 +1487,6 @@ void SnowDeformation::TickBodyCoatStore()
 		store.view = view;
 		store.recordsDirty = true;
 	}
-	// S4's clock (section 2.5): game time, so a wait, a sleep or a fast travel
-	// lands at once. The calendar is read here: gameClock sleeps with the
-	// deformation passes, and an inn holds no snow to wake them. Backwards is a
-	// loaded save, whose coats belong to another timeline (S8 co-saves them).
 	const float realDelta = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.0f;
 	store.realClock += realDelta;
 	float coatHours = 0.0f;
@@ -1726,7 +1499,6 @@ void SnowDeformation::TickBodyCoatStore()
 			coatHours = std::max(hours - store.clockHours, 0.0f);
 		}
 		store.clockHours = hours;
-		// The player's timescale, latched as TickGameClock latches it: a wait cranks the live one.
 		if (const float scale = calendar ? calendar->GetTimescale() : 0.0f; scale >= 1.0f && scale <= 100.0f)
 			store.timescale = scale;
 	}
@@ -1741,8 +1513,6 @@ void SnowDeformation::TickBodyCoatStore()
 		store.force = force;
 		store.RefillAll();
 	}
-	// The record's look: the A/B, and the shell's sparkle as Lighting's
-	// glintParameters (40 - log density, as LandscapeSeamsFix writes them).
 	if (debugBodyCoatLumpLook != 0)
 		EnsureBodyCoatLumps();
 	const uint32_t lumpFlags = !bodyCoatLumpSRV          ? 0u :
@@ -1753,33 +1523,18 @@ void SnowDeformation::TickBodyCoatStore()
 	                           (debugBodyCoatReliefView ? kBodyCoatFlagReliefView : 0u) | (debugBodyCoatHairShape == 1 ? kBodyCoatFlagHairBeads : 0u) | lumpFlags;
 	const bool sparkle = settings.SnowGlints && snowGlintLogDensity > 1.1f;
 	const float glint[4] = { snowGlintScreenSpaceScale, 40.0f - (sparkle ? snowGlintLogDensity : 1.0f), snowGlintMicroRoughness, snowGlintDensityRandomization };
-	// The cranks as the shader reads them: one over the angle of repose in
-	// radians; the smallest and largest speck radius in units (the sizes are
-	// diameters in mm, 14.2875 mm a unit); and how many more balls a share needs
-	// as the sizes' mean volume falls below the largest's, sizes spread evenly
-	// between: E[(r / largest)^3] = (1 + p)(1 + p^2) / 4 at p = smallest / largest.
 	const float repose = std::clamp(debugBodyCoatRepose, 1.0f, 89.0f);
 	const float sizeLo = std::clamp(std::min(debugBodyCoatSpeckMin, debugBodyCoatSpeckMax), 0.5f, 10.0f);
 	const float sizeHi = std::clamp(std::max(debugBodyCoatSpeckMin, debugBodyCoatSpeckMax), 0.5f, 10.0f);
 	const float sizeRatio = sizeLo / sizeHi;
 	const float look[4] = { 1.0f / DirectX::XMConvertToRadians(repose), sizeLo * 0.5f / 14.2875f, sizeHi * 0.5f / 14.2875f,
 		4.0f / ((1.0f + sizeRatio) * (1.0f + sizeRatio * sizeRatio)) };
-	// Grain 1 is half a surface, or as many specks as the lattice holds when
-	// that is less (sizes spread wider than 1.5 : 1): every ball on covers
-	// 1 - e^-L at L (x + y L) = the sizes' mean volume.
 	const float roomL = (kSpeckRank[0] - std::sqrt(kSpeckRank[0] * kSpeckRank[0] + 4.0f * kSpeckRank[1] / look[3])) / (-2.0f * kSpeckRank[1]);
 	const float grainScale = std::min(1.0f, (1.0f - std::exp(-roomL)) / kSpeckMax);
-	// The forced coat's lumps, specks and hair's specks, apart (S2's cranks), and
-	// the cohesion of the snow impacts bring, its share of lumps (round 3; D30),
-	// in steps of 0.05 so the records rebuild only on a step. The forced coat
-	// keeps its full share.
 	const float stickiness = GetSnowCondition().stickiness;
 	const float cohesion = force != 0 ? 1.0f : std::round(std::clamp(stickiness / kCoatMoistStickiness, 0.0f, 1.0f) * 20.0f) / 20.0f;
 	const float amounts[4] = { std::clamp(debugBodyCoatLumps, 0.0f, 1.0f), std::clamp(debugBodyCoatGrains, 0.0f, 1.0f) * grainScale,
 		std::clamp(debugBodyCoatHairAmount, 0.0f, 1.0f), cohesion };
-	// S5 (D20-D22): the stored snowfall fills the specks up to the load order's
-	// storm split, their reach rising from the angle of repose to 85 degrees,
-	// then thickens them over the rest (D29, D30).
 	const float fallLook[4] = { std::clamp(SnowWeathers().split, 0.05f, 0.95f), DirectX::XMConvertToRadians(repose),
 		DirectX::XMConvertToRadians(std::max(kFallReposeTop, repose)), 0.0f };
 	if (store.lookFlags != lookFlags || memcmp(store.glint, glint, sizeof(glint)) != 0 || memcmp(store.look, look, sizeof(look)) != 0 ||
@@ -1793,11 +1548,6 @@ void SnowDeformation::TickBodyCoatStore()
 		store.recordsDirty = true;
 	}
 	auto* player = globals::game::player;
-	// S5: the snowfall here, read every frame (the module's own sleeps with the
-	// deformation passes): none indoors, under No Sky or for ash. Round 2 (D10):
-	// it comes the way the game's own falling snow comes, the precipitation's
-	// fall speed against 500 units a second of wind at full (Precipitation
-	// GetDirection), its slant scaled by Wind Tilt.
 	{
 		auto* tes = globals::game::tes;
 		store.fallIntensity = tes && !tes->interiorCell ? ComputeSnowfallIntensity() : 0.0f;
@@ -1814,7 +1564,6 @@ void SnowDeformation::TickBodyCoatStore()
 			std::copy_n(store.fallFrom, 3, store.fallFromHeld);
 	}
 	const bool snowing = store.fallIntensity > 0.0f;
-	// Round 8: the doors out of the interior the player is in, read once a cell.
 	if (auto* tes = globals::game::tes; tes && tes->interiorCell != store.doorCell) {
 		store.doorCell = tes->interiorCell;
 		store.doorsAt = store.realClock;
@@ -1835,7 +1584,6 @@ void SnowDeformation::TickBodyCoatStore()
 		Store::PickTier(picks);
 		for (auto& [formID, a] : store.actors)
 			a.nearTier = false;
-		// Round 8: indoors, Accumulation holds the storm the player came in from.
 		const bool stormOutside = store.doorCell && accumWeatherIntensity.load(std::memory_order_relaxed) > 0.0f;
 		for (const auto& pick : picks) {
 			auto [it, inserted] = store.actors.try_emplace(pick.actor->formID);
@@ -1850,8 +1598,6 @@ void SnowDeformation::TickBodyCoatStore()
 			if (!inserted)
 				continue;
 			a.loadedAt = store.realClock;
-			// S5: first seen outdoors in a storm, so out in it a while. Round 8: or
-			// first seen at a door to the outside, come in from the storm there.
 			a.fallSeed = snowing;
 			if (!snowing && stormOutside && store.realClock - store.doorsAt >= kResidentSeconds && store.NearDoorOut(pick.actor->GetPosition()))
 				a.fallSeed = a.seedIndoors = true;
@@ -1859,9 +1605,6 @@ void SnowDeformation::TickBodyCoatStore()
 		if (store.GiveWay(frame))
 			store.recordsDirty = true;
 	}
-	// Round 8 (sections 2.7, 2.8): a coat stays while its actor is loaded, and
-	// through a load door: kGoneSeconds for its 3D to come back, a teammate's as
-	// long as it lives. A bare one out of the tier frees its slots.
 	for (auto it = store.actors.begin(); it != store.actors.end();) {
 		auto& a = it->second;
 		bool keep = a.player;
@@ -1881,8 +1624,6 @@ void SnowDeformation::TickBodyCoatStore()
 			store.recordsDirty = true;
 		}
 	}
-	// S4: what the writer and the fade hold for an actor, started over. S5: an
-	// emptied coat in a storm is seeded again (a loaded save, a race change).
 	auto restart = [snowing](Store::Actor& a_actor) {
 		a_actor.sinceWrite = 0.0f;
 		a_actor.joltHeld = 0.0f;
@@ -1910,9 +1651,6 @@ void SnowDeformation::TickBodyCoatStore()
 		store.reloadAt = store.realClock;
 	}
 
-	// Walks: a new actor, a new 3D or race, a draw that found no record, an
-	// equipment change, and a slow refresh for what changes silently; a few a
-	// frame.
 	uint32_t walks = 0;
 	for (auto& [formID, a] : store.actors) {
 		RE::NiPointer<RE::Actor> actor = a.player ? RE::NiPointer<RE::Actor>(player) : a.handle.get();
@@ -1922,11 +1660,8 @@ void SnowDeformation::TickBodyCoatStore()
 			a.dead = dead;
 			a.hasSpeedPos = false;
 			store.recordsDirty = true;
-			// S5: a corpse's skin, brows and scars join its coat; brought back, they leave it.
 			a.walk = true;
 		}
-		// S4 round 2: its ground speed for the shake-off, off the snow too; a
-		// corpse's at its bound's centre, which follows the ragdoll (round 3).
 		const RE::NiAVObject* body = a.dead ? actor->Get3D(false) : nullptr;
 		if (const RE::NiPoint3 at = body ? body->worldBound.center : actor->GetPosition(); a.hasSpeedPos && realDelta > 0.0f) {
 			const float step = std::hypot(at.x - a.speedPos.x, at.y - a.speedPos.y);
@@ -1940,7 +1675,6 @@ void SnowDeformation::TickBodyCoatStore()
 		const RE::NiAVObject* first = a.player ? actor->Get3D(true) : nullptr;
 		const RE::TESRace* race = actor->GetRace();
 		if (race != a.race) {
-			// A new skeleton (werewolf, Vampire Lord, RaceMenu): the frames reset (section 2.8).
 			if (a.race) {
 				const char* name = race ? race->GetName() : nullptr;
 				a.changeLine = std::format("reset by a race change to '{}'", name ? name : "");
@@ -1955,8 +1689,6 @@ void SnowDeformation::TickBodyCoatStore()
 			restart(a);
 			store.recordsDirty = true;
 		}
-		// S4: an equipment change walks the actor at once and opens the window in
-		// which its walks compare what it wears.
 		if (const uint64_t worn = Store::WornSignature(actor.get()); worn != a.wornSignature) {
 			if (a.wornSignature != 0) {
 				a.walk = true;
@@ -1967,7 +1699,6 @@ void SnowDeformation::TickBodyCoatStore()
 		}
 		if (a.wornChanging && frame - a.wornChangeFrame >= kWornWindowFrames)
 			a.wornChanging = false;
-		// Round 8: one waiting for a slot has no records, so its draws miss.
 		if (root != a.root3D || first != a.first3D || (frame + formID) % kRewalkFrames == 0 ||
 			(store.missed.contains(formID) && !a.refused && !a.waiting && frame - a.lastWalked >= kMissFrames))
 			a.walk = true;
@@ -1976,7 +1707,6 @@ void SnowDeformation::TickBodyCoatStore()
 		walks++;
 		a.walk = false;
 		a.lastWalked = frame;
-		// Round 8: a new 3D may stand past a load door: no heading across it.
 		if (root != a.root3D)
 			a.hasLastPos = false;
 		a.root3D = root;
@@ -1999,10 +1729,6 @@ void SnowDeformation::TickBodyCoatStore()
 		a.skipped = std::move(walked.skipped);
 		std::vector<Store::Worn> worn;
 		for (const auto& s : walked.skins) {
-			// Living skin takes no coat (Josef, S2 round 2; D4 melts it, S7): facegen
-			// heads and tinted body skin, beast races' fur included. It still seeds and
-			// chains the frames, so gloves and boots map through the body's bones. A
-			// corpse's skin takes the coat with the rest of it (S5).
 			const bool bareSkin = !a.dead && (s.feature == int(RE::BSShaderMaterial::Feature::kFaceGen) || s.feature == int(RE::BSShaderMaterial::Feature::kFaceGenRGBTint));
 			if (s.frame >= 0 && !bareSkin) {
 				a.shapes.push_back({ s.geometry, s.skin, uint32_t(s.frame), s.map.toAnchor, s.feature == int(RE::BSShaderMaterial::Feature::kHairTint) });
@@ -2014,9 +1740,6 @@ void SnowDeformation::TickBodyCoatStore()
 				a.skipped.push_back(s.geometry);
 			}
 		}
-		// S4 (section 2.8, D3): a piece taken off or put on clears its region, the
-		// new piece starting clean. Outside an equipment change's window a walk
-		// only adds what it finds, as a 3D still loading can show a piece missing.
 		auto among = [](const std::vector<Store::Worn>& a_list, const Store::Worn& a_shape) {
 			return std::ranges::any_of(a_list, [&](const Store::Worn& a_other) { return a_other.Same(a_shape); });
 		};
@@ -2068,14 +1791,6 @@ void SnowDeformation::TickBodyCoatStore()
 	if (std::exchange(debugBodyCoatClear, false))
 		store.RefillAll();
 
-	// S3: who the contact writer updates this frame, each with how far its
-	// touches grow the coat (section 5.31): adhesion (Snow Climate's stickiness,
-	// raised by the largest jolt since its last update, section 2.3) over the
-	// time since then, the cap reached in Build-up Time at full adhesion. And its
-	// heading since then (round 3): Impact Share of the cap is kept for the parts
-	// pushing into fresh snow, counted in full once it has moved a deformation
-	// texel, the taps' reach. That move weighs its impacts too, the lumps' only
-	// source (D30). Force Coat owns the atlas while it is on.
 	store.due.clear();
 	if (contact && force == 0 && store.live && store.atlasUAV) {
 		const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 0.0f) : 0.0f;
@@ -2085,9 +1800,6 @@ void SnowDeformation::TickBodyCoatStore()
 		const float texel = deformationTextures[0] && deformationTextures[0]->srv ? deformWorldSize / float(deformationTextures[0]->desc.Width) : 0.0f;
 		const float impactShare = std::clamp(debugBodyCoatImpactShare, 0.0f, 1.0f);
 		const auto make = [&](uint32_t a_formID, Store::Actor& a_actor, const RE::NiPoint3& a_pos) {
-			// A0 per actor (S4): the snow's stickiness at its own height. A corpse
-			// takes it at once (S4 round 2): its weight lays it in the snow, and it is
-			// drawn only while it falls and settles.
 			const float adhesion = std::min(1.0f, SnowConditionAtHeight(a_pos.z).stickiness + a_actor.joltHeld);
 			float4 write{ a_actor.dead ? cap : adhesion * perSecond * a_actor.sinceWrite, 0.0f, 0.0f, 0.0f };
 			const float dx = a_pos.x - a_actor.lastPos.x;
@@ -2112,7 +1824,6 @@ void SnowDeformation::TickBodyCoatStore()
 			a.sinceWrite = std::min(a.sinceWrite + dt, kWriteGapMax);
 			if (const auto track = impactTracks.find(formID); track != impactTracks.end())
 				a.joltHeld = std::max(a.joltHeld, track->second.Jolt());
-			// Round 8: contact only for those the capture draws.
 			if (!a.player && a.nearTier)
 				others.push_back(formID);
 			else if (frame % kWritePlayerFrames == 0 && player && player->Is3DLoaded())
@@ -2130,15 +1841,6 @@ void SnowDeformation::TickBodyCoatStore()
 		}
 		store.roundRobin = count ? (store.roundRobin + taken) % count : 0;
 
-		// S5 (section 2.4): snowfall while it snows here, each actor about every
-		// kFallGap (a settled corpse every kFallGapSettled), the player first, with
-		// the fill owed since: intensity x game time over the fill time, the ground
-		// refill's own (70 s at Refill Rate x1). An actor first seen outdoors in a
-		// storm is seeded with what the time it has snowed would have laid (the
-		// ground's accumulation, Accumulation Time when full), so people met in a
-		// storm are already snowy and at a storm's start as bare as the ground.
-		// Round 2 (Josef): any snowfall fills a coat in time; the weather sets the
-		// pace only.
 		store.fillTime = settings.RefillRateMultiplier > 0.0f ? kBaseRefillTime * kCoatFillShare / settings.RefillRateMultiplier : 0.0f;
 		if (debugBodyCoatFall) {
 			const float dose = store.fillTime > 0.0f ? store.fallIntensity * coatSeconds / store.fillTime : 0.0f;
@@ -2147,7 +1849,6 @@ void SnowDeformation::TickBodyCoatStore()
 				return store.fillTime > 0.0f ? a_intensity * accum * std::max(settings.AccumulationHours, 0.0f) * 3600.0f / store.timescale / store.fillTime : 0.0f;
 			};
 			const float seedDose = seedOf(store.fallIntensity);
-			// Round 8: one come in from a storm, seeded with the storm outside.
 			const float seedIndoors = seedOf(std::clamp(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f, 1.0f));
 			std::vector<uint32_t> waiting;
 			uint32_t playerID = 0;
@@ -2177,7 +1878,6 @@ void SnowDeformation::TickBodyCoatStore()
 					store.due.push_back({ a_formID });
 					it = store.due.end() - 1;
 				}
-				// Paid once a pass draws it (BodyCoatWriteResolve).
 				const float seed = a.fallSeed ? (a.seedIndoors ? seedIndoors : seedDose) : 0.0f;
 				it->fall = float4(a.fallDose + seed, seed, 1.0f, 0.0f);
 				it->seed = a.fallSeed;
@@ -2201,13 +1901,6 @@ void SnowDeformation::TickBodyCoatStore()
 		}
 	}
 
-	// S4 (section 2.5): every coat fades on game time. Per actor, A0 at its own
-	// place: the clear-weather clock (a full coat goes in Melt Time, faster by
-	// the ground's ageing weights, not at all while it snows), heat and fire
-	// spells at their rate over the reference layer, and on the living, loose
-	// snow shaken off by motion and jolts. Melt is owed in whole levels and the
-	// shake-off as a share of what is there; the slots that owe a level resolve
-	// with no point pass, about twice a second, at once after a fire.
 	store.sinceFade += realDelta;
 	if (store.realClock - store.fadeWindowStart >= 1.0) {
 		store.fadeResolvesLast = std::exchange(store.fadeResolves, 0u);
@@ -2220,9 +1913,6 @@ void SnowDeformation::TickBodyCoatStore()
 	const float meltRate = std::max(settings.SpellMeltRate, 0.0f);
 	const float shakeTime = std::max(debugBodyCoatShakeTime, 0.1f);
 	const bool current = frame - stampGatherFrame <= 1u;
-	// S5, D12: a shout cone's ground mark at a point, shaped as
-	// DeformationUpdateCS.hlsl's ShoutMark shapes it, without its churn: the
-	// share of its depth there, 0 outside what its front has reached.
 	const float waist = std::clamp(settings.ShoutMarkWaist, 0.05f, 0.95f);
 	const float roundness = std::max(settings.ShoutMarkRoundness, 1.0f);
 	const float fadeStart = std::clamp(settings.ShoutMarkFadeStart, 0.0f, 0.98f);
@@ -2240,7 +1930,6 @@ void SnowDeformation::TickBodyCoatStore()
 		const float u = along / std::max(a_cone.coneLength, axisLen);
 		if (along < 0.0f || along > axisLen || u > 1.0f)
 			return 0.0f;
-		// Two half-superellipses meeting at the waist.
 		const float t = std::clamp(u < waist ? (waist - u) / waist : (u - waist) / (1.0f - waist), 0.0f, 1.0f);
 		const float halfWidth = std::max(a_cone.radius * std::pow(std::max(1.0f - std::pow(t, roundness), 0.0f), 1.0f / roundness), 1e-3f);
 		if (std::abs(perp) >= halfWidth)
@@ -2250,9 +1939,6 @@ void SnowDeformation::TickBodyCoatStore()
 	};
 	float most = 0.0f;
 	for (auto& [formID, a] : store.actors) {
-		// Read for every actor, so a coat that forms later sees only what is new.
-		// A fire hit is new while the spell system's memory of it has not run
-		// down since the last read.
 		bool burning = false;
 		if (current) {
 			float hit = -1.0f;
@@ -2261,7 +1947,6 @@ void SnowDeformation::TickBodyCoatStore()
 			burning = hit >= 0.0f && (a.fireHitSeen < 0.0f || hit >= a.fireHitSeen - 1.0e-3f);
 			a.fireHitSeen = hit;
 		}
-		// E0's jolts off the impact track: a landing, and the start of a knockdown or a rush.
 		float jolt = 0.0f;
 		if (current)
 			if (const auto it = impactTracks.find(formID); it != impactTracks.end() && it->second.time != a.trackTime) {
@@ -2276,8 +1961,6 @@ void SnowDeformation::TickBodyCoatStore()
 				a.knocked = track.knockEnergy > 0.0f;
 				a.rushing = track.speedEnergy >= kRushEnergy || (a.rushing && track.speedEnergy >= kRushRearm);
 			}
-		// Round 3: a corpse moved off its rest (the capture's settle latch woken)
-		// is jolted as a body knocked into the snow is.
 		if (current && a.dead)
 			if (const auto rest = corpseRestStates.find(formID); rest != corpseRestStates.end()) {
 				if (a.wasSettled && !rest->second.settled)
@@ -2307,11 +1990,6 @@ void SnowDeformation::TickBodyCoatStore()
 		fading.aging = ComputeCoatAging(actor.get());
 		const auto& aging = fading.aging;
 		fading.burning = burning;
-		// Round 2 (Josef: gradual, by the fire's intensity). A heat source warms the
-		// air on the melt clock, its core as warm as +3 C and in any weather. A
-		// fire spell melts a coat at the pace it melts the snow under it, a layer
-		// for a layer. A corpse lying settled in the snow is still in it: the
-		// weather does not take its coat (E0's body-drop test against the snow).
 		fading.inSnow = false;
 		if (a.dead)
 			if (const auto rest = corpseRestStates.find(formID); rest != corpseRestStates.end() && rest->second.settled)
@@ -2326,9 +2004,6 @@ void SnowDeformation::TickBodyCoatStore()
 		const float coats = clock * coatHours / meltHours + fire * coatSeconds;
 		for (int c = 0; c < 2; ++c)
 			a.meltOwed[c] += coats * kCoatFullLevels[c];
-		// The shake-off, a moved corpse's too (round 3; a still one has no motion).
-		// S5: snowfall is loose snow, shaken off alike, and a jolt sheds its full
-		// loose share (contact snow is packed and holds half).
 		const float loose = 1.0f - aging.stickiness;
 		fading.motion = std::clamp(a.speed / kImpactSpeedFloor, 0.0f, 1.0f);
 		fading.shake = loose * fading.motion / shakeTime;
@@ -2340,9 +2015,6 @@ void SnowDeformation::TickBodyCoatStore()
 			a.keep[0] *= 1.0f - fading.jolt;
 			a.keep[1] *= 1.0f - loose * std::min(jolt, 1.0f);
 		}
-		// D12: a shove's cone (Unrelenting Force) blows a body's snowfall off as
-		// its front reaches it, by the share of its ground mark's depth there, once
-		// a cone.
 		if (current && settings.EnableShoutCones && bound[1] > 0.0f)
 			for (const auto& cone : spellEmitters) {
 				if (!cone.cone || cone.mark != SpellMark::Carve)
@@ -2364,8 +2036,6 @@ void SnowDeformation::TickBodyCoatStore()
 	}
 	if (most < 1.0f || (store.sinceFade < kFadeGap && most < kFadeSoon))
 		return;
-	// Each half's word; what its voxels can hold after (the share rounds down at
-	// most, then the whole levels); the owed fade paid.
 	BodyCoatResolveCB cb{};
 	std::bitset<kBodyCoatSlots> slots;
 	for (auto& [formID, a] : store.actors) {
@@ -2435,8 +2105,6 @@ bool SnowDeformation::BodyCoatWriteBegin(bool a_coatOnly)
 	std::fill(std::begin(store.scratchOf), std::end(store.scratchOf), int8_t(-1));
 	store.scratchUsed = 0;
 	store.scratchMissedLast = std::exchange(store.scratchMissed, 0u);
-	// Contact reads the snow as the shell draws it, placed for this frame
-	// (LandscapeSnowRefresh's recipe); snowfall needs none of it.
 	const bool shell = lastShellCBData && shellTerrainTexture && shellTerrainTexture->srv && GetDeformationSRV() && heightBottomFiltered &&
 	                   heightTopRaw[heightCurrent] && heightSkinDepth && ShellFootprintHasSnow();
 	if (shell) {
@@ -2450,19 +2118,12 @@ bool SnowDeformation::BodyCoatWriteBegin(bool a_coatOnly)
 		store.deformTexel = deformWorldSize / float(deformationTextures[0]->desc.Width);
 	}
 	store.waterSRV = waterFineTexture && waterFineTexture->srv ? waterFineTexture->srv.get() : nullptr;
-	// S5: the eye Skylighting placed its probes about this frame, and its probes.
 	const RE::NiPoint3 eyePosition = Util::GetEyePosition();
 	store.eye[0] = eyePosition.x;
 	store.eye[1] = eyePosition.y;
 	store.eye[2] = eyePosition.z;
 	const auto& sky = globals::features::skylighting;
 	store.skySRV = sky.loaded && sky.texProbeArray && sky.texProbeArray->srv ? sky.texProbeArray->srv.get() : nullptr;
-	// Each contact-due actor's snow-top tile (round 4): that surface sampled once
-	// over the capture's bound of the actor, at the deformation texel (coarser
-	// for a body wider than the tile), two texels beyond for the taps and their
-	// filter. Each fall-due actor's row of tops (S5); one the capture does not
-	// draw (on a road, a rock or a horse, or a settled corpse) is walked for its
-	// coat alone, as is everyone while the capture sleeps (round 8).
 	BodyCoatTileCB tiles{};
 	uint32_t tops = 0;
 	bool any = false;
@@ -2573,9 +2234,6 @@ const std::vector<SnowDeformation::ContactProp>& SnowDeformation::BodyCoatCoatOn
 void SnowDeformation::BodyCoatTopBind(ID3D11DeviceContext* a_context, bool a_on)
 {
 	auto& store = *bodyCoatStore;
-	// The actor's row of tops, its window over the whole row, the highest kept;
-	// the tops' own VS reads its window and the snow's way from the write CB
-	// (VS b3, put back after).
 	ID3D11RenderTargetView* rtv = a_on ? store.topRTV.get() : contactHeight->rtv.get();
 	a_context->OMSetRenderTargets(1, &rtv, nullptr);
 	a_context->OMSetBlendState(a_on ? store.topBlend.get() : contactMinBlendBodies.get(), nullptr, 0xFFFFFFFF);
@@ -2612,12 +2270,10 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 	if (it == store.recordOf.end() || store.recordSkin[it->second] != a_geometry->GetGeometryRuntimeData().skinInstance.get())
 		return false;
 	const BodyCoatRecordCB& record = store.records[it->second];
-	// A voxel's largest side in the frame's units: the self-cover's slack.
 	float voxel = 0.0f;
 	for (const auto& row : record.ModelToAtlas)
 		if (const float length = std::sqrt(row.x * row.x + row.y * row.y + row.z * row.z); length > 0.0f)
 			voxel = std::max(voxel, 1.0f / length);
-	// Round 10: the slot's scratch slot, taken at its first draw this frame.
 	const uint32_t slot = record.Slot >> 1;
 	if (store.scratchOf[slot] < 0) {
 		if (store.scratchUsed >= kCoatScratchSlots) {
@@ -2626,7 +2282,6 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 		}
 		store.scratchOf[slot] = int8_t(store.scratchUsed++);
 	}
-	// Round 8: a seed laid indoors for one come in from a storm reads no roof.
 	const float* from = store.From();
 	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
 		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV && !store.currentOpenSky ? 1.0f : 0.0f,
@@ -2648,11 +2303,6 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 void SnowDeformation::BodyCoatWriteBind(ID3D11DeviceContext* a_context, bool a_on)
 {
 	auto& store = *bodyCoatStore;
-	// The capture's target stays bound: the coat's points leave it as it is. The
-	// coat VS reads its tile (t0), its tops (t1, S5), Skylighting's probes (t2),
-	// the water (t63), its constants (b3), SharedData (b5: Grass Collision's slot
-	// the rest of the frame) and FeatureData (b6); the GS its constants (b3,
-	// round 2: the snow's way). What was bound there is put back after.
 	ID3D11RenderTargetView* rtv = contactHeight->rtv.get();
 	if (a_on) {
 		a_context->VSGetConstantBuffers(3, 1, store.savedCB[0].put());
@@ -2705,7 +2355,6 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 	auto& store = *bodyCoatStore;
 	store.writtenTrianglesLast = a_triangles;
 	store.writtenActorsLast = a_actors;
-	// The readout: the copy two resolves back, if the GPU has it.
 	const uint32_t oldest = (store.raisedRing + 1) % 3;
 	if (store.raisedPending[oldest]) {
 		D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -2725,8 +2374,6 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 	cb.Cap = store.capLevel;
 	cb.Seed = globals::state->frameCount;
 	store.touched.reset();
-	// S5: each fall-due actor's halves fill by its snowfall, and may then hold up
-	// to what the fill brings at full exposure.
 	std::vector<std::pair<BodyCoatStore::Frame*, float>> fallen;
 	for (const auto& d : store.due) {
 		if (d.fall.z <= 0.0f || !d.drawn)
@@ -2734,7 +2381,6 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 		const auto it = store.actors.find(d.formID);
 		if (it == store.actors.end())
 			continue;
-		// What it owed is paid, the seed once.
 		auto& a = it->second;
 		a.fallDose = std::max(a.fallDose - (d.fall.x - d.fall.y), 0.0f);
 		a.fallSeed = a.fallSeed && !d.seed;
@@ -2779,10 +2425,8 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 		store.raisedRing = (store.raisedRing + 1) % 3;
 		a_context->CopyResource(store.raisedStaging[store.raisedRing].get(), store.raisedBuffer.get());
 		store.raisedPending[store.raisedRing] = true;
-		// The UAV unbound the atlas from Lighting's t41: the hook binds it again.
 		store.atlasBoundFrame = UINT32_MAX;
 	}
-	// S4: a half the writer drew into may now hold up to the cap.
 	const auto halves = std::exchange(store.touchedHalves, {});
 	for (uint32_t half = 0; half < 2 * kBodyCoatSlots; ++half)
 		if (halves.test(half))
@@ -2797,7 +2441,6 @@ bool SnowDeformation::BodyCoatPixelKey(uint32_t a_rawTechnique) const
 {
 	using Flags = SIE::ShaderCache::LightingShaderFlags;
 	using Technique = SIE::ShaderCache::LightingShaderTechniques;
-	// Model-space-normal skins carry no bind frame for the coat to read (section 5.10): skin keeps its plain shader.
 	return bodyCoatLive && (a_rawTechnique & uint32_t(Flags::Skinned)) != 0 && (a_rawTechnique & uint32_t(Flags::ModelSpaceNormals)) == 0 &&
 	       static_cast<Technique>(0x3F & (a_rawTechnique >> 24)) != Technique::Eye;
 }
@@ -2808,13 +2451,11 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 	auto& permutation = state->permutationData;
 	permutation.ExtraFeatureDescriptor &= ~uint32_t(State::ExtraFeatureDescriptors::SnowBodyCoat);
 	BodyCoatStore* store = bodyCoatStore.get();
-	// S5: the draw after a corpse's skin takes its technique's own pixel shader back.
 	if (store && std::exchange(store->swappedPixelShader, false))
 		if (auto* own = state->customPixelShader ? state->customPixelShader : *globals::game::currentPixelShader)
 			globals::d3d::context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(own->shader), nullptr, 0);
 	if (!store || !store->live || !a_pass || !a_pass->geometry)
 		return;
-	// Reflections and the inventory's 3D take no coat (section 2.6).
 	if ((permutation.ExtraShaderDescriptor & uint32_t(State::ExtraShaderDescriptors::IsReflections)) != 0 || permutation.RenderToUI)
 		return;
 	RE::BSGeometry* geometry = a_pass->geometry;
@@ -2823,7 +2464,6 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		return;
 	const auto it = store->recordOf.find(geometry);
 	if (it == store->recordOf.end() || store->recordSkin[it->second] != skin) {
-		// A skin the last walk did not see (an equip change): walk its actor soon.
 		if (it == store->recordOf.end() && store->skippedOf.contains(geometry))
 			return;
 		if (auto* owner = geometry->GetUserData(); owner && owner->formType == RE::FormType::ActorCharacter && store->actors.contains(owner->formID))
@@ -2831,9 +2471,6 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		return;
 	}
 	auto* context = globals::d3d::context;
-	// S5 (skin on corpses): a model-space-normal skin's technique keys its plain pixel
-	// shader, so living faces and bodies keep theirs; a corpse's skin draw takes the
-	// coat's for itself alone, and the plain one draws while it compiles.
 	using Flags = SIE::ShaderCache::LightingShaderFlags;
 	if ((state->currentPixelDescriptor & uint32_t(Flags::ModelSpaceNormals)) != 0) {
 		if ((store->records[it->second].Flags & kBodyCoatFlagLiving) != 0)
@@ -2847,15 +2484,12 @@ void SnowDeformation::SetBodyCoatBit(RE::BSRenderPass* a_pass)
 		store->swappedPixelShader = true;
 	}
 	permutation.ExtraFeatureDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowBodyCoat);
-	// Once a frame: R0 measured the t41 bind reaching every actor draw (BODY-SNOW-PLAN.md section 5.4).
 	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	if (store->atlasBoundFrame != frame) {
 		ID3D11ShaderResourceView* srv = store->atlasSRV.get();
 		context->PSSetShaderResources(kBodyCoatAtlasSlot, 1, &srv);
 		store->atlasBoundFrame = frame;
 	}
-	// The look wears the shell's set, bound per draw as projected snow binds it
-	// (a Prepass bind does not survive to the Lighting draws).
 	if (store->view == 0) {
 		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
 		ID3D11ShaderResourceView* normalSRV = shellSnowNormalSRV.get();
@@ -2911,8 +2545,6 @@ void SnowDeformation::RunBodyCoatCensus(bool a_dump)
 		if (auto* state = a_actor->AsActorState())
 			c.weaponDrawn = state->IsWeaponDrawn();
 
-		// The store's frames where it holds the actor (what the coat draws
-		// with), copied so the census changes nothing; fresh ones otherwise.
 		Store::Frame body;
 		std::vector<Store::Frame> parts;
 		const Store::Actor* held = nullptr;
@@ -3056,10 +2688,8 @@ void SnowDeformation::ProbeBodyCoatDraw(RE::BSRenderPass* a_pass)
 		Util::SetResourceName(bodyCoatProbeTexture.get(), "SnowDeformation::BodyCoatProbe");
 		Util::SetResourceName(bodyCoatProbeSRV.get(), "SnowDeformation::BodyCoatProbe SRV");
 	}
-	// With the coat live, the probe checks the atlas itself.
 	ID3D11ShaderResourceView* probe = bodyCoatStore && bodyCoatStore->live ? bodyCoatStore->atlasSRV.get() : bodyCoatProbeSRV.get();
 
-	// Once a frame, at its first Lighting pass: the bind the coat would make.
 	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	auto& t = bodyCoatDrawBuilding;
 	if (frame != bodyCoatDrawFrame) {
@@ -3099,9 +2729,6 @@ void SnowDeformation::ProbeBodyCoatDraw(RE::BSRenderPass* a_pass)
 	if (!actorOwner)
 		return;
 
-	// A reflection draw is one inside the cubemap camera's render, which marks
-	// it in the descriptor; State::activeReflections stays set from that
-	// render to Present, so it cannot tell (round 2's split read it).
 	const bool reflection = (globals::state->permutationData.ExtraShaderDescriptor & uint32_t(State::ExtraShaderDescriptors::IsReflections)) != 0;
 	const bool deferred = !reflection && globals::deferred && globals::deferred->deferredPass;
 	(reflection ? t.ownedReflection : deferred ? t.ownedDeferred : t.ownedForward)++;
@@ -3151,7 +2778,6 @@ std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const
 	                                            "on";
 	lines.push_back(std::format("Fading (S4): {}. Melt Time {:.0f} game hours at timescale {:.0f}: in clear, calm, cold weather a full coat goes in {:.1f} real minutes, one at Contact Cap in {:.1f}. Fade resolves in the last second: {}.",
 		state, meltHours, timescale, fullMinutes, fullMinutes * capShare, store.fadeResolvesLast));
-	// Round 9: the place as the melt reads it, warm or cold and why (D31).
 	if (auto* player = globals::game::player) {
 		const CoatAging here = ComputeCoatAging(player);
 		const RE::BGSLocation* location = player->GetCurrentLocation();

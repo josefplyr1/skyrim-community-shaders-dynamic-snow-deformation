@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Globals.h"
@@ -10,9 +6,7 @@
 namespace
 {
 	constexpr const char* kSnowEventNames[] = { "kick-up", "crumble", "landing", "knockdown", "rush", "body drop", "shout", "blast", "lightning" };
-	// Havok's gravity, metres per second squared.
 	constexpr float kGravityMetres = 9.8f;
-	// A descent ends when the body falls slower than this share of its peak.
 	constexpr float kDropSettleShare = 0.25f;
 	constexpr uint32_t kCensusLogLinesPerSecond = 20;
 	constexpr uint32_t kTrackerExpiryFrames = 300;
@@ -149,8 +143,6 @@ void SnowDeformation::CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, co
 			body.rushing = false;
 	}
 
-	// A foot moving through the layer throws snow once per deformation texel
-	// it advances; a foot leaving its print drops the cut wall back in.
 	if (!a_bones)
 		return;
 	const size_t feet = std::min<size_t>(a_bones->feet.size(), 8);
@@ -236,8 +228,6 @@ void SnowDeformation::TickSnowEvents()
 		return;
 	}
 
-	// Spell marks that move snow, once each: fire melts and frost glazes,
-	// so only carves and pits throw anything.
 	const float stickiness = GetSnowCondition().stickiness;
 	for (const auto& blast : activeBlasts) {
 		if (blast.mark != SpellMark::Carve && blast.mark != SpellMark::Pit)

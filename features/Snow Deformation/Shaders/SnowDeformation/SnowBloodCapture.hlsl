@@ -1,19 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Blood deposits into the toroidal blood map (BLOOD-DESIGN.md). The game's
-// blood decals - engine decals clipped to the ground, Dynamic Bloodpool
-// Framework's skinned quads - are re-rasterised from above with their own
-// diffuse, so the authored splatter shapes survive; API callers deposit
-// plain discs. RT0 = pigment (linear rgb) + concentration, alpha-blended
-// with MAX alpha; RT1 = the burial clock and game hours at deposit.
-//
-// The map is physical (toroidal): world -> logical texel -> + MapOrigin,
-// drawn four times shifted by -dim per axis so a mark straddling the seam
-// lands on both sides. Fragments outside the LOGICAL window are discarded,
-// or ground beyond the window would wrap onto its far edge.
-
 cbuffer BloodCB : register(b1)
 {
 	float4 WorldRow0;
@@ -27,36 +11,27 @@ cbuffer BloodCB : register(b1)
 	int2 MapOrigin;
 	float2 ClockNow;
 
-	// xy offset, zw scale - the Lighting VS's uv convention.
 	float4 TexcoordOffset;
 
 	float Intensity;
-	float AlphaThreshold;  // < 0: no alpha test
+	float AlphaThreshold;
 	float MaterialAlpha;
 	float NormalZMin;
 
-	// x = reveal 0..1: the mark soaks in from its dense core outward, so a
-	// texel shows once its alpha exceeds (1 - reveal). y > 0.5 (overlay):
-	// leave pixels no coat drew on to the landscape shell; (mask): the decal
-	// is not blood. z > 0.5 (overlay): DecalMask.y holds the decals' cover.
 	float4 Spread;
 
-	// Overlay: the copied screen rectangle in NDC (x0, y0, x1, y1).
 	float4 OverlayRect;
 
-	// Mask: the game's view-projection rows (camera-relative), CameraPosAdjust.
 	float4 ViewProjRow0;
 	float4 ViewProjRow1;
 	float4 ViewProjRow2;
 	float4 ViewProjRow3;
 	float4 CameraAdjust;
 
-	// Overlay: x = the focal length in pixels, yz = the principal point.
 	float4 OverlayView;
 }
 
 #ifdef SKINNED
-// Same palette convention as SnowContactCapture.hlsl: absolute world rows.
 cbuffer BloodSkinCB : register(b2)
 {
 	float4 BoneRows[240];
@@ -66,27 +41,10 @@ cbuffer BloodSkinCB : register(b2)
 #endif
 
 #ifdef OVERLAY
-// OVERLAY: one screen-rectangle pass after the object-snow pass. Per pixel
-// it reads the G-buffer as the game left it before its blood decals drew
-// (PD) and after them (P), both copied over the decals' screen rectangle
-// (Blood.cpp), and puts the decals' own contribution back over thin snow:
-// blood leaves no green or blue, so the stack's alpha is
-// A = 1 - P.gb / PD.gb and the contribution P - (1 - A) PD, blended
-// ONE / INV_SRC_ALPHA into the lit diffuse, the normal + gloss, the albedo,
-// the specular and the reflectance. No decal geometry and no per-decal
-// alpha: stacked decals, the game's own fade and its depth test are all
-// in P already, and pixels the game did not paint stay untouched. Kept
-// where a thin layer drew over the pre-snow surface: the depth after the
-// skin pass nearer than it, and the snow's height over it fading the decal
-// out from 1.5 to 5 units; bare rock has no lift and the deep shell keeps
-// its extinction smear.
 #	ifdef PSHADER
 #		include "Common/SharedData.hlsli"
-// Pre-snow depth (TerrainBlending's copy) and the skin pass's own depth.
 Texture2D<float> SceneDepth : register(t3);
 Texture2D<float> SkinDepth : register(t4);
-// Lit diffuse, normal + gloss, albedo, specular, reflectance: before any
-// snow drew (t5-t9) and before the frame's first blood decal drew (t10-t14).
 Texture2D<float4> PreSnow0 : register(t5);
 Texture2D<float4> PreSnow2 : register(t6);
 Texture2D<float4> PreSnow3 : register(t7);
@@ -97,26 +55,14 @@ Texture2D<float4> PreDecal2 : register(t11);
 Texture2D<float4> PreDecal3 : register(t12);
 Texture2D<float4> PreDecal4 : register(t13);
 Texture2D<float4> PreDecal5 : register(t14);
-// The MASK pass: x = the decals that are not blood, y = every overlay decal,
-// as alpha; 0 where none drew.
 Texture2D<float2> DecalMask : register(t15);
-// The main depth after the landscape shell, before the object-snow skins.
 Texture2D<float> PreSkinDepth : register(t16);
 #	endif
-// View-distance units. Coat lift is 0.4; a rise or the shell is 10-40. The
-// snow height over the decal (SnowHeightOver) does the fine cut; the far one
-// is wide so grazing views keep the thin end of a melt basin.
 static const float kOverlayMinLift = 0.05;
 static const float kOverlayMaxLift = 24.0;
 #endif
 
 #ifdef MASK
-// MASK: every overlay decal drawn again in screen space with the game's
-// camera - its texture alpha into an R8G8 target, stacked as the game stacks
-// decals. x: only decals that are not blood (blood's alpha is read off its
-// colour in the overlay; a frost mark or a rune has no such tell). y: all of
-// them, the overlay's cover. Kept where the fragment lies on the pre-snow
-// surface, so a body in front still hides the mark.
 #	ifdef PSHADER
 #		include "Common/SharedData.hlsli"
 Texture2D<float> SceneDepth : register(t3);
@@ -124,7 +70,6 @@ Texture2D<float> SceneDepth : register(t3);
 #endif
 
 #ifdef DISC
-// [2i] = xyz world centre, w radius; [2i+1] = rgb pigment, w amount.
 StructuredBuffer<float4> Discs : register(t1);
 #endif
 
@@ -179,7 +124,6 @@ VS_OUTPUT main(uint vid : SV_VertexID, uint inst : SV_InstanceID)
 	const uint disc = inst >> 2;
 	const float4 centre = Discs[disc * 2];
 	const float4 look = Discs[disc * 2 + 1];
-	// Two triangles, corners in [-1, 1].
 	const float2 corners[6] = { float2(-1, -1), float2(1, -1), float2(-1, 1), float2(-1, 1), float2(1, -1), float2(1, 1) };
 	float2 c = corners[vid];
 	VS_OUTPUT o;
@@ -213,7 +157,6 @@ VS_OUTPUT main(VS_INPUT_SKIN input, uint inst : SV_InstanceID)
 	VS_OUTPUT o;
 	o.Position = PlaceVertex(world, inst & 3u, o.Logical);
 	o.UV = input.TexCoord * TexcoordOffset.zw + TexcoordOffset.xy;
-	// Pool quads lie on the ground by construction.
 	o.NormalZ = 1.0;
 	o.Tint = float4(1, 1, 1, 1);
 	return o;
@@ -263,15 +206,12 @@ float4 DecalPart(Texture2D<float4> p, Texture2D<float4> pd, int3 pixel, float a)
 	return float4(max(p.Load(pixel).rgb - (1.0 - a) * pd.Load(pixel).rgb, 0.0), a);
 }
 
-// The pre-snow surface at a pixel, in view space.
 float3 PreSnowViewPos(int2 px)
 {
 	const float z = SharedData::GetScreenDepth(SceneDepth.Load(int3(px, 0)));
 	return float3((float2(px) + 0.5 - OverlayView.yz) * (z / OverlayView.x), z);
 }
 
-// The snow's height over the pre-snow surface: lift is a gap in view depth,
-// the ray's slant through that surface turns it into a height.
 float SnowHeightOver(int2 px, float lift)
 {
 	const float3 p = PreSnowViewPos(px);
@@ -279,10 +219,6 @@ float SnowHeightOver(int2 px, float lift)
 	return lift * abs(dot(normalize(p), n)) * length(p) / max(p.z, 1e-3);
 }
 
-// Snow over a decal: under this much it shows whole, from this much it is
-// hidden - so the ground of a melt basin comes through as the snow thins
-// instead of ending on a contour. SnowShell.hlsl kDecalShowDepth stays above
-// kDecalHiddenOver.
 static const float kDecalShowsUnder = 2.0;
 static const float kDecalHiddenOver = 12.0;
 
@@ -293,21 +229,11 @@ OVERLAY_OUTPUT main(VS_OUTPUT input)
 	float lift = sceneDist - SharedData::GetScreenDepth(SkinDepth.Load(pixel));
 	if (lift < kOverlayMinLift || lift > kOverlayMaxLift)
 		discard;
-	// With the detail tiles live the landscape shell paints its own blood,
-	// from every angle; this lift is measured along the view ray, so on thin
-	// landscape snow the overlay came and went with the camera. A pixel whose
-	// depth the skin pass left alone is the shell's.
 	if (Spread.y > 0.5 && SkinDepth.Load(pixel) >= PreSkinDepth.Load(pixel))
 		discard;
 	float3 p0 = PreSnow0.Load(pixel).rgb;
 	float3 d0 = PreDecal0.Load(pixel).rgb;
-	// What the decals took off green and blue: 0 wherever nothing drew, however dark.
 	float2 taken = (d0.gb - p0.gb) / max(d0.gb, 1e-4);
-	// The copies also hold every decal-mode mesh the game drew between them
-	// (a porch's dirt): the stack counts only up to the overlay decals' own
-	// cover. The mask counts only where the game's decal drew: under snow
-	// claimed before the game's draws it failed its depth test, and both
-	// copies hold the clear colour.
 	const float2 mask = DecalMask.Load(pixel);
 	const float cover = Spread.z > 0.5 ? mask.y : 1.0;
 	float a = max(min(saturate(max(taken.x, taken.y)), cover), any(p0 != d0) ? mask.x : 0.0);
@@ -345,13 +271,6 @@ float2 main(VS_OUTPUT input) : SV_Target0
 	return float2(Spread.y > 0.5 ? a : 0.0, a);
 }
 #elif defined(PSHADER) && defined(RUNE)
-// RUNE: a rune's glyph decal, or a frost mark, into its atlas tile (Blood.cpp,
-// RenderRuneCapture). Not its colour - its UV FIELD: rg = the decal's uv at
-// this ground point, b = its id in the tile over 65535 (0 = none), a = the
-// material's alpha this frame (the pulse, the fade). The shell samples the
-// decal's own textures through it, so the mark keeps the texture's
-// resolution whatever the tile's. Where decals overlap, the most opaque owns
-// the texel (depth 1 - its alpha); pieces of one decal tie.
 struct RUNE_OUTPUT
 {
 	float4 Field : SV_Target0;
@@ -384,7 +303,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	if (any(input.Logical < 0.0) || any(input.Logical >= MapDim))
 		discard;
 #	ifdef DISC
-	// Soft disc: full inside 60% of the radius, gone at the rim.
 	float a = input.Tint.w * (1.0 - smoothstep(0.6, 1.0, length(input.UV)));
 	float3 rgb = input.Tint.rgb;
 #	else
@@ -394,8 +312,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float a = c.a * MaterialAlpha;
 	[flatten] if (AlphaThreshold >= 0.0)
 		a = a >= AlphaThreshold ? 1.0 : 0.0;
-	// Spreading: dense texels first, the thin fringe as the reveal reaches
-	// it; the map keeps the high-water mark so the shape only grows.
 	a *= smoothstep(1.0 - Spread.x, 1.0 - Spread.x + 0.3, c.a);
 	float3 rgb = c.rgb * input.Tint.rgb;
 #	endif

@@ -5,12 +5,6 @@
 
 #include <Psapi.h>
 
-// While the render thread is suspended the sampler only reads its registers
-// and copies the top of its stack: no locks, no allocation, so it cannot
-// deadlock on anything the suspended thread holds. Return addresses are found
-// afterwards by scanning that copy for values that land just after a call
-// instruction in a module's executable sections (a snapshot taken at Start).
-
 namespace
 {
 	constexpr uint32_t kStackCopyBytes = 4096;
@@ -114,8 +108,6 @@ namespace
 		return a_address < it->end ? &*it : nullptr;
 	}
 
-	// The bytes before a_address end in a call: E8 rel32, FF 15 disp32,
-	// FF /2 with a register, or FF /2 with a short memory operand.
 	bool AfterCall(uint64_t a_address, const CodeRange& a_range)
 	{
 		if (a_address < a_range.start + 7)
@@ -220,7 +212,6 @@ namespace SnowHitch
 	void OnFrame()
 	{
 		if (g_mainTid.load(std::memory_order_relaxed) == 0) {
-			// Above the stack pointer is always committed; only the base bounds the copy.
 			g_stackLow = 0;
 			g_stackHigh = reinterpret_cast<uint64_t>(reinterpret_cast<NT_TIB*>(NtCurrentTeb())->StackBase);
 			g_mainTid = GetCurrentThreadId();
@@ -274,7 +265,6 @@ namespace SnowHitch
 		if (marks.size() < 3 || sampleCount == 0)
 			return out;
 
-		// A frame is the time from one mark to the next; a sample belongs to the frame it falls in.
 		std::vector<float> periods;
 		for (size_t i = 1; i < marks.size(); i++)
 			periods.push_back(float((marks[i].qpc - marks[i - 1].qpc) * g_qpcToMs));
@@ -327,7 +317,6 @@ namespace SnowHitch
 		auto table = [&](const std::unordered_map<std::string, Tally>& a_map) {
 			std::vector<std::pair<std::string, Tally>> rows(a_map.begin(), a_map.end());
 			const double h = std::max(1u, hitchSamples), n = std::max(1u, normalSamples);
-			// One side empty (a threshold below or above every frame): rank by count.
 			const auto key = [&](const Tally& t) { return hitchSamples && normalSamples ? t.hitch / h - t.normal / n : double(t.hitch + t.normal); };
 			std::sort(rows.begin(), rows.end(), [&](const auto& a, const auto& b) { return key(a.second) > key(b.second); });
 			json t = json::array();

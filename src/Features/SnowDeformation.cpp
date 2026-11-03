@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "SnowDeformation.h"
 
 #include "Globals.h"
@@ -12,15 +8,6 @@
 #include <DirectXPackedVector.h>
 #include <dxgi1_4.h>
 
-// Settings serialisation, written out rather than generated.
-//
-// NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT tops out at 63 fields and
-// that ceiling was reached exactly: adding the lightning cloak knobs pushed it
-// over, and the macro failed with a hundred errors naming every field in the
-// struct rather than the one thing that was wrong. The JSON shape here is
-// identical - one flat object keyed by field name - so settings files written
-// before this change load unchanged, and there is no ceiling left to hit when
-// frost adds its own.
 #define SNOWDEF_SETTINGS_FIELDS(X) \
 	X(EnableSnowDeformation) \
 	X(SlumpRate) \
@@ -194,8 +181,6 @@ void to_json(nlohmann::json& j, const SnowDeformation::Settings& s)
 
 void from_json(const nlohmann::json& j, SnowDeformation::Settings& s)
 {
-	// A missing key keeps the default, matching what WITH_DEFAULT did, so a
-	// settings file written before a field existed still loads.
 	const SnowDeformation::Settings defaults{};
 #define X(field) s.field = j.value(#field, defaults.field);
 	SNOWDEF_SETTINGS_FIELDS(X)
@@ -215,12 +200,6 @@ void SnowDeformation::CreateDeformationTextures()
 		.Height = deformMapDim,
 		.MipLevels = 1,
 		.ArraySize = 1,
-		// Four channels: depth, signed surface state (melt positive, scorch
-		// negative), crust, and one spare. Widened rather than given a field of
-		// its own because crust PERSISTS after the frost that made it - a wall
-		// glazes ground and then expires - so a separate field would have had
-		// to duplicate this map's ping-pong, scrolling and decay rather than
-		// deriving itself each frame the way the exclusion field does.
 		.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
 		.SampleDesc = { .Count = 1 },
 		.Usage = D3D11_USAGE_DEFAULT,
@@ -241,9 +220,6 @@ void SnowDeformation::CreateDeformationTextures()
 		.Texture2D = { .MipSlice = 0 }
 	};
 
-	// [0] is THE map; [1] is EvolveCS's snapshot scratch. Its neighbour taps
-	// read depth and surface state only (the texel's own four come from the
-	// map), so the snapshot keeps those two.
 	deformationTextures[0] = new Texture2D(texDesc, "SnowDeformation::DeformationMap");
 	deformationTextures[0]->CreateSRV(srvDesc);
 	deformationTextures[0]->CreateUAV(uavDesc);
@@ -259,16 +235,10 @@ void SnowDeformation::CreateDeformationTextures()
 		deformationTextures[1]->CreateUAV(snapUav);
 	}
 
-	// The tile store's window-sized companions follow the map's dimension.
 	if (!CreateTrenchStoreResources()) {
 		logger::warn("[SNOW DEFORMATION] Trench store resources failed; trenches will not survive leaving the window");
 	}
 
-	// Berm field: a bake of the 17-tap disc average the shells used to run per
-	// pixel, beside it the carve's short blur the walls lay back toward
-	// (Snow Climate's slough), and the dates of both (track age). Same
-	// dimensions as the map it is derived from, four half-float channels, and
-	// no ping-pong - it is rebuilt from the current map where the map changed.
 	{
 		D3D11_TEXTURE2D_DESC bermDesc = texDesc;
 		bermDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -282,8 +252,6 @@ void SnowDeformation::CreateDeformationTextures()
 		bermFieldTexture->CreateUAV(bermUavDesc);
 	}
 
-	// Body passes: per map texel, the carve its last pass started from and
-	// when bodies last touched it (StampCS).
 	{
 		D3D11_TEXTURE2D_DESC passDesc = texDesc;
 		passDesc.Format = DXGI_FORMAT_R16_UINT;
@@ -297,8 +265,6 @@ void SnowDeformation::CreateDeformationTextures()
 		globals::d3d::context->ClearUnorderedAccessViewUint(passStateTexture->uav.get(), zero);
 	}
 
-	// Body reach: per map texel, the deepest a body has reached into the
-	// layer (StampCS), which the shells measure trampled ground against.
 	{
 		D3D11_TEXTURE2D_DESC reachDesc = texDesc;
 		reachDesc.Format = DXGI_FORMAT_R8_UNORM;
@@ -314,8 +280,6 @@ void SnowDeformation::CreateDeformationTextures()
 		globals::d3d::context->ClearUnorderedAccessViewFloat(bodyReachTexture->uav.get(), zero);
 	}
 
-	// Track dates: when each texel was last cut, on the ageing clock. Starts
-	// never-cut; the clear's full-map ring dates what the store brings back.
 	{
 		D3D11_TEXTURE2D_DESC clockDesc = texDesc;
 		clockDesc.Format = DXGI_FORMAT_R16_FLOAT;
@@ -334,7 +298,6 @@ void SnowDeformation::CreateDeformationTextures()
 
 	CreateBloodTextures(texDesc);
 
-	// Tile-dispatch state, sized to the map's tile grid (dim/8 per axis).
 	{
 		auto device = globals::d3d::device;
 		const uint tiles = deformMapDim / 8;
@@ -424,8 +387,6 @@ void SnowDeformation::CreateDeformationTextures()
 		DX::ThrowIfFailed(device->CreateShaderResourceView(untouchedTilesTexture.get(), nullptr, untouchedTilesSRV.put()));
 		Util::SetResourceName(untouchedTilesSRV.get(), "SnowDeformation::UntouchedTiles SRV");
 
-		// Occupancy and berm-dirty content is unknown until the next Prepass
-		// seeds both all-1.
 		tileGridsNeedInit = true;
 	}
 }
@@ -440,21 +401,7 @@ void SnowDeformation::SetupResources()
 	CreateDeformationTextures();
 
 	{
-		// Idle-skip activity flag: one raw uint the update CS ORs when any texel
-		// changed at stored precision, plus a staging ring to read it back
-		// without a stall. Dimension-independent, so a map-resolution change
-		// never touches it.
 		auto device = globals::d3d::device;
-		// 56 bytes, layout mirrored in DeformationUpdateCS.hlsl:
-		// [0] changed-anywhere flag, [4] changed count,
-		// [8] 65535-minX, [12] 65535-minY (min via complemented InterlockedMax,
-		// so ClearUAV's all-zero init works for every field), [16] maxX,
-		// [20] maxY, [24] depth count, [28] melt/scorch count, [32]
-		// crust count, [36] per-texel max-delta sum, fixed-point 1e6,
-		// [40] evolve-only flag (that pass's own idle gate; meaningful only on
-		// frames evolve ran), [44] evolve tile count, [48] berm tile count
-		// (the dispatch census), [52] evolve-only count of texels holding a
-		// fire or shock mark.
 		D3D11_BUFFER_DESC flagDesc{};
 		flagDesc.ByteWidth = 56;
 		flagDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -480,8 +427,6 @@ void SnowDeformation::SetupResources()
 			Util::SetResourceName(deformActivityStaging[i].get(), "SnowDeformation::DeformActivityStaging");
 		}
 
-		// Stamp-pass tile list: CPU-built per frame, capacity-fixed so it is
-		// dimension-independent.
 		D3D11_BUFFER_DESC tileDesc{};
 		tileDesc.ByteWidth = kStampTileCap * sizeof(uint32_t);
 		tileDesc.Usage = D3D11_USAGE_DYNAMIC;
@@ -498,9 +443,6 @@ void SnowDeformation::SetupResources()
 		DX::ThrowIfFailed(device->CreateShaderResourceView(stampTileBuffer.get(), &tileSrvDesc, stampTileSRV.put()));
 		Util::SetResourceName(stampTileSRV.get(), "SnowDeformation::StampTiles SRV");
 
-		// Indirect args for the evolve and berm dispatches, written by their
-		// scans' last group: three uints of args, then the scan's append and
-		// finished-group counters, zero at creation and after every scan.
 		D3D11_BUFFER_DESC argsDesc{};
 		argsDesc.ByteWidth = 5 * sizeof(uint32_t);
 		argsDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -528,8 +470,6 @@ void SnowDeformation::SetupResources()
 	}
 
 	{
-		// Wide exclusion field. Two 8-bit channels (suppression, melt) are
-		// plenty for values the shells only ever smoothstep.
 		D3D11_TEXTURE2D_DESC fieldDesc = {
 			.Width = kExclusionFieldDim,
 			.Height = kExclusionFieldDim,
@@ -557,9 +497,6 @@ void SnowDeformation::SetupResources()
 	}
 
 	{
-		// Baked undulation field: amp-free height + shading gradient in half
-		// floats. Camera-snapped and settings-keyed, so it rebakes on
-		// recenter/Spacing change rather than per frame.
 		D3D11_TEXTURE2D_DESC undDesc = {
 			.Width = kUndulationFieldDim,
 			.Height = kUndulationFieldDim,
@@ -608,8 +545,6 @@ void SnowDeformation::SetupResources()
 			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
 			.SampleDesc = { .Count = 1 },
 			.Usage = D3D11_USAGE_DEFAULT,
-			// UAV: the far-fill CS writes heightmap-sourced texels in place
-			// after each CPU upload.
 			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
 		};
 
@@ -655,8 +590,6 @@ void SnowDeformation::SetupResources()
 	CreateHeightFieldResources();
 
 	{
-		// RT0 MAX (tops) + RT1 MIN (bottoms) + RT2 MAX (skin depth): the
-		// extreme surfaces win per texel in any draw order; no depth buffer.
 		D3D11_BLEND_DESC minmaxBlendDesc{};
 		minmaxBlendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 3; i++) {
@@ -667,8 +600,6 @@ void SnowDeformation::SetupResources()
 			minmaxBlendDesc.RenderTarget[i].SrcBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].DestBlendAlpha = D3D11_BLEND_ONE;
 			minmaxBlendDesc.RenderTarget[i].BlendOpAlpha = D3D11_BLEND_OP_MAX;
-			// RT2 carries a second channel (G = a road's top, kNoRoadTop off
-			// roads); MAX on it keeps the highest road surface.
 			minmaxBlendDesc.RenderTarget[i].RenderTargetWriteMask = (i == 2) ?
 			                                                            (D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN) :
 			                                                            D3D11_COLOR_WRITE_ENABLE_RED;
@@ -721,17 +652,8 @@ void SnowDeformation::SetupResources()
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
 {
-	// Advance the window once per frame and only from the in-world upload:
-	// reflection/early uploads carry probe cameras that must not steer it.
-	// Advance only while the map is actually updated (feature enabled, or
-	// the overlay keeping the simulation alive for debugging); otherwise a
-	// walking origin desyncs the constant buffer from the frozen texture,
-	// visible as trails sliding with the camera.
 	static Util::FrameChecker frameChecker;
 	if (a_inWorld && (settings.EnableSnowDeformation || debugTerrainOverlay) && frameChecker.IsNewFrame()) {
-		// Snap to whole texels so scrolling never resamples the map. The
-		// cached FrameBuffer camera position is what the lighting pixel
-		// shader sees as CameraPosAdjust, so map and terrain agree.
 		auto eyePosFB = globals::game::frameBufferCached.GetCameraPosAdjust();
 		const float deformTexel = deformWorldSize / deformMapDim;
 		float2 desiredOrigin = {
@@ -743,10 +665,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		const int scrollY = (int)std::lround((desiredOrigin.y - windowOrigin.y) / deformTexel);
 		pendingScrollDelta.x += scrollX;
 		pendingScrollDelta.y += scrollY;
-		// The toroidal origin advances HERE, with the window, so every
-		// consumer CB filled after this point carries the pair consistently.
-		// The map itself catches up in Prepass (RingCS), before anything
-		// renders. The dim is a power of two, so the wrap is a mask.
 		const int originMask = (int)deformMapDim - 1;
 		mapOrigin.x = (mapOrigin.x + scrollX) & originMask;
 		mapOrigin.y = (mapOrigin.y + scrollY) & originMask;
@@ -759,7 +677,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
 	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
-	// Water raster frame (kWaterWindowSlot): the window's min corner, texel size, dim.
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
 		data.WaterWindowOrigin = { waterFineCenter.x - waterFineHalf, waterFineCenter.y - waterFineHalf };
@@ -767,15 +684,10 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 		data.WaterWindowDim = float(kWaterFineDim);
 	}
 
-	// Horizon snow: LOD terrain only exists beyond the loaded-cell seam
-	// (where the shell ends), so the recolor simply applies to all of it â€”
-	// including any LOD peeking through under the shell, which then wears
-	// the same material and helps hide holes.
 	EnsureShellSnowTextures();
 	data.LODReplaceStart = 0.0f;
 	data.LODReplaceFadeInv = 1.0f / 2048.0f;
 	data.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
-	// PBR auto-detection only; the manual linear override for non-PBR sets was retired.
 	data.SnowIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	data.SnowRoughnessScale = snowRoughnessScale;
 	data.LODReplaceEnable = (settings.EnableSnowDeformation && settings.HorizonSnow && shellSnowDiffuseSRV) ? 1.0f : 0.0f;
@@ -792,19 +704,13 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
 	const float wetIce = SnowWetIceStrength();
 	data.LandIce = wetIce * SnowIceShown(1);
-	// What froze before each track was cut, scaled as the rows' ice is, on the
-	// clock the dates stand in.
 	data.IceClock = TrackDateClock();
 	for (uint32_t k = 0; k < kIceHistoryBins; ++k) {
 		const auto& entry = snowClimate.iceHistory[k];
 		data.IceHistory[k] = { wetIce * entry[0], wetIce * entry[1], wetIce * entry[2], 0.0f };
 	}
-	// Snow Trenches on Objects: after the window advance above, which the print window follows.
 	data.PrintFullDepth = BodyPrintScale();
 	data.PrintRect = PrintRectForFrame();
-	// The world map renders the LOD world without the shell, so a shell-
-	// matched recolor there mismatches everything else the map shows
-	// skins are gated the same way in DrawCapturedStatics.
 	if (globals::state->isMapMenuOpen) {
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
@@ -817,7 +723,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 
 void SnowDeformation::ApplyRangeSettings()
 {
-	// Trench window: content is scale-relative, so a resize clears the map.
 	if (trenchRangeDirty || !rangeInitApplied) {
 		float newWorldSize = std::clamp(settings.RangeTrenchesM, 29.0f, 200.0f) * 2.0f * kUnitsPerMeter;
 		if (std::abs(newWorldSize - deformWorldSize) > 1.0f) {
@@ -827,16 +732,9 @@ void SnowDeformation::ApplyRangeSettings()
 		trenchRangeDirty = false;
 	}
 
-	// Map resolution: same contract as the range change - texel content is
-	// resolution-relative, so the pair recreates (with the store's window-sized
-	// companions) and clears, and the store re-injects what it holds.
 	if (deformMapDimDirty || !rangeInitApplied) {
-		// Snapped to a power of two - the toroidal mask requires it. The
-		// combo offers these three; this guards a hand-edited JSON and writes
-		// the value back so the next save holds what is running.
 		const uint desired = settings.DeformMapResolution >= 4096u ? 4096u : (settings.DeformMapResolution >= 2048u ? 2048u : 1024u);
 		settings.DeformMapResolution = desired;
-		// The VRAM cap runs the map smaller without touching the setting.
 		const uint effective = settings.VRAMAwareTrenchMap && deformMapVramCap ? std::min(desired, deformMapVramCap) : desired;
 		if (effective != deformMapDim) {
 			deformMapDim = effective;
@@ -872,8 +770,6 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 			const uint evolveTiles = value[11];
 			const uint bermTiles = value[12];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
-			// Evolve's own verdict, only from frames it actually ran (the
-			// buffer is cleared per frame, so a skipped evolve reads 0 there).
 			if (deformActivitySlotEvolveRan[i] && deformActivitySlotSeq[i] > evolveVerdictSeq) {
 				evolveVerdictSeq = deformActivitySlotSeq[i];
 				evolveFlagActive = evolveFlag != 0;
@@ -894,8 +790,6 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 				deformChangedMaxY = maxY;
 			}
 		}
-		// A failed map drops the slot rather than wedging the ring; the verdict
-		// simply stays whatever it was, which errs toward running.
 		deformActivityPending[i] = false;
 	}
 }
@@ -938,23 +832,13 @@ float SnowDeformation::GameClock::Read(std::atomic<bool>& a_unarm)
 	if (!calendar)
 		return -1.0f;
 
-	// The co-save callbacks land on the game thread. They ask rather than
-	// write, so the reading below stays owned by one thread.
 	if (a_unarm.exchange(false, std::memory_order_acq_rel))
 		lastHours = -1.0f;
 
-	// Waiting works by cranking the timescale enormously for its animation, so
-	// a live reading taken during one is the wait and not the player's setting.
-	// Latch the last plausible value; waited hours then pass at the rate the
-	// same hours would have passed at if they had been played.
 	const float rawScale = calendar->GetTimescale();
 	if (rawScale >= 1.0f && rawScale <= 100.0f)
 		timescale = rawScale;
 
-	// Elapsed hours telescope, so the calendar's float32 day quantisation
-	// (~2.6-second steps late game) cancels instead of accumulating. A wait,
-	// a sleep or a fast travel needs no special case: the next reading carries
-	// the whole elapsed span.
 	const float hours = calendar->GetHoursPassed();
 	if (lastHours < 0.0f) {
 		lastHours = hours;
@@ -963,8 +847,6 @@ float SnowDeformation::GameClock::Read(std::atomic<bool>& a_unarm)
 	const float delta = hours - lastHours;
 	lastHours = hours;
 
-	// Backwards is a loaded save: the consumers' state belongs to a timeline
-	// that no longer exists. Each decides what that means for itself.
 	if (delta < -1.0e-4f) {
 		reversed = true;
 		return hours;
@@ -986,8 +868,6 @@ RE::TESWorldSpace* SnowDeformation::NoSkyWorldspace()
 	return worldSpace && worldSpace->flags.any(RE::TESWorldSpace::Flag::kNoSky) ? worldSpace : nullptr;
 }
 
-// Snow-flagged precipitation that is not snow (Solstheim's ash storm), read as
-// ClassifyProjectedMato reads a MATO; redone when the record or texture changes.
 static bool FallsAsSnow(RE::TESWeather* a_weather)
 {
 	struct Verdict
@@ -1028,7 +908,6 @@ static bool FallsAsSnow(RE::TESWeather* a_weather)
 
 float SnowDeformation::ComputeSnowfallIntensity() const
 {
-	// Blackreach's weather is snow-flagged.
 	if (auto* worldSpace = NoSkyWorldspace()) {
 		static RE::FormID logged = 0;
 		if (std::exchange(logged, worldSpace->GetFormID()) != worldSpace->GetFormID())
@@ -1039,11 +918,6 @@ float SnowDeformation::ComputeSnowfallIntensity() const
 	return ComputePrecipitationIntensity(RE::TESWeather::WeatherDataFlag::kSnow);
 }
 
-// The load order's snowfalls (BODY-SNOW-PLAN.md D22): a body's snowfall coat
-// lumps past the heaviest non-storm snowfall's share of the heaviest; the
-// storms begin at the widest step in intensity among the snowfalls above
-// reference density. Weathers a No Sky worldspace's climate draws on snow on
-// nobody, so they are left out.
 const SnowDeformation::SnowWeatherRange& SnowDeformation::SnowWeathers()
 {
 	auto& range = snowWeatherRange;
@@ -1092,9 +966,6 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 	if (!sky)
 		return 0.0f;
 
-	// Normalized precipitation density of a weather of this class; flagged
-	// weathers without particle data count as baseline precipitation, and a
-	// snow-flagged one whose particles are not snow (ash) counts as none.
 	auto snowDensity = [a_flag](RE::TESWeather* weather) -> float {
 		if (!weather || !weather->data.flags.any(a_flag))
 			return 0.0f;
@@ -1112,11 +983,6 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 		return edge0 >= edge1 ? (x >= edge1 ? 1.0f : 0.0f) : std::clamp((x - edge0) / (edge1 - edge0), 0.0f, 1.0f);
 	};
 
-	// Fade with the transition the way the engine fades the particles: the
-	// incoming weather's precipitation ramps in over the last
-	// precipitationBeginFadeIn/255 of the transition, the outgoing weather's
-	// dies over the first precipitationEndFadeOut/255 (WetnessEffects' rain
-	// interpretation of the same record bytes).
 	float pct = std::clamp(sky->currentWeatherPct, 0.0f, 1.0f);
 	float intensity = 0.0f;
 	if (float current = snowDensity(sky->currentWeather); current > 0.0f) {
@@ -1133,7 +999,6 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 
 void SnowDeformation::Prepass()
 {
-	// Cloud Shadows binds t25 only in the reflections prepass, which not every frame runs.
 	lightingCloudShadowSRV = nullptr;
 	globals::d3d::context->PSGetShaderResources(25, 1, lightingCloudShadowSRV.put());
 	PrepassSimulation();
@@ -1160,17 +1025,11 @@ void SnowDeformation::PrepassSimulation()
 
 	auto context = globals::d3d::context;
 
-	// Keep t101 bound even while paused or disabled: the lighting shader
-	// samples it whenever the feature is compiled in.
 	ID3D11ShaderResourceView* deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
-	// Water raster for Lighting's underwater veto; null until captured.
 	ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 	BindPrintReaders(context);
-	// Horizon snow albedo + normals for the LOD terrain recolor; the shader
-	// gates on LODReplaceEnable/SnowHasNormal, which require these SRVs to
-	// exist.
 	EnsureShellSnowTextures();
 	if (shellSnowDiffuseSRV) {
 		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
@@ -1179,14 +1038,11 @@ void SnowDeformation::PrepassSimulation()
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 	}
 
-	// Child worldspace = walled city (WhiterunWorld etc. parent Tamriel).
 	cityWorldspace = false;
 	if (auto* tes = globals::game::tes)
 		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
 			cityWorldspace = worldSpace->parentWorld != nullptr;
 
-	// New frame: publish last frame's statics-capture count and reset the
-	// list before this frame's opaque rendering fills it again.
 	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
 	const size_t capturedLast = capturedStatics.size();
 	capturedStatics.clear();
@@ -1198,14 +1054,11 @@ void SnowDeformation::PrepassSimulation()
 	coatReachBounds[1].swap(coatReachBounds[0]);
 	coatReachBounds[0].clear();
 
-	// Publish last frame's projected-snow classification counters for the
-	// menu debug readout, then reset for this frame's opaque pass.
 	statProjMatchedPrev = std::exchange(statProjMatched, 0u);
 	statProjNoProjectionPrev = std::exchange(statProjNoProjection, 0u);
 	statProjVetoedPrev = std::exchange(statProjVetoed, 0u);
 
 	UpdateActiveWorldspace();
-	// Above every early return: these read the sky, the calendar and actors, not the snow.
 	snowfallIntensity = ComputeSnowfallIntensity();
 	weatherClock.Read(weatherClockUnarm);
 	TickAccumulation();
@@ -1213,11 +1066,6 @@ void SnowDeformation::PrepassSimulation()
 	TickSnowClimate();
 	TickBodyCoat();
 
-	// While the prime owns a group's shader members, its render paths skip;
-	// groups unlock as the worker publishes them (SnowShadersPending), so
-	// the snowfield appears when ITS shaders exist rather than when all
-	// do. Skipped frames resume exactly like a long hitch - the window-
-	// jump and trench-inject paths already handle the catch-up.
 	if (SnowShadersPending(1))
 		return;
 
@@ -1226,9 +1074,6 @@ void SnowDeformation::PrepassSimulation()
 		UpdateUndulationField();
 	}
 
-	// The overlay keeps the map simulation (stamps, scroll, refill) running
-	// while the feature is disabled, so path tracking can be debugged with
-	// every visual effect off.
 	if (!settings.EnableSnowDeformation && !debugTerrainOverlay)
 		return;
 
@@ -1236,32 +1081,15 @@ void SnowDeformation::PrepassSimulation()
 	if (ui && ui->GameIsPaused())
 		return;
 
-	// No ground in the deformation window carries positive snow depth, so both
-	// dispatches would produce a map no pixel can sample. Placed with the other
-	// early-outs rather than at the dispatch: everything below it - the trench
-	// store sweep, the flush, the inject build, the stamp gather - is work in
-	// service of that map, and the scroll delta must keep accumulating rather
-	// than be consumed, exactly as it does while the feature is switched off.
-	//
-	// Resuming forces a clear instead of trusting a delta that may now exceed
-	// the map. Trenches come back through the tile store's re-inject, the same
-	// path a worldspace change already uses.
-	//
-	// Arcs age above the suspend: one left behind on leaving snow must still
-	// expire while the passes below sleep.
 	spanClock.Lap(CpuCensus::kSpanPrepassHead);
 	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 
-	// Bare must hold kShellGateBareFrames before suspending: the resume clears
-	// the map, so a cell flickering at the square's edge must not cost it.
 	deformGateBareFrames = DeformationWindowHasReaders() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
 	if (deformGateBareFrames >= kShellGateBareFrames) {
 		if (!deformSuspended) {
 			deformSuspended = true;
 			logger::debug("[SNOW DEFORMATION] Deformation passes suspended: no snow depth in window");
 		}
-		// S5 round 8: snowfall on bodies needs no snow on the ground, and a seed
-		// for one come in from a storm is laid indoors.
 		if (BodyCoatFallDue())
 			DrawContactCapture(globals::d3d::context, true);
 		return;
@@ -1273,7 +1101,6 @@ void SnowDeformation::PrepassSimulation()
 	}
 	spanClock.Lap(CpuCensus::kSpanPrepassArcsAndGate);
 
-	// Before the scroll is consumed. Latched until ClearShaderCache so a failed compile is not retried per frame.
 	if (deformationCSFailed)
 		return;
 	if (!GetDeformationRingCS() || !GetDeformationScanEvolveCS() || !GetDeformationEvolveCS() ||
@@ -1285,10 +1112,6 @@ void SnowDeformation::PrepassSimulation()
 
 	PerFrame perFrameData{};
 
-	// The window origin and the toroidal map origin were advanced in
-	// GetCommonBufferData (during UpdateSharedData); only consume the stored
-	// state here. The scroll stays CPU-side: the GPU expresses it as the
-	// arriving-ring rects below.
 	const DirectX::XMINT2 scroll = pendingScrollDelta;
 	pendingScrollDelta = { 0, 0 };
 
@@ -1297,10 +1120,6 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.TexelSize = deformWorldSize / deformMapDim;
 	perFrameData.BermReach = BermReachScale();
 	perFrameData.BodyPrint = BodyPrintScale();
-	// Fresh snow cannot hold a cut: walls stamped while it is loose slope
-	// across most of the print. Stamp-time, so a trench keeps the wall it
-	// was cut with until firmer traffic re-cuts it. The clamp keeps clear of
-	// the degenerate smoothstep(1, 1, x) edge.
 	{
 		const SnowClimateLook look = ComputeSnowClimateLook();
 		const float wallEase = std::lerp(std::lerp(1.0f, 0.3f, GetSnowSoftness()), std::lerp(1.0f, 0.3f, look.slough), look.strength);
@@ -1311,60 +1130,31 @@ void SnowDeformation::PrepassSimulation()
 		std::clamp(settings.ShoutMarkFadeStart, 0.0f, 0.98f), std::clamp(settings.ShoutMarkFarDepth, 0.0f, 1.0f) };
 	perFrameData.ShoutChurn = { std::clamp(settings.ShoutChurn, 0.0f, 1.0f), std::max(settings.ShoutStreakSize, 4.0f),
 		std::max(settings.ShoutStreakLength, 1.0f), 0.0f };
-	// The ground snow as the shell draws it (ShellCB's UndulationAmp, UndulationScale, RimStyle.w).
 	perFrameData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	perFrameData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
 	perFrameData.AccumulationScale = GetAccumulationDepthScale();
 
 	float deltaTime = *globals::game::deltaTime;
-	// Taken here rather than beside the trench work below because the refill is
-	// spent in game time; nothing between the two returns early, so it is still
-	// read exactly once a frame.
 	TickGameClock();
-	// Refill rate follows the weather's snowfall density; interiors have no
-	// snowing weather and do not refill. With RefillOnlyWhenSnowing off the
-	// weather is ignored and the baseline rate applies everywhere.
 	float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
-	// Spent in GAME time, not render time. A wait or a sleep advances the
-	// calendar without rendering the hours it passes, so a render-second refill
-	// left the trenches in front of the player untouched across a night in a
-	// blizzard - while the stored ones behind them, which have always decayed on
-	// the game clock, went away. ONE definition of refill for both. In ordinary
-	// play this is the same number as before: the calendar advances at exactly
-	// timescale x render time, so the conversion cancels.
 	const float refillSeconds = gameClock.lastHours >= 0.0f ?
 	                                gameClock.elapsedHours * 3600.0f / std::max(gameClock.timescale, 1.0f) :
 	                                deltaTime;
 	const float frameRefill = refillSeconds / kBaseRefillTime * refillIntensity * std::max(settings.RefillRateMultiplier, 0.0f);
-	// A frame's refill (~2e-5 of full depth at 60 fps) is below what the R16F
-	// map stores near full depth and would round back every frame, so it is
-	// banked and spent in steps the map can hold.
 	refillBank += frameRefill;
 	perFrameData.RefillAmount = 0.0f;
 	if (refillBank >= kRefillStep) {
 		perFrameData.RefillAmount = refillBank;
 		refillBank = 0.0f;
 	}
-	// Blood is dated by the snowfall that has fallen since; nothing evolves it.
 	bloodBurialClock += frameRefill;
-	// The same span, for the world's other self-driven clocks: the glaze thaw
-	// (which runs under a clear sky, so waiting skipped it entirely) and the
-	// unsupported-snow settle. NOT for stamp application - a fire must not
-	// carve its whole basin in the one frame after a night's sleep.
 	perFrameData.GameDeltaTime = refillSeconds;
 
-	// Melt stamps accumulate per second. Persistence is a refill slowdown on
-	// melted ground rather than banked depth, so the bowl profile survives the
-	// readers' saturation intact.
 	perFrameData.DeltaTime = deltaTime;
-	// Body passes on the stamps' real time: a texel free of bodies for 2 s
-	// starts a new pass when one comes back.
 	passClockSeconds += deltaTime;
 	perFrameData.PassClock = static_cast<uint32_t>(std::fmod(passClockSeconds * 2.0, 1024.0));
 	perFrameData.PassGap = 4;
 	perFrameData.MeltPersistence = std::clamp(settings.MeltPersistence, 0.0f, 1.0f);
-	// Clamped just below the degenerate smoothstep(1, 1, x) edge, as the
-	// trench sharpness slider is.
 	perFrameData.MeltFloorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
 	perFrameData.MeltEdgeNoise = std::max(settings.MeltEdgeIrregularity, 0.0f);
 	perFrameData.CrustPrintDepth = std::clamp(settings.CrustPrintDepth, 0.0f, 1.0f);
@@ -1373,17 +1163,12 @@ void SnowDeformation::PrepassSimulation()
 	                             0.0f;
 	perFrameData.CrustBreakOnCarve = std::max(settings.CrustBreakOnCarve, 0.0f);
 
-	// Wind bias for the refill: the engine's live blended wind (derived from
-	// the weather records), so drifting accumulation tracks transitions.
 	perFrameData.WindBias = { 0.0f, 0.0f };
 	if (auto* sky = globals::game::sky) {
 		float windStrength = std::clamp(sky->windSpeed, 0.0f, 1.0f);
 		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
 
-	// A co-save load has no other way in: nothing scrolls into a window already
-	// sitting over the ground the store describes, and the map still holds the
-	// timeline the player just left.
 	if (trenchReinjectRequested.exchange(false, std::memory_order_acq_rel))
 		clearRequested = true;
 
@@ -1391,9 +1176,6 @@ void SnowDeformation::PrepassSimulation()
 	bloodTilesDrop = bloodTilesDrop || clearRequested;
 	clearRequested = false;
 
-	// The texels whose world assignment this frame's scroll (or clear)
-	// changed - RingCS's dispatch domain. Same rects BuildTrenchInject fills,
-	// through the same function, so the two cannot disagree.
 	{
 		ArrivalRect arriving[2];
 		const int arrivingCount = ComputeArrivalRects(scroll, perFrameData.ClearMap != 0, arriving);
@@ -1406,19 +1188,10 @@ void SnowDeformation::PrepassSimulation()
 	}
 	perFrameData.ForceAllDirty = debugForceAllTilesDirty ? 1u : 0u;
 
-	// Persistent trenches. Ordered against the dispatch:
-	// the flush stages what this frame's scroll is about to discard, so it must
-	// read the map BEFORE the ping-pong swap below, and it uses the window
-	// state the map's contents belong to rather than the live one - a clear
-	// arrives here with the worldspace, texel size or both already changed.
-	// The clock was read above; a tile folded in this frame must be stamped with
-	// the decay the world has already accrued, and a backwards jump has to drop
-	// the store before anything reads it.
 	spanClock.Lap(CpuCensus::kSpanPrepassPerFrame);
 	TickTrenchClock();
 	TickSnowAgeing();
 	TickTrenchAgeing();
-	// Track dates are on the ageing clock: they move when it falls back.
 	perFrameData.AgeingClock = snowClimate.ageingClock;
 	perFrameData.TrackRebase = trackClockTexture && bermFieldTexture ? snowClimate.ageingRebase : 0.0f;
 	spanClock.Lap(CpuCensus::kSpanTrenchTicks);
@@ -1428,37 +1201,23 @@ void SnowDeformation::PrepassSimulation()
 	spanClock.Lap(CpuCensus::kSpanTrenchDrain);
 	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);
 	spanClock.Lap(CpuCensus::kSpanTrenchFlush);
-	// Departure is not the only way ground becomes worth storing: dig and save
-	// without moving and nothing ever leaves. This keeps the store true.
 	RollTrenchWindow();
 	spanClock.Lap(CpuCensus::kSpanTrenchRoll);
 	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
 	spanClock.Lap(CpuCensus::kSpanTrenchInject);
 
-	// The two CPU gathers, named beside the dispatches below. Every GPU pass in
-	// this feature was already timed and neither of these was, which is the
-	// half that grew: the spell branch walks the projectile manager, resolves
-	// records and queries land height per source, all on the render thread.
-	// Sequential rather than nested - the profiler tracks one current pass.
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 	GatherSpellEmitters();
 	globals::profiler->EndPass();
 
-	// Timed inside as two sequential passes (actors+bones, then the reference
-	// scan for props), so the bone walk's share can be read on its own.
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
 	TickSnowEvents();
 	spanClock.Lap(CpuCensus::kSpanGather);
-	// Moving props inside the contact window carve by their render mesh:
-	// drawn now, read by the stamp pass below. Dim 0 tells the pass there
-	// is no field this frame.
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
-	// No draw, no field: a still crowd leaves the pass free to sleep.
 	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0 || contactCarriedLast > 0) ? float(kContactDim) : 0.0f;
-	// Road columns measure the contact against the road's own top (t9).
 	const bool roadRaster = heightMapValid && heightSkinDepth && heightSkinDepth->srv;
 	perFrameData.HeightWindowCenter = heightWindowCenter;
 	perFrameData.HeightHalfExtent = ObjectRasterHalfExtent();
@@ -1476,8 +1235,6 @@ void SnowDeformation::PrepassSimulation()
 		if (auto* player = globals::game::player) {
 			if (auto* root = player->Get3D(false)) {
 				perFrameData.ViewCenter = { root->worldBound.center.x, root->worldBound.center.y };
-				// Held for the overlay: the box has to be the bound this crop was
-				// centred on, not one re-read after the pass.
 				contactViewBoundCenter = perFrameData.ViewCenter;
 				contactViewBoundRadius = root->worldBound.radius;
 			}
@@ -1487,42 +1244,17 @@ void SnowDeformation::PrepassSimulation()
 	contactViewHalfUsed = perFrameData.ViewHalf;
 	contactViewTexelSize = perFrameData.TexelSize;
 
-	// Marked here, consumed by NEXT frame's roll: the map these stamps are
-	// about to be written into is the one that frame will be copying.
 	spanClock.Lap(CpuCensus::kSpanContact);
 	MarkTrenchDirtyRows(perFrameData);
 	spanClock.Lap(CpuCensus::kSpanDirtyRows);
 
-
-	// Activity view: which texels the CS is about to claim changed, and in
-	// which channel. The count in the readback rides along whether or not the
-	// view is displayed.
 	if (debugActivityView)
 		EnsureActivityViewTexture();
 	perFrameData.DebugActivityView = (debugActivityView && activityViewUAV) ? 1u : 0u;
 
-	// Idle skip: with every input quiet and the last executed pass reporting
-	// the map at its fixed point, both dispatches would rewrite the map
-	// byte-identically - so neither runs. Any doubt (readback not in yet,
-	// inputs active since the verdict) keeps them running.
 	PollDeformActivity(context);
 	spanClock.Lap(CpuCensus::kSpanPolls);
 
-	// Stamps are "quiet" when the SET is unchanged since the last executed
-	// dispatch, not when it is empty - planted feet stamp every frame, so a
-	// count never reaches zero while anyone stands on snow. Re-applying an
-	// unchanged set is exactly what the activity verdict proved absorbed
-	// (carves max-blend; melt/crust saturate, and stay active until they do).
-	// Matched within a tolerance rather than hashed on a grid: a swaying foot
-	// straddling any quantization boundary reads as change every few frames,
-	// and each flicker costs dispatch + verdict latency - measured as a
-	// permanent 0% skip under `tai`. One TEXEL of tolerance: movement under a
-	// texel cannot change which texels a print covers, and max-blend keeps the
-	// high-water mark, so snapping it is visually free - while idle-animation
-	// weight shifts (2+ units, measured at 116-161/300 frames) stay absorbed.
-	// Safe for real walkers: drift is measured against the BASELINE, so a
-	// walking foot accumulates past a texel within a frame or two and carves
-	// normally.
 	const float kStampTol = std::max(2.0f, perFrameData.TexelSize);
 	const float kStampTolSq = kStampTol * kStampTol;
 	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
@@ -1557,14 +1289,6 @@ void SnowDeformation::PrepassSimulation()
 		if (!stampsQuiet)
 			stampSetTallyDrift++;
 	}
-	// Snap a quiet-matched set to its baseline. The match alone was not
-	// enough: while anything else keeps the pass running, the swayed stamps
-	// are still APPLIED, and each sub-tolerance sway re-carves footprint edge
-	// texels by a hair - so the map keeps changing, which keeps the pass
-	// running, which keeps applying sway. Substituting the baseline makes the
-	// applied set bit-identical frame over frame; the edges converge and the
-	// feedback breaks. The baseline rebase below then keeps it FIXED while
-	// quiet, so it cannot creep.
 	if (stampsQuiet) {
 		for (uint i = 0; i < perFrameData.StampCount; i++) {
 			perFrameData.Stamps[i] = lastStampSet[stampMatchIndex[i]];
@@ -1591,16 +1315,10 @@ void SnowDeformation::PrepassSimulation()
 		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
 		(perFrameData.ContactDim > 0.5f ? 128u : 0u) |
 		(!printSpellMarks.empty() ? 256u : 0u);
-	// A new Berm Steepness needs one executed run to mark the whole bake dirty.
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
-	// The field view keeps the pass awake: a frozen picture is worse than no sleep.
-	// So does a rebase: the dates must follow the clock the shells read.
 	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && perFrameData.TrackRebase <= 0.0f &&
 	                    !(debugForceDeformationUpdate || debugContactView);
 
-	// The skip-rate window: "idle" that is really a flicker (a stamp crossing
-	// the hash quantum every few frames) reads identically in a single-frame
-	// readout; the rate is what tells them apart.
 	deformSkipTallyFrames++;
 	if (deformIdleSkipped)
 		deformSkipTallySkipped++;
@@ -1615,19 +1333,9 @@ void SnowDeformation::PrepassSimulation()
 	}
 
 	if (deformIdleSkipped) {
-		// Skipping IS the measurement. Without an explicit zero the profiler
-		// keeps publishing the stale pre-skip window (or retires the row), so
-		// an idle pass still reads as costing full price.
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 	}
 
-	// Evolve's own gate, inside a running frame: when its last full run
-	// changed nothing at stored precision and nothing external has written
-	// the map since (ring inject, stamps), rerunning it is a proven no-op.
-	// Refill arms it directly - a continuous input, not an event. This is
-	// what keeps walking in clear weather off the 4M-thread pass: the ring
-	// is a band, stamps are the stamp pass, and the settled world stays
-	// settled.
 	const bool evolveQuiet = !evolveFlagActive && evolveVerdictSeq > evolveLastArmSeq;
 	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet ||
 	                          (debugForceDeformationUpdate || debugContactView);
@@ -1659,35 +1367,23 @@ void SnowDeformation::PrepassSimulation()
 			cpuCensus.stampHashHead = (cpuCensus.stampHashHead + 1) % CpuCensus::kHashRing;
 		}
 		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.ContactDim > 0.5f;
-		// Whether the stamp pass actually wrote anything - a stamp set that
-		// lies entirely outside the window dispatches nothing and must not
-		// re-arm evolve.
 		bool stampDispatched = stampRan;
 
 		{
 			ID3D11Buffer* buffers[1] = { perFrame->CB() };
 			context->CSSetConstantBuffers(0, 1, buffers);
 
-			// The single map is about to be written; the frame-start t101 bind
-			// aliases it and the UAV bind would force-null it anyway - done
-			// explicitly so the debug layer stays quiet. Rebound at the end of
-			// Prepass as before.
 			ID3D11ShaderResourceView* nullPS = nullptr;
 			context->PSSetShaderResources(101, 1, &nullPS);
-			// The berm field the land recolor read last frame; the bake writes it below.
 			context->PSSetShaderResources(kLandBermSlot, 1, &nullPS);
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
-			// Max-composed by the passes, so it needs a fresh canvas each frame.
 			if (perFrameData.DebugActivityView) {
 				const FLOAT zeroView[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 				context->ClearUnorderedAccessViewFloat(activityViewUAV.get(), zeroView);
 			}
 
-			// Grid content is unknown after a (re)create; seed all-dirty so
-			// the first evolve and berm passes visit everything and write the
-			// truth back.
 			if (tileGridsNeedInit) {
 				const UINT allDirty[4] = { 1, 1, 1, 1 };
 				context->ClearUnorderedAccessViewUint(occupancyUAV.get(), allDirty);
@@ -1697,16 +1393,12 @@ void SnowDeformation::PrepassSimulation()
 				context->ClearUnorderedAccessViewUint(untouchedTilesUAV.get(), allTouched);
 				tileGridsNeedInit = false;
 			}
-			// Every texel's taps moved: rebuild the whole berm field. With the
-			// bake A/B off the marks wait, like any other.
 			if (perFrameData.BermReach != bermReachBaked) {
 				const UINT allDirty[4] = { 1, 1, 1, 1 };
 				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), allDirty);
 				bermReachBaked = perFrameData.BermReach;
 			}
 
-			// The ageing clock fell back: every date follows it before anything
-			// this frame reads or writes one.
 			if (perFrameData.TrackRebase > 0.0f) {
 				if (auto* rebaseCS = GetTrackRebaseCS()) {
 					ID3D11UnorderedAccessView* rebaseUavs[2] = { trackClockTexture->uav.get(), bermFieldTexture->uav.get() };
@@ -1725,15 +1417,10 @@ void SnowDeformation::PrepassSimulation()
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			ID3D11UnorderedAccessView* dirtyUAV = bermDirtyUAV.get();
 			context->CSSetUnorderedAccessViews(6, 1, &dirtyUAV, nullptr);
-			// The ring and the stamps date texels; the scans own u4 between them.
 			ID3D11UnorderedAccessView* clockUAV = trackClockTexture ? trackClockTexture->uav.get() : nullptr;
 			ID3D11UnorderedAccessView* nullClockUAV = nullptr;
-			// Both keep the body reach too (u5, the scans' args between them).
 			ID3D11UnorderedAccessView* reachUAV = bodyReachTexture ? bodyReachTexture->uav.get() : nullptr;
 
-			// Ring: rewrite only the texels the scroll (or clear) reassigned.
-			// This is the whole scroll cost now - a walking-speed frame is a
-			// few thousand threads instead of a 4M-texel copy.
 			if (perFrameData.RingTotalTexels > 0) {
 				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
@@ -1745,9 +1432,6 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->EndPass();
 				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
-				// The blood map shares the origin, so the same ring is cleared.
-				// Its targets take u0/u1 for this dispatch; the map table goes
-				// back afterwards for the passes that inherit it.
 				if (bloodMapTexture && bloodClockTexture) {
 					if (auto* bloodRing = GetBloodRingCS()) {
 						ID3D11UnorderedAccessView* bloodUavs[2] = { bloodMapTexture->uav.get(), bloodClockTexture->uav.get() };
@@ -1761,24 +1445,14 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 
-			// Evolve reads a snapshot so its neighbour taps (slump support,
-			// upwind supply) see one consistent frame. The copy must follow
-			// the ring, or arriving texels would evolve from the departed
-			// ground that used to stand at their physical position. The
-			// dispatch is indirect over ScanEvolveCS's occupied-plus-halo
-			// list, sized by the scan's own last group; neither the list nor
-			// its count ever touches the CPU.
 			if (evolveNeeded) {
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				// Both scans read occupancy as an SRV, so drop its UAV bind.
 				context->CSSetUnorderedAccessViews(3, 1, &nullUav, nullptr);
 				ID3D11ShaderResourceView* occSRV = occupancySRV.get();
 				context->CSSetShaderResources(4, 1, &occSRV);
 				const uint tilesPerAxis = deformMapDim / 8;
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
-				// The snapshot holds only the tiles evolve's taps can reach:
-				// listed (u4, args u5) by their own scan, copied indirectly.
 				auto* scanSnapshotCS = GetDeformationScanSnapshotCS();
 				auto* snapshotCS = GetDeformationSnapshotCS();
 				if (!evolveSnapshotOff && scanSnapshotCS && snapshotCS && snapshotTileUAV && snapshotTileSRV && snapshotArgsUAV) {
@@ -1812,7 +1486,6 @@ void SnowDeformation::PrepassSimulation()
 				}
 				globals::profiler->EndPass();
 
-				// Scan: occupancy + halo -> list (u4) and indirect args (u5).
 				ID3D11UnorderedAccessView* scanUAVs[2] = { evolveTileUAV.get(), evolveArgsUAV.get() };
 				context->CSSetUnorderedAccessViews(4, 2, scanUAVs, nullptr);
 				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
@@ -1837,13 +1510,6 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 
-			// Stamps + waves RMW the texels evolve just wrote. Sustained
-			// stamps (melt, crust) must re-apply even when the set is quiet -
-			// dwell time is their input - so the gate is presence, not change.
-			// Dispatched over the inputs' bounding tiles (the CPU knows every
-			// capsule and wave); full-map only past the list cap or under the
-			// force-all-dirty cross-check - never a truncated list, which
-			// would be a silently frozen stamp.
 			{
 				ID3D11ShaderResourceView* contactSRVs[3] = {
 					(contactHeight && perFrameData.ContactDim > 0.5f) ? contactHeight->srv.get() : nullptr,
@@ -1870,7 +1536,6 @@ void SnowDeformation::PrepassSimulation()
 					}
 				}
 				if (tileCount == 0) {
-					// Every stamp lies outside the window; nothing to write.
 					stampDispatched = false;
 					globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 				} else if (tiled) {
@@ -1890,9 +1555,6 @@ void SnowDeformation::PrepassSimulation()
 				stampTilesLast = 0;
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
-			// Field view, while the contact SRVs are still bound: the same
-			// texels the stamp pass just read, painted as it read them. The
-			// print view paints the same texture in UpdateObjectPrints.
 			if (debugContactView && !debugObjectPrintView) {
 				EnsureContactViewTexture();
 				if (auto* viewCS = GetContactViewCS(); viewCS && contactViewUAV) {
@@ -1914,17 +1576,11 @@ void SnowDeformation::PrepassSimulation()
 			}
 		}
 
-		// Berm bake, rebuilt only where the map changed (plus the tap-reach
-		// halo): scan the dirty grid AFTER the stamp pass so its marks are
-		// in (the scan sizes the indirect args), rebuild the listed tiles,
-		// each consuming its own mark. The toroidal layout is what makes the
-		// unrebuilt remainder stay valid across scrolls.
 		if (!bermFieldTexture) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 		} else {
 			globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 			ID3D11UnorderedAccessView* nullUav = nullptr;
-			// The dirty grid moves from UAV (writers) to SRV (scan).
 			context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
 			ID3D11ShaderResourceView* dirtySRV = bermDirtySRV.get();
 			context->CSSetShaderResources(6, 1, &dirtySRV);
@@ -1937,18 +1593,11 @@ void SnowDeformation::PrepassSimulation()
 			context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
 			context->CSSetUnorderedAccessViews(7, 1, &nullUav, nullptr);
 			context->CSSetUnorderedAccessViews(5, 1, &nullUav, nullptr);
-			// The bake takes the grid back as a UAV.
 			ID3D11ShaderResourceView* nullDirty = nullptr;
 			context->CSSetShaderResources(6, 1, &nullDirty);
 
 			if (auto* bermCS = GetBermFieldTiledCS()) {
-				// The freshly written map is still bound as a UAV; a texture
-				// cannot be read and written at once, so drop that binding
-				// first. BermFieldCS's own binding space: t0 map, t1 list,
-				// u6 the dirty grid (each group clears its tile's mark).
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				// t2 the track dates, gathered four texels a tap through the
-				// shells' wrapping sampler.
 				ID3D11ShaderResourceView* bermSrvs[3] = { map->srv.get(), bermTileSRV.get(), trackClockTexture ? trackClockTexture->srv.get() : nullptr };
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
 				ID3D11SamplerState* clockSampler = shellSnowSampler.get();
@@ -1967,14 +1616,11 @@ void SnowDeformation::PrepassSimulation()
 				ID3D11SamplerState* nullSampler = nullptr;
 				context->CSSetSamplers(0, 1, &nullSampler);
 			} else {
-				// Consumed all the same: the next frame's marks start clean.
 				const UINT zeroMarks[4] = { 0, 0, 0, 0 };
 				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), zeroMarks);
 			}
 			globals::profiler->EndPass();
 
-			// The untouched tiles, from the map's and the berm's occupancy as
-			// they stand after this frame's writers.
 			if (auto* untouchedCS = GetUntouchedTilesCS()) {
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				ID3D11UnorderedAccessView* nullTileUavs[4] = {};
@@ -2004,25 +1650,13 @@ void SnowDeformation::PrepassSimulation()
 		ID3D11UnorderedAccessView* nullUavs[8] = {};
 		context->CSSetUnorderedAccessViews(0, ARRAYSIZE(nullUavs), nullUavs, nullptr);
 
-		// The verdict this dispatch just wrote, staged for a later frame's poll.
-		// No free slot only happens if three are already in flight; the copy is
-		// simply not taken and the skip waits for a newer one.
 		deformDispatchSeq++;
 		if (!inputsIdle)
 			deformLastNonIdleSeq = deformDispatchSeq;
-		// Evolve re-arm bookkeeping. Stamps run AFTER evolve, so a stamp
-		// write is unassessed by this frame's evolve and arms at this seq; a
-		// ring inject runs BEFORE it, so when evolve ran this frame its
-		// verdict already covers the inject (arm at seq-1, which that verdict
-		// beats). A ring without inject writes pristine zeros - nothing to
-		// evolve - and arms nothing.
 		if (stampDispatched)
 			evolveLastArmSeq = std::max(evolveLastArmSeq, deformDispatchSeq);
 		if (ringRan && perFrameData.InjectValid)
 			evolveLastArmSeq = std::max(evolveLastArmSeq, evolveNeeded ? deformDispatchSeq - 1 : deformDispatchSeq);
-		// Rebase the match set on every executed dispatch: the pass just
-		// applied these exact stamps, so drift accumulates only while skipping
-		// - bounded by the tolerance.
 		lastStampSet.assign(perFrameData.Stamps, perFrameData.Stamps + perFrameData.StampCount);
 		lastStampEnds.assign(perFrameData.StampEnds, perFrameData.StampEnds + perFrameData.StampCount);
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -2037,24 +1671,15 @@ void SnowDeformation::PrepassSimulation()
 	}
 
 	spanClock.Lap(CpuCensus::kSpanDispatch);
-	// Snow Trenches on Objects: after the contact field and the trench pass,
-	// whose PerFrame upload its stamp reads.
 	UpdateObjectPrints(context, perFrameData, !deformIdleSkipped);
-	// After the passes, so it copies the map this frame just wrote - including
-	// anything the ring injected into it.
 	UpdateTrenchDebugTexture();
 
-	// What the map just written is anchored to. Recorded here because the live
-	// values move ahead of it: the origins advance in GetCommonBufferData, and
-	// a range or worldspace change rewrites the texel size and the key before
-	// the next frame's flush ever sees this content.
 	trenchMapOrigin = windowOrigin;
 	trenchMapTexel = perFrameData.TexelSize;
 	trenchMapWorldspace = activeWorldspace.load(std::memory_order_acquire);
 	trenchMapPhysOrigin = mapOrigin;
 	trenchMapPrimed = true;
 
-	// Rebind: the dispatch block nulled t101 while the map was a UAV target.
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
@@ -2232,7 +1857,6 @@ ID3D11ComputeShader* SnowDeformation::GetNoiseHashCS()
 
 namespace
 {
-	// One dispatch of a_cs over a_tex (8x8 groups) through its UAV at u<a_slot>.
 	void BakeNoiseTexture(ID3D11DeviceContext* a_context, ID3D11ComputeShader* a_cs, Texture2D* a_tex, UINT a_slot)
 	{
 		ID3D11UnorderedAccessView* uav = a_tex->uav.get();
@@ -2268,9 +1892,6 @@ void SnowDeformation::UpdateUndulationField()
 		return;
 	}
 
-	// Snap the centre so world-texel alignment is identical across rebakes
-	// (no swimming); the +-16384 window then covers the shell grid's
-	// +-15744 at any offset the snap allows.
 	const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float2 snapped = {
 		std::round(eye.x / kUndulationFieldSnap) * kUndulationFieldSnap,
@@ -2330,15 +1951,12 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 	bool overflow = false;
 
-	// A world box -> logical texel bounds (one-texel slop) -> physical
-	// segments (wrap split per axis, the CPU's one torus crossing besides
-	// CopyLogicalBox) -> deduped tiles.
 	auto addWorldBox = [&](float minX, float minY, float maxX, float maxY) {
 		int l0[2] = { (int)std::floor((minX - a_data.WindowOrigin.x) / texel) - 1,
 			(int)std::floor((minY - a_data.WindowOrigin.y) / texel) - 1 };
 		int l1[2] = { (int)std::floor((maxX - a_data.WindowOrigin.x) / texel) + 1,
 			(int)std::floor((maxY - a_data.WindowOrigin.y) / texel) + 1 };
-		int seg[2][2][2];  // [axis][segment][start,end], physical texels
+		int seg[2][2][2];
 		int segCount[2];
 		const int origin[2] = { mapOrigin.x, mapOrigin.y };
 		for (int axis = 0; axis < 2; axis++) {
@@ -2374,8 +1992,6 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 					}
 	};
 
-	// Stamp capsules: the shader's own gate radius, mirrored (pit legs reach
-	// furthest; melt edge noise widens the rest).
 	const float gateScale = std::max(1.31f, 1.0f + a_data.MeltEdgeNoise);
 	for (uint i = 0; i < a_data.StampCount && !overflow; i++) {
 		const float reach = a_data.Stamps[i].w * gateScale;
@@ -2385,9 +2001,6 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 			std::max(a_data.Stamps[i].y, a_data.StampEnds[i].y) + reach);
 	}
 
-
-	// Rasterized props: the field's own bounds, plus the stamp pass's
-	// one-texel dilation at contact resolution and the usual slop.
 	for (const auto* list : { &contactProps, &contactActors }) {
 		for (const auto& prop : *list) {
 			if (overflow)
@@ -2402,12 +2015,8 @@ uint32_t SnowDeformation::BuildStampTileList(const PerFrame& a_data)
 
 void SnowDeformation::ClearShaderCache()
 {
-	// The prime worker owns these members while it runs; a debug toggle in
-	// that window no-ops rather than racing it.
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
-	// Rehash the sources on the next compile, so a recompile after a live
-	// shader edit cannot serve stale cached bytecode.
 	{
 		std::scoped_lock lock(snowShaderCacheMutex);
 		snowSourcesFingerprint.clear();
@@ -2458,7 +2067,6 @@ void SnowDeformation::ClearShaderCache()
 		noiseHashCS->Release();
 	noiseHashCS = nullptr;
 	noiseHashBaked = false;
-	// The next UpdateUndulationField rebakes with the fresh CS.
 	undulationFieldValid = false;
 	if (exclusionFieldCS)
 		exclusionFieldCS->Release();
@@ -2654,7 +2262,6 @@ void SnowDeformation::ClearShaderCache()
 	clusterScratchIB = nullptr;
 	delete meshBounds;
 	meshBounds = nullptr;
-	// The entries' bound and cluster slots lived in the buffers just freed.
 	ResetSmoothedNormals(true);
 	if (smoothResolveCS)
 		smoothResolveCS->Release();
@@ -2686,7 +2293,6 @@ void SnowDeformation::ClearShaderCache()
 	if (heightRasterCompareCS)
 		heightRasterCompareCS->Release();
 	heightRasterCompareCS = nullptr;
-	// The kept rasters' keys name the shaders just released.
 	for (auto& key : heightRasterKey)
 		key.clear();
 	if (heightCombineCS)
@@ -2698,8 +2304,6 @@ void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
 	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, kMaxRangeSkinsM);
-	// Loaded values may change the window size or map resolution; the apply
-	// path is a no-op when they match the current state.
 	trenchRangeDirty = true;
 	deformMapDimDirty = true;
 	RefreshLandTextureDepths();
@@ -2712,8 +2316,6 @@ void SnowDeformation::SaveSettings(json& o_json)
 
 void SnowDeformation::RestoreDefaultSettings()
 {
-	// Trenches stay: a range or resolution change clears the map as any change
-	// does, and the store re-injects what it holds.
 	settings = {};
 	trenchRangeDirty = true;
 	deformMapDimDirty = true;
@@ -2779,10 +2381,6 @@ void SnowDeformation::TickVRAMLog()
 {
 	vramTickCounter++;
 
-	// One step down a session, taken once the free budget is smaller than
-	// what the step frees: half the dimension is a quarter of the bytes.
-	// Checked every frame while armed: the driver evicts between the log's
-	// samples, so a 120-tick sample can miss every moment over the line.
 	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
 		uint64_t nowMB = 0, nowBudgetMB = 0;
 		QueryAdapterVRAM(nowMB, nowBudgetMB);
@@ -2822,7 +2420,6 @@ void SnowDeformation::TickVRAMLog()
 		logger::info("[SNOW DEFORMATION] VRAM: adapter {}/{} MB ({}%), feature ~{} MB | {}",
 			usageMB, budgetMB, budgetMB ? usageMB * 100 / budgetMB : 0, featureMB, breakdown);
 
-	// Every resource, when the set changed since the last list; at most once a cadence.
 	std::vector<Util::NamedResourceUse> byName;
 	const uint64_t listBytes = Util::SumNamedResources(kSnowResourcePrefix, &byName);
 	uint32_t resources = 0;
@@ -2841,9 +2438,6 @@ void SnowDeformation::TickVRAMLog()
 	}
 }
 
-// A pass's GPU time is a timestamp pair, so paging and GPU idle (the CPU late
-// to submit) inside it count as its time; the line carries what tells those
-// apart from real work.
 void SnowDeformation::TickRowSpikeLog()
 {
 	constexpr float kSpikeMs = 4.0f;

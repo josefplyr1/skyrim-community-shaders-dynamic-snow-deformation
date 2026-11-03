@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/AlphaBuild.h"
@@ -20,11 +16,9 @@
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
 
-// Mirror of Permutation::ExtraFeatureFlags::SnowLandIsSnowShift.
 static constexpr uint32_t kSnowLandIsSnowShift = 11;
 static_assert(uint32_t(State::ExtraFeatureDescriptors::SnowLandIsSnowMask) == (0x3Fu << kSnowLandIsSnowShift));
 
-/** @brief Lowercased diffuse path of a texture set, empty when it has none. */
 static std::string LandTexturePath(RE::BGSTextureSet* a_textureSet)
 {
 	if (auto path = a_textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
@@ -36,20 +30,17 @@ static std::string LandTexturePath(RE::BGSTextureSet* a_textureSet)
 	return {};
 }
 
-/** @brief The engine's own land-texture material accessor (TESLandTexture::GetHavokMaterialType). Seasons of Skyrim replaces it to answer for the season's swap texture, so it agrees with the texture set the land was built from. */
 static RE::MATERIAL_ID LandHavokMaterial(const RE::TESLandTexture* a_landTexture)
 {
 	static const REL::Relocation<RE::MATERIAL_ID (*)(const RE::TESLandTexture*)> func{ RELOCATION_ID(18418, 18849) };
 	return func(a_landTexture);
 }
 
-/** @brief A quad's base land texture; the engine builds a quad that names none from its default. */
 static RE::TESLandTexture* QuadBaseTexture(RE::TESLandTexture* a_base)
 {
 	return a_base ? a_base : GetDefaultLandTexture();
 }
 
-/** @brief Classifies a land texture into a kSnowClasses index by diffuse filename substring (first match wins), falling back on the snow material check. Only supplies the DEFAULT depth now; per-texture overrides win. */
 static int ClassifySnowClass(const RE::TESLandTexture* a_landTexture, const std::string& a_path)
 {
 	for (uint32_t classI = 0; classI < SnowDeformation::kSnowClassCount; ++classI) {
@@ -60,10 +51,9 @@ static int ClassifySnowClass(const RE::TESLandTexture* a_landTexture, const std:
 
 	const auto material = LandHavokMaterial(a_landTexture);
 	const bool snowMaterial = material == RE::MATERIAL_ID::kSnow || material == RE::MATERIAL_ID::kSnowStairs;
-	return snowMaterial ? 3 /* Snow 01 */ : (int)SnowDeformation::kSnowClassCount - 1 /* Other */;
+	return snowMaterial ? 3  : (int)SnowDeformation::kSnowClassCount - 1 ;
 }
 
-/** @brief Display label for the texture list: filename without directory or extension. */
 static std::string LandTextureLabel(const std::string& a_path)
 {
 	size_t begin = a_path.find_last_of("\\/");
@@ -79,12 +69,6 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 	if (!a_landTexture)
 		return kNoLandTexture;
 
-	// Seasons of Skyrim never edits the record: it hands SetupMaterial the
-	// season's texture set and marks the record's own set with that form ID,
-	// which GetSeasonalSwap follows. The registry is keyed by the set the
-	// land is drawn with, so a season change resolves to a different entry
-	// with no flush. The engine default (form 0) stays unregistered unless a
-	// season swaps it: unpainted ground keeps its coverage gap.
 	auto* textureSet = Util::GetSeasonalSwap(a_landTexture->textureSet);
 	if (!textureSet || (a_landTexture->formID == 0 && textureSet == a_landTexture->textureSet))
 		return kNoLandTexture;
@@ -96,8 +80,6 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 			return it->second;
 	}
 
-	// Two LTEX forms can share one diffuse (vanilla does it), and the settings
-	// key is the path, so both forms must land on the same registry entry.
 	const std::string path = LandTexturePath(textureSet);
 	if (path.empty())
 		return kNoLandTexture;
@@ -145,7 +127,6 @@ uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 
 void SnowDeformation::ResolveLandTextureDepthLocked(LandTextureEntry& a_entry)
 {
-	// User value, then a shipped per-texture default, then the family slider.
 	auto it = settings.TextureDepths.find(a_entry.path);
 	a_entry.overridden = it != settings.TextureDepths.end();
 	a_entry.depth = a_entry.overridden ? it->second :
@@ -187,10 +168,6 @@ std::vector<float> SnowDeformation::LandTextureDepthSnapshot()
 
 namespace
 {
-	// A texture counts as snow for the terrain-shader mask when it currently
-	// carries a raised layer. The mask is cached per material and the game
-	// re-runs SetupMaterial constantly, so a slider that crosses zero corrects
-	// itself within seconds; no re-bake is needed.
 	bool IsSnowDepth(float a_depth) { return a_depth > 0.0f; }
 }
 
@@ -203,8 +180,6 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		if (land->loadedData->mesh[quadI] == nullptr)
 			continue;
 
-		// Runs after TruePBR's detour, so this is the final material used for
-		// drawing (TruePBR allocates a new property + material per quad).
 		const auto& children = land->loadedData->mesh[quadI]->GetChildren();
 		auto geometry = children.empty() ? nullptr : static_cast<RE::BSGeometry*>(children[0].get());
 		if (geometry == nullptr)
@@ -214,7 +189,6 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		if (shaderProp == nullptr || shaderProp->material == nullptr)
 			continue;
 
-		// Bit 0 = base texture, bits 1-5 = the quad's layer textures.
 		uint16_t quadTextures[6] = { RegisterLandTexture(QuadBaseTexture(land->loadedData->defQuadTextures[quadI])) };
 		for (uint32_t textureI = 0; textureI < 5; ++textureI)
 			quadTextures[textureI + 1] = RegisterLandTexture(land->loadedData->quadTextures[quadI][textureI]);
@@ -230,7 +204,6 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 		}
 
 		const std::unique_lock lock(snowMaskMutex);
-		// Materials are freed on cell unload; bound the map against stale pointers.
 		if (snowMasks.size() > 16384)
 			snowMasks.clear();
 		snowMasks[reinterpret_cast<uintptr_t>(shaderProp->material)] = mask;
@@ -239,17 +212,6 @@ void SnowDeformation::TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land)
 	BakeShellCell(land);
 }
 
-// The land mesh the engine draws is built per quad at 17 x 17, 33 x 33 or
-// 65 x 65 vertices by distance (128 / 64 / 32-unit spacing), from the 17 x 17
-// heights by a rule that is Catmull-Rom on gentle ground and something else
-// at cliffs; the mesh is the ground truth, so read it instead of guessing
-// the rule, at whatever level it currently has, and re-read when the level
-// changes. Positions are relative to the CELL CENTRE in XY (quad 0 spans
-// -2048..0 on both axes) and are float32 even though the descriptor does
-// not carry FULLPREC - the decode is chosen by which one lands on the
-// lattice. z is relative to a per-quad base measured against heights[] at
-// the lattice vertices; any mismatch drops the cell. A refusal is logged
-// once, with its reason.
 uint32_t SnowDeformation::LandQuadLevel(RE::BSTriShape* a_geometry)
 {
 	const uint32_t n = a_geometry ? a_geometry->GetTrishapeRuntimeData().vertexCount : 0;
@@ -291,14 +253,12 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 			return refuse(quadI, std::format("stride {} vertices {} (desc {:016X})", stride, vertexCount, descBits));
 		const uint32_t quadX = quadI & 1;
 		const uint32_t quadY = quadI >> 1;
-		const uint32_t side = 16 * level;  // mesh steps per quad edge
+		const uint32_t side = 16 * level;
 		const float spacing = 128.0f / float(level);
 		std::vector<float> quad;
 		double baseSum = 0.0;
 		uint32_t baseCount = 0, offGrid = 0, outside = 0;
 		float firstX = 0.0f, firstY = 0.0f;
-		// Float32 first, half on a miss: the descriptor's FULLPREC bit is not
-		// set on land although its positions are float.
 		bool usedHalf = false;
 		for (int pass = 0; pass < 2 && baseCount < 289; ++pass) {
 			const bool half = pass == 1;
@@ -324,8 +284,6 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 					firstX = px;
 					firstY = py;
 				}
-				// Cell-centre relative: this quad's vertices index 0..side after
-				// removing its own half-cell offset.
 				const float kx = px / spacing + float(side) - float(quadX) * float(side);
 				const float ky = py / spacing + float(side) - float(quadY) * float(side);
 				if (!std::isfinite(kx) || !std::isfinite(ky) || std::abs(kx) > 1e6f || std::abs(ky) > 1e6f) {
@@ -352,8 +310,6 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 			return refuse(quadI, std::format("{} of 289 lattice vertices found ({} off-grid, {} outside; {} vertices, level {}, first at {:.1f}, {:.1f}, stride {}, pos offset {}, {})",
 				baseCount, offGrid, outside, vertexCount, level, firstX, firstY, stride, posOffset, usedHalf ? "half" : "float"));
 		const float baseZ = float(baseSum / baseCount) + (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
-		// Verify, then resample to the 32-unit cell grid: a coarser level is
-		// drawn flat between its vertices, so it lands as the linear blend.
 		for (uint32_t iy = 0; iy <= side; ++iy)
 			for (uint32_t ix = 0; ix <= side; ++ix) {
 				const float z = quad[size_t(iy) * (side + 1) + ix];
@@ -365,7 +321,7 @@ bool SnowDeformation::ReadLandMeshHeights(RE::TESObjectLAND* a_land, ShellCellDa
 						return refuse(quadI, std::format("lattice vertex ({}, {}) off by {:.2f} after the base", ix, iy, d));
 				}
 			}
-		const uint32_t up = 4 / level;  // 32-unit texels per mesh step
+		const uint32_t up = 4 / level;
 		for (uint32_t fy = 0; fy < 65; ++fy)
 			for (uint32_t fx = 0; fx < 65; ++fx) {
 				const uint32_t ix0 = std::min(fx / up, side - 1), iy0 = std::min(fy / up, side - 1);
@@ -419,7 +375,6 @@ void SnowDeformation::RefreshLandMeshHeights()
 		return;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	const uint32_t length = grid->length;
-	// Summary every ~5 s while nothing has been read, so a zero names its cause.
 	const bool report = shellFineMeshCells == 0 && (++fineRefreshFrame % 300) == 1;
 	uint32_t nAttached = 0, nLand = 0, nReady = 0, nCached = 0, nWorldspace = 0, nRefused = 0, nHave = 0;
 	std::string first;
@@ -526,18 +481,13 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 	auto loadedData = land->loadedData;
 
-	// heights[] are relative to the cell's mid-height; the absolute base is
-	// the midpoint of heightExtents. World transforms are not composed yet
-	// when this hook runs and cannot be used for placement.
 	float cellBaseZ = (loadedData->heightExtents.x + loadedData->heightExtents.y) * 0.5f;
 
-	// Filler-plane detection, resolved after the vertex loop.
 	bool painted = false;
 	float minHeight = FLT_MAX;
 	float maxHeight = -FLT_MAX;
 
 	for (uint32_t quadI = 0; quadI < 4; ++quadI) {
-		// Index-based quad layout: 0=SW, 1=SE, 2=NW, 3=NE, vertices x-fastest.
 		uint32_t quadX = quadI & 1;
 		uint32_t quadY = quadI >> 1;
 
@@ -557,16 +507,10 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			minHeight = std::min(minHeight, data.height[cellIdx]);
 			maxHeight = std::max(maxHeight, data.height[cellIdx]);
 
-			// Same 0-255-in-int8 storage trick as percents below; ground's
-			// vertexAO is the max component of the land vertex color.
 			const auto& vertexColor = loadedData->colors[quadI][vertexI];
 			data.vertexAO[cellIdx] = std::max({ static_cast<uint8_t>(vertexColor[0]),
 				static_cast<uint8_t>(vertexColor[1]), static_cast<uint8_t>(vertexColor[2]) });
 
-			// Gather this vertex's weight per distinct texture: at most the
-			// base plus 6 layers, and layers of the same texture merge. An
-			// absent layer texture still spends its weight, so unpainted
-			// ground keeps its coverage gap and the shell submerges there.
 			uint16_t vertexTexture[7];
 			float vertexWeight[7];
 			uint32_t textureCount = 0;
@@ -586,8 +530,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 			float layerSum = 0.0f;
 			for (uint32_t layerI = 0; layerI < 6; ++layerI) {
-				// percents is declared std::int8_t but holds 0-255: a fully
-				// painted layer reads as -1 without the unsigned cast.
 				float weight = static_cast<uint8_t>(loadedData->percents[quadI][vertexI][layerI]) / 255.0f;
 				layerSum += weight;
 				addWeight(layerTexture[layerI], weight);
@@ -595,9 +537,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			painted = painted || layerSum > 0.0f;
 			addWeight(baseTexture, std::max(0.0f, 1.0f - layerSum));
 
-			// Keep the heaviest kShellVertexLayers: a vertex painted with more
-			// textures than that has the rest below noise, and the slot count
-			// is what holds the per-cell footprint at the old 12-class size.
 			for (uint32_t slot = 0; slot < kShellVertexLayers && slot < textureCount; ++slot) {
 				uint32_t best = slot;
 				for (uint32_t i = slot + 1; i < textureCount; ++i)
@@ -611,18 +550,9 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		}
 	}
 
-	// Exterior cells with no LAND record still get a TESObjectLAND: the engine
-	// fills them with a dead-flat, unpainted plane at the worldspace's default
-	// land height, which in a city worldspace sits a thousand units under the
-	// built city (Windhelm bakes at -13240 with the ground at -12300). Baking
-	// it hands the shell a full snow surface nobody can ever see. Real terrain
-	// carries relief or painted layers; this carries neither.
 	if (!painted && maxHeight - minHeight < 1.0f) {
 		const std::unique_lock lock(shellCellMutex);
 		uint64_t fillerKey = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
-		// Tombstone: the snow-presence gate fails open on cells it has never
-		// looked at, and without this record a city's whole floor would read
-		// as never-looked-at and keep the deformation passes running there.
 		if (shellFillerCells.size() > 4096)
 			shellFillerCells.clear();
 		shellFillerCells[fillerKey] = data.worldspaceID;
@@ -645,8 +575,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 			shellFineRefused.clear();
 			snowDepthVersion.fetch_add(1, std::memory_order_release);
 		}
-		// Land material setup re-runs frequently; only mark the window dirty
-		// when the baked data actually changed.
 		auto it = shellCells.find(key);
 		if (it != shellCells.end() && it->second.worldspaceID == data.worldspaceID &&
 			it->second.height == data.height && it->second.layerTexture == data.layerTexture &&
@@ -663,8 +591,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		}
 		shellCells[key] = data;
 		snowDepthVersion.fetch_add(1, std::memory_order_release);
-		// A real bake supersedes this worldspace's filler tombstone. Another
-		// worldspace's tombstone at the same coords (city vs its parent) stands.
 		if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == data.worldspaceID)
 			shellFillerCells.erase(ft);
 	}
@@ -674,7 +600,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missing)
 {
 	ScopedTicks _depth(cpuCensus.depthTicks, cpuCensus.depthCalls);
-	// A cell is 33 vertices = 32 intervals of kShellVertexSpacing.
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	const int cellX = (int)std::floor(a_x / kCellSize);
 	const int cellY = (int)std::floor(a_y / kCellSize);
@@ -687,7 +612,6 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	if (it == shellCells.end() || it->second.worldspaceID != activeWorldspace.load(std::memory_order_acquire))
 		return a_missing;
 
-	// Same layer resolve the window rebuild uses, for one vertex.
 	const uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
 	float depth = 0.0f;
 	float snowWeight = 0.0f;
@@ -706,7 +630,6 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 
 float SnowDeformation::LandSnowShareAround(float a_x, float a_y)
 {
-	// The 5x5 cells around the point, every fourth land vertex.
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	const int cellX = (int)std::floor(a_x / kCellSize);
 	const int cellY = (int)std::floor(a_y / kCellSize);
@@ -792,8 +715,6 @@ void SnowDeformation::UpdateActiveWorldspace()
 {
 	auto* tes = globals::game::tes;
 	auto* worldspace = tes ? tes->GetRuntimeData2().worldSpace : nullptr;
-	// Interiors keep the last exterior's state: a shop visit must not wipe the
-	// tracks outside its door.
 	if (!worldspace)
 		return;
 
@@ -802,12 +723,6 @@ void SnowDeformation::UpdateActiveWorldspace()
 		return;
 	snowDepthVersion.fetch_add(1, std::memory_order_release);
 
-	// City worldspaces share their parent's cell coordinates AND world XY
-	// (WindhelmWorld sits on the same 28-36 / 6-12 block as the Tamriel
-	// terrain outside its gate), so every world-anchored cache now describes
-	// the worldspace we just left. Baked cells carry their worldspace and are
-	// filtered below; the object raster and the deformation map have no such
-	// tag and have to be dropped.
 	shellDataDirty.store(true, std::memory_order_release);
 	heightMapValid = false;
 	clearRequested = true;
@@ -825,15 +740,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	int desiredOriginY = camCellY - kShellWindowCells / 2;
 
 	bool originChanged = desiredOriginX != shellWindowCellX || desiredOriginY != shellWindowCellY;
-	// A heightmap swap (worldspace change, or Terrain Shadows finishing its
-	// load after this window was built) invalidates the far fill even when
-	// the origin is unchanged.
 	auto& terrainShadows = globals::features::terrainShadows;
 	const std::string fillWorldspace = (terrainShadows.loaded && terrainShadows.IsHeightMapReady()) ? terrainShadows.cachedHeightmap->worldspace : std::string{};
 	bool fillChanged = lastFillWorldspace != fillWorldspace;
-	// A worldspace with no landscape of its own bakes nothing, so nothing
-	// would ever mark the window dirty and the previous worldspace's texels
-	// would stay resident.
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	bool worldspaceChanged = worldspace != shellWindowWorldspace;
 	const bool landBlend = LandBlendActive();
@@ -842,7 +751,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		shellDataDirty.store(true, std::memory_order_release);
 	RefreshLandMeshHeights();
 	if (!originChanged && !fillChanged && !worldspaceChanged && !shellDataDirty.exchange(false, std::memory_order_acq_rel)) {
-		// Mesh data that arrived after the last build: the fine layer alone.
 		if (shellFineDirty.exchange(false, std::memory_order_acq_rel) && shellTerrainTexture)
 			BuildTerrainFineWindow();
 		return;
@@ -856,14 +764,9 @@ void SnowDeformation::UpdateShellTerrainWindow()
 
 	shellUploadScratch.resize(size_t(kShellWindowDim) * kShellWindowDim * 4);
 	shellBareScratch.assign(size_t(kShellWindowDim) * kShellWindowDim, 0);
-	// One snapshot for the whole texel loop; the bake thread may register new
-	// textures while it runs, and those cells are not in this window yet.
 	const std::vector<float> textureDepths = LandTextureDepthSnapshot();
 
 	uint32_t statSnowTexels = 0;
-	// Cells whose blended depth goes positive somewhere: the only ground the
-	// deformation map can ever show. Filled from this loop's own arithmetic,
-	// so it costs one comparison per texel.
 	std::unordered_set<uint64_t> snowyCells;
 	float statMinH = FLT_MAX;
 	float statMaxH = -FLT_MAX;
@@ -876,7 +779,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 			int vy = ty % kShellTexelsPerCell;
 			const ShellCellData* rowCell = nullptr;
 			uint64_t rowKey = ~0ull;
-			// The cell sets take each run of one cell's texels once.
 			bool rowSnowy = false;
 			auto flushRowCell = [&] {
 				if (!rowCell)
@@ -894,10 +796,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					flushRowCell();
 					rowSnowy = false;
 					auto it = shellCells.find(key);
-					// A cell baked in another worldspace is not this window's
-					// ground: city worldspaces reuse the coordinates of the
-					// terrain outside them, so an unfiltered hit drapes the
-					// countryside through the city at its own elevation.
 					rowCell = it != shellCells.end() && it->second.worldspaceID == worldspace ? &it->second : nullptr;
 					rowKey = key;
 				}
@@ -905,8 +803,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				float* texel = &shellUploadScratch[(size_t(ty) * kShellWindowDim + tx) * 4];
 				if (rowCell) {
 					uint32_t idx = uint32_t(vy) * 33 + uint32_t(vx);
-					// Texture depths are applied here, so the sliders retune
-					// the shell from cached weights without a re-bake.
 					float rampDepth = 0.0f;
 					float coverage = 0.0f;
 					float snowWeight = 0.0f;
@@ -926,9 +822,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 					texel[0] = rowCell->height[idx];
 					texel[1] = rampDepth;
 					texel[2] = std::min(coverage, 1.0f);
-					// Land vertex AO packed into [0, 0.499): the LOD-fill CS
-					// writes its provenance codes at >= 0.5 and skips baked
-					// texels (x wins), so both meanings coexist in one channel.
 					texel[3] = rowCell->vertexAO[idx] * (0.499f / 255.0f);
 					shellBareScratch[size_t(ty) * kShellWindowDim + tx] = uint8_t(std::lround((1.0f - snowWeight) * 255.0f));
 
@@ -952,8 +845,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 		const std::unique_lock snowLock(shellSnowyCellMutex);
 		shellSnowyCells = std::move(snowyCells);
 	}
-	// The snowy set only covers the window; a move changes every cell
-	// verdict near its edge.
 	snowDepthVersion.fetch_add(1, std::memory_order_release);
 	shellStatCellsInWindow = (uint32_t)statCells.size();
 	shellStatSnowTexels = statSnowTexels;
@@ -1021,8 +912,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 	if (!shellTerrainFine->srv || !shellTerrainFine->uav)
 		return;
 
-	// Nine cells centred on the camera's: the shell's seam is at most 14,336
-	// units out, and four whole cells either side is at least 16,384.
 	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const int camCellX = (int)std::floor(eye.x / cellSize);
@@ -1058,8 +947,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	// Cells whose land mesh was read replace the cubic with the engine's own
-	// vertices. Shared edges carry the same values from either cell.
 	{
 		const int cell0X = camCellX - kShellFineCells / 2;
 		const int cell0Y = camCellY - kShellFineCells / 2;
@@ -1101,8 +988,6 @@ ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_world
 	if (lodTileMisses.contains(key))
 		return nullptr;
 
-	// sRGB ignored so classification runs on the stored gamma-space values
-	// regardless of how the DDS declares itself.
 	std::string path = std::format("Data\\textures\\terrain\\{}\\{}.32.{}.{}.dds", a_worldspace, a_worldspace, a_cellX, a_cellY);
 	std::wstring widePath(path.begin(), path.end());
 	winrt::com_ptr<ID3D11ShaderResourceView> srv;
@@ -1146,13 +1031,9 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	cbData.WindowDim = kShellWindowDim;
 	cbData.HeightMapScale = { 1.0f / (heightmap->pos1.x - heightmap->pos0.x), 1.0f / (heightmap->pos1.y - heightmap->pos0.y) };
 	cbData.HeightMapOffset = { -heightmap->pos0.x * cbData.HeightMapScale.x, -heightmap->pos0.y * cbData.HeightMapScale.y };
-	// pos0.z/pos1.z = the file's normalization range (ShadowUpdate.cs.hlsl
-	// decode convention), NOT zRange (the content min/max).
 	cbData.HeightRange = { heightmap->pos0.z, heightmap->pos1.z };
-	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);  // "Snow 01"
+	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);
 
-	// 2x2 block of level-32 tiles (each spans exactly the window's 32 cells)
-	// anchored at the window origin's tile; covers the window at any offset.
 	constexpr int kTileCells = 32;
 	const int tileX0 = (int)std::floor((float)shellWindowCellX / kTileCells) * kTileCells;
 	const int tileY0 = (int)std::floor((float)shellWindowCellY / kTileCells) * kTileCells;
@@ -1198,15 +1079,11 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 {
 	auto state = globals::state;
 
-	// Clear first so bits never leak from the previous landscape draw.
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	// Read by the Terrain Overlay and the land-blended edges (SnowLighting.hlsli).
 	if (material == nullptr || !(debugTerrainOverlay || LandBlendActive()))
 		return;
 
-	// Vanilla and TruePBR landscape materials answer kMultiTexLandLODBlend;
-	// only land quads' materials are registered.
 	const auto feature = material->GetFeature();
 	const bool landFeature = feature == RE::BSShaderMaterial::Feature::kMultiTexLand ||
 	                         feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend ||
@@ -1218,7 +1095,6 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 		const std::shared_lock lock(snowMaskMutex);
 		auto it = snowMasks.find(reinterpret_cast<uintptr_t>(material));
 		if (it == snowMasks.end()) {
-			// A miss on a land material is a bug.
 			if (landFeature)
 				landMaskMisses.fetch_add(1, std::memory_order_relaxed);
 			return;
@@ -1231,8 +1107,6 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 	landMaskHits.fetch_add(1, std::memory_order_relaxed);
 	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << kSnowLandIsSnowShift;
 
-	// Land Snow Recolor samples the shell's snow set; like the projected
-	// match, it is bound per draw (the Prepass-time bind does not survive).
 	if (mask != 0 && LandRecolorActive()) {
 		auto* context = globals::d3d::context;
 		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
@@ -1241,27 +1115,13 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 		context->PSSetShaderResources(kHorizonSnowAlbedoSlot, 1, &albedoSRV);
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
-		// The cut dates its prints glaze by (Wet Snow and Ice).
 		ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 		context->PSSetShaderResources(kLandBermSlot, 1, &bermSRV);
 	}
 }
 
-// Times the game's deferred terrain draws, which the per-type overlay only sees
-// as CPU wall time between draws. One pass per RUN of consecutive terrain draws:
-// a pass per batch (~35 a frame) overran the profiler's shared 128-slot frame
-// budget. Decided per draw from the pass's landscape property flag, the test
-// TerrainBlending uses: SetupTechnique's argument decoded as MTLand while the
-// shader held technique 0, and the run swallowed interior statics. The run
-// ends at the next non-terrain Lighting draw, any other shader's
-// SetupTechnique, or DrawShell entry. The profiler cannot nest; a run still
-// open at the frame boundary is dropped, never ended into the next frame's slots.
 void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 {
-	// Deferred pass only: forward terrain (reflections) can be the frame's last
-	// draw, leaving a run open across later profiled passes.
-	// Snow off, or a bare square past its hysteresis: the game's terrain is not
-	// ours to report.
 	const bool landscape = settings.EnableSnowDeformation && shellGateBareFrames < kShellGateBareFrames &&
 	                       globals::deferred->deferredPass && a_pass && a_pass->shaderProperty &&
 	                       a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
@@ -1298,8 +1158,6 @@ void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
 	}
 	landscapeRunsThisFrame++;
 	landscapeRunOpen = true;
-	// The game's own terrain shading, grouped apart from the module's rows and
-	// named so its P95/P99 is not read as snow's.
 	globals::profiler->BeginPass("Game Terrain::Deferred Draws (game's own, timed by Snow)");
 }
 
@@ -1343,7 +1201,6 @@ struct SD_BSLightingShader_SetupMaterial
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-// Any other shader setting up a technique ends the landscape run.
 template <int Slot>
 struct SD_OtherShader_SetupTechnique
 {
@@ -1372,9 +1229,6 @@ void SnowDeformation::InstallLandscapeTimingHook()
 
 void SnowDeformation::PostPostLoad()
 {
-	// Same detour target as TruePBR, whose PostPostLoad runs earlier in the
-	// feature list. Detours are LIFO, so attaching now makes this hook outer:
-	// it sees the final, possibly TruePBR-replaced, quad materials.
 	logger::info("[SNOW DEFORMATION] Hooking TESObjectLAND");
 	stl::detour_thunk<SD_TESObjectLAND_SetupMaterial>(REL::RelocationID(18368, 18791));
 
@@ -1387,8 +1241,6 @@ void SnowDeformation::PostPostLoad()
 	InstallAPI();
 	InstallLandscapeSnow();
 
-	// Claims the co-save records. Here rather than later because a save can be
-	// loaded straight from the main menu, and an unclaimed record is skipped.
 	CoSave::GetSingleton()->Install();
 	RegisterTrenchCoSave();
 	RegisterAccumulationCoSave();
@@ -1398,28 +1250,15 @@ void SnowDeformation::PostPostLoad()
 	RegisterPrintCoSave();
 }
 
-// Cell-granular on purpose: the per-texel answer lives in a GPU texture, and a
-// readback would cost more than the passes this saves. Cells are 4096 units
-// against a deformation window of a few hundred metres, so the overlap set is
-// tiny and the test errs toward "has snow".
 bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy, uint32_t* a_verdictOut) const
 {
-	// No landscape indoors: the cells under the player never bake, which
-	// otherwise reads as unknown and keeps every deformation pass running.
-	// Object snow in caves is not this test's business (GroundNearHasSnow).
 	if (InInteriorCell()) {
 		if (a_verdictOut)
 			*a_verdictOut = kSnowGateBare;
 		return false;
 	}
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
-	// Two cells of lead beyond the window. The snowy set only refreshes when
-	// the terrain window rebuilds, which waits on the bake thread, so testing
-	// the window exactly meant walking onto snow and waiting about a second
-	// for the first footprint. The margin resumes while the snow is still
-	// ~120 m off and the map is warm by the time it is stood on.
 	constexpr float kResumeMargin = kCellSize * 2.0f;
-	// Centre of the deformation window, which every caller measures out from.
 	const float centreX = windowOrigin.x + deformWorldSize * 0.5f;
 	const float centreY = windowOrigin.y + deformWorldSize * 0.5f;
 	const float reach = a_halfExtentUnits + kResumeMargin;
@@ -1432,8 +1271,6 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 	int cellMaxX = (int)std::floor(maxX / kCellSize);
 	int cellMinY = (int)std::floor(minY / kCellSize);
 	int cellMaxY = (int)std::floor(maxY / kCellSize);
-	// Clipped to the loaded square: land past it never loads, so a reach
-	// that crosses it never settles, and nothing of ours stands out there.
 	{
 		int sqMinX, sqMinY, sqMaxX, sqMaxY;
 		if (LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY)) {
@@ -1448,8 +1285,6 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 		*a_verdictOut = kSnowGateBare;
 	{
 		const std::shared_lock lock(shellSnowyCellMutex);
-		// No cells in the window means it has not been built yet (or holds no
-		// terrain at all); answer conservatively rather than skipping on no data.
 		if (shellSnowyCells.empty() && shellStatCellsInWindow == 0) {
 			if (a_verdictOut)
 				*a_verdictOut = kSnowGateUnknown;
@@ -1467,11 +1302,6 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 		}
 	}
 
-	// No snowy cell in reach. "Bare" may only be claimed about ground actually
-	// looked at: a cell neither baked for the active worldspace nor tombstoned
-	// as filler has simply not been seen yet - after a city gate, a door or
-	// fast travel that state lasts seconds, and failing closed on it suspends
-	// stamping while the player already stands on snow.
 	if (a_unknownIsSnowy) {
 		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 		const std::shared_lock lock(shellCellMutex);
@@ -1569,7 +1399,6 @@ bool SnowDeformation::SunCascadeFootprints(FootprintPlanes* a_out, size_t& a_cou
 		return false;
 	const auto& descriptors = sun->GetRuntimeData().shadowmapDescriptors;
 	for (uint32_t i = 0; i < descriptors.size() && a_count < kMaxSunFootprints; ++i) {
-		// uv = p * L (row vectors, absolute world); the slice is 0 <= u, v <= w.
 		const auto& L = reinterpret_cast<const DirectX::XMFLOAT4X4&>(descriptors[i].lightTransform);
 		auto& planes = a_out[a_count++];
 		for (int k = 0; k < 2; ++k) {
@@ -1597,7 +1426,6 @@ bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, s
 	if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
 		return true;
 	auto keyOf = [](int a_cx, int a_cy) { return (uint64_t(uint32_t(a_cx)) << 32) | uint32_t(a_cy); };
-	// A baked cell's land height range (kViewGateMarginZ out), or none.
 	auto landRange = [&](int a_cx, int a_cy) -> const std::pair<float, float>* {
 		const uint64_t key = keyOf(a_cx, a_cy);
 		if (auto z = viewGateCellZ.find(key); z != viewGateCellZ.end())
@@ -1608,7 +1436,6 @@ bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, s
 		const auto [lo, hi] = std::minmax_element(it->second.height.begin(), it->second.height.end());
 		return &viewGateCellZ.try_emplace(key, std::pair{ *lo - kViewGateMarginZ, *hi + kViewGateMarginZ }).first->second;
 	};
-	// Every baked cell's range over the square and one cell past it: what an unknown cell takes.
 	std::optional<std::pair<float, float>> known;
 	auto knownRange = [&]() -> const std::pair<float, float>& {
 		if (!known) {
@@ -1620,7 +1447,6 @@ bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, s
 		}
 		return *known;
 	};
-	// A triangle with a raised vertex reaches one vertex diagonal past its cell, over neighbours' land.
 	auto blockRange = [&](int a_cx, int a_cy) {
 		std::pair<float, float> r{ std::numeric_limits<float>::max(), std::numeric_limits<float>::lowest() };
 		for (int dy = -1; dy <= 1; ++dy) {
@@ -1678,7 +1504,6 @@ bool SnowDeformation::CascadeSnowSoon()
 	int sqMinX, sqMinY, sqMaxX, sqMaxY;
 	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
 		return true;
-	// This frame's cascades stand in for the next frame's.
 	FootprintPlanes footprints[kMaxSunFootprints];
 	size_t footprintCount = 0;
 	if (!cascadeHeightGateOff && SunCascadeFootprints(footprints, footprintCount))
@@ -1701,7 +1526,6 @@ uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, in
 	const uint32_t verdict = CellRangeSnowVerdict(a_minX, a_minY, a_maxX, a_maxY);
 	if (verdict != kSnowGateSnowy || shellViewGateOff)
 		return verdict;
-	// Inside where row . (p - cam, 1) >= 0 (left, right, bottom, top, front).
 	const auto& m = a_cb.CameraViewProj;
 	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
 	std::array<double, 4> planes[5];
@@ -1795,8 +1619,6 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 	if (drop <= 0.0)
 		return;
 	captureCullBail = 5;
-	// The side planes pass through the eye: each corner ray is the cross of
-	// two of them, turned to face along w.
 	const auto& m = a_cb.CameraViewProj;
 	using V = std::array<double, 3>;
 	auto row = [&](int a_r, double a_s) {
@@ -1823,7 +1645,6 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 		}
 	}
 	captureCullBail = 6;
-	// Past the loaded square the land can fall below the floor.
 	if (lo[0] < sqMinX * double(kCellSize) || lo[1] < sqMinY * double(kCellSize) ||
 		hi[0] > (sqMaxX + 1) * double(kCellSize) || hi[1] > (sqMaxY + 1) * double(kCellSize))
 		return;
@@ -1832,10 +1653,6 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 		lo[c] -= kViewGateMarginZ;
 		hi[c] += kViewGateMarginZ;
 	}
-	// LOD batches never enter the object raster: each feeds only its own
-	// skin, and no LOD past the loaded square can be on screen. Loaded
-	// captures feed every skin's raster reads, so they go only all together,
-	// when none of them can be on screen.
 	auto unseen = [&](const CapturedSnowStatic& a_cap) {
 		const auto& bound = a_cap.geometry->worldBound;
 		if (!(bound.radius > 0.0f))
@@ -1869,21 +1686,17 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 
 bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 {
-	// The cell and the loaded square hold for the frame's captures.
 	if (groundSnowFrame != globals::state->frameCount) {
 		groundSnowFrame = globals::state->frameCount;
 		groundSnowFrameInterior = InInteriorCell();
 		groundSnowFrameHasSquare = LoadedCellSquare(groundSnowFrameSquare[0], groundSnowFrameSquare[1], groundSnowFrameSquare[2], groundSnowFrameSquare[3]);
 	}
-	// Snow in a cave is on its objects; classification alone decides there.
 	if (groundSnowFrameInterior || !groundSnowFrameHasSquare)
 		return true;
 	const int sqMinX = groundSnowFrameSquare[0];
 	const int sqMinY = groundSnowFrameSquare[1];
 	const int sqMaxX = groundSnowFrameSquare[2];
 	const int sqMaxY = groundSnowFrameSquare[3];
-	// Stamp read BEFORE the lookup: a write racing the compute leaves a
-	// stale stamp and one extra recompute, never a stale verdict.
 	const uint32_t stamp = snowDepthVersion.load(std::memory_order_acquire);
 	const bool squareMoved = sqMinX != groundSnowCacheSquare[0] || sqMinY != groundSnowCacheSquare[1] ||
 	                         sqMaxX != groundSnowCacheSquare[2] || sqMaxY != groundSnowCacheSquare[3];
@@ -1899,9 +1712,6 @@ bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	const int cellX = (int)std::floor(a_x / kCellSize);
 	const int cellY = (int)std::floor(a_y / kCellSize);
-	// Two cells of reach, clipped to the loaded square: land past it never
-	// bakes, so an unclipped block never settles. A block wholly outside
-	// (LOD batches) takes the square's own verdict.
 	const int minX = std::max(cellX - 2, sqMinX);
 	const int maxX = std::min(cellX + 2, sqMaxX);
 	const int minY = std::max(cellY - 2, sqMinY);
@@ -1952,8 +1762,6 @@ void SnowDeformation::ClampCameraAboveSnow()
 {
 	cameraProbeFired++;
 	cameraProbeState = 5;
-	// Not State::inWorld: that is a render-scope flag, true only inside the
-	// world pass, and the camera updates outside it.
 	auto* camera = RE::PlayerCamera::GetSingleton();
 	auto* player = globals::game::player;
 	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
@@ -1962,12 +1770,9 @@ void SnowDeformation::ClampCameraAboveSnow()
 	cameraProbeCamState = camera && camera->currentState ? uint32_t(camera->currentState->id) : 99u;
 	if (!camera || !camera->cameraRoot || !camera->currentState)
 		return;
-	// ThirdPersonState with its Mount, Bleedout and Dragon subclasses, and PCTransition:
-	// a ragdoll or death runs in Bleedout and gets up through PCTransition.
 	const uint32_t thirdPerson = REL::Module::IsVR() ? RE::CameraState::kVRThirdPerson : RE::CameraState::kThirdPerson;
 	const uint32_t state = camera->currentState->id;
 	const bool followState = (state >= thirdPerson && state <= thirdPerson + 3) || state == RE::CameraState::kPCTransition;
-	// Knocked down, ragdolled or dead: any state but the free camera.
 	const bool down = player->IsInRagdollState() || player->IsDead() ||
 	                  player->AsActorState()->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal;
 	cameraProbeDown = down;
@@ -1976,7 +1781,6 @@ void SnowDeformation::ClampCameraAboveSnow()
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;
 	cameraProbeZ = cam.z;
-	// Dunes ride above the class depth; the near plane needs a little more.
 	const float clearance = 24.0f + std::clamp(settings.UndulationStrength, 0.0f, 32.0f);
 	float surface;
 	if (!SampleShellSurface(cam.x, cam.y, surface)) {
@@ -1990,13 +1794,10 @@ void SnowDeformation::ClampCameraAboveSnow()
 	}
 	RE::NiPoint3 target = cam;
 	if (down) {
-		// The body is no anchor while it tumbles.
 		cameraProbeState = 6;
 		target.z = surface + clearance;
 	} else {
 		cameraProbeState = 3;
-		// Pull in along the line from the player's head, like a terrain hit:
-		// bisect for the farthest point on it that clears the snow.
 		const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
 		float anchorSurface;
 		if (SampleShellSurface(anchor.x, anchor.y, anchorSurface) && anchor.z < anchorSurface + clearance)
@@ -2026,8 +1827,6 @@ struct SD_PlayerCamera_Update
 		auto& snowDeformation = globals::features::snowDeformation;
 		if (snowDeformation.loaded)
 			snowDeformation.ClampCameraAboveSnow();
-		// Here, not in Prepass: that runs inside the World pass, after the depth
-		// prepass has drawn the item where it was.
 		if (snowDeformation.loaded) {
 			snowDeformation.ItemSinkUpdate();
 			snowDeformation.ApplySpellLifts();
@@ -2039,7 +1838,6 @@ struct SD_PlayerCamera_Update
 
 void SnowDeformation::InstallCameraHook()
 {
-	// Detour on the function itself; the vtable slot (0x2) alone never fired.
 	SD_PlayerCamera_Update::func = REL::RelocationID(49852, 50784).address();
 	DetourTransactionBegin();
 	DetourUpdateThread(GetCurrentThread());

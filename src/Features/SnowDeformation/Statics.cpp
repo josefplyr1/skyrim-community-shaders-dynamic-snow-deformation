@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include <DirectXPackedVector.h>
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/DevSwitches.h"
@@ -20,10 +16,6 @@
 
 #include <bit>
 
-// The engine's projected-noise map, when reachable - the S4 shell's hard
-// dependency (its per-pixel footprint cut reconstructs vanilla's weight).
-// Checked identically at capture-raster and skin time so both passes pick
-// the same class for a draw.
 static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
 {
 	auto* graphicsState = globals::game::graphicsState;
@@ -31,9 +23,6 @@ static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
 	return (noiseTex && noiseTex->rendererTexture) ? noiseTex->rendererTexture->resourceView : nullptr;
 }
 
-// True if the scenegraph carries a live attached light. A burning torch (held
-// or dropped) has a NiPointLight in its 3D; torch-snuffing mods remove it
-// while keeping the carryable light base form.
 static bool HasActiveLight(RE::NiAVObject* a_obj)
 {
 	if (!a_obj || a_obj->GetAppCulled())
@@ -47,8 +36,6 @@ static bool HasActiveLight(RE::NiAVObject* a_obj)
 	return false;
 }
 
-// Model path of the reference a captured geometry belongs to. The ref hangs off
-// the 3D root's user data, so walk up from the drawn trishape.
 static std::string CapturedModelPath(RE::NiAVObject* a_object)
 {
 	for (RE::NiAVObject* node = a_object; node; node = node->parent) {
@@ -86,7 +73,6 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 			bound.radius, bound.center.z + bound.radius, distXY, capture.road });
 	}
 
-	// Largest first: a sheet that covers a courtyard belongs to a big capture.
 	std::sort(probe.entries.begin(), probe.entries.end(),
 		[](const ObjectSnowProbe::Entry& a, const ObjectSnowProbe::Entry& b) { return a.radius > b.radius; });
 	if (probe.entries.size() > 8)
@@ -94,17 +80,6 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 	return probe;
 }
 
-// One-shot samples of the object-LOD decision, so a single launch shows
-// whether the containment rule separates Windhelm's sheets from distant
-// scenery. Logs a handful of distinct outcomes, then goes quiet; this sits on
-// the per-geometry render path and must not become per-frame spam.
-// Samples the DIFFUSE path of LOD geometry the material gate drops, deduped by
-// path. DynDOLOD emits separate snow-projected and plain LOD batches, so a
-// PLAIN batch failing the gate is correct (it never wore projected snow in
-// vanilla either) while a SNOW-textured one failing is a bug - and only the
-// path tells the two apart. Same single-threaded assumption as
-// driftMaterialCache below.
-// Allocation-free case-insensitive substring; the needle is lowercase ASCII.
 static bool ContainsNoCase(const char* a_text, const char* a_needle)
 {
 	if (!a_text || !a_needle || !*a_needle)
@@ -120,9 +95,6 @@ static bool ContainsNoCase(const char* a_text, const char* a_needle)
 	return false;
 }
 
-// Non-snow materials, matched on MATO editor IDs, on DynDOLOD's LOD batch names
-// (objAsh on Solstheim) and on precipitation records (the ash storm). Falmer and
-// glow: the Falmer cave and Blackreach crystal glow (FalmerLightDirectionalShader01).
 static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast", "falmer", "glow", "sulfur", "leaves", "dust" };
 
 const char* SnowDeformation::NotSnowKeywordIn(const char* a_name)
@@ -133,11 +105,6 @@ const char* SnowDeformation::NotSnowKeywordIn(const char* a_name)
 	return nullptr;
 }
 
-// Every name-derived fact the capture hook needs, computed once per interned
-// geometry name (BSFixedString: equal content, equal pointer). Validated by
-// length and the first eight bytes against pointer reuse. The logged flags
-// carry the "one line per unique name" logs that used to hash a std::string
-// per capture per frame.
 struct GeometryNameFacts
 {
 	uint32_t length = 0;
@@ -148,12 +115,8 @@ struct GeometryNameFacts
 	bool plank = false;
 	bool iceFamily = false;
 	bool drift = false;
-	// DynDOLOD batch (obj<Material>[HD][-LargeRef]) of a non-snow projected
-	// material: no reference behind it, so the name is the only MATO signal.
 	bool lodNotSnow = false;
-	// Dynamic Bloodpool Framework's skinned pool quads (Decal:NN / DecalExt:NN).
 	bool bloodPool = false;
-	// The engine's own runtime decals: scorch, runes, blood.
 	bool engineDecal = false;
 	bool capturedLogged = false;
 	bool roundedLogged = false;
@@ -162,7 +125,6 @@ struct GeometryNameFacts
 	bool lodVetoLogged = false;
 };
 
-// One multiply; std::hash of a pointer is FNV-1a over all eight bytes. The hooks probe on every draw.
 struct SD_PointerHash
 {
 	size_t operator()(const void* a_pointer) const noexcept
@@ -172,10 +134,6 @@ struct SD_PointerHash
 	}
 };
 
-// The per-draw caches: open addressing with each value beside its key, so a
-// probe reads one cache line where std::unordered_map reads the bucket array
-// and then a node. Callers clear past 16384 entries, so a probe always meets
-// an empty slot.
 template <class V>
 class SD_InlinePointerTable
 {
@@ -211,7 +169,7 @@ public:
 
 private:
 #pragma warning(push)
-#pragma warning(disable: 4324)  // padded to a cache line on purpose
+#pragma warning(disable: 4324)
 	struct alignas(64) Slot
 	{
 		const void* key = nullptr;
@@ -222,7 +180,6 @@ private:
 	uint32_t count = 0;
 };
 
-// File scope: a function-local static pays the thread-safe init check on every call.
 static SD_InlinePointerTable<GeometryNameFacts> sNameFactsCache;
 
 bool SnowDeformation::IsEngineDecalName(const char* a_name)
@@ -234,7 +191,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 {
 	auto& cache = sNameFactsCache;
 	static GeometryNameFacts empty;
-	// Same one-entry memo as RecordOf: the hook asks 2-3 times per draw.
 	static const void* lastGeometry = nullptr;
 	static const char* lastName = nullptr;
 	static GeometryNameFacts* lastFacts = nullptr;
@@ -262,7 +218,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f.plank = ContainsNoCase(name, "plank") || ContainsNoCase(name, "walkway") || ContainsNoCase(name, "catwalk");
 		f.iceFamily = (std::tolower((unsigned char)name[0]) == 'i' && std::tolower((unsigned char)name[1]) == 'c' && std::tolower((unsigned char)name[2]) == 'e') ||
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
-		// Snow drifts, not shore driftwood (a twig-card class on its diffuse).
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
 		f.bloodPool = _strnicmp(name, "Decal:", 6) == 0 || _strnicmp(name, "DecalExt:", 9) == 0;
 		f.engineDecal = SnowDeformation::IsEngineDecalName(name);
@@ -278,9 +233,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 	return f;
 }
 
-// Per-loop filter for the IA slots and VS t10, which instances of one mesh
-// repeat. Device state on entry is unknown, so the first call binds; the
-// loops never pass a null layout or buffer, so null reads as "not yet bound".
 struct SD_DrawBinds
 {
 	ID3D11InputLayout* layout = nullptr;
@@ -315,7 +267,6 @@ struct SD_DrawBinds
 		ib = a_ib;
 		ibFormat = a_format;
 	}
-	// t10 may legitimately be null (no smoothed normals), hence the flag.
 	void Smooth(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
 	{
 		if (smoothBound && smooth == a_srv)
@@ -328,8 +279,6 @@ struct SD_DrawBinds
 
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
 {
-	// Own budget per outcome: eight "kept" lines used to spend the whole
-	// budget before the first rejection could be read.
 	static std::atomic<uint32_t> loggedKept{ 0 };
 	static std::atomic<uint32_t> loggedRejected{ 0 };
 	auto& logged = a_rejected ? loggedRejected : loggedKept;
@@ -349,19 +298,10 @@ namespace
 		kNoReference,
 		kNoMato,
 		kSnow,
-		// Seasons of Skyrim's multipass snow MATO, swapped onto the base at
-		// clone time: snow, but with no authored max angle.
 		kSnowSeasons,
 		kNotSnow
 	};
 
-	// The reference's STAT directional-material record vetoes non-snow
-	// projections. Negative keywords only: requiring "snow" in the path
-	// vetoed every MATO whose replacer names it differently.
-	// Sand/moss/ash keep their veto; an
-	// unrecognized path passes. Cached per MATO form (Seasons of Skyrim
-	// swaps the MATO under the same base each season); each new entry is
-	// logged so the modlist's actual MATO names are in CommunityShaders.log.
 	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
 	{
 		RE::TESObjectREFR* refr = nullptr;
@@ -380,12 +320,6 @@ namespace
 		auto [it, inserted] = matoClassCache.try_emplace(mato ? mato->GetFormID() : 0, MatoClass::kNoMato);
 		if (inserted) {
 			if (mato) {
-				// The MODL path is junk on vanilla MATO records (Bethesda left
-				// 'shadertests\shaderbox.nif' in most of them — the whole
-				// modlist logged that one path), so the editor ID carries the
-				// real identity (SnowMaterialObjectNoise1P, SandMaterialObject
-				// ...). Runtime editor IDs need po3 Tweaks; when absent the
-				// signal degrades to the path alone.
 				std::string matoPath;
 				if (const char* edid = mato->GetFormEditorID())
 					matoPath = edid;
@@ -415,46 +349,16 @@ namespace
 		return it->second;
 	}
 
-	// Diffuse-path facts, cached per material and shared by the flags-fail
-	// acceptance, the range-cap exemption and the capture's fade flag.
-	// Caching the ACCEPT decision instead would be wrong: the same material
-	// can reach the hook as both LOD and non-LOD, and the LOD path accepts
-	// more.
 	struct SnowPathMatch
 	{
-		// Drifts wear plain LANDSCAPE snow textures (no "drift" in the
-		// path); requiring the landscape folder keeps frosted plants
-		// (plant/tree folders) out.
 		bool base = false;
-		// The glacier/iceberg family wears baked snow the projected match
-		// can never recolor. "ice" is deliberately NOT matched (hits
-		// lattice/office/service); "mountain" is not matched either, since
-		// shore rocks share the diffuse, their LOD hangs off no reference, and
-		// distant snowy mountainsides are Horizon Snow's job. The merged-
-		// DynDOLOD-atlas experiment was retired the same day.
 		bool naturalFeature = false;
-		// Mountain/cliff diffuse. Not a capture family on its own (see above);
-		// read only for large-reference LOD, which has no other snow signal.
 		bool mountain = false;
-		// "snow" in the diffuse FILE name, any folder (season swaps' alternate sets, dirt cliffs' snow tops).
 		bool snowNamed = false;
-		// A plain landscape snow set (snow01, snow02, snowrocks01, snowstone01;
-		// landscape root, blend\ or statics\): ground material, not trees,
-		// grass, plants or roads.
 		bool groundSnow = false;
-		// Architecture diffuse that is not foliage: an alpha-tested roof or
-		// plank end is a surface, not a card.
 		bool architecture = false;
 	};
 
-	// Pointer-identity ownership: does any loaded reference's 3D subtree
-	// contain this geometry? The userData walk fails on some real meshes
-	// (a glacier's base never reaches the MATO log), and the unreferenced
-	// check then mistook them for merged Windhelm sheets whenever the camera
-	// stood inside their footprint - for a glacier underfoot, always. Exact and
-	// heuristic-free; merged LOD genuinely belongs to no reference. Only
-	// candidates already big + camera-inside + walk-unreferenced get here;
-	// cached per geometry, render thread only like the other caches.
 	bool GeometryBelongsToLoadedReference(RE::BSGeometry* a_geometry)
 	{
 		static std::unordered_map<const void*, bool> ownershipCache;
@@ -495,23 +399,16 @@ namespace
 		return found;
 	}
 
-	// Capture verdict log (Log All Capture Verdicts): the geometry's facts and
-	// which gate ended this pass's journey, once per geometry+outcome; the
-	// outcome must be a string literal (the dedup keys on its address).
-	// Render thread only, like the other caches.
 	void LogCaptureVerdict(RE::BSRenderPass* a_pass, const char* a_outcome)
 	{
 		const bool logAll = globals::features::snowDeformation.debugLogAllJourneys;
 		static std::unordered_set<uint64_t> logged;
-		// A fresh tick starts a fresh budget.
 		static bool lastLogAll = false;
 		if (logAll && !lastLogAll)
 			logged.clear();
 		lastLogAll = logAll;
 		if (!logAll)
 			return;
-		// Flora and LOD are the spam that ate the budget before the buildings
-		// were reached.
 		using LFlag = RE::BSShaderProperty::EShaderPropertyFlag;
 		if (a_pass->shaderProperty->flags.any(LFlag::kTreeAnim, LFlag::kLODObjects, LFlag::kHDLODObjects, LFlag::kLODLandscape))
 			return;
@@ -564,7 +461,6 @@ namespace
 					                            lowered.find("iceberg") != std::string::npos;
 					it->second.mountain = lowered.find("mountain") != std::string::npos ||
 					                      lowered.find("cliff") != std::string::npos;
-					// Berries and the no-snow variants are the known false friends.
 					const size_t slash = lowered.find_last_of("\\/");
 					const std::string file = slash == std::string::npos ? lowered : lowered.substr(slash + 1);
 					it->second.snowNamed = file.find("snow") != std::string::npos &&
@@ -587,10 +483,6 @@ namespace
 		return it->second;
 	}
 
-	// Does another geometry of this one's model take the road class by name,
-	// and pass the material gate (projection data or a landscape snow
-	// diffuse)? A road replacer's alpha-tested strips over the road shape
-	// (TMD Dirt Roads) inherit that verdict.
 	bool ModelRoadPassesGate(RE::BSGeometry* a_geometry)
 	{
 		RE::NiAVObject* root = a_geometry->parent;
@@ -623,12 +515,6 @@ namespace
 	}
 }
 
-// One record per geometry: every material-, name- and reference-derived fact
-// the two capture hooks read, so a draw pays one lookup (and the second hook
-// on the same draw none). Validated by the material and interned-name
-// pointers; a mismatch rebuilds from the per-material caches above. The MATO
-// class rides the record too: a geometry re-parented under another reference
-// keeps its old class until material or name changes.
 struct GeometryRecord
 {
 	const void* material = nullptr;
@@ -641,24 +527,14 @@ struct GeometryRecord
 	bool pathGroundSnow = false;
 	bool iceName = false;
 	bool shard = false;
-	// Diffuse path names blood: a decal-mode draw of it is a blood mark.
 	bool bloodTex = false;
-	uint8_t roadTex = 0;  // 0 none, 1 road, 2 bridge (an exclusion, never a road signal)
-	// Alpha-tested, not road-named, in a model whose road shape passes the
-	// material gate: part of that road's surface (ModelRoadPassesGate).
+	uint8_t roadTex = 0;
 	bool roadLayer = false;
-	// Diffuse under a landscape folder, or a paving texture (floor/slate,
-	// not roof): the road-name signal needs one of them.
 	bool landscapeTex = false;
 	bool pavingTex = false;
 	MatoClass mato = MatoClass::kNoReference;
-	// Projection applied at runtime by Seasons of Skyrim: its multipass MATO
-	// or its single-pass marker (SOS_SNOW_SHADER extra data on the root).
 	bool seasonsProj = false;
-	// The reference's base is one of Seasons' own snow statics: a snow MATO
-	// on a mesh with no authored vertex alpha (the alpha reads 0, not 1).
 	bool seasonsStatic = false;
-	// Nominal snow depth at the bound centre, valid while snowDepthVersion holds.
 	float depthX = 0.0f;
 	float depthY = 0.0f;
 	float depth = 0.0f;
@@ -667,8 +543,6 @@ struct GeometryRecord
 
 static SD_InlinePointerTable<GeometryRecord> sGeometryRecordCache;
 
-// The pass blends over the surface beneath it (decal or alpha blend): its
-// Masks write is blended too, and a coat cannot follow its fade.
 static bool PassBlendsOver(RE::BSRenderPass* a_pass)
 {
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -730,9 +604,6 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			for (RE::NiAVObject* node = a_geometry; node && !r.seasonsProj; node = node->parent)
 				r.seasonsProj = node->GetExtraData(seasonsMarker) != nullptr;
 		}
-		// Seasons' own snow statics (SnowOverSkyrim.esp): a vanilla snow MATO
-		// on a mesh whose vertex alpha was never authored for it, so the
-		// projection paints nothing; same mask as the runtime projection.
 		if (!r.seasonsProj) {
 			static std::unordered_map<uint32_t, bool> sosBase;
 			RE::TESObjectREFR* refr = nullptr;
@@ -760,17 +631,6 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass)
 {
 	ScopedTicks _bitTicks(cpuCensus.hookTicks, cpuCensus.hookBitCalls);
-	// Projected-snow bit for Lighting's material match (SNOW-MATCH Phase 2):
-	// cleared every pass so it never leaks, set when this draw's projected
-	// material is actually snow. Classified from the PASS TECHNIQUE
-	// (currentRawTechnique — the TruePBR precedent), NOT the property flags:
-	// the game renders projected snow as its own pass whose technique
-	// carries ProjectedUV (frame7075's fence: descriptor 100E201) while the
-	// property need not carry kProjectedUV or kSnow — gating on property
-	// flags is what kept this bit off the fence through two rounds. Sand
-	// and moss stay excluded by their MATO (kNotSnow). Runs BEFORE the
-	// game's SetupGeometry (the ExtendedTranslucency pattern): the
-	// descriptor is consumed inside it.
 	auto& extraDescriptor = globals::state->permutationData.ExtraFeatureDescriptor;
 	extraDescriptor &= ~(uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow) | uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow) |
 						 uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored) | uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha) |
@@ -787,32 +647,13 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
 		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
-		// Seasons of Skyrim's runtime projection: flagged on EVERY pass of the
-		// object. A multipass object's base pass carries no projection, and
-		// without this bit Lighting wrote no mask there, so the skin read
-		// "unknown" and reconstructed a coat over every face; with it the base
-		// pass writes "known, unpainted" and only the sparkle pass raises it.
 		if (rec.seasonsProj && !treeAnim)
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
 		if (rec.seasonsStatic && !treeAnim)
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha);
-		// An authored multipass snow MATO draws the same way Seasons' does: a
-		// base pass with no projection that leaves the read-back mask at 0,
-		// which the skin took for "unknown" and coated every face of
-		// (baldpatch79's Nordic walls, 2026-09-14). The authored angle and
-		// alpha stay: only the base-pass mask write is borrowed.
 		if (settings.MultipassSnowFollowsPaint && !rec.seasonsProj && !treeAnim && rec.mato != MatoClass::kNotSnow &&
 			a_pass->shaderProperty->flags.all(Flag::kMultiIndexSnow))
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
-		// A shape the game draws with NO projection, on an object whose MATO
-		// really is snow (Inn01:49 under XPMF, measured 2026-09-22: it lost
-		// its ProjectedUV bit, drew over the porch and wrote Masks.y 0 across
-		// the verdict Inn01:5 had written, which the drape read as licence and
-		// sleeved the door posts). "Known, unpainted" is the true reading: the
-		// game drew something that is not snow here. Only a POSITIVE snow MATO
-		// qualifies, so mesh-replacer statics and drifts - no MATO at all, and
-		// they depend on the unknown-means-reconstruct path - are untouched,
-		// and engine decals keep their own veto.
 		if (settings.UnprojectedShapesBare && !passProjected && !treeAnim &&
 			(rec.mato == MatoClass::kSnow || rec.mato == MatoClass::kSnowSeasons) &&
 			!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
@@ -823,8 +664,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		} else if (rec.mato == MatoClass::kNotSnow) {
 			statProjVetoed++;
 		} else if (NameFactsOf(a_pass->geometry).engineDecal) {
-			// A runtime decal inherits its target's projected technique; it is a mark on the snow, not snow.
-			// By the engine's own geometry name, never kDynamicDecal: DynDOLOD's passthru LOD batches carry that flag.
 			statProjVetoed++;
 		} else {
 			statProjMatched++;
@@ -833,10 +672,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 			projectedSnow = true;
 		}
 	}
-	// Plain object LOD: DynDOLOD's unflagged batches (drifts, roads, piles
-	// past the loaded grid) carry baked snow in the atlas and no projection,
-	// so the hook never sees them; Lighting classifies their texels like the
-	// horizon terrain. Snow-flagged LOD stays on the projected path above.
 	if (settings.LODObjectSnow && !bindSnowSet &&
 		a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
 		!a_pass->shaderProperty->flags.all(Flag::kTreeAnim) &&
@@ -844,9 +679,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 		bindSnowSet = true;
 	}
-	// Snow-textured shapes without projection (a dirt cliff's snow01 top, a
-	// rock pile's base and skirt, a season swap's alternate set, drifts): the
-	// baked recipe, so the weight is written like projected snow.
 	if (settings.SnowTexturedRecolor && settings.ProjSnowMatch && !bindSnowSet &&
 		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kTreeAnim) &&
 		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
@@ -861,11 +693,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		}
 	}
 	if (bindSnowSet) {
-		// The Prepass-time snow set bind does NOT survive to the Lighting
-		// draws (frame7075: null at every player-view draw — stomped around
-		// the cubemap pass; t101 only survives via its later re-bind).
-		// Re-bind per classified draw, where it is actually sampled, with the
-		// water raster for the underwater veto, same fate.
 		auto* context = globals::d3d::context;
 		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
 		ID3D11ShaderResourceView* normalSRV = shellSnowNormalSRV.get();
@@ -875,17 +702,11 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
-		// The print readers (t114-t115), same fate; only projected snow reads them.
 		if (projectedSnow && printRectPublished.z > printRectPublished.x)
 			BindPrintReaders(globals::d3d::context);
 	}
 }
 
-// The Masks channel is not colour: it is the note Lighting leaves for the
-// drape saying whether the game painted snow on this pixel. A decal-mode draw
-// blends EVERY bound target, so that note gets averaged with the decal's own
-// value and the drape reads the result as bare. Snapshot it before the frame's
-// first decal-mode draw; the coat merges the two (SnowStaticsShell SkinMasksY).
 void SnowDeformation::CapturePreDecalMasks()
 {
 	auto* context = globals::d3d::context;
@@ -895,12 +716,10 @@ void SnowDeformation::CapturePreDecalMasks()
 	auto* masksSRV = renderer->GetRuntimeData().renderTargets[MASKS].SRV;
 	if (!masksSRV)
 		return;
-	// Mid-pass: the game's targets are unbound around the copy and put back.
 	ID3D11RenderTargetView* rtvs[8]{};
 	ID3D11DepthStencilView* dsv = nullptr;
 	context->OMGetRenderTargets(8, rtvs, &dsv);
 	context->OMSetRenderTargets(0, nullptr, nullptr);
-	// The bound viewport is the main pass's: the skins read inside it, +-1 pixel.
 	UINT vpCount = 1;
 	D3D11_VIEWPORT vp{};
 	context->RSGetViewports(&vpCount, &vp);
@@ -910,7 +729,6 @@ void SnowDeformation::CapturePreDecalMasks()
 	if (auto masksTex = masksRes.try_as<ID3D11Texture2D>())
 		masksTex->GetDesc(&masksDesc);
 	const D3D11_BOX masksBox = ScreenRectBox(vpCount ? &vp : nullptr, masksDesc.Width, masksDesc.Height, 1);
-	// Called from inside the game's draws: an open terrain-run row would nest.
 	CloseLandscapeRun();
 	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 	CopySRVResource(masksSRV, "SnowDeformation::PreDecalMasks", preDecalMasksTex, preDecalMasksSRV, &masksBox);
@@ -928,18 +746,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	ScopedTicks _hookTicks(cpuCensus.hookTicks, cpuCensus.hookCalls);
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
-	// No depth-slider gate: the snow cover must exist at ANY slider values
-	// (it replaces the mismatched projected diffuse beneath; sliders only
-	// control thickness and trenching).
 	if (!settings.EnableSnowDeformation)
 		return;
-	// Main world view only: probe/reflection passes must not fill the list.
 	if (!globals::state->inWorld)
 		return;
 
-	// Before the frame's first decal-mode draw blends the Masks note away.
-	// Same test the capture path uses for decalDepth; the hook runs BEFORE
-	// the draw, so the targets still hold the note the surface wrote.
 	if (preDecalMasksFrame != globals::state->frameCount &&
 		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
 		using DecalFlag = RE::BSShaderProperty::EShaderPropertyFlag;
@@ -950,32 +761,15 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		}
 	}
 
-	// One verdict per geometry per frame: the same geometry arrives once per
-	// pass that draws it, and nothing below depends on the pass. A capture
-	// already returned at the set insert; this returns the rejections too.
-	// The clean gate: projected-UV + snow flags together; covers rocks,
-	// roofs, logs, stumps and never flora, because foliage is not
-	// snow-PROJECTED. Drifts (no flags at all) qualify via a NARROW texture
-	// match; a catch-all "snow" match drags frosted bushes in, whose leaf
-	// cards shard under the skin.
 	auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
 	const auto& passFacts = NameFactsOf(a_pass->geometry);
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	const auto& flags = a_pass->shaderProperty->flags;
-	// Blood decals go to the blood map, never to the statics list. Skinned
-	// blood is a wound decal on a body unless it is a pool framework quad.
-	// The engine's runtime decals that are not blood - scorch, frost, shock,
-	// rune glyphs: the object-snow coat draws over them, so they join the
-	// overlay that puts a decal back over the coat.
-	// By name, never by kDynamicDecal: DynDOLOD's passthru LOD batches carry the
-	// flag and draw mid-pass, which put the overlay's pre-decal snapshot ahead of
-	// half the frame and the stale paint mask under the road patch (2026-09-18).
 	const bool engineDecal = !rec.bloodTex && passFacts.engineDecal &&
 	                         !flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape);
 	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
 		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
 		CaptureDecalOverlay(a_pass);
-	// A live rune's decal, or a frost mark, goes to the rune atlas.
 	if (!rec.bloodTex && ((settings.RuneDecalsOnSnow && runeSitesLive.load(std::memory_order_acquire) != 0) || (engineDecal && settings.FrostDecalsOnSnow))) {
 		const bool decalMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode != 0 ||
 		                       flags.any(Flag::kDecal, Flag::kDynamicDecal);
@@ -997,92 +791,39 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 			return;
 		}
 	}
-	// Animated flora never qualifies: card meshes shard under the skin.
 	if (flags.all(Flag::kTreeAnim)) {
 		LogCaptureVerdict(a_pass, "rejected: tree-anim flag");
 		return;
 	}
-	// Skinned geometry never qualifies: with the family acceptance no
-	// longer LOD-only, an "Ice"-prefixed actor mesh (ice wraith) would
-	// otherwise capture and drag a static skin behind a moving creature.
 	if (a_pass->geometry->GetGeometryRuntimeData().skinInstance != nullptr) {
 		LogCaptureVerdict(a_pass, "rejected: skinned geometry");
 		return;
 	}
-	// Ash, sand, moss: not snow to the recolor, so no skin, no caster and no
-	// height-map entry either (Solstheim's ash rocks were shadowed by an
-	// invisible skin).
 	if (rec.mato == MatoClass::kNotSnow) {
 		LogCaptureVerdict(a_pass, "rejected: MATO not snow");
 		return;
 	}
-	// Ice-family meshes keep their skins at every range: the always-covered
-	// LOD family look is the acceptance criterion, and a skinless loaded
-	// glacier reads as having no snow even with the baked-snow recolor
-	// active. The recolor rides
-	// underneath as a second layer: it tints the baked snow that shows
-	// through skin gaps and beyond the raster window. The skin's
-	// structural limits here (58 m conforming window, facet squares,
-	// stacked trishape layers, rim gaps) stay known; the recolor's job is
-	// to soften what they expose.
-	// Merged LOD spans a whole worldspace quad; nothing belonging to a single
-	// reference comes close. Windhelm's merged quads measured 8700-12608.
 	constexpr float kMergedLODRadius = 4096.0f;
 
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
-	// Object LOD batches: the game draws a DynDOLOD BTO one segment per
-	// reference or cell, segments off where the real model is loaded, and a
-	// capture draws the whole buffer (Josef's ghost shell, RenderDoc
-	// 2026-09-10: objSnowHD-LargeRef, the game's 900 indices of our 6372).
-	// Flagged, not rejected: the skin PS keeps a pixel only where the hull
-	// is the scene surface.
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
 	const bool lodBatch = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
-	// Read after SetupGeometry: the raster depth-bias mode this draw uses.
-	// Decal mode writes depth with a slope bias (-0.65/px) and a shorter
-	// viewport range, so at grazing views the mesh's own depth sits far
-	// nearer than the geometry; the skin has to draw through the same state
-	// (Windhelm paving, RenderDoc 2026-09-10).
 	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
-	// A snow-textured overlay (rock skirt) keeps its own fade: recolor only,
-	// never a coat (SnowTexturedOverlay).
 	const bool snowTexOverlay = settings.SnowTexturedRecolor && rec.pathSnowNamed && PassBlendsOver(a_pass);
 
-	// Merged LOD sheets, discriminated by CONTAINMENT rather than by span.
-	//
-	// Distant objects and Windhelm's sheets are the same asset class at the
-	// same sizes, so neither the LOD flags nor worldBound.radius separates
-	// them. What does is whether the LOD is REDUNDANT: inside the loaded
-	// region the real meshes draw too, so a skin on the co-drawn LOD is a
-	// second surface cutting through them; outside it the LOD is the object's
-	// only representation and must be skinned. "Am I standing inside it" is
-	// the test, with the unreferenced check as the second half - merged LOD
-	// hangs off no TESObjectREFR.
 	{
 		const auto& wb = a_pass->geometry->worldBound;
 		const float bx = wb.center.x - eye.x;
 		const float by = wb.center.y - eye.y;
-		// Horizontal containment: these sheets are broad and flat, so the
-		// footprint is what matters, not the sphere's vertical reach.
 		const bool cameraInside = (bx * bx + by * by) < (wb.radius * wb.radius);
 		if (cameraInside && wb.radius > kMergedLODRadius) {
 			bool referenced = false;
 			for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
 				referenced = node->GetUserData() != nullptr;
-			// The userData walk is a fallible proxy: real glacier meshes walk
-			// as unreferenced too, and this rejection then ate them whenever
-			// the camera stood inside their footprint. Settle it exactly
-			// before rejecting.
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
-			// Ice-family sheets are exempt: the containment rule protects
-			// Windhelm's stone sheets, but a glacier LOD batch is rejected
-			// exactly while the camera stands inside its span - precisely
-			// where the glacier field below must stay skinned - and on the
-			// world map the panning camera strobed the whole field on and
-			// off across sheet boundaries.
 			const bool iceSheet = rec.pathNatural;
 			if (!referenced && !iceSheet && !lodBatch) {
 				LogCaptureVerdict(a_pass, "rejected: containment (big, camera inside, no owning reference found)");
@@ -1093,31 +834,16 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
 			SampleLODDecision(a_pass->geometry, wb.radius, false, cameraInside);
 	}
-	// Projected snow paint is the drape's whole input and Lighting recolors
-	// on PROJECTED_UV alone; the Snow flag adds nothing, and a PBR retexture
-	// drops it (Dawnstar's cliff, Alftand's dome, loaded rocks - bare with
-	// the recolor on them). Only draws WITHOUT projection data face the
-	// family gate below.
 	if (!flags.all(Flag::kProjectedUV)) {
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
 			return;
 
-		// Object LOD only. Terrain LOD (kLODLandscape) belongs to the shell and
-		// the horizon recolor, never to object snow.
 		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 
-		// Texture family OR mesh-name family: several glacier/ice meshes
-		// carry non-family texture paths. The MATO only vetoes (above);
-		// requiring positive snow MATOs wrongly rejected glaciers, whose
-		// snow is baked and needs no projection record.
-		// The mountain/cliff family too, on snowy ground: LOD batches carry
-		// the family's texture paths and no projection data.
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
 		bool mountainFeature = rec.pathMountain || nameFacts.mountainCliff;
 		if (mountainFeature) {
-			// Two shared locks per call; a static's answer only moves with the
-			// cell data, so it is kept on the record and stamped.
 			const uint32_t depthVersion = snowDepthVersion.load(std::memory_order_acquire);
 			if (rec.depthVersion != depthVersion || rec.depthX != wbCenter.x || rec.depthY != wbCenter.y) {
 				rec.depth = GetNominalSnowDepthAt(wbCenter.x, wbCenter.y, 0.0f);
@@ -1128,17 +854,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 			mountainFeature = rec.depth > 0.5f;
 		}
 		const bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
-		// Family accepts at any range, not just LOD: loaded glacier/ice meshes
-		// carry no proj/snow flags when PBR glacier textures replace the
-		// vanilla projected-snow setup, while their LOD counterparts capture
-		// normally. LOD-only acceptance was the whole
-		// bare-glacier bug). The MATO veto stands.
-		// Plain object LOD passes whole: Lighting recolors every such batch by
-		// texel brightness (SetProjectedSnowBit) and writes the weight back,
-		// and the coat reads that weight and nothing else (the atlas holds
-		// ships and walls beside the mountains).
-		// Snow-named textures capture under the toggle: their skin coats off
-		// the recolor's written weight.
 		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && !snowTexOverlay;
 		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture || rec.roadLayer)) {
 			LogCaptureVerdict(a_pass, "rejected: no family signal at material gate (name/texture both missed)");
@@ -1146,28 +861,10 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		}
 	}
 
-
-	// Twig-card shape class (branch piles, shore driftwood): vanilla flags
-	// them snow-projected so they pass the flag gate, but the capture sees
-	// sparse cards and the skin wraps them into broken shards. Name-matched
-	// on the diffuse path; extend the list as offenders surface.
 	if (rec.shard) {
 		LogCaptureVerdict(a_pass, "rejected: twig-card shape class");
 		return;
 	}
-	// Alpha-TESTED cards (grass, roots, leaves) never take a skin: the coat
-	// over a card is a translucent plane wherever the card is transparent.
-	// Seasons projects onto every geometry of a model, and season packs swap
-	// in variants whose MATO projects onto their cards too, so the gate is on
-	// the geometry, not on who projected. Decal-mode geometry keeps its
-	// skin whatever its alpha: a rock skirt (test + blend) is a soft overlay
-	// lying ON its trim, drawn in the game's decal depth mode, and its skin
-	// in that same mode is what covers it wherever the trim's own skin loses
-	// the depth fight to it. Cards stand off the surface and never draw as
-	// decals. LOD atlases keep their coat; it reads the recolor's own weight.
-	// Architecture surfaces (a thatch roof's fringe, plank ends) test alpha
-	// too and are not cards; foliage textures under architecture still are.
-	// Nor are a road model's strips: they lie on the road (rec.roadLayer).
 	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
 	const bool alphaTested = alphaProperty && alphaProperty->GetAlphaTesting();
 	if (!lodBatch && !decalDepth && !rec.pathArchitecture && alphaTested && !rec.roadLayer) {
@@ -1175,39 +872,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		return;
 	}
 
-	// Range cap (Object Snow slider): distant mountains are snow-projected
-	// everywhere in Skyrim; the skin only matters within the chosen range.
-	// Glacier/iceberg captures are exempt: their baked snow is far whiter
-	// than the shell and no
-	// projection exists for the match to recolor, so between the skin range
-	// and cell unload they stood out bright; the skin now covers them at
-	// every loaded distance and skips the fade to match.
 	const bool fadeExempt = rec.pathNatural || rec.iceName;
-	// Drifts: the mesh IS the snow, and at range the vanilla material reads
-	// far brighter than the shell (Josef, 2026-09-06). Coated whole at every
-	// loaded distance; the projection default below still applies.
 	const bool fullCoat = nameFacts.drift;
-	// Road-mesh model class: deterministic NAME + texture-path match. The
-	// name check matters: road models are built from MULTIPLE trishapes
-	// ('RoadChunk...:0', ':2'), and only some wear road textures; matching
-	// textures alone splits one road across two depth settings, stacking a
-	// second hovering shell.
-	// "bridge" (name or diffuse) EXCLUDES the road class: a bridge mesh does
-	// not split its road stones from its walls, so the road skin sheeted
-	// the whole thing (Josef, 2026-09-12). Bridges are ordinary objects;
-	// the RoadChunks laid over a deck keep their own road class.
-	// The name alone is not enough: Whiterun's district meshes are named
-	// WRMainRoad* and carry walls, roofs, stalls and the stream bed, so the
-	// name counts only on a landscape-textured trishape (the road kit's
-	// road01 / snow01 pieces) or a paving one (wrstonefloor, wrslate; not
-	// wrroofslate), never on walls, planks, trims or plaster.
 	const bool bridge = nameFacts.bridge || rec.roadTex == 2;
 	bool road = !bridge && nameFacts.road && (rec.landscapeTex || rec.pavingTex);
-	// Which signal decided it, for the road-classification log below.
 	const char* roadVia = road ? "name" : (bridge ? "bridge excluded" : "no");
-	// A road replacer's strips are the surface the game draws over its road
-	// shape: left out, the road top sat up to 15 units under them and the
-	// road's snow lost the depth test to the dirt (TMD Dirt Roads).
 	if (!road && !bridge && rec.roadLayer) {
 		road = true;
 		roadVia = "road model layer";
@@ -1216,51 +885,34 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		road = true;
 		roadVia = "texture";
 	}
-	// Cities: no road class at all. The paving is an ordinary object there
-	// (skin, recolor, volume), like the walls and stairs beside it.
 	if (road && GroundShellsSuspended()) {
 		road = false;
 		roadVia = "city";
 	}
-	// Off the road class a strip is an alpha-tested card again.
 	if (rec.roadLayer && !road) {
 		LogCaptureVerdict(a_pass, "rejected: road model layer outside the road class");
 		return;
 	}
 
-	// Measured to the bound's nearest point, not the origin: a long wall or
-	// a building's shape can sit inside the range with its origin outside it.
 	const auto& translate = a_pass->geometry->world.translate;
 	const auto& rangeBound = a_pass->geometry->worldBound;
 	float dx = rangeBound.center.x - eye.x;
 	float dy = rangeBound.center.y - eye.y;
 	const float captureRange = SkinFadeEndUnits() + std::max(rangeBound.radius, 0.0f);
-	// Road skins belong to the ground: no Object Snow range cap, no distance dissolve.
 	if (!fadeExempt && !fullCoat && !road && dx * dx + dy * dy > captureRange * captureRange) {
 		LogCaptureVerdict(a_pass, "rejected: range cap despite family signal (fadeExempt did not fire)");
 		return;
 	}
 
-	// Object snow needs snow-capable ground near it, unless the object IS
-	// the snow (ice family, drifts) or carries projected snow, which takes
-	// the drape wherever it stands. Two cells of reach clipped to the
-	// loaded square; a still-baking cell counts as snow.
 	if (!fadeExempt && !fullCoat && !flags.any(Flag::kProjectedUV) && !GroundNearHasSnow(translate.x, translate.y)) {
 		LogCaptureVerdict(a_pass, "rejected: no snow ground within two loaded cells");
 		return;
 	}
 
-	// The same geometry renders through multiple passes; capture once.
 	if (!capturedStaticsSet.insert(a_pass->geometry).second)
 		return;
 	LogCaptureVerdict(a_pass, fadeExempt ? "CAPTURED (fadeExempt)" : "CAPTURED (range-faded)");
 
-	// Capture log, one line per unique geometry name: classification plus the
-	// diffuse. Began as the road-class log; widened to EVERY capture because
-	// the question "was this trishape captured at all, and as what?" keeps
-	// being the fork in a diagnosis - RoadChunkS03's ':1' paper sheet is
-	// either an uncaptured vanilla snow drape or our own skin on a
-	// non-road-named trishape, and only this log can say which.
 	if (!nameFacts.capturedLogged) {
 		nameFacts.capturedLogged = true;
 		const char* diffusePath = "";
@@ -1272,10 +924,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, diffusePath);
 	}
 
-	// Vanilla's projected-UV threshold, for the S0 mask view and the S2
-	// placement suppressor (SKIN-PLACEMENT-PLAN.md). -1 = no projection data
-	// on this draw. Tree-anim meshes are sentineled too: their vertex alpha
-	// is wind weight, not a snow mask, and vanilla forces alpha 1 on them.
 	float projThreshold = -1.0f;
 	float projNoiseScale = 0.0f;
 	float projNoiseTiling = 0.0f;
@@ -1287,36 +935,17 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim)) {
 			const auto& projParams = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams;
 			projThreshold = projParams.alpha;
-			// = Lighting's ProjectedUVParams.x.
 			projNoiseWeight = projParams.red * (1.0f - projParams.alpha);
-			// Runtime projection (Seasons of Skyrim): the record's 0 stands
-			// for "no angle"; the skin reconstructs with the angle Lighting
-			// masks by, so the drape and the recolor agree.
 			if (rec.seasonsProj)
 				projThreshold = std::max(projThreshold, std::cos(std::clamp(settings.SeasonsSnowMaxAngle, 0.0f, 90.0f) * (DirectX::XM_PI / 180.0f)));
 			projNoiseScale = projParams.red;
 			projNoiseTiling = projParams.blue;
 			projReal = true;
 		} else if (!capFlags.any(CapFlag::kTreeAnim) && !fadeExempt) {
-			// The classification-key mismatch closed (Josef's fence,
-			// 2026-08-29): capture is technique-classified, so everything
-			// here IS projected snow to the recolor - but mesh-replacer
-			// statics (fences, drifts) carry no kProjectedUV on the
-			// PROPERTY and the S4 shell skipped them. Default them fully
-			// painted: threshold 0, no noise term, authored alpha still
-			// honored where the mesh carries vertex colors (vanilla's own
-			// PROJECTED_UV path reads Color.w on these draws too). Trees
-			// stay sentineled (wind alpha); the ice family keeps its
-			// structural exclusion.
 			projThreshold = 0.0f;
 		}
 	}
 
-	// Mountain/cliff family: force the rounded class. A jagged low-poly
-	// cliff's split normals score "flat" under the divergence classifier and
-	// the mesh drapes with a rigid plate lifted the full flat depth - the
-	// hovering translucent film. Name match like the road class; a false
-	// positive forces rounded on something already rounded, a no-op.
 	const bool forceRounded = nameFacts.mountainCliff;
 	if (decalDepth && !nameFacts.decalLogged) {
 		nameFacts.decalLogged = true;
@@ -1326,9 +955,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		nameFacts.roundedLogged = true;
 		logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", a_pass->geometry->name.c_str());
 	}
-	// Plank family: in authored-relief mode the ONLY flat-class draws
-	// (cornice treatment, own fill slider); everything else PD is
-	// rounded. Same deterministic name match as the road class.
 	const bool plankFamily = nameFacts.plank;
 	if (plankFamily && !nameFacts.plankLogged) {
 		nameFacts.plankLogged = true;
@@ -1336,11 +962,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	}
 
 	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && !snowTexOverlay;
-	// Snow Follows Parallax: the height map Extended Materials marches for this
-	// draw, read from the material as CS's TruePBR and the game bind it - the
-	// displacement, or the env mask a complex material keeps its height in -
-	// and the scale, channel and mip rule Lighting gives it. Vanilla parallax
-	// shapes paint nothing; object LOD takes no parallax.
 	winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
 	float4 parallaxUV = {};
 	float4 parallax = {};
@@ -1348,8 +969,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		const auto& em = globals::features::extendedMaterials.settings;
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		RE::NiSourceTexture* height = nullptr;
-		// TruePBR's own test (TruePBR::BSLightingShader_SetupMaterial): the pass's
-		// flag, not GetFeature(), which reports kDefault for PBR materials.
 		using LightingTechnique = SIE::ShaderCache::LightingShaderTechniques;
 		const auto technique = static_cast<LightingTechnique>(0x3F & (a_rawTechnique >> 24));
 		const bool truePbr = (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
@@ -1416,18 +1035,9 @@ void SnowDeformation::InstallStaticsCaptureHook()
 	stl::write_vfunc<0x6, SD_BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 }
 
-// Compiles one stage of the statics skin, RETURNING the bytecode blob;
-// input layouts must be created against the VS bytecode, which
-// Util::CompileShader discards. Include resolution matches CompileShader's
-// convention (everything relative to Data\Shaders).
 ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4, const char* a_extraDefine5, const char* a_extraDefine6)
 {
-	// Blob disk cache (see ShaderPrime.cpp): the fixed flag set below is part
-	// of the "sdblob" env token, and the full key round-trips through the
-	// stored file so a fingerprint or define change reads as a miss.
 	auto& snow = globals::features::snowDeformation;
-	// The fourth and fifth defines are appended only when present so every
-	// existing cache key keeps its text.
 	auto defs = std::format("{};{};{};{}", a_stageDefine,
 		a_extraDefine ? a_extraDefine : "", a_extraDefine2 ? a_extraDefine2 : "", a_extraDefine3 ? a_extraDefine3 : "");
 	if (a_extraDefine4)
@@ -1505,8 +1115,6 @@ ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, cons
 
 bool SnowDeformation::RoadMapsWanted() const
 {
-	// Every drawn non-road skin is S4, which reads neither outside a debug
-	// view; the probe readout prints the cone.
 	return capturedRoads > 0 || staticsDebugView != 0 || globals::state->frameCount - heightProbeShownFrame < 3;
 }
 
@@ -1517,41 +1125,25 @@ float2 SnowDeformation::PatchLatticeCentre() const
 
 void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
 {
-	// WorldRow0.xy = snapped patch CENTRE. The grid is warped (see
-	// kPatchBandVerts in SnowStaticsShell.hlsl), so the vertex shader
-	// places about the centre rather than stepping from a corner, and the
-	// snap has to be the COARSEST band step - snapping to the fine step
-	// would leave outer vertices off their own band's lattice and quad
-	// widths would flip as the camera moves.
 	const float2 centre = PatchLatticeCentre();
 	a_scb.WorldRow0 = { centre.x, centre.y, 0.0f, 0.0f };
-	// Objects carry no depth; roads carry theirs per texel in the skin-depth raster.
 	a_scb.ObjectsDepth = 0.0f;
 	a_scb.RoundedDepth = 0.0f;
-	// Roads are ground: no Object Snow distance dissolve.
 	a_scb.FadeExempt = 1.0f;
 	a_scb.HeightWindowCenter = heightWindowCenter;
 	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
-	// The patch stays on the coarse maps: its pass does not bind t33/t34, and
-	// a stale non-zero here would send PatchTop to an unbound texture, whose
-	// zero reads as an object top at world Z 0.
 	a_scb.FineHalfExtent = 0.0f;
-	// The far road level (t40) IS bound by the patch pass and the caster.
 	a_scb.FarWindowCenterX = farWindowCenter.x;
 	a_scb.FarWindowCenterY = farWindowCenter.y;
 	a_scb.FarHalfExtent = farHalfExtentLive;
 	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
-	// The march's footprint test (t11 in the visible pass).
 	a_scb.HasObjectTop = 1.0f;
-	// The patch is road snow throughout; it reads the road bit per texel from
-	// the raster's G channel, not from here.
 	a_scb.RoadField = 1.0f;
 }
 
 uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const
 {
 	a_out = {};
-	// Inside where row . (p - cam, 1) >= 0, rewritten over absolute world p.
 	const auto& m = a_cb.CameraViewProj;
 	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
 	auto plane = [&](int a_row, double a_sign) {
@@ -1567,11 +1159,8 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 		const double len = std::hypot(a_x, a_y);
 		if (len < 1e-9 || count >= 6)
 			return;
-		// Slack over the shader's float rounding at world-sized coordinates.
 		a_out.Lines[count++] = { float(a_x / len), float(a_y / len), float(a_d / len + 4.0), 0.0f };
 	};
-	// z eliminated (Fourier-Motzkin): each plane without z is a line as is,
-	// and every pair bounding z from opposite sides gives one.
 	for (const auto& p : planes)
 		if (p[2] == 0.0)
 			addLine(p[0], p[1], p[3]);
@@ -1590,9 +1179,6 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 
 uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const
 {
-	// PatchOutsideFootprint over 8x8 blocks: a block's corner range bounds its
-	// patches' (the warp is monotonic), and 8 units over the hull's 16 cover
-	// its float corners. A patch outside every band would get zero factors.
 	static constexpr uint32_t kBlock = 8;
 	static constexpr uint32_t kBlocks = (kPatchGridDim + kBlock - 1) / kBlock;
 	static constexpr double kMargin = 16.0 + 8.0;
@@ -1615,7 +1201,6 @@ uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a
 		edgeX[b] = double(a_centre.x) + w;
 		edgeY[b] = double(a_centre.y) + w;
 	}
-	// Per block row, the span of its kept blocks.
 	uint32_t rowX0[kBlocks];
 	uint32_t rowX1[kBlocks];
 	uint32_t by0 = kBlocks, by1 = 0;
@@ -1642,7 +1227,6 @@ uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a
 			by1 = std::max(by1, by + 1);
 		}
 	}
-	// Equal shares of the kept rows; a band spans the union of its rows' spans.
 	uint32_t count = 0;
 	for (uint32_t b = 0; b < kPatchBands && by0 < by1; b++) {
 		const uint32_t r0 = by0 + (by1 - by0) * b / kPatchBands;
@@ -1661,8 +1245,6 @@ uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a
 
 ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 {
-	// Lazy: the shadow pass runs before DrawShell has
-	// had a chance to create the statics shaders on early frames.
 	if (!patchShadowVS) {
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 		winrt::com_ptr<ID3DBlob> blob;
@@ -1679,12 +1261,6 @@ bool SnowDeformation::EnsurePatchCasterIB()
 {
 	if (patchCasterIB)
 		return true;
-	// Six indices per quad in the visible patch VS's corner order, so the
-	// triangles and their order are the same. A triangle with a corner
-	// past the caster's distance kill (SnowStaticsShell.hlsl
-	// BuildPatchVertex) never rasterises, and lattice offsets from the
-	// patch centre are fixed, so those are left out. No lattice vertex
-	// lies within 4 units of the kill radius (~4063).
 	constexpr uint32_t stride = kPatchGridDim + 1;
 	static constexpr uint32_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
 	const auto warp = [](int a_u) {
@@ -1844,7 +1420,6 @@ ID3D11PixelShader* SnowDeformation::PatchConditionViewPS()
 void SnowDeformation::ReleasePatchDeferred()
 {
 	for (int i = 0; i < 2; i++) {
-		// A compile in flight finishes first; its shader is dropped with the rest.
 		if (patchDeferredJob[i].valid()) {
 			if (auto* ps = patchDeferredJob[i].get())
 				ps->Release();
@@ -1886,8 +1461,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 			}
 		}
 	}
-	// Tessellated skin stages: optional (legacy path remains the fallback),
-	// so failures here never set staticsShadersFailed.
 	if (!staticsTessVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SNOW_TESS"));
@@ -1912,8 +1485,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
 		}
 	}
-	// EHF sun attenuation only compiles when the addon is installed (its
-	// hlsli is not CORE); the shells' PBR sun path gates on this define.
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
 
@@ -1926,11 +1497,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	// No-depth-export twin. Only the parallax carve needs SV_Depth, and only
-	// road draws carve, so every other captured static writes back the depth
-	// the rasteriser already had - paying the loss of early-Z across the whole
-	// pass for nothing.
-	// A compile failure here is not fatal: the draw falls back to staticsPS.
 	if (!staticsPSNoDepth) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT"));
@@ -1940,9 +1506,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	// Depth-prepass twin of the no-export shader: the alpha cut with the
-	// shading compiled out. Carving draws have no twin on purpose (see the
-	// shader). A compile failure just leaves the pass on its single loop.
 	if (!staticsPSPrepassNoDepth) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS"));
@@ -1952,8 +1515,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	// Drape twins of the pair above (SNOW_STATICS_DRAPE). A failure keeps
-	// drapes on the general pair.
 	if (!staticsPSDrapeNoDepth) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE"));
@@ -1970,8 +1531,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
 		}
 	}
-	// The drapes' print twin (SNOW_OBJECT_PRINTS), for draws over prints. A
-	// failure keeps them on the drape twin.
 	if (!staticsPSDrapePrintsNoDepth) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS"));
@@ -1981,8 +1540,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		}
 	}
 
-	// Trench patch (PATCH define): SV_VertexID grid, no input layout. The
-	// draw guards on the pointers, so a compile failure just skips the pass.
 	if (!patchVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH"));
@@ -2065,8 +1622,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 				Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
 		}
 	}
-	// Volume snow (VOXEL): brick VS + marching PS. Optional; the draw guards
-	// on the pointers.
 	if (!voxelShellVS) {
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "VOXEL"));
@@ -2165,10 +1720,6 @@ void SnowDeformation::CreateHeightFieldResources()
 		heightRaster->CreateSRV(rasterSrvDesc);
 		heightRaster->CreateRTV(rasterRtvDesc);
 	}
-	// The mask carries TWO independent channels (R = door suppression,
-	// G = melt fraction). A single winner-takes-all channel discarded melt
-	// wherever a door's faint influence tail reached - a ring of full-depth
-	// plateau snow around every sheltered door.
 	D3D11_TEXTURE2D_DESC maskDesc = heightDesc;
 	maskDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
 	D3D11_SHADER_RESOURCE_VIEW_DESC maskSrvDesc = heightSrvDesc;
@@ -2182,18 +1733,10 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomFiltered->CreateRTV(maskRtvDesc);
 	heightBottomFiltered->CreateUAV(maskUavDesc);
 	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
-	// The peeled second layer: the layer-1 cone seed's plane-continuation test.
 	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
 	heightTop2Raw[1] = makeHeightTexture("SnowDeformation::HeightTop2Raw1");
-	// Near clipmap level 0: same grid, quarter reach, so one texel is one
-	// world unit. The top alone: no ghost pair, and no cone (roads read the
-	// coarse one).
 	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
-	// Far road level: the road captures alone over the loaded-cell square.
-	// Same grid, so a texel is 12 units at uGridsToLoad 5 and 16 at 7.
 	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
-	// The tile grid below starts from the sky-openness field's shape (P3: half
-	// the raster's resolution, compute-written; made on Volume Snow's first run).
 	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
 	openDesc.Width = kHeightMapDim / 2;
 	openDesc.Height = kHeightMapDim / 2;
@@ -2212,20 +1755,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTileEmpty->CreateSRV(tileSrvDesc);
 	heightTileEmpty->CreateUAV(tileUavDesc);
 
-	// Skin-depth raster: SRV+RTV only (cleared and re-rasterized fresh every
-	// frame). TWO channels, same rationale as the shelter mask above:
-	// R = the class layer depth this texel wears, G = the world Z of the
-	// ROAD surface in this column (sentinel where no road drew).
-	//
-	// G holds a height rather than a road/not-road bit because the channels
-	// MAX-blend INDEPENDENTLY: a bare bit went true wherever a road's
-	// footprint reached, including columns whose top belongs to a taller
-	// object standing on or beside the road, and the patch then draped
-	// road-depth snow over that object (rocks, cairns, walls, a farmhouse
-	// over its own walkway). Comparing the road's own top against the
-	// column's top settles who OWNS the column, which is the question.
-	// R32G32 so the height is exact -- R16F's ulp at Skyrim world Z is
-	// coarser than the ownership epsilon.
 	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
 	skinDepthDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
 	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
@@ -2238,16 +1767,11 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
 }
 
-// Per compared target: the count, then the first differing texels as texel,
-// kept .xy, fresh .xy (RasterCompareCS).
 static constexpr UINT kHeightVerifySamples = 8;
 static constexpr UINT kHeightVerifySlotWords = 4 + kHeightVerifySamples * 8;
 static_assert(kHeightVerifySlotWords * sizeof(uint32_t) % D3D11_RAW_UAV_SRV_BYTE_ALIGNMENT == 0);
-// Layer-1 raster, skin depth, fine, far (each with a scratch twin), then the
-// object and road cones (against coneVerifyTex) and the shelter mask.
 static constexpr UINT kHeightVerifySlots = 7;
 static constexpr UINT kHeightVerifyRasterSlots = 4;
-// The verifiedLevels bit each target's compare sets.
 static constexpr uint32_t kHeightVerifyTargetLevel[kHeightVerifySlots] = { 0, 0, 1, 2, 3, 4, 5 };
 
 bool SnowDeformation::EnsureHeightRasterVerify()
@@ -2274,7 +1798,6 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 		heightRasterVerifyTex[i]->CreateRTV(rtvDesc);
 	}
 	if (!heightRasterVerifyCount) {
-		// A raw view starts on a 16-byte boundary; each slot is a multiple of 16 bytes.
 		D3D11_BUFFER_DESC countDesc{};
 		countDesc.ByteWidth = kHeightVerifySlots * kHeightVerifySlotWords * sizeof(uint32_t);
 		countDesc.Usage = D3D11_USAGE_DEFAULT;
@@ -2488,7 +2011,6 @@ bool SnowDeformation::EnsureStaticsRecordCB(uint32_t a_count)
 			logger::info("[SNOW DEFORMATION] statics record buffer: no ID3D11DeviceContext1; per-draw updates stay");
 			return false;
 		}
-		// An interposer's proxy may answer the query with itself; log what came back.
 		logger::info("[SNOW DEFORMATION] statics record buffer: ID3D11DeviceContext1 {:X} (base context {:X}, {})",
 			reinterpret_cast<uintptr_t>(staticsContext1.get()), reinterpret_cast<uintptr_t>(context),
 			static_cast<void*>(staticsContext1.get()) == static_cast<void*>(context) ? "same object" : "different object");
@@ -2559,9 +2081,6 @@ void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, boo
 	staticsContext1->VSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	if (a_pixelStage)
 		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
-	// Tessellated skins read the block in the hull and domain stages too;
-	// left on the old buffer they computed every skin from one frozen
-	// block (snow on vertical faces, Josef 2026-09-06).
 	if (a_tessStages) {
 		staticsContext1->HSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 		staticsContext1->DSSetConstantBuffers1(1, 1, &buffer, &first, &count);
@@ -2570,7 +2089,6 @@ void SnowDeformation::BindStaticsRecord(uint32_t a_index, bool a_pixelStage, boo
 
 void SnowDeformation::SkipObjectHeightMap()
 {
-	// The next run clears and rebuilds, as after a teleport.
 	heightMapValid = false;
 	globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
@@ -2583,8 +2101,6 @@ bool SnowDeformation::HeightMapIdleReady() const
 
 void SnowDeformation::IdleObjectHeightMap()
 {
-	// A run would scroll sentinels into sentinels; the window, the walk's
-	// cadence and its jump test advance exactly as a run's.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float halfExtent = ObjectRasterHalfExtent();
 	const float texel = halfExtent * 2.0f / kHeightMapDim;
@@ -2612,7 +2128,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	LoadTraceScope _loadTrace(this, "Statics: RenderObjectHeightMap");
 	auto context = globals::d3d::context;
 
-	// Camera-following window, snapped to texel size for stability.
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 	const float halfExtent = ObjectRasterHalfExtent();
 	const float texel = halfExtent * 2.0f / kHeightMapDim;
@@ -2621,15 +2136,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		std::floor(eye.y / texel) * texel
 	};
 
-	// Scroll the ACCUMULATED maps into the new window position.
-	// +worldY maps to texture -v, so the v-axis delta is negated.
 	HeightProcessCB processData{};
 	processData.ScrollDelta = {
 		(int)std::lround((newCenter.x - heightWindowCenter.x) / texel),
 		-(int)std::lround((newCenter.y - heightWindowCenter.y) / texel)
 	};
-	// A reach change re-texels the grid: the scrolled map would be read at
-	// the wrong scale, so it clears and rebuilds from this frame's captures.
 	if (objectRasterHalfExtentBuilt != halfExtent) {
 		objectRasterHalfExtentBuilt = halfExtent;
 		heightMapValid = false;
@@ -2653,19 +2164,10 @@ void SnowDeformation::RenderObjectHeightMap()
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;
-	// The layer-1 draws below re-extend it.
 	if (processData.ClearAll || heightGhostBox.x > newCenter.x + halfExtent || heightGhostBox.z < newCenter.x - halfExtent ||
 		heightGhostBox.y > newCenter.y + halfExtent || heightGhostBox.w < newCenter.y - halfExtent)
 		heightGhostsLive = false;
 
-	// Exclusion zones. Static sources (campfires, heat sources, dropped
-	// torches, workspaces, sealed containers) come from a walk over every
-	// loaded reference: started once a second and at once on a window jump
-	// (load, teleport, reach change), spread over the following frames a
-	// few cells at a time, swapped in whole when it ends. Heat sources come
-	// from Survival Mode's warm-up-objects formlist when the plugin is
-	// present, plus model-path matching that also covers non-Survival
-	// installs.
 	const bool windowJumped = processData.ClearAll != 0 ||
 	                          std::abs(processData.ScrollDelta.x) > kGatherJumpTexels || std::abs(processData.ScrollDelta.y) > kGatherJumpTexels;
 	if (windowJumped || (doorRefreshCounter++ % 60) == 0)
@@ -2675,10 +2177,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		StepExclusionGather();
 	}
 
-	// Upload after each gather. Carried torches deliberately do NOT melt:
-	// a moving basin warps the bearer's own trench and berms (tried at full
-	// and 0.35 strength, both read as snow avoiding the player). Dropped
-	// burning torches cover the on-ground case.
 	{
 		ExclusionsCB exclusionData{};
 		uint32_t exclusionCount = 0;
@@ -2710,20 +2208,14 @@ void SnowDeformation::RenderObjectHeightMap()
 			}
 			exclusionListHash = h;
 		}
-		// Every frame, never on a cadence (the window follows the camera);
-		// the bake itself skips while its inputs match.
 		RenderExclusionField(exclusionData);
 	}
 
-	// A capture wholly outside a window rasterizes to nothing there; the list
-	// reaches the object-snow range, far past the raster windows.
 	auto outsideWindow = [&](const RE::BSGeometry* a_geometry, float a_halfExtent) {
 		const auto& wb = a_geometry->worldBound;
 		return std::abs(wb.center.x - heightWindowCenter.x) > a_halfExtent + wb.radius ||
 		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
 	};
-	// LOD batches never rasterize: with none of the rest in the window and no ghost, the merges
-	// scroll sentinels into sentinels and the cone seeds zero, so the last such run's maps stand.
 	const bool emptyWindow = !heightGhostsLive && std::ranges::none_of(capturedStatics, [&](const auto& a_cap) {
 		return a_cap.geometry && !a_cap.lodBatch && !outsideWindow(a_cap.geometry.get(), halfExtent);
 	});
@@ -2737,14 +2229,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11ShaderResourceView* nullCsSRVs[2] = { nullptr, nullptr };
 	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
 
-	// The ghost merge runs AFTER each layer rasterizes, not before: the maps
-	// are cleared to their sentinels, the capture writes this frame's truth
-	// into them, and this fills what nothing drew into from the previous
-	// window. Scrolling in first and MAX-blending the captures over it could
-	// only ever RAISE a texel, so a reference that swapped LOD meshes kept
-	// the taller silhouette of the mesh it replaced for as long as GhostDecay
-	// needed to eat the difference. Rationale for the in-view rule (what
-	// stops this un-sheltering a walkway floor) is on ScrollCS itself.
 	{
 		auto& fb = globals::game::frameBufferCached;
 		HeightGhostCB ghostData{};
@@ -2753,10 +2237,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		heightGhostCB->Update(ghostData);
 	}
 	ID3D11Buffer* ghostCB = heightGhostCB->CB();
-	// Null bottoms = the top-only variant. a_tiles (bottoms only) takes the
-	// shelter mask's per-tile flags. With a_raster (bottoms only) the raster
-	// is read there (t6, heightRaster) and the current maps take the merge alone;
-	// without, it is merged in place.
 	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles,
 						  Texture2D* a_raster = nullptr) {
 		if (!a_prevTop || !a_curTop)
@@ -2790,20 +2270,12 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(2, 1, &nullMergeCB);
 	};
 
-	// Every raster starts empty, including the peeled layers: the sentinel
-	// is what tells the merge which texels this frame's capture owns. The
-	// layer-1 merge writes every texel of heightTopRaw/heightBottomRaw.
-	// Levels kept from an earlier run (heightRasterKey) skip their clears.
 	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
 	const float rasterClear[4] = { kHeightMapEmptyTop, -kHeightMapEmptyBottom, 0.0f, 0.0f };
 	if (heightTop2Raw[heightCurrent] && !keepEmpty)
 		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
 
-	// G = road top, so it clears to the no-road sentinel, not to zero: zero is
-	// a legal world Z and would read as a road at sea level.
 	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
-	// Only road records write the skin depth anything but its clear
-	// (SnowHeightCapture), so its pass draws the roads alone.
 	const bool roadRaster = capturedRoads > 0;
 	context->OMSetBlendState(heightRasterBlendState.get(), nullptr, 0xFFFFFFFF);
 
@@ -2814,33 +2286,16 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS, nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
-	// The peel pixel shader reads the block too (window centre, extent,
-	// PeelTol). It used to find staticsCB at b1 by accident, left there by
-	// the skin pass; bound here so the fallback path never depends on that,
-	// and the offset path binds the pixel stage per draw below.
 	context->PSSetConstantBuffers(1, 1, &cb1);
-	// The capture PS rejects grounded fragments from the bottoms raster
-	// (elevated undersides only); it reads terrain via the process CB.
 	ID3D11Buffer* captureCB0 = heightProcessCB->CB();
 	context->PSSetConstantBuffers(0, 1, &captureCB0);
 	ID3D11ShaderResourceView* captureTerrainSRV = shellTerrainTexture->srv.get();
 	context->PSSetShaderResources(2, 1, &captureTerrainSRV);
 
-	// Every static's capture and peel blocks, filled once: the three loops
-	// below bind them by offset (or Update from them on the fallback path).
-	// The smoothed-normals view is taken here and bound from the same slot
-	// in each loop, so HasSmoothedNormals and the view never disagree.
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
-	// Three blocks per capture: the coarse raster, the peel, and the near
-	// clipmap's raster (the same draw against a quarter-width window).
 	const bool roadMaps = RoadMapsWanted();
 	const bool fineLevel = roadMaps && FineLevelOn() && heightTopRawFine;
 	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
-	// Far road level: the road captures alone against the loaded-cell square,
-	// one block each, appended after the per-capture blocks. The window snaps
-	// to its own texel; one cell of slack past the square's half-width reaches
-	// its far edge from anywhere in the camera's cell.
-	// Its readers (patch, patch caster, road skins) are road draws only.
 	const bool farLevel = roadMaps && FarLevelActive();
 	farHalfExtentLive = 0.0f;
 	std::vector<uint32_t> farRecordIndex(captureCount, ~0u);
@@ -2860,22 +2315,15 @@ void SnowDeformation::RenderObjectHeightMap()
 				farRecordIndex[ci] = farCount++;
 	}
 	const uint32_t farRecordBase = captureCount * recordBlocks;
-	// Kept across frames: a fresh vector of this size (MBs at thousands of
-	// captures) paid its allocation and page faults on top of the zero fill.
 	static std::vector<StaticsCB> sCaptureRecords;
 	sCaptureRecords.assign(size_t(farRecordBase) + farCount, StaticsCB{});
 	auto& captureRecords = sCaptureRecords;
-	// The records a draw below binds: the loops' own tests. The volume binds every coarse record; far records are all kept.
 	std::vector<uint8_t> recordNeeded(captureRecords.size(), 0);
-	// Read once: a volume the mask did not cover takes the per-draw update path.
 	const bool volumeRecords = settings.VolumeSnow;
 	if (volumeRecords)
 		std::fill_n(recordNeeded.begin(), captureCount, uint8_t(1));
 	std::fill(recordNeeded.begin() + farRecordBase, recordNeeded.end(), uint8_t(1));
-	// The largest depth the skin-depth raster can hold this frame: only road
-	// records write one (SnowHeightCapture), MAX-blended from a zero clear.
 	float maxSeedDepth = 0.0f;
-	// Entries used this frame outlive the pass (EnsureSmoothedNormals never evicts them).
 	std::vector<ID3D11ShaderResourceView*> captureSmoothSRVs(captureCount, nullptr);
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		auto& cap = capturedStatics[ci];
@@ -2920,7 +2368,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
 		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
 		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
-		// Objects carry no lift into the raster and cones; roads keep theirs.
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		maxSeedDepth = std::max(maxSeedDepth, std::max(scb.ObjectsDepth, scb.RoundedDepth));
@@ -2933,10 +2380,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		scb.RoadField = cap.road ? 1.0f : 0.0f;
 		scb.ProjThreshold = cap.projThreshold;
 		{
-			// The S4 path no longer depends on the 3D toggle: that toggle is
-			// the RISE only. The coat and its edge lumps live in the S4 draw,
-			// so gating the draw on it took the border Josef keeps along with
-			// the shell (his test, 2026-09-06).
 			const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && SD_ProjNoiseMapSRV();
 			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
 		}
@@ -2953,13 +2396,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
 
 		if (fineLevel) {
-			// Same transform, same class depths - only the window narrows.
 			StaticsCB& fine = captureRecords[size_t(captureCount) * 2 + ci];
 			fine = scb;
 			fine.HeightHalfExtent = FineRasterHalfExtent();
 		}
 		if (farRecordIndex[ci] != ~0u) {
-			// Same draw against the far window.
 			StaticsCB& farBlock = captureRecords[size_t(farRecordBase) + farRecordIndex[ci]];
 			farBlock = scb;
 			farBlock.HeightWindowCenter = farWindowCenter;
@@ -2968,7 +2409,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()), recordNeeded.data());
 	uint32_t captureParity = 0;
-	// The top/bottom and top-only PSs read no b1: the raster loops bind the VS alone and the PS takes the last record after them.
 	uint32_t lastRasterRecord = ~0u;
 	uint32_t lastRasterParity = 0;
 	auto bindRasterRecord = [&](uint32_t a_index) {
@@ -2977,10 +2417,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		BindStaticsRecord(a_index, false, false, captureParity);
 	};
 
-	// Each raster level's draws in draw order. A level whose key (every draw's
-	// binds and record bytes, the inherited state and the level's extras)
-	// matches the one its targets were last drawn with keeps them: the same
-	// draws, records, state and clears give the same raster under MAX.
 	struct HeightRasterDraw
 	{
 		ID3D11InputLayout* layout;
@@ -3009,14 +2445,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		memcpy(&descKey, &desc, sizeof(descKey));
 		auto layoutIt = staticsILCache.find(descKey);
 		if (layoutIt == staticsILCache.end() || !layoutIt->second)
-			return;  // layouts are created by the skin pass; reuse only
+			return;
 		const UINT stride = uint32_t(descKey & 0xF) * 4;
 		if (stride == 0)
 			return;
 		a_out.push_back({ layoutIt->second.get(), reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
 			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), stride, indexCount, a_ci, a_record });
 	};
-	// The rasters inherit the pass's rasterizer state, topology and HS/DS/GS.
 	std::vector<uint8_t> inheritedState;
 	{
 		auto put = [&](const void* a_p, size_t a_n) {
@@ -3097,7 +2532,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->DrawIndexed(d.indexCount, 0, 0);
 		}
 	};
-	// A kept level binds nothing; the PS still takes the record it would have.
 	auto noteLastRecord = [&](const std::vector<HeightRasterDraw>& a_draws) {
 		if (!a_draws.empty() && captureRecordsLive) {
 			lastRasterRecord = a_draws.back().record;
@@ -3131,8 +2565,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetShader(nullptr, nullptr, 0);
 	};
 
-	// Layer 1: every capture into heightRaster, then the roads alone into the
-	// skin depth; each pass binds RT0 only, and MAX does not depend on order.
 	std::vector<HeightRasterDraw> layer1Draws;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
@@ -3186,15 +2618,11 @@ void SnowDeformation::RenderObjectHeightMap()
 		verifiedLevels |= 1u;
 	}
 
-	// Layer 1 is complete only once the ghost is under it: the peels below
-	// test against it, and so does everything downstream.
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Ghost Merge"));
 	if (!keepEmpty)
 		mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
-	// The top-only levels: 1 near clipmap, 2 far roads. RT0 alone, no ghost.
-	// Verify draws a kept level into its scratch twin (a_level + 1).
 	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly : heightPS;
 	auto drawTopOnly = [&](uint32_t a_level, Texture2D* a_target, const std::vector<HeightRasterDraw>& a_draws) {
 		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(topOnlyPS) }));
@@ -3220,10 +2648,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			verifiedLevels |= 1u << a_level;
 		}
 	};
-	// Near clipmap level 0: the same captures against a quarter-width window,
-	// so the layer-1 top lands at one world unit per texel. No ghost and no
-	// bottoms - readers fall back to the coarse level outside the window, and
-	// the shelter mask is the coarse level's business.
 	if (fineLevel) {
 		std::vector<HeightRasterDraw> fineDraws;
 		for (uint32_t ci = 0; ci < captureCount; ci++) {
@@ -3237,10 +2661,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	}
 
-	// Far road level: the road captures alone, MAX-rasterized over the
-	// loaded-cell square into one top map. Rebuilt from this frame's list -
-	// roads never move, and an off-screen road needs no patch - so no ghost
-	// and no scroll.
 	if (farLevel) {
 		std::vector<HeightRasterDraw> farDraws;
 		for (uint32_t ci = 0; ci < captureCount; ci++)
@@ -3251,7 +2671,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 	}
 	if (lastRasterRecord != ~0u) {
-		// Unbind first: the runtime filters a rebind of the same buffer at a new offset.
 		ID3D11Buffer* none = nullptr;
 		context->PSSetConstantBuffers(1, 1, &none);
 		ID3D11Buffer* buffer = staticsRecordCB[lastRasterParity & 1].get();
@@ -3260,21 +2679,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
 	}
 
-	// The layer-2 PEEL: re-rasterize the captures against the finished
-	// layer-1 top (now readable), keeping only up-facing fragments below it
-	// by the peel tolerance; MAX blending yields the next-highest surface per
-	// column. The layer-1 cone seed reads it for its plane-continuation test.
-	// Only the transform and the window fields matter here.
 	Texture2D* peelTarget = heightTop2Raw[heightCurrent];
 	if (heightPeelPS && peelTarget && !keepEmpty) {
 		ID3D11RenderTargetView* peelRTVs[1] = { peelTarget->rtv.get() };
 		context->OMSetRenderTargets(1, peelRTVs, nullptr);
 		context->PSSetShader(heightPeelPS, nullptr, 0);
-		// t3 = layer 1.
 		ID3D11ShaderResourceView* peelSRVs[1] = { heightTopRaw[heightCurrent]->srv.get() };
 		context->PSSetShaderResources(3, 1, peelSRVs);
-		// The peel PS addresses the layer maps through StaticCB's window
-		// fields; the capture pass binds b1 to the VS only.
 		context->PSSetConstantBuffers(1, 1, &cb1);
 
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel"));
@@ -3325,13 +2736,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		ID3D11ShaderResourceView* nullPeelSRVs[2] = { nullptr, nullptr };
 		context->PSSetShaderResources(3, 2, nullPeelSRVs);
 
-		// Same merge for the peeled layer, before the next peel reads it;
-		// tops only, nothing reads a peeled layer's bottoms.
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel Merge"));
 		if (heightScrollTopCS) {
 			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr, nullptr);
 		} else {
-			// Without the tops-only merge the bottoms need an output of their own.
 			if (!heightScratch) {
 				const DXGI_FORMAT format = heightBottomRaw[0]->desc.Format;
 				heightScratch = new Texture2D(heightBottomRaw[0]->desc, "SnowDeformation::HeightPeelScratch");
@@ -3344,11 +2752,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		globals::profiler->EndPass();
 	}
 
-	// P3: the sky-openness field from a layer-1 top (half-res; the consumers
-	// bilinear it). Only Volume Snow reads it, and the volume below reads the
-	// last run's: a run that turns the bake back on first bakes that one from
-	// the previous top, which this run has only read.
-	// Made on Volume Snow's first run: nothing else reads it.
 	if (settings.VolumeSnow && objectSkyOpenCS && !objectSkyOpen) {
 		D3D11_TEXTURE2D_DESC openDesc = heightTopRaw[0]->desc;
 		openDesc.Width = kHeightMapDim / 2;
@@ -3393,8 +2796,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
 	context->PSSetShaderResources(2, 1, &nullSmoothSRV);
 
-	// Combine: raw tops/bottoms -> shelter mask (bottomFiltered); bare ground
-	// under floating walkways/roofs/bridges.
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Combine"));
 	ID3D11ShaderResourceView* terrainSRV = shellTerrainTexture->srv.get();
@@ -3403,7 +2804,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	{
 		ID3D11ShaderResourceView* combineSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightBottomRaw[heightCurrent]->srv.get() };
 		ID3D11Buffer* exclusionCB = doorsCB->CB();
-		// t4: the layer-1 merge's tile flags (unbound reads 0, which never skips).
 		ID3D11ShaderResourceView* tileSRV = heightTileEmpty ? heightTileEmpty->srv.get() : nullptr;
 		ID3D11ShaderResourceView* exclusionListSRV = exclusionListBuffer->SRV();
 		context->CSSetConstantBuffers(1, 1, &exclusionCB);
@@ -3411,8 +2811,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetShaderResources(5, 1, &exclusionListSRV);
 		context->CSSetShader(heightCombineCS, nullptr, 0);
 		auto combine = [&](Texture2D* a_mask, ID3D11ShaderResourceView* a_tiles) {
-			// Two-channel mask at u2 (u1 belongs to ScrollCS's raw bottoms; u0
-			// and u1 stay clear here).
 			ID3D11UnorderedAccessView* combineUAVs[3] = { nullptr, nullptr, a_mask->uav.get() };
 			context->CSSetShaderResources(4, 1, &a_tiles);
 			context->CSSetUnorderedAccessViews(0, 3, combineUAVs, nullptr);
@@ -3435,18 +2833,8 @@ void SnowDeformation::RenderObjectHeightMap()
 		verifiedLevels |= 1u << 5;
 	}
 
-	// Angle of repose for the object cones: multi-scale min-plus passes
-	// (large steps first), ping-ponging with the previous bottoms, dead once
-	// the layer-1 merge has run. Steps are texels:
-	// the leading 64 is the cone's world reach at the 4-unit texel; the
-	// trailing repeat keeps the pass count even.
 	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
-	// ConeFusedCS's CONE_TILE.
 	static constexpr uint kConeFusedTile = 16;
-	// A pass can only lower a texel from a neighbour one step away plus the
-	// slope over that distance, and every value lies in [0, maxSeed]: a step
-	// reaching past maxSeed / slope is a no-op and is skipped. The margin
-	// keeps a boundary case on the safe side of the shader's own rounding.
 	auto activeConeSteps = [&](const HeightProcessCB& a_data, float a_maxSeed) {
 		std::vector<uint> steps;
 		const float texel = a_data.HeightHalfExtent * 2.0f / float(kHeightMapDim);
@@ -3456,13 +2844,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		return steps;
 	};
 
-	// Object snow cone: the same repose transform run over the OBJECT top
-	// raster, giving the skin's edge taper a ready-made snow surface to read.
-	// Seeded at full class depth over covered columns and at terrain height
-	// off them, so each object's layer slopes down to the ground at its rim.
-	// The seed floor: objects carry no depth, so their columns seed at the
-	// coat's own lift; roads seed per texel from InB (see SkinLift.RimT).
-	// Later passes read these constants whether or not the chains run.
 	processData.ObjectSnowDepth = 0.1f;
 	heightProcessCB->Update(processData);
 	conePassesCoarse = 0;
@@ -3476,10 +2857,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		conePassesCoarse = uint32_t(coarseSteps.size());
 		coneRuns++;
 
-		// P4: settle a finished cone - TWO Jacobi diffusion passes. Exactly
-		// two, and inside the same ping-pong: the pass count must stay even
-		// so the result lands back in the cone's own texture (the kConeSteps
-		// parity invariant).
 		auto settleCone = [&](Texture2D*& a_in, Texture2D*& a_out) {
 			if (!objectConeDiffuseCS)
 				return;
@@ -3496,7 +2873,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			}
 		};
 
-		// The repose chain over a seeded cone; it lands back in a_cone.
 		auto repose = [&](Texture2D* a_cone, Texture2D* a_seeded, HeightProcessCB& a_data, const std::vector<uint>& a_steps) {
 			Texture2D* in = a_seeded;
 			Texture2D* out = a_seeded == a_cone ? heightBottomRaw[previous] : a_cone;
@@ -3516,10 +2892,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			settleCone(in, out);
 		};
 
-		// The separate passes: the seed, then the repose chain. The chain lands
-		// back in its cone texture only over an even number of passes, the two
-		// settles included: an odd count seeds the scratch. b0 is bound again
-		// per chain, the verify's compare unbinds it.
 		auto chainCone = [&](Texture2D* a_cone, ID3D11ComputeShader* a_seedCS, const auto& a_bindSeed) {
 			Texture2D* seeded = (coarseSteps.size() % 2) ? heightBottomRaw[previous] : a_cone;
 			heightProcessCB->Update(processData);
@@ -3533,8 +2905,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 			repose(a_cone, seeded, processData, coarseSteps);
 		};
-		// No repose step: the chain is the seed and two settles, which
-		// ConeFusedCS runs per 16x16 tile in one dispatch, bit for bit.
 		const bool fuse = coarseSteps.empty() && objectConeDiffuseCS && !coneFusedOff;
 		auto fusedCone = [&](Texture2D* a_cone, ID3D11ComputeShader* a_fusedCS, const auto& a_bindSeed) {
 			heightProcessCB->Update(processData);
@@ -3548,9 +2918,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
 		};
 
-		// InB (t1) = the skin-depth raster: the per-texel cone seed, so roads
-		// seed at their own class depth (see ObjectConeSeedCS). InC (t3) =
-		// the next layer's top, for the rise rim's continuation test.
 		ID3D11ShaderResourceView* objectSeedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
 			heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
 		ID3D11ShaderResourceView* objectSeedNextSRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
@@ -3585,7 +2952,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 	}
 	if (heightRasterVerifyStaging[0]) {
-		// Copies in flight, DO_NOT_WAIT: a busy one is read on a later run.
 		for (uint32_t slot = 0; slot < 3; slot++) {
 			const uint32_t levels = heightRasterVerifyStagingLevels[slot];
 			if (!levels)
@@ -3620,7 +2986,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 	}
 
-	// This run's field, for the next run's volume.
 	if (skyWanted && heightTopRaw[heightCurrent])
 		bakeSkyOpen(heightTopRaw[heightCurrent]);
 	else
@@ -3633,10 +2998,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
 
-	// Height-field probe (Debugging Options): the seven object maps read
-	// back at the player's texel. Copy this frame, map LAST frame's copy
-	// with DO_NOT_WAIT, so the readout is one frame old and never stalls.
-	// Only while the readout is on screen.
 	if (globals::state->frameCount - heightProbeShownFrame >= 3) {
 		probeValid = false;
 	} else if (auto probePlayer = globals::game::player) {
@@ -3663,7 +3024,6 @@ void SnowDeformation::RenderObjectHeightMap()
 		if (probeStaging[0] && probeStaging[1]) {
 			const auto pos = probePlayer->GetPosition();
 			probeWorldPos = { pos.x, pos.y, pos.z };
-			// Same world->texel mapping as PatchTexel / the capture VS.
 			float u = (pos.x - heightWindowCenter.x) / ObjectRasterHalfExtent() * 0.5f + 0.5f;
 			float v = 0.5f - (pos.y - heightWindowCenter.y) / ObjectRasterHalfExtent() * 0.5f;
 			uint tx = uint(std::clamp(int(u * kHeightMapDim), 0, int(kHeightMapDim) - 1));
@@ -3673,8 +3033,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			for (uint i = 0; i < 3; i++)
 				if (probeMaps[i] && probeMaps[i]->resource)
 					context->CopySubresourceRegion(probeStaging[probeCursor].get(), 0, i, 0, 0, probeMaps[i]->resource.get(), 0, &probeBox);
-			// Slot 3: the water window, in the TERRAIN window's frame (+Y-up
-			// raster, so the row counts down from the top).
 			if (waterHeightTexture && waterHeightTexture->resource && waterWindowCellX != INT_MIN) {
 				const float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 				const int wx = int(std::floor((pos.x - waterWindowCellX * cellSize) / kShellVertexSpacing));
@@ -3702,8 +3060,6 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_cap.world.translate.x };
 	a_scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_cap.world.translate.y };
 	a_scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_cap.world.translate.z };
-	// Objects carry no rise: the S4 draw runs at depth 0, the coat and its
-	// lumps alone. Roads are the patch's and keep theirs.
 	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
 	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
 	a_scb.VertexCountF = a_vertexCount;
@@ -3721,28 +3077,16 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
 	a_scb.ProjNoiseWeight = a_cap.projNoiseWeight;
 	a_scb.ParallaxFollow = (settings.SnowFollowsParallax && a_cap.mayParallax) ? 1.0f : 0.0f;
-	// 2 = the S4 shell owns this draw; 0 = classic path.
 	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
 	a_scb.PeelTol = kPeelTol;
 	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
-	// A frame with no decal-mode draw leaves an older frame's snapshot bound.
 	a_scb.HasPreDecalMasks = (preDecalMasksSRV && preDecalMasksFrame == globals::state->frameCount) ? 1.0f : 0.0f;
-	// The accumulation scalar is already 0..1 over Accumulation Time, melt
-	// and fade, independent of the peak - exactly the reach's timeline.
 	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
 	                           snowAccumulation.load(std::memory_order_relaxed) :
 	                           std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
-	// Same veto as the Lighting-side recolor (sand and moss keep their
-	// look), and only where the property really carries projection data:
-	// the mesh-replacer default reconstructs a weight the game never paints.
-	// LOD batches read the brightness recolor's written weight instead.
 	a_scb.SteepThin = std::clamp(settings.SteepFaceThinning, 0.0f, 1.0f);
 	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry && a_cap.matoSnow) ? 1.0f : 0.0f;
-	// The near clipmap shares the coarse window's centre, so its half-extent
-	// is all the shaders need; 0 turns every fine read back into a coarse one.
 	a_scb.FineHalfExtent = (FineLevelOn() && heightTopRawFine) ? FineRasterHalfExtent() : 0.0f;
-	// Far road level (t40, bound by the skin pass): the road skin's
-	// RoadOwnsColumn steps aside on far roads through it.
 	a_scb.FarWindowCenterX = farWindowCenter.x;
 	a_scb.FarWindowCenterY = farWindowCenter.y;
 	a_scb.FarHalfExtent = farHalfExtentLive;
@@ -3818,9 +3162,6 @@ bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
 		clusterBounds->CreateUAV(uavDesc);
 	}
 	if (!clusterIndexPool) {
-		// Every unique mesh's index data in one buffer: a single dispatch
-		// cannot bind one index buffer per skin, so the cull reads them all
-		// from here at the mesh's own offset. 16-bit, as the game stores them.
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = kClusterIndexPoolIndices * 2;
 		desc.Usage = D3D11_USAGE_DEFAULT;
@@ -3840,9 +3181,6 @@ bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
 		clusterScratchIB = nullptr;
 	}
 	if (!clusterScratchIB) {
-		// 32-bit purely for alignment: a cluster's compacted destination is a
-		// running sum of surviving index counts, which 16-bit stores could
-		// land on an odd halfword.
 		clusterScratchCapacity = wantScratch;
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = clusterScratchCapacity * 4;
@@ -3996,7 +3334,6 @@ bool SnowDeformation::EnsureSmoothBuildScratch(uint32_t a_sourceBytes, uint32_t 
 		smoothTableUAVs.clear();
 		smoothTableSlots = slots;
 	}
-	// Every table view starts at 0: TableMask addresses the first a_tableSlots slots.
 	const uint32_t level = uint32_t(std::countr_zero(a_tableSlots));
 	if (smoothTableUAVs.size() <= level)
 		smoothTableUAVs.resize(level + 1);
@@ -4080,9 +3417,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	const uint32_t triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
 	const uint32_t frame = globals::state->frameCount;
 
-	// A vertex buffer pointer the game recycled for another mesh fails the
-	// check and rebuilds; within one frame the entry stands, as its range is
-	// bound by this frame's draws.
 	if (auto found = smoothedNormalsCache.find(rendererData->vertexBuffer); found != smoothedNormalsCache.end()) {
 		auto& hit = found->second;
 		if (hit.lastUsedFrame == frame ||
@@ -4095,10 +3429,7 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 		}
 		EvictSmoothedNormals(found);
 	}
-	// Builds only; the scope costs more than a hit.
 	LoadTraceScope _loadTrace(this, "Statics: EnsureSmoothedNormals (build)");
-	// Past the cap the least recently used entries make room; nothing used
-	// this frame is evicted.
 	while (smoothedNormalsCache.size() >= kSmoothedNormalsCap && !smoothedNormalsLru.empty()) {
 		auto oldest = smoothedNormalsCache.find(smoothedNormalsLru.front());
 		if (oldest == smoothedNormalsCache.end()) {
@@ -4117,9 +3448,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	entry.lastUsedFrame = frame;
 	entry.lru = smoothedNormalsLru.insert(smoothedNormalsLru.end(), rendererData->vertexBuffer);
 
-	// First sight of this geometry: build now into the pooled buffers (a
-	// buffer copy and a few small dispatches, once per unique mesh). Failures
-	// leave the null entry until it is evicted; the VS falls back to raw normals.
 	if (!EnsureSmoothNormalsCS() || !smoothCB)
 		return nullptr;
 
@@ -4129,8 +3457,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	if (stride == 0 || vertexCount == 0)
 		return nullptr;
 
-	// Position size = distance to the first following attribute (same
-	// offset-table logic the input layouts use; VF_FULLPREC is unreliable).
 	uint32_t positionBytes = stride;
 	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kSmoothAttrs[] = {
 		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
@@ -4150,8 +3476,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 		}
 	}
 	const uint32_t normalOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
-	// Authored vertex color for the projected-mask reconstruction; alpha
-	// rides OutNormals.w (see SmoothNormalsCS RESOLVE).
 	uint32_t colorOffset = 0;
 	bool hasColor = false;
 	if (desc.HasFlag(RE::BSGraphics::Vertex::VF_COLORS)) {
@@ -4164,9 +3488,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
 	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 
-	// The game's own buffers carry no shader-resource bind flag: the vertex
-	// stream is copied into the shared source buffer (raw view). The shader
-	// reads vertexCount * stride bytes of it, all inside the copy.
 	D3D11_BUFFER_DESC srcDesc{};
 	gameVB->GetDesc(&srcDesc);
 	if (uint64_t(vertexCount) * stride > srcDesc.ByteWidth)
@@ -4176,9 +3497,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 		tableSlots <<= 1;
 	if (!EnsureSmoothBuildScratch(srcDesc.ByteWidth, tableSlots))
 		return nullptr;
-	// One extra element past the vertices: the mesh's flatness stats, read by
-	// the VS to pick the flat or rounded snow behavior without any CPU
-	// readback.
 	uint32_t chunk = UINT32_MAX;
 	uint32_t chunkOffset = 0;
 	if (!AllocateSmoothedNormals(vertexCount + 1, chunk, chunkOffset))
@@ -4214,10 +3532,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	const bool wantBounds = boundsSlot != UINT32_MAX;
 	cb.BoundsSlot = wantBounds ? boundsSlot : 0u;
 
-	// Clusters: at most one thread group's worth per mesh, so the cull pass is
-	// a single chunk (a barrier under a buffer-driven trip count is
-	// non-uniform flow control and will not compile). 64 triangles each until
-	// that would exceed the cap, proportionally larger after.
 	const uint32_t indexCount = triangleCount * 3;
 	uint32_t clusterTris = kClusterTrisBase;
 	uint32_t clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
@@ -4245,7 +3559,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	smoothCB->Update(cb);
 
 	if (wantClusters) {
-		// The game's index data, copied once into the shared pool.
 		D3D11_BOX box{};
 		box.left = 0;
 		box.right = indexCount * 2;
@@ -4254,7 +3567,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 		context->CopySubresourceRegion(clusterIndexPool->resource.get(), 0, poolOffset * 2, 0, 0, gameIB, 0, &box);
 	}
 
-	// Compute-only state: does not disturb the surrounding draw pipeline.
 	ID3D11Buffer* cscb = smoothCB->CB();
 	context->CSSetConstantBuffers(0, 1, &cscb);
 	ID3D11ShaderResourceView* csSRV = smoothSourceSRV.get();
@@ -4266,7 +3578,6 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	context->Dispatch(groups, 1, 1);
 	context->CSSetShader(smoothResolveCS, nullptr, 0);
 	context->Dispatch(groups, 1, 1);
-	// Flatness stats: one group strided over the resolved normals.
 	context->CSSetShader(smoothFlatStatsCS, nullptr, 0);
 	context->Dispatch(1, 1, 1);
 	if (wantBounds) {
@@ -4308,16 +3619,12 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	// Every early exit ends the decal overlay's frame: a list left standing
-	// keeps DrawShell's pre-snow copies running with nothing to read them.
 	auto endOverlay = [this] { DrawBloodOverlay(globals::d3d::context, nullptr); };
 	if (SnowShadersPending(2)) {
 		endOverlay();
 		return;
 	}
 	if (cpuCensusArmed) {
-		// Order-free: the game hands the passes over in a different order
-		// each frame, so entries hash on their own and the sum is the list.
 		uint64_t h = 0;
 		uint64_t e = 0;
 		auto mix = [&](const void* a_p, size_t a_n) {
@@ -4350,7 +3657,6 @@ void SnowDeformation::DrawCapturedStatics()
 		cpuCensus.captureCount = (uint32_t)capturedStatics.size();
 	}
 	LoadTraceScope _loadTrace(this, "Statics: DrawCapturedStatics");
-	// The cover always draws (minimum coat); sliders never disable it.
 	if (capturedStatics.empty()) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Setup & Cull");
 		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
@@ -4358,23 +3664,15 @@ void SnowDeformation::DrawCapturedStatics()
 		endOverlay();
 		return;
 	}
-	// Not on the world map: skins strobed there as the panning camera
-	// crossed capture gates, and a skin without the shell beside it only
-	// mismatches the map. Mirrors the recolor gate in GetCommonSettingsGPU.
 	if (globals::state->isMapMenuOpen || !EnsureStaticsShaders()) {
 		endOverlay();
 		return;
 	}
 
-	// The skins' depth prepass (see the fills below), decided here: the
-	// pre-snow copy DrawShell left to this pass rides its first fill.
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 	const bool prepass = staticsPSPrepassNoDepth && fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
-	// No statics draw has written the main depth yet. The first fill writes
-	// the copy where its viewport is exactly the copy's rectangle; otherwise
-	// it is taken now.
 	bool fillPreSnow = false;
 	if (preSnowDepthDeferred) {
 		preSnowDepthDeferred = false;
@@ -4394,29 +3692,14 @@ void SnowDeformation::DrawCapturedStatics()
 
 	auto context = globals::d3d::context;
 
-	// Per-draw PS choice below; bound here so a fallback path still has one.
 	context->PSSetShader(staticsPS, nullptr, 0);
 	ID3D11PixelShader* boundStaticsPS = staticsPS;
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
 
-	// Tessellated skins: 3-control-point patches with the same index data;
-	// the hull shader subdivides by edge length and distance, the domain
-	// shader adds displacement-map relief along the inflate normal. The DS
-	// binds its needs directly so the path is self-sufficient even if the
-	// landscape shell's tessellation is unavailable.
-	// Every class tessellates, relief or not: the vertical lift resolves its
-	// rim over whatever vertices the source mesh happens to carry there, and
-	// low-poly meshes have far too few. Relief stays gated inside the DS.
 	const bool tessellateSkins = staticsTessVS && staticsHS && staticsDS;
-	// A lambda because the depth prepass's fullscreen fills replace these
-	// stages mid-pass and have to put them back. The drape (S4 draws) takes
-	// the plain VS: a flat coat has nothing for tessellation to shape, and
-	// the rim term tessellates it to the cap everywhere (its cone is under
-	// the 4-unit "rim is near" threshold on every texel).
 	bool skinStagesTess = false;
-	// The Snow Follows Parallax VS is bound (drapes with a height map).
 	bool skinVSParallax = false;
 	auto bindSkinStages = [&](bool a_tess) {
 		skinStagesTess = a_tess;
@@ -4428,14 +3711,9 @@ void SnowDeformation::DrawCapturedStatics()
 			ID3D11Buffer* cb0 = shellCB->CB();
 			context->HSSetConstantBuffers(0, 1, &cb0);
 			context->DSSetConstantBuffers(0, 1, &cb0);
-			// The DS evaluates the lift per generated vertex and the HS sizes
-			// tessellation against the class collapse range, so both need the
-			// per-object block.
 			ID3D11Buffer* dsCB1 = staticsCB->CB();
 			context->HSSetConstantBuffers(1, 1, &dsCB1);
 			context->DSSetConstantBuffers(1, 1, &dsCB1);
-			// P1: EdgeTessFactor's rim term reads the cone field, so the HS
-			// needs t13 like the VS/DS do (bound below for those stages).
 			ID3D11ShaderResourceView* hsConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 			context->HSSetShaderResources(13, 1, &hsConeSRV);
 			ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
@@ -4454,8 +3732,6 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 	bindSkinStages(tessellateSkins);
 
-	// Volume seed debug view: level 0's occupancy, field, heightmap and the
-	// seed maps for the skin PS, the level's constants at b3.
 	ID3D11Buffer* savedPSCB3 = nullptr;
 	const bool volumeSeedView = staticsDebugView == 10 && settings.VolumeSnow && voxelLevels[0].valid &&
 	                            voxelLevels[0].volume[voxelLevels[0].current] && voxelLevels[0].field && voxelLevels[0].heightMap && voxelLevels[0].heightMapUnder;
@@ -4485,118 +3761,62 @@ void SnowDeformation::DrawCapturedStatics()
 	}
 
 	globals::profiler->BeginPass("SnowDeformation::Objects - Setup & Cull");
-	// One-shot skip diagnostics: geometries that capture but cannot draw are
-	// the "why is THIS rock bare" cases; name the reason in the log.
 	static std::unordered_set<std::string> loggedSkips;
 	auto logSkip = [this](RE::BSGeometry* a_geometry, const char* a_reason) {
 		if (skinCullLogArmed || (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second))
 			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
 	};
 
-	// Object top raster (PS t11): the skin PS reads it to keep its rim wall
-	// alive through the steepness gates. Same raster the patch binds to its
-	// VS further down.
 	ID3D11ShaderResourceView* objectTopSRV = (heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv) ?
 	                                             heightTopRaw[heightCurrent]->srv.get() :
 	                                             nullptr;
 	context->PSSetShaderResources(11, 1, &objectTopSRV);
-	// Untouched tiles (PS t57): the march skips carve and berm reads over
-	// them, as the ground's does. DrawShell unbinds the slot; the skins, the
-	// patch and the volume take it from here, and the pass unbinds it last.
 	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
-	// Scene depth copy (PS t3): the SSS hug gate, ported from the terrain
-	// shell, reads it. Same helper and same slot the shell binds - a COPY
-	// (Terrain Blending's blended depth when that feature owns it, else
-	// kPOST_ZPREPASS_COPY), never the bound DSV, so sampling it while this
-	// pass writes depth is legal.
 	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
 	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
-	// Skin-depth raster (PS t12): the road skin runs the patch's own
-	// RoadOwnsColumn test before stepping aside, so it never discards into a
-	// column the patch declined.
 	ID3D11ShaderResourceView* skinDepthPSSRV = (heightSkinDepth && heightSkinDepth->srv) ?
 	                                               heightSkinDepth->srv.get() :
 	                                               nullptr;
 	context->PSSetShaderResources(12, 1, &skinDepthPSSRV);
-	// IBL SH textures (t76/t77): the skins draw standalone from the landscape
-	// shell, so slot state from its pass is not guaranteed here.
 	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
 		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
 		context->PSSetShaderResources(76, 2, iblSRVs);
 	}
-	// The VS reads the same raster for the edge taper; the patch rebinds VS
-	// t11 for itself further down. The DS reads it too when tessellating.
 	context->VSSetShaderResources(11, 1, &objectTopSRV);
 	context->DSSetShaderResources(11, 1, &objectTopSRV);
-	// Cone field (t13): the edge taper's single read.
 	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 	context->VSSetShaderResources(13, 1, &coneSRV);
 	context->DSSetShaderResources(13, 1, &coneSRV);
 	context->PSSetShaderResources(13, 1, &coneSRV);
-	// Land-exact layer (t52): the drape finds the landscape sheet's drawn surface with it.
 	ID3D11ShaderResourceView* landFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	context->PSSetShaderResources(52, 1, &landFineSRV);
-	// Near clipmap top (t34): the top raster at one unit per texel over the
-	// inner window. Every reader falls back to t11 outside it, so a null bind
-	// here is simply the coarse behaviour.
 	ID3D11ShaderResourceView* fineTopSRV = (FineLevelOn() && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr;
 	context->VSSetShaderResources(34, 1, &fineTopSRV);
 	context->DSSetShaderResources(34, 1, &fineTopSRV);
 	context->PSSetShaderResources(34, 1, &fineTopSRV);
-	// Far road level (t40): PatchTop's fallback past the coarse window. Null
-	// when the level is off; FarHalfExtent is 0 then, so nothing reads it.
 	ID3D11ShaderResourceView* farTopSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
 	context->VSSetShaderResources(40, 1, &farTopSRV);
 	context->DSSetShaderResources(40, 1, &farTopSRV);
 	context->PSSetShaderResources(40, 1, &farTopSRV);
 	context->HSSetShaderResources(40, 1, &farTopSRV);
-	// Wide exclusion field (t15): the skin's self-shadow march reads the
-	// landscape shell's slot; the skins draw standalone, so bind explicitly here.
 	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
 	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
 	ID3D11ShaderResourceView* skinBloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, skinBloodSRVs);
-	// The S4 shell's per-pixel footprint cut: vanilla's noise map (PS t21).
-	// Bound whenever it exists: the coat's contour is built from it, and the
-	// coat draws with the 3D rise off.
 	ID3D11ShaderResourceView* projNoiseSRV = SD_ProjNoiseMapSRV();
 	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	// The pre-shell Masks copy: the recolor's real projected weight.
 	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
 	context->PSSetShaderResources(32, 1, &skinMasksSRV);
-	// The same note from before the frame's first decal-mode draw blended it.
 	ID3D11ShaderResourceView* preDecalSRV = preDecalMasksSRV.get();
 	context->PSSetShaderResources(53, 1, &preDecalSRV);
-	// The game's shadow mask: the drape lies on the geometry it was drawn
-	// for and takes its shadows from it (sun in x, local lights by mask
-	// index), as Lighting does at t14.
 	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
 	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
-	// The print map and its tiles (t114-t115), for the drapes' print twin.
 	BindPrintReaders(context);
-	// Rune glyphs and frost marks, on object snow lying on a surface their
-	// decal covers - with the overlay that would otherwise put the decal back.
 	BindMarkReaders(context, CoatPaintsMarks());
 
-	// Depth prepass for the skins. Unlike the shell's, the private test
-	// depth is written BY the prepass draws themselves rather than through a
-	// colour target: the skins draw with a rasterizer depth bias, and whether
-	// that bias reaches the depth a pixel shader sees is a spec detail the
-	// EQUAL test must not depend on. Starting the private buffer as a copy
-	// of the scene depth and running the identical raster path twice makes
-	// the tested value the written value by construction. Carving draws
-	// (roads at default settings) take no part in the prepass: their depth is
-	// shader-computed, so they draw once in the shading loop under their own
-	// LESS_EQUAL + export as they always did, into the same private buffer.
-	// The write-back then hands every skin's depth to the main buffer exactly
-	// as the single loop would have left it; nothing else writes depth in
-	// between.
 	ID3D11DepthStencilState* boundDepthState = nullptr;
 
-	// Render-target and viewport snapshot. The cull's compute reads the scene
-	// depth, so the targets come off first; the prepass fills need a
-	// full-range viewport; both restore from here.
 	ID3D11RenderTargetView* rawRTVs[8] = {};
 	ID3D11DepthStencilView* rawDSV = nullptr;
 	context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
@@ -4617,16 +3837,12 @@ void SnowDeformation::DrawCapturedStatics()
 		fillVps[i].MinDepth = 0.0f;
 		fillVps[i].MaxDepth = 1.0f;
 	}
-	// The game's decal depth range (0.9999720 against the main pass's
-	// 0.9999980, RenderDoc 2026-09-10): skins of decal-mode draws rasterise
-	// through it so their depth lands where the mesh's own did.
 	D3D11_VIEWPORT decalVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
 	for (UINT i = 0; i < vpCount; i++) {
 		decalVps[i] = vps[i];
 		decalVps[i].MaxDepth = kDecalViewportMaxDepth;
 	}
 
-	// One filtered list of skin draws, walked by the cull and by both loops.
 	struct SkinDraw
 	{
 		const CapturedSnowStatic* cap;
@@ -4646,17 +3862,12 @@ void SnowDeformation::DrawCapturedStatics()
 		uint32_t scratchBase;
 		bool decalDepth;
 		ID3D11ShaderResourceView* smoothSRV;
-		// A drape over prints: shaded by the print twin.
 		bool prints;
-		// Snow Follows Parallax: a drape with a height map draws through the
-		// parallax VS with this layout (null otherwise).
 		ID3D11InputLayout* layoutParallax;
 	};
 	std::vector<SkinDraw> skinDraws;
 	skinDraws.reserve(capturedStatics.size());
 	const bool coatParallax = settings.SnowFollowsParallax && EnsureCoatParallaxShaders();
-	// Grown a frame late from what the last frame asked for: the allocation
-	// below has to hand out ranges before the total is known.
 	EnsureClusterResources(clusterScratchNeeded);
 	uint32_t scratchNext = 0;
 	uint32_t scratchWanted = 0;
@@ -4668,17 +3879,6 @@ void SnowDeformation::DrawCapturedStatics()
 		if (!geometry)
 			continue;
 		parallaxCaptures += cap.parallaxSRV ? 1u : 0u;
-		// THE OLD OBJECT SHELL IS RETIRED (Josef, 2026-08-29 - at fill 0
-		// its no-PD pillows stood alone on the steps, and at fill 100 the
-		// S4 shell stacked on top of them). Only two things draw now:
-		// roads (their own tuned machinery, always) and the S4 shell
-		// (PD-carrying draws, gated by "3D Snow on Objects"). Draws whose
-		// PROPERTY carries no projection data get no skin at all - the
-		// Lighting recolor still covers the technique-classified ones
-		// (fence family) flat. The classic shader path survives only
-		// because roads run through it.
-		// The sentinel is -1; an authored bias can sit at exactly -0.5 (the
-		// farmhouse snow material), which the old > -0.5 read as no data.
 		const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && projNoiseSRV;
 		if (!cap.road && !s4Shell) {
 			if (skinCullLogArmed)
@@ -4707,49 +3907,24 @@ void SnowDeformation::DrawCapturedStatics()
 			continue;
 		}
 
-		// One input layout per distinct vertex descriptor; layouts may carry
-		// more elements than the VS consumes, so POSITION+NORMAL suffices.
 		uint64_t descKey;
 		memcpy(&descKey, &desc, sizeof(descKey));
 		auto* layout = StaticsInputLayoutFor(descKey, desc);
 		if (!layout)
 			continue;
 
-		// "Recolor Projected Snow" is the DRAPE: the skin finds where the
-		// game's projected diffuse is and lays the shell's snow set over it,
-		// Edge Lump Reach shaping how far it spreads. That is geometry - the
-		// Lighting-pass recolor can change the projected snow's COLOUR but
-		// cannot give it the shell's material or an edge - so the draw has
-		// to happen for it. Off, nothing of ours is drawn on an object. Roads
-		// belong to Road Meshes Depth and keep their skin either way.
-		//
-		// The layout above is created BEFORE this gate on purpose: the
-		// object height raster draws through that same cache, and the
-		// landscape shell's lift, the shelter mask and the trench patch all
-		// read the raster. Skipping the layout would silently drop objects
-		// out of the height field the moment the shell was switched off.
 		if (!cap.road && !settings.ProjSnowMatch)
 			continue;
 
-		// Stride comes from the descriptor's low nibble (in dwords); the
-		// same field the game's renderer uses. VertexDesc::GetSize() is NOT
-		// equivalent: it reconstructs from flags assuming 16-byte float
-		// positions, but most SSE meshes store 8-byte half positions, and
-		// the overshot stride shreds vertices into giant garbage triangles.
 		UINT stride = uint32_t(descKey & 0xF) * 4;
 		if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
 			logSkip(geometry, "implausible stride/offset");
 			continue;
 		}
-		// Smoothed normals (and the mesh box beside them) are built on first
-		// sight; the draw loop reads the view kept here.
 		const auto* smooth = SmoothedNormalsFor(cap);
 		const bool cached = smooth && smooth->ready;
 		ID3D11ShaderResourceView* smoothSRV = cached ? smooth->srv.get() : nullptr;
 		uint32_t cOffset = 0, cCount = 0, cPool = 0, cBase = 0;
-		// Clusters need a contiguous slice of the scratch buffer, handed out
-		// here so the pass writes to a known place; a mesh that does not fit
-		// simply draws its own index buffer entire.
 		if (cached && smooth->clusterCount != 0)
 			scratchWanted += smooth->indexCount;
 		if (cached && smooth->clusterCount != 0 &&
@@ -4779,18 +3954,12 @@ void SnowDeformation::DrawCapturedStatics()
 		globals::profiler->EndPass();
 		globals::profiler->BeginPass(a_name);
 	};
-	// Whole-skin occlusion cull: bounding spheres against a max-depth
-	// pyramid of the scene, on the GPU, same frame. Writes each skin's
-	// indirect draw arguments; the loops below draw through them.
 	auto* hiZBuild = GetHiZBuildCS();
 	auto* skinCull = hiZBuild ? GetSkinCullCS() : nullptr;
-	// The pyramid covers the rendered rectangle (dynamic resolution draws into
-	// a corner of the display-size depth); every read is clamped to it.
 	const uint32_t hiZExtentW = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
 	const uint32_t hiZExtentH = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
 	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV, hiZExtentW, hiZExtentH);
-	// Every drawn skin added its footprint: the culls ran over all of them.
 	bool skinFootprintLive = false;
 	if (cullActive) {
 		const float liftMargin = settings.RoadMeshesDepth + kSkinCullMargin;
@@ -4804,7 +3973,6 @@ void SnowDeformation::DrawCapturedStatics()
 		clusterSkinsLast = clusterSkins;
 		clusterScratchUsedLast = scratchNext;
 		clusterScratchNeeded = scratchWanted;
-		// Debug views draw every skin at full visibility, past the range too.
 		const float skinFadeEnd = staticsDebugView != 0 ? 0.0f : SkinFadeEndUnits();
 		D3D11_MAPPED_SUBRESOURCE mapped{};
 		if (SUCCEEDED(context->Map(skinCullBounds->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -4837,12 +4005,8 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetConstantBuffers(0, 1, &cullCB);
 		ID3D11ShaderResourceView* nullCullSRVs[4] = {};
 		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
-		// The scratch-copy chain below stands in when the UAV build fails to compile.
 		auto* hiZBuildUAV = GetHiZBuildCS(true);
 		if (hiZBuildUAV && skinCullHiZUAVs.size() == skinCullLevels) {
-			// Level 0 folds the viewport-masked depth into mip 0; every later
-			// level reads the previous mip through its UAV and writes its own,
-			// so the chain is never bound as an SRV while it is written.
 			ccb.Level = 0.0f;
 			skinCullCB->Update(ccb);
 			context->CSSetShader(hiZBuild, nullptr, 0);
@@ -4869,7 +4033,6 @@ void SnowDeformation::DrawCapturedStatics()
 			for (uint32_t level = 0; level < skinCullLevels; level++) {
 				ccb.Level = float(level);
 				skinCullCB->Update(ccb);
-				// Read level-1 of the chain, write the level's scratch, copy it in.
 				ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
 				ID3D11UnorderedAccessView* dst = skinCullHiZScratch[level]->uav.get();
 				context->CSSetShaderResources(1, 1, &src);
@@ -4894,9 +4057,6 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetUnorderedAccessViews(7, 1, &footprintUAV, nullptr);
 		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
 
-		// Cluster pass: refines the arguments of every skin the whole-skin
-		// test kept, and compacts what survives into the scratch buffer both
-		// draw loops read.
 		auto* clusterCull = clusterSkins > 0 ? GetClusterCullCS() : nullptr;
 		const bool clusterPass = clusterCull && clusterScratchIB && clusterScratchIB->uav;
 		skinFootprintLive = clusterSkins == 0 || clusterPass;
@@ -4916,8 +4076,6 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetUnorderedAccessViews(7, 1, nullCullUAVs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
-		// Census: the arguments and the pyramid's top texel two frames back,
-		// read without waiting.
 		context->CopyResource(skinCullArgsStaging[skinCullRing].get(), skinCullArgs->resource.get());
 		if (skinCullHiZTopStaging[skinCullRing])
 			context->CopySubresourceRegion(skinCullHiZTopStaging[skinCullRing].get(), 0, 0, 0, 0, skinCullHiZ->resource.get(), skinCullLevels - 1, nullptr);
@@ -4941,7 +4099,6 @@ void SnowDeformation::DrawCapturedStatics()
 				for (uint32_t i = 0; i < skinCullStagingCount[readRing]; i++) {
 					if (args[i * 5 + 1]) {
 						drawn++;
-						// The cluster pass rewrites this to what survived.
 						trisDrawn += args[i * 5] / 3;
 					} else
 						culled++;
@@ -4973,18 +4130,10 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 	}
 
-	// The skin loop runs once (no prepass) or twice: non-carving skins
-	// depth-only into the private copy, then every skin shading against it -
-	// non-carving under EQUAL with writes off, carving under the shipping
-	// LESS_EQUAL + write.
-	// Every skin's block, filled once for both loops; the view taken here is
-	// the one bound, so HasSmoothedNormals and the view never disagree.
-	// Decided before the records: SkinSssSeen tells each skin which mask it reads.
 	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady(vpCount ? &vps[0] : nullptr);
 	if (!skinSssMarch) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Snow Depth Sync");
 	}
-	// Kept across frames, as sCaptureRecords.
 	static std::vector<StaticsCB> sSkinRecords;
 	sSkinRecords.assign(skinDraws.size(), StaticsCB{});
 	auto& skinRecords = sSkinRecords;
@@ -4999,8 +4148,6 @@ void SnowDeformation::DrawCapturedStatics()
 			skinRecords[si].ObjParallaxUV = d.cap->parallaxUV;
 			skinRecords[si].ObjParallax = d.cap->parallax;
 		}
-		// Debug views only. Stable per object: the submission order moves
-		// with the camera.
 		skinRecords[si].DebugSkinId = 0.0f;
 		if (staticsDebugView != 0) {
 			const auto& tr = d.cap->world.translate;
@@ -5021,15 +4168,7 @@ void SnowDeformation::DrawCapturedStatics()
 		for (const auto& d : skinDraws) {
 			const auto& cap = *d.cap;
 			const uint32_t recordIndex = drawIndex++;
-			// Depth export only where the carve can fire: SnowStaticsShell's
-			// carveObject is LegacySkin, i.e. cap.road. Everything else writes
-			// back the rasterised depth, so dropping the export leaves the same
-			// number in the buffer and hands early-Z rejection back to the whole
-			// pass. The prepass twins mirror the same split so the private
-			// depth holds exactly what the shipping shaders would have written.
-			// Depth fight view: every skin through the prepass, roads too.
 			const bool needsDepth = staticsDebugView != 9 && cap.road;
-			// Skipped before any state: each drawn skin sets all it reads.
 			if (a_prepass && needsDepth)
 				continue;
 			if (d.decalDepth != boundDecal) {
@@ -5041,21 +4180,16 @@ void SnowDeformation::DrawCapturedStatics()
 			[[maybe_unused]] auto* geometry = d.geometry;
 			binds.Layout(context, d.layoutParallax ? d.layoutParallax : d.layout);
 			binds.Vertex(context, d.vb, d.stride);
-			// Cluster skins draw the compacted stream; everything else draws
-			// the mesh's own indices, as before.
 			if (cullActive && d.clusterCount != 0)
 				binds.Index(context, clusterScratchIB->resource.get(), DXGI_FORMAT_R32_UINT);
 			else
 				binds.Index(context, d.ib, DXGI_FORMAT_R16_UINT);
 
-			// Smoothed normals (built once per unique mesh): pillow inflation
-			// for flat split-normal surfaces; planks, roofs, pole caps.
 			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex];
 			binds.Smooth(context, skinSmoothSRV);
 			const bool wantTess = tessellateSkins && !d.s4Shell;
 			if (wantTess != skinStagesTess)
 				bindSkinStages(wantTess);
-			// Both loops: the prepass and the shading draw must raster the same VS.
 			const bool wantParallaxVS = !wantTess && d.layoutParallax != nullptr;
 			if (wantParallaxVS != skinVSParallax) {
 				context->VSSetShader(wantParallaxVS ? staticsVSParallax : staticsVS, nullptr, 0);
@@ -5075,9 +4209,6 @@ void SnowDeformation::DrawCapturedStatics()
 				cpuCensus.skinLoopCBUpdates++;
 			}
 
-			// Drapes take the SNOW_STATICS_DRAPE twins, which fold exactly
-			// what FillSkinDrawCB gives every S4 draw, with no debug view;
-			// drapes over prints shade through the print twin.
 			const bool drapePS = d.s4Shell && staticsDebugView == 0;
 			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth : staticsPSDrapeNoDepth;
 			if (d.layoutParallax)
@@ -5115,10 +4246,8 @@ void SnowDeformation::DrawCapturedStatics()
 	};
 
 	if (prepass) {
-		// DepthSyncCS FillFootprint.
 		static constexpr UINT kFillFootprintSlot = 62;
 		auto* fillRectVS = skinFootprintLive ? GetShellFillRectVS() : nullptr;
-		// a_footprint: over the drawn skins' footprint alone.
 		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source, bool a_preSnow, bool a_footprint) {
 			ID3D11RenderTargetView* preSnowRTV = preSnowDepthRTV.get();
 			context->OMSetRenderTargets(a_preSnow ? 1 : 0, a_preSnow ? &preSnowRTV : nullptr, a_target);
@@ -5153,14 +4282,11 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
-		// The decal overlay leaves the landscape shell's pixels to the blood
-		// detail tiles; it tells them by the depth the skins did not touch.
 		bloodPreSkinDepthThisFrame = false;
 		const D3D11_BOX skinExtent = ScreenRectBox(vpCount ? &vps[0] : nullptr, shellRasterDepth->desc.Width, shellRasterDepth->desc.Height, 0);
 		if (BloodTilesLive() && !bloodOverlays.empty() && GetPreSnowCopyCS() && depthSyncRectCB &&
 			EnsureBloodPreSkinDepth(std::max(skinExtent.right, 1u), std::max(skinExtent.bottom, 1u))) {
 			statsRow(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Depth Copy"));
-			// The composite reads it inside the decals' rectangle only.
 			const RECT& rc = bloodCopyRect;
 			CopyDepthRect(context, mainDepthSRV, D3D11_BOX{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 }, bloodPreSkinDepthUAV.get());
 			bloodPreSkinDepthThisFrame = true;
@@ -5168,8 +4294,6 @@ void SnowDeformation::DrawCapturedStatics()
 			globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		}
 		statsRow("SnowDeformation::Objects - Depth Prepass");
-		// Off the footprint the private depth is read only by the pre-snow copy,
-		// the skins' second SSS march, the decal overlay and the depth-fight view.
 		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch && bloodOverlays.empty() && staticsDebugView != 9;
 		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
 		if (fillPreSnow) {
@@ -5178,7 +4302,6 @@ void SnowDeformation::DrawCapturedStatics()
 		}
 		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
-		// The hidden-quad exit reads the depth the private buffer was filled from.
 		context->PSSetShaderResources(43, 1, &mainDepthSRV);
 		drawSkins(true);
 		ID3D11ShaderResourceView* nullPreSkinSRV = nullptr;
@@ -5190,9 +4313,6 @@ void SnowDeformation::DrawCapturedStatics()
 		statsRow("SnowDeformation::Objects - Shading");
 
 		if (staticsDebugView == 9) {
-			// Depth fight view: no depth test; every skin paints its verdict
-			// against the main depth it was tested on (t43) and the prepass
-			// result (t44).
 			context->OMSetRenderTargets(8, rtvPtrs, nullptr);
 			ID3D11ShaderResourceView* fightSRVs[2] = { mainDepthSRV, shellTestDepthSRV.get() };
 			context->PSSetShaderResources(43, 2, fightSRVs);
@@ -5215,13 +4335,8 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(false);
 	}
 	globals::profiler->EndPass();
-	// The private test depth holds the skins only after the prepass path.
 	DrawBloodOverlay(context, prepass ? shellTestDepthSRV.get() : nullptr);
 
-	// Everything after inherits b1 rather than binding it: put staticsCB
-	// back on every stage the offset path rebound, or the trench patch
-	// draws against the record buffer at the last skin's offset (shadowed
-	// road floors, Josef 2026-09-06).
 	if (skinRecordsLive) {
 		ID3D11Buffer* restore = staticsCB->CB();
 		context->VSSetConstantBuffers(1, 1, &restore);
@@ -5230,15 +4345,12 @@ void SnowDeformation::DrawCapturedStatics()
 		context->DSSetConstantBuffers(1, 1, &restore);
 	}
 
-	// The trench patch and everything after run the normal pipeline.
 	if (tessellateSkins) {
 		context->HSSetShader(nullptr, nullptr, 0);
 		context->DSSetShader(nullptr, nullptr, 0);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	}
 
-	// Leave IA clean, mirroring DrawShell's convention (game state manager
-	// rebinds via DIRTY_RENDERTARGET).
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
 	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
@@ -5267,28 +4379,13 @@ void SnowDeformation::DrawCapturedStatics()
 		if (savedPSCB3)
 			savedPSCB3->Release();
 	}
-	// With the cull off the census never ran to disarm the one-shot.
 	skinCullLogArmed = false;
 
-	// trench PATCH: the landscape shell's dense-grid carve applied to object
-	// tops; real carved geometry drawn after the skins so it shows through
-	// their dithered trench hand-off holes. SV_VertexID grid, no IA state.
-	// Per-class trenching emerges from the raster: each captured object
-	// writes its own class depth into the skin-depth raster, so a class at
-	// 0 produces dead patch texels for its objects only. Roads are the one
-	// class with depth, so the gate is theirs (the old > 1 threshold
-	// silently disabled the whole patch at depth 1). Both road rasters are
-	// rebuilt from this frame's captures, so no road captured = every patch
-	// vertex killed.
 	const bool patchWanted = patchVS && patchPS && heightSkinDepth && settings.RoadMeshesDepth > 0.5f && !GroundShellsSuspended();
 	if (patchWanted && capturedRoads == 0)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Trench Patch");
 	if (patchWanted && capturedRoads > 0) {
 		globals::profiler->BeginPass("SnowDeformation::Trails - Trench Patch");
-		// Tessellated patch: quad patches with trench-aware factors, so the
-		// object trenches pick up the same wall smoothness and rim relief as
-		// the landscape shell. Self-sufficient bindings, same rationale as
-		// the skins.
 		const bool tessellatePatch = settings.Tessellation && patchTessVS && patchHS && patchDS;
 		PatchBand patchBands[kPatchBands] = { { 0, kPatchGridDim, 0, kPatchGridDim } };
 		uint32_t patchBandCount = 1;
@@ -5316,14 +4413,10 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetShaderResources(40, 1, &farTopSRV);
 			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
 			context->DSSetSamplers(0, 1, &dsSampler);
-			// The hull's frustum footprint (b11), from the b0 this draw projects
-			// with; no lines culls nothing.
 			if (!patchCullCB)
 				patchCullCB = new ConstantBuffer(ConstantBufferDesc<PatchCullCB>(), "SnowDeformation::PatchCullCB");
 			if (lastShellCBData)
 				FillPatchCullLines(*lastShellCBData, cullData);
-			// Only the lattice bands the lines can reach: the patches left out
-			// would get zero factors, and rows stay in order.
 			if (!patchBoxOff && cullData.LineCount)
 				patchBandCount = PatchLatticeBands(cullData, PatchLatticeCentre(), patchBands);
 			cullData.RowStart = patchBands[0].y0;
@@ -5337,69 +4430,41 @@ void SnowDeformation::DrawCapturedStatics()
 		} else {
 			context->VSSetShader(patchVS, nullptr, 0);
 		}
-		// Deferred: the geometry keeps the coverage cut alone, into the ground's
-		// deferred targets, which are free once the ground has shaded; one
-		// full-screen pass then shades each kept pixel once. Forward under the
-		// debug views and until both deferred shaders exist.
 		bool deferredPatch = staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
 		ID3D11VertexShader* patchFillVS = deferredPatch ? GetShellFillVS() : nullptr;
 		deferredPatch = deferredPatch && patchFillVS;
 		context->PSSetShader(deferredPatch ? patchDeferredPS[0] : patchPS, nullptr, 0);
-		// Object top raster (PS t11): the patch's self-shadow march needs the
-		// same footprint test as the skins - inside a footprint the tap
-		// surface is the object top, not the terrain window's class ramp.
 		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
 		context->PSSetShaderResources(40, 1, &farTopSRV);
-		// Scene depth copy (PS t3), as for the skins: the skin pass unbinds it
-		// before this block, so it has to be bound again here.
 		ID3D11ShaderResourceView* patchDepthSRV = Util::GetCurrentSceneDepthSRV(false);
 		context->PSSetShaderResources(3, 1, &patchDepthSRV);
-		// Skin-depth raster (PS t12): the march rebuilds the carved layer on
-		// road-owned taps. Bound explicitly - inheriting the skin pass's bind
-		// through D3D11 state persistence worked but was one reorder away
-		// from a silently unbound read.
 		ID3D11ShaderResourceView* patchSkinPSSRV = (heightSkinDepth && heightSkinDepth->srv) ?
 		                                               heightSkinDepth->srv.get() :
 		                                               nullptr;
 		context->PSSetShaderResources(12, 1, &patchSkinPSSRV);
-		// Rune glyphs and frost marks on the road's snow, as the landscape shell paints them.
 		BindMarkReaders(context, true);
 
-		// ONE recipe with the shadow caster (FillPatchDrawCB): the caster must
-		// be the exact surface this draw renders.
 		StaticsCB scb{};
 		FillPatchDrawCB(scb);
 		staticsCB->Update(scb);
 
 		ID3D11ShaderResourceView* patchSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 		context->VSSetShaderResources(11, 2, patchSRVs);
-		// Far road level (t40): the outer bands drape on it.
 		context->VSSetShaderResources(40, 1, &farTopSRV);
-		// Terrain window (t0) + object snow cone (t13) for the road-verge
-		// depth blend, in whichever stage evaluates BuildPatchVertex (the VS
-		// on the legacy grid, the DS when tessellating). Explicit binds: both
-		// were previously reachable only through state left over from earlier
-		// passes, which is one reorder from an unbound read.
 		ID3D11ShaderResourceView* patchTerrainSRV = shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr;
 		ID3D11ShaderResourceView* patchConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 		context->VSSetShaderResources(0, 1, &patchTerrainSRV);
 		context->VSSetShaderResources(13, 1, &patchConeSRV);
-		// The march's road taps read the same cone.
 		context->PSSetShaderResources(13, 1, &patchConeSRV);
-		// Land-exact layer (t52): the landscape meet finds the sheet's drawn
-		// surface with it, in whichever stage builds the patch vertex.
 		ID3D11ShaderResourceView* patchLandFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 		context->VSSetShaderResources(52, 1, &patchLandFineSRV);
 		if (tessellatePatch) {
 			context->DSSetShaderResources(0, 1, &patchTerrainSRV);
 			context->DSSetShaderResources(13, 1, &patchConeSRV);
 			context->DSSetShaderResources(52, 1, &patchLandFineSRV);
-			// The hull's screen-size cap stands corners off any road on the terrain.
 			context->HSSetShaderResources(0, 1, &patchTerrainSRV);
 		}
-		// The targets, depth and raster state the forward draw would have used;
-		// the deferred passes borrow and restore them.
 		winrt::com_ptr<ID3D11RenderTargetView> patchRTVs[8];
 		ID3D11RenderTargetView* patchRTVPtrs[8] = {};
 		winrt::com_ptr<ID3D11DepthStencilView> patchDSV;
@@ -5418,7 +4483,6 @@ void SnowDeformation::DrawCapturedStatics()
 			const float markClear[4] = {};
 			context->ClearRenderTargetView(patchDeferredMark->rtv.get(), markClear);
 			if (patchVerify && tessellatePatch && EnsurePatchVerify(patchDSV.get())) {
-				// The targets as the bands find them, for the whole lattice to draw over.
 				context->OMSetRenderTargets(0, nullptr, nullptr);
 				for (uint32_t i = 0; i < 3; i++)
 					context->CopyResource(patchVerifyRT[i]->resource.get(), shellDeferredAttr[i]->resource.get());
@@ -5504,8 +4568,6 @@ void SnowDeformation::DrawCapturedStatics()
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		}
 		if (deferredPatch) {
-			// Shading: every pixel the mark kept, against the forward draw's
-			// bindings (b0, b1, the same SRVs and samplers).
 			context->OMSetRenderTargets(8, patchRTVPtrs, nullptr);
 			context->OMSetDepthStencilState(patchDeferredDepthState.get(), 0);
 			context->RSSetState(shellRasterState.get());
@@ -5553,8 +4615,6 @@ void SnowDeformation::DrawCapturedStatics()
 		globals::profiler->EndPass();
 	}
 
-	// Volume snow last: it depth-tests against everything above, skins
-	// included, and shades through the same material - marks as the skins take them.
 	BindMarkReaders(context, CoatPaintsMarks());
 	DrawVoxelSnow();
 	BindMarkReaders(context, false);
@@ -5582,17 +4642,11 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 	auto context = globals::d3d::context;
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
-	// Snap the window to whole texels so a texel keeps covering the same patch
-	// of world as the camera moves; an unsnapped window resamples the bowls
-	// every frame and their noisy rims crawl.
 	constexpr float texelSize = kExclusionFieldHalfExtent * 2.0f / kExclusionFieldDim;
 	const float2 center = {
 		std::floor(eye.x / texelSize) * texelSize,
 		std::floor(eye.y / texelSize) * texelSize
 	};
-	// Everything the CS reads: cb0 (centre, window origin), cb1 (the list),
-	// t0 (the terrain window). All unchanged = the texture already holds
-	// the same bits.
 	const bool same = exclusionFieldValid && exclusionBakeList &&
 	                  center.x == exclusionFieldCenter.x && center.y == exclusionFieldCenter.y &&
 	                  shellWindowCellX == exclusionBakeCellX && shellWindowCellY == exclusionBakeCellY &&
@@ -5643,10 +4697,6 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 	memcpy(exclusionBakeList.get(), &a_list, sizeof(ExclusionsCB));
 }
 
-// Position size = distance to the first following attribute (the descriptor's
-// offset table is authoritative). The VF_FULLPREC flag is NOT reliable: logged
-// runtime buffers carry 16-byte float4 positions with the flag clear, and
-// reading them as halfs shreds geometry into screen-wide streaks.
 uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
 {
 	uint32_t positionBytes = uint32_t(a_descKey & 0xF) * 4;
@@ -5672,12 +4722,9 @@ uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& 
 
 ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc, uint32_t a_dynamicPositionBytes)
 {
-	// Flag bits sit at 44..53; the dynamic variants key above them.
 	const uint64_t cacheKey = a_descKey | (a_dynamicPositionBytes ? (uint64_t(a_dynamicPositionBytes) << 56) : 0);
 	auto& layout = contactSkinILCache[cacheKey];
 	if (!layout && contactSkinVSBlob) {
-		// SSE skinning block: four float16 weights then four UNORM byte
-		// indices, 12 bytes, at the descriptor's own skinning offset.
 		const uint32_t skinOffset = a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_SKINNING);
 		const uint32_t positionBytes = a_dynamicPositionBytes ? a_dynamicPositionBytes : SD_PositionBytes(a_descKey, a_desc);
 		const UINT positionSlot = a_dynamicPositionBytes ? 1 : 0;
@@ -5686,7 +4733,6 @@ ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey
 			{ "BLENDWEIGHT", 0, DXGI_FORMAT_R16G16B16A16_FLOAT, 0, skinOffset, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "BLENDINDICES", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, skinOffset + 8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		};
-		// Null stays cached: this descriptor is skipped from now on.
 		globals::d3d::device->CreateInputLayout(elements, 3, contactSkinVSBlob->GetBufferPointer(), contactSkinVSBlob->GetBufferSize(), layout.put());
 	}
 	return layout.get();
@@ -5702,7 +4748,6 @@ ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, co
 			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		};
-		// Null stays cached: this descriptor is skipped from now on.
 		globals::d3d::device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put());
 	}
 	return layout.get();
@@ -5716,7 +4761,6 @@ ID3D11InputLayout* SnowDeformation::StaticsParallaxInputLayoutFor(uint64_t a_des
 	auto& layout = staticsILParallaxCache[a_descKey];
 	if (!layout) {
 		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
-		// Lighting's own attributes: the tangent frame spans POSITION.w, NORMAL.w and BINORMAL.
 		D3D11_INPUT_ELEMENT_DESC elements[4] = {
 			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, a_desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), D3D11_INPUT_PER_VERTEX_DATA, 0 },
@@ -5755,11 +4799,6 @@ bool SnowDeformation::EnsureCoatParallaxShaders()
 	return staticsVSParallax && staticsPSDrapeParallax;
 }
 
-// The engine's own list of live water bodies: every loaded cell's water and
-// every placed body, culled or not, each with its shape. What the water
-// SHADER draws is a superset - the LOD quadtree, a mod's skirts, the ripple
-// displacement mesh and the waterline-crossing effect at the camera's own
-// level - and capturing draws put every one of those into the raster.
 void SnowDeformation::GatherWaterObjects()
 {
 	capturedWater.clear();
@@ -5784,8 +4823,6 @@ void SnowDeformation::GatherWaterObjects()
 	}
 }
 
-// The engine's water bodies top-down into the terrain window's frame (128-unit
-// texels, MAX blend); the landscape shell ends where its ground lies under it.
 void SnowDeformation::RenderWaterCapture()
 {
 	auto context = globals::d3d::context;
@@ -5846,7 +4883,6 @@ void SnowDeformation::RenderWaterCapture()
 				.Texture2D = { .MipSlice = 0 }
 			};
 			waterVisibleTexture->CreateUAV(uavDesc);
-			// Squared texels, 0-9 and 10 for none in reach: one byte.
 			D3D11_TEXTURE2D_DESC nearDesc = visDesc;
 			nearDesc.Format = DXGI_FORMAT_R8_UINT;
 			waterNearTexture = new Texture2D(nearDesc, "SnowDeformation::WaterNear");
@@ -5863,8 +4899,6 @@ void SnowDeformation::RenderWaterCapture()
 	}
 	GatherWaterObjects();
 	statWaterCaptured = (uint32_t)capturedWater.size();
-	// The draw list exactly as the loop below consumes it. Same list at the
-	// same window cell = the texture already holds the same bits.
 	waterBakeScratch.clear();
 	waterBakeScratch.reserve(capturedWater.size());
 	for (const auto& water : capturedWater) {
@@ -5886,7 +4920,6 @@ void SnowDeformation::RenderWaterCapture()
 	const bool same = waterBakeValid && waterWindowCellX == shellWindowCellX && waterWindowCellY == shellWindowCellY &&
 	                  waterBakeKeys.size() == waterBakeScratch.size() &&
 	                  (waterBakeScratch.empty() || memcmp(waterBakeKeys.data(), waterBakeScratch.data(), waterBakeScratch.size() * sizeof(WaterBakeKey)) == 0);
-	// The fine raster follows the object height window as well as the list.
 	const float2 fineCenter = heightWindowCenter;
 	const float fineHalf = ObjectRasterHalfExtent();
 	const bool fineNeeded = waterFineTexture && (!same || !waterFineValid ||
@@ -5902,12 +4935,6 @@ void SnowDeformation::RenderWaterCapture()
 		waterCoverDirty = true;
 		waterWindowVersion++;
 	}
-	// The terrain window's frame, rebuilt whenever the list or the cell
-	// moves (never kept across a change: a plane from an earlier frame - the
-	// waterline effect at the camera's level, a plane seen once from a bad
-	// angle - poisoned the area until the next cell crossing). A body's plane
-	// is set up whenever the ground over it is in view, so nothing the
-	// camera can see is lost.
 	const float clear[4] = { kShellMissingHeight, 0.0f, 0.0f, 0.0f };
 	if (!same) {
 		context->ClearRenderTargetView(waterHeightTexture->rtv.get(), clear);
@@ -5921,7 +4948,6 @@ void SnowDeformation::RenderWaterCapture()
 	}
 
 	globals::profiler->BeginPass("SnowDeformation::Ground - Field Bakes");
-	// The fine raster is Lighting's water raster; off the PS before it becomes a target.
 	ID3D11ShaderResourceView* nullWaterSRV = nullptr;
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &nullWaterSRV);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
@@ -5931,8 +4957,6 @@ void SnowDeformation::RenderWaterCapture()
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
-	// One loop, two frames: the terrain window (coarse) and the object
-	// height window (fine).
 	auto drawPlanes = [&](ID3D11RenderTargetView* a_rtv, uint32_t a_dim, float2 a_center, float a_halfExtent) {
 	context->OMSetRenderTargets(1, &a_rtv, nullptr);
 	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(a_dim), float(a_dim), 0.0f, 1.0f };
@@ -6008,11 +5032,6 @@ void SnowDeformation::RenderWaterCapture()
 	capturedWater.clear();
 }
 
-// When the water raster or the terrain window changed: the data route's
-// water window is the raw raster minus its lone wet texels, and the near
-// field is the texel distance to the nearest vertex under the water
-// (WaterCoverCS). Without the pass the raw window is copied through and
-// the near field reads "far".
 void SnowDeformation::CoverWaterWindow()
 {
 	if (!waterHeightTexture || !waterVisibleTexture || !waterVisibleTexture->uav || !waterNearTexture || !waterNearTexture->uav)
@@ -6068,7 +5087,6 @@ bool SnowDeformation::EnsureContactResources()
 		winrt::com_ptr<ID3DBlob> blob;
 		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED"));
 		if (blob) {
-			// Kept: input layouts must be created against the VS bytecode.
 			contactSkinVSBlob = blob;
 			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactSkinVS)))
 				Util::SetResourceName(contactSkinVS, "SnowDeformation::ContactCaptureSkinVS");
@@ -6112,7 +5130,6 @@ bool SnowDeformation::EnsureContactResources()
 		contactHeight->CreateSRV(srvDesc);
 		contactHeight->CreateRTV(rtvDesc);
 	}
-	// One MIN blend per channel: bodies write R, loose props G.
 	auto makeMinBlend = [&](winrt::com_ptr<ID3D11BlendState>& a_state, UINT8 a_mask) {
 		if (a_state)
 			return true;
@@ -6133,7 +5150,6 @@ bool SnowDeformation::EnsureContactResources()
 		return false;
 	}
 	if (!contactRasterState) {
-		// Undersides are the surfaces that touch the snow: no culling.
 		D3D11_RASTERIZER_DESC rasterDesc{};
 		rasterDesc.FillMode = D3D11_FILL_SOLID;
 		rasterDesc.CullMode = D3D11_CULL_NONE;
@@ -6146,15 +5162,9 @@ bool SnowDeformation::EnsureContactResources()
 	return true;
 }
 
-// Rasterizes this frame's contact props (gathered by the prop scan) from
-// above into the contact field. Runs in Prepass after the stamp gather and
-// before the map update that reads it. Same per-geometry draw the height
-// capture uses; the rasterizer state is saved and put back because the
-// capture leaves the game's alone and so must this.
 void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly)
 {
 	contactDrawsLast = 0;
-	// S5: snowfall on bodies walks actors even with nobody in the snow.
 	const bool coatFall = BodyCoatFallDue();
 	if ((contactProps.empty() && contactActors.empty() && !coatFall) || !EnsureContactResources())
 		return;
@@ -6176,14 +5186,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
-	// A carried mesh that jumps further than this in one frame was equipped,
-	// swapped or teleported, not swung: it prints where it now stands.
 	constexpr float kContactSweepTeleport = 200.0f;
-	// One rigid mesh into the field, by its own world transform. Props use it
-	// for every mesh; actors use it for what they carry. With a_sweep, the
-	// mesh is also drawn at interpolated poses back toward where it stood
-	// last frame: the field is a snapshot, and a swung blade crosses several
-	// texels between frames, which prints as rungs rather than a slash.
 	auto drawRigid = [&](RE::BSGeometry* a_geometry, bool a_sweep = false) -> bool {
 		auto& runtime = a_geometry->GetGeometryRuntimeData();
 		auto* triShape = a_geometry->AsTriShape();
@@ -6234,11 +5237,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 			state.frame = contactSweepFrame;
 			state.buffer = rendererData->vertexBuffer;
 			if (!fresh) {
-				// How far the mesh's far edge travelled: the origin's own step plus
-				// the arc its radius swept. cos(angle) from the relative rotation.
-				// Below a texel of travel there is nothing new to print - a sheathed
-				// sword on a standing body, or a shield at rest - and not drawing it
-				// is what keeps the field empty for the update pass's sleep.
 				const float radius = a_geometry->worldBound.radius;
 				float trace = 0.0f;
 				for (int r = 0; r < 3; ++r)
@@ -6248,7 +5246,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				const float travel = world.translate.GetDistance(previous.translate) + radius * angle;
 				if (travel < kContactSweepStep)
 					return false;
-				// A jump this large is a new placement (equip, cell load), not a swing.
 				if (travel < kContactSweepTeleport)
 					steps = std::clamp(uint32_t(std::ceil(travel / kContactSweepStep)), 1u, kContactMaxSweep);
 			}
@@ -6259,8 +5256,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 			if (step == steps) {
 				rowsFrom(world, scb);
 			} else {
-				// Straight lerp of the rows: over one frame's rotation the chord
-				// shortens the mesh by a fraction of a percent, far under a texel.
 				const float t = float(step) / float(steps);
 				RE::NiTransform blend = world;
 				for (int r = 0; r < 3; ++r)
@@ -6280,8 +5275,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 	static const std::vector<ContactProp> noProps;
 	for (const auto& prop : a_coatOnly ? noProps : contactProps) {
-		// Re-resolved, not held: see ContactProp. A body whose 3D went away
-		// this frame simply drops out.
 		auto ref = prop.ref.get();
 		auto* root = ref ? ref->Get3D(false) : nullptr;
 		if (!root)
@@ -6296,12 +5289,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	}
 	globals::profiler->EndPass();
 
-	// S1 spike: actors, drawn from their SKINNED meshes. Bone palettes are
-	// built here as absolute world transforms (bone node world * that bone's
-	// skinToBone), one upload per skin partition, so the VS needs no object
-	// transform and none of the game's pivot convention. A missing bone
-	// contributes nothing rather than crashing - which is the whole
-	// edited-skeleton family, handled by construction.
 	contactSkinDrawsLast = 0;
 	contactSkinMissingLast = 0;
 	contactCarriedLast = 0;
@@ -6321,13 +5308,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 		context->VSSetShader(contactSkinVS, nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
-		// Tracks the bound VS across actors: a rigid part leaves contactVS bound for the next actor.
 		bool skinnedVSBound = true;
-		// S3: the body coat's contact writer rides this walk (BodyCoat.cpp). S5:
-		// snowfall draws the parts above the snow too, an actor's own highest
-		// surface toward the snow first (its tops, drawn along the snow's way at
-		// the actor's own scale), and actors the capture does not draw are walked
-		// for it alone.
 		const bool coatWrite = BodyCoatWriteBegin(a_coatOnly);
 		bool coatPass = false;
 		bool coatTopPass = false;
@@ -6348,8 +5329,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				continue;
 			const uint drawsBeforeActor = contactSkinDrawsLast;
 			ScopedTicks _actorTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactActor], cpuCensus.spanCalls[CpuCensus::kSpanContactActor]);
-			// First person hides the player's third-person root, but that skeleton
-			// still animates: the body under the camera is what walks in the snow.
 			const bool firstPersonPlayer = firstPerson && ref->IsPlayerRef();
 			struct
 			{
@@ -6360,11 +5339,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				ScopedTicks _geometryTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactGeometry], cpuCensus.spanCalls[CpuCensus::kSpanContactGeometry]);
 				auto& runtime = a_geometry->GetGeometryRuntimeData();
 				auto* skin = runtime.skinInstance.get();
-				// A part whose whole bound floats above the layer carves nothing,
-				// and the draws are the cost: on a standing actor that leaves the
-				// boots and calves, and a sheathed sword at the hip stays out until
-				// a swing brings it down. Corpses lie low and keep everything. Every
-				// test here only rejects, so this cheapest one goes first.
 				if (!coatAll) {
 					const auto& gb = a_geometry->worldBound;
 					if (gb.radius > 0.0f && gb.center.z - gb.radius > actor.groundZ + actor.layer + kContactSkipMargin) {
@@ -6372,18 +5346,10 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
-				// RaceMenu overlays ('[Ovl0]'..'[Ovl5]', '[SOvl0]') are clones of the
-				// body and hands that exist to layer textures: the same surface
-				// again, up to seven times over. One copy is enough.
 				if (const char* name = a_geometry->name.c_str(); name && (std::strstr(name, "[Ovl") || std::strstr(name, "[SOvl"))) {
 					contactOverlaysLast++;
 					return RE::BSVisit::BSVisitControl::kContinue;
 				}
-				// Creature fur is shells: the body duplicated and pushed out along
-				// its normals up to sixteen times, alpha-tested so only strands
-				// show. Solid, each is an inflated body; the base mesh under them
-				// is the surface. Bethesda names every one '*shell*'. Blended
-				// (translucent) geometry is not a surface either.
 				if (auto* alpha = runtime.alphaProperty.get()) {
 					const char* name = a_geometry->name.c_str();
 					const bool shell = alpha->GetAlphaTesting() && name && (std::strstr(name, "shell") || std::strstr(name, "Shell"));
@@ -6392,21 +5358,12 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
-				// Draw only what the game draws: a geometry hidden by itself or by
-				// any ancestor (dismembered parts, physics helper meshes, alternate
-				// variants), or one with no shader to render it, never reaches the
-				// screen and must not reach the snow.
 				{
 					bool hidden = false;
 					for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
 						hidden = n->GetAppCulled() && !(firstPersonPlayer && n == root);
-					// Effect art - glows, light rays, runes, blood decals, an ENB light's
-					// 500-unit billboard - is drawn with an effect shader, never a
-					// lighting one. It is not a surface and must not carve snow.
 					auto* property = runtime.shaderProperty.get();
 					const bool lit = property && property->GetRTTI() == globals::rtti::BSLightingShaderPropertyRTTI.get();
-					// A refraction mesh is a distortion volume drawn only into the
-					// refraction mask: a master spell's ritual haze is 183 units across.
 					const bool refraction = lit && property->flags.any(RE::BSShaderProperty::EShaderPropertyFlag::kRefraction);
 					if (hidden || !lit || refraction) {
 						if (contactSkinHiddenLogged.size() < 32 && contactSkinHiddenLogged.insert(a_geometry).second)
@@ -6417,15 +5374,11 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						++(hidden ? tally.hidden : tally.unlit);
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
-					// Physics proxies and overlay layers draw no surface of their own.
 					if (IsProxyOrOverlayGeometry(a_geometry, property)) {
 						tally.proxy++;
 						return RE::BSVisit::BSVisitControl::kContinue;
 					}
 				}
-				// Carried gear - weapons, shields, torches - is rigid, hung off a
-				// bone. It prints by its own world transform when it dips into the
-				// snow: a low sword swing cuts a slash.
 				if (!skin) {
 					if (coatPass || coatTopPass)
 						return RE::BSVisit::BSVisitControl::kContinue;
@@ -6443,11 +5396,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					context->VSSetShader(contactSkinVS, nullptr, 0);
 					skinnedVSBound = true;
 				}
-				// The coat pass draws only the shapes the coat maps.
 				if (coatPass && !BodyCoatWriteShape(context, a_geometry, coatParams))
 					return RE::BSVisit::BSVisitControl::kContinue;
-				// Solo: draw one skinned geometry only, so the field shows whose
-				// silhouette is which. -1 draws them all.
 				++geometryIndex;
 				if (debugContactSolo >= 0) {
 					if (geometryIndex != debugContactSolo)
@@ -6456,20 +5406,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				}
 				auto* skinData = skin->skinData.get();
 				auto* skinPartition = skin->skinPartition.get();
-				// Accessors, not the raw members: those are compiled out under
-				// cross-VR targeting, and these relocate per runtime.
-				// partitions is a bare array behind a count; an instance mid-
-				// rebuild can carry a count with no array.
 				if (!skinData || !skinPartition || !skin->bones || !skinPartition->partitions.data())
 					return RE::BSVisit::BSVisitControl::kContinue;
-				// A BSDynamicTriShape (RaceMenu BodyMorph / OBody bodies, facegen
-				// heads) keeps its positions CPU-side in dynamicData and the game
-				// streams them per draw; its static buffer has none at offset 0.
-				// Drawn from the static buffer alone the body lands nowhere, the
-				// draw still counts, and the actor carves nothing. Positions go
-				// up as a second stream; a size that does not read as one
-				// position per vertex is logged and the geometry left undrawn, so
-				// the bone fallback below takes it.
 				uint32_t dynamicPositionBytes = 0;
 				if (auto* dynamicShape = a_geometry->AsDynamicTriShape()) {
 					tally.dynamic++;
@@ -6533,12 +5471,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					dynamicPositionBytes = perVertex;
 				}
 				const uint32_t boneCount = skinData->GetBoneCount();
-				// Dismember partitions carry the game's own visibility: a creature
-				// keeps alternate or severable parts in partitions it hides by
-				// default, and the bones only those parts use resolve to no node.
-				// Drawn anyway, their vertices collapse to the world origin as
-				// slivers. Honour the flag, then refuse any partition whose bones
-				// resolve to nothing at all as the same case without the flag.
 				auto* dismember = netimmerse_cast<RE::BSDismemberSkinInstance*>(skin);
 				const RE::BSDismemberSkinInstance::Data* dismemberParts = nullptr;
 				uint32_t dismemberCount = 0;
@@ -6549,13 +5481,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						dismemberCount = uint32_t(rd.numPartitions);
 					}
 				}
-				// How this skin's vertices index bones. SSE partitions were assumed to
-				// carry partition-local indices, and the shader refuses an index past
-				// the partition's count - parking the vertex on slot 0. A mesh whose
-				// vertices index the skin's FULL list instead fans every high-boned
-				// vertex onto one bone: the mammoth's spikes. Audit once from the raw
-				// vertex copy; a skin that ever indexes past a partition's count is
-				// drawn from a whole-skin palette.
 				uint8_t indexing = 0;
 				if (auto it = contactSkinIndexing.find(skin); it != contactSkinIndexing.end() && it->second.partition == skinPartition) {
 					indexing = it->second.indexing;
@@ -6610,8 +5535,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						return true;
 					if (!skin->boneMatrices || a_bone >= skin->numMatrices)
 						return false;
-					// An unset matrix in the game's palette: all-zero rows, or an
-					// identity rotation sitting at the world origin.
 					const float* m = reinterpret_cast<const float*>(skin->boneMatrices) + size_t(a_bone) * 12;
 					float rot = 0.0f, pos = 0.0f;
 					for (int r = 0; r < 3; ++r) {
@@ -6621,8 +5544,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					}
 					return rot > 1e-3f && pos > 1.0f;
 				};
-				// One composed transform per skin bone, built on first use: every
-				// partition of this geometry that names the bone reuses it.
 				contactPaletteScratch.resize(boneCount);
 				contactPaletteBuilt.assign(boneCount, 0);
 				auto composedFor = [&](uint16_t a_bone, uint32_t a_partition, uint16_t a_slot) -> const RE::NiTransform& {
@@ -6630,12 +5551,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					auto* boneNode = a_bone < boneCount ? skin->bones[a_bone] : nullptr;
 					const RE::NiTransform* boneWorld = boneNode ? &boneNode->world : nullptr;
 					if (!boneWorld && a_bone < skin->numMatrices && skin->boneMatrices) {
-						// A slot with no node - creature skins have several - is not a
-						// missing bone: the game renders the mesh correctly, so its own
-						// uploaded palette holds the right matrix. Traced 2026-09-02:
-						// three float4 rows per bone, rotation times scale with the
-						// translation in .w, ABSOLUTE world, identical to our composition
-						// where both exist. Read it straight; it is at most a frame old.
 						if (!contactPaletteBuilt[a_bone]) {
 							const float* m = reinterpret_cast<const float*>(skin->boneMatrices) + size_t(a_bone) * 12;
 							RE::NiTransform& t = contactPaletteScratch[a_bone];
@@ -6650,11 +5565,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 						return contactPaletteScratch[a_bone];
 					}
 					if (!boneWorld) {
-						// A bone the skeleton lacks (an editor removed it) or one past the
-						// skin data's count cannot be left as zero rows: the vertex would
-						// keep its weight on nothing and be pulled toward the world origin
-						// by that fraction - the comb. Stand in with the skin's root at the
-						// bone's bind pose, which holds the vertex near the body.
 						contactSkinMissingLast++;
 						RE::NiAVObject* stand = skin->rootParent ? skin->rootParent : root;
 						standIn = a_bone < boneCount ? stand->world * skinData->GetBoneDataSkinToBone(a_bone) : stand->world;
@@ -6670,8 +5580,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					}
 					return contactPaletteScratch[a_bone];
 				};
-				// The constant buffer is uploaded once per DISTINCT bone list: the
-				// partitions of one garment usually share theirs.
 				ContactSkinCB cb{};
 				cb.SkinWindowCenter = contactCenter;
 				cb.SkinHalfExtent = kContactHalfExtent;
@@ -6686,12 +5594,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					logger::info("[SNOW DEFORMATION] contact skin '{}': {} partitions {}",
 						a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skinPartition->numPartitions, layout);
 				}
-				// SSE partitions share one shape buffer and each owns a contiguous
-				// triangle RANGE of it, in order. Drawing every partition from
-				// index 0 skins the first partition's triangles with every other
-				// partition's palette: vertices follow the wrong bones, the mesh
-				// smears wide and stretched triangles comb the snow. A partition
-				// with its own buffer starts at 0; a skipped one still advances.
 				RE::BSGraphics::TriShape* rangeBuff = nullptr;
 				uint32_t indexStart = 0;
 				for (uint32_t p = 0; p < skinPartition->numPartitions; ++p) {
@@ -6788,12 +5690,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			};
-			// By reference: the walk copies its std::function at every node, and
-			// this closure is past the small buffer, so each copy was a heap one.
 			if (!coatOnlyWalk)
 				RE::BSVisit::TraverseScenegraphGeometries(root, std::ref(visitGeometry));
-			// Nothing printed from a body the game draws: hand the actor to the bone
-			// stamps for a while rather than leave it carving nothing at all.
 			const bool rootHidden = root->GetAppCulled() && !firstPersonPlayer;
 			if (!coatOnlyWalk && !actor.corpse && contactSkinDrawsLast == drawsBeforeActor && !rootHidden && debugContactSolo < 0) {
 				if (auto it = stampBoneCache.find(ref->GetFormID()); it != stampBoneCache.end()) {
@@ -6808,9 +5706,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					}
 				}
 			}
-			// S3: an actor due a coat update is walked again with the writer bound,
-			// its own row; the capture's counters stay the capture's. S5: snowfall
-			// lays the actor's tops first, and both walks keep the parts above the snow.
 			if (coatWrite && BodyCoatWriteDue(ref->GetFormID(), coatParams, coatTop)) {
 				const auto counts = std::tuple{ contactOverlaysLast, contactShellsLast, contactHiddenPartsLast, contactGlobalPartsLast, contactSkinMissingLast, contactSkinDrawsLast };
 				globals::profiler->EndPass();
@@ -6877,11 +5772,6 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 	if (!skinCullCB)
 		skinCullCB = new ConstantBuffer(ConstantBufferDesc<SkinCullCB>(), "SnowDeformation::SkinCullCB");
 
-	// Max-depth pyramid over the scene depth's first a_extent pixels: level 0
-	// is half res, the chain runs to 1x1 so a footprint of any size finds its
-	// level. An odd extent short of the texture rounds up (the pixel past it
-	// is masked to 0); at the texture's edge the build's odd-tail fold covers
-	// the last pixel, as for the whole texture.
 	winrt::com_ptr<ID3D11Resource> depthRes;
 	a_mainDepthSRV->GetResource(depthRes.put());
 	auto depthTex = depthRes.try_as<ID3D11Texture2D>();
@@ -6998,7 +5888,6 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		skinFootprint->CreateUAV(footUAV);
 	}
 
-	// Bounds in, indirect arguments out; grown in steps of 256 skins.
 	if (a_count > skinCullCapacity) {
 		const uint32_t capacity = (a_count + 255) & ~255u;
 		delete skinCullBounds;
@@ -7054,9 +5943,6 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 	       skinFootprint->srv && skinFootprint->uav;
 }
 
-// Mirrors RE::TES::ForEachReferenceInRange: the interior cell alone, or the
-// loaded grid (x outer, y inner, attached cells whose square meets the
-// radius) and then the sky cell. Slot i is one of those cells.
 void SnowDeformation::StartExclusionGather()
 {
 	auto* player = globals::game::player;
@@ -7092,12 +5978,9 @@ void SnowDeformation::StepExclusionGather()
 		exclusionGatherSlot = 0;
 		return;
 	}
-	// Reaches the WIDE field's window, not just the near mask's: a campfire
-	// only shows at 200 m if it was gathered at 200 m.
 	const float radius = kExclusionFieldHalfExtent + 512.0f;
 	const auto& origin = exclusionGatherOrigin;
 	auto visit = [this](RE::TESObjectREFR* a_ref) { return ExclusionVisit(a_ref); };
-	// The walk spreads over ~50 frames.
 	const uint32_t perStep = std::max(1u, (exclusionGatherSlots + 49) / 50);
 	const uint32_t gridLength = tes->gridCells ? tes->gridCells->length : 0;
 	for (uint32_t n = 0; n < perStep && exclusionGatherSlot <= exclusionGatherSlots; n++, exclusionGatherSlot++) {
@@ -7128,9 +6011,6 @@ void SnowDeformation::StepExclusionGather()
 RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR* a_ref)
 {
 	auto* tes = globals::game::tes;
-	// Collect past the CB cap: the nearest-first sort below
-	// picks the winners, so a far sconce can never evict a
-	// near door. 4x cap bounds the pathological case.
 	if (exclusionPending.size() >= kMaxExclusions * 4)
 		return RE::BSContainer::ForEachResult::kStop;
 	if (!a_ref || a_ref->IsDisabled() || !a_ref->Is3DLoaded())
@@ -7139,20 +6019,9 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 	if (!base)
 		return RE::BSContainer::ForEachResult::kContinue;
 
-	// Doors: REMOVED per round-248 verdict. They were the
-	// only coverage-kill (bare ground) system left, their
-	// ellipse is large, and elevated doors (porch decks)
-	// project it straight down onto the ground below
-	// through the 300-unit z-gate. The suppress channel and
-	// the shader ellipse stay for a better-scoped revisit.
 	if (base->Is(RE::FormType::Door))
 		return RE::BSContainer::ForEachResult::kContinue;
 
-	// Dropped torches: carryable light references melt where
-	// they lie - but only while actually BURNING. Torch-
-	// snuffing mods keep the light base on the dropped ref
-	// while removing its attached flame light; those still
-	// trench as props, they just stop melting.
 	if (auto* light = base->As<RE::TESObjectLIGH>(); light && light->CanBeCarried()) {
 		if (HasActiveLight(a_ref->Get3D())) {
 			auto pos = a_ref->GetPosition();
@@ -7162,9 +6031,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		return RE::BSContainer::ForEachResult::kContinue;
 	}
 
-	// Explicit form-type chain: skyrim_cast to TESModel
-	// silently returns null for activator bases, which
-	// makes campfires invisible to the gather.
 	const char* modelPath = nullptr;
 	if (auto* acti = base->As<RE::TESObjectACTI>())
 		modelPath = acti->GetModel();
@@ -7172,11 +6038,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		modelPath = stat->GetModel();
 	else if (auto* movable = base->As<RE::BGSMovableStatic>())
 		modelPath = movable->GetModel();
-	// Classification order: named heat (model table / flames),
-	// then the workspace table, then the Survival warm-up
-	// formlist LAST - patched warm-up lists add workstations
-	// (grindstones, anvils...), and those must stay
-	// slider-controlled workspaces, not fixed heat spots.
 	float heatRadius = 0.0f;
 	bool genericFlame = false;
 	std::string lowered;
@@ -7200,9 +6061,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 	if (heatRadius > 0.0f || genericFlame) {
 		auto pos = a_ref->GetPosition();
 		if (genericFlame) {
-			// Grounded flame = open fire; raised flame
-			// (brazier bowl, wall fire) melts a small spot
-			// on the ground below.
 			float landZ = pos.z;
 			tes->GetLandHeight(pos, landZ);
 			heatRadius = pos.z - landZ < kGroundFireBand ? kFireClearRadius : kRaisedFlameClearRadius;
@@ -7215,14 +6073,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		return RE::BSContainer::ForEachResult::kContinue;
 	}
 
-	// Workspace clearings: the shell only ever forms to
-	// partial depth around worked spots (workstations,
-	// stalls, wells, shrines) - a melt bowl centered toward
-	// the working side; real trampling carves the rest. A
-	// full pre-trampled look via the deformation map read
-	// as mini mountains and was replaced by this.
-	// TESFurniture derives from TESObjectACTI, so the model
-	// chain above already reached every workstation.
 	if (!lowered.empty()) {
 		for (const auto& spec : kTrampleSpecs) {
 			if (lowered.find(spec.substring) != std::string::npos) {
@@ -7233,9 +6083,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 				const float meltStrength = spec.meltStrength > 0.0f ?
 			                                   spec.meltStrength :
 			                                   1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f;
-				// Elongation axis rides the facing (length =
-				// aspect - 1; zero = circle); type 2 = smooth
-				// bowl edge for bedding.
 				const float elongation = std::max(spec.aspect, 1.0f) - 1.0f;
 				exclusionPending.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
 												 pos.y + std::cos(angleZ) * spec.forwardBias * scale,
@@ -7243,9 +6090,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 					{ std::sin(angleZ) * elongation, std::cos(angleZ) * elongation, meltStrength,
 						spec.smoothEdge ? 2.0f : 1.0f } });
 				exclusionPendingTrample++;
-				// Physical footprint, NOT slider-scaled: the
-				// flame sits inside the structure no matter
-				// how small the clearing is tuned.
 				if (spec.ownsFlames)
 					exclusionPendingGuards.push_back({ pos.x, pos.y, pos.z, spec.radius * scale * 0.5f });
 				return RE::BSContainer::ForEachResult::kContinue;
@@ -7253,12 +6097,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		}
 	}
 
-	// Sealed containers (draugr sarcophagi): an oriented
-	// rectangle that kills coverage inside the footprint,
-	// so an opened coffin is bare rather than holding a
-	// sheet of snow it could not have collected. Placed
-	// after the tables above because a sarcophagus matches
-	// neither: they melt depth, this one suppresses.
 	if (!lowered.empty()) {
 		bool sealed = false;
 		for (const char* substring : kSealedContainerSubstrings)
@@ -7269,16 +6107,9 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 			const float scale = a_ref->GetScale();
 			const float halfX = (bounds.boundMax.x - bounds.boundMin.x) * 0.5f * scale;
 			const float halfY = (bounds.boundMax.y - bounds.boundMin.y) * 0.5f * scale;
-			// A degenerate bound would collapse the rectangle
-			// to a line and clear nothing; skip rather than
-			// substitute a guessed size.
 			if (halfX >= 1.0f && halfY >= 1.0f) {
 				const float angleZ = a_ref->GetAngleZ();
 				const float sinZ = std::sin(angleZ), cosZ = std::cos(angleZ);
-				// Bounds are model-space and need not straddle
-				// the origin, so the box CENTRE rides the ref's
-				// own rotation (+Y is the facing, matching the
-				// workspace forward bias above).
 				const float localX = (bounds.boundMax.x + bounds.boundMin.x) * 0.5f * scale;
 				const float localY = (bounds.boundMax.y + bounds.boundMin.y) * 0.5f * scale;
 				auto pos = a_ref->GetPosition();
@@ -7292,9 +6123,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 		}
 	}
 
-	// Survival warm-up formlist: heat neither table named.
-	// Modest circle when grounded (the list also holds
-	// candelabras), footprint-sized spot when raised.
 	if (survivalHeatSources && survivalHeatSources->HasForm(base)) {
 		float halfExtent = 20.0f;
 		if (auto* bound = base->As<RE::TESBoundObject>()) {
@@ -7315,8 +6143,6 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 
 void SnowDeformation::FinishExclusionGather()
 {
-	// Drop flame melt spots that sit inside a flame-owning station
-	// (descending index order keeps the remaining indices valid).
 	if (!exclusionPendingGuards.empty() && !exclusionPendingFlames.empty()) {
 		for (auto it = exclusionPendingFlames.rbegin(); it != exclusionPendingFlames.rend(); ++it) {
 			const auto& flame = exclusionPending[*it].first;
@@ -7333,7 +6159,6 @@ void SnowDeformation::FinishExclusionGather()
 	statTrampleCount = exclusionPendingTrample;
 	statSealedCount = exclusionPendingSealed;
 
-	// Overflow: keep the sources nearest the walk's origin.
 	if (exclusionPending.size() > kMaxExclusions) {
 		const auto playerPos = exclusionGatherOrigin;
 		std::partial_sort(exclusionPending.begin(), exclusionPending.begin() + kMaxExclusions, exclusionPending.end(),

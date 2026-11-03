@@ -1,32 +1,5 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Smoothed-normal builder for the statics snow skin.
-//
-// Flat hard-edged meshes carry split normals, and inflating snow along them
-// leaves a rigid parallel sheet with an air gap at the rim, since the side
-// faces' twin vertices never rise. Averaging across vertices that share a
-// position seals the crack by construction and lets plank edges mushroom;
-// already-smooth meshes are unchanged.
-//
-// Three passes over a copy of the mesh's vertex buffer:
-//   AccumulateCS; quantized-position hash table accumulates fixed-point
-//                  normal sums (linear probing, fingerprint-guarded).
-//   ResolveCS   ; per vertex, look up its position's sum and write the
-//                  normalized average. w=1 marks validity; unresolvable
-//                  vertices write 0 and the VS falls back to the raw normal.
-//   FlatStatsCS ; one-group reduction writing the mesh's FLATNESS stats to
-//                  OutNormals[VertexCount]: x = fraction of vertices whose
-//                  smoothed normal diverges from the raw one. Split-normal
-//                  plates (walkways, roofs, planks) score high; organically
-//                  smooth meshes (rocks, drifts) score ~0. The skin VS reads
-//                  it to pick flat vs rounded snow; no CPU readback.
-//
-// Runs ONCE per unique geometry (cached CPU-side by vertex buffer).
-
 ByteAddressBuffer SrcVerts : register(t0);
-RWByteAddressBuffer HashTable : register(u0);  // 16B/slot: int sumX, sumY, sumZ, uint fingerprint
+RWByteAddressBuffer HashTable : register(u0);
 RWStructuredBuffer<float4> OutNormals : register(u1);
 
 cbuffer SmoothCB : register(b0)
@@ -34,19 +7,19 @@ cbuffer SmoothCB : register(b0)
 	uint VertexCount;
 	uint StrideBytes;
 	uint NormalOffsetBytes;
-	uint PosIsFloat32;  // 1 = float4 position, 0 = half4
+	uint PosIsFloat32;
 
-	uint TableMask;  // slots - 1 (power of two)
+	uint TableMask;
 	uint ColorOffsetBytes;
-	uint HasColor;  // 1 = the vertex stream carries VA_COLOR
-	uint BoundsSlot;  // MESHBOUNDS: slot in MeshBounds (2 float4 per slot)
+	uint HasColor;
+	uint BoundsSlot;
 
-	uint IndexPoolOffset;  // CLUSTERBOUNDS: this mesh's first index in the pool
+	uint IndexPoolOffset;
 	uint IndexCount;
-	uint ClusterOffset;  // first cluster slot for this mesh
-	uint ClusterStrideIndices;  // indices per cluster (64 triangles, or more on a mesh too big to cut that fine)
+	uint ClusterOffset;
+	uint ClusterStrideIndices;
 
-	uint OutBase;  // this mesh's first element in OutNormals (a pooled buffer)
+	uint OutBase;
 	uint3 SmoothPad;
 }
 
@@ -70,9 +43,6 @@ float3 LoadNormal(uint v)
 	return float3(raw & 0xFF, (raw >> 8) & 0xFF, (raw >> 16) & 0xFF) / 255.0 * 2.0 - 1.0;
 }
 
-// Authored vertex alpha (VA_COLOR is R8G8B8A8_UNORM), the term vanilla's
-// projected-UV mask multiplies its up-test by. Raw per-vertex on purpose:
-// that is exactly what Lighting.hlsl reads, no welding.
 float LoadColorAlpha(uint v)
 {
 	float alpha = 1.0;
@@ -83,17 +53,14 @@ float LoadColorAlpha(uint v)
 	return alpha;
 }
 
-// Quantize to 1/32 model unit: welds coincident vertices, keeps distinct ones apart.
 uint2 PositionHashes(float3 p)
 {
 	int3 q = (int3)round(p * 32.0);
 	uint h1 = (uint)(q.x * 73856093) ^ (uint)(q.y * 19349663) ^ (uint)(q.z * 83492791);
-	uint h2 = ((uint)(q.x * 40503) ^ (uint)(q.y * 104729) ^ (uint)(q.z * 12289)) | 1u;  // never 0 (0 = empty slot)
+	uint h2 = ((uint)(q.x * 40503) ^ (uint)(q.y * 104729) ^ (uint)(q.z * 12289)) | 1u;
 	return uint2(h1, h2);
 }
 
-// Finds (or in AccumulateCS claims) the slot for fingerprint h2. Returns
-// 0xFFFFFFFF when probing fails (table pressure); vertex falls back.
 uint FindSlot(uint h1, uint h2, bool claim)
 {
 	uint slot = h1 & TableMask;
@@ -153,7 +120,6 @@ groupshared float3 gsNormalSum[64];
 			total++;
 			float3 rawN = normalize(LoadNormal(v));
 			normalSum += rawN;
-			// ~18-degree divergence marks a split-normal (edge/corner) vertex.
 			if (dot(smoothN.xyz, rawN) < 0.95)
 				divergent++;
 		}
@@ -172,12 +138,6 @@ groupshared float3 gsNormalSum[64];
 			sumNormal += gsNormalSum[i];
 		}
 		float flatFraction = sumTotal > 0 ? float(sumDivergent) / float(sumTotal) : 0.0;
-		// Alignment ratio: 1 when every normal agrees (a planar SHEET), near
-		// 0 when they spread or cancel (rocks, boxes). y carries the mean
-		// direction's z. Neither is consumed today: two alignment-based
-		// classifier extensions (any-planar, then sloped-sheets-only) both
-		// misclassified real compound meshes worse than they helped; the
-		// stats stay available, but do not build a third heuristic on them.
 		float sumLen = length(sumNormal);
 		float alignRatio = sumTotal > 0 ? sumLen / float(sumTotal) : 0.0;
 		float meanNz = sumLen > 1e-3 ? sumNormal.z / sumLen : 0.0;
@@ -196,10 +156,6 @@ groupshared float3 gsNormalSum[64];
 	uint2 h = PositionHashes(LoadPosition(v));
 	uint slot = FindSlot(h.x, h.y, false);
 
-	// w encodes validity AND the vertex's authored color alpha: 0 = invalid,
-	// 1 + alpha = valid. Every reader's `w > 0.5` test is untouched; the skin
-	// VS decodes alpha as saturate(w - 1). Chosen over a second buffer: no
-	// new register, no new bind at the three draw sites.
 	float4 result = float4(0.0, 0.0, 0.0, 0.0);
 	if (slot != 0xFFFFFFFF) {
 		uint base = slot * 16;
@@ -214,8 +170,6 @@ groupshared float3 gsNormalSum[64];
 #endif
 
 #ifdef MESHBOUNDS
-// Local-space box of the mesh for the skin cull: one group strides the
-// vertex stream and reduces; slot layout is min.xyz, max.xyz.
 RWStructuredBuffer<float4> MeshBounds : register(u2);
 groupshared float3 gBoundsMin[256];
 groupshared float3 gBoundsMax[256];
@@ -247,12 +201,6 @@ groupshared float3 gBoundsMax[256];
 #endif
 
 #ifdef CLUSTERBOUNDS
-// Local-space box per 64-triangle cluster, for the object-snow cluster cull:
-// one thread per cluster, walking that cluster's slice of the pooled index
-// data and reducing the positions it names. Built once per unique mesh,
-// beside the mesh box and the smoothed normals. Slot layout mirrors
-// MeshBounds - min.xyz then max.xyz - with the cluster's own index range
-// carried in the two w channels, so the per-frame pass needs nothing else.
 ByteAddressBuffer ClusterSrcIndices : register(t1);
 RWStructuredBuffer<float4> ClusterBoundsOut : register(u3);
 

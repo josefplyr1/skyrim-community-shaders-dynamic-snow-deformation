@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Deferred.h"
@@ -9,29 +5,10 @@
 #include "State.h"
 #include "Util.h"
 
-/**
- * The arc a shock cloak throws at the ground it just pocked.
- *
- * Purely visual, and it writes nothing into the game world. That constraint is
- * structural rather than cautious: this feature decides a projectile has
- * detonated by watching it LEAVE the projectile manager, so a real bolt
- * spawned for the look would be seen by our own detector, become a blast, pock
- * the snow, and arc again. A ribbon we draw ourselves cannot feed that loop,
- * and it costs no hit events, no sound, no aggro and no save bloat either.
- *
- * Drawn after the deferred composite, additively into the main colour target,
- * depth-tested against the scene but writing no depth - the ordinary shape of
- * an emissive overlay. Both endpoints already exist: the cloak's discharge
- * picks a spot and the wearer is standing right there, so nothing here has to
- * be guessed or searched for.
- */
-
 void SnowDeformation::EmitLightningArc(const RE::NiPoint3& a_from, const RE::NiPoint3& a_to)
 {
 	if (!settings.EnableLightningArcs)
 		return;
-	// Cosmetic, so a barrage drops the excess rather than growing a list on
-	// the render thread.
 	if (lightningArcs.size() >= kMaxLightningArcs)
 		return;
 
@@ -40,7 +17,6 @@ void SnowDeformation::EmitLightningArc(const RE::NiPoint3& a_from, const RE::NiP
 	arc.to = a_to;
 	arc.age = 0.0f;
 	arc.life = std::max(settings.LightningArcLife, 0.02f);
-	// Per-arc, so two bolts in the same burst do not fork identically.
 	arc.seed = static_cast<float>((++lightningArcSeed * 2654435761u) >> 8 & 0xFFFF) / 65535.0f;
 	lightningArcs.push_back(arc);
 }
@@ -89,8 +65,6 @@ bool SnowDeformation::EnsureLightningArcResources()
 		arcCB = new ConstantBuffer(ConstantBufferDesc<ArcCB>(), "SnowDeformation::ArcCB");
 
 	if (!arcBlendState) {
-		// Additive, and the alpha channel is left alone: this is light added
-		// to a lit scene, not a surface composited over it.
 		D3D11_BLEND_DESC desc{};
 		desc.RenderTarget[0].BlendEnable = TRUE;
 		desc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
@@ -105,16 +79,9 @@ bool SnowDeformation::EnsureLightningArcResources()
 	}
 
 	if (!arcDepthState) {
-		// Tested so the bolt is occluded by the world, but writing nothing -
-		// several arcs overlap and each must add rather than mask the last.
 		D3D11_DEPTH_STENCIL_DESC desc{};
 		desc.DepthEnable = TRUE;
 		desc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		// LESS_EQUAL, matching shellDepthState in the same depth buffer. This
-		// was GREATER_EQUAL on the assumption that the depth here is reversed;
-		// it is not, and the assumption inverted the whole test - the bolt
-		// showed where it was BEHIND the world and hid where it was in front,
-		// which reads as flickering in and out rather than as a wrong compare.
 		desc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
 		desc.StencilEnable = FALSE;
 		if (FAILED(device->CreateDepthStencilState(&desc, arcDepthState.put())))
@@ -122,8 +89,6 @@ bool SnowDeformation::EnsureLightningArcResources()
 	}
 
 	if (!arcRasterState) {
-		// Two-sided: a camera-facing ribbon has no meaningful winding, and
-		// culling one side makes it vanish from half the angles it is seen at.
 		D3D11_RASTERIZER_DESC desc{};
 		desc.FillMode = D3D11_FILL_SOLID;
 		desc.CullMode = D3D11_CULL_NONE;
@@ -153,14 +118,10 @@ void SnowDeformation::DrawLightningArcs()
 
 	globals::profiler->BeginPass("SnowDeformation::Spells - Lightning Arcs");
 
-	// The composite has already run, so the lit scene is in kMAIN and this is
-	// light added on top of it. Depth comes from the main buffer so the bolt
-	// is cut off by anything standing in front of it.
 	auto& rtData = renderer->GetRuntimeData();
 	ID3D11RenderTargetView* rtv = rtData.renderTargets[RE::RENDER_TARGETS::kMAIN].RTV;
 	auto dsv = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].views[0];
 
-	// Save what the game had bound; this pass runs inside its frame.
 	winrt::com_ptr<ID3D11BlendState> prevBlend;
 	float prevBlendFactor[4]{};
 	UINT prevSampleMask = 0;
@@ -186,12 +147,6 @@ void SnowDeformation::DrawLightningArcs()
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
 
-	// The same rebased space the shell draws in: the camera's own position is
-	// subtracted before transform, so world coordinates never reach the matrix
-	// at a magnitude that costs float precision.
-	// CS's own cached frame buffer, exactly as the shell reads it - the matrix
-	// and the rebase origin have to be the same pair or the bolt lands beside
-	// the snow it is arcing into.
 	auto& fb = globals::game::frameBufferCached;
 	ArcCB data{};
 	data.CameraViewProj = fb.GetCameraViewProj();
@@ -199,8 +154,6 @@ void SnowDeformation::DrawLightningArcs()
 	data.ArcTint = { settings.LightningArcTint[0], settings.LightningArcTint[1],
 		settings.LightningArcTint[2], 0.0f };
 
-	// One draw per arc. There are never many, and the alternative is an array
-	// in the constant buffer for no gain.
 	for (const auto& arc : lightningArcs) {
 		data.ArcFrom = { arc.from.x, arc.from.y, arc.from.z, 0.0f };
 		data.ArcTo = { arc.to.x, arc.to.y, arc.to.z, 0.0f };
@@ -212,7 +165,6 @@ void SnowDeformation::DrawLightningArcs()
 		context->Draw(kLightningArcSegments * 6, 0);
 	}
 
-	// Leave the pipeline as it was found.
 	context->VSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(nullptr, nullptr, 0);
 	context->OMSetRenderTargets(0, nullptr, nullptr);

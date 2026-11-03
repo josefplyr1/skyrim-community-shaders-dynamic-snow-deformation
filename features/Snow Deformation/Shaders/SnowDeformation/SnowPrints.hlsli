@@ -1,34 +1,15 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Snow Trenches on Objects, the readers: Lighting's bare floor
-// (SnowLighting.hlsli), the drape's print twin (SnowStaticsShell.hlsl,
-// SNOW_OBJECT_PRINTS), and the volume's PS (VOXEL), which has them for when
-// it follows the projected snow onto objects (VOLUME-SNOW.md). The map is
-// DeformationUpdateCS.hlsl's PrintMap; its frame this frame is SharedData's
-// PrintRect. The rim (SNOW_PRINT_RIM) is PrintRimCS's.
-
 #ifndef __SNOW_PRINTS_HLSLI__
 #define __SNOW_PRINTS_HLSLI__
 
 namespace SnowPrints
 {
-	// Two slots of (world Z in quarter units << 10 | depth in 1023rds) per
-	// world texel, texel (x, y) at (x, y) & (dim - 1); 0 is empty.
 	Texture2DArray<uint> PrintMap : register(t114);
-	// One texel per 32 x 32 tile on the same world-anchored grid: nonzero where
-	// that tile, or the next one along x, y or both, holds prints.
 	Texture2D<uint> PrintTiles : register(t115);
 
-	// Mirror PRINT_TEXEL, PRINT_Z_OFFSET and PRINT_TILE_SHIFT.
 	static const float kTexel = 3.0;
 	static const float kZOffset = 524288.0;
 	static const int kTileShift = 5;
 
-	// One texel's depth for a surface at a_z: a slot counts in full within 6
-	// units of its own Z and not past 12, so a print on another level or
-	// another object adds nothing.
 	float TexelDepth(int2 a_texel, int a_mask, float a_z)
 	{
 		const int2 phys = a_texel & a_mask;
@@ -39,8 +20,6 @@ namespace SnowPrints
 		return max(float(a & 1023u) * saturate(2.0 - abs(a_z - za) / 6.0), float(b & 1023u) * saturate(2.0 - abs(a_z - zb) / 6.0)) * (1.0 / 1023.0);
 	}
 
-	// The map's address mask where texels a_t0 to a_t0 + a_span lie inside this
-	// frame's rect and their tile holds prints; -1 where there is nothing to read.
 	int Mask(int2 a_t0, int a_span)
 	{
 		const int4 rect = SharedData::snowDeformationSettings.PrintRect;
@@ -56,8 +35,6 @@ namespace SnowPrints
 		return mask;
 	}
 
-	// Bilinear print depth, 0-1, at a point on a surface (absolute world): the
-	// dent shadow's taps.
 	float DepthFast(float3 a_world)
 	{
 		const float2 tf = a_world.xy / kTexel - 0.5;
@@ -74,7 +51,6 @@ namespace SnowPrints
 		return d;
 	}
 
-	// Cubic B-spline weights at a fraction, for the texels -1 to +2 around it.
 	float4 BSpline(float a_f)
 	{
 		const float f2 = a_f * a_f;
@@ -82,25 +58,18 @@ namespace SnowPrints
 		return float4(1.0 - 3.0 * a_f + 3.0 * f2 - f3, 4.0 - 6.0 * f2 + 3.0 * f3, 1.0 + 3.0 * a_f + 3.0 * f2 - 3.0 * f3, f3) * (1.0 / 6.0);
 	}
 
-	// The weights' derivatives.
 	float4 BSplineSlope(float a_f)
 	{
 		const float f2 = a_f * a_f;
 		return float4(-0.5 + a_f - 0.5 * f2, -2.0 * a_f + 1.5 * f2, 0.5 + a_f - 1.5 * f2, 0.5 * f2);
 	}
 
-	// Row a_y of the 4 x 4 block around a_t0: texels a_t0 + (-1 to 2, a_y).
 	float4 BlockRow(int2 a_t0, int a_y, int a_mask, float a_z)
 	{
 		return float4(TexelDepth(a_t0 + int2(-1, a_y), a_mask, a_z), TexelDepth(a_t0 + int2(0, a_y), a_mask, a_z),
 			TexelDepth(a_t0 + int2(1, a_y), a_mask, a_z), TexelDepth(a_t0 + int2(2, a_y), a_mask, a_z));
 	}
 
-	// Print depth, 0-1, at a point on a surface, through a cubic B-spline over
-	// the 4 x 4 height-tested texels, as the ground's trench map is read: the
-	// grid's steps come out as smooth curves. The inner 2 x 2 goes first; when
-	// it holds nothing the outer ring gives at most 0.31 of its deepest texel,
-	// under Bare's lowest threshold, so it is skipped.
 	float Depth(float3 a_world)
 	{
 		const float2 tf = a_world.xy / kTexel - 0.5;
@@ -125,8 +94,6 @@ namespace SnowPrints
 		return d;
 	}
 
-	// Print depth at a surface point as a share of a full print's (Snow
-	// Resistance's); 0 where none.
 	float Share(float3 a_world)
 	{
 		const float full = SharedData::snowDeformationSettings.PrintFullDepth;
@@ -136,16 +103,8 @@ namespace SnowPrints
 		return share;
 	}
 
-	// How much of the game's projected snow a print takes off at a depth
-	// share, a_noise the game's own projection noise there: the edge breaks
-	// up in the noise's flecks within a few units of the sole's outline, the
-	// last snow on low noise as at the projection's own edge. None as the
-	// resistance nears 100 %.
 	float Bare(float a_share, float a_noise)
 	{
-		// The threshold: noise at its 5th percentile (0.05) keeps its snow to a
-		// share of 0.85, at its 95th (0.45) gives it up at 0.38. Never below
-		// 0.36, clear of the 0.31 Depth's early-out can drop.
 		const float noiseLo = 0.05;
 		const float noiseHi = 0.45;
 		const float soft = 0.03;
@@ -153,8 +112,6 @@ namespace SnowPrints
 		return smoothstep(thr - soft, thr + soft, a_share) * saturate(4.0 * SharedData::snowDeformationSettings.PrintFullDepth);
 	}
 
-	// Depth at a surface point and its world slope, x = depth, yz = d/dx,
-	// d/dy: Depth's B-spline and its exact gradient, smooth across texel edges.
 	float3 DepthSlope(float3 a_world)
 	{
 		const float2 tf = a_world.xy / kTexel - 0.5;
@@ -180,11 +137,7 @@ namespace SnowPrints
 	}
 
 #ifdef SNOW_PRINT_RIM
-	// The rim map (DeformationUpdateCS.hlsl PrintRimCS): how strongly the snow
-	// around a print is disturbed, packed and addressed as the map, one
-	// surface a texel.
 	Texture2D<uint> PrintRim : register(t116);
-	// Mirror PRINT_RIM_APRON: texels a rim reaches past its print.
 	static const int kRimApron = 5;
 
 	float RimTexel(int2 a_texel, int a_mask, float a_z)
@@ -194,9 +147,6 @@ namespace SnowPrints
 		return float(v & 1023u) * saturate(2.0 - abs(a_z - z) / 6.0) * (1.0 / 1023.0);
 	}
 
-	// Rim strength, 0-1 as a print's depth, at a point on a surface: bilinear
-	// over this surface's rim texels. The tile mask is read where the rim's
-	// farthest print could lie: that tile and the three after it cover them all.
 	float Rim(float3 a_world)
 	{
 		const float2 tf = a_world.xy / kTexel - 0.5;
@@ -220,12 +170,6 @@ namespace SnowPrints
 	}
 #endif
 
-	// Sun visibility through a print's dent at a point on it: the dent lies
-	// -a_dentDepth x depth under the surface's tangent plane (slope a_g). Four
-	// taps toward the sun until the ray clears the untouched surface, each
-	// tap's overshoot weighed against its distance as in TrenchDetailSunShadow,
-	// the worst scaled by a_strength. The point and the taps read one filter,
-	// so the dent cannot shadow itself where two filters disagree. 1 = lit.
 	float DentSunShadow(float3 a_world, float3 L, float2 a_g, float a_dentDepth, float a_strength, float a_noise)
 	{
 		const float climb = L.z - dot(L.xy, a_g);
@@ -248,4 +192,4 @@ namespace SnowPrints
 	}
 }
 
-#endif  // __SNOW_PRINTS_HLSLI__
+#endif

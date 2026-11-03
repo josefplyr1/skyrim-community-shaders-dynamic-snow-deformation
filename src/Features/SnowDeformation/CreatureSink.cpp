@@ -1,10 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Creatures lighter than the player stand in the snow by weight. Model and
-// sources: MD plans/TRACK-VARIATION-RESEARCH.md 3.5 and Part 4, Stage 3.
-
 #include "Features/SnowDeformation.h"
 
 #include "Globals.h"
@@ -12,13 +5,10 @@
 
 namespace
 {
-	// TRACK-VARIATION-RESEARCH.md 1.3: a person's step loads 3 x 17 kPa; fist-hard
-	// snow (100 kg/m3) holds 5 kPa, ten times more every 125 kg/m3.
 	constexpr float kPersonStepLoad = 51.0f;
 	constexpr float kFistStrength = 5.0f;
 	constexpr float kFistDensity = 100.0f;
 	constexpr float kStrengthDecade = 125.0f;
-	/** Carried at most half way up the snow. */
 	constexpr float kMaxLiftShare = 0.5f;
 	constexpr float kLiftEaseSeconds = 0.2f;
 	constexpr float kCorpseSettleSeconds = 1.0f;
@@ -54,8 +44,6 @@ namespace
 			c0[2] * a_v[0] + c1[2] * a_v[1] + c2[2] * a_v[2] + t[2] };
 	}
 
-	// Simulated bodies in Havok's own frame (a body offset from its bone lands
-	// where it is simulated); the rest by their bone.
 	BuildReading ReadBuild(RE::NiAVObject* a_root)
 	{
 		BuildReading out;
@@ -107,7 +95,6 @@ namespace
 		return out;
 	}
 
-	// Below NPC Root [Root], everything is the animation's to write.
 	RE::NiAVObject* FindLiftNode(RE::NiAVObject* a_root)
 	{
 		static const RE::BSFixedString animRoot("NPC Root [Root]");
@@ -141,8 +128,6 @@ namespace
 		return true;
 	}
 
-	// The offset rides the node it moves (rule 5, WEIGHT-SINK-PLAN.md): whoever
-	// else writes the node, ours is found again by the value we left there.
 	float ApplyLift(RE::NiAVObject* a_node, float a_lift)
 	{
 		float carried = 0.0f, written = 0.0f;
@@ -158,7 +143,6 @@ namespace
 		const float z = base + a_lift;
 		if (z != a_node->local.translate.z) {
 			a_node->local.translate.z = z;
-			// This node only: the bones follow on the engine's next update.
 			RE::NiUpdateData data{};
 			a_node->UpdateWorldData(&data);
 		}
@@ -171,7 +155,6 @@ namespace
 		return inBones;
 	}
 
-	// How far the snow carries a step: 0 it packs down like the player's, 1 it holds.
 	float Carried(float a_density, float a_load)
 	{
 		const float strength = kFistStrength * std::pow(10.0f, (a_density - kFistDensity) / kStrengthDecade);
@@ -231,7 +214,6 @@ float SnowDeformation::CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows, f
 
 void SnowDeformation::CreatureSinkUpdate()
 {
-	// PlayerCamera::Update runs twice a frame.
 	static uint32_t lastFrame = ~0u;
 	const uint32_t frame = globals::state->frameCount;
 	if (lastFrame == frame)
@@ -291,7 +273,6 @@ void SnowDeformation::CreatureSinkUpdate()
 		state.dead = actor->IsDead();
 		const uint32_t readsBefore = state.build.reads;
 		const bool built = MeasureCreatureBuild(root, state.build, Upright(actor), frame, position.z);
-		// A lift the ragdoll did not rise with leaves its lowest capsule on the ground.
 		if (built && state.build.reads != readsBefore && state.lift > 2.0f) {
 			state.havokFollows = state.build.lowestRel > 0.5f * state.lift;
 			state.havokKnown = true;
@@ -342,11 +323,9 @@ void SnowDeformation::CreatureSinkUpdate()
 			else {
 				state.density = SnowConditionAt(here.temperature - kClimateLapse * (position.z - playerPos.z)).density;
 				state.support = Carried(state.density, kPersonStepLoad * std::cbrt(state.weight));
-				// Carried, it sinks the player's sink times its weight against the player's.
 				state.byWeight = depth * (1.0f - std::lerp(1.0f, state.weight, state.support));
 				if (((frame + formID) % kProbeFrames) == 0) {
 					{
-						// A trench under it is the floor it walks on.
 						std::scoped_lock storeLock(trenchStoreMutex);
 						state.floorShare = 1.0f - std::clamp(SampleTrenchStore(worldspace, position.x, position.y), 0.0f, 1.0f);
 						trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
@@ -369,7 +348,6 @@ void SnowDeformation::CreatureSinkUpdate()
 					}
 				}
 				target = std::min(state.byWeight, kMaxLiftShare * depth);
-				// Never sunk past its belly.
 				if (state.build.belly > 0.0f)
 					target = std::max(target, depth - state.build.belly);
 				target = std::clamp(std::min({ target, depth * state.floorShare, state.clearance }), 0.0f, depth);

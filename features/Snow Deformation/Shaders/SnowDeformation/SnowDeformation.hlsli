@@ -1,39 +1,14 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Snow deformation sampling for the lighting pixel shader.
-//
-// The deformation map is a world-space window (absolute coordinates) around
-// the camera, produced each frame by DeformationUpdateCS. Texel value is
-// normalized depression depth: 0 = untouched snow, 1 = compressed to ground.
-
-// Snow Trenches on Objects: the print map (t114) and its tiles (t115).
 #include "SnowDeformation/SnowPrints.hlsli"
 
 namespace SnowDeformation
 {
-	// Slots: SnowDeformation.h kHorizonSnowAlbedoSlot and its neighbours.
 	Texture2D<float4> DeformationMap : register(t101);
-	// Shell snow albedo + tangent normals for the horizon LOD-terrain recolor.
 	Texture2D<float4> HorizonSnowAlbedo : register(t33);
 	Texture2D<float4> HorizonSnowNormal : register(t23);
-	// Drawn water top-down in the terrain window's frame (RenderWaterCapture),
-	// kShellMissingHeight where none drew; rows grow with -Y.
 	Texture2D<float> WaterWindow : register(t63);
-	// Shell snow RMAOS, for the land recolor (bound with the set on land draws).
 	Texture2D<float4> HorizonSnowRmaos : register(t68);
-	// The shells' berm field, for the land recolor's cut dates (bound with the
-	// set on land draws, SnowDeformation.h kLandBermSlot): y the carve's short
-	// blur, z its date times that (BermFieldCS).
 	Texture2D<float4> BermField : register(t56);
 
-	// Ground under drawn water: the shell's WaterBareTexel test (2 u skim).
-	// Bilinear over the four texels: a sloped plane is linear, so this
-	// reconstructs it exactly, where a point Load stepped it per texel and
-	// striped a bed lying a few units under it. A missing texel among the
-	// four falls back to the nearest one. No early return: fxc flags one
-	// inside a [branch] as X4000.
 	bool UnderWater(float3 absWorld)
 	{
 		float dim = SharedData::snowDeformationSettings.WaterWindowDim;
@@ -58,14 +33,8 @@ namespace SnowDeformation
 		return inside && absWorld.z < level - 2.0;
 	}
 
-	// Must match kSnowUVTile in SnowShell.hlsl: identical world tiling on the
-	// shell and the recolored LOD is what makes the handoff invisible.
 	static const float SnowUVTile = 4096.0 / 24.0;
 
-	// Snow classification of a baked LOD terrain texel: bright and
-	// desaturated (gamma-space input). Must match ClassifyLODSnow in
-	// TerrainWindowFillCS.hlsl so the shell's far coverage and the horizon
-	// recolor agree on where snow is.
 	float ClassifyLODSnow(float3 gammaColor)
 	{
 		float luminance = dot(gammaColor, float3(0.2126, 0.7152, 0.0722));
@@ -79,11 +48,6 @@ namespace SnowDeformation
 		return (absWorldXY - SharedData::snowDeformationSettings.WindowOrigin) * SharedData::snowDeformationSettings.InvWorldSize;
 	}
 
-	// Bilinear at fractional LOGICAL texel coordinates. Load-based on
-	// purpose: the map is toroidal, and a hardware sampler would bilinear
-	// across the physical wrap seam, mixing two unrelated world locations.
-	// Clamp logically first (the map border is the window border), then mask
-	// each tap to physical.
 	float DeformBilinear(float2 t, float2 mapDim)
 	{
 		t = clamp(t, 0.0, mapDim - 1.001);
@@ -101,9 +65,6 @@ namespace SnowDeformation
 		float s01 = DeformationMap.Load(int3(q0.x, q1.y, 0)).x;
 		float s11 = DeformationMap.Load(int3(q1.x, q1.y, 0)).x;
 
-		// Saturated per tap: melt writes past 1.0 into the refill headroom
-		// and only the visible 0-1 range shades; the bicubic weights below
-		// are convex, so this bounds the result too.
 		return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
 	}
 
@@ -111,18 +72,12 @@ namespace SnowDeformation
 	{
 		float2 uv = GetDeformationUV(absWorldXY);
 
-		// Fade near the window border so the effect never pops at the edge.
-		// LOGICAL uv: the physical rotation never reaches this math.
 		float2 edge = min(uv, 1.0 - uv);
 		float border = saturate(min(edge.x, edge.y) * 16.0);
 
 		float deformation = 0.0;
 		[branch] if (border > 0.0)
 		{
-			// B-spline bicubic via 4 bilinear taps: value- and gradient-
-			// continuous, so normals derived from this field do not band
-			// per texel. Dimensions from the texture, not a constant: the map
-			// resolution is runtime (Debugging Options).
 			float2 mapDim;
 			DeformationMap.GetDimensions(mapDim.x, mapDim.y);
 			float2 t = uv * mapDim - 0.5;
@@ -151,9 +106,6 @@ namespace SnowDeformation
 		return deformation;
 	}
 
-	// The carve's date at a point on the ageing clock, as the shells read it
-	// (SnowFields.hlsli BermFieldBaked): bilinear in the map's torus, the
-	// weighted date over its weight; 0 where nothing is cut.
 	float GetCutDate(float2 absWorldXY)
 	{
 		float2 mapDim;

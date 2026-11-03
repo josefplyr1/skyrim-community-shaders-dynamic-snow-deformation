@@ -1,10 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Dropped items rest in the snow by weight and shape. Design, measurements and
-// the rules every line here was paid for: MD plans/WEIGHT-SINK-PLAN.md.
-
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/CoSave.h"
@@ -17,29 +10,22 @@ namespace
 	constexpr float kMeasureFloat = 0.1f;
 	constexpr float kMeasureFull = 0.8f;
 	constexpr float kMaxLift = 80.0f;
-	/** A rest height is the item's where it lies; this far from there it is forgotten. */
 	constexpr float kRestMove = 3.0f;
-	/** A saved rest is taken only by an item this close to where it was saved: a load jostles a pile by 10-30 units, and a recycled form ID is usually much further. */
 	constexpr float kRecordMatch = 48.0f;
 	constexpr size_t kMaxRecords = 4096;
-	/** Melee weapons are authored anywhere from 9 to 35 for the same blade (steel vs iron greatsword); this much per unit of length at least. */
 	constexpr float kWeaponMassPerLength = 0.3f;
-	/** An item this far under where today's snow would put it is buried, and stops printing its trench. */
 	constexpr float kBuriedMargin = 2.0f;
-	/** Snow's grip on a body inside it, per second at full strength. Havok's damping is isotropic, so the linear part also slows the last of the fall: 686 u/s^2 over 6 = a 114 u/s sink. */
 	constexpr float kGripLinear = 6.0f;
 	constexpr float kGripAngular = 10.0f;
-	/** Flat speed under which the snow holds fully, and over which a thrown item still slides. */
 	constexpr float kGripSlow = 60.0f;
 	constexpr float kGripFast = 240.0f;
-	/** Snow over the body's underside at which the grip is full. */
 	constexpr float kGripDeep = 24.0f;
 
 	struct BodyRead
 	{
 		RE::NiAVObject* root = nullptr;
 		RE::NiPoint3 world;
-		RE::NiPoint3 up;  // world up in the root's frame, over its scale
+		RE::NiPoint3 up;
 		float scale = 1.0f;
 		float radius = 0.0f;
 		uint32_t bodies = 0;
@@ -48,15 +34,12 @@ namespace
 		bool hasBox = false;
 		float undersideZ = 0.0f;
 		float topZ = 0.0f;
-		/** The first shape's box in its own frame, game units: pose-independent. */
 		bool hasLocal = false;
 		float local[3] = {};
-		/** Up to four bodies, this frame only: the snow's grip is written to them. */
 		RE::hkpRigidBody* rigid[4] = {};
 		float speedFlat = 0.0f;
 	};
 
-	// Masses summed over every body; sleep is the first body's island.
 	BodyRead ReadBody(RE::TESObjectREFR* a_ref)
 	{
 		BodyRead out;
@@ -87,12 +70,6 @@ namespace
 				_mm_storeu_ps(v, hkpRigid->motion.linearVelocity.quad);
 				out.speedFlat = std::sqrt(v[0] * v[0] + v[1] * v[1]) * toGame;
 			}
-			// Havok's world box is the shape's own box turned with the body: for
-			// anything round it hangs far under the shape (an apple: 10.7 under a
-			// centre 5.5 above its skin), and the land clamp only helps an item
-			// lying ON the land. Half-height as an ellipsoid's instead -
-			// sqrt(sum((axis.z * extent)^2)) - exact for round shapes and for
-			// anything lying flat, short only for a box balanced on an edge.
 			if (const auto* shape = hkpRigid->collidable.GetShape()) {
 				const auto& transform = hkpRigid->motion.motionState.transform;
 				RE::hkAabb aabb;
@@ -138,8 +115,6 @@ namespace
 		return out;
 	}
 
-	// The root is Havok's: Update() on it re-reads the body and wipes any
-	// offset, asleep or not. Its children are ours.
 	uint32_t ShiftChildren(RE::NiAVObject* a_root, const RE::NiPoint3& a_localOffset)
 	{
 		auto* node = a_root ? a_root->AsNode() : nullptr;
@@ -164,9 +139,6 @@ namespace
 		return nullptr;
 	}
 
-	// The offset is written on the mesh that carries it. States are dropped
-	// by loads, roots are replaced and subtrees cloned with the offset still
-	// in them; extra data goes wherever the transform goes.
 	const RE::BSFixedString& LiftTag()
 	{
 		static const RE::BSFixedString tag("SnowDeformationItemLift");
@@ -209,9 +181,6 @@ namespace
 				CollectWorld(child.get(), a_out, a_depth + 1);
 	}
 
-	// Nothing refreshes previousWorld under a Havok-driven root, and the motion
-	// vectors are made from it. Last frame's final transforms where the subtree
-	// is the same one, this frame's otherwise. a_last is never dereferenced.
 	void PropagateChildren(RE::NiAVObject* a_root, bool a_consecutive, WorldList& a_last)
 	{
 		auto* node = a_root ? a_root->AsNode() : nullptr;
@@ -234,7 +203,6 @@ namespace
 		a_root->UpdateWorldBound();
 	}
 
-	/** The game's angles for a rotation (the inverse of EulerAnglesToAxesZXY); false near the pole or when the rebuilt matrix misses. */
 	bool AnglesOf(const RE::NiMatrix3& a_m, RE::NiPoint3& a_out)
 	{
 		a_out = { std::asin(std::clamp(-a_m.entry[2][1], -1.0f, 1.0f)), std::atan2(a_m.entry[2][0], a_m.entry[2][2]), std::atan2(a_m.entry[0][1], a_m.entry[1][1]) };
@@ -247,7 +215,6 @@ namespace
 		return worst < 0.01f;
 	}
 
-	/** Proven once a session on the cell's own statics: their 3D is their angles through EulerAnglesToAxesZXY. -1 until enough were seen. */
 	int angleRule = -1;
 	bool AngleRuleHolds(RE::TESObjectCELL* a_cell)
 	{
@@ -294,8 +261,6 @@ void SnowDeformation::ItemSinkNote(RE::TESObjectREFR* a_ref, const RE::NiPoint3&
 {
 	if (!settings.ItemSink && itemSinkHeld.load(std::memory_order_relaxed) == 0)
 		return;
-	// What a player can drop. The scan also walks effect planes, statics and
-	// loose clutter that has lain where it is since the cell was built.
 	auto* base = a_ref->GetBaseObject();
 	if (!base || !base->IsInventoryObject())
 		return;
@@ -320,12 +285,10 @@ bool SnowDeformation::ItemSinkWantsPrint(RE::TESObjectREFR* a_ref)
 
 void SnowDeformation::ItemSinkUpdate()
 {
-	// Switched off: keep running until every offset this pass can reach is undone.
 	if (!settings.EnableSnowDeformation || (!settings.ItemSink && itemSinkHeld.load(std::memory_order_relaxed) == 0))
 		return;
 	if (itemSinkCandidatesStale.exchange(false, std::memory_order_acq_rel))
 		itemSinkCandidates.clear();
-	// PlayerCamera::Update runs twice a frame.
 	static uint lastRenderFrame = ~0u;
 	if (lastRenderFrame == globals::state->frameCount)
 		return;
@@ -385,8 +348,6 @@ void SnowDeformation::ItemSinkUpdate()
 		state.seenFrame = frame;
 		itemSinkCandidates[pick.key].position = body.world;
 
-		// Thickness, roundness and the weight measure, from the authored box's
-		// EXTENTS (its centre is worn-space on armour and is never used).
 		float thickness = body.radius * 1.1547f;
 		float side = thickness;
 		float longest = thickness;
@@ -401,8 +362,6 @@ void SnowDeformation::ItemSinkUpdate()
 				longest = std::max({ ex, ey, ez });
 			}
 		}
-		// No authored box (mod-added forms), or a cube (the iron mace is 54 on
-		// every side): the collision's own box is the better shape.
 		if (body.hasLocal && thickness > 0.95f * longest) {
 			const float lx = std::max(body.local[0], 1.0f), ly = std::max(body.local[1], 1.0f), lz = std::max(body.local[2], 1.0f);
 			thickness = std::min({ lx, ly, lz });
@@ -421,8 +380,6 @@ void SnowDeformation::ItemSinkUpdate()
 			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' mass {:.1f} (used {:.3f}) side {:.1f} thickness {:.1f} -> measure {:.4f}, roundness {:.2f}",
 				base->GetFormID(), base->GetName(), body.mass, cappedMass, side, thickness, measure, roundness);
 
-		// Underside: the collision's, never under the land, eased - the loose
-		// box swings with the pose while the shape's low point does not.
 		RE::NiPoint3 ground = body.world;
 		tes->GetLandHeight(ground, ground.z);
 		const float rise = SnowLiftFor(ground, 1.0f, 0.0f, tes);
@@ -443,10 +400,6 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 		}
 
-		// What the meshes carry is read off them every frame, never remembered:
-		// a load drops the state, replaces the root or clones the subtree with
-		// the offset still in it, and lifting again draws the item at twice its
-		// height (measured 2026-09-19 by capture, again 2026-09-20).
 		{
 			RE::NiPoint3 carried;
 			float carriedLift = 0.0f;
@@ -467,14 +420,8 @@ void SnowDeformation::ItemSinkUpdate()
 		const float lying = state.lyingHeight > 0.0f ? std::min(thickness, state.lyingHeight) : thickness;
 		const float embed = weight * weight * embedShare * lying * Smooth((roundness - roundFloor) / (roundFull - roundFloor));
 
-		// Snow already dug away around the item (the player's trenches, a
-		// trampled yard): it rests on what is left, not on the snow that was.
-		// A ring outside its own print, or its own trench would pull it down.
 		if (((frame + pick.key) & 7) == 0 || fresh) {
 			const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
-			// Just past its own print, and the three deepest of eight: an item
-			// wider than a trail still drops into it, where the average of a ring
-			// that mostly lands on untouched snow left it hanging over the trail.
 			const float ring = side * 0.5f + 10.0f;
 			float taps[8];
 			{
@@ -483,7 +430,6 @@ void SnowDeformation::ItemSinkUpdate()
 					const float angle = 0.785398f * i;
 					taps[i] = SampleTrenchStore(worldspace, body.world.x + std::cos(angle) * ring, body.world.y + std::sin(angle) * ring);
 				}
-				// The sampler's one-tile cache must not outlive the lock.
 				trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 				trenchSampleTile = nullptr;
 			}
@@ -491,15 +437,9 @@ void SnowDeformation::ItemSinkUpdate()
 			state.carveAround = std::clamp((taps[0] + taps[1] + taps[2]) / 3.0f, 0.0f, 1.0f);
 		}
 		const float carveAround = state.carveAround;
-		// The height a snow state puts this item at, under the CURRENT settings.
-		// Over the land under the item, not an absolute height: the rest then
-		// holds for an item a load has shoved a few units along a slope.
 		auto heightIn = [&](float a_rise, float a_depth, float a_carve) { return ground.z + a_rise - std::max(weight, a_carve) * a_depth - embed; };
 		const float today = heightIn(rise, snowDepth, carveAround);
 
-		// Snow buries: what is kept is the snow the item settled in. Rising
-		// snow closes over it; falling or dug snow takes it down, and it stays
-		// down. Kept as the snow rather than a height so the settings stay live.
 		if (state.restValid && body.world.GetSquaredDistance(state.restPos) > kRestMove * kRestMove) {
 			if (itemSinkClaimsLogged < 96) {
 				itemSinkClaimsLogged++;
@@ -508,9 +448,6 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 			state.restValid = false;
 		}
-		// Inside the grace a record survives its claim: a load that arrives in
-		// two passes shows the items somewhere else first, and the rest taken
-		// there is dropped the moment the second pass puts them back.
 		if ((fresh || body.asleep) && !state.restValid) {
 			if (auto found = itemSinkLoaded.find(state.formID); found != itemSinkLoaded.end()) {
 				const bool grace = std::chrono::duration<float>(std::chrono::steady_clock::now() - itemSinkLoadedAt).count() < kItemSinkLoadGrace;
@@ -535,8 +472,6 @@ void SnowDeformation::ItemSinkUpdate()
 					itemSinkLoaded.erase(found);
 			}
 		}
-		// No snow data (a load's first frames, a cell edge) says nothing about
-		// where the snow is; only real readings move the rest.
 		const bool snowKnown = snowDepth >= 1.0f;
 		float target = today;
 		if (state.restValid) {
@@ -562,9 +497,6 @@ void SnowDeformation::ItemSinkUpdate()
 		const RE::NiPoint3 offset = body.up * want;
 		const RE::NiPoint3 delta = offset - state.childOffset;
 		const bool moved = delta.SqrLength() > 1e-4f;
-		// A held item that is awake moves every frame whether or not the lift
-		// changed, and needs its previousWorld kept; a sleeping one needs it
-		// levelled once (two passes: the second sees last == now).
 		if (!moved && state.offsetApplied && (!body.asleep || state.restPasses < 2)) {
 			PropagateChildren(body.root, state.lastWorldFrame + 1 == frame, state.lastWorlds);
 			state.lastWorldFrame = frame;
@@ -583,10 +515,6 @@ void SnowDeformation::ItemSinkUpdate()
 		if (state.offsetApplied)
 			held++;
 
-		// Snow packs under what drops into it: the deeper the body is in, and
-		// the less it is travelling, the harder it is held. Written only on a
-		// change, under the world's write lock; the body's own damping goes back
-		// when it sleeps or leaves the snow.
 		{
 			const float over = snowKnown ? surfaceZ - carveAround * snowDepth - std::max(body.hasBox ? body.undersideZ : body.world.z, ground.z) : 0.0f;
 			float grip = enabled && !body.asleep ? std::clamp(settings.ItemSnowGripPercent, 0.0f, 100.0f) * 0.01f * Smooth(over / kGripDeep) *
@@ -616,17 +544,12 @@ void SnowDeformation::ItemSinkUpdate()
 			}
 		}
 
-		// One line when an item comes to rest: every number the height is made of.
 		if (body.asleep && !state.wasAsleep && itemSinkRestsLogged < 200) {
 			itemSinkRestsLogged++;
 			logger::info("[SNOW DEFORMATION] item sink: {:08X} '{}' RESTS at {:.1f}, {:.1f} (the game's own record of it {:.1f}, {:.1f}) | snow {:.1f} deep, surface z {:.1f}, land z {:.1f}, dug around {:.2f} | sink {:.2f}, embed {:.1f} -> today z {:.1f}, held to z {:.1f}{} | body z {:.1f}, collision underside z {:.1f}, used {:.1f} | lift +{:.1f}",
 				state.formID, base->GetName(), body.world.x, body.world.y, ref->GetPositionX(), ref->GetPositionY(), snowDepth, surfaceZ, ground.z, carveAround, weight, embed, today, target, state.buried ? " (buried)" : "",
 				body.world.z, body.hasBox ? body.undersideZ : body.world.z, bottomZ, state.appliedLift);
 		}
-		// The game keeps no running record of where a dropped item lies: carried
-		// or rolled, it reloads where it was dropped. At rest its place goes into
-		// the reference. (Marking it kHavokMoved instead, tried 2026-09-20, did
-		// not move it and reloaded it floating.)
 		if (body.asleep && !state.wasAsleep) {
 			const RE::NiPoint3 place = body.root->world.translate;
 			if (place.GetSquaredDistance(ref->data.location) > 1.0f) {
@@ -666,13 +589,8 @@ void SnowDeformation::ItemSinkUpdate()
 	itemSinkHeld.store(held, std::memory_order_relaxed);
 	itemSinkWatched.store(static_cast<uint32_t>(picks.size()), std::memory_order_relaxed);
 
-	// Unseen for a while: picked up, unloaded or out of range. Nothing to undo -
-	// the offset lives on nodes that went with the 3D, or stays right for an
-	// item that is merely far away.
 	if ((frame & 0xFF) == 0) {
 		std::erase_if(itemSinkStates, [&](const auto& a_kv) { return frame - a_kv.second.seenFrame > 1200; });
-		// Past the grace a record is spent once its item has a rest of its own;
-		// left in, it is written back by every save taken while the item moves.
 		if (!itemSinkLoaded.empty() && std::chrono::duration<float>(std::chrono::steady_clock::now() - itemSinkLoadedAt).count() > kItemSinkLoadGrace)
 			for (const auto& [key, state] : itemSinkStates)
 				if (state.restValid)
@@ -694,7 +612,6 @@ void SnowDeformation::SaveItemSink(const SKSE::SerializationInterface* a_intfc)
 		for (const auto& [key, state] : itemSinkStates)
 			if (state.restValid && state.formID && rows.size() < kMaxRecords && written.insert(state.formID).second)
 				rows.push_back({ state.formID, state.baseID, state.restPos.x, state.restPos.y, state.restRise, state.restDepth, state.restCarve });
-		// Settled items this session never came near keep their records.
 		for (const auto& [formID, record] : itemSinkLoaded)
 			if (rows.size() < kMaxRecords && written.insert(formID).second)
 				rows.push_back({ formID, record.baseID, record.x, record.y, record.rise, record.depth, record.carve });
@@ -727,8 +644,6 @@ void SnowDeformation::LoadItemSink(const SKSE::SerializationInterface* a_intfc, 
 			logger::warn("[SNOW DEFORMATION] item sink co-save short read at row {}; the rest dropped", i);
 			break;
 		}
-		// A load order may have moved since the save; a form that no longer
-		// resolves belongs to a plugin that is gone.
 		RE::FormID formID = 0, baseID = 0;
 		if (!a_intfc->ResolveFormID(ids[0], formID) || !a_intfc->ResolveFormID(ids[1], baseID))
 			continue;
@@ -749,8 +664,6 @@ void SnowDeformation::RegisterItemSinkCoSave()
 		[this](const SKSE::SerializationInterface* a_intfc) { SaveItemSink(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadItemSink(a_intfc, a_version, a_length); },
 		[this]() {
-			// Before a load and on a new game. The offsets themselves go with the
-			// 3D the load throws away.
 			std::scoped_lock lock(itemSinkLock);
 			itemSinkStates.clear();
 			itemSinkLoaded.clear();

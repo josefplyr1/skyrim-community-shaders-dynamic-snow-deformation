@@ -1,42 +1,19 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Wide exclusion field bake.
-//
-// The near mask (CombineCS) carries clearings only as far as the object height
-// window reaches - about 57 m - because it lives in a texture sized for the
-// SHELTER term, which needs a top-down render of real geometry. Clearings
-// themselves need no geometry at all: a fire is a position and a radius. This
-// pass evaluates them over a far wider window so a camp read from a hillside
-// still shows its melted ground.
-//
-// Coarse on purpose. Clearings are 100-450 units across with soft, noisy
-// edges, so a 32-unit texel resolves them with room to spare - the same
-// reasoning that let the berm field be baked.
-
 #include "SnowDeformation/SnowExclusions.hlsli"
 
-// Terrain heights for the exclusion Z gate. The shell's window covers far more
-// ground than this field does, at 128-unit texels.
 Texture2D<float4> TerrainWindow : register(t0);
 RWTexture2D<float2> OutField : register(u0);
 
 cbuffer ExclusionFieldCB : register(b0)
 {
-	// Texel-snapped world XY at the centre of the field window.
 	float2 FieldCenter;
-	// World units from the centre to an edge.
 	float padHalfExtent;
 	float FieldTexelSize;
 
-	// Terrain window addressing, mirroring the shell's SampleTerrain.
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	uint TerrainDim;
 }
 
-// Threads per group per axis; the tile list below is shared by the whole group.
 #define TILE_DIM 16
 
 groupshared uint TileCount;
@@ -47,8 +24,6 @@ float2 FieldTexelWorldXY(uint2 texel, float2 dims)
 	return FieldCenter + (float2(texel) - dims * 0.5 + 0.5) * FieldTexelSize;
 }
 
-// Bilinear terrain height for the Z gate: the surface the clearing is judged
-// against. The ground snow itself stands on the land-exact layer instead.
 float SampleTerrainHeight(float2 worldXY)
 {
 	float2 t = (worldXY - TerrainWindowOrigin) / TerrainTexelSize;
@@ -71,10 +46,6 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 	float2 dims;
 	OutField.GetDimensions(dims.x, dims.y);
 
-	// Per-group cull. A brute-force loop would be 256 exclusions for every one
-	// of a million texels; almost every tile is touched by none of them, so
-	// each group tests the list once against its own bounds and the texels
-	// below iterate only over survivors.
 	if (gindex == 0)
 		TileCount = 0;
 	GroupMemoryBarrierWithGroupSync();
@@ -83,20 +54,9 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 		float2 tileMin = FieldTexelWorldXY(gid.xy * TILE_DIM, dims) - FieldTexelSize * 0.5;
 		float2 tileMax = tileMin + FieldTexelSize * TILE_DIM;
 		for (uint testI = gindex; testI < ExclusionCount; testI += TILE_DIM * TILE_DIM) {
-			// Sealed containers (type 3) are deliberately NEAR-ONLY. Every
-			// other clearing is 100-450 units across, which a 32-unit texel
-			// resolves with room to spare; a sarcophagus footprint is around
-			// 50, so this field cannot represent one, and bilinear spread
-			// would ring it with bare ground WIDER than the coffin itself -
-			// a worse artefact than the snow it removes. The near mask runs
-			// at 4-unit texels and owns them; nobody reads the inside of a
-			// coffin from 60 m out.
 			if (ExclusionDirExtType[testI].w > 2.5)
 				continue;
 			float3 center = ExclusionPosRadius[testI].xyz;
-			// Widest reach any type can have from its centre: doors extend by
-			// their forward extent, fire bowls by their noise (0.7 + 0.35 +
-			// 0.35 = 1.4 at the maximum).
 			float reach = ExclusionPosRadius[testI].w * 1.4 + max(ExclusionDirExtType[testI].z, 0.0);
 			float2 closest = clamp(center.xy, tileMin, tileMax);
 			[branch] if (dot(closest - center.xy, closest - center.xy) <= reach * reach)
@@ -120,7 +80,6 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 	{
 		float2 worldXY = FieldTexelWorldXY(dtid.xy, dims);
 		float terrain = SampleTerrainHeight(worldXY);
-		// The culled list, one surviving entry at a time.
 		for (uint listI = 0; listI < tileCount; listI++) {
 			ExclusionResult one = EvaluateExclusionAt(TileList[listI], worldXY, terrain);
 			suppress = max(suppress, one.Suppress);

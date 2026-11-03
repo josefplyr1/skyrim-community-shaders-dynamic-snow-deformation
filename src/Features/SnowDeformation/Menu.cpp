@@ -12,8 +12,6 @@
 
 namespace
 {
-	// Lays text out from the cursor, wrapping at the content edge; continuation lines hang one indent past the first.
-	// Works after SameLine, so it also serves as a widget label.
 	void WrapText(const char* a_text, const char* a_end = nullptr)
 	{
 		ImGuiWindow* window = ImGui::GetCurrentWindow();
@@ -96,8 +94,6 @@ namespace
 	}
 
 #if !SNOW_ALPHA_BUILD
-	// Widget drawn with a hidden label, its label wrapped beside it. The widget stays the last item, and hovering
-	// the label counts as hovering it, so tooltips and IsItem* queries behave as with a native label.
 	template <class F>
 	bool WrappedLabel(const char* a_label, bool* a_toggle, F&& a_widget)
 	{
@@ -147,7 +143,6 @@ namespace
 
 namespace
 {
-	// Low = every lever at its cheapest, High = the shipped defaults, Medium halfway.
 	struct QualityPreset
 	{
 		uint32_t mapDim;
@@ -257,8 +252,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::InputText(T(TKEY("snow_pbr_config"), "Snow PBR Config"), &settings.SnowPBRConfig)) {
-			// Re-resolve on the next frame, the way Reload does: the match is
-			// made where the texture loads.
 			shellSnowTextureAttempted = false;
 		}
 		if (auto _ttPbrCfg = Util::HoverTooltipWrapper())
@@ -317,8 +310,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttModels = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh."));
 
-		// Object snow is the recolor of the game's own projected snow and the
-		// drape the skin lays over it; nothing of ours stands above a mesh.
 		ImGui::Checkbox(T(TKEY("object_snow_near_detail"), "Object Snow Near Detail"), &settings.ObjectSnowNearDetail);
 		if (auto _ttNearDetail = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("object_snow_near_detail_tooltip"), "Near you - over a quarter of the Object Height Map Range, 25 m at its default - road snow and the trenches in it read their shape from a map four times finer: about 1.7 world units a texel instead of 6.8 at the default range. Off, roads use the coarser map everywhere: slightly softer road edges and trenches up close, a little less GPU time. The Medium and Low presets turn it off."));
@@ -356,7 +347,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask; 90 keeps Seasons' own coverage, which the recolor and the drape then follow exactly, and lower cuts the snow off steeper faces for them only. Authored snow objects keep their own angle and mask."));
 
 		{
-			// Driven by the accumulation scalar while Recolored Snow Accumulates is on.
 			const bool reachDriven = settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates;
 			float reachShown = reachDriven ? snowAccumulation.load(std::memory_order_relaxed) : settings.SkinEdgeFlankWidth;
 			ImGui::BeginDisabled(reachDriven);
@@ -370,9 +360,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttSteep = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("steep_face_thinning_tooltip"), "How much less the accumulating snow spreads onto steep faces. Snow does not settle on a vertical post or wall the way it does on a roof: at 1 a vertical face takes none of the spread that Edge Lump Reach (or snowfall) adds, at 0 it takes all of it, and slopes gentler than about 60 degrees always take all of it. The game's own painted snow is never touched - with Edge Lump Reach at 0 this setting does nothing. Needs Recolor Projected Snow."));
 
-		// The object-snow experiments live HERE, beside the sliders they
-		// modify, so the whole workbench is one tree (Josef's round-9 ask -
-		// no scrolling between Snow Trenches and the model depths).
 		ImGui::SliderFloat(T(TKEY("skin_depth_bias"), "Object Snow Depth Bias"), &settings.SkinDepthBias, 0.0f, 128.0f, "%.0f");
 		if (auto _ttSdb = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_depth_bias_tooltip"), "How far the object snow layer is nudged toward the camera in the depth buffer, in the buffer's own smallest steps. The layer is rasterised from the same vertices as the object under it, so at a distance the two land on the same depth value and fight - snow that flickers, or shows from one angle and not another. A few steps settle the fight; more than needed makes the layer stand in front of things that should hide it. Constant with distance in depth terms, which is what the contest needs."));
@@ -391,8 +378,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttVol = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("volume_snow_tooltip"), "Rasterises the captured objects into nested windows of voxels around the camera (Ring Shape, Levels), grows a snow field on every surface that faces up, and draws that field as snow - marched per pixel and shaded with the object snow's own material, so it matches the snow on the objects beneath it, which keeps drawing under it. Snow whose shape is not inherited from the object's mesh: it can overhang an edge, bridge two rocks, cap a post. Remembered between frames and fading where nothing redraws. Cost is the Volume - Bake and Volume - Draw rows."));
 		if (settings.VolumeSnow) {
-			// Says so when the pass is not running: a slice that never
-			// updates is indistinguishable from a broken volume otherwise.
 			if (voxelShadersFailed)
 				WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("voxel_status_failed"), "NOT RUNNING: a voxel shader failed to compile, or this GPU cannot run the volume - see CommunityShaders.log."));
 			else if (!voxelLevels[0].valid)
@@ -430,9 +415,6 @@ void SnowDeformation::DrawSettings()
 				const float nearAcross = dims.x * voxel / kUnitsPerMeter;
 				const float nearTall = dims.z * voxel / kUnitsPerMeter;
 				const float farAcross = nearAcross * float(1 << (levels - 1));
-				// EnsureVoxelResources' allocations. Per ring: the two occupancy volumes and the field (R8), the R32 top
-				// heightmap at four texels a voxel side and its under-layers at two, three uints a brick (list, dirty,
-				// flags), the dispatch lists and the draw args. Once: the R8 support volume at the largest dims and the slice image.
 				double bytes = double(dims.x) * dims.y * dims.z + double(kVoxelDimWide) * kVoxelDimWide;
 				for (uint i = 0; i < (uint)levels; i++) {
 					const auto d = VoxelDimsForLevel(i);
@@ -518,8 +500,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::Combo(T(TKEY("voxel_slice_axis"), "Plane"), &voxelSliceAxis, voxelAxes, IM_ARRAYSIZE(voxelAxes));
 				if (!voxelSliceXray)
 					ImGui::SliderFloat(T(TKEY("voxel_slice_offset"), "Offset from Camera"), &voxelSliceOffset, -1000.0f, 1000.0f, "%.0f u");
-				// Long-form: the whole point of V0 is that this image can be
-				// read without the plan open beside it.
 				WrapText(T(TKEY("voxel_slice_hint"), "The square is the chosen level's window - the Finest level line further up gives the finest one's size - and the cross is its centre, which sits ahead of you by Forward Bias. Red = an object surface: bright when drawn this frame, dim as it fades. Each red block is one voxel of that level.\n\nStart with X-ray ON and a Side plane. A house should read as a box with a pitched roof, a rock as a blob. Uniform speckle with no shapes means the volume is wrong, and the number above will say so.\n\nThen X-ray OFF for the real test: slide the Offset until the plane cuts through a porch or covered walkway, and look for the roof as a line with EMPTY space beneath it and the floor as a second line below. A thin plane prints a drifting surface as dots rather than a line - that is normal."));
 				const ImVec2 voxelImageTopLeft = ImGui::GetCursorScreenPos();
 				if (voxelSliceTexture && voxelSliceTexture->srv) {
@@ -713,8 +693,6 @@ void SnowDeformation::DrawSettings()
 		std::transform(filter.begin(), filter.end(), filter.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
 
-		// Snow families first (table order), then alphabetical, so the
-		// textures worth tuning are not buried under the bare ground ones.
 		std::vector<uint16_t> order(textures.size());
 		std::iota(order.begin(), order.end(), (uint16_t)0);
 		std::sort(order.begin(), order.end(), [&](uint16_t a, uint16_t b) {
@@ -761,10 +739,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTd = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_trenches_tooltip"), "Everything about the ground being walked through: how long a trench is remembered, how wide and how sharply it cuts, and the look of the disturbed snow around it. Untouched snow is never affected."));
 
-		// Promoted from Debugging Options once the tile-dispatch work made
-		// it a real performance lever. Applies like a Trenches-range
-		// change: the map clears and the trench store re-injects what it
-		// remembers.
 		{
 			static const uint kMapDims[] = { 1024u, 2048u, 4096u };
 			int dimIndex = settings.DeformMapResolution <= 1024u ? 0 : (settings.DeformMapResolution >= 4096u ? 2 : 1);
@@ -1222,9 +1196,6 @@ void SnowDeformation::DrawSettings()
 			if (debugContactView) {
 				SliderFloatWrapped("Field view crop (units each side; 192 = a body, 1536 = the whole field)", &debugContactViewHalf, 64.0f, kContactHalfExtent, "%.0f");
 				CheckboxWrapped("Object print view (Snow Trenches on Objects: each print texel's verdict left, the print map right)", &debugObjectPrintView);
-				// The half-extent the view CS ran with, not the live slider: dragging
-				// it rebuilds the image next frame, and drawing this frame's box at
-				// next frame's scale is what makes a correct silhouette look misplaced.
 				const float viewHalf = contactViewHalfUsed > 0.0f ? contactViewHalfUsed : std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
 				if (debugObjectPrintView) {
 					WrapTextF("Crop of %.0f x %.0f units around the player, %g units per view texel, +Y up. LEFT: each print texel's verdict this frame (black = no body over it, BLUE = the body is in the ground's snow layer, so the trench map takes it, MAGENTA = no captured object's top at the contact's height, green to yellow = a print, brighter = deeper). RIGHT: the print map over the SAME ground (red = slot A depth, green = slot B, the second surface level; faint blue = print texel edges when zoomed in; grey = outside the window). Yellow box = the player's world bound on both.",
@@ -1239,7 +1210,6 @@ void SnowDeformation::DrawSettings()
 						2.0f * viewHalf, 2.0f * viewHalf, 2.0f * viewHalf / (float)kContactViewPx);
 				}
 				if (contactViewSRV) {
-					// Two squares side by side, sized to the window.
 					const float box = std::max(128.0f, std::floor((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f));
 					const float scale = box / (2.0f * viewHalf);
 					const float2 center = contactViewCenter;
@@ -1250,9 +1220,6 @@ void SnowDeformation::DrawSettings()
 							if (auto* root = player->Get3D(false)) {
 								auto toX = [&](float a_wx) { return topLeft.x + (a_wx - (center.x - viewHalf)) * scale; };
 								auto toY = [&](float a_wy) { return topLeft.y + ((center.y + viewHalf) - a_wy) * scale; };
-								// The bound the crop was BUILT from, so the box is a
-								// statement about the image rather than about the
-								// moment the menu happened to read the scene graph.
 								const float2 boundCenter = contactViewBoundCenter;
 								const float boundRadius = contactViewBoundRadius;
 								if (boundRadius > 0.0f)
@@ -1260,9 +1227,6 @@ void SnowDeformation::DrawSettings()
 										{ toX(boundCenter.x - boundRadius), toY(boundCenter.y + boundRadius) },
 										{ toX(boundCenter.x + boundRadius), toY(boundCenter.y - boundRadius) },
 										IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
-								// Bone positions over the silhouette: feet white, hands cyan,
-								// head/spine magenta. A mesh stretched against its own bones
-								// shows as a silhouette reaching past them.
 								struct BoneDot { const char* name; ImU32 color; };
 								static const BoneDot dots[] = {
 									{ "NPC L Foot [Lft ]", IM_COL32(255, 255, 255, 255) }, { "NPC R Foot [Rft ]", IM_COL32(255, 255, 255, 255) },
@@ -1282,10 +1246,6 @@ void SnowDeformation::DrawSettings()
 					drawHalf(0.5f, 1.0f);
 					if (auto* player = globals::game::player) {
 						if (auto* root = player->Get3D(false))
-							// Crop centre beside the live bound: the box is drawn from the
-							// crop, so a gap between these two is the only way the box can
-							// sit off a centred silhouette. Named here so one screenshot
-							// separates a misplaced overlay from a misplaced raster.
 							WrapTextF("player bound: centre (%.0f, %.0f) radius %.0f | yaw %.2f rad | crop centre (%.0f, %.0f) half %.0f, live bound drifts (%.0f, %.0f) | field centre (%.0f, %.0f) | map texel %.2f units, contact texel %g units | dots: feet white, calves grey, hands cyan, head/spine magenta",
 								root->worldBound.center.x, root->worldBound.center.y, root->worldBound.radius, player->GetAngleZ(),
 								contactViewCenter.x, contactViewCenter.y, contactViewHalfUsed,
@@ -1293,9 +1253,6 @@ void SnowDeformation::DrawSettings()
 								contactCenter.x, contactCenter.y,
 								contactViewTexelSize, 2.0f * kContactHalfExtent / (float)kContactDim);
 					}
-					// Heights against the baked ground: what the carve's (contact - ground) / layer
-					// sees, in numbers. Red arms with hands 60 units up means the raster's Z
-					// or the ground sample is wrong, not the silhouette.
 					if (auto* player = globals::game::player) {
 						if (auto* root = player->Get3D(false)) {
 							const auto probe = ProbeShellData(player->GetPositionX(), player->GetPositionY());
@@ -1390,7 +1347,6 @@ void SnowDeformation::DrawSettings()
 			if (debugContactSolo >= 0)
 				WrapTextF("  soloed: %s", contactSoloName.c_str());
 
-			// Diagnostics: plain text by existing convention (no i18n).
 			WrapTextF("Stamps/frame: feet %u, limbs %u, shapes %u, props %u (refs at last scan %u, movers %u, scan every 6 frames)",
 				stampStats.feet, stampStats.limbs, stampStats.shapes, stampStats.props,
 				propScanRefs, stampStats.propMovers);
@@ -1404,8 +1360,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_cpu"), "CPU & Memory"))) {
-			// CPU census (PERF-RESEARCH §11.1), 30-frame averages. The hook line
-			// is the one cost no profiler row carries.
 			{
 				cpuCensusArmedUntil = globals::state->frameCount + 120;
 				const auto& s = cpuShown;
@@ -1439,27 +1393,16 @@ void SnowDeformation::DrawSettings()
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_deform_map"), "Deformation Map"))) {
 			if (ImGui::Button(T(TKEY("clear"), "Clear Map"))) {
 				clearRequested = true;
-				// Deliberate wipe, so the store goes with it: left alone, the
-				// inject would put every trench back on the very next frame.
 				ClearTrenchStore("the Clear Deformation Map button");
 				ClearPrintStore("the Clear Deformation Map button");
 			}
 
-
-			// S3: the tile dispatch's one-click cross-check. A symptom that
-			// vanishes with this on means a dirty-tracking path missed a writer.
 			ImGui::Checkbox(T(TKEY("debug_force_tiles"), "Force All Tiles Dirty"), &debugForceAllTilesDirty);
 
-			// S1: the idle skip and its measurement override. The readout names
-			// what is holding the pass on, so "why is it running" answers itself.
 			ImGui::Checkbox(T(TKEY("debug_force_update"), "Force Update"), &debugForceDeformationUpdate);
 
 			ImGui::Checkbox(T(TKEY("show_debug"), "Show Map"), &showDebugTexture);
 			if (showDebugTexture) {
-				// The map's own depth (TrenchDebugCS), copied to a single channel:
-				// ImGui blends by the texture's alpha, and the map's .w is the impact
-				// energy, so the map drawn directly shows only where something hit
-				// the snow. This is the image that answers "did the trench reach the map".
 				WrapTextF("%s", T(TKEY("debug_hint"), "Deformation map: red = compressed snow. The window is centred on the camera, so the cross is you and the ring is 25 m."));
 				const ImVec2 imageTopLeft = ImGui::GetCursorScreenPos();
 				if (trenchDebugSRV)
@@ -1467,10 +1410,6 @@ void SnowDeformation::DrawSettings()
 				else if (auto* deformSRV = GetDeformationSRV())
 					ImGui::Image(deformSRV, { 512.0f, 512.0f });
 
-				// Where the player is, drawn ON the map. Without it "the trench did
-				// not load" and "the trench is eighty metres that way" look
-				// identical: the window is 14000 units across, so a mark 200 px off
-				// centre is most of a hundred metres away.
 				{
 					auto* draw = ImGui::GetWindowDrawList();
 					const ImVec2 centre{ imageTopLeft.x + 256.0f, imageTopLeft.y + 256.0f };
@@ -1482,19 +1421,12 @@ void SnowDeformation::DrawSettings()
 					draw->AddCircle(centre, ring, IM_COL32(80, 220, 255, 90), 0, 1.0f);
 				}
 
-				// R8_UNORM samples as (depth, 0, 0, 1), so this one is opaque and
-				// can be trusted. It is the store's own answer to "what does the
-				// window look like", which is exactly the question a reload raises.
 				if (trenchInjectSRV) {
 					WrapTextF("%s", T(TKEY("debug_inject_hint"), "Trench store: what the inject last painted into the window. Opaque, so what you see is what the store holds. Refreshed when the window scrolls or is rebuilt - after a load it is the whole restored window."));
 					ImGui::Image(trenchInjectSRV.get(), { 512.0f, 512.0f });
 				}
 			}
 
-
-			// The count is the magnitude behind a map-active blocker: a handful of
-			// texels is a precision tail, millions is a logic bug. From the newest
-			// verdict, so it lags the dispatch by the readback ring.
 			ImGui::Checkbox(T(TKEY("debug_activity_view"), "Update Activity View"), &debugActivityView);
 			if (debugActivityView) {
 				WrapTextF("Texels the last pass changed at stored precision. R = depth, G = melt/scorch, B = crust or impact energy. Black = the pass rewrote the map byte-identically. The yellow box bounds the changed texels - a few hundred are sub-pixel here without it.");
@@ -1516,10 +1448,6 @@ void SnowDeformation::DrawSettings()
 						IM_COL32(255, 220, 80, 220), 0.0f, 0, 1.5f);
 				}
 
-				// The mean delta is the fingerprint: the slump step is
-				// SlumpRate x 0.5 x dt (~0.0008 at defaults) and scales with the
-				// Snow Slumping slider; storage-precision creep is an order
-				// smaller and scales with nothing.
 				WrapTextF("Changed texels (last verdict): %u (depth %u, melt/scorch %u, crust/impact %u), mean delta %.5f",
 					deformChangedTexels, deformChangedDepth, deformChangedMelt, deformChangedCrustDep,
 					deformChangedTexels > 0 ? (double)deformChangedDeltaSum * 1e-6 / (double)deformChangedTexels : 0.0);
@@ -1558,25 +1486,15 @@ void SnowDeformation::DrawSettings()
 						held.empty() ? "none - engages next verdict" : held.c_str(), deformSkipRate * 100.0f);
 				else
 					WrapTextF("Update pass: running (%s)", held.empty() ? "none - engages next verdict" : held.c_str());
-				// Within a running frame the evolve pass has its own gate: idle
-				// means its last full run changed nothing and no external write
-				// (ring inject, stamps) or refill has re-armed it - the ring and
-				// stamp passes are the only cost while walking settled ground.
 				WrapTextF("Evolve pass: %s", evolveIdleLastFrame ? "idle (settled)" : "active");
 			}
 
 			if (deformSkipRate >= 0.0f) {
-				// The flicker census: count changes are stamps appearing or
-				// vanishing (plant-band flicker), drift is a matched stamp moving
-				// past tolerance. Either resets the quiet window.
 				WrapTextF("Stamp set changes: %u/300 frames (count %u, drift %u)",
 					stampSetCountChanges + stampSetDriftChanges, stampSetCountChanges, stampSetDriftChanges);
 			}
 
 			{
-				// The tile census: dispatch domain vs the whole map. Cost should
-				// track these counts; if it does not, the force-all-dirty toggle
-				// is the discriminator.
 				const uint32_t totalTiles = (deformMapDim / 8) * (deformMapDim / 8);
 				if (debugForceAllTilesDirty)
 					WrapTextF("Stamp tiles: forced to full map (%u tiles)", totalTiles);
@@ -1584,24 +1502,15 @@ void SnowDeformation::DrawSettings()
 					WrapTextF("Stamp tiles: OVERFLOWED to full map (%u tiles)", totalTiles);
 				else
 					WrapTextF("Stamp tiles: %u of %u", stampTilesLast, totalTiles);
-				// Occupied + slump halo and changed + tap halo, from the last
-				// executed scans (lag by the readback ring, like the verdict).
 				WrapTextF("Evolve tiles: %u of %u", evolveTilesLast, totalTiles);
 				WrapTextF("Berm tiles: %u of %u", bermTilesLast, totalTiles);
 			}
 
 
 			{
-				// One tile is 512 world units square, only trodden ground has one,
-				// and refill deletes the ones it takes back to bare snow. Occupancy
-				// separates real trails from tiles a shallow refill residue is
-				// keeping alive: a high thin count wants a bigger store epsilon,
-				// not a faster fade.
 				const auto stats = GetTrenchStoreStats();
 				WrapTextF("Trench store: %zu tiles, %.1f KB raw, %.1f%% full, %zu thin",
 					stats.tiles, (double)stats.bytes / 1024.0, stats.occupancy * 100.0f, stats.thin);
-				// Encoded is the number that matters: it is what a save will cost
-				// once Stage C writes it, and what the budget is spent in.
 				WrapTextF("Save cost: %.0f KB of %.0f KB budget (%.0fx vs raw)",
 					(double)stats.encoded / 1024.0,
 					(double)settings.TrenchMemoryMB * 1024.0,
@@ -1622,7 +1531,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttEffectCost = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("effect_cost_probe_tooltip"), "Turns each snow shading effect off in turn for about two seconds and shows how much GPU time the snow saves without it. Covers the ground snow and the snow on objects, which share these effects. Stand still and keep the camera still while it runs (about 50 seconds); the effects visibly switch off one by one. Differences under about 0.03 ms are measurement noise."));
 			if (effectCost.done) {
-				// Diagnostics: plain text by existing convention (no i18n).
 				const auto [lo, hi] = std::minmax_element(std::begin(effectCost.withMs), std::end(effectCost.withMs));
 				WrapTextF("Snow shading + depth prepasses with everything on: %.3f ms (drift during the run %.3f ms)", effectCost.withMs[0], *hi - *lo);
 				for (uint32_t i = 0; i < EffectCostProbe::kEffects; i++)
@@ -1666,10 +1574,6 @@ void SnowDeformation::DrawSettings()
 			WrapTextF("Shadow source: descriptors=%u endSplits=%.0f/%.0f/%.0f atlasSlices=%u",
 				dbgLodDescriptorCount, dbgLodEndSplits[0], dbgLodEndSplits[1], dbgLodEndSplits[2], dbgLodAtlasSlices);
 
-
-			// Shell probe: what the landscape shell reads at the camera. A shell
-			// artifact that this call cannot account for is not the landscape
-			// shell - it is object snow, which the Object Snow debug view owns.
 			{
 				auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 				const ShellProbe probe = ProbeShellData(eye.x, eye.y);
@@ -1693,9 +1597,6 @@ void SnowDeformation::DrawSettings()
 						WrapTextF("    %s x%.2f @ %.0f units", layer.label.c_str(), layer.weight, layer.depth);
 				}
 
-				// Object snow probe: which captured meshes cover this spot, largest
-				// first. Bound top Z against the camera height says whether one of
-				// them is the surface an artifact sits on.
 				const ObjectSnowProbe objects = ProbeObjectSnow(eye.x, eye.y);
 				WrapTextF("Object snow probe: %zu captured this frame, %zu cover this spot (camera z %.0f)",
 					objects.captured, objects.overlapping, eye.z);
@@ -1747,7 +1648,6 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
 			{
-				// The shaders' StaticsDebugView values; 6 and 7 are unassigned.
 				static constexpr int kStaticsDebugModeValues[] = { 0, 1, 2, 3, 4, 5, 8, 9, 10 };
 				const char* staticsDebugModes[] = { "Off", "Edge taper", "Coverage alpha", "Normals", "Self-shadow march", "Projected mask", "Skin identity", "Depth fight", "Volume seed" };
 				static_assert(IM_ARRAYSIZE(kStaticsDebugModeValues) == IM_ARRAYSIZE(staticsDebugModes));
@@ -1769,11 +1669,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::Checkbox(T(TKEY("debug_proj_snow"), "Projected Snow Match Tint"), &debugProjSnowView);
 				if (auto _ttProjDbg = Util::HoverTooltipWrapper())
 					ImGui::Text("%s", T(TKEY("debug_proj_snow_tooltip"), "Tints every pixel the projected-snow match classifies and replaces in magenta. If a snowy rock or fence shows no magenta, the classification missed that draw; if the magenta area is wrong, the projection weight is. The counters below break last frame's draws down; every projected material record seen is also logged to CommunityShaders.log."));
-				// Height-field probe: the seven object maps under the player's
-				// feet, one frame old. The numbers behind every layer/height
-				// question - tops per peeled layer, the depth cones, and the
-				// bridged surface. Sentinels (no data) print as '-'. Showing it
-				// keeps the cone built (RoadMapsWanted).
 				heightProbeShownFrame = globals::state->frameCount;
 				if (probeValid) {
 					auto fmtHeight = [](float v, char* out, size_t n) {
@@ -1790,8 +1685,6 @@ void SnowDeformation::DrawSettings()
 					snprintf(probeLine2, sizeof(probeLine2), "cone depth: L1 %.1f", probeVals[2]);
 					WrapText(probeLine1);
 					WrapText(probeLine2);
-					// Water window under the player: '-' = no water drawn there since
-					// the last cell crossing. The cut fires where terrain z < water z.
 					char wz[16];
 					fmtHeight(probeVals[3], wz, sizeof(wz));
 					char probeLine3[160];
@@ -1810,7 +1703,6 @@ void SnowDeformation::DrawSettings()
 			WrapTextDisabledF("Cone passes run this frame: %u of 8", conePassesCoarse);
 			WrapTextDisabledF("Roads captured this frame: %u", capturedRoads);
 			{
-				// The prime worker owns the patch shader members until the object snow group is published.
 				const bool primed = !SnowShadersPending(2);
 				const char* patchShading = staticsDebugView != 0 ? "forward (debug view)" :
 				                           !primed               ? "forward until its shaders compile" :
@@ -1861,9 +1753,6 @@ void SnowDeformation::DrawSettings()
 				ImGui::Text("%s", T(TKEY("freshness_override_tooltip"), "Not saved. Below 0 the weather drives the snow's freshness; at 0 or above this value replaces it, so firm (0) and fresh (1) can be compared on the spot without waiting for a storm. The ridge and rim change at once; wall steepness only shows on trenches cut after the change."));
 
 			{
-				// The rate is spelled out because the exit test is "does the number
-				// do what the plan's table says", which needs the arithmetic
-				// visible rather than inferred from watching it drift.
 				const float accum = snowAccumulation.load(std::memory_order_relaxed);
 				const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 				const float growth = settings.AccumulationHours > 0.01f ? intensity / settings.AccumulationHours : 0.0f;
@@ -1874,9 +1763,6 @@ void SnowDeformation::DrawSettings()
 				auto* tes = globals::game::tes;
 				const char* held = !tes ? "" : tes->interiorCell ? " (held, indoors)" : NoSkyWorldspace() ? " (held, no sky)" : "";
 
-				// The scale the shells are actually handed, not what the peak would
-				// give: with the toggle off it reads x1.000, which is the other
-				// half of the A/B saying so.
 				WrapTextF("Accumulation: %.3f (depth x%.3f%s), snowfall %.2f%s",
 					accum, GetAccumulationDepthScale(),
 					settings.EnableSnowAccumulation ? "" : ", not applied", intensity, held);
@@ -1909,7 +1795,6 @@ void SnowDeformation::DrawSettings()
 		}
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_condition"), "Snow Condition"))) {
-			// Diagnostics use plain text by existing convention (no i18n).
 			const SnowCondition condition = GetSnowCondition();
 			const auto& climate = snowClimate;
 			auto* tes = globals::game::tes;
@@ -2142,7 +2027,6 @@ void SnowDeformation::DrawSettings()
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
-				// Diagnostics use plain text by existing convention (no i18n).
 				WrapTextF("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
 					spellStats.projectiles, spellStats.streams, spellStats.hazards, spellStats.auras,
 					spellStats.groundContacts, spellStats.trails);
@@ -2221,7 +2105,6 @@ void SnowDeformation::DrawSettings()
 			ImGui::TextDisabled("%s", joinState);
 			if (shellEarlyViewMismatches > 0)
 				ImGui::TextDisabled("%s %u", T(TKEY("shell_join_view_mismatch"), "Frames whose view changed under the early pass:"), shellEarlyViewMismatches);
-			// The menu draws after Present has advanced the frame counter.
 			const bool sssSynced = shellSssSyncFrame != UINT32_MAX && globals::state->frameCount - shellSssSyncFrame <= 1u;
 			ImGui::TextDisabled("%s", sssSynced ? T(TKEY("shell_sss_drawing"), "Shadow depth sync: drawing") :
 			                                       T(TKEY("shell_sss_not_drawing"), "Shadow depth sync: not this frame (needs the depth prepass join drawing, Snow Contact Shadows, and Screen-Space Shadows in an exterior)"));

@@ -1,15 +1,7 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Globals.h"
 #include "Utils/D3D.h"
-
-// Voxel snow volume (VOLUME-SNOW-PLAN): the captured statics rasterised
-// into camera-anchored 3D windows - a clipmap of them, each level twice the
-// voxel of the one inside it, drawn only where no finer level reaches.
 
 bool SnowDeformation::EnsureVoxelResources()
 {
@@ -30,9 +22,6 @@ bool SnowDeformation::EnsureVoxelResources()
 	LoadTraceScope _loadTrace(this, "Volume: EnsureVoxelResources");
 	auto* device = globals::d3d::device;
 	auto* context = globals::d3d::context;
-	// The occupancy is read back through its own UAV (the raster's was-empty
-	// test, the decay's tick), a typed load past R32 that is optional in
-	// D3D11; CS already leans on it for R8_UINT and R16G16_UNORM.
 	static int r8TypedLoads = -1;
 	if (r8TypedLoads < 0) {
 		D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support2{};
@@ -48,8 +37,6 @@ bool SnowDeformation::EnsureVoxelResources()
 		return false;
 	}
 
-	// Fresh VRAM is not blank: cleared so a never-written volume reads
-	// empty rather than as whatever lived there before.
 	const float clearZero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 	auto makeVolume = [&](const std::string& a_name, DirectX::XMUINT3 a_dims) {
 		D3D11_TEXTURE3D_DESC volDesc{
@@ -82,8 +69,6 @@ bool SnowDeformation::EnsureVoxelResources()
 	for (uint i = 0; i < levels; i++) {
 		auto& lv = voxelLevels[i];
 		const auto dim = VoxelDimsForLevel(i);
-		// A level whose grid size changed (Fine Levels or the shape moved) is
-		// rebuilt from nothing; its old textures are the wrong size for every pass.
 		if (lv.dims.x != dim.x || lv.dims.y != dim.y || lv.dims.z != dim.z) {
 			for (int p = 0; p < 2; p++) {
 				delete lv.volume[p];
@@ -142,8 +127,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			context->ClearUnorderedAccessViewUint(lv.heightMap->uav.get(), zeros);
 		}
 		if (!lv.heightMapUnder) {
-			// The kVoxelUnderLayers layers under the top: two sub-pixels a voxel
-			// side, a quarter of the top map's memory each (the capture PS).
 			const uint hdim = dim.x * 2;
 			D3D11_TEXTURE2D_DESC desc{
 				.Width = hdim,
@@ -195,8 +178,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			lv.bricks->CreateUAV(uavDesc);
 		}
 		if (!lv.drawArgs) {
-			// {VertexCountPerInstance, InstanceCount, StartVertex, StartInstance};
-			// only the count changes, copied from the list's counter.
 			const uint32_t args[4] = { 36, 0, 0, 0 };
 			D3D11_SUBRESOURCE_DATA init{ args, 0, 0 };
 			D3D11_BUFFER_DESC desc{};
@@ -205,8 +186,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			desc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
 			lv.drawArgs = new Buffer(desc, &init, std::format("SnowDeformation::VoxelDrawArgs{}", i).c_str());
 		}
-		// Dirty-brick bookkeeping: raw buffers, zeroed. The lists buffer is
-		// also the partial passes' DispatchIndirect args.
 		auto makeRaw = [&](const std::string& a_name, uint a_bytes, bool a_args) {
 			D3D11_BUFFER_DESC desc{};
 			desc.Usage = D3D11_USAGE_DEFAULT;
@@ -243,8 +222,6 @@ bool SnowDeformation::EnsureVoxelResources()
 		}
 		lv.valid = false;
 	}
-	// One support volume for every level, at the finest grid: a coarser
-	// level's passes only ever touch its own [0, dim) corner of it.
 	if (voxelSupport && (voxelSupportDims.x != wantMax.x || voxelSupportDims.y != wantMax.y || voxelSupportDims.z != wantMax.z)) {
 		delete voxelSupport;
 		voxelSupport = nullptr;
@@ -277,7 +254,6 @@ bool SnowDeformation::EnsureVoxelResources()
 		voxelSliceTexture = new Texture2D(desc, "SnowDeformation::VoxelSlice");
 		voxelSliceTexture->CreateSRV(srvDesc);
 		voxelSliceTexture->CreateUAV(uavDesc);
-		// Shown by the menu before the first write; black, not stale VRAM.
 		context->ClearUnorderedAccessViewFloat(voxelSliceTexture->uav.get(), clearZero);
 	}
 	if (!voxelCB)
@@ -285,7 +261,6 @@ bool SnowDeformation::EnsureVoxelResources()
 	if (!voxelDrawCB)
 		voxelDrawCB = new ConstantBuffer(ConstantBufferDesc<VoxelDrawCB>(), "SnowDeformation::VoxelDrawCB");
 	if (!voxelWrapSampler) {
-		// Trilinear + WRAP: the torus, after the shader clamps in logical space.
 		D3D11_SAMPLER_DESC sampDesc{};
 		sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
 		sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
@@ -324,7 +299,6 @@ bool SnowDeformation::EnsureVoxelResources()
 			logger::warn("[SNOW DEFORMATION] Voxel occupancy counter unavailable (HRESULT {:#x}); the volume still runs", (unsigned)hr);
 	}
 	if (!voxelRasterState) {
-		// Both faces: undersides are what the roof test is about.
 		D3D11_RASTERIZER_DESC rasterDesc{};
 		rasterDesc.FillMode = D3D11_FILL_SOLID;
 		rasterDesc.CullMode = D3D11_CULL_NONE;
@@ -336,7 +310,6 @@ bool SnowDeformation::EnsureVoxelResources()
 		Util::SetResourceName(voxelRasterState.get(), "SnowDeformation::VoxelRaster");
 	}
 
-	// Util::CompileShader adds the stage define from the target itself.
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowVoxelCapture.hlsl";
 	auto compileCS = [&](ID3D11ComputeShader*& a_cs, const char* a_entry, const char* a_name) {
 		if (a_cs)
@@ -383,9 +356,6 @@ bool SnowDeformation::EnsureVoxelResources()
 	return true;
 }
 
-// A far ring has half the cubes a side at twice the voxel, so its extent
-// is what a full ring's would be: the reach doubles per level throughout,
-// the far rings at an eighth of the work and memory.
 DirectX::XMUINT3 SnowDeformation::VoxelDimsMax() const
 {
 	const int shape = std::clamp(settings.VolumeRingShape, 0, 2);
@@ -446,39 +416,15 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 		const int fixedDim = a_cb.SliceAxis == 0 ? (int)lv.dims.z : (a_cb.SliceAxis == 1 ? (int)lv.dims.y : (int)lv.dims.x);
 		a_cb.SliceIndex = std::clamp((int)std::floor((along + voxelSliceOffset) / voxelSize) - originAlong, 0, fixedDim - 1);
 	}
-	// The seed gate's maps live in the height window; without them every
-	// column reads as open sky (HalfExtent 0 fails the window test).
 	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
 	a_cb.HeightWindowCenter = heightWindowCenter;
 	a_cb.HeightHalfExtent = seedMaps ? ObjectRasterHalfExtent() : 0.0f;
 	a_cb.ShelterDust = kVoxelShelterDust;
-	// The ramp field: the depth in this level's voxels, unfloored, and a
-	// fixed crossing at 0.5. Rounding likewise unfloored - under about 0.4
-	// voxel the kernel radius rounds to zero and the coarse ring keeps its
-	// crisp voxel edges rather than eroding a whole voxel at every one.
 	a_cb.DepthVox = std::max(settings.VolumeSnowDepth, 0.0f) / voxelSize;
 	a_cb.FieldThreshold = VoxelThresholdForLevel(a_level);
-	// The Rounding in this level's voxels. The smoothing kernel takes it
-	// floored at half a voxel, so a far ring's columns meld across their
-	// steps. The field's exponential rate is ln 2 over it floored at TWO
-	// voxels: a half-air neighbourhood then drops the snow by the Rounding
-	// (or two voxels, where that is more), and the crossing between the two
-	// centres bracketing the top interpolates within a tenth of a voxel.
-	// Air neighbours vote only where the voxel is small against the
-	// Rounding: on a ring whose voxel is the Rounding or more, dilution
-	// would take a whole voxel off every rim, so there they do not.
 	const float roundU = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f);
 	const float roundVox = roundU / voxelSize;
 	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
-	// THE FLOOR IS A VOXEL where air does not vote. A far ring re-samples
-	// the mesh at its own pitch, one point per column and nothing between
-	// - aliasing, which every voxel LOD averages away and this did not: a
-	// Rounding of 5 u is a third of a 16 u voxel, no kernel at all. The
-	// support-normalised average cannot inflate (it is a soft-max of the
-	// tops, under a fifth of a voxel of bias), so the one-voxel floor that
-	// grew 78 u lumps under the gaussian's dilution is safe here. Where air
-	// still votes the floor stays at a half: a wider kernel there is more
-	// dilution at every rim.
 	a_cb.RoundSigma = std::max(roundVox, airWeight > 0.0f ? 0.5f : 1.0f);
 	a_cb.EdgeParams[0] = 0.0f;
 	a_cb.EdgeParams[1] = kVoxelEdgeNoiseCell;
@@ -490,9 +436,6 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.HeadroomVox = (float)std::max(1, (int)std::lround(kVoxelHeadroomUnits / voxelSize));
 	a_cb.SlopeMinNz = std::cos(DirectX::XMConvertToRadians(std::clamp(settings.VolumeSnowMaxSlopeDeg, 0.0f, 90.0f)));
 	a_cb.SkyStrength = std::clamp(settings.VolumeSkyExposurePct / 100.0f, 0.0f, 1.0f);
-	// Memory: the life nibble ticks down 15 times over voxelMemorySeconds,
-	// counted in this level's own rebuilds - a lazy ring sees a 2^L-th of
-	// the frames.
 	const uint32_t period = VoxelLevelPeriod(a_level);
 	const uint32_t tickEvery = std::max(1u, (uint32_t)std::lround(voxelMemorySeconds * 60.0f / 15.0f) / period);
 	a_cb.Decay = ((voxelFrame / period) % tickEvery == 0) ? 1.0f : 0.0f;
@@ -500,8 +443,6 @@ void SnowDeformation::FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const
 	a_cb.CentreVox[0] = centre.x / voxelSize;
 	a_cb.CentreVox[1] = centre.y / voxelSize;
 	a_cb.CentreVox[2] = centre.z / voxelSize;
-	// Bricks reach the end of this level's band, Chebyshev. The hole for the
-	// level inside is the draw VS's, per frame.
 	float bandStart = 0.0f, bandEnd = 0.0f;
 	VoxelReachBand(a_level, bandStart, bandEnd);
 	a_cb.CentreVox[3] = bandEnd / voxelSize;
@@ -515,9 +456,6 @@ uint32_t SnowDeformation::VoxelLevelPeriod(uint a_level) const
 
 float SnowDeformation::VoxelThresholdForLevel(uint a_level) const
 {
-	// Where air votes, the lip's survival is the ratio k >= Coverage / gain
-	// of the field's saturation, so the gain stays 1; where it does not,
-	// nothing dilutes and the gain only buys R8 precision for a thin layer.
 	const float coverage = std::clamp(settings.VolumeSnowCoverage, 0.02f, 0.5f);
 	const float roundVox = std::clamp(settings.VolumeSnowRounding, 0.0f, 32.0f) / VoxelSizeForLevel(a_level);
 	const float airWeight = std::clamp((roundVox - 0.5f) / 1.5f, 0.0f, 1.0f);
@@ -544,8 +482,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		return;
 	auto* context = globals::d3d::context;
 
-	// The window origins are in VOXEL units, so a size change makes every
-	// stored voxel's world position wrong: start the windows over.
 	const float voxelSize0 = VoxelSizeLive();
 	if (voxelSize0 != voxelSizeBuilt) {
 		voxelSizeBuilt = voxelSize0;
@@ -560,8 +496,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	ID3D11Buffer* nullCB = nullptr;
 	const bool counting = voxelCountUAV && voxelCountStaging[0] && voxelCountStaging[1];
 	voxelFrame++;
-	// The camera's heading (TerrainData's derivation): the windows sit ahead
-	// of the eye, since what is behind it is not in the capture list anyway.
 	float fwdX = 0.0f, fwdY = 0.0f;
 	if (auto* cam = RE::PlayerCamera::GetSingleton(); cam && cam->cameraRoot) {
 		const auto& r = cam->cameraRoot->world.rotate;
@@ -573,23 +507,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		}
 	}
 
-	// ---- Which levels rebuild this frame ----
-	// Cadence: level L rebuilds every 2^L frames, phased at 2^(L-1) so
-	// no frame carries more than two levels; a level with nothing built
-	// yet rebuilds now. Between rebuilds it keeps its origin, its field
-	// and its bricks, and draws off them.
-	//
-	// THE IDLE GATE (the deformation map's S1, applied here). A level due
-	// to rebuild whose inputs match its last rebuild's - the window origin,
-	// the capture list, the exclusion list, the field's constants - skips
-	// the whole rebuild, once those inputs have held for a stagger period
-	// plus a memory expiry of its rebuilds: sooner, a static that had just
-	// left the list would keep its voxels, the life nibble only ticking in
-	// a rebuild. Standing still cost 2.8 ms of building a field nothing
-	// had changed (Josef's profiler, 2026-09-17). An empty capture list
-	// ignores the origin as well: a bare stretch or an interior then costs
-	// nothing however the camera moves, the volume being empty by the time
-	// the gate arms, and the window catches up on the first capture.
 	DirectX::XMINT3 levelDelta[kVoxelMaxLevels]{};
 	bool levelClear[kVoxelMaxLevels]{};
 	bool anyUpdated = false;
@@ -602,8 +519,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			a_h *= 1099511628211ull;
 		}
 	};
-	// Order-free, as the census hash: the list arrives in a different
-	// order each frame.
 	uint64_t captureHash = 0;
 	for (uint32_t ci = 0; ci < a_captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
@@ -628,10 +543,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		const auto extent = VoxelExtentForLevel(L);
 		const float half = extent.x * 0.5f;
 		const float halfZ = extent.z * 0.5f;
-		// The cube ahead of the camera, its origin snapped to WHOLE BRICKS
-		// (centred, so the snap is within half a brick): the dirty-brick
-		// bookkeeping is per physical brick, which is one logical brick only
-		// while the origin is a multiple of eight.
 		const float ahead = std::clamp(settings.VolumeForwardBias, 0.0f, 0.45f) * 2.0f * half;
 		const float brickUnits = 8.0f * voxelSize;
 		const float snapBias = 4.0f * voxelSize;
@@ -640,8 +551,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			(int)std::floor((eye.y + fwdY * ahead - half + snapBias) / brickUnits) * 8,
 			(int)std::floor((eye.z - std::clamp(settings.VolumeVerticalBias, -0.3f, 0.3f) * 2.0f * halfZ - halfZ + snapBias) / brickUnits) * 8
 		};
-		// The field's inputs, the per-frame terms zeroed. With nothing
-		// captured the window's place does not matter either.
 		VoxelVolumeCB in{};
 		FillVoxelCB(L, in);
 		in.OriginVox = {};
@@ -677,8 +586,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		lv.exclusionHashLast = exclusionHash;
 		lv.cbHashLast = cbHash;
 		lv.stableRebuilds = blockers == 0 ? lv.stableRebuilds + 1 : 0;
-		// Settled: a stagger period (every known record drawn once since the
-		// change) plus the memory (fifteen ticks) in this level's rebuilds.
 		const uint32_t tickEvery = std::max(1u, (uint32_t)std::lround(voxelMemorySeconds * 60.0f / 15.0f) / period);
 		const uint32_t rasterPeriod = settings.VolumeStaggeredCapture ? std::max(1u, 8u >> L) : 1u;
 		const uint32_t settle = rasterPeriod + 15u * tickEvery + 1u;
@@ -688,8 +595,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			blockers |= 32u;
 		voxelIdleBlockers |= blockers;
 		if (blockers == 0) {
-			// Nothing to do: the origin, the field, the bricks and the
-			// rebuild count all stand; the draw list is refreshed below.
 			lv.updated = false;
 			lv.skipped = true;
 			continue;
@@ -702,8 +607,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		anyUpdated = true;
 	}
 	voxelIdleSkipped = anyDue && !anyUpdated;
-	// The skip-rate window, S1's: a gate that opens every few frames reads
-	// as idle in a single-frame readout; the rate tells.
 	voxelSkipTallyFrames++;
 	if (voxelIdleSkipped)
 		voxelSkipTallySkipped++;
@@ -713,12 +616,9 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		voxelSkipTallySkipped = 0;
 	}
 	if (!anyUpdated) {
-		// Skipping is the measurement: an explicit zero, or the profiler
-		// keeps the stale window or retires the row.
 		globals::profiler->MarkPassSkipped("SnowDeformation::Volume - Bake");
 	}
 
-	// ---- Occupancy: scroll + decay per rebuilding level ----
 	if (anyUpdated)
 		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	for (uint L = 0; L < levels; L++) {
@@ -733,8 +633,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		cb.OriginVox.w = clearAll ? 1 : 0;
 		cb.ScrollDelta = { delta.x, delta.y, delta.z, 0 };
 		voxelCB->Update(cb);
-		// Dirty bookkeeping for this rebuild: no bricks dirty yet, and the
-		// partial passes' dispatch args at zero groups (y = bricks of z).
 		{
 			const UINT zeros[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(lv.dirty->uav.get(), zeros);
@@ -756,8 +654,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 			context->CSSetUnorderedAccessViews(8, 1, &heightMapUAV, nullptr);
 			context->CSSetUnorderedAccessViews(9, 1, &heightMapUnderUAV, nullptr);
-			// The slots the move brings in, one brick-aligned slab per moved
-			// axis; a move past the extent, or a cleared level, is the window.
 			context->CSSetShader(voxelScrollCS, nullptr, 0);
 			const bool whole = clearAll || std::abs(delta.x) >= (int)lv.dims.x || std::abs(delta.y) >= (int)lv.dims.y || std::abs(delta.z) >= (int)lv.dims.z;
 			if (whole) {
@@ -775,8 +671,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 					context->Dispatch(slab, axis == 0 ? gy : gx, axis == 2 ? gy : gz);
 				}
 			}
-			// The memory tick, over the bricks that hold anything; level 0's
-			// carries the menu's occupancy count.
 			if (cb.Decay > 0.5f) {
 				const bool countHere = counting && L == 0;
 				ID3D11UnorderedAccessView* countUAV = countHere ? voxelCountUAV.get() : nullptr;
@@ -788,7 +682,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 				context->CSSetShader(voxelDecayCS, nullptr, 0);
 				context->Dispatch(gx, gy, gz);
 				context->CSSetUnorderedAccessViews(2, 1, &nullUAV, nullptr);
-				// Copy this tick's count, map LAST tick's copy without waiting.
 				if (countHere) {
 					context->CopyResource(voxelCountStaging[voxelCountCursor].get(), voxelCountBuffer.get());
 					voxelCountCursor ^= 1;
@@ -812,11 +705,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	if (anyUpdated)
 		globals::profiler->EndPass();
 
-	// ---- This frame's captures, per rebuilding level ----
-	// UAV-only raster: no target, the viewport sizes it. The game's VS b0
-	// goes back afterwards; the capture pass never touched it. Its own
-	// profiler row: with the field passes at a quarter of a millisecond,
-	// this is where the building's time goes.
 	if (anyUpdated)
 		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	if (anyUpdated) {
@@ -841,37 +729,19 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->VSSetConstantBuffers(0, 1, &cbPtr);
 			context->GSSetConstantBuffers(0, 1, &cbPtr);
 			context->PSSetConstantBuffers(0, 1, &cbPtr);
-			// Viewport 0: one pixel a voxel column, the occupancy. Viewport 1:
-			// four a voxel side, the top-down heightmap copy the GS adds.
 			D3D11_VIEWPORT viewports[2] = {
 				{ 0.0f, 0.0f, float(lv.dims.x), float(lv.dims.x), 0.0f, 1.0f },
 				{ 0.0f, 0.0f, float(lv.dims.x * 4), float(lv.dims.x * 4), 0.0f, 1.0f }
 			};
 			context->RSSetViewports(2, viewports);
-			// u0 occupancy, u1 the layers under the top, u2 the heightmap, u3
-			// the dirty bricks and u4 the flags (a raised layer or a voxel
-			// turning solid marks its brick).
 			ID3D11UnorderedAccessView* rasterUAVs[5] = { lv.volume[0]->uav.get(), lv.heightMapUnder->uav.get(), lv.heightMap->uav.get(), lv.dirty->uav.get(), lv.flags->uav.get() };
 			context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 5, rasterUAVs, nullptr);
-			// STAGGERED CAPTURE. A static already in the volume stays there on
-			// the memory nibble (a tick every 16 of this level's rebuilds, 15
-			// to expire), so drawing it every rebuild only paid for the same
-			// voxels again - after dirty bricks, the one full-cost pass left. A
-			// known record draws every 8th rebuild on the finest ring (4th,
-			// 2nd on the next two; the far rings rebuild rarely anyway); a
-			// level starting from nothing draws everything; a new record waits
-			// at most a period.
 			const uint32_t rasterPeriod = (settings.VolumeStaggeredCapture && !lv.cleared) ? std::max(1u, 8u >> L) : 1u;
 
 			for (uint32_t ci = 0; ci < a_captureCount; ci++) {
 				if (rasterPeriod > 1 && ((ci + lv.rebuilds) % rasterPeriod) != 0)
 					continue;
 				const auto& cap = capturedStatics[ci];
-				// Roads belong to the trench patch, which drapes the road
-				// heightfield itself; the S4 skin excludes them for the same
-				// reason. Voxelising them put volume snow over every RoadChunk
-				// (Josef, 2026-09-06). Bridges are not roads: the volume is
-				// what gives their deck its snow.
 				if (cap.road)
 					continue;
 				auto* geometry = cap.geometry.get();
@@ -922,18 +792,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		globals::profiler->EndPass();
 	}
 
-	// ---- The snow field, then the draw's brick list, per level ----
-	// DIRTY BRICKS: the field is world-anchored (a physical slot is the
-	// same world voxel until the window scrolls 256 past it), so only the
-	// brick columns whose occupancy changed - plus the blur's reach around
-	// them - are recomputed; the rest keep last rebuild's field. The scroll
-	// marked the slots it reused, the compare marks what the raster
-	// changed, and one small pass turns the marks into column lists that
-	// drive the passes as DispatchIndirect. Seeds go into the dead ping-pong
-	// volume (its previous occupancy is compared first, then overwritten),
-	// then Z, X, Y bouncing between it and the field. UP FIRST: the sideways
-	// passes then run in the air above surfaces, where the solid blocker
-	// (occupancy at t4) can stop them at a riser or a wall.
 	if (anyUpdated)
 		globals::profiler->BeginPass("SnowDeformation::Volume - Bake");
 	const bool seedMaps = heightBottomFiltered && heightBottomFiltered->srv && objectSkyOpen && objectSkyOpen->srv;
@@ -965,9 +823,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		voxelCB->Update(cb);
 		context->CSSetConstantBuffers(0, 1, &cbPtr);
 
-		// A whole rebuild re-derives every brick's OCC bit from the occupancy;
-		// between those the raster, the decay and the scroll keep it as they
-		// write, and the dirt with it.
 		if (forceAll) {
 			context->CSSetShaderResources(0, 1, &occSRV);
 			context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
@@ -976,7 +831,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 			context->CSSetUnorderedAccessViews(6, 1, &nullUAV, nullptr);
 			context->CSSetShaderResources(0, 1, &nullSRV);
 		}
-		// The dirty columns and their dilations -> dispatch args + lists.
 		context->CSSetShaderResources(6, 1, &dirtySRV);
 		context->CSSetUnorderedAccessViews(7, 1, &listsUAV, nullptr);
 		context->CSSetShader(voxelDirtyColsCS, nullptr, 0);
@@ -984,14 +838,8 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetUnorderedAccessViews(7, 1, &nullUAV, nullptr);
 		context->CSSetShaderResources(6, 1, &nullSRV);
 		context->CSSetShaderResources(7, 1, &listsSRV);
-		// The flags stay bound (u6) through the field passes: their active-
-		// brick gates read OCC/FIELD from it, Z writes FIELD, the flags pass
-		// writes the mask. Unbound before the compaction reads it at t8.
 		context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 
-		// Seeds: occupancy + the shelter/sky maps -> scratch, on D0; the
-		// raster's heightmap at t10 for the top surface's facing (Z and the
-		// sideways passes read it too).
 		ID3D11ShaderResourceView* heightMapSRVs[2] = { lv.heightMap->srv.get(), lv.heightMapUnder->srv.get() };
 		context->CSSetShaderResources(10, 2, heightMapSRVs);
 		ID3D11ShaderResourceView* mapSRVs[2] = {
@@ -1006,17 +854,13 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		ID3D11ShaderResourceView* nullMapSRVs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(1, 2, nullMapSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-		// Every field pass reads the occupancy at t4: Z stops at the first
-		// solid beneath, X and Y at the first solid beside.
 		context->CSSetShaderResources(4, 1, &occSRV);
-		// Z: scratch -> field, one thread per column, on D0.
 		context->CSSetShaderResources(0, 1, &scratchSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &fieldUAV, nullptr);
 		context->CSSetShader(voxelBlurZCS, nullptr, 0);
 		context->DispatchIndirect(listsBuffer, kVoxelListArgsZ);
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-		// X: field -> scratch, and its 1D distance -> support (u4), on D3.
 		cb.BlurAxis = 0;
 		voxelCB->Update(cb);
 		context->CSSetShaderResources(0, 1, &fieldSRV);
@@ -1027,7 +871,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		context->CSSetShaderResources(0, 1, &nullSRV);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
 		context->CSSetUnorderedAccessViews(4, 1, &nullUAV, nullptr);
-		// Y: scratch -> field, reading support (t5) for the cap, on D2.
 		cb.BlurAxis = 1;
 		voxelCB->Update(cb);
 		context->CSSetShaderResources(0, 1, &scratchSRV);
@@ -1040,7 +883,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 		ID3D11ShaderResourceView* nullHeightSRVs[2] = { nullptr, nullptr };
 		context->CSSetShaderResources(10, 2, nullHeightSRVs);
 		context->CSSetUnorderedAccessViews(0, 1, &nullUAV, nullptr);
-		// The brick flags on D3's bricks (kept between rebuilds)...
 		context->CSSetShaderResources(3, 1, &fieldSRV);
 		context->CSSetUnorderedAccessViews(6, 1, &flagsUAV, nullptr);
 		context->CSSetShader(voxelBrickFlagsCS, nullptr, 0);
@@ -1054,10 +896,6 @@ void SnowDeformation::RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_c
 	if (anyUpdated)
 		globals::profiler->EndPass();
 
-	// ---- The draw list from every flag in reach, on each level's rebuild
-	// frames, skipped or not: the reach is the eye's, which the gate does
-	// not hold still. Binding the append UAV with a zero initial count
-	// resets its counter; the count then becomes the instance count. ----
 	for (uint L = 0; L < levels; L++) {
 		auto& lv = voxelLevels[L];
 		if (!lv.updated && !lv.skipped)
@@ -1103,7 +941,6 @@ void SnowDeformation::UpdateVoxelSliceTexture()
 	context->CSSetShaderResources(3, 1, &fieldSRV);
 	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
 	context->CSSetShader(voxelSliceCS, nullptr, 0);
-	// The CS zeroes whatever the window's plane does not cover.
 	context->Dispatch(kVoxelDimWide / 8, kVoxelDimWide / 8, 1);
 
 	ID3D11ShaderResourceView* nullSRV = nullptr;
@@ -1164,8 +1001,6 @@ void SnowDeformation::DrawVoxelSnow()
 		return;
 	auto* context = globals::d3d::context;
 
-	// One block for the whole draw, as the patch does: rounded class at the
-	// volume's depth, the window for the footprint reads, no coat, no relief.
 	StaticsCB scb{};
 	scb.ObjectsDepth = settings.VolumeSnowDepth;
 	scb.RoundedDepth = settings.VolumeSnowDepth;
@@ -1180,25 +1015,18 @@ void SnowDeformation::DrawVoxelSnow()
 
 	ID3D11SamplerState* wrap = voxelWrapSampler.get();
 	context->PSSetSamplers(3, 1, &wrap);
-	// What the skin pass unbinds and the patch rebinds: the march's depth
-	// cap and SkinShadeSurface's footprint reads.
 	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
 	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
 	ID3D11ShaderResourceView* topSRV = (heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv) ? heightTopRaw[heightCurrent]->srv.get() : nullptr;
 	context->PSSetShaderResources(11, 1, &topSRV);
 	ID3D11ShaderResourceView* skinDepthSRV = (heightSkinDepth && heightSkinDepth->srv) ? heightSkinDepth->srv.get() : nullptr;
 	context->PSSetShaderResources(12, 1, &skinDepthSRV);
-	// The march's road taps read the object snow cone.
 	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
 	context->PSSetShaderResources(13, 1, &coneSRV);
-	// Snow Trenches on Objects (t114-t116): SnowPrints' readers are compiled
-	// into this PS for when the volume follows the projected snow onto
-	// objects and takes their prints.
 	BindPrintReaders(context);
 
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());
-	// Both faces: the PS keeps the back one by distance (see the shader).
 	context->RSSetState(voxelRasterState.get());
 	context->OMSetDepthStencilState(shellDepthState.get(), 0);
 	context->IASetInputLayout(nullptr);
@@ -1213,8 +1041,6 @@ void SnowDeformation::DrawVoxelSnow()
 	context->GSSetShader(nullptr, nullptr, 0);
 	context->PSSetShader(voxelShellPS, nullptr, 0);
 
-	// Measurement: PS invocations over samples passed = marches a written
-	// pixel costs, the shell's own instrument (its 7.8 found the culling).
 	const bool stats = voxelPipelineStatsEnabled && EnsureVoxelStatsQueries();
 	if (stats) {
 		ReadVoxelStatsQueries(context);
@@ -1232,14 +1058,10 @@ void SnowDeformation::DrawVoxelSnow()
 		d.VoxOrigin = { lv.origin.x, lv.origin.y, lv.origin.z, 0 };
 		d.VoxParams = { voxelSize, float(lv.dims.x), VoxelThresholdForLevel(L), std::clamp(settings.VolumeMarchStep, 0.25f, 2.0f) };
 		d.VoxDims = { float(lv.dims.x), float(lv.dims.y), float(lv.dims.z), float(lv.dims.x) / float(lv.dims.z) };
-		// Hand-over bands: in over the finer level's outer band (none on
-		// level 0: a band below zero reads as fully in), out over this one's.
 		float inStart = -2.0f, inEnd = -1.0f, outStart = 0.0f, outEnd = 0.0f;
 		const auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 		const auto centre = VoxelLevelCentre(L);
-		// w = the sub-cell skip switch.
 		d.VoxCentre = { centre.x - eye.x, centre.y - eye.y, centre.z - eye.z, settings.VolumeSkipEmptyCells ? 1.0f : 0.0f };
-		// w = the shading detail distance.
 		const float detailDist = std::clamp(settings.VolumeDetailDistance, 100.0f, 8000.0f);
 		d.VoxInnerCentre = { 0.0f, 0.0f, 0.0f, detailDist };
 		if (L > 0) {

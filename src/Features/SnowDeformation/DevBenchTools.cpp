@@ -11,10 +11,6 @@
 #	include <DevBenchAPI.h>
 #endif
 
-// Read-only DevBench tools for perf loops. The shader-type table is the F10
-// overlay's: CPU wall time between draw submissions attributed to the drawing
-// shader type, smoothed 0.95/0.05, and only updated while the overlay shows.
-
 #ifdef DEVBENCH_BRIDGE_ENABLED
 namespace
 {
@@ -46,7 +42,6 @@ namespace
 		json out;
 		try {
 			const json args = a_argsJson && *a_argsJson ? json::parse(a_argsJson) : json::object();
-			// arm: frames the census stays armed (default 120); history: the newest N frame rows, oldest first.
 			globals::features::snowDeformation.cpuCensusArmedUntil = globals::state->frameCount + std::clamp(args.value("arm", 120u), 1u, 100000u);
 			const auto& s = globals::features::snowDeformation.cpuShown;
 			json spans = json::array();

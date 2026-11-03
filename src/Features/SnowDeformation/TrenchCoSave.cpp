@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/CoSave.h"
@@ -9,34 +5,12 @@
 
 #include <unordered_set>
 
-// Persistent trenches, Stage C: the tile store on the SKSE co-save channel.
-// Design in PERSISTENT-TRENCHES-PLAN.md; the channel itself is CoSave.h.
-//
-// Layout, version 2. The per-tile header is exactly kTrenchTileHeaderBytes so
-// Stage D's budget counts what actually lands in the file:
-//
-//   chunk  { u32 tileCount, u16 tileDim, u16 pad, f32 tileWorldSize }
-//   tile   { u32 worldspace, i32 x, i32 y, f32 clockRel, f32 touchRel,
-//            u32 payloadBytes }  followed by payloadBytes of depth payload,
-//          { f32 freshRel, u32 freshBytes } followed by freshBytes of
-//            freshness payload (0 bytes: the tile's tracks have aged out)
-//
-// Version 1 is version 2 without the freshness pair; it loads with every
-// track aged. Clocks and touch are RELATIVE to this session's own (all <= 0,
-// meaning "this far behind now"), so nothing depends on two playthroughs
-// sharing a calendar. On load the decay clock restarts at zero and a tile's
-// negative clock is the decay it still owes; the freshness clock is put that
-// far behind the store's ageing clock. tileDim and tileWorldSize are written
-// so a resolution change is detected rather than misread at the wrong scale.
-
 void SnowDeformation::EncodeTrenchTile(const std::vector<uint8_t>& a_bytes, std::vector<uint8_t>& o_bytes) const
 {
 	const auto& depth = a_bytes;
 	o_bytes.clear();
 	o_bytes.reserve(depth.size() / 4);
 
-	// The rule pinned in the header, and the one SweepTrenchStore measures
-	// against: (count 1-255, value) pairs, a longer run split across pairs.
 	size_t run = 0;
 	uint8_t previous = depth[0];
 	auto emit = [&]() {
@@ -58,8 +32,6 @@ void SnowDeformation::EncodeTrenchTile(const std::vector<uint8_t>& a_bytes, std:
 	}
 	emit();
 
-	// A tile the encoder would grow is written raw, which is what the measured
-	// size assumed as well.
 	if (o_bytes.size() >= depth.size())
 		o_bytes.assign(depth.begin(), depth.end());
 }
@@ -97,8 +69,6 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 		return;
 	}
 
-	// Written even when empty or switched off, so a record always exists and a
-	// load can tell "no trenches" from "no data".
 	const uint32_t tileCount = settings.PersistTrenches ? (uint32_t)trenchTiles.size() : 0u;
 	const uint16_t tileDim = (uint16_t)kTrenchTileDim;
 	const uint16_t pad = 0;
@@ -138,10 +108,6 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 		written += payloadBytes + freshBytes + kTrenchTileHeaderBytes;
 	}
 
-	// The budget slider is denominated in this number. A drift between what the
-	// sweep measured and what was actually written means the cap has quietly
-	// stopped bounding the save - cheap to notice here, expensive to diagnose
-	// from a bug report about save size.
 	if (trenchEncodedTotal && written > trenchEncodedTotal + trenchEncodedTotal / 8)
 		logger::warn("[SNOW DEFORMATION] trench co-save wrote {} bytes against a measured {}; budget accounting has drifted",
 			written, trenchEncodedTotal);
@@ -153,28 +119,20 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	LoadTraceBegin("co-save trench store");
 	LoadTraceScope _loadTrace(this, "CoSave: LoadTrenchStore");
 	if (a_version != kTrenchRecordVersion && a_version != 1) {
-		// Refused, not guessed at: a future layout read as this one is a
-		// corrupt store rather than a missing one.
 		logger::warn("[SNOW DEFORMATION] trench co-save is version {}, this build reads 1-{}; stored trenches dropped",
 			a_version, kTrenchRecordVersion);
 		return;
 	}
-	// Version 1 kept no dates: its tracks come back aged.
 	const bool dated = a_version >= 2;
 
 	uint32_t tileCount = 0;
 	uint16_t tileDim = 0;
 	uint16_t pad = 0;
 	float tileWorld = 0.0f;
-	// Length-checked, not truthiness-checked: a truncated chunk returns a SHORT
-	// read, and treating that as success would build tiles out of whatever the
-	// stack happened to hold.
 	if (a_intfc->ReadRecordData(&tileCount, sizeof(tileCount)) != sizeof(tileCount) ||
 		a_intfc->ReadRecordData(&tileDim, sizeof(tileDim)) != sizeof(tileDim) ||
 		a_intfc->ReadRecordData(&pad, sizeof(pad)) != sizeof(pad) ||
 		a_intfc->ReadRecordData(&tileWorld, sizeof(tileWorld)) != sizeof(tileWorld)) {
-		// Never silent: a return with no line here is indistinguishable from
-		// the callback not firing at all.
 		logger::warn("[SNOW DEFORMATION] trench co-save header would not read; nothing restored");
 		return;
 	}
@@ -190,12 +148,7 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 	std::scoped_lock lock(trenchStoreMutex);
 	ClearTrenchStoreLocked("the co-save load");
 
-	// Restart the clock with the store: every tile's reading was written
-	// relative to it, so a negative clock is exactly the decay it still owes.
 	trenchDecayClock = 0.0f;
-	// UNARM the game-hours watch. Left armed, the first tick would read the
-	// loaded save's calendar as a backwards jump and clear the store just
-	// filled - the reverting-on-load trap arriving from the other side.
 	gameClockUnarm.store(true, std::memory_order_release);
 
 	std::vector<uint8_t> payload;
@@ -248,8 +201,6 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 				tile.freshClock = trenchAgeingTotal + std::min((double)freshRel, 0.0);
 			}
 		}
-		// Both stay negative: relative readings order correctly against the
-		// positive ones this session will stamp, so the LRU needs no fixup.
 		tile.clock = std::min(clockRel, 0.0f);
 		tile.lastTouch = std::min(touchRel, 0.0f);
 		tile.encodedBytes = payloadBytes + (uint32_t)(tile.fresh.empty() ? 0 : payload.size());
@@ -259,14 +210,8 @@ void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intf
 
 	trenchStatTiles = trenchTiles.size();
 
-	// The next update rebuilds the whole window from this. Without it the
-	// tiles sit in the store unreachable: injection only touches texels
-	// arriving from outside the window, and the player loads standing on the
-	// ground they describe.
 	trenchReinjectRequested.store(true, std::memory_order_release);
 
-	// The worldspaces restored, against the one the inject will ask for. A
-	// silent mismatch here looks exactly like a store that failed to load.
 	std::unordered_set<uint32_t> worldspaces;
 	for (const auto& [key, tile] : trenchTiles)
 		worldspaces.insert(key.worldspace);
@@ -284,12 +229,8 @@ void SnowDeformation::RegisterTrenchCoSave()
 		[this](const SKSE::SerializationInterface* a_intfc) { SaveTrenchStore(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadTrenchStore(a_intfc, a_version, a_length); },
 		[this]() {
-			// Fires before a save is loaded AND on a new game. Without it a
-			// fresh game inherits the last one's trenches.
 			std::scoped_lock lock(trenchStoreMutex);
 			ClearTrenchStoreLocked("the co-save revert");
-			// Unarmed so the first tick of the new timeline re-arms instead of
-			// reading its calendar as a jump.
 			gameClockUnarm.store(true, std::memory_order_release);
 			trenchDecayClock = 0.0f;
 		});

@@ -1,33 +1,8 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Globals.h"
 #include "State.h"
 #include "Utils/D3D.h"
-
-// The sun heightfield marches' occluder heights, baked. The marches of the
-// ground, the trench patch and the object snow read one gather per tap from
-// these instead of rebuilding terrain, land layer, melt, carve, berm and dunes
-// at every tap (two dependent fetch rounds, five taps a pixel):
-// [0] the ground's tap height per deformation texel, in the map's torus
-//     (SnowShell.hlsl MarchHeightCS);
-// [1] the statics march's road tap per deformation texel, the sentinel off the
-//     roads (SnowStaticsShell.hlsl RoadMarchHeightCS);
-// [2] the ground's tap height per land-layer vertex over the FineWindow, for
-//     the marches that leave the trail map (MarchHeightFarRowsCS);
-// [3] the sun envelope over [0] (MarchSunCS), which stands in for the near
-//     taps inside the trail map.
-//
-// The near pair follows the berm bake's tile list (the map or the berm field
-// changed there; the scroll's arriving strips are on it too). Every cache
-// also refreshes a band of rows a frame for the slow inputs (snowfall,
-// objects, water, clearings), faster after a terrain or land-layer rebuild,
-// and rebuilds whole when created, re-set, or after a berm bake it missed.
-// The envelope follows the same tiles, swept away from the sun, and its own
-// row band, which also carries the sun's drift.
 
 namespace
 {
@@ -40,12 +15,9 @@ namespace
 	constexpr UINT kMarchTilesSlot = 63;
 	constexpr UINT kMarchSlot = 106;
 	constexpr UINT kMarchSunSlot = 100;
-	// cos 1 and 5 degrees: a turn of the sun that takes a fast sweep, and one
-	// that takes a whole rebuild.
 	constexpr float kMarchSunFastTurn = 0.99985f;
 	constexpr float kMarchSunFullTurn = 0.99619f;
 
-	// Toward the sun, as State::UpdateSharedData sets DirLightDirection.
 	bool MarchSunDirection(float (&a_dir)[3])
 	{
 		auto* smState = globals::game::smState;
@@ -133,8 +105,6 @@ namespace
 		return a_tex->srv && a_tex->uav ? a_tex : nullptr;
 	}
 
-	// A band of rows from a_cursor (all of them on a full build); advances
-	// the cursor and spends the fast budget.
 	uint32_t MarchRows(bool a_full, uint32_t a_dim, uint32_t a_slow, uint32_t a_fast, uint32_t& a_fastLeft, uint32_t& a_cursor, uint32_t& a_start)
 	{
 		uint32_t rows = a_full ? a_dim : (a_fastLeft > 0 ? std::min(a_fast, a_fastLeft) : a_slow);
@@ -184,12 +154,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	if (!marchCacheCB)
 		marchCacheCB = new ConstantBuffer(ConstantBufferDesc<MarchCacheCB>(), "SnowDeformation::MarchCacheCB");
 
-	// What moves every texel at once: the settings, the window's size, the
-	// readers' gates. Snowfall's depth scale (RimStyle.w) creeps every frame
-	// while it snows and is left to the row bands. So do the berm and lip
-	// amplitudes and the wall slough: freshness and the climate ease them
-	// every tick, so the key holds their sliders and the climate's overrides,
-	// not their values. Track age the same: the clock runs, Track Ageing keys.
 	uint64_t key = 1469598103934665603ull;
 	auto mix = [&](const void* a_p, size_t a_n) {
 		const auto* b = static_cast<const uint8_t*>(a_p);
@@ -210,13 +174,11 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const bool terrainMoved = shellTerrainVersion != marchCacheTerrainVersion;
 	marchCacheTerrainVersion = shellTerrainVersion;
 
-	// Near: the berm bake's tiles, unless the caches missed one.
 	const bool missedBake = bermBakeSeq > marchCacheBermSeq + 1;
 	const bool full = !marchCacheValid || keyChanged || missedBake;
 	const bool tiles = !full && bermBakeSeq == marchCacheBermSeq + 1;
 	marchCacheBermSeq = bermBakeSeq;
 	const bool fineMoved = shellFineOriginX != marchCacheFineOrigin[0] || shellFineOriginY != marchCacheFineOrigin[1];
-	// Tracks age slowly enough for the row bands, except across a wait.
 	const bool tracksAged = std::abs(a_cb.TrackAge.x - marchCacheAgeingClock) > 2.0f;
 	marchCacheAgeingClock = a_cb.TrackAge.x;
 	if (full)
@@ -226,7 +188,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	uint32_t nearStart = 0;
 	const uint32_t nearRows = MarchRows(full, dim, kMarchCacheRows, kMarchCacheFastRows, marchCacheFastRows, marchCacheRowCursor, nearStart);
 
-	// Far: whole when the land-layer window moves.
 	const bool farFull = farCache && (!marchFarValid || keyChanged || fineMoved);
 	if (farCache && !farFull && terrainMoved)
 		marchFarFastRows = kShellFineDim;
@@ -235,9 +196,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	marchCacheFineOrigin[0] = shellFineOriginX;
 	marchCacheFineOrigin[1] = shellFineOriginY;
 
-	// The envelope's sun: a sweep takes the sun as it stands when it starts, as
-	// Terrain Shadows does; a turn past a degree starts a fast sweep, past five
-	// a whole rebuild (a wait, the moon taking over).
 	const float sunDot = sunNow[0] * marchSunDir[0] + sunNow[1] * marchSunDir[1] + sunNow[2] * marchSunDir[2];
 	const bool sunFull = full || !marchSunValid || sunDot < kMarchSunFullTurn;
 	const bool sunTurned = !sunFull && sunDot < kMarchSunFastTurn;
@@ -277,7 +235,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		context->CSSetUnorderedAccessViews(0, 1, &uav, nullptr);
 	};
 
-	// Ground, near and far: SnowShell.hlsl's own bindings for what its taps read.
 	context->CSSetConstantBuffers(0, 3, cbs);
 	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
@@ -301,7 +258,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		rowsDispatch(kFarRowsCS, kShellFineDim, farStart, farRows);
 	}
 
-	// Roads: SnowStaticsShell.hlsl's bindings, with the trench patch's window.
 	StaticsCB scb{};
 	FillPatchDrawCB(scb);
 	staticsCB->Update(scb);
@@ -316,8 +272,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	}
 	rowsDispatch(kRoadRowsCS, dim, nearStart, nearRows);
 
-	// The sun envelope over the ground heights just written: the swept tiles
-	// and its own row band, gathered through the shells' wrapping sampler.
 	ID3D11ShaderResourceView* groundSRV = marchHeight[0]->srv.get();
 	ID3D11SamplerState* sunSampler = shellSnowSampler.get();
 	setUAV(marchSunEnvelope);

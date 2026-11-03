@@ -9,14 +9,7 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
-// Shader prime + blob disk cache. See the header block for the contract.
-//
-// The fingerprint deliberately hashes ALL of Data\Shaders, not the snow
-// includes' exact closure: over-wide only costs a background recompile after
-// an unrelated edit, while under-wide serves stale bytecode after a deploy -
-// the invisible-change trap this project's workflow cannot afford.
-
-static constexpr uint32_t kSnowBlobMagic = 0x53445343u;  // "SDSC"
+static constexpr uint32_t kSnowBlobMagic = 0x53445343u;
 static constexpr uint32_t kSnowBlobVersion = 1;
 static constexpr uint64_t kSnowBlobMaxBytes = 64ull << 20;
 
@@ -43,8 +36,6 @@ std::string SnowDeformation::ShaderSourcesFingerprint()
 	if (!snowSourcesFingerprint.empty())
 		return snowSourcesFingerprint;
 
-	// Contents, not timestamps: MO2's VFS makes mtimes untrustworthy across
-	// deploys. Deterministic order so the hash is stable per launch.
 	std::vector<std::filesystem::path> files;
 	std::error_code ec;
 	for (auto it = std::filesystem::recursive_directory_iterator("Data\\Shaders", ec);
@@ -102,8 +93,6 @@ winrt::com_ptr<ID3DBlob> SnowDeformation::ShaderCacheLoad(const std::string& a_k
 	std::string storedKey(keyLen, '\0');
 	in.read(storedKey.data(), keyLen);
 	in.read(reinterpret_cast<char*>(&size), sizeof(size));
-	// The full key is compared, not just the filename hash, so a collision or
-	// a stale fingerprint reads as a miss rather than serving wrong bytecode.
 	if (!in || storedKey != a_key || size == 0 || size > kSnowBlobMaxBytes) {
 		snowShaderCacheMisses.fetch_add(1, std::memory_order_relaxed);
 		return blob;
@@ -152,10 +141,6 @@ ID3D11DeviceChild* SnowDeformation::CompileSnowShader(const wchar_t* a_path, con
 		}
 		defs += ';';
 	}
-	// Everything Util::CompileShader folds into the compile beyond its
-	// arguments: the global define set, developer mode (which also swaps the
-	// flag set), and the flag-affecting toggles. Any of them changing must
-	// miss the cache.
 	auto state = globals::state;
 	std::string global;
 	if (auto shaderDefines = state->GetDefines())
@@ -192,8 +177,6 @@ void SnowDeformation::DataLoaded()
 	if (!snowPrimeState.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
 		return;
 	snowPrimeThread = std::thread([this] {
-		// Grace nap: a render-thread call already past a gate when the state
-		// flipped drains out before the worker touches any shader member.
 		std::this_thread::sleep_for(std::chrono::milliseconds(250));
 		RunShaderPrime();
 		snowPrimeState.store(2, std::memory_order_release);
@@ -210,14 +193,6 @@ void SnowDeformation::RunShaderPrime()
 {
 	const auto start = std::chrono::steady_clock::now();
 
-	// Three groups, in the order the player sees them, each PUBLISHED through
-	// snowPrimePhase the moment it completes so the gated render paths
-	// unlock per group: on a cold cache the snowfield appears when ITS
-	// shaders exist, not when all of them do. Ownership contract: the worker
-	// never touches a published group's members again, and the render thread
-	// never touches an unpublished group's (SnowShadersPending). A quit
-	// mid-prime bails between items so shutdown never waits on more than one
-	// compile.
 	const std::function<void()> groundSteps[] = {
 		[&] { ShaderSourcesFingerprint(); },
 		[&] { GetShellPSPrepassEarly(); },
@@ -296,8 +271,6 @@ void SnowDeformation::RunShaderPrime()
 		return;
 	if (!runGroup(effectSteps, std::size(effectSteps), 3, "effects"))
 		return;
-	// The body coat's contact writer into the blob cache only: its shaders are
-	// built on the render thread when an actor is first due (BodyCoat.cpp).
 	PrimeBodyCoatWriter();
 
 	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();

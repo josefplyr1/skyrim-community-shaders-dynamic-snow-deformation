@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/CoSave.h"
@@ -10,14 +6,8 @@
 
 #include <numbers>
 
-// Progressive snow accumulation: one global scalar, 0 = the authored per-class
-// depth, 1 = AccumulationPeak times it. Co-save record 'SNAC'.
-// Design in ACCUMULATION-PLAN.md, rationale in CODE-NOTES.md.
-
 void SnowDeformation::TickAccumulation()
 {
-	// Loaded save: the co-save already supplied this timeline's value, so the
-	// calendar jump must not be integrated.
 	if (weatherClock.reversed)
 		return;
 
@@ -25,17 +15,10 @@ void SnowDeformation::TickAccumulation()
 	if (elapsed <= 0.0f)
 		return;
 
-	// Indoors and in a No Sky worldspace the last exterior intensity holds
-	// rather than reading live: nothing snows there, so a live reading would
-	// melt the exterior while the player sleeps. TES::interiorCell's few-frame
-	// lag through a load transition is immaterial at these rates.
 	auto* tes = globals::game::tes;
 	if (!tes || (!tes->interiorCell && !NoSkyWorldspace()))
 		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 
-	// One signed rate. Melt is weighted by (1 - intensity) rather than gated on
-	// a snowing threshold, so a weather cross-fade turns the curve instead of
-	// stepping it; ComputeSnowfallIntensity already fades across transitions.
 	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 	const float growth = settings.AccumulationHours > 0.01f ?
 	                         intensity / settings.AccumulationHours :
@@ -43,9 +26,6 @@ void SnowDeformation::TickAccumulation()
 	const float melt = settings.AccumulationMeltHours > 0.01f ?
 	                       (1.0f - intensity) / settings.AccumulationMeltHours :
 	                       0.0f;
-	// Applied in all weather including snowfall, so the layer is bounded at the
-	// authored height. Same order as the melt, so it also shortens a
-	// clear-weather settle.
 	const float fade = settings.AccumulationFadeDays > 0.01f ?
 	                       1.0f / (settings.AccumulationFadeDays * 24.0f) :
 	                       0.0f;
@@ -60,8 +40,6 @@ float SnowDeformation::GetAccumulationDepthScale() const
 	if (!settings.EnableSnowAccumulation)
 		return 1.0f;
 
-	// Peak clamped at 1 from below: accumulation only adds, so a hand-edited
-	// peak below 1 must not turn snowfall into a thaw.
 	const float peak = std::max(settings.AccumulationPeak, 1.0f);
 	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (peak - 1.0f);
 }
@@ -73,8 +51,6 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// Written zeroed rather than skipped when off, so the record layout does not
-	// depend on a setting.
 	const float value = settings.PersistAccumulation ? snowAccumulation.load(std::memory_order_relaxed) : 0.0f;
 	const float weather = settings.PersistAccumulation ? accumWeatherIntensity.load(std::memory_order_relaxed) : 0.0f;
 	if (!a_intfc->WriteRecordData(&value, sizeof(value)) ||
@@ -89,7 +65,6 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 {
 	LoadTraceBegin("co-save accumulation");
 	LoadTraceScope _loadTrace(this, "CoSave: LoadAccumulation");
-	// Refuse an unrecognised version rather than parsing it as this one.
 	if (a_version != kAccumRecordVersion) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save is version {}, this build reads {}; dropped",
 			a_version, kAccumRecordVersion);
@@ -101,8 +76,6 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// Length-checked, not truthiness-checked: a short read would leave stack
-	// contents in the scalar.
 	float value = 0.0f;
 	float weather = 0.0f;
 	if (a_intfc->ReadRecordData(&value, sizeof(value)) != sizeof(value) ||
@@ -115,8 +88,6 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 		return;
 	}
 
-	// Gated on load as well as save: a record written while the toggle was on
-	// must not restore after it is turned off.
 	if (!settings.PersistAccumulation) {
 		weatherClockUnarm.store(true, std::memory_order_release);
 		gameClockUnarm.store(true, std::memory_order_release);
@@ -125,9 +96,7 @@ void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_int
 	}
 
 	snowAccumulation.store(std::clamp(value, 0.0f, 1.0f), std::memory_order_relaxed);
-	// Held weather rides the record; an indoor save must not resume as clear sky.
 	accumWeatherIntensity.store(std::clamp(weather, 0.0f, 1.0f), std::memory_order_relaxed);
-	// Unarm both clocks, or the first tick reads the loaded calendar as a jump.
 	weatherClockUnarm.store(true, std::memory_order_release);
 	gameClockUnarm.store(true, std::memory_order_release);
 	logger::info("[SNOW DEFORMATION] accumulation restored at {:.3f}", value);
@@ -140,18 +109,12 @@ void SnowDeformation::RegisterAccumulationCoSave()
 		[this](const SKSE::SerializationInterface* a_intfc) { SaveAccumulation(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadAccumulation(a_intfc, a_version, a_length); },
 		[this]() {
-			// Fires before a load and on a new game; state must not cross timelines.
 			snowAccumulation.store(0.0f, std::memory_order_relaxed);
 			accumWeatherIntensity.store(0.0f, std::memory_order_relaxed);
 			weatherClockUnarm.store(true, std::memory_order_release);
 			gameClockUnarm.store(true, std::memory_order_release);
 		});
 }
-
-// ---- Snow condition: freshness ----
-// One global scalar beside the accumulated layer: 0 = settled firm snow (the
-// authored trench look), 1 = loose new snow. Co-save record 'SNFR'.
-// Research in TRENCH-MORPHOLOGY-RESEARCH.md (P4), rationale in CODE-NOTES.md.
 
 void SnowDeformation::TickSnowCondition()
 {
@@ -161,7 +124,6 @@ void SnowDeformation::TickSnowCondition()
 	if (elapsed <= 0.0f)
 		return;
 
-	// The accumulator's held weather: exterior intensity, frozen indoors.
 	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
 	const float freshen = intensity / kFreshenHours;
 	const float settle = settings.FreshSnowSettleHours > 0.01f ?
@@ -177,12 +139,6 @@ float SnowDeformation::GetSnowSoftness() const
 	return std::clamp(freshness, 0.0f, 1.0f) * std::clamp(settings.FreshSnowSoftness, 0.0f, 1.0f);
 }
 
-// ---- Snow climate (TRACK-VARIATION-RESEARCH.md 3.2) ----
-// A temperature proxy from the land's snow share, the weather and the sun;
-// wetness, stickiness and firmness from it, freshness and wind packing; and
-// the ageing clock. The condition formulas are mirrored in SnowShell.hlsl
-// (SNOW_CONDITION_VIEW); the look they drive (3.3) is ComputeSnowClimateLook.
-
 namespace
 {
 	float ClimateSmoothstep(float a_edge0, float a_edge1, float a_x)
@@ -196,22 +152,17 @@ namespace
 		return ClimateSmoothstep(-1.5f, 1.5f, a_temperature);
 	}
 
-	// How warm the air is for the snow, 0 at freezing to 1 at +3 C: ages tracks, melts a coat.
 	float ClimateWarmth(float a_temperature)
 	{
 		return std::clamp(a_temperature / 3.0f, 0.0f, 1.0f);
 	}
 
-	// New snow is lighter the colder it falls (Hedstrom and Pomeroy 1998);
-	// it settles toward 290 kg/m3, wetness and wind pack it further.
 	float ClimateDensity(float a_temperature, float a_freshness, float a_wetness, float a_wind)
 	{
 		const float fresh = a_temperature <= 0.0f ? 67.9f + 51.3f * std::exp(a_temperature / 2.6f) : 125.0f + 40.0f * std::min(a_temperature, 3.0f);
 		return std::clamp(std::lerp(fresh, 290.0f, 1.0f - a_freshness) + 110.0f * a_wetness + 150.0f * a_wind, 50.0f, 560.0f);
 	}
 
-	// Sintering is negligible below about -20 C and steepest near -2 C; moist
-	// snow sticks, slush does not; wind-packed snow holds together.
 	float ClimateStickiness(float a_temperature, float a_freshness, float a_wetness, float a_wind)
 	{
 		return std::clamp(0.1f + 0.62f * ClimateSmoothstep(-20.0f, -1.5f, a_temperature) * (0.3f + 0.7f * (1.0f - a_freshness)) +
@@ -224,25 +175,18 @@ namespace
 		return ClimateSmoothstep(150.0f, 460.0f, a_density);
 	}
 
-	// Under a tenth of its slider a term is off, so its branch skips cleanly.
 	float ClimateHardZero(float a_factor)
 	{
 		return std::clamp((a_factor - 0.1f) / 0.9f, 0.0f, 1.0f);
 	}
 
-	// Loose snow falls back into the print; the rest of the wall stands.
 	constexpr float kSloughMax = 0.5f;
 
-	// Ageing-clock units a game hour of full snowfall adds.
 	constexpr float kSnowfallAgeing = 20.0f;
-	// How much faster the clock runs in full rain, in full wind packing out of
-	// snowfall, and warm (+3 C). The body coat's clear-weather clock takes them too.
 	constexpr float kRainAgeing = 8.0f;
 	constexpr float kWindAgeing = 4.0f;
 	constexpr float kWarmAgeing = 6.0f;
-	// Held water freezes at a rate of one per hour from this many degrees of frost.
 	constexpr float kFreezeColdness = 3.0f;
-	// Above freezing, water the snow no longer holds drains over this many hours.
 	constexpr float kDrainHours = 6.0f;
 
 	struct ClimateLookTerms
@@ -250,9 +194,6 @@ namespace
 		float berm, lip, teeth, slough;
 	};
 
-	// Every term is 1 in settled sticky dry snow (stickiness 0.7 and up),
-	// where the look is the sliders' own. Wet snow is soft whatever its
-	// density, so firmness counts dry.
 	ClimateLookTerms ClimateLookOf(float a_stickiness, float a_firmness, float a_wetness)
 	{
 		ClimateLookTerms look;
@@ -346,8 +287,6 @@ void SnowDeformation::TickSnowClimate()
 		}
 	}
 
-	// Snowfall buries in an hour or two, sun and rain round in hours, calm
-	// cold keeps a track crisp for a day or two.
 	const float warm = ClimateWarmth(climate.temperature);
 	climate.ageingRate = debugAgeingRateOverride >= 0.0f ? debugAgeingRateOverride :
 	                                                       1.0f + kSnowfallAgeing * snowing + kRainAgeing * raining + kWindAgeing * climate.windPacking * (1.0f - snowing) + kWarmAgeing * warm;
@@ -363,7 +302,6 @@ void SnowDeformation::TickSnowAgeing()
 		return;
 	climate.ageingClock += climate.ageingRate * elapsed;
 	climate.ageingTotal += (double)climate.ageingRate * elapsed;
-	// Track dates follow the clock back (TrackRebaseCS).
 	while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
 		climate.ageingClock -= kAgeingClockStart;
 		climate.ageingRebase += kAgeingClockStart;
@@ -375,9 +313,7 @@ void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
 {
 	auto& climate = snowClimate;
 	const float playerT = debugClimateTemperatureOn ? debugClimateTemperature : climate.temperature;
-	// Snowfall buries the glaze as it buries a track.
 	const float bury = std::exp(-a_elapsed * kSnowfallAgeing * a_snowing / kTrackAgeSpan);
-	// The override holds its ice still, and the history with it.
 	const bool overridden = debugClimateIceOverride >= 0.0f;
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
 		const float t = playerT + (float(i) - 1.0f) * kClimateLUTStep;
@@ -399,15 +335,11 @@ void SnowDeformation::TickSnowIce(float a_elapsed, float a_snowing)
 		water += thawed;
 		ice = std::clamp(ice * bury, 0.0f, 1.0f);
 		water = std::clamp(water * bury, 0.0f, 1.0f);
-		// Ice frozen before a cut thaws and is buried like the rest.
 		if (!overridden)
 			for (auto& entry : climate.iceHistory)
 				entry[i] *= unthawed * bury;
 	}
 
-	// The shown ice when each clock unit ended; the current unit's is now. Units
-	// a jump skips take the ice it arrived at. A clock wrap is kAgeingClockStart
-	// units, a whole number of histories.
 	const int32_t unit = static_cast<int32_t>(std::floor(climate.ageingClock));
 	int32_t passed = climate.iceHistoryUnit < 0 ? 0 : unit - climate.iceHistoryUnit;
 	if (passed < 0)
@@ -459,7 +391,6 @@ SnowDeformation::SnowCondition SnowDeformation::SnowConditionAt(float a_temperat
 	condition.temperature = a_temperature;
 	condition.freshness = std::clamp(debugFreshnessOverride >= 0.0f ? debugFreshnessOverride : snowFreshness.load(std::memory_order_relaxed), 0.0f, 1.0f);
 	condition.windPacking = snowClimate.windPacking;
-	// An overridden temperature moves the wetness with it, as height does per pixel.
 	condition.wetness = debugClimateWetnessOverride >= 0.0f ?
 	                        std::min(debugClimateWetnessOverride, 1.0f) :
 	                        std::clamp(snowClimate.wetness + ClimateWetRamp(condition.temperature) - ClimateWetRamp(liveTemperature), 0.0f, 1.0f);
@@ -482,7 +413,6 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 	look.teeth = ClimateHardZero(terms.teeth);
 	look.slough = terms.slough;
 
-	// Rows by the pixel's temperature offset; the shader lerps between them.
 	const float wetIce = SnowWetIceStrength();
 	float mostIce = 0.0f;
 	for (uint32_t i = 0; i < kClimateLUTRows; ++i) {
@@ -490,7 +420,6 @@ SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
 		look.lut[i] = { wetIce * SnowIceShown(i), wetIce * row.wetness, 0.0f, look.strength * row.wetness };
 		mostIce = std::max(mostIce, look.lut[i].x);
 	}
-	// z: the shaders' one-read ice gate (SnowIceInView).
 	for (auto& entry : look.lut)
 		entry.z = mostIce;
 	return look;
@@ -562,7 +491,6 @@ void SnowDeformation::RegisterSnowIceCoSave()
 				snowClimate.rowWater[i] = std::isfinite(values[i]) ? std::clamp(values[i], 0.0f, 1.0f) : 0.0f;
 				snowClimate.rowIce[i] = std::isfinite(values[kClimateLUTRows + i]) ? std::clamp(values[kClimateLUTRows + i], 0.0f, 1.0f) : 0.0f;
 			}
-			// Without a history every track already made reads as cut before the ice.
 			int32_t unit = -1;
 			if (withHistory && (a_intfc->ReadRecordData(&unit, sizeof(unit)) != sizeof(unit) || a_intfc->ReadRecordData(history.data(), sizeof(history)) != sizeof(history) ||
 								   unit < static_cast<int32_t>(kAgeingClockStart) || unit >= static_cast<int32_t>(2.0f * kAgeingClockStart))) {
@@ -585,15 +513,8 @@ void SnowDeformation::RegisterSnowIceCoSave()
 		});
 }
 
-// ---- Snow coat aging inputs (SSPP-SNOW-PLAN.md section 7, stage A0) ----
-
 namespace
 {
-	// D31 (Josef, 2026-11-02): an interior is cold by its location's type, as
-	// the vanilla interiors are typed (BODY-SNOW-PLAN.md section 5.51): caves,
-	// ruins, tombs and lairs, mines, jails, forts, ships and Halls of the Dead;
-	// or on Survival Mode's own list of cold interiors while it is loaded.
-	// Lived-in places and interiors without a type stay warm. Why, or nullptr.
 	const char* InteriorColdBy(const RE::TESObjectCELL* a_cell, const RE::BGSLocation* a_location)
 	{
 		static constexpr const char* kColdTypes[] = { "LocTypeDungeon", "LocTypeClearable", "LocTypeAnimalDen", "LocTypeBanditCamp", "LocTypeDragonLair",
@@ -643,8 +564,6 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	if (!a_actor)
 		return aging;
 	const auto position = a_actor->GetPosition();
-	// The melt bowl of SnowExclusions.hlsli without its edge noise: the fire
-	// that clears the ground is the one that melts the coat.
 	float governing = -1.0f;
 	for (const auto& source : heatSources) {
 		const float radius = std::max(source.w, 1.0f);
@@ -668,7 +587,6 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 	aging.interiorSnow = aging.interior && capturedLoadedPrev > 0;
 	if (auto* player = globals::game::player; aging.interior && player)
 		aging.interiorCold = InteriorColdBy(player->GetParentCell(), player->GetCurrentLocation());
-	// Snow Climate at the character's own height.
 	const SnowCondition condition = SnowConditionAtHeight(position.z);
 	aging.temperature = condition.temperature;
 	aging.warm = ClimateWarmth(condition.temperature);
@@ -679,7 +597,6 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 		aging.snowfall = std::max(accumWeatherIntensity.load(std::memory_order_relaxed), 0.0f);
 		aging.wind = std::clamp(snowClimate.windPacking, 0.0f, 1.0f);
 	}
-	// The stamp gather keeps these; asleep (no snow near), they hold old values.
 	if (globals::state->frameCount - stampGatherFrame <= 1u) {
 		if (auto it = impactTracks.find(a_actor->formID); it != impactTracks.end()) {
 			const auto& track = it->second;
@@ -690,8 +607,6 @@ SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor)
 			aging.knockEnergy = track.knockEnergy;
 			aging.trackTime = track.time;
 		}
-		// Fire spells' melt emitters as the stamp pass melts the ground under them:
-		// the capsule's falloff from Melt Bowl Floor, strength x rate, summed.
 		const float floorStart = std::clamp(settings.MeltBowlFloor, 0.0f, 0.98f);
 		for (const auto& emitter : spellEmitters) {
 			if (emitter.element != SpellElement::Fire || emitter.mark != SpellMark::Melt || emitter.cone)

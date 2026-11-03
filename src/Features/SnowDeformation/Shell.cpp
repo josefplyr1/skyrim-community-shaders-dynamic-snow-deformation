@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include <DDSTextureLoader.h>
@@ -32,8 +28,6 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 
 	D3D11_TEXTURE2D_DESC srcDesc;
 	srcTex->GetDesc(&srcDesc);
-	// Under dynamic resolution only the rendered corner of the full-size
-	// target is ever copied or read.
 	const D3D11_BOX* hold = a_extent ? a_extent : a_box;
 	const UINT width = hold ? std::clamp(hold->right, 1u, srcDesc.Width) : srcDesc.Width;
 	const UINT height = hold ? std::clamp(hold->bottom, 1u, srcDesc.Height) : srcDesc.Height;
@@ -60,8 +54,6 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 			return;
 		Util::SetResourceName(a_tex.get(), a_name);
 
-		// Reuse the source SRV's view description so typeless depth formats
-		// resolve to the same shader-readable format.
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
 		a_srcSRV->GetDesc(&srvDesc);
 		if (FAILED(globals::d3d::device->CreateShaderResourceView(a_tex.get(), &srvDesc, a_srv.put()))) {
@@ -77,47 +69,16 @@ void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const 
 		globals::d3d::context->CopySubresourceRegion(a_tex.get(), 0, box.left, box.top, 0, srcTex.get(), 0, &box);
 }
 
-/**
- * @brief Lazy-loads the shell snow texture set from the user-configurable
- * path (through the MO2 VFS).
- *
- * The TruePBR variant of the chosen path (Textures\PBR\..., _n / _rmaos
- * companions, linear-color albedo) is probed first. When found, the
- * modlist's own TruePBR config JSON (PBRTextureSets\, matched by texture
- * basename) supplies the authored glint/roughness/specular values.
- */
-
-/**
- * @brief Loads a DDS through the GAME's resource system rather than the filesystem.
- *
- * A plain file open sees only loose files. That is half the game: Bethesda
- * ships almost every texture inside a BSA, so a path that is perfectly valid -
- * and that the game itself renders every day - resolves to nothing unless some
- * mod happens to have unpacked it. The snow shell had that hole from the start
- * and never showed it, because anyone running this feature is also running a
- * snow retexture with loose files. The frost pattern found it immediately: its
- * default is a vanilla landscape texture that lives in Skyrim - Textures5.bsa.
- *
- * BSResourceNiBinaryStream is the game's own lookup, so it reads loose files
- * AND archives, and a modlist's override still wins exactly as it does in
- * game. The filesystem path stays as a fallback for anything outside Data.
- */
 bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv)
 {
 	a_srv = nullptr;
 	if (a_dataRelativePath.empty())
 		return false;
 
-	// "Textures\Effects\shockbolttile01" is how anyone would write the path,
-	// and the resource system wants the extension. Supplying it is kinder than
-	// silently loading nothing and leaving the user to guess which half of the
-	// path was wrong.
 	std::string path = a_dataRelativePath;
 	{
 		const size_t dot = path.find_last_of('.');
 		const size_t sep = path.find_last_of("\\/");
-		// No dot at all, or the only dot is in a folder name: npos compares
-		// LARGER than any real index, so the two cases cannot share one test.
 		if (dot == std::string::npos || (sep != std::string::npos && dot < sep))
 			path += ".dds";
 	}
@@ -129,9 +90,6 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 
 	RE::BSResourceNiBinaryStream stream(path);
 	if (stream.good() && stream.stream) {
-		// The stream reports the size the CONSUMER sees, so a compressed BSA
-		// entry gives its uncompressed length here and decompresses as it is
-		// read. binary_read is protected; the templated read is the way in.
 		const uint32_t total = stream.stream->totalSize;
 		if (total > 0) {
 			std::vector<uint8_t> bytes(total);
@@ -146,9 +104,6 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 		a_srv = nullptr;
 	}
 
-	// Fallback: a real path on disk, for anything the resource system does not
-	// own. Loose files already came back above, so this is only ever the
-	// unusual case.
 	const std::string diskPath = "Data\\" + path;
 	const std::wstring wide(diskPath.begin(), diskPath.end());
 	if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()))) {
@@ -188,10 +143,6 @@ void SnowDeformation::EnsureShellSnowTextures()
 	shellSnowHeightSRV = nullptr;
 	shellSnowTextureIsPBR = false;
 
-	// Through the game's own lookup, so a snow texture that lives only in a BSA
-	// loads like any other. This path had the same hole the frost pattern
-	// exposed; it simply never showed, because a modlist that wants deep snow
-	// invariably ships a loose snow retexture on top of the vanilla one.
 	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
 		return LoadGameDDS(a_path, a_srv);
 	};
@@ -227,21 +178,12 @@ void SnowDeformation::EnsureShellSnowTextures()
 		snowDisplacementScale = 1.0f;
 		snowPBRSetName.clear();
 
-		// TruePBR already parsed every PBRTextureSets JSON into its table, keyed
-		// by filename stem (the texture-set editor ID) - the same string the old
-		// directory scan matched against. Match the keys instead: shared struct,
-		// shared parse, and ReloadTextureSetData/menu edits reach us through
-		// RefreshSnowPBRParams. Exact key first, then the lexicographically
-		// smallest substring match so multi-match modlists resolve the same way
-		// every run (the old filesystem-order scan did not).
 		size_t slashPos = base.find_last_of('\\');
 		std::string baseName = (slashPos == std::string::npos) ? base : base.substr(slashPos + 1);
 		std::transform(baseName.begin(), baseName.end(), baseName.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
 		const auto& pbrSets = globals::features::truePBR.pbrTextureSets;
 		size_t matchCount = 0;
-		// The user's pin wins over any match: a modlist can hold several sets
-		// whose key contains the same basename and no rule fits every one.
 		if (!settings.SnowPBRConfig.empty()) {
 			if (pbrSets.find(settings.SnowPBRConfig) != pbrSets.end()) {
 				snowPBRSetName = settings.SnowPBRConfig;
@@ -262,15 +204,6 @@ void SnowDeformation::EnsureShellSnowTextures()
 					logger::info("[SNOW DEFORMATION] pinned TruePBR config '{}' is not loaded; falling back to the automatic match", settings.SnowPBRConfig);
 			}
 		}
-		// RANKED, not first-alphabetically. A modlist holds several keys
-		// containing the same basename, and taking the smallest name handed the
-		// shell an AutoBlend stub - three fields, no glintParameters block at
-		// all - so the snow rendered with glints off and the stub's roughness
-		// (2026-09-22: 'Blendsnow01' beat 'LandscapeSnow01' on the letter B and
-		// the sparkle vanished from BOTH shells, which share the >1.1 gate).
-		// Order: a set that carries the glint block we came for, then the least
-		// decorated name, then alphabetically so a tie resolves the same run to
-		// run. An exact key still wins outright.
 		std::string bestKey;
 		bool bestHasGlints = false;
 		size_t bestExtra = 0;
@@ -337,12 +270,11 @@ void SnowDeformation::RefreshSnowPBRParams()
 	snowDisplacementScale = cfg.displacementScale;
 	if (cfg.glintParameters.enabled) {
 		snowGlintLogDensity = cfg.glintParameters.logMicrofacetDensity;
-		// Same clamps Lighting.hlsl applies (PBR::Constants).
 		snowGlintMicroRoughness = std::clamp(cfg.glintParameters.microfacetRoughness, 0.005f, 0.3f);
 		snowGlintDensityRandomization = std::clamp(cfg.glintParameters.densityRandomization, 0.0f, 5.0f);
 		snowGlintScreenSpaceScale = std::max(1.0f, cfg.glintParameters.screenSpaceScale);
 	} else {
-		snowGlintLogDensity = 0.0f;  // below the shader's >1.1 gate
+		snowGlintLogDensity = 0.0f;
 	}
 }
 
@@ -377,8 +309,6 @@ bool SnowDeformation::EnsureShellStatsQueries()
 
 void SnowDeformation::ReadShellStatsQueries(ID3D11DeviceContext* a_context)
 {
-	// Oldest slot, two frames behind the one about to be issued; a slot that
-	// is not ready yet is simply tried again next frame.
 	const int ring = (shellStatsRing + 1) % kShellStatsRing;
 	if (!shellStatsIssued[ring])
 		return;
@@ -409,10 +339,6 @@ ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
 	if (skinRasterState && skinDecalRasterState && bias == skinRasterBiasBuilt && slope == skinRasterSlopeBuilt)
 		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 
-	// Sliders read "toward the camera"; D3D's bias is added to depth and the
-	// shells test LESS_EQUAL, so nearer is negative. The clamp bounds the
-	// slope term at a third of the old decal cap (-3e-5 NDC), the push that
-	// stood a 450 m peak 2000 units in front of its mist.
 	D3D11_RASTERIZER_DESC rasterDesc{};
 	rasterDesc.FillMode = D3D11_FILL_SOLID;
 	rasterDesc.CullMode = D3D11_CULL_NONE;
@@ -426,9 +352,6 @@ ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
 		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 	}
 	Util::SetResourceName(state.get(), "SnowDeformation::SkinRasterState");
-	// Decal-mode draws: the game's own decal bias (measured: -1, -0.65,
-	// clamp -100) on top of the skin's, unclamped like the game's, or the
-	// slope term never reaches the mesh's written depth at a grazing view.
 	D3D11_RASTERIZER_DESC decalDesc = rasterDesc;
 	decalDesc.DepthBias -= 1;
 	decalDesc.SlopeScaledDepthBias -= 0.65f;
@@ -446,8 +369,6 @@ ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
 	return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
 }
 
-// EHF sun attenuation only compiles when the addon is installed (its hlsli
-// is not CORE); SnowShading.hlsli gates on the define.
 std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines(const char* a_extra)
 {
 	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
@@ -556,8 +477,6 @@ void SnowDeformation::UpdateTerrainWet()
 	shellTerrainWetValid = true;
 }
 
-// The main depth between the landscape shell and the skins, over the decals'
-// rectangle (PreSnowCopyCS, R32F like the pre-snow copy).
 bool SnowDeformation::EnsureBloodPreSkinDepth(UINT a_width, UINT a_height)
 {
 	if (bloodPreSkinDepth) {
@@ -638,8 +557,6 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		shellRasterDepth->CreateSRV(srvDesc);
 		shellRasterDepth->CreateRTV(rtvDesc);
 
-		// Typeless so the object-snow prepass can read it back through an
-		// R32 view for its write-back into the main depth.
 		D3D11_TEXTURE2D_DESC testDesc = desc;
 		testDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		testDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
@@ -661,8 +578,6 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 			return false;
 		Util::SetResourceName(shellTestDepthSRV.get(), "SnowDeformation::ShellTestDepth SRV");
 
-		// Pre-snow copy of the main depth: R32F, written by PreSnowCopyCS over
-		// the rendered rectangle only (DepthSync reads nothing outside it).
 		preSnowDepth = nullptr;
 		preSnowDepthSRV = nullptr;
 		preSnowDepthUAV = nullptr;
@@ -871,15 +786,12 @@ bool SnowDeformation::EnsureEarlyPrepassResources()
 		}
 		return a_tex->srv && a_tex->rtv;
 	};
-	// The marks also hold the blended depth SyncSssDepth replaced, until PostPrepass; S1 itself needs no UAV.
 	return ensure(shellEarlyPending, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::ShellEarlyPending", false) &&
 	       ensure(shellEarlyMarks, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellEarlyMarks", true);
 }
 
 void SnowDeformation::SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY)
 {
-	// The fade band is the last half cell INSIDE the seam: the ground snow
-	// replays the loaded land only, so nothing draws beyond it.
 	a_cb.SeamBounds = { a_minX * 4096.0f, a_minY * 4096.0f, (a_maxX + 1) * 4096.0f, (a_maxY + 1) * 4096.0f };
 	a_cb.SeamRampInv = 1.0f / 2048.0f;
 }
@@ -1034,30 +946,10 @@ ID3D11ComputeShader* SnowDeformation::GetSssChangedRaymarchCS()
 
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
 {
-	// Grid placement re-derived from THIS frame's camera; shared by
-	// DrawShell and the shadow-caster injection: a one-frame-stale grid slides a
-	// crisp full-surface shadow whenever the camera moves - the old blob
-	// caster hid it). Spacing is FIXED at 8 units: the shell ends at the
-	// loaded-cell seam (ShellEdgeFade), so range no longer scales density;
-	// tighter spacing was measured to EXPLODE cost (sub-pixel triangles
-	// near the camera: 94 m range = 2-unit triangles = 4.2 ms Shell pass
-	// vs 1.1 ms at 8). The window-offset fields pair the fresh GridOrigin
-	// with the CURRENT window state, which describes the texture content
-	// actually bound - correct even when the window scrolls later in the
-	// frame.
 	auto& fb = globals::game::frameBufferCached;
 	const auto camAdjust = a_camAdjust ? *a_camAdjust : fb.GetCameraPosAdjust();
 	const float shellSpacing = kShellGridSpacing;
 	a_cb.GridSpacing = shellSpacing;
-	// The warped grid is camera-centered: snap the center to the COARSEST band
-	// step, then offset by the warped span. Snapping to the base 8 units is not
-	// enough - a coarse-band vertex would then need per-vertex rounding onto its
-	// own lattice, and the rounding is what used to flip quad widths as the
-	// camera moved (C3 root cause). At kShellOriginSnap every band start is an
-	// exact multiple of its own step, so every vertex sits on its lattice with
-	// nothing left to round. The cost is that the fine region re-centres in
-	// 256-unit steps, leaving the camera up to ~181 units off centre against a
-	// 1792-unit inner radius.
 	const float warpedHalfSpan = ShellWarpedHalfSpan(shellSpacing);
 	a_cb.WarpedHalfSpan = warpedHalfSpan;
 	a_cb.GridOrigin = {
@@ -1066,7 +958,6 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 	};
 	a_cb.TerrainTexelSize = kShellVertexSpacing;
 	a_cb.TerrainDim = kShellWindowDim;
-	// Keep shader-side sampling math in small grid-local coordinates.
 	constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	a_cb.GridToTerrainOffset = {
 		a_cb.GridOrigin.x - shellWindowCellX * cellSize,
@@ -1076,19 +967,12 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 		a_cb.GridOrigin.x - windowOrigin.x,
 		a_cb.GridOrigin.y - windowOrigin.y
 	};
-	// Toroidal addressing pairs with the same live window state; refreshed
-	// here so the shadow-caster snapshot cannot go stale against a map that
-	// scrolled after it was taken. One b0 serves both shells and the
-	// shadow/probe passes.
 	a_cb.DeformMapOrigin = mapOrigin;
-	// Bit 0 horizon march. .y is DrawShell's (road tops this frame).
 	a_cb.ShellFlags.x = settings.ShellHorizonMarch ? 1 : 0;
 	const bool fine = shellFineValid && shellTerrainFine && shellTerrainFine->srv;
 	a_cb.FineWindow = { a_cb.GridOrigin.x - shellFineOriginX, a_cb.GridOrigin.y - shellFineOriginY,
 		fine ? float(kShellFineDim) : 0.0f, kShellFineTexel };
 	a_cb.SlopeDrape = { std::clamp(settings.SlopeDrape, 0.0f, 1.0f), 0.5f, 0.866f, 0.0f };
-	// Snow uv offset folded to the tile period, so shader-side uv math stays
-	// in small numbers. Must match kSnowUVTile in SnowShell.hlsl.
 	constexpr float kSnowUVTile = 4096.0f / 24.0f;
 	a_cb.SnowUVOffset = {
 		std::fmod(a_cb.GridOrigin.x, kSnowUVTile),
@@ -1107,11 +991,6 @@ void SnowDeformation::StartEffectCostProbe()
 	shellKillMask = 0;
 }
 
-// Each effect is read as a pair, everything on then that effect off, so a
-// scene that drifts during the run cannot skew it. Each window settles, then
-// takes the median of the rows these switches reach - the ground and object
-// shading and their depth prepasses; the rest only add noise. The profiler
-// drops rows on some frames, and the median ignores those.
 void SnowDeformation::TickEffectCostProbe()
 {
 	auto& p = effectCost;
@@ -1144,16 +1023,11 @@ void SnowDeformation::TickEffectCostProbe()
 
 float SnowDeformation::ShellTessTargetRenderPx() const
 {
-	// Dynamic resolution ratios: render size over display size.
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	const float scale = (dynRes.x > 0.0f && dynRes.y > 0.0f) ? std::clamp(std::sqrt(dynRes.x * dynRes.y), 0.25f, 1.0f) : 1.0f;
 	return kShellTessTargetPx * scale;
 }
 
-// S1: the ground prepass at the end of Prepass, before the game's opaque
-// draws. Last DrawShell's CB re-placed for this frame's camera and windows:
-// the deformation map and its fields are this frame's, the object maps and
-// water windows last frame's.
 void SnowDeformation::DrawShellEarlyPrepass()
 {
 	shellEarlyState = EarlyPrepass::NotDrawing;
@@ -1161,8 +1035,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	if (!settings.EnableSnowDeformation || !globals::state->inWorld || SnowShadersPending(1) || !lastShellCBData ||
 		shellDrawViewportFrame + 1 != frame || !shellDrawGroundGated)
 		return;
-	// The viewport is last frame's: a new render size leaves this frame to
-	// DrawShell's own prepass.
 	const auto& frameDynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	if (frameDynRes.x != shellDrawDynRes[0] || frameDynRes.y != shellDrawDynRes[1])
 		return;
@@ -1178,12 +1050,9 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
 	auto* fillClaim = fillVS ? GetShellFillPSClaim() : nullptr;
-	// The replay draws the ground; without this frame's capture it is DrawShell's.
 	if (!psEarly || !fillPS || !fillClaim || !GetShellPSEarlyResolve() || !GetShellPSDeferred() || !mainDepth.views[0] || !mainDepth.texture ||
 		!shellFillDepthState || !LandscapeShadeReady())
 		return;
-	// DrawShell sizes the prepass targets from the main depth; checked here only
-	// (until Terrain Blending's replay the main depth's SRV is its blended copy).
 	D3D11_TEXTURE2D_DESC mainDesc{};
 	mainDepth.texture->GetDesc(&mainDesc);
 	if (!shellRasterDepth || shellRasterDepth->desc.Width != mainDesc.Width || shellRasterDepth->desc.Height != mainDesc.Height || !shellTestDepthDSV ||
@@ -1209,7 +1078,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
-	// This frame's clock: a rebase has already moved the dates under it.
 	cb.TrackAge = TrackAgeConstants();
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
@@ -1222,8 +1090,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	cb.TessScreen = { ShellTessTargetRenderPx(), shellDrawViewport.Width * 0.5f, shellDrawViewport.Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	shellCB->Update(cb);
 
-	// The game re-binds only what its state cache believes changed: every slot
-	// this pass touches goes back as found.
 	struct StageBinds
 	{
 		ID3D11ShaderResourceView* srv[34]{};
@@ -1280,9 +1146,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11DepthStencilView* prevDSV = nullptr;
 	context->OMGetRenderTargets(8, prevRTVs, &prevDSV);
 
-	// A terrain window this Prepass moved: the water windows follow it here, as
-	// DrawShell would, before the wet cut and the prepass read them on its grid.
-	// The slots the capture touches outside the saved set go back as found.
 	if (shellTerrainVersion != shellDrawTerrainVersion) {
 		ID3D11Buffer* prevVB = nullptr;
 		UINT prevVBStride = 0, prevVBOffset = 0;
@@ -1332,8 +1195,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
 
 	globals::profiler->BeginPass("SnowDeformation::Ground - Shell Depth Prepass");
-	// The private depth starts as the blended scene depth: the terrain's true
-	// depth, where the main buffer still holds Terrain Blending's offset copy.
 	D3D11_VIEWPORT fillViewport = shellDrawViewport;
 	fillViewport.MinDepth = 0.0f;
 	fillViewport.MaxDepth = 1.0f;
@@ -1354,8 +1215,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11ShaderResourceView* nullSRV = nullptr;
 	context->PSSetShaderResources(9, 1, &nullSRV);
 
-	// The prepass: raster depth (negative while pending), the deferred
-	// attributes and the pending inputs, against the private depth.
 	const float rasterClear[4] = {};
 	context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
 	ID3D11RenderTargetView* prepassRTVs[5] = { shellRasterDepth->rtv.get(), shellDeferredAttr[0]->rtv.get(), shellDeferredAttr[1]->rtv.get(), shellDeferredAttr[2]->rtv.get(), shellEarlyPending->rtv.get() };
@@ -1376,15 +1235,12 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11ShaderResourceView* bareSRV = shellTerrainBare ? shellTerrainBare->srv.get() : nullptr;
 	context->PSSetShaderResources(kTerrainBareSlot, 1, &bareSRV);
 	context->PSSetSamplers(0, 1, &snowSampler);
-	// Terrain Blending's mask: whether the land or an object is the surface at a pixel.
 	ID3D11ShaderResourceView* tbMaskSRV = tb.terrainDepth.depthSRV;
 	context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 	DrawLandscapeSnowPrepass(context, cb, cbs[0]);
 	tbMaskSRV = nullptr;
 	context->PSSetShaderResources(kTBMaskSlot, 1, &tbMaskSRV);
 
-	// The settled pixels into the main depth: the game's opaque draws, the
-	// terrain replay among them, now test against the snow.
 	context->OMSetRenderTargets(0, nullptr, mainDepth.views[0]);
 	context->RSSetViewports(1, &fillViewport);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1459,10 +1315,8 @@ void SnowDeformation::SyncSssDepth()
 	auto& tb = globals::features::terrainBlending;
 	auto* blended = tb.blendedDepthTexture;
 	auto sky = globals::game::sky;
-	// ScreenSpaceShadows::PostPrepass marches GetCurrentSceneDepthSRV(false) on these conditions.
 	const bool marched = settings.SnowScreenSpaceShadows && ss.loaded && ss.screenSpaceShadowsTexture && ss.bendSettings.Enable &&
 	                     sky && sky->mode.get() == RE::Sky::Mode::kFull && tb.loaded && tb.settings.Enabled;
-	// The restore has to follow the march in the PostPrepass loop.
 	static const bool marchFirst = [] {
 		const auto& list = Feature::GetFeatureList();
 		const auto at = [&](const Feature* a_feature) { return std::find(list.begin(), list.end(), a_feature) - list.begin(); };
@@ -1474,7 +1328,6 @@ void SnowDeformation::SyncSssDepth()
 	const auto rasterSized = [&](const Texture2D* a_tex) {
 		return a_tex && a_tex->uav && a_tex->desc.Width == shellRasterDepth->desc.Width && a_tex->desc.Height == shellRasterDepth->desc.Height;
 	};
-	// An early pass this frame means the prime has published these shaders.
 	const bool early = shellEarlyFrame == frame && shellEarlyState == EarlyPrepass::Drawing;
 	auto* syncCS = (early && marchFirst && marched) ? GetSssSyncCS() : nullptr;
 	if (!syncCS || !shellRasterDepth || !shellRasterDepth->srv || !rasterSized(blended) || !rasterSized(shellEarlyMarks) || !GetSssRestoreCS() ||
@@ -1500,12 +1353,9 @@ void SnowDeformation::CopyFirstMarchDepth()
 	auto& tb = globals::features::terrainBlending;
 	auto* blended = tb.blendedDepthTexture;
 	const uint32_t frame = globals::state->frameCount;
-	// Only while the skins marched last frame: the copy pays only where a second march follows.
 	if (!settings.EnableSnowDeformation || !globals::state->inWorld || skinSssMarchFrame + 1 != frame || ss.marchFrame != frame || !blended ||
 		!blended->resource || !blended->srv || ss.marchDepthSRV != blended->srv.get())
 		return;
-	// The mark pass compares inside the march's rect only; MarchSkinSss marks
-	// only when this frame's rect lies inside the copy.
 	const UINT width = std::clamp(skinSssRectLast.right, 1u, blended->desc.Width);
 	const UINT height = std::clamp(skinSssRectLast.bottom, 1u, blended->desc.Height);
 	if (sssFirstMarchDepth && (sssFirstMarchDepth->desc.Width != width || sssFirstMarchDepth->desc.Height != height ||
@@ -1622,7 +1472,6 @@ bool SnowDeformation::SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport)
 	if (!settings.SnowScreenSpaceShadows || !ss.loaded || !ss.screenSpaceShadowsTexture || !ss.screenSpaceShadowsTexture->srv || !ss.bendSettings.Enable ||
 		!sky || sky->mode.get() != RE::Sky::Mode::kFull || !tb.loaded || !tb.settings.Enabled || !blended || !blended->uav || !preSnowDepthSRV)
 		return false;
-	// Written and restored inside the march's rect, which this viewport bounds.
 	const D3D11_BOX extent = ScreenRectBox(a_viewport, blended->desc.Width, blended->desc.Height, 0);
 	const UINT width = std::max(extent.right, 1u);
 	const UINT height = std::max(extent.bottom, 1u);
@@ -1657,9 +1506,6 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
 	depthSyncRectCB->Update(rectData);
 	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-	// The first march's depth, when it was copied this frame from the texture this march reads:
-	// the sync then marks where the two differ and the march redoes only those wavefronts. The
-	// marks cover this rect, so the shell's restore since the copy has to lie inside it.
 	const bool restoreInside = shellSssSyncFrame != globals::state->frameCount ||
 	                           (shellSssRect.left >= rect.left && shellSssRect.top >= rect.top && shellSssRect.right <= rect.right && shellSssRect.bottom <= rect.bottom);
 	const bool mark = !sssChangedMarchOff && restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
@@ -1685,20 +1531,17 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 		context->CSSetConstantBuffers(2, 1, &nullCB);
 		context->CSSetShader(nullptr, nullptr, 0);
 	};
-	// The skins' private depth is the bound DSV; its SRV is read here.
 	context->OMSetRenderTargets(0, nullptr, nullptr);
 	if (mark) {
 		const UINT zero[4] = {};
 		context->ClearUnorderedAccessViewUint(sssChangedTiles->uav.get(), zero);
 	}
 	dispatch(mark ? GetSkinSssSyncMarkCS() : GetSkinSssSyncCS());
-	// The march times its own row; profiler passes do not nest.
 	globals::profiler->EndPass();
 	if (ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS : nullptr))
 		sssChangedMarchFrame = globals::state->frameCount;
 	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
 	dispatch(GetSkinSssRestoreCS());
-	// The UAV writes unbound the blended depth (PS t3) and the mask (PS t45).
 	ID3D11ShaderResourceView* maskSRV = ss.screenSpaceShadowsTexture->srv.get();
 	context->PSSetShaderResources(3, 1, &a_sceneDepthSRV);
 	context->PSSetShaderResources(45, 1, &maskSRV);
@@ -1709,7 +1552,6 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 void SnowDeformation::DrawShell()
 {
 	TickEffectCostProbe();
-	// First profiled code after the opaque batches; the profiler cannot nest.
 	CloseLandscapeRun();
 	if (!settings.EnableSnowDeformation)
 		return;
@@ -1735,8 +1577,6 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
 	RefreshShellGridPlacement(cbData);
-	// Bit 0: a road can write road tops into the skin-depth raster this frame
-	// (the skin march's road taps read nothing else).
 	cbData.ShellFlags.y = capturedRoads > 0 ? 1 : 0;
 	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
@@ -1746,10 +1586,6 @@ void SnowDeformation::DrawShell()
 		(settings.BloodOnSnow && bloodMapTexture && bloodClockTexture) ? 1.0f : 0.0f, BloodTilesLive() ? 1.0f : 0.0f };
 	cbData.BloodLook3 = { 0.0f, 0.0f, BloodTileCell(), BloodTileTexel() };
 
-	// Loaded-cell boundary square around the PLAYER's cell (cell attachment
-	// follows the player, not the camera): full terrain inside, LOD outside.
-	// The shell's edge fade anchors here so it hands off to the horizon
-	// recolor exactly where the game swaps terrain for LOD meshes.
 	cbData.SeamRampInv = 0.0f;
 	int seamMinX, seamMinY, seamMaxX, seamMaxY;
 	if (LoadedCellSquare(seamMinX, seamMinY, seamMaxX, seamMaxY))
@@ -1757,24 +1593,11 @@ void SnowDeformation::DrawShell()
 	cbData.DeformInvWorldSize = 1.0f / deformWorldSize;
 
 	EnsureShellSnowTextures();
-	// Per frame so TruePBR's hot-reload and live menu edits of the matched
-	// texture set reach the shell the same frame they reach the ground.
 	RefreshSnowPBRParams();
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
-	// Tessellated relief amplitude, straight from the slider (world units;
-	// the PBR config's displacementScale is deliberately not multiplied in,
-	// the slider is authoritative).
-	// Relief retired (setting removed 2026-08-27, slider long gone): 0 keeps
-	// the tess reach collapsing to 1 on undeformed ground and the DS flat.
 	cbData.SnowReliefDepth = 0.0f;
-	// Parallax. HeightScale is the PBR config's displacementScale verbatim:
-	// kSnowUVTile now equals the game's landscape tiling, so the UV-space slab
-	// depth Extended Materials derives from it lands on the same world depth
-	// the ground beside us gets. No correction factor.
-	// w is a documented spare: the march runs Extended Materials' own step
-	// budget since M4, so the old step count read nowhere and was retired.
 	cbData.SnowParallax = {
 		snowDisplacementScale,
 		std::clamp(settings.ParallaxShadowStrength, 0.0f, 2.0f),
@@ -1783,8 +1606,6 @@ void SnowDeformation::DrawShell()
 	};
 	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f), 0.0f, 0.0f, 0.0f };
 	cbData.TrackAge = TrackAgeConstants();
-	// Fresh snow compacts instead of being thrown: little berm, no cut rim.
-	// Snow Climate moves each lever from that fixed look to the climate's.
 	const float snowSoftness = GetSnowSoftness();
 	const SnowClimateLook look = ComputeSnowClimateLook();
 	const float bermSlider = std::clamp(settings.BermHeight, 0.0f, 1.0f);
@@ -1792,14 +1613,10 @@ void SnowDeformation::DrawShell()
 	const float teethSlider = std::clamp(settings.RimTeeth, 0.0f, 1.0f);
 	cbData.BermHeightAmp = std::lerp(bermSlider * std::lerp(1.0f, 0.35f, snowSoftness), bermSlider * look.berm, look.strength);
 	cbData.BermReach = BermReachScale();
-	// .w claims RimStyle's documented spare rather than growing ShellCB: the
-	// buffer is hand-mirrored across two shaders and the statics pass binds
-	// this same b0, so one component serves both shells with nothing moving.
 	cbData.RimStyle = { std::lerp(lipSlider * (1.0f - snowSoftness), lipSlider * look.lip, look.strength),
 		std::lerp(teethSlider * (1.0f - snowSoftness), teethSlider * look.teeth, look.strength),
 		0.0f,
 		GetAccumulationDepthScale() };
-	// Trampled ground: floors walked deeper than one pass flatten their detail.
 	cbData.TrampleStyle = { 0.0f, std::clamp(settings.TrampledFlattening, 0.0f, 1.0f), BodyPrintScale(), 0.0f };
 	EnsureTrenchDetailTextures();
 	const bool trenchDetail = trenchDetailNormalSRV && trenchDetailHeightSRV;
@@ -1810,8 +1627,6 @@ void SnowDeformation::DrawShell()
 	cbData.TrenchDetailView = (trenchDetail && debugTrenchDetailView) ? 1u : 0u;
 	cbData.SpeedSpoil = trenchDetail && settings.SpeedSpoil ? 1.0f : 0.0f;
 	{
-		// Pixels per world unit at distance d = focalPx / d, with
-		// focalPx = half the screen height times the projection's y scale.
 		const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
 		const float focalPx = 0.5f * static_cast<float>(globals::game::graphicsState->screenHeight) * eye.projMat(1, 1);
 		const float capPx = std::clamp(settings.SkinTessCapPx, 0.0f, 64.0f);
@@ -1822,14 +1637,9 @@ void SnowDeformation::DrawShell()
 	cbData.SnowRoughnessScale = snowRoughnessScale;
 	cbData.SnowGlintParams = { snowGlintLogDensity, snowGlintMicroRoughness, snowGlintDensityRandomization, snowGlintScreenSpaceScale };
 	cbData.SnowSpecularLevel = snowSpecularLevel;
-	// Sparkle: the shell's specular runs TruePBR's glint NDF when its shared
-	// noise texture exists (bound to t20 below for the whole pass).
 	cbData.EnableGlints = (settings.SnowGlints && globals::features::truePBR.glintsNoiseTexture) ? 1.0f : 0.0f;
-	// xy are layout keepers: the retired dust switch and trench floor.
 	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	// x spare; y, z = the land-blend contest's depth bonus and carve penalty
-	// (log2 odds); w = the wall slough.
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { 0.0f, landContest.x, landContest.y, look.strength * look.slough };
 	{
@@ -1841,35 +1651,14 @@ void SnowDeformation::DrawShell()
 		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}
 	cbData.DebugNoFarPad = 0.0f;
-	// Gated on the terrain window existing: without it the cull's SampleTerrain
-	// reads zeros, which look like fully bare ground everywhere.
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
-	// Statics-skin distance dissolve: starts at the blend slider, fully gone
-	// at the Object Snow capture range (floored one meter past the start so
-	// the smoothstep never degenerates when the sliders cross).
-	// Distant Snow Blend (RangeSkinsFadeM) is retired: its dissolve END was
-	// anchored at the capture range, so with both at 750 m and captures bounded
-	// by the loaded cells (~207 m at uGrids 5) the slider could thin a real
-	// object by at most ~7% - inert in practice, its stated job long since
-	// taken over by Distant Bare Rock and the geometry-range flatten. The skin
-	// now dissolves over a fixed ~29 m band inside the capture range, so
-	// lowering Object Snow keeps a soft edge without a second slider.
 	cbData.SkinFadeEnd = SkinFadeEndUnits();
 	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
-	// Field enable gate + window addressing for the object map samplers; the
-	// center is re-uploaded below once the height pass has recentered.
 	cbData.ObjectLiftCap = 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 
-	// Crisp shadows: full-resolution comparison PCF against the cascade atlas,
-	// read in place as the shadow-mask pass left it. Without it this frame,
-	// the shader falls back to the blurred VSM path.
 	cbData.CrispShadows = ShadowAtlasSRV() ? 1.0f : 0.0f;
-	// Screen-Space Shadows availability: the feature clears its texture to
-	// white every frame even when disabled, so multiplying is always safe
-	// once the texture exists. 2 = this frame's mask was marched on the snow
-	// (SyncSssDepth).
 	auto& screenSpaceShadowsFeature = globals::features::screenSpaceShadows;
 	cbData.ScreenSpaceShadowsActive = (settings.SnowScreenSpaceShadows && screenSpaceShadowsFeature.loaded && screenSpaceShadowsFeature.screenSpaceShadowsTexture) ?
 	                                      (shellSssSyncFrame == globals::state->frameCount ? 2.0f : 1.0f) :
@@ -1877,32 +1666,19 @@ void SnowDeformation::DrawShell()
 
 	cbData.UndulationAmp = std::max(settings.UndulationStrength, 0.0f);
 	cbData.UndulationScale = std::max(settings.UndulationSpacing, 0.05f);
-	// The bake is only usable once its texture exists; without it the shells
-	// take the berm taps per pixel.
 	cbData.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
 	cbData.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
 		undulationFieldValid ? 1.0f : 0.0f };
-	// Wide exclusion field window: filled provisionally here and RE-UPLOADED
-	// below, after the height pass has rebaked the field and moved its centre.
-	// Sampling this frame's texture through last frame's centre offsets the
-	// whole field by a texel whenever the camera advances one, which reads as
-	// clearing depth (and the berm riding on it) twitching while the camera
-	// moves and settling when it stops. w gates the sampler off until the bake
-	// has actually run.
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
 		exclusionFieldValid ? 1.0f : 0.0f };
 
-	// Point lights: LLF's clustered visible-light list. The cluster buffers
-	// are only coherent when LLF ran this frame (CORE, but boot-disableable).
 	auto& lightLimitFix = globals::features::lightLimitFix;
 	cbData.PointLightsActive = (lightLimitFix.loaded && lightLimitFix.lights && lightLimitFix.lightIndexList && lightLimitFix.lightGrid) ? 1.0f : 0.0f;
-	// Skylighting probe volume for ambient parity with terrain shading.
 	auto& skylighting = globals::features::skylighting;
 	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
 
-	// Shadow-source diagnostics for the settings UI.
 	dbgLodDescriptorCount = 0;
 	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
 		if (auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight) {
@@ -1938,8 +1714,6 @@ void SnowDeformation::DrawShell()
 	}
 	shellCB->Update(cbData);
 
-	// Back up the pipeline state we touch so the composite and later game
-	// passes see exactly what they expect.
 	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
 	winrt::com_ptr<ID3D11DepthStencilState> prevDepth;
 	winrt::com_ptr<ID3D11BlendState> prevBlend;
@@ -1963,16 +1737,6 @@ void SnowDeformation::DrawShell()
 	UINT prevViewportCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
 	context->RSGetViewports(&prevViewportCount, prevViewports);
 
-	// Only the loaded square is asked: the shell ends at its seam, and land
-	// past it never loads, so a test over the whole span never settles.
-	// Snowy cells outside the frustum count as bare. A
-	// loaded cell still baking opens the gate at once; bare must hold for
-	// kShellGateBareFrames before the grid draw and its dependents (bake,
-	// stats, depth sync) are skipped. The CB upload above stays - the
-	// statics and the caster read it.
-	// An interior has no landscape, so the square under the player is
-	// unbaked for ever and read as unknown (Alternate Start's dungeon ran the
-	// shell, bake and sync at full cost).
 	if (InInteriorCell()) {
 		shellSnowVerdict = kSnowGateBare;
 	} else {
@@ -1982,20 +1746,13 @@ void SnowDeformation::DrawShell()
 		                       kSnowGateUnknown;
 	}
 	shellGateBareFrames = shellSnowVerdict == kSnowGateBare ? std::min(shellGateBareFrames + 1, kShellGateBareFrames) : 0;
-	// S1: the early prepass already put this frame's ground snow into the main
-	// depth, so the shell must shade it even on the frame the gate closes.
 	const bool early = shellEarlyFrame == globals::state->frameCount;
 	shellDrawGroundGated = shellGateBareFrames < kShellGateBareFrames && !GroundShellsSuspended();
 	const bool shellGround = shellDrawGroundGated || early;
-	// The raised sun cascades read the same object fields as the ground snow,
-	// at the next frame's shadow pass, only while ShellFootprintHasSnow holds
-	// and only in a cascade a snowy cell meets (LsCascadeMeetsSnow); an
-	// interior has no land to raise.
 	const bool cascadeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
 	const bool interior = InInteriorCell();
 	cascadeSnowSoonLast = !interior && CascadeSnowSoon();
 	const bool landscapeReads = cascadeReads && (interior ? interiorHeightGateOff : (cascadeSnowSoonLast || exteriorHeightGateOff));
-	// Off the ground, the captures feed only their own skins (and the volume).
 	if (!shellGround && !landscapeReads && !settings.VolumeSnow)
 		CullUnseenCaptures(cbData);
 	else {
@@ -2003,15 +1760,7 @@ void SnowDeformation::DrawShell()
 		captureCullBail = 1;
 	}
 
-	// Rasterize this frame's captured statics top-down into the object
-	// height windows, then restore the viewport for the screen-space passes.
-	// Waits for the prime's object group: EnsureStaticsShaders would
-	// otherwise compile its ten variants synchronously right here.
-	// Every reader of these fields (shell, skins, trench patch, caster,
-	// volume) is off in a bare square with nothing captured.
 	spanClock.Lap(CpuCensus::kSpanShellSetup);
-	// LOD batches never enter the object raster, and their skins read it only
-	// inside its window: the one this frame would build, or the one a skip leaves.
 	bool rasterReaders = capturedLoaded > 0;
 	if (!rasterReaders && !lodRasterGateOff) {
 		const auto& eye = globals::game::frameBufferCached.GetCameraPosAdjust();
@@ -2031,7 +1780,6 @@ void SnowDeformation::DrawShell()
 	}
 	lodCapturesIgnoredLast = !rasterReaders && !capturedStatics.empty();
 	const bool nothingDraws = !shellGround && !landscapeReads && !rasterReaders && !settings.VolumeSnow;
-	// An interior idles once no ghost can be in the window; until then it runs.
 	const bool idleInterior = nothingDraws && cascadeReads && interior;
 	if (idleInterior && HeightMapIdleReady())
 		IdleObjectHeightMap();
@@ -2052,11 +1800,6 @@ void SnowDeformation::DrawShell()
 	spanClock.Lap(CpuCensus::kSpanRuneCapture);
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
-	// The main pass's depth range, not the decal viewport the deferred span
-	// ended on: through the decal cap every shell sat a constant ~3e-5 NDC
-	// nearer than its object - a third of a unit on a rock, two thousand on
-	// a mountain at 450 m, in front of the mist meant to wrap it (RenderDoc
-	// pixel history against re-rasterised triangles, 2026-09-04).
 	const bool mainRange = prevViewportCount && mainViewportFrame == globals::state->frameCount;
 	if (mainRange) {
 		D3D11_VIEWPORT shellViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
@@ -2067,7 +1810,6 @@ void SnowDeformation::DrawShell()
 		}
 		context->RSSetViewports(prevViewportCount, shellViewports);
 	}
-	// Next frame's early prepass draws with this viewport.
 	shellDrawViewportFrame = UINT32_MAX;
 	if (prevViewportCount) {
 		D3D11_VIEWPORT used = prevViewports[0];
@@ -2081,11 +1823,6 @@ void SnowDeformation::DrawShell()
 		shellDrawDynRes[1] = dynRes.y;
 	}
 
-	// The height pass recentered its window after the shell CB was filled;
-	// sampling the freshly scrolled maps with last frame's center makes the
-	// whole field trail the camera by one frame of movement. Re-upload with
-	// the current center. (Any CPU value consumed by both a constant buffer
-	// and a same-frame-scrolled texture must be uploaded after the scroll.)
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
@@ -2093,12 +1830,8 @@ void SnowDeformation::DrawShell()
 	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
 		cbData.TessScreen = { ShellTessTargetRenderPx(), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
-	// GetDimensions of the field maps every landscape-shell pass binds from here
-	// on; they change size only in Prepass, so they hold for the next frame's
-	// caster too.
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
 	cbData.FieldDims = { mapDim(deformationTextures[0]), mapDim(bermFieldTexture), mapDim(heightBottomFiltered), mapDim(exclusionFieldTexture) };
-	// After this frame's deposits: a blood map with none in the window reads 0 everywhere.
 	if (bloodMapWritten && (windowOrigin.x > bloodWrittenBox.z || windowOrigin.x + deformWorldSize < bloodWrittenBox.x ||
 							   windowOrigin.y > bloodWrittenBox.w || windowOrigin.y + deformWorldSize < bloodWrittenBox.y))
 		bloodMapWritten = false;
@@ -2106,15 +1839,10 @@ void SnowDeformation::DrawShell()
 		cbData.BloodLook2.z = 0.0f;
 	shellCB->Update(cbData);
 
-	// Snapshot for next frame's shadow-caster injection (it runs at the
-	// shadow-mask pass, before DrawShell recomputes these values).
 	if (!lastShellCBData)
 		lastShellCBData = std::make_unique<ShellCB>();
 	*lastShellCBData = cbData;
 
-	// The sun marches read only the baked heights: without them this frame,
-	// no march. Only the ground PS and the skins march; kMarchIdleFrames
-	// without either stops the caches, and the next update rebuilds them whole.
 	UnbindMarchCaches();
 	const bool marchReaders = shellGround || !capturedStatics.empty();
 	marchIdleFrames = (marchReaders || marchIdleOff) ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
@@ -2132,13 +1860,8 @@ void SnowDeformation::DrawShell()
 		*lastShellCBData = cbData;
 	}
 
-	// Pre-shell copy of MASKS: Masks.y carries the land's EM grain height
-	// (Lighting.hlsl LANDSCAPE; 0 = no data), and the land under the shell
-	// is only readable before the shell overwrites the G-buffer. Unbind
-	// around the copy; our own targets are set immediately after.
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
-		// Read by the shell PS (shellGround) and the skins (any capture) only.
 		const bool masksReaders = masksCopyGateOff ? !nothingDraws : (shellGround || !capturedStatics.empty());
 		if (masksRT.SRV && masksRT.texture && masksReaders) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
@@ -2147,9 +1870,6 @@ void SnowDeformation::DrawShell()
 			masksRT.texture->GetDesc(&masksDesc);
 			const D3D11_BOX masksBox = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, masksDesc.Width, masksDesc.Height, 1);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV, &masksBox);
-			// The game's blood decals wrote Masks.y = 0 under themselves, which
-			// the coat reads as no paint: over their rectangle the copy takes
-			// the masks from before the first decal drew (Blood.cpp).
 			if (landMasksCopyTex && bloodPreDecalValid && bloodPreDecalMasksTex && DecalOverlayWanted()) {
 				const RECT& rc = bloodCopyRect;
 				const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
@@ -2159,18 +1879,12 @@ void SnowDeformation::DrawShell()
 		} else {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 		}
-		// The G-buffer before any snow, over the blood decals' rectangle: the
-		// overlay puts the decals' own contribution back over thin snow
-		// (Blood.cpp). Only while blood decals are in view.
 		bloodPreSnowValid = false;
 		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid && !capturedStatics.empty())
 			CopyBloodTargets(false);
 	}
 
-	// The ground snow: the landscape replay's prepass (S1 before the opaque
-	// draws, or here when S1 did not run), the resolve and the deferred pass.
 	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
-	// The hidden-fragment exit reads Terrain Blending's blended depth as the main depth.
 	const bool keepHidden = !globals::features::terrainBlending.loaded || !globals::features::terrainBlending.settings.Enabled;
 	auto* fillVS = shellGround ? GetShellFillVS() : nullptr;
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
@@ -2178,14 +1892,6 @@ void SnowDeformation::DrawShell()
 	const bool ground = fillPS && (early || (psPrepass && LandscapeShadeReady())) && GetShellPSDeferred() &&
 	                    EnsurePrepassResources(mainDepth.depthSRV) && EnsureDeferredResources();
 
-	// Main depth before any snow draw: DepthSync syncs the pixels the snow
-	// passes (shell, skins, patch) move nearer than this copy. Targets are
-	// unbound around the copy like the masks copy above. Not for LOD-batch
-	// coats alone: they lie on their mesh, past anything Terrain Blending
-	// softened. With the prepass's raster marks DepthSync reads it only off
-	// the shell's pixels, where the main depth keeps the pre-snow value until
-	// a statics pass writes: then no copy is taken without one, and with one
-	// DrawCapturedStatics takes it (in the skins' first fill when it can).
 	preSnowDepthThisFrame = false;
 	preSnowDepthDeferred = false;
 	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
@@ -2194,8 +1900,6 @@ void SnowDeformation::DrawShell()
 			D3D11_TEXTURE2D_DESC preDesc{};
 			preSnowDepth->GetDesc(&preDesc);
 			preSnowRect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, preDesc.Width, preDesc.Height, 0);
-			// Skins, patch and volume all draw past DrawCapturedStatics's
-			// empty-capture return.
 			if (ground && shellRasterDepth && shellRasterDepth->srv)
 				preSnowDepthDeferred = !capturedStatics.empty();
 			else
@@ -2205,8 +1909,6 @@ void SnowDeformation::DrawShell()
 	if (!preSnowDepthThisFrame && !preSnowDepthDeferred)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 
-	// Bind the deferred G-buffer exactly as StartDeferred configures it,
-	// plus the main depth buffer for correct intersection with the world.
 	auto& rtData = renderer->GetRuntimeData();
 	ID3D11RenderTargetView* rtvs[8] = {
 		rtData.renderTargets[RE::RENDER_TARGETS::kMAIN].RTV,
@@ -2230,18 +1932,9 @@ void SnowDeformation::DrawShell()
 	ID3D11Buffer* cbs[1] = { shellCB->CB() };
 	context->VSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(0, 1, cbs);
-	// SharedData (b5) supplies SH ambient + sun for the PS lighting; rebind
-	// the b4-b6 triple exactly as Deferred does for its own passes.
 	auto state = globals::state;
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
-	// The PS evaluates the terrain/deformation fields for per-pixel coverage
-	// and normals; the trench patch VS reads the deformation map (t1). The
-	// snow maps and scene depth are PS-only. The depth SRV is a copy (Terrain
-	// Blending's blended depth when available), never the bound DSV, so
-	// sampling it here is legal; the PS fades the shell where it hovers close
-	// in front of any geometry so it dissolves into statics (walkways, mesh
-	// roads, rocks).
 	ID3D11ShaderResourceView* shellSRVs[9] = { shellTerrainTexture->srv.get(), GetDeformationSRV(), shellSnowDiffuseSRV.get(), Util::GetCurrentSceneDepthSRV(false), nullptr, heightBottomFiltered->srv.get(), shellSnowNormalSRV.get(), shellSnowRmaosSRV.get(), shellSnowHeightSRV.get() };
 	context->VSSetShaderResources(1, 1, &shellSRVs[1]);
 	ID3D11ShaderResourceView* wetSRV = TerrainWetSRV();
@@ -2251,16 +1944,9 @@ void SnowDeformation::DrawShell()
 	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
 	context->VSSetShaderResources(27, 2, waterSRVs);
 	context->VSSetShaderResources(19, 1, &waterNearSRV);
-	// The game's texture tracker rebinds a slot only when it believes the
-	// binding changed. t3 is the effect shaders' soft-particle depth, set
-	// once per frame, so the null the skin pass left there faded every mist
-	// and cloud to nothing wherever a soft effect drew (Josef's peaks,
-	// 2026-09-04). Save the slots this pass overwrites and put them back.
 	winrt::com_ptr<ID3D11ShaderResourceView> prevShellSRVs[9];
 	for (uint i = 0; i < 9; i++)
 		context->PSGetShaderResources(i, 1, prevShellSRVs[i].put());
-	// The frost pair takes t16/t17; t17 is CS's shared scene depth, bound once
-	// a frame and read by the forward passes. Restored at the end of DrawShell.
 	winrt::com_ptr<ID3D11ShaderResourceView> prevFrostSlotSRVs[2];
 	for (uint i = 0; i < 2; i++)
 		context->PSGetShaderResources(16 + i, 1, prevFrostSlotSRVs[i].put());
@@ -2271,18 +1957,12 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(27, 2, waterSRVs);
 	context->PSSetShaderResources(19, 1, &waterNearSRV);
-	// Raw object tops + skin-depth raster (t11/t12, shared with the trench
-	// patch): the object-depth cap on the shell's layer.
 	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 	context->PSSetShaderResources(11, 2, objectCapSRVs);
-	// Land grain height copy (t10) for the two-sided edge contest.
 	if (landMasksCopySRV) {
 		ID3D11ShaderResourceView* landMasksSRV = landMasksCopySRV.get();
 		context->PSSetShaderResources(10, 1, &landMasksSRV);
 	}
-	// Baked berm field (t14). The berm is read by the surface evaluation
-	// (VS/DS) and by the normal block (PS), so every stage that can run
-	// ShellSurfaceZ or shade needs it.
 	ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 	context->VSSetShaderResources(14, 1, &bermSRV);
 	context->PSSetShaderResources(14, 1, &bermSRV);
@@ -2290,46 +1970,29 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
 	ID3D11ShaderResourceView* bloodSRVs[2] = { GetBloodMapSRV(), GetBloodClockSRV() };
 	context->PSSetShaderResources(30, 2, bloodSRVs);
-	// Blood detail tiles (t66-t69): cell index, pigment atlas, (t68 retired with the soak), clock blocks.
 	ID3D11ShaderResourceView* bloodTileSRVs[4] = { bloodTileIndexSRV.get(), bloodTileAtlasSRV.get(), nullptr, bloodTileClockSRV.get() };
 	context->PSSetShaderResources(66, 4, bloodTileSRVs);
-	// Rune glyphs and frost marks. Unbound reads as none.
 	BindMarkReaders(context, true);
 	ID3D11ShaderResourceView* undulationSRV = GetUndulationFieldSRV();
 	context->VSSetShaderResources(29, 1, &undulationSRV);
 	context->PSSetShaderResources(29, 1, &undulationSRV);
-	// The teeth noise table and the trench detail tiles, for this pass and the trench patch's.
 	ID3D11ShaderResourceView* noiseSRV = NoiseHashSRV();
 	context->PSSetShaderResources(kNoiseHashSlot, 1, &noiseSRV);
 	ID3D11ShaderResourceView* trenchDetailSRVs[] = { trenchDetailNormalSRV.get(), trenchDetailHeightSRV.get() };
 	context->PSSetShaderResources(kTrenchDetailSlot, ARRAYSIZE(trenchDetailSRVs), trenchDetailSRVs);
-	// The trampled floor's measure, for the same two passes.
 	ID3D11ShaderResourceView* bodyReachSRV = bodyReachTexture ? bodyReachTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(kBodyReachSlot, 1, &bodyReachSRV);
-	// Wide exclusion field (t15): read by the surface evaluation and by the
-	// pixel-side melt overrides, so the same stages as the berm.
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	context->VSSetShaderResources(15, 1, &exclusionSRV);
 	context->PSSetShaderResources(15, 1, &exclusionSRV);
-	// Glint noise (t20): TruePBR binds this each prepass, but slot 20's state
-	// at deferred time is not guaranteed; bind explicitly for this pass.
 	if (globals::features::truePBR.glintsNoiseTexture) {
 		ID3D11ShaderResourceView* glintSRV = globals::features::truePBR.glintsNoiseTexture->srv.get();
 		context->PSSetShaderResources(20, 1, &glintSRV);
 	}
-	// IBL SH textures (t76/t77, the include's forward slots): same not-
-	// guaranteed-at-deferred-time reasoning as the glint noise above.
 	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
 		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
 		context->PSSetShaderResources(76, 2, iblSRVs);
 	}
-	// Terrain Shadows height map (t60) + Cloud Shadows cube (t25):
-	// GetWorldShadow reads both, and the Prepass-time binds do not survive
-	// to this pass (the t102 lesson). Unbound t60 reads zeros, which the
-	// helper's ramp maps to shadow 1.0 — the far shell stood bright while
-	// the LOD terrain past the seam wore the mountain shadow. The statics
-	// skin inherits these like t22. t25 is whatever Lighting read this
-	// frame, null included; restored at the end of DrawShell.
 	if (globals::features::terrainShadows.loaded && globals::features::terrainShadows.texShadowHeight) {
 		ID3D11ShaderResourceView* terrainShadowSRV = globals::features::terrainShadows.texShadowHeight->srv.get();
 		context->PSSetShaderResources(60, 1, &terrainShadowSRV);
@@ -2338,8 +2001,6 @@ void SnowDeformation::DrawShell()
 	context->PSGetShaderResources(25, 1, prevCloudShadowSRV.put());
 	ID3D11ShaderResourceView* cloudShadowSRV = lightingCloudShadowSRV.get();
 	context->PSSetShaderResources(25, 1, &cloudShadowSRV);
-	// Comparison sampler (s2), shared by the crisp cascade path and the
-	// point-light shadow path.
 	if (cbData.CrispShadows > 0.5f || PointShadowAtlasSRV()) {
 		if (!shadowCmpSampler) {
 			D3D11_SAMPLER_DESC cmpDesc{};
@@ -2355,22 +2016,14 @@ void SnowDeformation::DrawShell()
 		ID3D11SamplerState* cmpSampler = shadowCmpSampler.get();
 		context->PSSetSamplers(2, 1, &cmpSampler);
 	}
-	// The live shadow atlas (t22) for crisp cascade shadows; the statics
-	// skin inherits it too.
 	if (cbData.CrispShadows > 0.5f) {
 		ID3D11ShaderResourceView* shadowAtlasSRV = ShadowAtlasSRV();
 		context->PSSetShaderResources(22, 1, &shadowAtlasSRV);
 	}
-	// Screen-Space Shadows output (t45) for the shell + statics passes.
 	if (cbData.ScreenSpaceShadowsActive > 0.5f) {
 		ID3D11ShaderResourceView* sssSRV = screenSpaceShadowsFeature.screenSpaceShadowsTexture->srv.get();
 		context->PSSetShaderResources(45, 1, &sssSRV);
 	}
-	// LLF cluster buffers (t35-t37) + the point-shadow light table (t38) and
-	// the local shadow maps (t39). LLF binds t35-37 each Prepass, but slot
-	// state at deferred time is not guaranteed; rebind explicitly like t20.
-	// Do NOT null t35-37 in teardown: later forward passes (water, effects)
-	// read LLF's own binding, which this rebind matches exactly.
 	if (cbData.PointLightsActive > 0.5f) {
 		ID3D11ShaderResourceView* lightSRVs[3] = { lightLimitFix.lights->srv.get(), lightLimitFix.lightIndexList->srv.get(), lightLimitFix.lightGrid->srv.get() };
 		context->PSSetShaderResources(35, 3, lightSRVs);
@@ -2380,8 +2033,6 @@ void SnowDeformation::DrawShell()
 			context->PSSetShaderResources(38, 2, pointShadowSRVs);
 		}
 	}
-	// Skylighting probe volume (t50). Skylighting's own SRV; no teardown
-	// needed for the same reason as t35-37.
 	if (cbData.SkylightingActive > 0.5f) {
 		ID3D11ShaderResourceView* probeSRV = skylighting.texProbeArray->srv.get();
 		context->PSSetShaderResources(50, 1, &probeSRV);
@@ -2396,8 +2047,6 @@ void SnowDeformation::DrawShell()
 	if (early && (std::memcmp(&shellDrawViewport, &shellEarlyViewport, sizeof(D3D11_VIEWPORT)) != 0 ||
 					 std::memcmp(&cbData.CameraViewProj, &shellEarlyCB->CameraViewProj, sizeof(cbData.CameraViewProj)) != 0))
 		shellEarlyViewMismatches++;
-	// The stats ring pairs the shell and statics queries per slot, so a
-	// gated frame issues neither.
 	const bool shellStats = ground && shellPipelineStatsEnabled && EnsureShellStatsQueries();
 	if (shellStats) {
 		ReadShellStatsQueries(context);
@@ -2414,15 +2063,11 @@ void SnowDeformation::DrawShell()
 			globals::profiler->EndPass();
 			globals::profiler->BeginPass(a_name);
 		};
-		// The fields the trench patch's domain stage inherits.
 		context->DSSetShaderResources(14, 1, &bermSRV);
 		context->DSSetShaderResources(15, 1, &exclusionSRV);
 		context->DSSetShaderResources(29, 1, &undulationSRV);
 
 		if (!earlyMarks) {
-			// The replay's prepass: raster depth, the deferred attributes and the
-			// clamped depth into the main buffer. The fill turns the raster depth
-			// into the private depth the deferred pass tests.
 			splitRow("SnowDeformation::Ground - Shell Depth Prepass");
 			const float rasterClear[4] = {};
 			context->ClearRenderTargetView(shellRasterDepth->rtv.get(), rasterClear);
@@ -2451,9 +2096,6 @@ void SnowDeformation::DrawShell()
 		}
 
 		if (earlyMarks) {
-			// The pending pixels against this frame's land masks; every winner's
-			// depth into the main buffer under LESS_EQUAL, so one something drew
-			// in front of since the claim loses. The marks fill the private depth.
 			const float marksClear[4] = {};
 			context->ClearRenderTargetView(shellEarlyMarks->rtv.get(), marksClear);
 			ID3D11RenderTargetView* marksRTV = shellEarlyMarks->rtv.get();
@@ -2482,8 +2124,6 @@ void SnowDeformation::DrawShell()
 			context->Draw(3, 0);
 			context->PSSetShaderResources(9, 1, nullResolveSRVs);
 		}
-		// One full-screen triangle at z 0: LESS passes wherever the fill left a
-		// prepass winner's depth, rejects the cleared 0.
 		context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDeferredDepthState.get(), 0);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2506,15 +2146,6 @@ void SnowDeformation::DrawShell()
 		context->End(shellStatsQuery[shellStatsRing][0].get());
 	}
 
-	// The post-shell depth copy that used to run here went with the seam
-	// cross-fade it served. Restoring the pair-3 contest needs it back first;
-	// see HEIGHT-BLEND-PLAN.md.
-
-	// Captured projected-snow statics, inflated with the same material.
-	// Inherits this pass's bindings (b0, t0-t8, s0, b4-b6, RTs, depth).
-	// Their own raster state carries the skin depth bias: a skin and its
-	// mesh rasterise the same vertices, so without a bias the far ones
-	// z-fight.
 	spanClock.Lap(CpuCensus::kSpanGround);
 	if (auto* skinRaster = GetSkinRasterState())
 		context->RSSetState(skinRaster);
@@ -2528,7 +2159,6 @@ void SnowDeformation::DrawShell()
 	DrawCapturedStatics();
 	spanClock.Lap(CpuCensus::kSpanStatics);
 	if (patchStatsArmed) {
-		// No patch drew: an empty pair keeps this ring slot's read in step.
 		context->Begin(patchStatsQuery[shellStatsRing][0].get());
 		context->Begin(patchStatsQuery[shellStatsRing][1].get());
 		context->End(patchStatsQuery[shellStatsRing][1].get());
@@ -2543,10 +2173,6 @@ void SnowDeformation::DrawShell()
 	}
 	context->RSSetState(shellRasterState.get());
 
-	// Restore everything we changed. DS/HS state is cleared unconditionally:
-	// the statics pass binds its own DS resources even when the landscape
-	// tessellation is unavailable, and the deformation map is UAV-written
-	// next Prepass so it must not linger on a DS slot.
 	{
 		ID3D11ShaderResourceView* nullDSSRVs[24] = {};
 		context->DSSetShaderResources(0, 24, nullDSSRVs);
@@ -2568,10 +2194,6 @@ void SnowDeformation::DrawShell()
 	context->VSSetShaderResources(0, 16, nullSRVs);
 	context->PSSetShaderResources(0, 16, nullSRVs);
 	context->PSSetShaderResources(kTerrainWetSlot, 1, nullSRVs);
-	// t22/t23 hold SRVs of the game's shadow depth targets; they must be
-	// unbound before the next shadow render binds those targets as DSVs, or
-	// D3D silently drops the binding with warning spam. t20 (glint noise) and
-	// t21 are cleared alongside.
 	ID3D11ShaderResourceView* nullShadowSRVs[4] = { nullptr, nullptr, nullptr, nullptr };
 	context->PSSetShaderResources(20, 4, nullShadowSRVs);
 	ID3D11ShaderResourceView* restoreShellSRVs[9];
@@ -2584,7 +2206,6 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(27, 2, nullFinePS);
 	context->PSSetShaderResources(19, 1, nullFinePS);
 	context->PSSetShaderResources(24, 1, &nullFinePS[0]);
-	// The untouched mask and the body reach are compute targets next Prepass.
 	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(kBodyReachSlot, 1, &nullFinePS[0]);
 	context->PSSetShaderResources(26, 1, &nullFinePS[1]);
@@ -2604,13 +2225,6 @@ void SnowDeformation::DrawShell()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 	spanClock.Lap(CpuCensus::kSpanShellRestore);
 
-	// Screen-space passes running after us (SSGI, SSS, the shadow mask) read
-	// Terrain Blending's blended depth, finalized during opaque rendering;
-	// without a sync they see buried geometry poking through the snow and
-	// paint occlusion, shadow and GI from under the sheet. min() the fresh
-	// depth into both blended copies (DSV is unbound again at this point),
-	// on the module's own pixels only: the shell prepass's mark, or a depth
-	// the snow passes moved nearer than the pre-snow copy (skins, patch).
 	auto& tb = globals::features::terrainBlending;
 	const bool syncable = rasterMarks || preSnowDepthThisFrame;
 	if (!syncable)
@@ -2622,9 +2236,6 @@ void SnowDeformation::DrawShell()
 			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
 				shellGroundMarksSRV,
 				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
-			// Outside the rendered rectangle nothing moved the main depth and the raster
-			// marks are clear: the full-target pass returned there. The pre-snow copy
-			// covers this same rectangle.
 			const auto& depthDesc = tb.blendedDepthTexture->desc;
 			const D3D11_BOX rect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, depthDesc.Width, depthDesc.Height, 0);
 			DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
@@ -2647,7 +2258,6 @@ void SnowDeformation::DrawShell()
 			context->CSSetShader(nullptr, nullptr, 0);
 		}
 	}
-	// After Depth Sync: its UAV write unbinds the blended depth from PS t17.
 	ID3D11ShaderResourceView* restoreFrostSlotSRVs[2] = { prevFrostSlotSRVs[0].get(), prevFrostSlotSRVs[1].get() };
 	context->PSSetShaderResources(16, 2, restoreFrostSlotSRVs);
 	ID3D11ShaderResourceView* restoreCloudShadowSRV = prevCloudShadowSRV.get();

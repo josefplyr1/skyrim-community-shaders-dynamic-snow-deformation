@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/DevSwitches.h"
 
@@ -14,23 +10,12 @@
 #include <algorithm>
 #include <cctype>
 
-// Blood on snow (BLOOD-DESIGN.md). The blood mods stay the simulation; the
-// shells become the surface. Every decal-mode Lighting draw with a blood
-// diffuse that the capture hook sees is re-rasterised from above into a
-// toroidal blood map beside the deformation map, with its own texture, so
-// the authored splatter shapes survive. Engine decals are baked geometry
-// and deposit once; Dynamic Bloodpool quads animate and deposit every frame
-// under MAX alpha. API discs ride the same pass. Nothing evolves the map:
-// each texel is dated, and the shells fade by snowfall and age at read.
-
 void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 {
 	delete bloodMapTexture;
 	bloodMapTexture = nullptr;
 	delete bloodClockTexture;
 	bloodClockTexture = nullptr;
-	// The wrappers throw on a failed create; blood is optional, so a failure
-	// (RenderDoc's wrapper rejecting a view, say) disables it and says why.
 	try {
 
 	D3D11_TEXTURE2D_DESC desc = a_mapDesc;
@@ -48,7 +33,6 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
 			.Texture2D = { .MipSlice = 0 }
 		};
-		// UAVs take no sRGB format; the ring clear writes zeros either way.
 		D3D11_UNORDERED_ACCESS_VIEW_DESC uav{
 			.Format = DXGI_FORMAT_R8G8B8A8_UNORM,
 			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
@@ -220,9 +204,6 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		return false;
 	}
 	if (!bloodOverlayBlendState) {
-		// The decals' own contribution over the snow in the lit diffuse,
-		// normal + gloss, albedo, specular and reflectance; motion vectors
-		// and the masks are left to the snow.
 		D3D11_BLEND_DESC blendDesc{};
 		blendDesc.IndependentBlendEnable = TRUE;
 		for (int i = 0; i < 8; i++)
@@ -245,9 +226,6 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		}
 	}
 	if (!bloodOverlayDepthState) {
-		// No hardware test: the coat, the rise and the shell all sit nearer
-		// than the decal by design. The PS tests against the pre-snow depth
-		// copy instead, so bodies and props still hide it.
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
 		dsDesc.DepthEnable = FALSE;
 		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
@@ -275,11 +253,6 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		bloodSkinCB = new ConstantBuffer(cbDesc, "SnowDeformation::BloodSkinCB");
 	}
 	if (!bloodBlendState) {
-		// The pigment is the texture's colour, written as is: blending it by
-		// alpha over the map's black darkened every faint mark to soot.
-		// Concentration keeps its high-water mark, so a pool that grows over
-		// frames only grows. The clock target overwrites: the newest deposit
-		// dates the texel.
 		D3D11_BLEND_DESC blendDesc{};
 		blendDesc.IndependentBlendEnable = TRUE;
 		auto& rt = blendDesc.RenderTarget[0];
@@ -300,7 +273,6 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		}
 	}
 	if (!bloodRasterState) {
-		// Top-down with the row flipped: winding is meaningless, cull nothing.
 		D3D11_RASTERIZER_DESC rasterDesc{};
 		rasterDesc.FillMode = D3D11_FILL_SOLID;
 		rasterDesc.CullMode = D3D11_CULL_NONE;
@@ -358,8 +330,6 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 
 void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 {
-	// The overlay lifts decals over coats on loaded objects; with none, the
-	// game's own draw is already the visible one and the copies buy nothing.
 	if (capturedLoaded == 0 && capturedLoadedPrev == 0)
 		return;
 	auto* geometry = a_capture.geometry.get();
@@ -370,10 +340,6 @@ void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 		return;
 	}
 	const BloodCapture& capture = a_capture;
-	// Every frame, once per geometry (the hook sees a decal once per pass
-	// that draws it): the decal's screen rectangle joins the overlay's. The
-	// hook runs before the draw, so at the frame's first decal the targets
-	// still hold the ground the game is about to blend it onto.
 	if (bloodOverlays.size() < 512 && bloodOverlaySet.insert(geometry).second) {
 		RECT rect{};
 		UINT viewports = 1;
@@ -393,9 +359,6 @@ void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 			bloodRectFrameValid = true;
 		}
 		if (bloodOverlays.empty() && settings.ProjSnowMatch) {
-			// Last frame's rectangle grown a little plus this decal; with
-			// neither, the whole viewport. A missing copy loses every decal
-			// of the frame, a large one costs a copy.
 			bool any = haveRect;
 			bloodCopyRect = rect;
 			if (bloodRectPrevValid) {
@@ -436,9 +399,6 @@ void SnowDeformation::MarkCoatReach(float a_x, float a_y, float a_radius)
 
 bool SnowDeformation::DecalReachesSnow(const RE::NiBound& a_bound)
 {
-	// While the ground snow draws, every decal: its pre-decal Masks put the
-	// land's grain back under it for the shell's contest (Masks.y 0 cuts thin
-	// snow), and without live tiles the composite covers thin ground snow.
 	const uint32_t frame = globals::state->frameCount;
 	if (settings.VolumeSnow || shellDrawGroundGated || shellEarlyFrame == frame)
 		return true;
@@ -469,7 +429,6 @@ bool SnowDeformation::DecalReachesSnow(const RE::NiBound& a_bound)
 	const int x1 = int(std::floor((a_bound.center.x + r - coatReachOrigin[0]) / kCoatReachCell));
 	const int y0 = int(std::floor((a_bound.center.y - r - coatReachOrigin[1]) / kCoatReachCell));
 	const int y1 = int(std::floor((a_bound.center.y + r - coatReachOrigin[1]) / kCoatReachCell));
-	// Past the grid nothing was marked: no claim.
 	if (!(r >= 0.0f) || x0 < 0 || y0 < 0 || x1 >= coatReachDim || y1 >= coatReachDim)
 		return true;
 	for (int y = y0; y <= y1; ++y) {
@@ -536,11 +495,6 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 			diffusePath = path;
 	std::string pathLower(diffusePath);
 	std::transform(pathLower.begin(), pathLower.end(), pathLower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-	// Not a stain to copy: drips and bleed trails (particle blood owns them),
-	// and decals authored for additive or blend rendering, whose RGB is
-	// black around the blood - the game blends them, we would paint the
-	// black. The bound radius says nothing about a decal's size (Sanguine's
-	// Large spray reports 11) and is not consulted.
 	auto* alphaProperty = runtime.alphaProperty.get();
 	const bool blendsOver = !alphaProperty || !alphaProperty->GetAlphaBlending() ||
 	                        (alphaProperty->GetSrcBlendMode() == RE::NiAlphaProperty::AlphaFunction::kSrcAlpha &&
@@ -567,9 +521,6 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	capture.skinned = a_skinned;
 	RegisterDecalOverlay(capture);
 	if (!a_skinned) {
-		// Baked geometry: deposited while it spreads, then left alone. A
-		// pointer reused for a new decal fails the buffer-and-position check
-		// and starts over.
 		auto& seen = bloodSeen[geometry];
 		const auto& position = geometry->world.translate;
 		const bool same = seen.frame != 0 && seen.vb == vb && seen.position.GetSquaredDistance(position) < 1.0f;
@@ -590,9 +541,6 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		const double age = bloodRenderSeconds - seen.firstSeconds;
 		const bool revealing = !(same && age > spread + 0.1);
 		capture.reveal = spread > 0.0f ? std::clamp(float(age / spread), 0.05f, 1.0f) : 1.0f;
-		// The detail tiles take the mark while it spreads, and again when a
-		// tile under it was allocated after it finished. Not once snowfall
-		// has buried it: it would only win back the tile that burial freed.
 		const bool buried = bloodBurialClock - seen.firstClock.x >= std::max(settings.BloodBurial, 0.01f);
 		if (BloodTilesWanted() && !buried && bloodFineQueue.size() < 512 &&
 			(revealing || ((seen.fineEpoch != bloodTileEpoch || seen.fineMissing) && frame >= seen.fineRetryFrame)))
@@ -600,8 +548,6 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		if (!revealing)
 			return;
 	} else if (BloodTilesWanted() && bloodFineQueue.size() < 512) {
-		// Pool quads animate: the tiles follow every eighth frame for the
-		// first minute, by when a pool has stopped growing.
 		auto& seen = bloodSeen[geometry];
 		const uint32_t frame = globals::state->frameCount;
 		if (seen.frame == 0 || frame - seen.frame > 600) {
@@ -621,15 +567,6 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 		bloodCaptures.push_back(std::move(capture));
 }
 
-// Rune glyphs (BURIED-REF-LIFT-PLAN.md). A rune's visible glyph is an engine
-// decal on the ground the landscape shell covers. Same capture as blood, its
-// own target: the blood map's texel is several units and a glyph's lines are
-// two or three, so each live rune gets a tile of a small atlas, cleared and
-// redrawn every frame - the glyph leaves with its rune, and its pulse rides
-// the decal's own per-frame alpha. A tile holds the decal's UV FIELD, not its
-// colour: the shell samples the rune's own diffuse and normal map through it,
-// at the texture's full resolution. Frost impact decals take the tiles the
-// runes leave, so frost lies on the landscape snow as on object snow.
 bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal)
 {
 	auto* geometry = a_pass->geometry;
@@ -655,7 +592,6 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 			logger::info("[SNOW DEFORMATION] rune watch: decal draw '{}' tex='{}' rune={}",
 				geometry->name.c_str() ? geometry->name.c_str() : "", diffusePath, matched ? 1 : 0);
 	}
-	// ImpactDecals\DecalFrostImpact01 and its kin; not on a body.
 	const bool frost = !matched && a_engineDecal && settings.FrostDecalsOnSnow &&
 	                   pathLower.find("impactdecals\\") != std::string::npos && pathLower.find("frost") != std::string::npos &&
 	                   geometry->GetGeometryRuntimeData().skinInstance == nullptr;
@@ -682,10 +618,6 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 	capture.draw.skinned = false;
 	if (auto* normal = material->normalTexture.get(); normal && normal->rendererTexture && normal->rendererTexture->resourceView)
 		capture.normal.copy_from(normal->rendererTexture->resourceView);
-	// The material as BSLightingShader loads it for the decal's own draw:
-	// EmitColor = emissive colour x multiplier, the glow map of a Glowmap
-	// material, SpecularColor x scale and the power under the Specular flag.
-	// Linear Lighting uploads both colours in working space (LinearLighting.cpp).
 	const auto& linearLighting = globals::features::linearLighting;
 	if (auto* lighting = netimmerse_cast<RE::BSLightingShaderProperty*>(property)) {
 		const float mult = lighting->emissiveMult;
@@ -738,7 +670,6 @@ bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 			Util::SetResourceName(decalMaskPS, "SnowDeformation::DecalMaskPS");
 	}
 	if (!decalMaskBlendState) {
-		// Each channel stacks as the game's alpha blend does: a + d (1 - a).
 		D3D11_BLEND_DESC blendDesc{};
 		auto& rt = blendDesc.RenderTarget[0];
 		rt.BlendEnable = TRUE;
@@ -815,7 +746,6 @@ bool SnowDeformation::EnsureRuneResources()
 			desc.Height = kRuneTileDim * 2;
 			desc.MipLevels = 1;
 			desc.ArraySize = 1;
-			// uv at 16 bits: half floats step 1/1024 near 1, a texel of the glyph.
 			desc.Format = DXGI_FORMAT_R16G16B16A16_UNORM;
 			desc.SampleDesc.Count = 1;
 			desc.Usage = D3D11_USAGE_DEFAULT;
@@ -863,7 +793,6 @@ bool SnowDeformation::EnsureRuneResources()
 			Util::SetResourceName(runePS, "SnowDeformation::RuneCapturePS");
 	}
 	if (!runeDepthState) {
-		// The most opaque decal owns a texel; pieces of one decal tie and keep the first.
 		D3D11_DEPTH_STENCIL_DESC depthDesc{};
 		depthDesc.DepthEnable = TRUE;
 		depthDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ALL;
@@ -878,51 +807,30 @@ bool SnowDeformation::EnsureRuneResources()
 	return true;
 }
 
-// A frost decal's mark, from the decal's own vertices as the blood tiles read
-// their bounds: the least-squares uv plane over the xy of its flat triangles,
-// each corner weighted by a third of its triangle's area over the ground, and
-// the quarter of the 2x2 decal atlas that uv lies in. The whole geometry at
-// once, so a sliver or a rock face cannot tip it and it is the same every
-// frame. The mark is the decal's whole round, wherever the game clipped it.
 namespace
 {
-	// Flatter triangles shape a mark; up a rock's side the decal's uv runs up
-	// the face, not over the ground.
 	constexpr float kFrostFlatNormalZ = 0.5f;
-	// A mark whose flat triangles miss its plane by more than this (rms, world
-	// units) does not lie on the ground.
 	constexpr float kFrostFitTolerance = 4.0f;
-	// One decal laid on two geometries (the ground and a rock, two shapes of a
-	// rock) fits twice: centres this close, slopes this alike, one atlas quarter.
 	constexpr float kFrostTwinDistance = 12.0f;
 	constexpr float kFrostTwinSlope = 0.15f;
-	// float4s per mark in FrostPlanes: head, slopes, height span.
 	constexpr uint32_t kFrostMarkRows = 3;
 
 	struct FrostFit
 	{
-		// World xy of the decal's centre, the middle of its atlas quarter.
 		double centreX = 0.0;
 		double centreY = 0.0;
-		// du/dx, dv/dx, du/dy, dv/dy.
 		double slope[4] = {};
-		// Half the extent of its round along world x and y.
 		float reachX = 0.0f;
 		float reachY = 0.0f;
-		// 0-3: a quarter of the 2x2 atlas; 4: all of it.
 		uint32_t quarter = 4;
 		uint32_t slot = 0;
-		// Flat ground under it, square units.
 		float area = 0.0f;
 		float alpha = 0.0f;
-		// The lowest and highest point of the surfaces the decal covers.
 		float zLow = 0.0f;
 		float zHigh = 0.0f;
 		const RE::BSGeometry* geometry = nullptr;
 	};
 
-	// A decal geometry's world vertices, uvs and triangles, where the engine
-	// kept a CPU copy.
 	bool ReadDecalMesh(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, std::vector<RE::NiPoint3>& a_points, std::vector<float2>& a_uvs,
 		const uint16_t*& a_indices, uint32_t& a_triangles)
 	{
@@ -964,8 +872,6 @@ namespace
 		return true;
 	}
 
-	// Widens [a_low, a_high] to the surfaces a decal covers: its vertices, or
-	// its bound where the engine kept no copy of them.
 	void WidenDecalSpan(RE::BSGeometry* a_geometry, const RE::NiTransform& a_world, float& a_low, float& a_high)
 	{
 		thread_local std::vector<RE::NiPoint3> points;
@@ -999,7 +905,6 @@ namespace
 			a_fit.zLow = std::min(a_fit.zLow, p.z);
 			a_fit.zHigh = std::max(a_fit.zHigh, p.z);
 		}
-		// Moments about the first vertex: world coordinates are too large to square in floats.
 		const double ox = points[0].x, oy = points[0].y;
 		double s = 0.0, sx = 0.0, sy = 0.0, su = 0.0, sv = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0;
 		double suu = 0.0, svv = 0.0, sxu = 0.0, syu = 0.0, sxv = 0.0, syv = 0.0;
@@ -1033,7 +938,6 @@ namespace
 				uvHi = { std::max(uvHi.x, uvs[k].x), std::max(uvHi.y, uvs[k].y) };
 			}
 		}
-		// Under one square unit of flat ground.
 		if (s < 1.0)
 			return false;
 		const double mx = sx / s, my = sy / s, mu = su / s, mv = sv / s;
@@ -1170,7 +1074,6 @@ void SnowDeformation::BindFrostField(ID3D11DeviceContext* a_context, bool a_bind
 		srvs[10] = frostListSRV.get();
 	}
 	a_context->PSSetShaderResources(117, 11, srvs);
-	// SnowFields.hlsli FrostGlow0-3.
 	constexpr UINT kGlowSlots[kFrostTextures] = { 97, 99, 111, 64 };
 	for (uint32_t i = 0; i < kFrostTextures; ++i) {
 		ID3D11ShaderResourceView* glow = a_bind ? frostGlow[i].get() : nullptr;
@@ -1184,7 +1087,6 @@ void SnowDeformation::BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bin
 	a_context->PSSetConstantBuffers(7, 1, &buffer);
 	ID3D11ShaderResourceView* atlas = a_bind ? GetRuneAtlasSRV() : nullptr;
 	a_context->PSSetShaderResources(90, 1, &atlas);
-	// Each tile's own diffuse (t80-t83) and normal map (t84-t87), and its glow map (SnowFields.hlsli RuneGlow0-3).
 	ID3D11ShaderResourceView* textures[2 * kRuneMaxTiles] = {};
 	constexpr UINT kGlowSlots[kRuneMaxTiles] = { 88, 89, 95, 96 };
 	for (uint32_t i = 0; i < kRuneMaxTiles; ++i) {
@@ -1209,8 +1111,6 @@ void SnowDeformation::RenderRuneCapture()
 	runeStatTiles = 0;
 	markDecals.clear();
 
-	// A rune in range whose decal never matched: say so once, with what the
-	// record named, so the log can be read against the decal draws it lists.
 	if (!sites.empty() && runeCaptures.empty()) {
 		if (++runeMissFrames == 180 && !runeMissLogged) {
 			runeMissLogged = true;
@@ -1220,8 +1120,6 @@ void SnowDeformation::RenderRuneCapture()
 		runeMissFrames = 0;
 	}
 
-	// Frost marks on the ground under the landscape snow or level with its top.
-	// Higher ones are on objects, which wear them.
 	std::vector<const RuneCapture*> frost;
 	if (settings.FrostDecalsOnSnow) {
 		for (const auto& capture : frostCaptures) {
@@ -1309,14 +1207,11 @@ void SnowDeformation::RenderRuneCapture()
 			}
 			if (list.empty())
 				continue;
-			// The tile's textures and material are its first decal's.
 			const RuneCapture* first = members.front();
 			const float tileX = float((tiles & 1u) * kRuneTileDim);
 			const float tileY = float((tiles >> 1u) * kRuneTileDim);
 			D3D11_VIEWPORT viewport{ tileX, tileY, float(kRuneTileDim), float(kRuneTileDim), 0.0f, 1.0f };
 			context->RSSetViewports(1, &viewport);
-			// The blood VS's map transform, aimed at one tile: no torus, so its
-			// seam instances fall outside clip space.
 			BloodCB cb{};
 			cb.WindowOrigin = { site.position.x - kRuneTileHalf, site.position.y - kRuneTileHalf };
 			cb.TexelSize = 2.0f * kRuneTileHalf / float(kRuneTileDim);
@@ -1353,10 +1248,6 @@ void SnowDeformation::RenderRuneCapture()
 		}
 	}
 
-	// Every frost mark as its own uv plane over the ground, fitted from its
-	// decal's vertices and listed in every cell of the window its round
-	// reaches. The shells lay every mark over a point through its own plane,
-	// inside its quarter of the decal atlas, however many there are.
 	if (frosted) {
 		RE::NiPoint3 centre = frost.front()->centre;
 		if (auto* player = globals::game::player)
@@ -1365,8 +1256,6 @@ void SnowDeformation::RenderRuneCapture()
 		const float2 origin{ std::floor((centre.x - half) / kFrostCellSize) * kFrostCellSize, std::floor((centre.y - half) / kFrostCellSize) * kFrostCellSize };
 		uint32_t slots = 0;
 		uint32_t unfitted = 0;
-		// A slot is one material: two texture sets share the frost diffuse and
-		// differ in their glow map.
 		const RuneCapture* slotMaterial[kFrostTextures] = {};
 		auto sameMaterial = [](const RuneCapture& a_a, const RuneCapture& a_b) {
 			return a_a.draw.diffuse.get() == a_b.draw.diffuse.get() && a_a.normal.get() == a_b.normal.get() && a_a.glow.get() == a_b.glow.get() &&
@@ -1404,7 +1293,6 @@ void SnowDeformation::RenderRuneCapture()
 			frostNormal[i] = nullptr;
 			frostGlow[i] = nullptr;
 		}
-		// A decal on two geometries keeps the fit with more flat ground under it.
 		std::vector<uint32_t> byX(fits.size());
 		for (uint32_t i = 0; i < byX.size(); ++i)
 			byX[i] = i;
@@ -1430,7 +1318,6 @@ void SnowDeformation::RenderRuneCapture()
 			if (dropped[i])
 				continue;
 			const FrostFit& fit = fits[i];
-			// uv at the window's origin, from the decal's centre.
 			const double cu = fit.quarter < 4u ? 0.5 * (fit.quarter & 1u) + 0.25 : 0.5;
 			const double cv = fit.quarter < 4u ? 0.5 * (fit.quarter >> 1u) + 0.25 : 0.5;
 			const double rx = double(origin.x) - fit.centreX, ry = double(origin.y) - fit.centreY;
@@ -1444,7 +1331,6 @@ void SnowDeformation::RenderRuneCapture()
 			frostFitMissLogged = true;
 			logger::warn("[SNOW DEFORMATION] frost marks: none of {} frost decal draw(s) could be fitted (not flat on the ground, or the engine kept no CPU vertex copy) - they stay off the landscape snow", unfitted);
 		}
-		// Each mark into every cell its round reaches.
 		const float inv = 1.0f / kFrostCellSize;
 		auto cellRange = [&](uint32_t a_mark, int32_t& a_x0, int32_t& a_y0, int32_t& a_x1, int32_t& a_y1) {
 			const float4& bounds = reach[a_mark];
@@ -1512,8 +1398,6 @@ void SnowDeformation::RenderRuneCapture()
 			}
 			cbRune.FrostNormals = { hasNormal[0], hasNormal[1], hasNormal[2], hasNormal[3] };
 			cbRune.FrostEmissiveMults = { emissiveMults[0], emissiveMults[1], emissiveMults[2], emissiveMults[3] };
-			// The overlay leaves these decals to the marks: every fitted one, twins
-			// included, whose round reaches the window.
 			const float windowSize = kFrostCellSize * float(kFrostCells);
 			if (uploaded)
 				for (const FrostFit& fit : fits)
@@ -1544,10 +1428,6 @@ void SnowDeformation::RenderRuneCapture()
 	runeCaptureSet.clear();
 }
 
-// The decal's world bound projected with the game's current camera into the
-// bound viewport, in render-resolution pixels. A bound crossing the near
-// plane takes the whole viewport (the decal can be anywhere on screen);
-// false only when it is off screen.
 bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const
 {
 	const auto& fb = globals::game::frameBufferCached;
@@ -1585,9 +1465,6 @@ bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_
 	return a_rect.right > a_rect.left && a_rect.bottom > a_rect.top;
 }
 
-// Lit diffuse, normal + gloss, albedo, specular, reflectance over
-// bloodCopyRect into the pre-decal or the pre-snow set. Mid-pass in the
-// hook: the game's targets are unbound around the copy and put back.
 void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 {
 	auto* context = globals::d3d::context;
@@ -1605,7 +1482,6 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 	if (rc.right <= rc.left || rc.bottom <= rc.top)
 		return;
 	const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
-	// The rect moves every frame; the copies are sized once, to the viewport.
 	const D3D11_BOX extent = ScreenRectBox(&bloodViewport, UINT32_MAX, UINT32_MAX, 0);
 	ID3D11RenderTargetView* rtvs[8]{};
 	ID3D11DepthStencilView* dsv = nullptr;
@@ -1732,9 +1608,6 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 			continue;
 		}
 
-		// Pool quads: skinned, one palette per partition, absolute world rows
-		// (bone world * skinToBone; the game's own palette where a slot has
-		// no node). Partition-local bone indices, as SSE partitions carry.
 		auto* skin = runtime.skinInstance.get();
 		auto* skinData = skin ? skin->skinData.get() : nullptr;
 		auto* skinPartition = skin ? skin->skinPartition.get() : nullptr;
@@ -1835,7 +1708,6 @@ void SnowDeformation::RenderBloodCapture()
 	bloodDiscsLast = 0;
 	bloodRenderSeconds += double(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
 	const uint32_t frame = globals::state->frameCount;
-	// A decal unseen for ten seconds is gone; forget it.
 	if ((frame & 63) == 0 || bloodSeen.size() > 4096)
 		std::erase_if(bloodSeen, [&](const auto& a_kv) { return frame - a_kv.second.frame > 600; });
 	bloodSeenLive = uint32_t(bloodSeen.size());
@@ -1937,11 +1809,6 @@ void SnowDeformation::RenderBloodCapture()
 	}
 }
 
-// The game's blood decals drawn again over the object-snow coat, into the
-// skin pass's own targets and depth: the coat is a lifted copy of the mesh
-// the decal lies on, so the decal loses the depth test to it and vanishes
-// under the recolored snow. Pushed past the coat's lift, tested against
-// everything else, and confined by the PS to pixels the game painted solid.
 void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth)
 {
 	bloodOverlaysLast = 0;
@@ -1954,7 +1821,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodRectPrevValid = bloodRectFrameValid;
 	bloodRectFrameValid = false;
 	decalMasksLast = 0;
-	// The decals the marks paint themselves (RenderRuneCapture), this frame only.
 	std::unordered_set<const RE::BSGeometry*> marked;
 	marked.swap(markDecals);
 	if (bloodOverlays.empty()) {
@@ -1964,9 +1830,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	const size_t decals = bloodOverlays.size();
 	std::vector<BloodCapture> overlays;
 	overlays.swap(bloodOverlays);
-	// Without the prepass there is no post-skin depth to read the lift from,
-	// and without both copies nothing to put back; the decals stay under the
-	// snow that frame rather than double on rock.
 	if (!DecalOverlayWanted() || !settings.ProjSnowMatch || !a_postSkinDepth || !copies || !EnsureBloodResources())
 		return;
 	auto* context = a_context;
@@ -1981,10 +1844,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->OMGetDepthStencilState(savedDepth.put(), &savedStencilRef);
 	winrt::com_ptr<ID3D11RasterizerState> savedRaster;
 	context->RSGetState(savedRaster.put());
-	// The trench patch draws next and INHERITS most of its pixel-stage
-	// textures from the skin pass: what this pass binds over is put back,
-	// not nulled (the road patch shaded against empty rasters, 2026-09-18).
-	constexpr UINT kOverlaySlots = 4 + 2 * kBloodCopyCount;  // t3 .. t16
+	constexpr UINT kOverlaySlots = 4 + 2 * kBloodCopyCount;
 	ID3D11ShaderResourceView* savedSRVs[kOverlaySlots]{};
 	context->PSGetShaderResources(3, kOverlaySlots, savedSRVs);
 	ID3D11ShaderResourceView* savedDiffuse = nullptr;
@@ -2013,7 +1873,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodPreSkinDepthThisFrame = false;
 	cb.Spread = { 0.0f, shellPaintsOwn ? 1.0f : 0.0f, 0.0f, 0.0f };
 	const float W = std::max(bloodViewport.Width, 1.0f), H = std::max(bloodViewport.Height, 1.0f);
-	// The camera in pixels: the overlay turns a depth gap into snow height with it.
 	const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
 	cb.OverlayView = { 0.5f * H * eye.projMat(1, 1), bloodViewport.TopLeftX + 0.5f * W, bloodViewport.TopLeftY + 0.5f * H, 0.0f };
 	cb.OverlayRect = { float(bloodCopyRect.left) / W * 2.0f - 1.0f, 1.0f - float(bloodCopyRect.top) / H * 2.0f,
@@ -2032,12 +1891,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	ID3D11Buffer* sharedBuffers[3] = { state->permutationCB->CB(), state->sharedDataCB->CB(), state->featureDataCB->CB() };
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 
-	// Every overlay decal's own alpha in screen space, drawn with the game's
-	// camera where the fragment lies on the pre-snow surface. y confines the
-	// stack the overlay reads off the colour to these decals: the copies also
-	// hold every other decal-mode mesh the game drew between them. x is the
-	// alpha of the decals that are not blood: a frost mark or a rune leaves
-	// no tell in the colour.
 	ID3D11ShaderResourceView* maskSRV = nullptr;
 	uint32_t width = 0, height = 0;
 	if (auto* mainTexture = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGETS::kMAIN].texture) {
@@ -2052,7 +1905,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		ID3D11DepthStencilView* savedDSV = nullptr;
 		context->OMGetRenderTargets(8, savedRTVs, &savedDSV);
 		const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		// The composite reads the mask inside the decals' rectangle only.
 		if (decalMaskClearView) {
 			const D3D11_RECT clearRect = bloodCopyRect;
 			decalMaskContext1->ClearView(decalMaskTexture->rtv.get(), zero, &clearRect, 1);
@@ -2079,8 +1931,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		maskCB.ViewProjRow2 = { m.m[2][0], m.m[2][1], m.m[2][2], m.m[2][3] };
 		maskCB.ViewProjRow3 = { m.m[3][0], m.m[3][1], m.m[3][2], m.m[3][3] };
 		maskCB.CameraAdjust = { adjust.x, adjust.y, adjust.z, 0.0f };
-		// A frost mark or a rune glyph the object snow paints itself stays out
-		// of the cover, so the overlay does not lay the game's decal over it again.
 		const auto kept = std::remove_if(overlays.begin(), overlays.end(), [&](const BloodCapture& a_capture) { return marked.contains(a_capture.geometry.get()); });
 		const bool excluded = kept != overlays.end();
 		overlays.erase(kept, overlays.end());
@@ -2099,10 +1949,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 			decalMaskLogged = true;
 			logger::info("[SNOW DEFORMATION] decal overlay: first frame drew {} mask draws for {} decals, {} not blood", drawn, overlays.size(), decalMasksLast);
 		}
-		// Nothing drew: no cover to confine the stack to, the overlay as before -
-		// unless decals were left out, which then have none.
 		cb.Spread.z = (drawn || excluded) ? 1.0f : 0.0f;
-		// The list drew with its own state; back to the screen rectangle.
 		context->OMSetBlendState(bloodOverlayBlendState.get(), nullptr, 0xFFFFFFFF);
 		context->IASetInputLayout(nullptr);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

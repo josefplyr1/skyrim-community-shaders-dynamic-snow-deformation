@@ -1,21 +1,7 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Lighting.hlsl's Snow Deformation blocks, as functions. Included by
-// Lighting.hlsl just before main, so its samplers, constants and the PBR
-// evaluators are in scope; Lighting keeps the call sites only.
-
 #ifndef __SNOW_LIGHTING_HLSLI__
 #define __SNOW_LIGHTING_HLSLI__
 
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(PROJECTED_UV) || defined(LANDSCAPE) || defined(SNOW_BODY_COAT)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-// Non-TRUE_PBR permutations that re-light snow through the PBR evaluators:
-// the LOD terrain family (horizon snow), the land's recolored snow layers,
-// projected-snow statics and the body coat. The
-// optional-lobe branches inside are TRUE_PBR-gated, so these permutations
-// compile the coatless diffuse/lobe core against the vanilla
-// MaterialProperties.
 #	include "Common/PBR.hlsli"
 #endif
 #if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
@@ -28,28 +14,17 @@ namespace SnowLighting
 	struct State
 	{
 		float landSnowness;
-		// Projected snow: the CPU classified this draw's projected material
-		// as snow and the swap ran; the albedo is saved for the write tail.
 		bool projMatch;
 		float3 projAlbedo;
-		// Its material response (ShellRMAOS), for the write tail's re-light.
 		float4 projRMAOS;
-		// Snow Follows Parallax: mesh point to the parallax texel, in world units.
 		float3 parallaxShift;
-		// Ground under drawn water takes no recolor and no coat (Masks.y = 2).
 		bool underWater;
-		// Snow Trenches on Objects: the print's depth share here.
 		float printShare;
 		float lodReplaceW;
 		float3 lodAlbedo;
-		// Snow-textured recolor: pixel judged, and its snow weight.
 		bool texMatch;
 		float texWeight;
-		// Total accumulated lights before the tail clobbers diffuseColor.
 		float3 projLightTotal;
-		// Land Snow Recolor: the shell's snow at this pixel in the layers'
-		// own colour domain, its normal xy and RMAOS, and the share of the
-		// blend that took it.
 		bool landRecolor;
 		uint landSnowBits;
 		float3 landSnowRaw;
@@ -57,14 +32,10 @@ namespace SnowLighting
 		float4 landSnowRMAOS;
 		float landSnowFrac;
 #if defined(SNOW_BODY_COAT)
-		// The body coat's opacity here, for the skin's SSS mask.
 		float coatAlpha;
 #endif
 	};
 
-	// How much a texel reads as snow: bright and grey, on the texture's own
-	// encoded values. A snowy rocks, grass snow or path layer keeps its rock,
-	// grass and dirt texels. Shared by the land and snow-textured recolors.
 	float LandSnowTexel(float3 g)
 	{
 		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
@@ -73,7 +44,6 @@ namespace SnowLighting
 		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
 	}
 
-	// A raw base texture sample as encoded: TRUE_PBR decodes it to linear.
 	float3 SampleEncoded(float3 sampled)
 	{
 #if defined(TRUE_PBR)
@@ -84,8 +54,6 @@ namespace SnowLighting
 	}
 
 #if defined(LANDSCAPE)
-	// A land layer as encoded. The layers arrive converted: TRUE_PBR's linear,
-	// otherwise ColorManagement::DiffuseToWorking's, inverted here.
 	float3 LayerEncoded(float3 layerColor)
 	{
 #	if defined(TRUE_PBR)
@@ -104,9 +72,6 @@ namespace SnowLighting
 	}
 #endif
 
-	// Snow grain on a recolored surface, in the drape's frame. texN: the snow
-	// normal map through the plane SampleStochastic took with triWeights
-	// (DirectX map, +G along +v; x plane yz, y plane xz, z plane xy).
 	void SnowGrain(inout float3 worldNormal, float3 texN, float3 triWeights, float screenNoise, float weight)
 	{
 		const bool planeX = screenNoise < triWeights.x;
@@ -120,15 +85,11 @@ namespace SnowLighting
 		worldNormal = normalize(worldNormal + (bumpT * texN.x + bumpB * texN.y) * weight);
 	}
 
-	// The shell's material response (SnowShell.hlsl): roughness and F0 from an
-	// RMAOS texel of its set under the set's scales, AO as authored, metallic 0.
 	float4 ShellRMAOS(float4 r)
 	{
 		return float4(clamp(r.x * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0), 0.0, r.z, r.w * SharedData::snowDeformationSettings.SnowSpecularLevel);
 	}
 
-	// Its defaults (kSnowRoughness, kSnowF0) where the set has no RMAOS map:
-	// DebugTerrainOverlay bit 512 says HorizonSnowRmaos is bound with the set.
 	bool ShellHasRMAOS()
 	{
 		return (uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 512) != 0;
@@ -136,9 +97,6 @@ namespace SnowLighting
 	static const float4 kShellRMAOSDefault = float4(0.6, 0.0, 1.0, 0.028);
 
 #if defined(LANDSCAPE) || ((defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR))
-	// The shell's snow set through the shell's own anti-tiling taps
-	// (SnowParallax.hlsli ComputeSnowTapsNoGrad) at the shell's tiling, for a
-	// camera-relative position: every texel lands where the shell's would.
 	struct SnowSetTaps
 	{
 		float2 uv0, uv1, uv2;
@@ -153,8 +111,6 @@ namespace SnowLighting
 		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
 	}
 
-	// worldXY: worldRelXY + CameraPosAdjust. Takes derivatives: call in
-	// uniform flow.
 	SnowSetTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY)
 	{
 		float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRelXY / SnowDeformation::SnowUVTile;
@@ -186,16 +142,11 @@ namespace SnowLighting
 #endif
 
 #if defined(LANDSCAPE)
-	// Per-tile snow detection: how much of this pixel's landscape blend is
-	// snow material. Only the terrain overlay reads it.
 	void LandSnowness(inout State s, float4 blendWeights1, float2 blendWeights2)
 	{
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
 		{
 #	if defined(TRUE_PBR)
-			// PBR terrain replaces the vanilla per-layer snow constants, so the
-			// CPU side publishes per-tile snow-material bits via the permutation
-			// data (see SnowDeformation::BSLightingShader_SetupMaterial).
 			uint snowTileBits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
 			float4 snowIsSnow1to4 = float4(snowTileBits & 1, (snowTileBits >> 1) & 1, (snowTileBits >> 2) & 1, (snowTileBits >> 3) & 1);
 			float2 snowIsSnow5to6 = float2((snowTileBits >> 4) & 1, (snowTileBits >> 5) & 1);
@@ -206,19 +157,11 @@ namespace SnowLighting
 		}
 	}
 
-	// Re-run after EM height blending has rewritten the weights, so the
-	// verdict matches the layer actually shown.
 	void LandSnownessPostBlend(inout State s, float4 blendWeights1, float2 blendWeights2)
 	{
 		LandSnowness(s, blendWeights1, blendWeights2);
 	}
 
-	// Snow on Landscape's edge verdict (DebugTerrainOverlay bit 128): log2 odds
-	// of the module's snow layers (the per-draw permutation bits) against the
-	// rest, after EM's height blend, clamped to +-16 and packed into the land's
-	// (0.004, 1]. Decoded by SnowShell.hlsl LandSnowOdds. Masks is written
-	// opaque: under Terrain Blending's alpha the odds mixed with the code of
-	// the object base behind the land.
 	void WriteLandSnowOdds(float4 blendWeights1, float2 blendWeights2, inout float4 masks)
 	{
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 128) != 0)
@@ -233,11 +176,6 @@ namespace SnowLighting
 	}
 
 #	if defined(EMAT) && defined(DEFERRED)
-	// EM's parallax path fades its height blend over 1024-2048 units of view
-	// depth and hands back the vertex weights past it, so the snow edge (and
-	// the odds above) became the vertex grid's linear ramp: grey patches with
-	// straight sides. Where the land mixes the module's snow layers with
-	// others, the blend keeps EM's full strength at any distance.
 	void LandSnowEdgeBlend(PS_INPUT input, float viewDepth, float screenNoise, float2 uv, float mipLevels[6], DisplacementParams params[6], StochasticOffsets sharedOffset, inout float weights[6])
 	{
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 128) != 0 && SharedData::extendedMaterialSettings.EnableHeightBlending && viewDepth > 1024.0)
@@ -247,11 +185,9 @@ namespace SnowLighting
 			float rest = dot(input.LandBlendWeights1, 1.0) + input.LandBlendWeights2.x + input.LandBlendWeights2.y - snow;
 			[branch] if (snow > 0.01 && rest > 0.01)
 			{
-				// EM's full-strength inputs (ExtendedMaterialsParallaxCore.hlsli).
 				float full[6];
 				ExtendedMaterials::GetTerrainHeight(screenNoise, input, uv, mipLevels, params, 1.0,
 					smoothstep(0.0, 1.0, input.LandBlendWeights1), smoothstep(0.0, 1.0, input.LandBlendWeights2.xy), sharedOffset, full);
-				// EM's own fade, so the hand-over at 1024 is continuous.
 				float far = smoothstep(1024.0 * 1024.0, 2048.0 * 2048.0, viewDepth * viewDepth);
 				[unroll] for (uint i = 0; i < 6; i++)
 					weights[i] = lerp(weights[i], full[i], far);
@@ -260,9 +196,6 @@ namespace SnowLighting
 	}
 #	endif
 
-	// Land Snow Recolor (DebugTerrainOverlay bit 256): the module's snow layers
-	// wear the shell's snow set texel by texel, so wherever the land shows
-	// through the shell, its snow is the shell's snow.
 	void LandRecolorBegin(inout State s, float3 worldRel)
 	{
 		uint bits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
@@ -272,18 +205,8 @@ namespace SnowLighting
 			const SnowSetTaps taps = SnowSetTapsAt(worldRel.xy, worldXY);
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
-			// Shell albedo convention (SnowShell.hlsl kSnowAlbedo), then the layer
-			// value the land's own Color::Albedo turns back into it.
 			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-			// Wet snow (Snow Climate): a print through to the land's snow presses
-			// dark and glossy like the shell's thin print beside it. The tint is
-			// in the shell's albedo convention; a linear set takes it linearised.
 			const float wet = SharedData::snowDeformationSettings.LandWetPrint;
-			// Refrozen (Wet Snow and Ice): a pressed print glazes like the shell's,
-			// by the ice that froze after it was cut (SnowFields.hlsli
-			// SnowIceSince, row 1 as LandIce), the rest of the snow by the sun
-			// crust's share. Mirror kIceTint, kIceRoughCut and kIceSurfaceGlaze in
-			// SnowFields.hlsli.
 			const float ice = SharedData::snowDeformationSettings.LandIce;
 			float press = 0.0;
 			float glaze = 0.0;
@@ -298,15 +221,12 @@ namespace SnowLighting
 			}
 			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 			shellAlbedo *= printTint;
-			// The layers arrive converted (Common/LightingLandscape.hlsli): TRUE_PBR's
-			// linear, otherwise already the albedo.
 #	if defined(TRUE_PBR)
 			s.landSnowRaw = Color::PBRMaterialToLinear(shellAlbedo);
 #	else
 			s.landSnowRaw = shellAlbedo;
 			s.lodAlbedo = shellAlbedo;
 #	endif
-			// Classification debug (bit 4): the recolored texels in magenta too.
 			[flatten] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 4) != 0)
 			{
 				s.landSnowRaw = float3(1.0, 0.0, 1.0);
@@ -318,7 +238,6 @@ namespace SnowLighting
 				float2 n = SnowSetSample(SnowDeformation::HorizonSnowNormal, taps).xy * 2.0 - 1.0;
 				s.landSnowNormal = float2(n.x, -n.y);
 			}
-			// The shell's material defaults; its RMAOS map where the set has one.
 			s.landSnowRMAOS = kShellRMAOSDefault;
 			[branch] if (ShellHasRMAOS())
 				s.landSnowRMAOS = ShellRMAOS(SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps));
@@ -351,9 +270,6 @@ namespace SnowLighting
 		}
 	}
 
-	// The shell's grain on the recolored share, the shell's own perturbation
-	// (world +X/+Y frame, SnowShell.hlsl). The layers' own grain was flattened
-	// out of it above. Vanilla land then re-lights that share like horizon snow.
 	void LandRecolorNormal(inout State s, inout float3 worldNormal)
 	{
 		[branch] if (s.landSnowFrac > 0.003 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
@@ -369,8 +285,6 @@ namespace SnowLighting
 
 	void DebugLandOverlay(inout float3 baseColor, float2 worldXYRel, float snowness)
 	{
-		// Diagnostic overlay: R = outside deformation window, G = raw
-		// deformation sample, B = detected snowness.
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
 		{
 			float2 debugWorldXY = worldXYRel + FrameBuffer::CameraPosAdjust.xy;
@@ -380,28 +294,14 @@ namespace SnowLighting
 			baseColor = lerp(baseColor, float3(debugOutside, debugDeformation, snowness), 0.75);
 		}
 	}
-#endif  // LANDSCAPE
+#endif
 
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	// Horizon snow: where the game's own LOD terrain bake reads as snow,
-	// wear the shell's snow albedo instead, through the shell's taps, so the
-	// shell's geometry hands off to identically-dressed terrain beyond its
-	// reach. No normal map: the shell's own fades out by 2200 units.
-	// Classification runs on the raw (gamma) bake, matching the window fill's
-	// thresholds; the world-space normal.z gates cliffs back to rock even where
-	// the bake is pale. Shading happens at the write tail (RelightLOD, the
-	// shell's recipe on the OUTPUTS).
 	void LODRecolor(inout State s, float3 rawBaseColor, float2 uv, float2 worldXYRel, float3 normal)
 	{
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
-		// Plain object-LOD batches flagged by the statics hook: their baked snow
-		// (drifts, roads, piles in the atlas) takes the horizon recipe. The
-		// bake covers the mesh whole, so only undersides are kept out, and only
-		// solid texels: a texture cut out within two mips of the drawn texel
-		// (tree cards, leaves, fences) is never snow.
 		bool snowLodOn = SharedData::snowDeformationSettings.LODObjectEnable > 0.5 &&
 		                 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0;
-		// Two mips past the draw's own sample; the gradients stay out of flow control.
 		const float coverScale = exp2(SharedData::MipBias + 2.0);
 		const float2 coverDx = ddx(uv) * coverScale;
 		const float2 coverDy = ddy(uv) * coverScale;
@@ -414,7 +314,6 @@ namespace SnowLighting
 			float lodReplaceT = saturate((length(worldXYRel) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);
-			// Opaque at 8 bits.
 			[branch] if (lodReplaceW > 0.003)
 				lodReplaceW *= TexColorSampler.SampleGrad(SampColorSampler, uv, coverDx, coverDy).a >= 254.5 / 255.0 ? 1.0 : 0.0;
 #	else
@@ -424,10 +323,8 @@ namespace SnowLighting
 			[branch] if (lodReplaceW > 0.003)
 			{
 				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
-				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.lodReplaceW = lodReplaceW;
 				s.lodAlbedo = SnowColor::SetAlbedo(snowSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-				// Classification debug (bit 4): the baked recipe's pixels in magenta too.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.lodAlbedo = float3(1.0, 0.0, 1.0);
 			}
@@ -436,15 +333,6 @@ namespace SnowLighting
 #endif
 
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD) || defined(LANDSCAPE)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-	// Horizon snow, shell recipe (SNOW-MATCH Phase 1): replaced pixels are
-	// re-evaluated through the SAME PBR functions the shell and TruePBR
-	// statics use - the context already carries this pixel's normal, view
-	// ray, and the EHF/world-shadowed sun; the compensation
-	// reconstructs the TRUE_PBR-flavoured light input this non-PBR
-	// permutation never applied (PI-CONVENTION-SPIKE.md), and GetDirect-
-	// LightInput's Lambert cancels it back out. Direct + Fresnel-weighted
-	// lobe x ambient, all x PBRLightingScale, and the sun GGX and environment
-	// lobes the shell writes; no vertex color - the shell has none.
 	void RelightLOD(State s, DirectContext dirLightContext, IndirectContext indirectContext, float3 directionalAmbientColor,
 		inout float3 color, inout float3 outputAlbedo, inout float3 specularColor, inout float3 lobeSpecular, inout float roughness)
 	{
@@ -452,9 +340,6 @@ namespace SnowLighting
 		{
 			MaterialProperties snowMaterial = (MaterialProperties)0;
 			snowMaterial.BaseColor = s.lodAlbedo;
-			// The shell's material defaults (SnowShell.hlsl kSnowRoughness/kSnowF0)
-			// under the same roughness scale: scalar stand-ins for its RMAOS map,
-			// which mips flat at LOD range anyway.
 			snowMaterial.Roughness = clamp(0.6 * SharedData::snowDeformationSettings.SnowRoughnessScale, 0.05, 1.0);
 			snowMaterial.F0 = 0.028;
 			snowMaterial.AO = 1.0;
@@ -487,59 +372,32 @@ namespace SnowLighting
 #endif
 
 #if defined(PROJECTED_UV)
-	// Runtime-applied projections (Seasons of Skyrim) carry the record
-	// default max angle (cos 0) and no vertex-alpha mask, so every face short
-	// of an overhang paints. Stand in for the mask an author would have
-	// painted: a slope cut at the max angle, applied to the alpha so tops
-	// keep the projection's own full weight and noise (a threshold
-	// subtracted from the weight left only patches) and steeper faces go
-	// bare. The game's own paint, the sparkle discard and the recolor all
-	// follow it.
 	float ProjectionAlpha(State s, float vertexAlpha, float projDot)
 	{
-		// Seasons' own snow statics carry no authored alpha at all (it reads 0):
-		// the mask stands in for it rather than scaling it.
 		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedNoAlpha) != 0)
 			vertexAlpha = 1.0;
 		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
 			vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
-		// Under drawn water the game's own projection paints nothing either,
-		// on snow-classified draws only (the sparkle pass then discards).
 		[flatten] if (s.underWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 			vertexAlpha = 0.0;
 		return vertexAlpha;
 	}
 
-	// Snow Trenches on Objects: in a print the object goes bare at any facing.
-	// The weight itself drops, to -1 at the core, under every reader's
-	// threshold: the vertex alpha only scales the facing term, which is near 0
-	// on a wall. The projection's own noise breaks the edge up. Never raised;
-	// printShare is 0 off snow-classified draws.
 	float PrintBareWeight(State s, float projWeight, float projNoise)
 	{
 		return lerp(projWeight, min(projWeight, -1.0), SnowPrints::Bare(s.printShare, projNoise));
 	}
 
 #	if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
-	// Snow Follows Parallax: the projected snow at the mesh point whose texel
-	// Extended Materials' parallax drew here, so the paint, its texture and
-	// the coat that copies its verdict stay on the drawn surface instead of
-	// the mesh. Records the shift for the recolor and returns the noise, which
-	// shapes the paint's edge, read there; gradients stay the mesh's, or every
-	// step in the parallax would blow the mip up. Vanilla parallax shapes
-	// paint nothing, so for them this is dead code.
 	float ParallaxProjNoise(inout State s, float projNoise, float3 worldRel, float3 triWeights, float2 uv, float2 uvOriginal)
 	{
 		[branch] if (SharedData::snowDeformationSettings.ParallaxFollow > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 		{
-			// Fine derivatives: the coarse ones Lighting takes elsewhere would be
-			// merged with these and held live across the shader (+1 register).
 			const float3 pDx = ddx_fine(worldRel);
 			const float3 pDy = ddy_fine(worldRel);
 			s.parallaxShift = SnowParallaxFollow::UVShiftToWorld(uv - uvOriginal, ddx_fine(uvOriginal), ddy_fine(uvOriginal), pDx, pDy);
 #		if defined(TRUE_PBR)
-			// An interlayer shift shows the layer under the coat; the snow lies on the coat.
 			[flatten] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 				s.parallaxShift = 0.0;
 #		endif
@@ -555,14 +413,6 @@ namespace SnowLighting
 
 #		if !defined(MODELSPACENORMALS) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
 #			define SNOW_FLATTEN_PARALLAX
-	// Flatten Parallax Under Snow: the share of Extended Materials' parallax this
-	// pixel keeps. The relief fades as the projection covers the surface, from
-	// the noise-free weight at which vanilla's material first shows (-0.1) to the
-	// one every noise value paints in full (noise scale + 0.1). Smooth on purpose:
-	// a depth that followed the noise's patches swirled the rock between them.
-	// Lighting scales the march's height by it and raises the self-shadow's base
-	// height; the coat's march takes the same share (SnowStaticsShell
-	// ObjectParallaxShift).
 	float ParallaxUnderSnow(float3 worldRel, float3 vertexNormal, float3 texProj, float vertexAlpha)
 	{
 		float keep = 1.0;
@@ -572,7 +422,6 @@ namespace SnowLighting
 #			if defined(TREE_ANIM)
 			vertexAlpha = 1.0;
 #			endif
-			// Runs before BeginObject: the water test is its own.
 			State s = (State)0;
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 			const float projDot = dot(vertexNormal, normalize(texProj));
@@ -585,12 +434,6 @@ namespace SnowLighting
 #	endif
 
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
-	// SNOW-MATCH Phase 2 round 5: branch-INDEPENDENT. The authored data
-	// picks texture vs flat-color projection in Lighting; when the CPU
-	// classified this draw's projected material as snow, both paths converge
-	// here onto the shell's snow set. Sits after the SPARKLE branch so the
-	// multipass snow pass (technique 14, every surviving pixel already snow)
-	// takes the same set.
 	void ProjectedRecolor(inout State s, float projWeight, float3 vertexNormal, float3 projWorldPos, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
@@ -598,38 +441,14 @@ namespace SnowLighting
 		              (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 		[branch] if (s.projMatch)
 		{
-			// All or nothing at the game's own half blend (projWeight 0, where
-			// vanilla's flat-colour path starts painting), in the object's own
-			// shader so no angle is missed. The old cut at the last trace of
-			// paint turned a faint dusting into full snow (interior floors,
-			// 2026-09-16); the coat's kCoatSolidReal reads the same edge.
-			// The snow verdict: the RELIEF and the albedo below both ride it.
 			float snowVerdict = smoothstep(-0.01, 0.01, projWeight);
 			projectedMaterialWeight = snowVerdict;
 			[branch] if (snowVerdict > 0.003)
 			{
-				// Plane weights from the smooth vertex normal. The derivative face
-				// normal behind Lighting's triWeights goes through a hard step()
-				// mask and flips planes on the quads straddling mesh creases - a
-				// line of a different snow texel along the edge.
 				float3 snowTriWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
-				// Read where the paint lies (Snow Follows Parallax), with the mesh's gradients.
 				const float3 snowPos = projWorldPos + s.parallaxShift;
 				float3 snowGradX, snowGradY;
 				Triplanar::ComputeGradients(projWorldPos, 1.0 / SnowDeformation::SnowUVTile, snowGradX, snowGradY);
-				// THE RELIEF. Vanilla's own projected normal never reaches the
-				// G-buffer: Lighting builds worldNormal from the tangent-space
-				// normal BEFORE the projected block, and the block's
-				// `normal.xyz = lerp(..., finalProjNormal, ...)` is a dead write
-				// (upstream too - see CODE-NOTES). So every projected-snow pixel
-				// wears the object's own bump, which reads as snow PAINTED ON
-				// the plank; only the drape's coat hid it. The shell's own
-				// recipe, applied here to the pixels the coat does not own:
-				// same additive perturbation and same +Y reference frame as
-				// SnowStaticsShell, so coat and bare PD carry one grain and
-				// their junction is a seam of height only. The object's own bump
-				// goes first, as vanilla's projected normal replaces it: a glacier
-				// slab's ice streaks read through the snow (Alftand, 2026-10-23).
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
@@ -640,35 +459,20 @@ namespace SnowLighting
 #		endif
 					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
-				// SINGLE RETURN: an early `return` inside a `[branch]` is the
-				// X4000 shape this file has paid for twice. Nested branch.
 				[branch] if (projectedMaterialWeight > 0.003)
 				{
-				// The sparkle pass declares no projected-diffuse sampler (s3 is
-				// its own texture there); its colour sampler is the same wrap state.
 #		if defined(SPARKLE)
 				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 #		else
 				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 #		endif
-				// Shell albedo convention (SnowShell.hlsl kSnowAlbedo).
 				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-				// Classification debug: everything this block replaces, in magenta.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.projAlbedo = float3(1.0, 0.0, 1.0);
-				// Recolor weight view (bit 32): the weight the recolor really
-				// blends by, as a grey ramp.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
 					s.projAlbedo = projectedMaterialWeight.xxx;
-				// Sampled-albedo view (bit 64): the texture read above, raw. The
-				// magenta and weight views both REPLACE snowProjSample, so they
-				// say nothing about whether HorizonSnowAlbedo reached the draw -
-				// and a recolor whose block runs at full weight while the pixel
-				// does not change can only be the sample.
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 64) != 0)
 					s.projAlbedo = snowProjSample;
-				// The shell's response at the albedo's texel. Its scalar stand-ins
-				// (0.6 x roughness scale) left the slabs glossier than the ground.
 				s.projRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
 				{
@@ -679,37 +483,21 @@ namespace SnowLighting
 #		endif
 				}
 #		if defined(TRUE_PBR)
-				// PBR pixels are convention-correct already: albedo + the shell's
-				// response (rawRMAOS.w IS F0).
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
 				rawRMAOS = lerp(rawRMAOS, s.projRMAOS, projectedMaterialWeight);
 #		else
-				// Vanilla pixels get the albedo here; the write tail re-lights
-				// the snow fraction through the PBR evaluators (hue+brightness).
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
 #		endif
 				}
 			}
 		}
-		// Recolor weight view (bit 32): projected draws the recolor does not
-		// classify as snow go red, so an unpainted wall reads as "not ours".
 		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !s.projMatch)
 			baseColor = float3(1.0, 0.0, 0.0);
 	}
 #	endif
-#endif  // PROJECTED_UV
+#endif
 
 #if (defined(PROJECTED_UV) || defined(SNOW_BODY_COAT)) && !defined(TRUE_PBR) && !defined(WORLD_MAP)
-	// SNOW-MATCH Phase 2 round 3: the projected-snow fraction of non-PBR
-	// statics re-lit through the SAME PBR evaluators as the shell and the
-	// horizon snow. frame7075 measured the fence's snow pass (vanilla
-	// ENVMAP+PROJECTED_UV) writing blue-tilted Diffuse - the Phase 0
-	// convention signature; a brightness scale cannot fix hue. Sun and
-	// ambient rebuilt on the snow albedo saved at the swap; the point-light
-	// share is carried over from the vanilla accumulation (the sun's vanilla
-	// term subtracted out), scaled into the same units. The wood fraction
-	// keeps the vanilla output untouched. The body coat hands its snow
-	// fraction over the same way (BodyCoat below).
 	void RelightProjected(State s, float projectedMaterialWeight, DirectContext dirLightContext, IndirectContext indirectContext, float3 directionalAmbientColor,
 		float3 dirLightColor, float3 worldNormal, float dirDetailedShadow,
 		inout float3 color, inout float3 outputAlbedo, inout float3 specularColor, inout float3 lobeSpecular, inout float roughness)
@@ -740,11 +528,6 @@ namespace SnowLighting
 #endif
 
 #if !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-	// Snow-textured shapes without projection (dirt cliff snow tops, rock pile
-	// bases and skirts, season swaps, drifts), flagged by the statics hook:
-	// the shell's snow set on the texels LandSnowTexel calls snow, on every
-	// texel of a plain landscape snow set (SnowTexturedGround). Facing from
-	// the vertex normal.
 	void SnowTexturedRecolor(inout State s, float3 rawBaseColor, float3 vertexNormal, float3 worldRel, float screenNoise,
 		inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
@@ -758,7 +541,6 @@ namespace SnowLighting
 			{
 				float3 snowTexWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
 				float3 snowTexWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
-				// The texture's own bump goes with its colour; the snow grain replaces it.
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, s.texWeight));
@@ -786,13 +568,6 @@ namespace SnowLighting
 #endif
 
 #if !defined(LANDSCAPE)
-	// Masks.y is dead for statics (SSS reads it only where Masks.x > 0):
-	// carry the projection's verdict for the object snow shell's coat. The
-	// target is an 11-bit float, 64 steps an octave: 2 = known and bare,
-	// [4, 32) = bare with the weight, three octaves below the half blend
-	// (the coat's cut sinks into it as snow accumulates): [-0.3, 0) over the
-	// top 5/6, [-0.8, -0.3) over the bottom 1/6. 48 = painted.
-	// Landscape keeps (0, 1] for its grain. Mirror: SnowStaticsShell.hlsl.
 	void WriteMasksY(State s, float projWeight, inout float masksY)
 	{
 #	if defined(PROJECTED_UV)
@@ -802,35 +577,20 @@ namespace SnowLighting
 			masksY = projWeight >= 0.0 ? 48.0 : (snowBareT > 0.0 ? 4.0 * exp2(3.0 * snowBareT) : 2.0);
 		}
 #	else
-		// A Seasons of Skyrim multipass object's base pass: no projection, so
-		// nothing above writes the weight and the skin's read-back saw 0
-		// ("unknown") and reconstructed a coat over every face. 2 = known and
-		// unpainted; the sparkle pass writes 48 over it where it paints.
-		// Same for any multipass snow MATO (vanilla glaciers and ice, Simplicity
-		// of Snow, Stretched Snow Begone) when Multipass Snow Follows Paint is on.
-		// And for a plain shape of a snow-MATO object (SnowObjectBarePass): it
-		// draws over its projected siblings and would otherwise leave 0 there.
 		[flatten] if ((Permutation::ExtraFeatureDescriptor & (Permutation::ExtraFeatureFlags::SnowProjectedUnauthored | Permutation::ExtraFeatureFlags::SnowMultipassBase | Permutation::ExtraFeatureFlags::SnowObjectBarePass)) != 0)
 			masksY = 2.0;
 #	endif
 #	if !defined(WORLD_MAP) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
-		// The snow-textured recolor's verdict, same encoding, on every texel it
-		// judged: an unwritten 0 reads "unknown" and the coat reconstructs. An
-		// overlay blends into the note beneath it, so it never claims paint.
 		[flatten] if (s.texMatch)
 			masksY = (s.texWeight >= 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowTexturedOverlay) == 0) ? 48.0 : 2.0;
 #	endif
 #	if (defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
-		// The LOD brightness recolor's weight, same encoding, for the same coat.
 		[flatten] if (s.lodReplaceW > 0.003)
 			masksY = s.lodReplaceW >= 0.5 ? 48.0 : 2.0;
 #	endif
-		// Under drawn water: 2 = known, unpainted, so the coat stays off too.
 		[flatten] if (s.underWater)
 			masksY = 2.0;
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
-		// An object LOD's verdict rides x256 (exact in a float): the skin tells a
-		// LOD the game drew alone from one hidden inside its full model.
 		[flatten] if (masksY >= 1.5)
 			masksY *= 256.0;
 #	endif
@@ -838,11 +598,6 @@ namespace SnowLighting
 #endif
 
 #if defined(SNOW_BODY_COAT) && !defined(EYE)
-	// Snow on bodies (BODY-SNOW-PLAN.md): the draw's record and the coat atlas,
-	// bound by the body coat hook with bit 25. SNOW_BODY_COAT is the pixel key
-	// skinned draws take while the coat is live (TruePBR.cpp GetPixelTechnique):
-	// SKINNED reaches only model-space-normal skin. Mirror: SnowDeformation.h
-	// BodyCoatRecordCB, kBodyCoatRecordSlot, kBodyCoatAtlasSlot.
 	cbuffer BodyCoatRecord : register(b8)
 	{
 		float4 CoatModelToCanonical[3];
@@ -860,11 +615,7 @@ namespace SnowLighting
 	};
 	Texture3D<float4> CoatAtlas : register(t41);
 	Texture3D<float4> CoatField : register(t44);
-	// State.h ExtraFeatureDescriptors::SnowBodyCoat. Declared here rather than
-	// in Permutation.hlsli, so permutations without SNOW_BODY_COAT keep their text.
 	static const uint kSnowBodyCoatBit = (1u << 25);
-	// SnowDeformation.h kBodyCoatFlag bits, and the atlas (kBodyCoatSlotDim x kBodyCoatSlots)
-	// with the impact store beside it along x (D30).
 	static const uint kCoatFlatPaint = 1u;
 	static const uint kCoatLiving = 2u;
 	static const uint kCoatHairSpecks = 4u;
@@ -875,33 +626,10 @@ namespace SnowLighting
 	static const uint kCoatLumpBlend = 128u;
 	static const float3 kCoatAtlasSize = float3(64.0, 32.0, 1536.0);
 	static const float kCoatImpactX = 32.0;
-	// The clump field baked (BodyCoatLumps.dds from tools/lump-tiles/pack_field.py; section
-	// 5.26): CoatNoise periodic over 12 cells at 6 texels a cell, each axis's first texel
-	// repeated last, so the lookup wraps by hand and no address mode matters. R the noise,
-	// GBA its gradient per cell over 3.2. The lumps read it at every scale, flakes and
-	// holes too: spread 0.2577, 11 % above 0.3236, slope 0.537 a cell (measured).
 	static const float kCoatFieldCells = 12.0;
 	static const float kCoatFieldTexels = 72.0;
 	static const float kCoatFieldGrad = 3.2;
 	static const float kCoatFieldSd = 0.2577;
-	// Round 11 (section 5.20; derivations in CODE-NOTES). CoatLook: x one over the
-	// angle of repose in radians, y and z the smallest and largest speck radius in
-	// units, w the balls a share needs per the sizes' mean volume, 4 / ((1 + p)(1 +
-	// p^2)) at p = smallest / largest; CoatAmounts: x the lumps, y the specks, z
-	// hair's specks, w contact snow's cohesion (round 3: its share of lumps);
-	// CoatFall (S5, D20-D22): x the stored snowfall that fills the specks, y and z
-	// the angle of repose their reach rises from and to, in radians.
-	// Lumps: patches 8 units, clumps 2.5, flakes 0.5; 8 cm deep on
-	// an average crown, as opaque as r d / (1 + r d) at r = 1.4 per cm (Perovich
-	// 2007), domed 1.5 units, holed at
-	// their rims at 0.8, 0.4 and 0.2 units, each to 11 %, opening two spreads over the
-	// rim. Specks: half the surface at most, full over half their order (hair:
-	// out to 105 degrees). Equal balls cover 70 % all on; a share takes q = L
-	// (0.9212 - 0.0764 L) of them, L = -ln(1 - share) (measured, within 1 % of q);
-	// an edge ramp a pixel wide adds 0.0587 (pixel / smallest radius)^2 of the cover
-	// (measured with 2 to 3 mm). Hair beads: 1.2 by 0.45 speck radii. The relief
-	// is read at 0.2 units, or the pixel when larger. An edge is never sharper than
-	// 0.05 of the relief.
 	static const float3 kCoatClumpFreq = float3(1.0 / 8.0, 1.0 / 2.5, 1.0 / 0.5);
 	static const float3 kCoatClumpWeight = float3(0.45, 0.35, 0.2);
 	static const float kCoatClumpContrast = 1.6;
@@ -925,7 +653,6 @@ namespace SnowLighting
 	static const float kCoatRimCut = 0.3236;
 	static const float kCoatPocketRadius = 0.2;
 	static const float kCoatNoiseSlope = 0.537;
-	// S5 round 2: Blended's grains thin out over half a clump past a lump's edge.
 	static const float kCoatGrainUnits = 0.5 / kCoatClumpFreq.y;
 
 	float3 CoatDebugHue(float h)
@@ -934,10 +661,6 @@ namespace SnowLighting
 		return 0.25 + 0.75 * k;
 	}
 
-	// S1's Body Coat View: 1 bands every 8 units of the frame's height and lines
-	// every 16 across, which must run unbroken from body to armour to boots; 2
-	// the slot's pattern read back from the atlas, magenta past the slot; 3 each
-	// slot's colour, a component's striped.
 	float3 CoatDebugView(float4 p, float3 c)
 	{
 		float3 colour;
@@ -962,8 +685,6 @@ namespace SnowLighting
 		return v * rsqrt(max(dot(v, v), 1e-16));
 	}
 
-	// A vector's coefficients in a frame of rows, v = k.x F[0] + k.y F[1] + k.z F[2],
-	// up to scale: of the determinant only the sign is kept.
 	float3 CoatFrameSolve(float3x3 F, float3 v)
 	{
 		const float3 c0 = cross(F[1], F[2]);
@@ -975,9 +696,6 @@ namespace SnowLighting
 		return dot(Random::perlinGradient(Random::murmur3(cell + o, 0x578437ADu)), f - float3(o));
 	}
 
-	// Gradient noise on CS's hash with a quintic fade, smooth where cells meet, so
-	// a threshold on it draws no seams. Random::perlinNoise eases one cell edge
-	// linearly and the next cell's matching edge smoothly: it jumps between them.
 	float CoatNoise(float3 p)
 	{
 		const float3 i = floor(p);
@@ -992,9 +710,6 @@ namespace SnowLighting
 			u.z);
 	}
 
-	// One cell's two balls: jitter and rank in ten-bit fields from the top of each word.
-	// One cell's two balls: jitter and rank in ten-bit fields from the top of each
-	// word, and a size fraction each in five bits of the last.
 	void CoatCellBalls(int3 cell, uint set, out float4 ball0, out float4 ball1, out float2 size)
 	{
 		const uint3 h = Random::pcg3d(asuint(cell) + uint3(0u, 0u, set * 0x9E3779B9u));
@@ -1003,9 +718,6 @@ namespace SnowLighting
 		size = (float2((h.zz >> uint2(7, 2)) & 31u) + 0.5) / 32.0;
 	}
 
-	// The fraction of balls a share needs at a level (fitted to the measured cover),
-	// less the area a pixel-wide edge ramp adds at the smallest size, aspect^2 more
-	// for ellipsoids, and more again as the sizes' mean volume falls below the largest's.
 	float CoatBallFraction(float share, float footprint, float smallest, float aspect)
 	{
 		const float s = min(share / (1.0 + kCoatDotInflate * footprint * footprint / (smallest * smallest)), kCoatDotCover);
@@ -1013,13 +725,6 @@ namespace SnowLighting
 		return L * (kCoatDotRank.x + kCoatDotRank.y * L) * aspect * aspect * CoatLook.w;
 	}
 
-	// One level of specks: two balls to each lattice cell through rest space, each
-	// its own size between the smallest and the largest, the cell twice the largest's
-	// longest semi-axis, so a point meets only the eight cells about its nearest
-	// corner; the surface cuts each ball into a disc. With a strand (unit, rest
-	// space) they are ellipsoids aspect times longer along it. A ball shows while its
-	// rank is below q, so specks appear or go and never shift; each edge gives back
-	// the area its ramp adds. Each set hashes its own balls into the same cells.
 	float CoatBalls(float3 c, float footprint, float q, float smallest, float largest, float3 strand, float aspect, uint set)
 	{
 		const float g = 2.0 * largest * aspect;
@@ -1043,9 +748,6 @@ namespace SnowLighting
 		return 1.0 - keep;
 	}
 
-	// Specks never drawn under a pixel: once the smallest would be, a level up holds
-	// fewer that are twice the size (the lattice keeps its cover at any scale),
-	// blended across the level as a texture's mips are. They never turn see-through.
 	float CoatSpecks(float3 c, float footprint, float share, float smallest, float largest, float3 strand, float aspect, uint set)
 	{
 		const float m = clamp(log2(max(footprint, 1e-6) / (2.0 * smallest)), 0.0, kCoatSpeckLevels);
@@ -1058,10 +760,6 @@ namespace SnowLighting
 		return alpha;
 	}
 
-	// The armour's relief around a pixel: its normal map read at three points a
-	// radius (rest units) away, each normal's lean toward its point measured in
-	// world. Positive where they lean in (a groove, an engraving), negative where
-	// they lean out (a rim, a rivet); a groove whose walls rise at a reads 0.87a to a.
 	float CoatPocket(Texture2D<float4> normalTex, SamplerState normalSampler, float2 uv, float2 duvdx, float2 duvdy,
 		float3 dcdx, float3 dcdy, float3 worldDx, float3 worldDy, float3x3 world, float radius)
 	{
@@ -1092,7 +790,6 @@ namespace SnowLighting
 		return valid * asin(clamp(-0.5 * flux, -1.0, 1.0));
 	}
 
-	// The baked clump noise at a point in cells: x the noise, yzw its gradient per cell.
 	float4 CoatFieldRead(float3 cells)
 	{
 		const float3 uvw = (frac(cells / kCoatFieldCells) * kCoatFieldTexels + 0.5) / (kCoatFieldTexels + 1.0);
@@ -1100,8 +797,6 @@ namespace SnowLighting
 		return float4(t.x, t.yzw * kCoatFieldGrad);
 	}
 
-	// The clump field's two coarse octaves at a rest point, baked: x today's crown
-	// before its clamp, yzw its gradient per unit.
 	float4 CoatCrown(float3 q, float2 fade)
 	{
 		const float2 w = kCoatClumpContrast * kCoatClumpWeight.xy * fade;
@@ -1110,22 +805,17 @@ namespace SnowLighting
 		return float4(0.5 + w.x * a.x + w.y * b.x, w.x * kCoatClumpFreq.x * a.yzw + w.y * kCoatClumpFreq.y * b.yzw);
 	}
 
-	// Today's dome over a cut, in units.
 	float CoatDome(float crown, float cut)
 	{
 		return kCoatLumpUnits * sqrt(saturate(saturate(crown) - cut));
 	}
 
-	// The lumps' dome along the view ray, as the trench detail's parallax occlusion:
-	// N the surface and V the view, in rest space, a pixel footprint units across.
-	// Returns the rest point the ray meets, and the crown there.
 	float3 CoatLumpMarch(float3 c, float3 N, float3 V, float2 fade, float cut, float footprint, out float4 crown)
 	{
 		const float vn = max(dot(V, N), 0.2);
 		const float3 per = (V - N * dot(V, N)) / vn;
 		const float top = CoatDome(1.0, cut);
 		float3 hit = c;
-		// A shift under half a pixel would draw nothing: the dome is read where the pixel is.
 		[branch] if (length(per) * top >= 0.5 * footprint)
 		{
 			const float steps = floor(lerp(8.0, 16.0, saturate(1.0 - vn)));
@@ -1141,7 +831,6 @@ namespace SnowLighting
 				rayH -= stepH;
 				surf = CoatDome(CoatCrown(c + per * rayH, fade).x, cut);
 			}
-			// Where the ray met the dome between the last two steps.
 			const float before = prevRay - prevSurf;
 			const float after = surf - rayH;
 			hit = c + per * lerp(prevRay, rayH, saturate(before / max(before + after, 1e-5)));
@@ -1150,24 +839,6 @@ namespace SnowLighting
 		return hit;
 	}
 
-	// S2's coat, rounds 3 to 11 (sections 5.10-5.20, after Josef's reads and
-	// the study of snow on people). Smooth across triangles and glued to the
-	// body: the rest-space normals come from the bind pose's own tangent frame,
-	// which the coat's vertex shader passes down, the surface's shape straight
-	// and its relief (the shading normal) un-skinned through the world and bind
-	// frames. A model-space-normal skin (a corpse's, S5) has its model's own axes
-	// for that frame and its map for the shape. Lumps come only from impacts
-	// (D30), at random spots over a relief of their own in rest space. Specks,
-	// each its own size between two set sizes and as many as Grain Amount sets,
-	// spread from the surfaces facing the snowfall out to the angle of repose,
-	// steered by the armour's own relief, and never draw smaller than a pixel. Hair takes specks only (round,
-	// or beads along its strands), as many as its own amount sets. The material is the shell's own set in
-	// rest space: its albedo convention, grain and RMAOS, as projected snow takes
-	// them. TruePBR pixels blend the material; vanilla pixels hand the snow
-	// fraction to RelightProjected, which lights it as the ground's. The base
-	// texture and the alpha test (x the alpha's scale, y its reference) say where an
-	// alpha-cut piece is see-through. Returns the opacity, for the glint and the SSS
-	// mask.
 	float BodyCoat(inout State s, float3 modelPosition, float3 worldPos, float3x3 worldFrame, float3x3 bindFrame, Texture2D<float4> normalTex,
 		SamplerState normalSampler, Texture2D<float4> colorTex, SamplerState colorSampler, float2 alphaTest, float2 uv, float2 uvMesh, float3 strand,
 		float screenNoise, float3 viewDirection, inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
@@ -1183,7 +854,6 @@ namespace SnowLighting
 			}
 			else
 			{
-				// Every derivative before the per-pixel branch.
 				const float3 dcdx = ddx(c);
 				const float3 dcdy = ddy(c);
 				const float3 worldDx = ddx(worldPos);
@@ -1194,8 +864,6 @@ namespace SnowLighting
 				const float3x3 world = float3x3(CoatSafeNormalize(worldFrame[0]), CoatSafeNormalize(worldFrame[1]), CoatSafeNormalize(worldFrame[2]));
 				const float3x3 bind = float3x3(CoatSafeNormalize(bindFrame[0]), CoatSafeNormalize(bindFrame[1]), CoatSafeNormalize(bindFrame[2]));
 				const float3 restRelief = CoatSafeNormalize(mul(toCanonical, mul(CoatFrameSolve(world, worldNormal), bind)));
-				// The surface's shape in the bind frame and in world. A model-space skin's map
-				// holds it, in the model's own axes.
 #	if defined(MODELSPACENORMALS)
 				const float3 bindShape = CoatSafeNormalize(normalTex.SampleGrad(normalSampler, uv, duvdx, duvdy).xzy * 2.0 - 1.0);
 				const float3 worldShape = CoatSafeNormalize(mul(bindShape, world));
@@ -1205,47 +873,23 @@ namespace SnowLighting
 #		define COAT_BIND_SHAPE bind[2]
 #		define COAT_WORLD_SHAPE world[2]
 #	endif
-				// A back face's shading normal is turned to the viewer; its shape turns with it.
 				float3 restShape = CoatSafeNormalize(mul(toCanonical, COAT_BIND_SHAPE));
 				restShape = dot(restShape, restRelief) < 0.0 ? -restShape : restShape;
 				const float3 t = float3(dot(CoatModelToAtlas[0], p), dot(CoatModelToAtlas[1], p), dot(CoatModelToAtlas[2], p));
 				const bool inside = all(t >= CoatAtlasLo.xyz) && all(t < CoatAtlasHi.xyz);
-				// Half a texel inside the slot, so the filter never reads a neighbour.
 				const float3 at = clamp(t, CoatAtlasLo.xyz + 0.5, CoatAtlasHi.xyz - 0.5);
 				const float4 voxel = CoatAtlas.SampleLevel(SampColorSampler, at / kCoatAtlasSize, 0);
-				// The writer stores the way down's encoding, so up sits at the
-				// octahedron's centre and the filter between voxels stays near it.
 				const float3 deposit = -GBuffer::DecodeNormal(voxel.ba);
 				const float contact = inside ? voxel.r : 0.0;
 				const float fall = inside ? voxel.g : 0.0;
-				// D30: how much of the contact came with an impact.
 				float impact = 0.0;
 				[branch] if (contact > 0.0)
 					impact = CoatAtlas.SampleLevel(SampColorSampler, (at + float3(kCoatImpactX, 0.0, 0.0)) / kCoatAtlasSize, 0).r;
-				// S5 (D20, D21): the stored snowfall fills the specks first, their share
-				// and reach rising together from the angle of repose to the ramp's top,
-				// then the rest, never the live storm. The rest thickens the specks with a
-				// second set, as many again by a full coat (D29), on corpses too: snowfall
-				// lays no lumps (D30). Hair keeps its own.
 				const bool hairSpecks = (CoatFlags & kCoatHairSpecks) != 0;
 				const bool flatPaint = (CoatFlags & kCoatFlatPaint) != 0;
 				const float fallSpecks = saturate(fall / CoatFall.x);
 				const float fallThick = hairSpecks ? 0.0 : saturate((fall - CoatFall.x) / (1.0 - CoatFall.x));
 				const float footprint = max(length(dcdx), length(dcdy));
-				// Lumps (hair has none) come only from impacts (D30): Lump Amount's share
-				// of the surface at random spots, thinning with the impact's strength as
-				// the specks do with the contact's and with how little the snow coheres
-				// (drier snow sits as grains), cut at the clump field's own quantile (near
-				// normal, the spread of the octaves left; Tukey's quantile). They lie where
-				// their cover drowns the relief, deep however few, holed only at their
-				// rims; a clump octave fades once a pixel spans half of it, a hole octave a
-				// quarter. On fur, hair and other see-through
-				// alpha-cut pieces a lump up close would paint the cards flat, so the lumps'
-				// share passes to the specks (snow balled in the fur) as specks come to cover
-				// a pixel: none while the largest is under one, all once the smallest covers
-				// one. See-through is the share of a grain's reach around the point the alpha
-				// test cuts away, from four taps of the alpha it reads at this pixel's mip; a
-				// plate, cloth or body it leaves whole keeps its lumps at any distance.
 #	if defined(DO_ALPHA_TEST)
 				const float2 tapU = duvdx * (0.5 * kCoatGrainUnits / max(length(dcdx), 1e-6));
 				const float2 tapV = duvdy * (0.5 * kCoatGrainUnits / max(length(dcdy), 1e-6));
@@ -1264,12 +908,6 @@ namespace SnowLighting
 				float3 lumpNormal = restShape;
 				[branch] if (!hairSpecks && CoatAmounts.x > 0.0 && impact > 0.0)
 				{
-					// In depth the lumps stand on the field's dome by parallax and keep its normal,
-					// the armour beside them its own shading. Today's bevel their dome. Blended
-					// (S5 round 2) reads the same field where the surface is, so a lump keeps its
-					// shape from any angle and distance: its two coarse octaves never fade, only
-					// the flakes as they come under a pixel. It keeps In Depth's dome normal, and
-					// its edges break into grains, specks thinning out over half a clump.
 					const bool inDepth = (CoatFlags & kCoatLumpDepth) != 0;
 					const bool blended = (CoatFlags & kCoatLumpBlend) != 0;
 					const bool baked = inDepth || blended;
@@ -1288,7 +926,6 @@ namespace SnowLighting
 					float3 domeNormal = restShape;
 					[branch] if (baked)
 					{
-						// Nothing to draw where there is no cover: the field never passes a cut of 1.
 						clump = 0.0;
 						[branch] if (cover > 0.0)
 						{
@@ -1306,16 +943,12 @@ namespace SnowLighting
 							[branch] if (clumpFade.z > 0.0)
 								flakes = CoatFieldRead(lumpPoint.yzx * kCoatClumpFreq.z + 5.3).x;
 							clump = saturate(crown.x + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * flakes);
-							// The dome's slope, never past 45 degrees as today's bevel; flat where the crown clamps.
 							const float3 slope = crown.yzw - restShape * dot(crown.yzw, restShape);
 							const float lie2 = saturate(crown.x) - cut;
 							float3 tilt = crown.x > 0.0 && crown.x < 1.0 && lie2 > 0.0 ? slope * (0.5 * kCoatLumpUnits * rsqrt(max(lie2, 1e-4))) : 0.0;
 							tilt *= rsqrt(max(1.0, dot(tilt, tilt)));
 							domeNormal = CoatSafeNormalize(restShape - tilt);
-							// An edge as wide as the field moves across a pixel, the flakes by their mean slope.
 							edge = max(footprint * (length(slope) + kCoatClumpContrast * kCoatClumpWeight.z * clumpFade.z * kCoatNoiseSlope * kCoatClumpFreq.z), kCoatEdge);
-							// Blended's grains past a lump's edge, by the distance to it along the
-							// field's own slope, wherever some lump stands.
 							[branch] if (blended && cut < 1.0)
 								grainShare = saturate(1.0 - (cut - clump) / max(length(slope), 1e-3) / kCoatGrainUnits);
 						}
@@ -1328,7 +961,6 @@ namespace SnowLighting
 						dome = CoatDome(0.5 + kCoatClumpContrast * (octaves.x + octaves.y), cut);
 					}
 					const float3 holeFade = saturate(0.5 / max(footprint * kCoatHoleFreq, 1e-6) - 1.0);
-					// The holes' octaves from the baked field, each turned to its own axes.
 					float3 holeNoise = 0.0;
 					[branch] if (cover > 0.0 && any(holeFade > 0.0))
 						holeNoise = holeFade * float3(CoatFieldRead(lumpPoint * kCoatHoleFreq.x + 17.1).x, CoatFieldRead(lumpPoint.zxy * kCoatHoleFreq.y + 43.7).x,
@@ -1342,10 +974,6 @@ namespace SnowLighting
 								(1.0 - lumpHoles.x) * (1.0 - lumpHoles.y) * (1.0 - lumpHoles.z);
 					lumpNormal = CoatSafeNormalize(lerp(restShape, domeNormal, lumpAlpha));
 				}
-				// The specks: Grain Amount's share of the surface (hair: its own amount) in
-				// the same order, full over half of it (hair: its shape, out to 105
-				// degrees). The armour's relief steers them, up to twice the share in its
-				// grooves and none on its rims.
 				const float speckSlope = acos(clamp(dot(hairSpecks ? restShape : restRelief, deposit), -1.0, 1.0));
 				const float fallOrder = fall > 0.0 ? 1.0 - speckSlope / (hairSpecks ? kCoatSpeckReach : lerp(CoatFall.y, CoatFall.z, fallSpecks)) : -1.0;
 				const float speckCover = max(saturate((contact - 1e-3) / kCoatSpeckFront), fallSpecks * saturate(fallOrder / kCoatSpeckFront));
@@ -1356,13 +984,10 @@ namespace SnowLighting
 				const float steer = (CoatFlags & kCoatRelief) != 0 ? 1.0 + clamp(pocket * CoatLook.x / kCoatSpeckFront, -1.0, 1.0) : 1.0;
 				const float speckShare =
 					max(kCoatSpeckMax * (hairSpecks ? CoatAmounts.z : CoatAmounts.y) * speckCover * steer, kCoatSpeckMax * max(lumpShare * furSpecks, grainShare));
-				// D29: the second set, past the split, in the same order.
 				const float thickShare = kCoatSpeckMax * CoatAmounts.y * fallThick * saturate(fallOrder / kCoatSpeckFront) * steer;
 				float speckAlpha = 0.0;
 				[branch] if (speckShare > 0.0 && !flatPaint)
 				{
-					// Hair beads run along the strand as CS Hair shading reads it, carried
-					// into rest space like the relief and laid in the surface.
 					float3 restStrand = 0.0;
 					float aspect = 1.0;
 					float2 sizes = CoatLook.yz;
@@ -1379,11 +1004,8 @@ namespace SnowLighting
 				}
 				alpha = flatPaint ? 1.0 - (1.0 - speckShare) * (1.0 - thickShare) : max(lumpAlpha, speckAlpha);
 				const float snowCover = max(0.75 * alpha, flatPaint ? 0.0 : lumpAlpha);
-				// The snow's surface domes over each lump, steepest at its rim, so a full
-				// cover stays lumpy; the specks stay flat.
 				[branch] if ((CoatFlags & kCoatReliefView) != 0)
 				{
-					// Show Relief: grooves blue, rims red, full at 30 degrees; no snow.
 					const float v = clamp(pocket / 0.5235988, -1.0, 1.0);
 					baseColor = float3(saturate(-v), 0.15 * (1.0 - abs(v)), saturate(v));
 					alpha = 0.0;
@@ -1395,8 +1017,6 @@ namespace SnowLighting
 				[branch] if (alpha > 0.003)
 				{
 					const float3 weights = Triplanar::GetWeights(restShape, restShape);
-					// The snow's own surface in rest space, the shape beneath with the set's
-					// grain, carried back to world through the two frames.
 					float3 restSnow = lumpNormal;
 					[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 					{
@@ -1405,9 +1025,6 @@ namespace SnowLighting
 					}
 					const float3 snowNormal = CoatSafeNormalize(mul(CoatFrameSolve(bind, mul(restSnow, toCanonical)), world));
 					worldNormal = normalize(lerp(worldNormal, snowNormal, snowCover));
-					// The rim stands up by its surface gradient (Mikkelsen 2010), from screen
-					// derivatives, so it does not depend on the mesh's uv layout; turned with
-					// a back face, and never past 45 degrees.
 					const float3 r1 = cross(worldDy, COAT_WORLD_SHAPE);
 					const float3 r2 = cross(COAT_WORLD_SHAPE, worldDx);
 					const float det = dot(worldDx, r1);
@@ -1422,10 +1039,8 @@ namespace SnowLighting
 #	if defined(TRUE_PBR)
 					baseColor = lerp(baseColor, coatAlbedo, alpha);
 					rawRMAOS = lerp(rawRMAOS, coatRMAOS, alpha);
-					// Its clearcoat, fuzz and subsurface fade under the snow, as under projected snow.
 					projectedMaterialWeight = max(projectedMaterialWeight, alpha);
 #	else
-					// The armour's own albedo stays: the write tail blends the re-lit snow over it.
 					s.projMatch = true;
 					s.projAlbedo = coatAlbedo;
 					s.projRMAOS = coatRMAOS;
@@ -1442,8 +1057,6 @@ namespace SnowLighting
 #endif
 }
 
-// Land Snow Recolor's per-layer step (Common/LightingLandscape.hlsli hook),
-// expanded inside main where the layer's samples and snowState are in scope.
 #if defined(LANDSCAPE)
 #	undef LIGHTING_LANDSCAPE_LAYER_HOOK
 #	if defined(TRUE_PBR)
@@ -1453,4 +1066,4 @@ namespace SnowLighting
 #	endif
 #endif
 
-#endif  // __SNOW_LIGHTING_HLSLI__
+#endif

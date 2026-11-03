@@ -1,18 +1,7 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Globals.h"
 #include "SnowDeformationAPI.h"
-
-// Public API for other mods, one set of facts on two transports: Papyrus
-// globals on the `SnowDeformation` script (Scripts/SnowDeformation.pex, its
-// source beside it) and a versioned C struct from the exported
-// SnowDeformation_GetAPI for SKSE plugins. Read-only, callable from any
-// thread: the depth query takes the cell data's shared locks and the
-// accumulation scalar is atomic. Documented in SNOW-API.md.
 
 bool SnowDeformation::APIIsActive() const
 {
@@ -23,8 +12,6 @@ float SnowDeformation::APISnowDepthAt(float a_x, float a_y)
 {
 	if (!APIIsActive())
 		return 0.0f;
-	// Nominal = the class-weighted untrampled depth, negative for submerged
-	// classes; the shells clamp the same way.
 	return std::max(GetNominalSnowDepthAt(a_x, a_y, 0.0f), 0.0f) * GetAccumulationDepthScale();
 }
 
@@ -33,7 +20,6 @@ float SnowDeformation::APISnowDepthAtRef(RE::TESObjectREFR* a_ref)
 	if (!a_ref || !APIIsActive())
 		return 0.0f;
 	const RE::NiPoint3 position = a_ref->GetPosition();
-	// The stamps' elevated gate: a walkway, bridge or roof is not in the snow.
 	float landZ = position.z;
 	if (auto* tes = globals::game::tes)
 		tes->GetLandHeight(position, landZ);
@@ -56,7 +42,6 @@ namespace
 		return globals::features::snowDeformation;
 	}
 
-	// ---- C API ----
 	bool CAPI_IsActive() { return Snow().APIIsActive(); }
 	float CAPI_GetSnowDepthAt(float a_x, float a_y) { return Snow().APISnowDepthAt(a_x, a_y); }
 	float CAPI_GetSnowDepthAtRef(void* a_ref) { return Snow().APISnowDepthAtRef(static_cast<RE::TESObjectREFR*>(a_ref)); }
@@ -82,7 +67,6 @@ namespace
 		CAPI_DepositBlood
 	};
 
-	// ---- Papyrus ----
 	int32_t Papyrus_GetAPIVersion(RE::StaticFunctionTag*) { return int32_t(SNOWDEFORMATION_API_VERSION); }
 	bool Papyrus_IsActive(RE::StaticFunctionTag*) { return Snow().APIIsActive(); }
 	float Papyrus_GetSnowDepthAt(RE::StaticFunctionTag*, float a_x, float a_y) { return Snow().APISnowDepthAt(a_x, a_y); }
@@ -107,8 +91,6 @@ namespace
 	}
 }
 
-// Resolve with GetProcAddress(GetModuleHandleA("CommunityShaders.dll"),
-// "SnowDeformation_GetAPI"); null for a version this build does not serve.
 extern "C" __declspec(dllexport) const void* SnowDeformation_GetAPI(uint32_t a_version)
 {
 	switch (a_version) {

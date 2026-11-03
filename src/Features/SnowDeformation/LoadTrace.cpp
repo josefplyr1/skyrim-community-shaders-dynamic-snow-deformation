@@ -3,11 +3,6 @@
 #include <fstream>
 #include <sstream>
 
-// Load trace: attributes the time between "Continue" and playable. The
-// instrumented phases live where the work is (TerrainData, TrenchStore,
-// Statics, Shell); this file only aggregates and reports. Everything is
-// gated on loadTraceActive so ordinary play pays one atomic load per site.
-
 using Clock = std::chrono::steady_clock;
 
 static double MsBetween(Clock::time_point a_from, Clock::time_point a_to)
@@ -79,9 +74,6 @@ void SnowDeformation::LoadTraceFramePulse()
 	if (loadTraceFrameSeen) {
 		double gapMs = MsBetween(loadTraceLastFrame, now);
 		loadTraceWorstFrameMs = std::max(loadTraceWorstFrameMs, gapMs);
-		// 250 ms with no rendered frame is a stall a player sees. The gap is
-		// measured between OUR pulses, so it includes engine and other-mod
-		// time - the phase table below says how much of it was ours.
 		if (gapMs >= 250.0) {
 			loadTraceStallFrames++;
 			double t = MsBetween(loadTraceStart, now) / 1000.0;
@@ -144,8 +136,6 @@ void SnowDeformation::LoadTraceReportLocked(const char* a_reason)
 			logger::warn("[LoadTrace] could not write {}; report follows in this log", path.string());
 		}
 	}
-	// The log carries the report too: it survives a crash before the menu,
-	// and the file location is discoverable from it.
 	std::istringstream lines(report);
 	for (std::string line; std::getline(lines, line);)
 		logger::info("[LoadTrace] {}", line);

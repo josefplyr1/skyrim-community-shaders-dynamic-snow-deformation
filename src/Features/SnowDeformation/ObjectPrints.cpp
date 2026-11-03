@@ -1,25 +1,7 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 
 #include "Features/SnowDeformation/CoSave.h"
 #include "Globals.h"
-
-// Snow Trenches on Objects, the data half: bodies' contacts on captured
-// objects' tops, written into a world-anchored print map beside the trench
-// map, refilled on the trenches' own refill, kept in a store when they leave
-// the window and written to the co-save. Design and decisions:
-// MD plans\OBJECT-TOP-TRACKS-PLAN.md. Kernels: the tail of
-// DeformationUpdateCS.hlsl.
-//
-// Co-save record 'SNOP', version 1:
-//   chunk { u32 tileCount, u16 tileDim, u16 pad, f32 texel }
-//   tile  { u32 worldspace, i32 x, i32 y, f32 clockRel, u32 entries }
-//         followed by entries x { u16 index, u32 value }
-// index = slice * tileTexels + row * tileDim + column; value = the map's own
-// packing. clockRel is relative to this session's decay clock (<= 0).
 
 namespace
 {
@@ -43,7 +25,6 @@ namespace
 		return a_v >= 0 ? a_v / a_d : -((-a_v + a_d - 1) / a_d);
 	}
 
-	// Intersection of two (x0, y0, w, h) rects; false when empty.
 	bool Overlap(const DirectX::XMINT4& a_a, const DirectX::XMINT4& a_b, DirectX::XMINT4& o_r)
 	{
 		const int32_t x0 = std::max(a_a.x, a_b.x);
@@ -64,7 +45,6 @@ namespace
 		return std::any_of(a_texels.begin(), a_texels.end(), [](uint32_t v) { return (v & 1023u) != 0u; });
 	}
 
-	// The three map sizes the reach setting offers.
 	uint32_t SnapPrintDim(uint32_t a_dim)
 	{
 		return a_dim >= 2048u ? 2048u : (a_dim >= 1024u ? 1024u : 512u);
@@ -145,7 +125,6 @@ SnowDeformation::PrintSpellMark SnowDeformation::HeldPrintFront(const HeldPrintS
 {
 	PrintSpellMark mark = a_held.mark;
 	if ((mark.flags & kPrintSpellCone) && a_held.speed > 0.0f) {
-		// The ground cone's front: where it has run by the end of this frame.
 		const float extent = std::clamp(a_held.speed * (a_held.age + a_deltaTime) / std::max(mark.reach, 1.0f), 0.0f, 1.0f);
 		mark.a = mark.b + (mark.a - mark.b) * extent;
 	}
@@ -274,7 +253,6 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 	tilesSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
 	tilesSrvDesc.Texture2D.MipLevels = 1;
 	printTiles->CreateSRV(tilesSrvDesc);
-	// Uploaded whole by the next publish.
 	printTilesUploaded.clear();
 
 	if (!printFrameCB)
@@ -338,7 +316,6 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 	}
 
 	if (!printWriteBuffer) {
-		// Sized for the largest map: (2048 / tile + 1)^2 flags.
 		constexpr uint32_t maxRow = 2048u / kPrintTileDim + 1u;
 		D3D11_BUFFER_DESC writeDesc{};
 		writeDesc.ByteWidth = maxRow * maxRow * sizeof(uint32_t);
@@ -382,8 +359,6 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 	}
 
 	printBlockSeen.assign((size_t)(a_dim / 8) * (a_dim / 8), 0);
-	// The new map is uncleared: the next update clears it and refills it from
-	// the store. Prints written since their last mirror are lost with the old one.
 	printWindowValid = false;
 	printLive.clear();
 }
@@ -393,7 +368,6 @@ bool SnowDeformation::DecayPrintTile(PrintStoreTile& a_tile, float a_clock)
 	const int drop = (int)std::floor((a_clock - a_tile.clock) * 1023.0f);
 	if (drop <= 0)
 		return AnyPrint(a_tile.texels);
-	// Advanced only by what was applied, so a fraction is never discarded.
 	a_tile.clock += (float)drop / 1023.0f;
 	bool any = false;
 	for (auto& v : a_tile.texels) {
@@ -412,7 +386,6 @@ void SnowDeformation::EnforcePrintStoreCap()
 {
 	if (printStore.size() <= kPrintStoreCap)
 		return;
-	// Another worldspace first, then the furthest from the window.
 	const float centreX = ((float)printWindowMin.x + 0.5f * (float)printMapDim) * kPrintTexel;
 	const float centreY = ((float)printWindowMin.y + 0.5f * (float)printMapDim) * kPrintTexel;
 	std::vector<std::pair<float, TrenchTileKey>> ranked;
@@ -449,8 +422,6 @@ bool SnowDeformation::QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a
 	slot->frame = printFrame;
 	slot->generation = printQueueGeneration;
 	slot->busy = true;
-	// A tile is one contiguous block of the map: its origin is a multiple of
-	// the tile and the dim a multiple of that.
 	const int32_t mask = (int32_t)printMapDim - 1;
 	const UINT px = (UINT)((a_tx * kPrintTileDim) & mask);
 	const UINT py = (UINT)((a_ty * kPrintTileDim) & mask);
@@ -482,7 +453,6 @@ void SnowDeformation::PollPrintMirrors(ID3D11DeviceContext* a_context)
 		a_context->Unmap(slot.texture.get(), 0);
 		slot.busy = false;
 
-		// Texels outside the window the copy was taken in hold other ground.
 		const DirectX::XMINT4 window = { slot.windowMin.x, slot.windowMin.y, (int32_t)slot.dim, (int32_t)slot.dim };
 		DirectX::XMINT4 valid{};
 		if (!Overlap(TileRect(slot.key.x, slot.key.y, kPrintTileDim), window, valid))
@@ -529,8 +499,6 @@ void SnowDeformation::PollPrintWrites(ID3D11DeviceContext* a_context)
 		if (FAILED(a_context->Map(slot.staging.get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 			continue;
 		slot.busy = false;
-		// Flags from before the last clear name tiles the clear emptied; a clear's
-		// own frame stamps after it.
 		if (slot.frame >= printLastClearFrame && slot.worldspace == printWorldspace) {
 			const auto* flags = static_cast<const uint32_t*>(mapped.pData);
 			const DirectX::XMINT4 window = { printWindowMin.x, printWindowMin.y, (int32_t)printMapDim, (int32_t)printMapDim };
@@ -597,7 +565,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 {
 	if (!EnsurePrintShaders())
 		return;
-	// Window and dim as GetCommonBufferData decided them for this frame.
 	if (!printDimTarget)
 		PrintRectForFrame();
 	const uint32_t wantDim = printDimTarget;
@@ -606,7 +573,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		CreatePrintResources(wantDim);
 	if (!printMap)
 		return;
-	// The readers let go before the map is a UAV target; PrepassSimulation binds them again.
 	ID3D11ShaderResourceView* nullReaders[3] = {};
 	a_context->PSSetShaderResources(kPrintReaderSlot, 3, nullReaders);
 	printFrame++;
@@ -627,8 +593,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		}
 	}
 
-	// A load or revert replaced the store: copies and flags in flight describe
-	// the timeline before it.
 	const bool reinject = printReinjectRequested.exchange(false, std::memory_order_acq_rel);
 	printQueueGeneration = printStoreGeneration.load(std::memory_order_acquire);
 	if (reinject) {
@@ -639,7 +603,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	}
 
 	ID3D11UnorderedAccessView* nullUAV[4] = {};
-	// Copies into and out of the map (mirror, inject) go with no UAV bound.
 	a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
 	PollPrintWrites(a_context);
 	PollPrintMirrors(a_context);
@@ -653,9 +616,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	const bool fullClear = reinject || !printWindowValid || worldspace != printWorldspace || std::abs(dx) + std::abs(dy) >= dim / 2;
 	const bool moved = dx != 0 || dy != 0;
 
-	// Tiles about to lose texels: a dirty one is mirrored before the clear
-	// below reaches it. A reinject replaces the map from a store that already
-	// says what it should hold, so nothing is mirrored over it.
 	if (printWindowValid && (fullClear || moved)) {
 		for (auto it = printLive.begin(); it != printLive.end();) {
 			const int32_t tx = PrintTileX(it->first);
@@ -697,7 +657,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		cb.RingTotal = ringTotal;
 	}
 
-	// The trench refill, in the map's 1023rds.
 	uint32_t quanta = 0;
 	if (a_trenchPassRan && a_frame.RefillAmount > 0.0f) {
 		printRefillBank = std::min(printRefillBank + a_frame.RefillAmount, 1.0f);
@@ -734,7 +693,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		}
 	}
 
-	// Physical 8x8 blocks over a world rect clipped to the window, each once.
 	const int32_t blockMask = dim / 8 - 1;
 	std::vector<uint32_t> touched;
 	auto addBlocks = [&](DirectX::XMINT4 a_rect) {
@@ -790,7 +748,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		const float refill = (float)quanta / 1023.0f;
 		for (auto it = printLive.begin(); it != printLive.end();) {
 			it->second.refillSince += refill;
-			// A full depth refilled since the last write: nothing left in it.
 			if (it->second.refillSince >= 1.0f && !it->second.dirty)
 				it = printLive.erase(it);
 			else
@@ -807,12 +764,8 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
 		(a_frame.HasRoadRaster > 0.5f && heightSkinDepth) ? heightSkinDepth->srv.get() : nullptr
 	};
-	// The object gate needs a finished raster and, for bodies and props, this
-	// frame's contacts; an unbound raster reads 0, which is a top at sea level.
 	const bool fieldReady = a_trenchPassRan && contactSRVs[1] && heightMapValid && topSRVs[0] && topSRVs[1] && (contactSRVs[0] || spellCount > 0);
 
-	// World print-texel rects the stamp covers this frame: the rim is rebuilt
-	// around them when it ran.
 	std::vector<DirectX::XMINT4> stampRects;
 	if (fieldReady) {
 		printBlockScratch.clear();
@@ -823,7 +776,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			const int32_t y1 = (int32_t)std::floor(a_maxY / kPrintTexel);
 			return DirectX::XMINT4{ x0, y0, x1 - x0 + 1, y1 - y0 + 1 };
 		};
-		// The stamp reads the contact field 2x2 around each texel centre.
 		const float pad = 2.0f * kPrintTexel;
 		if (contactSRVs[0]) {
 			for (const auto& actor : contactActors)
@@ -831,8 +783,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			for (const auto& prop : contactProps)
 				stampRects.push_back(texelRect(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad));
 		}
-		// A spell's reach: its two points and its radius. A ray's hit is not
-		// known here, so its whole run is covered.
 		for (uint32_t i = 0; i < spellCount; i++) {
 			const auto& mark = printSpellMarks[i];
 			const float r = mark.radius + pad;
@@ -861,7 +811,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 					}
 					a_context->Unmap(printSpellBuffer.get(), 0);
 				}
-				// Each ray to the first object top it enters, before the stamp reads the hits.
 				a_context->CSSetShaderResources(13, 1, &spellSRVs[0]);
 				ID3D11UnorderedAccessView* rayUAVs[5] = { nullptr, nullptr, nullptr, nullptr, printRayHitUAV.get() };
 				a_context->CSSetUnorderedAccessViews(0, 5, rayUAVs, nullptr);
@@ -893,9 +842,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			touched.clear();
 		}
 	}
-	// The rim, rebuilt from the map wherever it can have changed: around this
-	// frame's stamp, or over every live tile and its apron after a refill, an
-	// inject, a clear, a move or a new width.
 	uint32_t rimBlocks = 0;
 	const bool rimAll = fullClear || moved || quanta > 0 || printInjectsLast > 0 || cb.RimWidth != printRimWidthLast;
 	if (printRim && GetPrintRimCS() && ((rimAll && !printLive.empty()) || printStampBlocksLast > 0)) {
@@ -931,8 +877,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	if (!printStampBlocksLast && !rimBlocks)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Trench Prints");
 
-	// Rolling mirror: keeps the store, and so the save, current with what the
-	// map holds.
 	if (persist) {
 		uint32_t queued = 0;
 		for (auto& [id, live] : printLive) {
@@ -979,15 +923,10 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 
 DirectX::XMINT4 SnowDeformation::PrintRectForFrame()
 {
-	// The window follows the trench window's centre, as the contact field does
-	// (contactCenter), and is decided here, with it, so the rect and the map agree.
 	printDimTarget = SnapPrintDim(settings.ObjectTrenchResolution);
 	const int32_t dim = (int32_t)printDimTarget;
 	printWindowTarget = { (int32_t)std::floor((windowOrigin.x + deformWorldSize * 0.5f) / kPrintTexel) - dim / 2,
 		(int32_t)std::floor((windowOrigin.y + deformWorldSize * 0.5f) / kPrintTexel) - dim / 2 };
-	// Only texels both the map as it stands and the map after this frame's
-	// update hold: the update may not run (suspended passes, a pause), and when
-	// it runs it may move, clear or remake the map.
 	printRectPublished = { 0, 0, 0, 0 };
 	DirectX::XMINT4 both{};
 	if (settings.EnableSnowDeformation && printMap && printWindowValid && !printLive.empty() &&
@@ -1004,7 +943,6 @@ void SnowDeformation::PublishPrintTiles(ID3D11DeviceContext* a_context)
 	const int32_t n = (int32_t)printMapDim / kPrintTileDim;
 	const int32_t mask = n - 1;
 	printTilesScratch.assign((size_t)n * n, 0);
-	// The window's corner sits off the tile grid, so it touches one tile more a side than the map holds.
 	const int32_t w = n + 1;
 	printTileSumOrigin = { FloorDiv(printWindowMin.x, kPrintTileDim), FloorDiv(printWindowMin.y, kPrintTileDim) };
 	printTileSumDim = w;
@@ -1012,8 +950,6 @@ void SnowDeformation::PublishPrintTiles(ID3D11DeviceContext* a_context)
 	for (const auto& [id, live] : printLive) {
 		const int32_t tx = PrintTileX(id);
 		const int32_t ty = PrintTileY(id);
-		// A reader's block starts in one tile and may run into the next along
-		// x, y or both: the tile and the three before it are marked.
 		for (int32_t dy = 0; dy <= 1; dy++)
 			for (int32_t dx = 0; dx <= 1; dx++)
 				printTilesScratch[(size_t)((ty - dy) & mask) * n + ((tx - dx) & mask)] = 1;
@@ -1037,8 +973,6 @@ bool SnowDeformation::PrintsUnder(const RE::NiBound& a_bound) const
 	if (printTileSumDim <= 0 || printRectPublished.z <= printRectPublished.x || printRectPublished.w <= printRectPublished.y ||
 		!std::isfinite(a_bound.center.x) || !std::isfinite(a_bound.center.y) || !(a_bound.radius >= 0.0f && a_bound.radius < 1e6f))
 		return false;
-	// The twin reads up to a texel and a half past its pixel, and the rim
-	// reaches its apron past the print.
 	const float reach = a_bound.radius + (2.0f + (float)kPrintRimApron) * kPrintTexel;
 	const float tileSize = kPrintTexel * (float)kPrintTileDim;
 	const int32_t w = printTileSumDim;
@@ -1067,7 +1001,6 @@ void SnowDeformation::SavePrintStore(const SKSE::SerializationInterface* a_intfc
 		logger::error("[SNOW DEFORMATION] Could not open the print co-save record");
 		return;
 	}
-	// Written even when empty, so a load can tell "no prints" from "no data".
 	uint32_t tileCount = 0;
 	if (settings.PersistTrenches)
 		for (const auto& [key, tile] : printStore)
@@ -1169,7 +1102,6 @@ void SnowDeformation::LoadPrintStore(const SKSE::SerializationInterface* a_intfc
 		printStore.insert_or_assign(key, std::move(tile));
 		restored++;
 	}
-	// The next update replaces the map with what was just read.
 	printReinjectRequested.store(true, std::memory_order_release);
 	logger::info("[SNOW DEFORMATION] print co-save restored {} of {} tiles (active worldspace {:08X})",
 		restored, tileCount, activeWorldspace.load(std::memory_order_acquire));
@@ -1181,8 +1113,6 @@ void SnowDeformation::RegisterPrintCoSave()
 		kPrintRecord, kPrintRecordVersion,
 		[this](const SKSE::SerializationInterface* a_intfc) { SavePrintStore(a_intfc); },
 		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadPrintStore(a_intfc, a_version, a_length); },
-		// Before a load and on a new game: the map must not carry one
-		// timeline's prints into the next.
 		[this]() { ClearPrintStore("the co-save revert"); });
 }
 

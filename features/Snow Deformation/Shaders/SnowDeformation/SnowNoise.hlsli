@@ -1,16 +1,6 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #ifndef __SNOW_NOISE_DEPENDENCY_HLSL__
 #define __SNOW_NOISE_DEPENDENCY_HLSL__
 
-// Constant-free noise core, split out of SnowFields.hlsli so the undulation
-// bake CS evaluates the EXACT functions the shells do without pulling in
-// their ShellCB context. Both shells reach these through SnowFields.hlsli.
-
-// World-anchored value noise, shared by the border domain warp, the dune
-// undulation and the rim teeth (and any other organic-edge shaping).
 float ShapeNoiseHash(float2 cell)
 {
 	float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
@@ -27,10 +17,6 @@ float ShapeNoise(float2 p)
 		lerp(ShapeNoiseHash(i + float2(0, 1)), ShapeNoiseHash(i + float2(1, 1)), f.x), f.y);
 }
 
-// ShapeNoise on a torus of a_cells cells: the cell hash wraps. On the 256-cell
-// torus a 256x256 table of ShapeNoiseHash (UndulationFieldCS NoiseHashCS) read
-// through a wrapping bilinear sampler returns the same value: one fetch where
-// this takes four hashes. The rim teeth use the pair (SnowDetailNoise).
 static const float kNoiseTorusCells = 256.0;
 
 float ShapeNoiseTorus(float2 p, float a_cells)
@@ -45,9 +31,6 @@ float ShapeNoiseTorus(float2 p, float a_cells)
 		lerp(ShapeNoiseHash(float2(c0.x, c1.y)), ShapeNoiseHash(c1), f.x), f.y);
 }
 
-// The dune field's amp-free core: two octaves in [-1, 1]. The shells apply
-// UndulationAmp live (so the strength slider needs no rebake) and the bake
-// CS stores exactly this.
 float UndulationNorm(float2 worldXY, float scale)
 {
 	float2 p = worldXY / max(scale, 0.05);
@@ -55,9 +38,6 @@ float UndulationNorm(float2 worldXY, float scale)
 	return (n - 0.5) * 2.0;
 }
 
-// Central-difference step for the shading gradient, shared by the bake and
-// the live fallback. Response is sinc(2*pi*step/wavelength): 12 went to zero
-// at a 24-unit wavelength, 6 keeps a 32-unit one at 78%.
 static const float kUndulationGradStep = 6.0;
 
-#endif  // __SNOW_NOISE_DEPENDENCY_HLSL__
+#endif

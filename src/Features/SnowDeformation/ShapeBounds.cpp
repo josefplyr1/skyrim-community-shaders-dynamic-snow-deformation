@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation/ShapeBounds.h"
 
 #include "Utils/ActorUtils.h"
@@ -44,7 +40,7 @@ namespace SnowShapes
 			c.body = body;
 			c.bhkRigid = body ? body->AsBhkRigidBody() : nullptr;
 			c.hkpRigid = c.bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(c.bhkRigid->referencedObject.get()) : nullptr;
-			if (c.bhkRigid && c.hkpRigid && !skyrim_cast<RE::hkpListShape*>(c.hkpRigid)) {  // as Util::GetShapeBound
+			if (c.bhkRigid && c.hkpRigid && !skyrim_cast<RE::hkpListShape*>(c.hkpRigid)) {
 				c.shape = c.hkpRigid->collidable.GetShape();
 				c.valid = Util::ExtractShapeBound(c.shape, c.radius);
 			}
@@ -64,8 +60,6 @@ namespace SnowShapes
 	{
 		if (!shape)
 			return false;
-		// Support mapping along each local axis, both ways, so the extents are
-		// offset-invariant whatever the shape's origin.
 		auto project = [shape](float x, float y, float z) {
 			return shape->GetMaximumProjection(RE::hkVector4{ x, y, z, 0.0f }) * RE::bhkWorld::GetWorldScaleInverse();
 		};
@@ -81,21 +75,16 @@ namespace SnowShapes
 			return false;
 		RE::bhkRigidBody* bhkRigid = collisionObj->body.get() ? collisionObj->body.get()->AsBhkRigidBody() : nullptr;
 		RE::hkpRigidBody* hkpRigid = bhkRigid ? skyrim_cast<RE::hkpRigidBody*>(bhkRigid->referencedObject.get()) : nullptr;
-		if (!bhkRigid || !hkpRigid || skyrim_cast<RE::hkpListShape*>(hkpRigid))  // hkpListShape unsupported, as in GetShapeBound
+		if (!bhkRigid || !hkpRigid || skyrim_cast<RE::hkpListShape*>(hkpRigid))
 			return false;
 		float h[3];
 		if (!ExtractShapeHalfExtents(hkpRigid->collidable.GetShape(), h[0], h[1], h[2]))
 			return false;
 
-		// Each local axis, scaled by its extent, rotated by the node Havok
-		// drives, then flattened onto the ground.
 		const auto& rot = collisionObj->sceneObject->world.rotate;
 		const RE::NiPoint3 axes[3] = { { 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f } };
 		float px[3], py[3], len[3];
 		int longest = 0;
-		// The oriented box's vertical half-extent is the sum of what each
-		// scaled axis contributes along Z - exact for a box, so a flat shield
-		// lying down reports its thickness, not its width.
 		halfHeight = 0.0f;
 		for (int i = 0; i < 3; ++i) {
 			const RE::NiPoint3 world = rot * axes[i];

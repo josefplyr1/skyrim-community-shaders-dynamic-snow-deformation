@@ -1,7 +1,3 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/TrenchSimd.h"
 
@@ -11,19 +7,8 @@
 #include <DirectXPackedVector.h>
 #include <limits>
 
-// Persistent trenches, Stage A. Design and staging in PERSISTENT-TRENCHES-PLAN.md;
-// rationale in CODE-NOTES.md.
-//
-// DeformationUpdateCS reads the previous map at a scrolled offset and drops
-// whatever falls outside it. This file is the memory that gives it back:
-// departing texels are staged, read back a frame later, and folded into tiles
-// on a fixed world grid; arriving texels are resampled out of those tiles into
-// the inject texture the CS seeds from.
-
 namespace
 {
-	// Floor division on the store's world grid; plain / truncates toward zero
-	// and would fold the tiles either side of the origin onto each other.
 	inline int FloorDiv(int a_value, int a_divisor)
 	{
 		return a_value >= 0 ? a_value / a_divisor : -(((-a_value) + a_divisor - 1) / a_divisor);
@@ -33,9 +18,6 @@ namespace
 int SnowDeformation::ComputeArrivalRects(DirectX::XMINT2 a_scroll, bool a_clearing, ArrivalRect a_rects[2]) const
 {
 	const int dim = (int)deformMapDim;
-	// The texels whose world assignment the scroll changed are the leading
-	// band on each axis (in the NEW logical frame); a clear reassigns
-	// everything.
 	if (a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim) {
 		a_rects[0] = { 0, 0, dim, dim };
 		return 1;
@@ -48,10 +30,6 @@ int SnowDeformation::ComputeArrivalRects(DirectX::XMINT2 a_scroll, bool a_cleari
 	return count;
 }
 
-// The one place CPU code crosses the torus: a logical box becomes up to four
-// physical segments (one wrap split per axis), each landing at its logical
-// offset in the destination, so every staging texture stays LOGICALLY laid
-// out and StoreTrenchBand never learns the map rotated under it.
 void SnowDeformation::CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_src,
 	int a_x0, int a_y0, int a_w, int a_h, DirectX::XMINT2 a_physOrigin)
 {
@@ -93,7 +71,6 @@ bool SnowDeformation::CreateTrenchStoreResources()
 			trenchBandValid[ring][axis] = false;
 		}
 
-	// Depth and freshness: arriving ground comes back with its age.
 	D3D11_TEXTURE2D_DESC injectDesc{};
 	injectDesc.Width = deformMapDim;
 	injectDesc.Height = deformMapDim;
@@ -110,9 +87,6 @@ bool SnowDeformation::CreateTrenchStoreResources()
 		return false;
 	Util::SetResourceName(trenchInjectSRV.get(), "SnowDeformation::TrenchInject SRV");
 
-	// Staged bands are the map's own format: the copy is a straight region
-	// blit and the half-float unpack happens on the CPU, off the render path.
-	// The track dates beside them in theirs.
 	D3D11_TEXTURE2D_DESC bandDesc{};
 	bandDesc.MipLevels = 1;
 	bandDesc.ArraySize = 1;
@@ -134,7 +108,6 @@ bool SnowDeformation::CreateTrenchStoreResources()
 		}
 	}
 
-	// Rolling window mirror: same formats, a fixed slice of full-width rows.
 	bandDesc.Width = clockBandDesc.Width = deformMapDim;
 	bandDesc.Height = clockBandDesc.Height = (UINT)kTrenchRollRows;
 	for (int ring = 0; ring < 2; ring++) {
@@ -149,7 +122,6 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	}
 	trenchRollRow = 0;
 
-	// The debug copy is made at the new size on the next Show Map tick.
 	trenchDebugTexture = nullptr;
 	trenchDebugSRV = nullptr;
 	trenchDebugUAV = nullptr;
@@ -172,8 +144,6 @@ void SnowDeformation::UpdateTrenchDebugTexture()
 	if (!showDebugTexture)
 		return;
 	if (!trenchDebugUAV) {
-		// Honest debug copy of the map's depth. See the header for why the map
-		// itself cannot simply be handed to ImGui.
 		D3D11_TEXTURE2D_DESC desc{};
 		desc.Width = deformMapDim;
 		desc.Height = deformMapDim;
@@ -201,10 +171,6 @@ void SnowDeformation::UpdateTrenchDebugTexture()
 	if (!context || !live || !shader)
 		return;
 
-	// The CS de-rotates: it reads the map physically (MapOrigin from the
-	// PerFrame CB, which holds this frame's values on every executed frame
-	// and the still-current ones on skipped frames) and writes the debug
-	// view logically, so the preview stays world-aligned.
 	ID3D11Buffer* cb = perFrame->CB();
 	context->CSSetConstantBuffers(0, 1, &cb);
 	ID3D11ShaderResourceView* srvs[] = { live->srv.get() };
@@ -236,8 +202,6 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	if (texel <= 0.0f)
 		return;
 
-	// Against the CURRENT origin: these rows are consumed next frame, by which
-	// time the map being copied is the one this frame wrote.
 	auto markSpan = [&](float a_minY, float a_maxY) {
 		const int row0 = std::max((int)std::floor((a_minY - a_data.WindowOrigin.y) / texel), 0);
 		const int row1 = std::min((int)std::floor((a_maxY - a_data.WindowOrigin.y) / texel), dim - 1);
@@ -249,10 +213,6 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		}
 	};
 
-	// A settled source carves the same max again: its rows hold nothing new for
-	// the mirror. Each source holds an anchor and only moves it past
-	// kTrenchMarkTolTexels. A settled source still re-marks once per refresh
-	// period, bounding creep inside the tolerance.
 	auto marks = [&](uint32_t a_age) {
 		if (a_age < kTrenchMarkSettleFrames || a_age % kTrenchMarkRefreshFrames == 0)
 			return true;
@@ -265,12 +225,9 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
-		// Carves only. A melt stamp's depth is subtracted out of what the
-		// store keeps anyway, so mirroring its rows early buys nothing.
 		const float stampMode = a_data.StampEnds[i].z;
 		if ((stampMode > kStampModeBody - 0.5f ? stampMode - kStampModeBody : stampMode) > 0.5f)
 			continue;
-		// An impact stamp carves nothing.
 		if (a_data.Stamps[i].z <= 0.0f)
 			continue;
 		cpuCensus.carveStampsTotal++;
@@ -292,12 +249,9 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		if (!marks(anchor.age))
 			continue;
 
-		// The capsule spans segStart to tip, so take both ends plus the radius.
 		markSpan(std::min(s.y, e.y) - s.w, std::max(s.y, e.y) + s.w);
 	}
 
-	// Contact-window raster draws carve by mesh and never enter the stamp list;
-	// their bounds mark rows too (CODE-NOTES: trench roll blind spot).
 	for (const auto* draws : { &contactActors, &contactProps })
 		for (const auto& draw : *draws) {
 			cpuCensus.contactRectsTotal++;
@@ -333,17 +287,9 @@ void SnowDeformation::RollTrenchWindow()
 
 	std::scoped_lock lock(trenchStoreMutex);
 
-	// The ring is only claimed once a slice is actually going to be copied, so
-	// an idle frame neither flips it nor blocks on a drain.
 	const int dim = (int)deformMapDim;
 	const bool haveMarks = trenchDirtyRows.size() == (size_t)(dim + 31) / 32;
 
-	// A cursor that only ever moves forward, skipping rows nothing has dug.
-	// Dirtiness chooses what to IGNORE, never where to go: seeking the lowest
-	// dirty row starves the sweep, since stamps mark rows faster than a slice
-	// can clear them and the cursor never reaches the player. Coverage comes
-	// from the cursor being monotonic; speed from clean rows costing a bit
-	// test. Safe only because writes are raise-only.
 	if (haveMarks) {
 		int skipped = 0;
 		while (skipped < dim && !(trenchDirtyRows[(size_t)trenchRollRow >> 5] & (1u << (trenchRollRow & 31)))) {
@@ -351,8 +297,6 @@ void SnowDeformation::RollTrenchWindow()
 				trenchRollRow = 0;
 			skipped++;
 		}
-		// Nothing dug anywhere in the window: the store is already current, and
-		// standing still costs one pass of bit tests.
 		if (skipped >= dim)
 			return;
 	}
@@ -360,8 +304,6 @@ void SnowDeformation::RollTrenchWindow()
 	const int ring = trenchRollRing;
 	trenchRollRing ^= 1;
 
-	// Same rule as the departing bands: never overwrite an undrained slot,
-	// because losing a slice loses ground the store would then never relearn.
 	if (trenchRollValid[ring]) {
 		D3D11_MAPPED_SUBRESOURCE stale{};
 		D3D11_MAPPED_SUBRESOURCE staleClocks{};
@@ -379,13 +321,6 @@ void SnowDeformation::RollTrenchWindow()
 	const int start = trenchRollRow;
 	int rows = std::min(kTrenchRollRows, dim - start);
 
-	// TRIMMED to the last dug row inside the slice. Without this the slice
-	// width sets the cost outright: one dug row would drag 127 clean ones
-	// through the readback with it, and a wide slice would be a flat per-frame
-	// charge instead of a budget spent only where something was carved.
-	// Clean rows INSIDE the trimmed span still ride along - they are part of
-	// one contiguous copy, and splitting that to dodge them would cost more
-	// than it saves.
 	if (haveMarks) {
 		int last = start;
 		for (int row = start; row < start + rows; row++)
@@ -393,24 +328,17 @@ void SnowDeformation::RollTrenchWindow()
 				last = row;
 		rows = last - start + 1;
 
-		// Everything copied is now mirrored, dug or merely swept up with it.
 		for (int row = start; row < start + rows; row++)
 			trenchDirtyRows[(size_t)row >> 5] &= ~(1u << (row & 31));
 	}
 
-	// Logical rows out of the toroidal map; the staging slice stays laid out
-	// logically so the unpack below is untouched.
 	CopyLogicalBox(trenchRollStaging[ring].get(), live->resource.get(), 0, start, dim, rows, trenchMapPhysOrigin);
 	if (trackClockTexture)
 		CopyLogicalBox(trenchClockRollStaging[ring].get(), trackClockTexture->resource.get(), 0, start, dim, rows, trenchMapPhysOrigin);
 
-	// The window state the CONTENTS belong to, not the live values - the same
-	// rule the departing flush follows.
 	trenchRollMeta[ring] = { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, start, dim, rows, TrackDateClock(), trenchAgeingTotal };
 	trenchRollValid[ring] = true;
 
-	// UNCONDITIONAL. Nothing may hold the cursor still, which is the whole
-	// difference from what this replaces.
 	trenchRollRow = start + rows;
 	if (trenchRollRow >= dim)
 		trenchRollRow = 0;
@@ -418,23 +346,8 @@ void SnowDeformation::RollTrenchWindow()
 
 void SnowDeformation::TickTrenchClock()
 {
-	// The co-save callbacks land on the game thread and can rewrite the store
-	// mid-frame.
 	std::scoped_lock lock(trenchStoreMutex);
 
-	// A backwards calendar no longer wipes the store, it just sits the tick out.
-	//
-	// This rule was written in Stage B, when nothing else knew a save had been
-	// loaded. Stage C's revert callback now owns that: SKSE fires it before
-	// every load and on every new game, whether or not our record is in the
-	// file, so the timeline case is covered at its source. Keeping a second
-	// mechanism meant any hiccup in the calendar destroyed the whole store -
-	// and the threshold is a third of a game SECOND, which at a low timescale
-	// is a few dozen milliseconds of real time - observed dropping the whole
-	// store mid-play with no load anywhere near it.
-	//
-	// Skipping is safe on its own terms. Decay is an integral over elapsed
-	// hours, so a frame contributing nothing costs nothing.
 	if (gameClock.reversed) {
 		logger::info("[SNOW DEFORMATION] trench clock went backwards; skipping the tick ({} tiles kept)",
 			trenchTiles.size());
@@ -444,21 +357,10 @@ void SnowDeformation::TickTrenchClock()
 	if (elapsed <= 0.0f)
 		return;
 
-	// Snowfall erases stored trenches at the LIVE REFILL'S OWN RATE rather than
-	// a second number of its own: ground should behave the same whether or not
-	// it is being looked at, and that also makes the away-decay follow the
-	// refill sliders for free. The refill is per RENDER second, so it converts
-	// through the timescale - RefillAmount is deltaTime/kBaseRefillTime scaled
-	// by intensity and the multiplier, and one game hour is 3600/timescale
-	// render seconds.
-	// Elapsed hours telescope, so the calendar's float32 day quantisation
-	// (~2.6-second steps late game) cancels instead of accumulating.
 	const float refillIntensity = settings.RefillOnlyWhenSnowing ? snowfallIntensity : 1.0f;
 	const float realSecondsPerGameHour = 3600.0f / std::max(gameClock.timescale, 1.0f);
 	const float weather = realSecondsPerGameHour * refillIntensity *
 	                      std::max(settings.RefillRateMultiplier, 0.0f) / kBaseRefillTime;
-	// The floor underneath it: without one, a clear-weather modlist never
-	// prunes and the store only grows.
 	const float floorRate = settings.StoredTrenchFadeDays > 0.01f ?
 	                            1.0f / (settings.StoredTrenchFadeDays * 24.0f) :
 	                            0.0f;
@@ -474,8 +376,6 @@ void SnowDeformation::TickTrenchAgeing()
 
 bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
 {
-	// Floored like the depth below, the clock advancing only by what was
-	// applied. A tile whose tracks have all aged out drops its bytes.
 	if (const int age = (int)std::floor((trenchAgeingTotal - a_tile.freshClock) * kTrackFreshPerUnit); age > 0) {
 		a_tile.freshClock += (double)age / kTrackFreshPerUnit;
 		if (!a_tile.fresh.empty() && !TrenchSimd::DecayBytes(a_tile.fresh.data(), a_tile.fresh.size(), std::min(age, 255)))
@@ -486,10 +386,6 @@ bool SnowDeformation::DecayTrenchTile(TrenchTile& a_tile)
 	if (pending <= 0.0f)
 		return true;
 
-	// FLOORED, and the clock advances only by what was actually applied. The
-	// sweep visits a tile every few frames, so rounding each visit's fraction
-	// away and stamping the clock to now would discard the remainder every
-	// time and the store would never decay at all.
 	const int drop = (int)std::floor(pending * 255.0f);
 	if (drop <= 0)
 		return true;
@@ -512,17 +408,9 @@ void SnowDeformation::SweepTrenchStore()
 	}
 
 	if (trenchSweepQueue.empty()) {
-		// Cycle boundary: publish what the last pass measured, then spend the
-		// budget while every tile's encoded size is freshly known.
 		trenchStatNonZero = trenchAccumNonZero;
 		trenchStatThin = trenchAccumThin;
 		trenchStatSweptTiles = trenchAccumTiles;
-		// A CENSUS, not a report of the paths we know about. Every count that
-		// went missing this cycle is attributed to decay or to eviction, and
-		// anything left over is named as unexplained - because the store has
-		// twice now lost tiles through a path nobody was watching, and a line
-		// that only speaks for the mechanisms already suspected would have
-		// stayed silent both times.
 		const size_t live = trenchTiles.size();
 		if (live != trenchStatTiles) {
 			const long long delta = (long long)live - (long long)trenchStatTiles;
@@ -545,8 +433,6 @@ void SnowDeformation::SweepTrenchStore()
 			trenchSweepQueue.push_back(key);
 	}
 
-	// A slice per frame. The store cycles in well under a second at any size
-	// worth sweeping, and no frame pays for the whole of it.
 	constexpr int kPerFrame = 8;
 	constexpr size_t texels = (size_t)kTrenchTileDim * kTrenchTileDim;
 	for (int i = 0; i < kPerFrame && !trenchSweepQueue.empty(); i++) {
@@ -556,10 +442,6 @@ void SnowDeformation::SweepTrenchStore()
 		if (it == trenchTiles.end())
 			continue;
 
-		// Refill is the reaper: a tile it has taken back to bare ground is
-		// deleted, so the store self-prunes anywhere weather happens. This is
-		// the ONLY place a tile dies of emptiness now - writes raise only, so
-		// a blank map can no longer delete ground the store knows is dug.
 		if (!DecayTrenchTile(it->second)) {
 			trenchTiles.erase(it);
 			trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
@@ -568,20 +450,13 @@ void SnowDeformation::SweepTrenchStore()
 			continue;
 		}
 
-		// One pass over the tile counts BOTH figures: how full it is, and
-		// exactly what it will cost to write. The encoded size has to be exact
-		// rather than estimated, or the budget bounds a number that is not the
-		// one landing in the save.
 		const auto& bytes = it->second.depth;
 		size_t nonZero = 0;
 		size_t pairs = 0;
 		TrenchSimd::CountRuns(bytes.data(), bytes.size(), nonZero, pairs);
 
 		const uint32_t encoded = (uint32_t)(pairs * kTrenchRLEPairBytes);
-		// A tile the encoder would make bigger is kept raw, so a pathological
-		// pattern costs its raw size and never more.
 		it->second.encodedBytes = std::min(encoded, (uint32_t)bytes.size());
-		// Its freshness, by the same rule; an aged-out tile writes none.
 		if (const auto& fresh = it->second.fresh; !fresh.empty()) {
 			size_t freshNonZero = 0;
 			size_t freshPairs = 0;
@@ -598,31 +473,12 @@ void SnowDeformation::SweepTrenchStore()
 
 void SnowDeformation::EnforceTrenchBudget()
 {
-	// Floored low enough that the cap can actually be REACHED on a normal
-	// store. At ~354 bytes a tile the 1 MB default holds nearly 3000 of them,
-	// perhaps ten times a busy session, so without a settable floor this whole
-	// path would never run in play and would never be tested either.
 	const size_t budget = (size_t)(std::max(settings.TrenchMemoryMB, 0.01f) * 1024.0f * 1024.0f);
 	if (trenchEncodedTotal <= budget) {
-		// Fits, so nothing is out of reach and the writer is unconstrained.
 		trenchKeepRadiusSq = std::numeric_limits<float>::max();
 		return;
 	}
 
-	// FURTHEST ground goes first, not least-recently-touched.
-	//
-	// Recency was the original rule and it degenerated: the rolling mirror
-	// rewrites every tile in the window every few seconds, so it touches
-	// nearly everything and the timestamps stop discriminating. Eviction then
-	// picked arbitrarily, and the ground the player was standing on was as
-	// likely to go as an NPC trail on the far side of the hold, so a store
-	// larger than the budget lost arbitrary tiles on load.
-	//
-	// Distance from the window centre cannot degenerate that way, and it
-	// matches what the feature is for: snow is only ever SEEN nearby, so when
-	// the store cannot hold everything the far half is what to lose. Another
-	// worldspace outranks any distance - Solstheim's trenches are not competing
-	// with the Rift's.
 	const float2 centre = { windowOrigin.x + deformWorldSize * 0.5f,
 		windowOrigin.y + deformWorldSize * 0.5f };
 	const uint32_t here = activeWorldspace.load(std::memory_order_acquire);
@@ -640,7 +496,6 @@ void SnowDeformation::EnforceTrenchBudget()
 		}
 		trenchEvictScratch.emplace_back(rank, key);
 	}
-	// Furthest first.
 	std::sort(trenchEvictScratch.begin(), trenchEvictScratch.end(),
 		[](const auto& a, const auto& b) { return a.first > b.first; });
 
@@ -655,9 +510,6 @@ void SnowDeformation::EnforceTrenchBudget()
 		trenchEncodedTotal -= std::min(trenchEncodedTotal, (size_t)it->second.encodedBytes + kTrenchTileHeaderBytes);
 		trenchTiles.erase(it);
 		evicted++;
-		// Furthest-first, so the last one dropped is the nearest that had to
-		// go. That distance becomes the frontier the writer must respect, or
-		// the mirror simply recreates everything just culled.
 		nearestEvicted = rank;
 	}
 	trenchKeepRadiusSq = evicted ? nearestEvicted : std::numeric_limits<float>::max();
@@ -666,11 +518,6 @@ void SnowDeformation::EnforceTrenchBudget()
 	if (evicted) {
 		trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 		trenchSampleTile = nullptr;
-		// INFO, not debug: this should be a rare event, and if it is happening
-		// in ordinary play that is the finding, not noise.
-		// The keep radius is the number that says whether the store is
-		// SETTLING on the near field or thrashing: it should stabilise, and
-		// the survivors should sit inside it.
 		logger::info("[SNOW DEFORMATION] trench store over budget: evicted {} of {} tiles, {} remain, {} KB encoded, keep radius {:.0f} units",
 			evicted, trenchEvictScratch.size(), trenchTiles.size(), trenchEncodedTotal / 1024,
 			std::sqrt(trenchKeepRadiusSq));
@@ -685,10 +532,6 @@ void SnowDeformation::ClearTrenchStore(const char* a_reason)
 
 void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 {
-	// Every wipe says so. A clear is the one thing that can empty the store
-	// without passing decay or eviction, so an unlogged one is indistinguishable
-	// from the store losing tiles to a path nobody is watching - which is
-	// exactly the hole the last two rounds were spent inside.
 	if (!trenchTiles.empty())
 		logger::info("[SNOW DEFORMATION] trench store CLEARED by {}, {} tiles dropped", a_reason, trenchTiles.size());
 
@@ -701,8 +544,6 @@ void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 	trenchAccumErased = trenchAccumEvicted = trenchAccumAdded = 0;
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
-	// The staged bands and slices describe a map that is about to be wiped;
-	// folding them in afterwards would put the trenches straight back.
 	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++)
 			trenchBandValid[ring][axis] = false;
@@ -721,8 +562,6 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 {
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 
-	// Continuous store-texel coordinates, offset by half a texel so the lerp
-	// runs between texel CENTRES.
 	const float fx = a_worldX / storeTexel - 0.5f;
 	const float fy = a_worldY / storeTexel - 0.5f;
 	const int gx = (int)std::floor(fx);
@@ -745,9 +584,6 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 			continue;
 		const int lx = sx - key.x * kTrenchTileDim;
 		const int ly = sy - key.y * kTrenchTileDim;
-		// The tile's own pending decay applied at READ time, so a sweep that
-		// has not reached this tile yet cannot hand back a stale depth. The
-		// sweep exists to reclaim memory, never to keep the store correct.
 		corner[i] = std::max(0.0f,
 			trenchSampleTile->depth[(size_t)ly * kTrenchTileDim + lx] * (1.0f / 255.0f) -
 				(trenchDecayClock - trenchSampleTile->clock));
@@ -759,8 +595,6 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 
 	const float w[4] = { (1.0f - tx) * (1.0f - ty), tx * (1.0f - ty), (1.0f - tx) * ty, tx * ty };
 	if (o_fresh) {
-		// Weighted by depth as the berm bake weighs dates, so a trench's edge
-		// keeps its own age rather than averaging toward the untrodden.
 		float weight = 0.0f;
 		float fresh = 0.0f;
 		for (int i = 0; i < 4; i++) {
@@ -777,57 +611,27 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	cpuCensus.storeCalls[cpuCensus.trenchStorePath]++;
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 	const float half = a_meta.texel * 0.5f;
-	// The band's dates are on the ageing clock it was copied under; the store
-	// has aged this much since.
 	const double sinceCopy = trenchAgeingTotal - a_meta.ageingTotal;
 
-	// Centre of the window these contents belong to, for the keep-radius gate.
 	const float centreX = a_meta.origin.x + a_meta.texel * (float)deformMapDim * 0.5f;
 	const float centreY = a_meta.origin.y + a_meta.texel * (float)deformMapDim * 0.5f;
 
-	// No emptiness check here any more. Writes raise only, so a batch cannot
-	// empty a tile, and erasure belongs to the sweep, which decides it from the
-	// tile's actual content rather than from what one slice of map happened to
-	// say. That also gives it a log line; this prune had none, which is why it
-	// took a code review rather than a glance at the log to find.
-
-	// One-entry tile cache. The jump path folds in the whole 2048 square, and a
-	// row crosses a tile only every 128 store texels, so without this the inner
-	// loop is millions of hash lookups at a loading screen.
 	TrenchTileKey cachedKey{ 0, INT32_MIN, INT32_MIN };
 	TrenchTile* cachedTile = nullptr;
 
-	// depth <= total, so a total below the epsilon (or negative) always stores
-	// zero. Positive half bits order like their values; either rounding of the
-	// epsilon to half leaves no half value on the wrong side.
 	static const DirectX::PackedVector::HALF kEpsilonHalf = DirectX::PackedVector::XMConvertFloatToHalf(kTrenchStoreEpsilon);
 
-	// The tile a store texel lands in, brought up to date, or created inside the keep radius; null when refused.
 	auto tileFor = [&](const TrenchTileKey& a_key) -> TrenchTile* {
-		// The MISS is cached too, not just the hit. Most of the map
-		// is untrodden, and a cache that only remembers tiles that
-		// exist does a fresh hash lookup for every texel of empty
-		// ground - which the rolling mirror now walks tens of
-		// thousands of times a frame.
 		if (a_key != cachedKey) {
 			auto it = trenchTiles.find(a_key);
 			cachedKey = a_key;
 			cachedTile = it == trenchTiles.end() ? nullptr : &it->second;
 			if (cachedTile) {
-				// Brought up to date before fresh texels mix in, or
-				// the batch's new depths would sit beside stale ones
-				// under a single clock and decay twice.
 				DecayTrenchTile(*cachedTile);
-				// Written to, so it is recent ground whatever the
-				// LRU thought a moment ago.
 				cachedTile->lastTouch = gameClock.lastHours;
 			}
 		}
 		if (!cachedTile) {
-			// Nor does ground the cap has already pushed out of
-			// reach. Creating it would only hand the next eviction
-			// the same tile back, and the store would thrash
-			// instead of settling on the near field.
 			if (trenchKeepRadiusSq < std::numeric_limits<float>::max()) {
 				const float dx = ((float)a_key.x + 0.5f) * kTrenchTileWorld - centreX;
 				const float dy = ((float)a_key.y + 0.5f) * kTrenchTileWorld - centreY;
@@ -839,14 +643,12 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			fresh.clock = trenchDecayClock;
 			fresh.freshClock = trenchAgeingTotal;
 			fresh.lastTouch = gameClock.lastHours;
-			// Re-seated after the insert, which may have rehashed.
 			cachedTile = &trenchTiles.emplace(a_key, std::move(fresh)).first->second;
 			trenchAccumAdded++;
 		}
 		return cachedTile;
 	};
 
-	// A tile's freshness, allocated on its first dated texel, on the store's clock.
 	auto freshOf = [&](TrenchTile& a_tile) -> uint8_t* {
 		if (a_tile.fresh.empty()) {
 			a_tile.fresh.assign((size_t)kTrenchTileDim * kTrenchTileDim, 0);
@@ -872,33 +674,17 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 				col += 7;
 				continue;
 			}
-			// DISPLACED depth, not total - the shell's own definition
-			// (SampleDisplacedFast in SnowShell.hlsl), reused verbatim.
-			//
-			// The store keeps depth alone, so melt classification cannot come
-			// back with it; storing a basin's total depth would re-inject it as
-			// a dug one, growing a berm it never earned and refilling at trench
-			// speed. A boot print through a basin still stores its own
-			// displacement. Scorch (negative y) is NOT subtracted - it was
-			// displaced and keeps its berm. Campfire melt never reaches here;
-			// that is the exclusion field, rederived each frame.
 			const DirectX::PackedVector::HALF totalBits = src[(size_t)col * 4];
 			if ((totalBits & 0x8000) || totalBits < kEpsilonHalf)
 				continue;
 			const float total = DirectX::PackedVector::XMConvertHalfToFloat(totalBits);
 			const float melted = DirectX::PackedVector::XMConvertHalfToFloat(src[(size_t)col * 4 + 1]);
 			const float depth = std::clamp(total - std::max(melted, 0.0f), 0.0f, 1.0f);
-			// Written, not maxed: the store is the map's record, so snow the
-			// refill has put back must be able to shallow a stored trench.
 			const uint8_t quantised = depth >= kTrenchStoreEpsilon ?
 			                              (uint8_t)std::lround(std::clamp(depth, 0.0f, 1.0f) * 255.0f) :
 			                              (uint8_t)0;
-			// Raise-only, so a zero writes nothing; skipping it only defers the
-			// tile's lazy decay, which is exact at any call cadence. Most of a
-			// slice is untrodden: this was ~3 ms/frame at a 125 m window.
 			if (quantised == 0)
 				continue;
-			// How lately it was cut: 255 now, 0 at kTrackAgeHorizon or never.
 			const float date = dates ? DirectX::PackedVector::XMConvertHalfToFloat(dates[col]) : 0.0f;
 			const uint8_t freshByte = date > 0.0f ?
 			                              (uint8_t)std::clamp((int)std::lround(255.0 - ((double)a_meta.ageingClock - date + sinceCopy) * kTrackFreshPerUnit), 0, 255) :
@@ -908,13 +694,8 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 			const int gx0 = (int)std::floor((worldX - half) / storeTexel);
 			const int gx1 = (int)std::floor((worldX + half - 0.001f) / storeTexel);
 
-			// A map texel is 2.0-13.7 units against the store's 4, so it can
-			// cover several store texels or share one. Splat across every
-			// texel it covers; where several map texels share one, the last
-			// wins, which costs sub-texel detail and nothing else.
 			const int kx0 = FloorDiv(gx0, kTrenchTileDim);
 			if (gx1 >= gx0 && gy1 >= gy0 && ky0 == ky1 && kx0 == FloorDiv(gx1, kTrenchTileDim)) {
-				// One tile under the whole splat: one lookup, then plain byte raises.
 				const TrenchTileKey key{ a_meta.worldspace, kx0, ky0 };
 				TrenchTile* tile = tileFor(key);
 				if (!tile)
@@ -948,17 +729,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					uint8_t& stored = tile->depth[(size_t)ly * kTrenchTileDim + lx];
 					if (quantised > stored)
 						cpuCensus.storeRaises[cpuCensus.trenchStorePath]++;
-					// RAISE ONLY. The map may teach the store what has been dug;
-					// it may not teach it that snow is gone.
-					//
-					// The map is routinely emptier than the store for reasons
-					// unrelated to weather: ClearMap frames, an inject that
-					// reaches nothing, and the frames between a clear and the
-					// inject landing. Removal is decay's job - the store derives
-					// its rate from RefillAmount, so ground behaves the same
-					// whether or not it is being looked at.
 					stored = std::max(stored, quantised);
-					// The latest cut dates it, raise-only like the depth.
 					if (freshByte) {
 						uint8_t& storedFresh = freshOf(*tile)[(size_t)ly * kTrenchTileDim + lx];
 						storedFresh = std::max(storedFresh, freshByte);
@@ -968,7 +739,6 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 		}
 	}
 
-	// Inserting rehashes; the sampler's cached pointer would dangle.
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
 }
@@ -979,8 +749,6 @@ void SnowDeformation::DrainTrenchBands()
 	if (!context)
 		return;
 
-	// StoreTrenchBand writes the store, which the game thread's save and load
-	// callbacks also touch.
 	std::scoped_lock lock(trenchStoreMutex);
 
 	for (int ring = 0; ring < 2; ring++) {
@@ -989,8 +757,6 @@ void SnowDeformation::DrainTrenchBands()
 				continue;
 			D3D11_MAPPED_SUBRESOURCE mapped{};
 			D3D11_MAPPED_SUBRESOURCE clocks{};
-			// DO_NOT_WAIT: a copy issued this frame is still in flight and
-			// simply waits another frame rather than stalling the render thread.
 			if (FAILED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 				continue;
 			if (FAILED(context->Map(trenchClockBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &clocks))) {
@@ -1031,23 +797,14 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 	auto context = globals::d3d::context;
 	auto device = globals::d3d::device;
-	// The map still holds last frame's final content here (nothing has
-	// written it yet this frame), anchored to trenchMapOrigin and
-	// trenchMapPhysOrigin.
 	auto* previous = deformationTextures[0];
 	if (!context || !device || !previous || !previous->resource)
 		return;
 
-	// The jump path folds straight into the store, and the blocking drain below
-	// does too.
 	std::scoped_lock lock(trenchStoreMutex);
 
 	const int dim = (int)deformMapDim;
 
-	// A clear, a cell load, a coc or a fast travel all abandon the whole
-	// window at once; the band ring cannot hold that, so take the map entire.
-	// Every one of these lands on a load boundary or a menu press, which is
-	// the one place a blocking map costs nothing anyone will see.
 	if (a_clearing || std::abs(a_scroll.x) >= kTrenchBandMax || std::abs(a_scroll.y) >= kTrenchBandMax) {
 		D3D11_TEXTURE2D_DESC fullDesc{};
 		fullDesc.Width = deformMapDim;
@@ -1059,8 +816,6 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		fullDesc.Usage = D3D11_USAGE_STAGING;
 		fullDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 
-		// Created and dropped around the copy: 32 MB is too much to hold for a
-		// path that runs at a loading screen.
 		winrt::com_ptr<ID3D11Texture2D> fullStaging;
 		winrt::com_ptr<ID3D11Texture2D> fullClockStaging;
 		D3D11_TEXTURE2D_DESC fullClockDesc = fullDesc;
@@ -1068,14 +823,10 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		if (FAILED(device->CreateTexture2D(&fullDesc, nullptr, fullStaging.put())))
 			return;
 		Util::SetResourceName(fullStaging.get(), "SnowDeformation::TrenchFullStaging");
-		// The dates ride along when they can; without them the trenches store aged.
 		if (!trackClockTexture || FAILED(device->CreateTexture2D(&fullClockDesc, nullptr, fullClockStaging.put())))
 			fullClockStaging = nullptr;
 		else
 			Util::SetResourceName(fullClockStaging.get(), "SnowDeformation::TrenchClockFullStaging");
-		// De-rotated during the copy, so the CPU unpack (and through it the
-		// co-save format) stays layout-independent: saves never encode the
-		// map origin.
 		CopyLogicalBox(fullStaging.get(), previous->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
 		if (fullClockStaging)
 			CopyLogicalBox(fullClockStaging.get(), trackClockTexture->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
@@ -1097,8 +848,6 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 	if (a_scroll.x == 0 && a_scroll.y == 0)
 		return;
 
-	// Destination texel p reads previous texel p + scroll, so the previous
-	// texels nothing reaches any more are the leading band on each axis.
 	const int ring = trenchBandRing;
 	trenchBandRing ^= 1;
 
@@ -1117,8 +866,6 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 			meta.h = std::abs(delta);
 		}
 
-		// The slot still holds an undrained copy: block rather than overwrite
-		// it. Losing a band loses trenches; a rare stall does not.
 		if (trenchBandValid[ring][axis]) {
 			D3D11_MAPPED_SUBRESOURCE stale{};
 			D3D11_MAPPED_SUBRESOURCE staleClocks{};
@@ -1150,10 +897,6 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	if (!settings.PersistTrenches || !trenchInjectTexture || !context)
 		return 0;
 
-	// Taken before the emptiness test, not after: a load on the game thread can
-	// fill the store between the two. Held across the whole tile walk rather
-	// than per sample, because SampleTrenchStore caches a pointer INTO the
-	// store that the same load would invalidate.
 	std::scoped_lock lock(trenchStoreMutex);
 	if (trenchTiles.empty())
 		return 0;
@@ -1162,8 +905,6 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	const float texel = deformWorldSize / (float)deformMapDim;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 
-	// The SAME rects RingCS is dispatched over (one function serves both), so
-	// the inject upload and the ring consumption can never disagree.
 	ArrivalRect rects[2];
 	const int rectCount = ComputeArrivalRects(a_scroll, a_clearing, rects);
 	if (rectCount == 0)
@@ -1173,7 +914,6 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 	bool any = false;
 	for (int i = 0; i < rectCount; i++) {
 		const ArrivalRect& rect = rects[i];
-		// Two bytes a texel: depth, freshness.
 		const size_t bytes = (size_t)rect.w * rect.h * 2;
 		std::fill_n(trenchInjectScratch.begin(), bytes, (uint8_t)0);
 
@@ -1182,9 +922,6 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 		const float minY = windowOrigin.y + (float)rect.y0 * texel;
 		const float maxY = windowOrigin.y + (float)(rect.y0 + rect.h) * texel;
 
-		// Driven by the tiles that exist rather than by the texels that need
-		// filling: the store is sparse, so a full rebuild costs the ground you
-		// have walked and not the 4 M texels of the window.
 		bool painted = false;
 		int matched = 0;
 		int reached = 0;
@@ -1198,13 +935,8 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 				continue;
 			reached++;
 
-			// Standing inside the window counts as use: the LRU should forget
-			// where you have not been, not where you happen not to be digging.
 			tile.lastTouch = gameClock.lastHours;
 
-			// Texel centres inside this tile's world span, widened by one so a
-			// texel just outside still picks up the tile's edge through the
-			// bilinear tap instead of notching the trench at the seam.
 			const int px0 = std::max(rect.x0, (int)std::ceil((tileX - windowOrigin.x) / texel - 0.5f) - 1);
 			const int px1 = std::min(rect.x0 + rect.w - 1, (int)std::floor((tileX + kTrenchTileWorld - windowOrigin.x) / texel - 0.5f) + 1);
 			const int py0 = std::max(rect.y0, (int)std::ceil((tileY - windowOrigin.y) / texel - 0.5f) - 1);
@@ -1215,9 +947,6 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 				uint8_t* row = trenchInjectScratch.data() + (size_t)(py - rect.y0) * rect.w * 2;
 				for (int px = px0; px <= px1; px++) {
 					const float worldX = windowOrigin.x + ((float)px + 0.5f) * texel;
-					// Bilinear, not nearest: the store is finer than the map at
-					// every range setting above 4 units per texel, and dropping
-					// texels thins a trail on the way back in.
 					float fresh = 0.0f;
 					const float depth = SampleTrenchStore(worldspace, worldX, worldY, &fresh);
 					const uint8_t quantised = (uint8_t)std::lround(std::clamp(depth, 0.0f, 1.0f) * 255.0f);
@@ -1228,18 +957,11 @@ uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearin
 			}
 		}
 
-		// Only on a full rebuild, so this costs nothing per frame. The three
-		// counts separate the failures that otherwise look identical: a store
-		// keyed to another worldspace, tiles keyed outside the window, and a
-		// window that simply had nothing to put back.
 		if (full)
 			logger::info("[SNOW DEFORMATION] trench inject rebuild: {} tiles in store, {} in this worldspace, {} inside the window, painted {}",
 				trenchTiles.size(), matched, reached, painted ? "yes" : "no");
 
 		any = any || painted;
-		// Uploaded even when nothing was painted: with the flag on, an
-		// unpainted rect would otherwise hand the CS whatever an older band
-		// left in the texture. Zeroes are the correct answer for bare ground.
 		const D3D11_BOX box{ (UINT)rect.x0, (UINT)rect.y0, 0, (UINT)(rect.x0 + rect.w), (UINT)(rect.y0 + rect.h), 1 };
 		context->UpdateSubresource(trenchInjectTexture.get(), 0, &box, trenchInjectScratch.data(), (UINT)rect.w * 2, 0);
 	}

@@ -11,15 +11,6 @@
 
 #include <future>
 
-// Landscape snow (LANDSCAPE-SNOW-PLAN): the ground snow on the landscape's
-// own meshes. The depth prepass's landscape draws are captured for the ground
-// snow's replay (DrawLandscapeSnowPrepass), and the sun cascades' landscape
-// draws are raised onto the snow's surface: after the game's SetupGeometry
-// such a draw is moved onto LandscapeSnow.hlsl, which reruns CS's landscape VS
-// per vertex, near draws through the hull and domain stages, the rest through
-// a raising VS. RestoreGeometry puts the pipeline back. See CODE-NOTES.md
-// (LandscapeSnow.cpp).
-
 namespace
 {
 	enum : uint32_t
@@ -45,7 +36,6 @@ namespace
 	{
 		bool tessellate = true;
 		bool gate = true;
-		// LandscapeSnow.hlsl's content-gate checks: 1 map tiles, 2 class borders, 4 water, 16 exclusions.
 		int gateMask = 23;
 		bool cull = true;
 		bool measure = false;
@@ -53,19 +43,13 @@ namespace
 		float maxFactor = 64.0f;
 		float guard = 0.05f;
 		float lift = 512.0f;
-		// Past these the base lattice outruns the land's own triangles: the
-		// raising VS alone, no hull (the replay, the sun cascades).
 		float tessReach = 2600.0f;
 		float shadowTessReach = 2000.0f;
-		// Phase 5, land-blended edges: the resolve's depth bonus (log2 odds per
-		// unit of remaining snow) and carve penalty.
 		float blendBonus = 6.0f;
 		float blendPenalty = 16.0f;
-		// Replay loaded land quads the camera passes culled while their snow reaches the view.
 		bool culledLand = true;
 	};
 
-	// Mirrors LandscapeSnowTess.hlsli LsExcl / LsExclAxis.
 	constexpr uint32_t kLsMaxSmallExclusions = 16;
 
 	struct alignas(16) LsCBData
@@ -78,22 +62,14 @@ namespace
 	};
 	STATIC_ASSERT_ALIGNAS_16(LsCBData);
 
-	// Clearings this small can fall between the gate's point checks (a land
-	// triangle's interior lies up to ~45 units from its corners and edge
-	// midpoints); larger ones always cover one.
 	constexpr float kLsSmallExclusionReach = 100.0f;
 
-	// The exclusions a tessellated draw's bound reaches that the gate's point
-	// checks can miss, grid-local, into its CB: every sealed container as its
-	// rectangle, every small clearing as the square of its reach. More than
-	// the CB holds: the draw drops its content gate, so every edge is detailed.
 	int LsFillSmallExclusions(LsCBData& a_data, const std::vector<std::pair<float4, float4>>& a_exclusions, float2 a_boundXY, float a_boundRadius, float2 a_gridOrigin)
 	{
 		uint32_t n = 0;
 		bool overflow = false;
 		for (const auto& [posRadius, dirExtType] : a_exclusions) {
 			const bool sealed = dirExtType.w > 2.5f;
-			// SnowExclusions.hlsli ExclusionReach.
 			const float reach = 1.4f * std::max(posRadius.w, 1.0f) * (1.0f + std::sqrt(dirExtType.x * dirExtType.x + dirExtType.y * dirExtType.y)) +
 			                    1.2f * std::max(std::abs(dirExtType.z), 1.0f);
 			if (!sealed && reach >= kLsSmallExclusionReach)
@@ -113,7 +89,6 @@ namespace
 			auto& axis = a_data.exclusionAxis[n];
 			c[0] = float(double(posRadius.x) - double(a_gridOrigin.x));
 			c[1] = float(double(posRadius.y) - double(a_gridOrigin.y));
-			// A sealed rectangle's x axis is (cos, -sin) of its angle (Statics.cpp).
 			c[2] = sealed ? posRadius.w : reach;
 			c[3] = sealed ? dirExtType.z : reach;
 			axis[0] = sealed ? dirExtType.y : 1.0f;
@@ -138,7 +113,7 @@ namespace
 
 	struct LsEntry
 	{
-		int state = 0;  // 1 compiling, 2 ready, 3 failed
+		int state = 0;
 		std::future<LsShaders> pending;
 		LsShaders shaders;
 		uint64_t tessAttaches = 0;
@@ -205,7 +180,6 @@ namespace
 		kRaise
 	};
 
-	// Snow on Landscape: one depth-prepass landscape draw, as the replay re-issues it.
 	struct LsCapture
 	{
 		const void* geometry = nullptr;
@@ -231,7 +205,6 @@ namespace
 		double compileMs = 0.0;
 	};
 
-	// Per frame: draws that carried small exclusions (and how many), and the ones that overflowed the CB.
 	struct LsExclCounts
 	{
 		uint32_t draws = 0;
@@ -275,31 +248,26 @@ namespace
 		LsTarget targets[kLsMaxTargets];
 		uint32_t targetCount = 0;
 
-		// This frame's surface inputs (Refresh); valid while cbFrame is the frame.
 		uint32_t cbFrame = UINT32_MAX;
 		uint32_t cbCategory = UINT32_MAX;
 		bool cbValid = false;
 		ID3D11ShaderResourceView* srvs[kLsSRVCount]{};
 		ID3D11SamplerState* sampler = nullptr;
 		float4 liveRect{};
-		// Per category, the last refresh's camera adjust and the per-frame buffer's.
 		float4 camUsed[kLsCategories]{};
 		float4 camFrame[kLsCategories]{};
 
-		// The draw in flight.
 		LsMode mode = LsMode::kNone;
 		winrt::com_ptr<ID3D11VertexShader> savedVS;
 		ID3D11ShaderResourceView* savedVSSRVs[kLsSRVCount]{};
 		ID3D11Buffer* savedVSCB[2]{};
 
-		// Snow on Landscape: this frame's depth-prepass landscape draws, the
-		// replay's shaders, and the counts (this frame's, the last full one's).
 		std::vector<LsCapture> captures;
 		std::unordered_set<const void*> captured;
 		uint32_t captureFrame = UINT32_MAX;
 		bool capturePending = false;
 		LsCapture pendingCapture;
-		int shadeState = 0;  // 1 compiling, 2 ready, 3 failed
+		int shadeState = 0;
 		std::future<LssShaders> shadePending;
 		LssShaders shade;
 		LsShadeCounts shadeFrame;
@@ -308,7 +276,6 @@ namespace
 	};
 
 	LsState ls;
-	// Outside LsState: its alignas(16) would pad the struct (C4324).
 	SnowDeformation::ShellCB lsCB{};
 	std::mutex lsMutex;
 
@@ -351,7 +318,6 @@ namespace
 		return out;
 	}
 
-	// Starts the replay's compile on first use; true once it is ready.
 	bool LssPoll()
 	{
 		if (ls.shadeState == 0) {
@@ -369,8 +335,6 @@ namespace
 		return ls.shadeState == 2;
 	}
 
-	// Depth prepass: queue the draw for capture (its IA state is read at
-	// RestoreGeometry). Main pass: count the draws the capture missed.
 	void LsShadeTrack(RE::BSRenderPass* a_pass, uint32_t a_cat, uint32_t a_frame)
 	{
 		if (a_frame != ls.captureFrame) {
@@ -388,7 +352,6 @@ namespace
 		auto* triShape = a_pass->geometry->AsTriShape();
 		if (!triShape || ls.captured.contains(geometry))
 			return;
-		// The replay places model space by the translate alone, as the raise does.
 		const auto& world = a_pass->geometry->world;
 		if (std::abs(world.scale - 1.0f) > 1e-4f)
 			return;
@@ -426,7 +389,6 @@ namespace
 		cap = {};
 	}
 
-	// Where ShellEdgeFade can be above zero: the seam square, within the grid's span.
 	float4 LsLiveRect(const SnowDeformation::ShellCB& a_cb)
 	{
 		const float2 spanLo = a_cb.GridOrigin;
@@ -436,7 +398,6 @@ namespace
 		return { spanLo.x, spanLo.y, spanHi.x, spanHi.y };
 	}
 
-	// LssOffView's planes with its guard band (left, right, bottom, top, near); inside where plane . (p, 1) >= 0, p absolute.
 	using LsViewPlanes = std::array<std::array<double, 4>, 5>;
 
 	LsViewPlanes LsOffViewPlanes(const SnowDeformation::ShellCB& a_cb, float a_guard)
@@ -474,7 +435,6 @@ namespace
 			context->HSSetShaderResources(0, kLsSRVCount, none);
 			context->DSSetShaderResources(0, kLsSRVCount, none);
 		} else if (ls.mode == LsMode::kRaise) {
-			// The game's state cache believes its own VS bindings are still in place.
 			context->VSSetShaderResources(0, kLsSRVCount, ls.savedVSSRVs);
 			context->VSSetConstantBuffers(11, 1, &ls.savedVSCB[0]);
 			context->VSSetConstantBuffers(13, 1, &ls.savedVSCB[1]);
@@ -601,7 +561,6 @@ namespace
 		}
 	}
 
-	// The depth target a Utility draw writes, folded into the per-target table.
 	uint32_t LsTargetIndex(uint32_t a_cat)
 	{
 		auto* context = globals::d3d::context;
@@ -674,7 +633,6 @@ namespace
 
 void SnowDeformation::InstallLandscapeSnow()
 {
-	// Lighting's SetupGeometry side rides SD_BSLightingShader_SetupGeometry (Statics.cpp).
 	logger::info("[SNOW DEFORMATION] Landscape snow: hooking Lighting RestoreGeometry, Utility Setup/RestoreGeometry");
 	stl::write_vfunc<0x7, LS_Lighting_RestoreGeometry>(RE::VTABLE_BSLightingShader[0]);
 	stl::write_vfunc<0x6, LS_Utility_SetupGeometry>(RE::VTABLE_BSUtilityShader[0]);
@@ -688,7 +646,6 @@ float SnowDeformation::LsRiseReach() const
 
 bool SnowDeformation::LsCascadeMeetsSnow()
 {
-	// Shadow maps draw with their cascade's camera in the per-frame buffer.
 	const auto& fb = globals::game::frameBufferCached;
 	const auto& m = fb.GetCameraViewProj();
 	const auto& cam = fb.GetCameraPosAdjust();
@@ -704,7 +661,6 @@ bool SnowDeformation::LsCascadeMeetsSnow()
 	cascadeGateFrame = frame;
 	cascadeGateVP = m;
 	cascadeGateCam = cam;
-	// |x|, |y| <= w of row . (p - cam, 1); z is pancaked, so no near or far plane.
 	FootprintPlanes planes;
 	for (int i = 0; i < 4; i++) {
 		const int r = i >> 1;
@@ -725,8 +681,6 @@ bool SnowDeformation::LandscapeSnowRefresh()
 		!heightTopRaw[heightCurrent] || !heightSkinDepth || !shellSnowSampler || !ShellFootprintHasSnow())
 		return false;
 
-	// DrawShellEarlyPrepass's recipe: last frame's snapshot, placed for this
-	// frame's camera and paired with the fields as they stand now.
 	auto& fb = globals::game::frameBufferCached;
 	ShellCB cb = *lastShellCBData;
 	const uint32_t cat = std::min(ls.cbCategory, kLsCategories - 1);
@@ -737,8 +691,6 @@ bool SnowDeformation::LandscapeSnowRefresh()
 	cb.CameraView = fb.GetCameraView();
 	cb.CameraPosAdjust = fb.GetCameraPosAdjust();
 	cb.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
-	// Shadow maps draw with their cascade's camera in the per-frame buffer: place their
-	// surface (grid, distance terms, tessellation reach) by the player's camera instead.
 	if (LsShadowPass(ls.cbCategory)) {
 		if (auto* camera = RE::Main::WorldRootCamera()) {
 			const auto& eye = camera->world.translate;
@@ -839,7 +791,6 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	if (!ls.drawCB)
 		ls.drawCB = std::make_unique<ConstantBuffer>(ConstantBufferDesc<LsCBData>(), "SnowDeformation::LandscapeSnowCB");
 
-	// Every slot this binds outside the caller's own save set goes back as found.
 	winrt::com_ptr<ID3D11InputLayout> prevLayout;
 	a_context->IAGetInputLayout(prevLayout.put());
 	winrt::com_ptr<ID3D11Buffer> prevVB, prevIB;
@@ -870,8 +821,6 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 	a_context->HSSetConstantBuffers(11, 1, &drawCB);
 	a_context->DSSetConstantBuffers(11, 1, &drawCB);
 
-	// Loaded quads the camera passes culled by their land (lattice outside one view
-	// plane) whose raised box still meets the view; drawn on a captured quad's layout and IB.
 	std::vector<LsCapture> culled;
 	auto* grid = cfg.culledLand && !InInteriorCell() && globals::game::tes ? globals::game::tes->gridCells : nullptr;
 	if (grid) {
@@ -880,7 +829,6 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 		const double rise = double(LsRiseReach());
 		constexpr double kCell = kShellVertexSpacing * 32.0;
 		constexpr double kQuad = kCell * 0.5;
-		// A quad by the 2048-unit square holding its bound's centre.
 		const auto quadOf = [&](double a_x, double a_y) { return std::pair{ int(std::floor(a_x / kQuad)), int(std::floor(a_y / kQuad)) }; };
 		std::vector<std::pair<int, int>> drawn;
 		drawn.reserve(ls.captures.size());
@@ -942,7 +890,6 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 							zHi = std::max(zHi, latticeZ(ix, iy));
 						}
 					}
-					// LssOffView's prism: the submerge floor to the rise reach.
 					const double box[2][3] = { { x0, y0, zLo - 32.0 }, { x0 + kQuad, y0 + kQuad, zHi + rise } };
 					if (!LsBoxMeetsView(guarded, box))
 						continue;
@@ -1031,7 +978,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	ls.curDraw = -1;
 	ls.capturePending = false;
 	const auto& cfg = ls.cfg;
-	// Not in the walled cities while their ground snow is off: no snow layer there to stand for.
 	const bool snowOn = settings.EnableSnowDeformation && !SnowShadersPending(1) && !GroundShellsSuspended();
 	if (!snowOn && !cfg.measure)
 		return;
@@ -1052,7 +998,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		using U = SIE::ShaderCache::UtilityShaderFlags;
 		const uint32_t raw = state->currentPixelDescriptor | state->currentVertexDescriptor;
 		const auto& sky = globals::features::skylighting;
-		// Skylighting's occlusion map draws through RenderDepth (the 512x512 target).
 		if (sky.loaded && sky.inOcclusion)
 			cat = kLsSkyOcclusion;
 		else if (raw & uint32_t(U::RenderShadowmap))
@@ -1067,8 +1012,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	if (frame != ls.lastFrame)
 		LsNewFrame(frame);
 	auto& slot = ls.slots[ls.slotIndex];
-	// The ground snow's prepass draws this frame's depth-prepass landscape; only
-	// the sun cascades are raised.
 	if (snowOn && (cat == kLsDepth || cat == kLsMain) && LssPoll())
 		LsShadeTrack(a_pass, cat, frame);
 	slot.draws[cat]++;
@@ -1079,7 +1022,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 	LsMode want = LsMode::kNone;
 	if (snowOn && cat == kLsShadowSun && settings.SnowCastsShadows) {
 		want = LsMode::kRaise;
-		// The raise works in model space less a translate.
 		const auto& world = a_pass->geometry->world;
 		if (std::abs(world.scale - 1.0f) > 1e-4f)
 			want = LsMode::kNone;
@@ -1094,8 +1036,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		}
 		if (!ls.cbValid)
 			want = LsMode::kNone;
-		// No snowy land this cascade can show: every vertex would keep the land's
-		// height, so the whole cascade draws as the game's own.
 		else if (want != LsMode::kNone && !cascadeRaiseGateOff && !LsCascadeMeetsSnow())
 			want = LsMode::kNone;
 	}
@@ -1172,7 +1112,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 			context->VSSetShader(entry->shaders.vs.get(), nullptr, 0);
 			context->HSSetShader(entry->shaders.hs.get(), nullptr, 0);
 			context->DSSetShader(entry->shaders.ds.get(), nullptr, 0);
-			// The draw re-sends TRIANGLELIST only when the cached topology differs.
 			globals::game::shadowState->GetRuntimeData().topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 			globals::game::stateUpdateFlags->reset(RE::BSGraphics::ShaderFlags::DIRTY_PRIMITIVE_TOPO);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
@@ -1237,9 +1176,6 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 
 void SnowDeformation::NoteMainViewport()
 {
-	// The main pass's depth range, read after the frame's first deferred-pass
-	// lighting draw went out: before its draw the context can still hold an
-	// earlier pass's viewport (the water's reflection draws first, at range 1).
 	auto* state = globals::state;
 	if (mainViewportFrame == state->frameCount || !loaded || !settings.EnableSnowDeformation || !state->inWorld || !globals::deferred->deferredPass ||
 		(state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections)))
@@ -1366,7 +1302,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
 		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess }, { "replayCulled", sc.replayCulled },
 						   { "replaySmallExclusions", excl(sc.replayExcl) }, { "raiseSmallExclusions", excl(sc.raiseExcl) } } } };
-	// The sealed containers the gate tests: centre, half extents, facing (radians).
 	json sealed = json::array();
 	for (const auto& [posRadius, dirExtType] : staticExclusions)
 		if (dirExtType.w > 2.5f && sealed.size() < 32)
@@ -1376,7 +1311,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 	for (uint32_t i = 0; i < kLsCategories; i++)
 		cams[kLsNames[i]] = { { "used", { ls.camUsed[i].x, ls.camUsed[i].y, ls.camUsed[i].z } }, { "perFrameBuffer", { ls.camFrame[i].x, ls.camFrame[i].y, ls.camFrame[i].z } } };
 	out["cameras"] = cams;
-	// Mixed land around the camera (the window's land snow weight 0.2-0.8), for aiming the land-blend A/Bs.
 	if (a_args.contains("mixed") && a_args["mixed"].is_boolean() && a_args["mixed"].get<bool>() && !shellBareScratch.empty()) {
 		const auto* camera = RE::Main::WorldRootCamera();
 		const RE::NiPoint3 eye = camera ? camera->world.translate : RE::NiPoint3{};
@@ -1386,7 +1320,6 @@ json SnowDeformation::LandscapeSnowTool(const json& a_args)
 		const float originY = shellWindowCellY * cellSize;
 		json texels = json::array();
 		uint32_t count = 0;
-		// Every texel with land snow weight in the radius, in tenths (the last bin is exactly 1).
 		uint32_t histogram[11]{};
 		for (int ty = 0; ty < kShellWindowDim; ++ty) {
 			for (int tx = 0; tx < kShellWindowDim; ++tx) {

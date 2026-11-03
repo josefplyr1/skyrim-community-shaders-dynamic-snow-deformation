@@ -1,30 +1,12 @@
-// Snow Deformation for Community Shaders.
-// Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
-// Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
-
-// Blood detail tiles (BloodTiles.cpp; BLOOD-DESIGN.md "Detail tiles"). The
-// blood map's texel is several units, a splatter's contours a fraction of
-// one, so ground that holds blood near the camera gets a tile of a fine
-// atlas. A tile is drawn into a scratch first; these passes fold the scratch
-// into the atlas and date the tile's clock blocks.
-//
-// Pigment textures are read and written as raw UNORM bytes, sRGB-encoded:
-// the scratch is drawn through an sRGB view and the atlas sampled through
-// one. The scratch holds the colour as drawn; the atlas holds it
-// PREMULTIPLIED by concentration, so the shell's filtered taps and the mip
-// chain weigh a colour by how much blood carries it and a mark's rim does
-// not darken toward the empty texels beside it.
-
 cbuffer BloodTileCB : register(b0)
 {
-	int2 TileTexel;  // the tile's first texel on the 8x8 tile grid (the clock and pigment x)
-	int2 TileBlock;  // its first block in the clock atlas
+	int2 TileTexel;
+	int2 TileBlock;
 
 	float2 TileWorldMin;
 	float FineTexel;
-	int Explained;  // MERGE_PIGMENT: the residue was rebuilt this merge
+	int Explained;
 
-	// The blood map as the tile was seeded from it.
 	float2 WindowOrigin;
 	float CoarseTexel;
 	int CoarseDim;
@@ -33,13 +15,10 @@ cbuffer BloodTileCB : register(b0)
 	float BurialNow;
 	float BurialRefills;
 
-	// MipDownCS: the tile's first texel at the level written, its size there.
 	int2 MipTexel;
 	int MipDim;
-	int TileRow;  // the pigment atlas's slice: one row of 8 tiles, from y 0
+	int TileRow;
 
-	// The tile's first texel in the coarse atlases, and the map's logical
-	// texel that is the snapshot's first.
 	int2 SnapTexel;
 	int2 SnapLogical;
 }
@@ -48,9 +27,7 @@ static const int kTileDim = 512;
 static const int kBlockTexels = 8;
 static const int kBlockShift = 3;
 static const float kMinAlpha = 0.02;
-// Coarse texels a side per tile (SnowDeformation.h kBloodTileSnapDim).
 static const int kSnapDim = 80;
-// 8-bit noise between a mark's map deposit and its redraw at the same texel.
 static const float kOwnedSlack = 3.0 / 255.0;
 
 float3 LinearToSrgb(float3 c)
@@ -63,9 +40,6 @@ float3 SrgbToLinear(float3 c)
 	return lerp(c / 12.92, pow(max((c + 0.055) / 1.055, 1e-6), 2.4), step(0.04045, c));
 }
 
-// The concentration's low bit says where a texel came from: odd = a decal was
-// drawn here, even = copied in from the blood map when the tile was
-// allocated. A copy is what the merge may reduce; a deposit never.
 float CopiedAlpha(float a)
 {
 	return float((uint)round(saturate(a) * 255.0) & ~1u) / 255.0;
@@ -94,14 +68,10 @@ int3 CoarsePhys(int2 logical)
 	return int3((logical + MapOrigin) & (CoarseDim - 1), 0);
 }
 
-// A tile starts as the blood map's own picture of its ground, so marks whose
-// decals are gone stay where they were; live decals redraw themselves over it.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID, uint3 gtid : SV_GroupThreadID)
 {
 	if (any(dtid.xy >= (uint)kTileDim))
 		return;
-	// The map's texels under the tile, kept for COPY_RESIDUE; no mark is
-	// redrawn here yet.
 	if (all(dtid.xy < (uint)kSnapDim))
 	{
 		const int2 logical = SnapLogical + int2(dtid.xy);
@@ -141,7 +111,6 @@ int3 CoarsePhys(int2 logical)
 	if (acc.a > kMinAlpha)
 		o = float4(LinearToSrgb(acc.rgb), CopiedAlpha(acc.a));
 	Pigment[int3(TileTexel.x + int(dtid.x), int(dtid.y), TileRow)] = o;
-	// One thread per block dates it.
 	if (all(gtid.xy == 3u))
 		Clock[TileBlock + (int2(dtid.xy) >> kBlockShift)] = newest.y > 0.0 ? float4(newest.x, newest.y, newest.y, 0.0) : float4(0.0, 0.0, 0.0, 0.0);
 }
@@ -153,16 +122,11 @@ Texture2D<float2> ScratchClock : register(t1);
 Texture2D<float4> PrevClock : register(t2);
 RWTexture2D<float4> Clock : register(u0);
 
-// Per block: x = burial clock and y = game hours of the newest deposit,
-// z = game hours of the oldest still showing,
-// w = 1 when what lay here was buried for good and this merge replaces it.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
 {
 	const int blocks = kTileDim / kBlockTexels;
 	if (any(dtid.xy >= (uint)blocks))
 		return;
-	// One texel past the block on every side: the shell's filtered tap at a
-	// mark's rim reaches a texel into the next block, which must be dated too.
 	float2 newest = 0.0;
 	for (int y = -1; y <= kBlockTexels; y++)
 	{
@@ -201,7 +165,6 @@ Texture2D<float4> Snapshot : register(t0);
 Texture2D<float4> Redrawn : register(t1);
 RWTexture2D<float4> Residue : register(u0);
 
-// owned: a redrawn mark reached the seeded value here.
 float4 SnapshotAt(int2 i, out bool owned)
 {
 	const float4 s = Snapshot.Load(int3(SnapTexel + i, 0));
@@ -209,11 +172,6 @@ float4 SnapshotAt(int2 i, out bool owned)
 	return s;
 }
 
-// Per coarse texel, premultiplied: the blood the tile was seeded with that no
-// mark redrawn into it accounts for. The map keeps each texel's strongest
-// deposit, so a texel a redrawn mark reached is that mark's own blur; what
-// lay under it is the mean of the neighbours no redrawn mark reached, empty
-// ones counting as none.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
 {
 	if (any(dtid.xy >= (uint)kSnapDim))
@@ -261,7 +219,6 @@ Texture2D<float4> ClockAtlas : register(t2);
 Texture2D<float4> Residue : register(t3);
 RWTexture2DArray<float4> Pigment : register(u0);
 
-// The seed's own sampling of the map, over the residue.
 float4 CopyResidue(uint2 texel)
 {
 	const float2 world = TileWorldMin + (float2(texel) + 0.5) * FineTexel;
@@ -283,8 +240,6 @@ float4 CopyResidue(uint2 texel)
 	return acc.a > kMinAlpha ? float4(LinearToSrgb(acc.rgb), CopiedAlpha(acc.a)) : 0.0;
 }
 
-// The blood map's own blend: the pigment as drawn, the concentration's
-// high-water mark.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
 {
 	if (any(dtid.xy >= (uint)kTileDim))
@@ -294,7 +249,6 @@ float4 CopyResidue(uint2 texel)
 	float4 o = PrevPigment.Load(p);
 	if (ClockAtlas.Load(int3(TileBlock + (int2(dtid.xy) >> kBlockShift), 0)).w > 0.5)
 		o = 0.0;
-	// A copy keeps only what the residue says no redrawn mark accounts for.
 	if (Explained != 0 && IsCopied(o.a))
 	{
 		const float4 r = CopyResidue(dtid.xy);
@@ -314,8 +268,6 @@ float4 CopyResidue(uint2 texel)
 Texture2D<float4> Src : register(t0);
 RWTexture2DArray<float4> Dst : register(u0);
 
-// One level of the tile's own mip chain, from a copy of the level above:
-// tiles never filter into their neighbours in the atlas.
 [numthreads(8, 8, 1)] void main(uint3 dtid : SV_DispatchThreadID)
 {
 	if (any(dtid.xy >= (uint)MipDim))
