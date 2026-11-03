@@ -562,6 +562,7 @@ SnowDeformation::SnowCondition SnowDeformation::SnowConditionAtHeight(float a_z)
 	return SnowConditionAt((debugClimateTemperatureOn ? debugClimateTemperature : snowClimate.temperature) - kClimateLapse * (a_z - playerZ));
 }
 
+#if SD_WITH_BODY_COAT
 SnowDeformation::CoatAging SnowDeformation::ComputeCoatAging(RE::Actor* a_actor) const
 {
 	CoatAging aging;
@@ -674,4 +675,5 @@ std::vector<std::string> SnowDeformation::CoatAgingLines() const
 	lines.push_back("Not measured yet: shelter from snowfall. The game's precipitation occlusion map is on the GPU; stage A1 reads it there.");
 	return lines;
 }
+#endif
 

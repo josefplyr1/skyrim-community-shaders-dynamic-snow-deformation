@@ -1251,10 +1251,12 @@ struct BSLightingShader_GetPixelTechnique
 		uint32_t pixelTechnique = rawTechnique;
 
 		pixelTechnique &= ~0b111000000u;
+#if SD_WITH_BODY_COAT
 		// Snow on bodies: tangent-space skins lose Skinned below, so the coat keys skinned draws itself.
 		if (globals::features::snowDeformation.BodyCoatPixelKey(rawTechnique)) {
 			pixelTechnique |= static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::SnowBodyCoat);
 		}
+#endif
 		if ((pixelTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
 			pixelTechnique &= ~static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::Skinned);
 		}

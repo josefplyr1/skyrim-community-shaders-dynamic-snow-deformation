@@ -2,6 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowSwitches.hlsli"
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -263,7 +264,7 @@ Texture2D<float4> SnowHeightMap : register(t8);
 SamplerState SnowSampler : register(s0);
 #endif
 
-#ifdef PSHADER
+#if defined(PSHADER) && SD_WITH_SPELLS
 #	define SNOW_RUNE_GLYPHS
 #endif
 #if defined(PSHADER) && (defined(PATCH) || defined(SNOW_OBJECT_PRINTS))
@@ -3063,7 +3064,9 @@ PS_OUTPUT main(VS_OUTPUT input)
 	ssi.pom = 1.0;
 #ifdef PATCH
 	ssi.geoNz = -1.0;
+#ifdef SNOW_RUNE_GLYPHS
 	ssi.markBase = kMarkAnyBase;
+#endif
 #else
 	ssi.geoNz = abs(geoFacing.z);
 	ssi.markBase = input.WorldPos.z + ShellCameraPosAdjust.z - input.Lift;
@@ -3382,7 +3385,9 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	ssi.detail = 1.0;
 	ssi.pom = 1.0;
 	ssi.geoNz = -1.0;
+#ifdef SNOW_RUNE_GLYPHS
 	ssi.markBase = kMarkAnyBase;
+#endif
 	const SkinShadeResult ssr = SkinShadeSurface(ssi, float3(grid.zw, sqrt(saturate(1.0 - dot(grid.zw, grid.zw)))));
 
 	PS_OUTPUT psout;

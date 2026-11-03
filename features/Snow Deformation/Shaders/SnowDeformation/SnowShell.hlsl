@@ -2,6 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowSwitches.hlsli"
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/GBuffer.hlsli"
@@ -215,8 +216,12 @@ SamplerState SnowSampler : register(s0);
 #	define SNOW_NOISE_TABLE
 #endif
 
-#define SNOW_RUNE_GLYPHS
-#define SNOW_BLOOD_TILES
+#if SD_WITH_SPELLS
+#	define SNOW_RUNE_GLYPHS
+#endif
+#if SD_WITH_BLOOD
+#	define SNOW_BLOOD_TILES
+#endif
 #define SNOW_FIELD_DIMS
 #include "SnowDeformation/SnowFields.hlsli"
 
@@ -1312,8 +1317,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	float scorchRaw = 0.0;
+#if SD_WITH_SPELLS
 	[branch] if (!pixelUntouched)
 		scorchRaw = SampleScorch(gridLocal);
+#endif
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
 	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
@@ -1363,11 +1370,14 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		kSnowAlbedo = SnowColor::SetAlbedo(kSnowAlbedo, SnowTextureIsLinear != 0.0);
 	}
+#if SD_WITH_SPELLS
 	{
 		float scorch = scorchRaw * SpellShading.x;
 		[branch] if (scorch > 0.001)
 			kSnowAlbedo = lerp(kSnowAlbedo, kSnowAlbedo * float3(0.30, 0.27, 0.26), saturate(scorch));
 	}
+#endif
+#ifdef SNOW_BLOOD_TILES
 	float bloodFresh = 0.0;
 	float4 blood = SampleBlood(input.GridLocal, bloodFresh);
 	float4 bloodPaint;
@@ -1380,6 +1390,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		kSnowAlbedo = lerp(kSnowAlbedo, paintRgb, saturate(blood.a * BloodLook.x));
 	}
 	const float bloodCover = blood.a;
+#endif
+#ifdef SNOW_RUNE_GLYPHS
 	RuneGlyph rune = SampleRunes(worldXYPS, gDeferredGridDx, gDeferredGridDy, kMarkAnyBase);
 	[branch] if (rune.colour.a > 0.004)
 	{
@@ -1387,6 +1399,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float3 runeNormal = normalize(rune.tangent * rune.normalTS.x + rune.bitangent * rune.normalTS.y + normalWS * rune.normalTS.z);
 		normalWS = normalize(lerp(normalWS, runeNormal, rune.colour.a));
 	}
+#endif
 	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
 	float kSnowRoughness = 0.6;
 	float3 kSnowF0 = float3(0.028, 0.028, 0.028);
@@ -1404,8 +1417,12 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 
 	snowRoughness *= 1.0 - wetLook.x;
+#ifdef SNOW_BLOOD_TILES
 	snowRoughness = lerp(snowRoughness, 0.22, saturate(bloodCover * 2.0) * bloodFresh * BloodLook2.y);
 	const float glintsLeft = wetLook.y * (1.0 - saturate(bloodCover * 3.0));
+#else
+	const float glintsLeft = wetLook.y;
+#endif
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -1525,7 +1542,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
+#ifdef SNOW_RUNE_GLYPHS
 		glintUV, glintDuvdx, glintDuvdy, rune.specular);
+#else
+		glintUV, glintDuvdx, glintDuvdy, float4(0.0, 0.0, 0.0, 0.0));
+#endif
 	float3 specularLobe = sunLit.specularLobe;
 	float3 diffuseLobe = sunLit.diffuseLobe;
 	float3 directDiffuse = sunLit.directDiffuse;
@@ -1538,7 +1559,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float2 clusterUV;
 		ShellClusterCoords(input.WorldPos, viewZ, clusterUV);
 		SnowLights::AccumulatePointLights(snowMtl, shadePos, shadePos + ShellCameraPosAdjust.xyz,
+#ifdef SNOW_RUNE_GLYPHS
 			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), rune.specular,
+#else
+			normalWS, V, viewZ, clusterUV, glintUV, glintDuvdx, glintDuvdy, float4(-1.0, 0.0, 0.0, 0.0), float4(0.0, 0.0, 0.0, 0.0),
+#endif
 			directDiffuse, directSpecular, markSpecular);
 	}
 
@@ -1558,9 +1583,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	directDiffuse *= Color::PBRLightingScale;
 	directSpecular *= Color::PBRLightingScale;
 	diffuseLobe *= Color::PBRLightingScale;
+#ifdef SNOW_RUNE_GLYPHS
 	directSpecular = lerp(directSpecular, markSpecular, rune.colour.a);
 	specularLobe *= 1.0 - rune.colour.a;
 	float3 preLit = ambientPart + directDiffuse + rune.emission;
+#else
+	float3 preLit = ambientPart + directDiffuse;
+#endif
 
 	float alpha = coverageAlpha;
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
@@ -1568,7 +1597,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	PS_OUTPUT psout;
 	psout.Diffuse = float4(preLit, alpha);
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
+#ifdef SNOW_RUNE_GLYPHS
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), (1.0 - snowRoughness) * (1.0 - rune.colour.a), stochasticBlend);
+#else
+	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
+#endif
 	psout.Albedo = float4(diffuseLobe, alpha);
 	psout.Specular = float4(directSpecular, alpha);
 	psout.Reflectance = float4(specularLobe, alpha);

@@ -7,6 +7,7 @@
 #include "Globals.h"
 #include "Utils/Game.h"
 
+#if SD_WITH_SPELLS
 static constexpr float kSpellStreamReachDefault = 900.0f;
 static constexpr float kSpellReachMin = 200.0f;
 static constexpr float kSpellReachMax = 4000.0f;
@@ -30,9 +31,11 @@ static constexpr float kImpactRadiusDefault = 90.0f;
 static constexpr float kExplosionRate = 4.0f;
 static constexpr float kBlastDuration = 0.35f;
 static constexpr float kBlastMinHold = 0.05f;
+#endif
 static constexpr float kSpellReferenceMagnitude = 8.0f;
 static constexpr float kSpellMagnitudeMin = 0.35f;
 static constexpr float kSpellMagnitudeMax = 3.0f;
+#if SD_WITH_SPELLS
 static constexpr float kSpellTrailBreak = 512.0f;
 static constexpr float kMinSpellStrength = 0.04f;
 static constexpr float kMinSpellSpeed = 1.0f;
@@ -50,7 +53,9 @@ static constexpr float kAtronachDeathRate = 4.0f;
 static constexpr float kAtronachDeathHold = 1.2f;
 static constexpr float kFireDeathFuseSeconds = 3.0f;
 static constexpr float kInnateDeathWindow = 0.5f;
+#endif
 static constexpr float kElementalImmunity = 90.0f;
+#if SD_WITH_SPELLS
 static constexpr float kBlastRampSeconds = 0.09f;
 static constexpr float kElementalMemory = 6.0f;
 static constexpr float kShoutMouthOffset = 60.0f;
@@ -78,12 +83,15 @@ static constexpr float kPitScaleMin = 0.8f;
 static constexpr float kPitScaleMax = 2.2f;
 static constexpr float kStreamPitScale = 0.65f;
 static constexpr float kTrailPitScale = 0.5f;
+#endif
 static constexpr float kSelfAreaToUnits = 21.0f;
 static constexpr float kSelfAreaReachMin = 60.0f;
 static constexpr float kSelfAreaReachMax = 1400.0f;
+#if SD_WITH_SPELLS
 static constexpr float kCloakStrikeInner = 0.45f;
 static constexpr float kBlastTravelWindow = 0.05f;
 static constexpr float kBlastLandingReach = 220.0f;
+#endif
 SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectSetting* a_effect)
 {
 	if (!a_effect)
@@ -107,6 +115,7 @@ SnowDeformation::SpellElement SnowDeformation::ClassifyElement(const RE::EffectS
 	return SpellElement::None;
 }
 
+#if SD_WITH_SPELLS
 SnowDeformation::SpellMark SnowDeformation::MarkForElement(SpellElement a_element)
 {
 	switch (a_element) {
@@ -798,6 +807,7 @@ void SnowDeformation::ConsiderActorAuras(RE::Actor* a_actor, CloakState& a_cloak
 	emitter.rateScale = a_cloak.rateScale * heightFade;
 	spellEmitters.push_back(emitter);
 }
+#endif
 
 bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out)
 {
@@ -878,6 +888,7 @@ bool SnowDeformation::AuraFromSpellList(const RE::TESSpellList* a_list, InnateAu
 	return true;
 }
 
+#if SD_WITH_SPELLS
 bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out)
 {
 	auto* race = a_actor ? a_actor->GetRace() : nullptr;
@@ -885,6 +896,7 @@ bool SnowDeformation::AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord&
 		return false;
 	return AuraFromSpellList(race, a_out) || AuraFromSpellList(a_actor->GetActorBase(), a_out);
 }
+#endif
 
 const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::Actor* a_actor)
 {
@@ -917,6 +929,7 @@ const SnowDeformation::InnateAuraRecord* SnowDeformation::ResolveInnateAura(RE::
 	return baseIt->second.element != SpellElement::None ? &baseIt->second : nullptr;
 }
 
+#if SD_WITH_SPELLS
 void SnowDeformation::OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position)
 {
 	a_state.blasted = true;
@@ -1846,3 +1859,4 @@ void SnowDeformation::GatherSpellEmitters()
 	spellStats.emitters = static_cast<uint>(spellEmitters.size());
 	spellStats.armed = static_cast<uint>(projectileBlasts.size());
 }
+#endif

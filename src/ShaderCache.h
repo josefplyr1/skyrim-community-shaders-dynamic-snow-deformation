@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Features/SnowDeformation/SnowSwitches.h"
 #include <BS_thread_pool.hpp>
 #include <atomic>
 #include <deque>
@@ -710,7 +711,9 @@ namespace SIE
 			TruePbr = 1 << 3,
 			Deferred = 1 << 4,
 			LandscapeSeams = 1 << 5,
+#if SD_WITH_BODY_COAT
 			SnowBodyCoat = 1 << 6,  // pixel key, and the vertex key with it; vanilla's 6 to 8 reach neither
+#endif
 			// Community Shaders end
 			Specular = 1 << 9,
 			SoftLighting = 1 << 10,

@@ -232,6 +232,7 @@ void SnowDeformation::TickSnowEvents()
 		return;
 	}
 
+#if SD_WITH_SPELLS
 	const float stickiness = GetSnowCondition().stickiness;
 	for (const auto& blast : activeBlasts) {
 		if (blast.mark != SpellMark::Carve && blast.mark != SpellMark::Pit)
@@ -263,6 +264,7 @@ void SnowDeformation::TickSnowEvents()
 		PushSnowEvent(event);
 	}
 	std::erase_if(snowEventMarksSeen, [frame](const auto& a_entry) { return a_entry.second != frame; });
+#endif
 
 	snowEventsPublished.swap(snowEventsBuilding);
 	snowEventsBuilding.clear();

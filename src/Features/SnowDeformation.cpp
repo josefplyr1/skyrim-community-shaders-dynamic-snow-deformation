@@ -300,7 +300,9 @@ void SnowDeformation::CreateDeformationTextures()
 		snowClimate.ageingRebase = 0.0f;
 	}
 
+#if SD_WITH_BLOOD
 	CreateBloodTextures(texDesc);
+#endif
 
 	{
 		auto device = globals::d3d::device;
@@ -1068,7 +1070,9 @@ void SnowDeformation::PrepassSimulation()
 	TickAccumulation();
 	TickSnowCondition();
 	TickSnowClimate();
+#if SD_WITH_BODY_COAT
 	TickBodyCoat();
+#endif
 
 	if (SnowShadersPending(1))
 		return;
@@ -1086,7 +1090,9 @@ void SnowDeformation::PrepassSimulation()
 		return;
 
 	spanClock.Lap(CpuCensus::kSpanPrepassHead);
+#if SD_WITH_SPELLS
 	UpdateLightningArcs(globals::game::deltaTime ? *globals::game::deltaTime : 1.0f / 60.0f);
+#endif
 
 	deformGateBareFrames = DeformationWindowHasReaders() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
 	if (deformGateBareFrames >= kShellGateBareFrames) {
@@ -1094,8 +1100,10 @@ void SnowDeformation::PrepassSimulation()
 			deformSuspended = true;
 			logger::debug("[SNOW DEFORMATION] Deformation passes suspended: no snow depth in window");
 		}
+#if SD_WITH_BODY_COAT
 		if (BodyCoatFallDue())
 			DrawContactCapture(globals::d3d::context, true);
+#endif
 		return;
 	}
 	if (deformSuspended) {
@@ -1177,7 +1185,9 @@ void SnowDeformation::PrepassSimulation()
 		clearRequested = true;
 
 	perFrameData.ClearMap = clearRequested;
+#if SD_WITH_BLOOD
 	bloodTilesDrop = bloodTilesDrop || clearRequested;
+#endif
 	clearRequested = false;
 
 	{
@@ -1210,13 +1220,17 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
 	spanClock.Lap(CpuCensus::kSpanTrenchInject);
 
+#if SD_WITH_SPELLS
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 	GatherSpellEmitters();
 	globals::profiler->EndPass();
+#endif
 
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
+#if SD_WITH_EVENTS
 	TickSnowEvents();
+#endif
 	spanClock.Lap(CpuCensus::kSpanGather);
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
@@ -1306,8 +1320,11 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
 		perFrameData.ClearMap == 0 &&
-		perFrameData.ContactDim < 0.5f &&
-		printSpellMarks.empty();
+		perFrameData.ContactDim < 0.5f
+#if SD_WITH_SPELLS
+		&& printSpellMarks.empty()
+#endif
+		;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
 	deformIdleBlockers =
 		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
@@ -1317,8 +1334,11 @@ void SnowDeformation::PrepassSimulation()
 		(perFrameData.ClearMap != 0 ? 16u : 0u) |
 		(deformFlagActive ? 32u : 0u) |
 		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
-		(perFrameData.ContactDim > 0.5f ? 128u : 0u) |
-		(!printSpellMarks.empty() ? 256u : 0u);
+		(perFrameData.ContactDim > 0.5f ? 128u : 0u)
+#if SD_WITH_SPELLS
+		| (!printSpellMarks.empty() ? 256u : 0u)
+#endif
+		;
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
 	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && perFrameData.TrackRebase <= 0.0f &&
 	                    !(debugForceDeformationUpdate || debugContactView);
@@ -1436,6 +1456,7 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->EndPass();
 				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
+#if SD_WITH_BLOOD
 				if (bloodMapTexture && bloodClockTexture) {
 					if (auto* bloodRing = GetBloodRingCS()) {
 						ID3D11UnorderedAccessView* bloodUavs[2] = { bloodMapTexture->uav.get(), bloodClockTexture->uav.get() };
@@ -1445,6 +1466,7 @@ void SnowDeformation::PrepassSimulation()
 						context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 					}
 				}
+#endif
 			} else {
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}

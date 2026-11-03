@@ -5,6 +5,7 @@
 #pragma once
 
 #include "Buffer.h"
+#include "Features/SnowDeformation/SnowSwitches.h"
 
 #include <d3d11_1.h>
 #include <deque>
@@ -59,8 +60,10 @@ public:
 	static constexpr float kStampModeBody = 40.0f;
 	static constexpr float kStampImpactScale = 0.45f;
 	static constexpr float kStampModeShove = kStampImpactScale;
+#if SD_WITH_SPELLS
 	static constexpr size_t kMaxSpellEmitters = 64;
 	static constexpr size_t kSpellEmitterCeiling = 192;
+#endif
 	static constexpr uint kSpellStampReserve = 48;
 
 	static constexpr float kUnitsPerMeter = 70.0f;
@@ -595,8 +598,10 @@ public:
 
 	Texture2D* bloodMapTexture = nullptr;
 	Texture2D* bloodClockTexture = nullptr;
+#if SD_WITH_BLOOD
 	ID3D11ShaderResourceView* GetBloodMapSRV() const { return bloodMapTexture ? bloodMapTexture->srv.get() : nullptr; }
 	ID3D11ShaderResourceView* GetBloodClockSRV() const { return bloodClockTexture ? bloodClockTexture->srv.get() : nullptr; }
+#endif
 	bool bloodMapWritten = false;
 	float4 bloodWrittenBox = {};
 	bool bloodLatchOff = false;
@@ -717,8 +722,10 @@ public:
 	winrt::com_ptr<ID3D11Buffer> bloodDiscBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodDiscSRV;
 	static constexpr uint32_t kBloodMaxDiscs = 256;
+#if SD_WITH_BLOOD
 	ID3D11ComputeShader* bloodRingCS = nullptr;
 	ID3D11ComputeShader* GetBloodRingCS();
+#endif
 	bool bloodShadersFailed = false;
 	bool bloodResourcesLogged = false;
 	bool bloodDepositLogged = false;
@@ -728,13 +735,17 @@ public:
 	uint32_t bloodDepositsLast = 0;
 	uint32_t bloodDiscsLast = 0;
 	uint32_t bloodSeenLive = 0;
+#if SD_WITH_BLOOD
 	void CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc);
+#endif
 	bool EnsureBloodResources();
 	void ReleaseBloodShaders();
+#if SD_WITH_BLOOD
 	/** @brief From the capture hook: a decal-mode Lighting draw whose diffuse is a blood texture. */
 	void CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned);
 	/** @brief Draws this frame's captures and discs into the blood map. After the object height raster, before the shells. */
 	void RenderBloodCapture();
+#endif
 	/** @brief One list of captures through the rigid and skinned blood shaders; a_rigidVS / a_skinnedVS replace the map's vertex shaders, a_instances the map's four seam instances. */
 	uint32_t DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS = nullptr, UINT a_instances = 4u, bool a_ownClock = false, ID3D11VertexShader* a_skinnedVS = nullptr);
 	/** @brief Joins the frame's overlay set: the decal's screen rectangle, and at the frame's first decal the pre-decal copy. Once per geometry. */
@@ -772,8 +783,11 @@ public:
 	std::unordered_set<std::string> decalOverlayNamesLogged;
 	uint32_t decalMasksLast = 0;
 	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
+#if SD_WITH_API
 	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
+#endif
 
+#if SD_WITH_BLOOD
 	static constexpr uint32_t kBloodTileDim = 512;
 	static constexpr uint32_t kBloodTilesAcross = 8;
 	static constexpr uint32_t kBloodMaxTiles = kBloodTilesAcross * kBloodTilesAcross;
@@ -806,6 +820,7 @@ public:
 		int32_t snapLogical[2]{};
 		bool snapValid = false;
 	};
+#endif
 	struct BloodFineRequest
 	{
 		BloodCapture draw;
@@ -832,6 +847,7 @@ public:
 		int32_t SnapLogical[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(BloodTileCB);
+#if SD_WITH_BLOOD
 	enum BloodTileShader : uint32_t
 	{
 		kBloodTileSeed,
@@ -842,7 +858,9 @@ public:
 		kBloodTileShaderCount
 	};
 	BloodTile bloodTiles[kBloodMaxTiles];
+#endif
 	std::vector<BloodFineRequest> bloodFineQueue;
+#if SD_WITH_BLOOD
 	uint32_t bloodTileEpoch = 1;
 	uint32_t bloodTilesLive = 0;
 	uint32_t bloodTileMergesLast = 0;
@@ -852,12 +870,14 @@ public:
 	bool bloodTilesFailed = false;
 	bool bloodTilesLogged = false;
 	bool bloodTilesDrop = false;
+#endif
 	winrt::com_ptr<ID3D11Texture2D> bloodPreSkinDepth;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodPreSkinDepthSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodPreSkinDepthUAV;
 	bool bloodPreSkinDepthThisFrame = false;
 	/** @brief bloodPreSkinDepth at a_width x a_height (the skins' viewport extent), recreated when that changes. */
 	bool EnsureBloodPreSkinDepth(UINT a_width, UINT a_height);
+#if SD_WITH_BLOOD
 	winrt::com_ptr<ID3D11Texture2D> bloodTileSnapshot;
 	winrt::com_ptr<ID3D11ShaderResourceView> bloodTileSnapshotSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bloodTileSnapshotUAV;
@@ -908,7 +928,9 @@ public:
 	void MergeBloodTile(ID3D11DeviceContext* a_context, uint32_t a_slot, const std::vector<BloodDisc>& a_discs);
 	/** @brief Draws this frame's detail requests into their tiles. Before the blood map takes the same frame's marks, so a new tile is not seeded with them. */
 	void RenderBloodTiles(const std::vector<BloodDisc>& a_discs);
+#endif
 
+#if SD_WITH_SPELLS
 	static constexpr uint32_t kRuneMaxTiles = 4;
 	static constexpr uint32_t kRuneTileDim = 512;
 	static constexpr float kRuneTileHalf = 110.0f;
@@ -1010,6 +1032,7 @@ public:
 	void BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bind);
 	/** @brief Clears the atlas and draws this frame's rune decals into their tiles, and finds each frost mark's uv plane and cells. After the blood capture, before the shells. */
 	void RenderRuneCapture();
+#endif
 
 	static constexpr uint32_t kUndulationFieldDim = 2048;
 	static constexpr float kUndulationFieldTexel = 16.0f;
@@ -1380,6 +1403,7 @@ public:
 	bool shellStatsIssued[kShellStatsRing] = {};
 	int shellStatsRing = 0;
 	ShellStatsResult shellStatsLast;
+#if SD_WITH_VOLUME
 	bool voxelPipelineStatsEnabled = false;
 	winrt::com_ptr<ID3D11Query> voxelStatsQuery[kShellStatsRing][2];
 	bool voxelStatsIssued[kShellStatsRing] = {};
@@ -1387,6 +1411,7 @@ public:
 	ShellStatsResult voxelStatsLast;
 	bool EnsureVoxelStatsQueries();
 	void ReadVoxelStatsQueries(ID3D11DeviceContext* a_context);
+#endif
 	ShellStatsResult staticsStatsLast;
 	ShellStatsResult patchStatsLast;
 	bool EnsureShellStatsQueries();
@@ -1578,6 +1603,7 @@ public:
 
 	ConstantBuffer* shellCB = nullptr;
 
+#if SD_WITH_SPELLS
 	struct LightningArc
 	{
 		RE::NiPoint3 from;
@@ -1606,9 +1632,11 @@ public:
 	winrt::com_ptr<ID3D11BlendState> arcBlendState;
 	winrt::com_ptr<ID3D11DepthStencilState> arcDepthState;
 	winrt::com_ptr<ID3D11RasterizerState> arcRasterState;
+#endif
 
 	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and trench detail textures - a second copy would drift. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
+#if SD_WITH_SPELLS
 	ID3D11VertexShader* GetLightningArcVS();
 	ID3D11PixelShader* GetLightningArcPS();
 	bool EnsureLightningArcResources();
@@ -1619,6 +1647,7 @@ public:
 	void UpdateLightningArcs(float a_deltaTime);
 	/** @brief Draws the live arcs. Called AFTER the deferred composite - an emissive overlay lit by nothing, which is what a bolt is. */
 	void DrawLightningArcs();
+#endif
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
 	/** @brief Skin draws' raster state: the shell's plus SkinDepthBias / SkinSlopeDepthBias, rebuilt when either slider moves. The decal variant adds the game's decal depth bias (-1, slope -0.65, clamp -100) for skins of decal-mode draws (CapturedSnowStatic::decalDepth). Implemented in SnowDeformation/Shell.cpp. */
 	ID3D11RasterizerState* GetSkinRasterState(bool a_decal = false);
@@ -1804,6 +1833,7 @@ public:
 	void InstallStaticsCaptureHook();
 	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
 	void InstallCameraHook();
+#if SD_WITH_API
 	/** @brief Queues the Papyrus native registration. */
 	void InstallAPI();
 	/** @brief Loaded and switched on. */
@@ -1814,16 +1844,23 @@ public:
 	float APISnowDepthAtRef(RE::TESObjectREFR* a_ref);
 	/** @brief The accumulation scalar 0..1, 0 when accumulation or the feature is off. */
 	float APISnowAccumulation() const;
+#endif
 	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person, mount, bleedout (ragdoll, death), dragon and PCTransition, plus any non-free camera while the player is down: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would; while knocked down, ragdolled or dead, lift it straight up instead. */
 	void ClampCameraAboveSnow();
+#if SD_WITH_ITEMS
 	/** @brief Holds dropped items at their depth in the snow. From the camera-update hook: before the frame's first pass, main thread. */
 	void ItemSinkUpdate();
+#endif
+#if SD_WITH_SPELLS
 	/** @brief Raises the rune and frost pieces the spell scan queued. From the camera-update hook: main thread, before the frame's first pass. */
 	void ApplySpellLifts();
+#endif
+#if SD_WITH_ITEMS
 	/** @brief Draws creatures lighter than the player standing in the snow by weight. From the camera-update hook: main thread, before the frame's first pass. */
 	void CreatureSinkUpdate();
+#endif
 	uint8_t cameraProbeState = 0;
 	uint32_t cameraProbeFired = 0;
 	uint32_t cameraProbeCamState = 0;
@@ -2439,6 +2476,7 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(HeightGhostCB);
 	ConstantBuffer* heightGhostCB = nullptr;
 
+#if SD_WITH_VOLUME
 	static constexpr uint kVoxelDim = 256;
 	static constexpr uint kVoxelDimWide = 512;
 	static constexpr uint kVoxelDimFlatZ = 128;
@@ -2451,6 +2489,7 @@ public:
 	/** @brief Live voxel size in world units; changing it invalidates the accumulated volume (the torus origin is in voxel units). */
 	float VoxelSizeLive() const { return std::clamp(settings.VolumeVoxelSize, 1.0f, 24.0f); }
 	float voxelSizeBuilt = 0.0f;
+#endif
 
 	/** @brief Layout must match VoxelCB in SnowVoxelCapture.hlsl. */
 	struct alignas(16) VoxelVolumeCB
@@ -2482,6 +2521,7 @@ public:
 		int Dims[4];
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelVolumeCB);
+#if SD_WITH_VOLUME
 	DirectX::XMFLOAT3 VoxelLevelCentre(uint a_level) const;
 	/** @brief Frames between a level's rebuilds: 2^L. */
 	uint32_t VoxelLevelPeriod(uint a_level) const;
@@ -2540,6 +2580,7 @@ public:
 	/** @brief Fills every per-level field of the volume CB from live state; ScrollDelta and the clear flag are the caller's. Implemented in SnowDeformation/Volume.cpp. */
 	void FillVoxelCB(uint a_level, VoxelVolumeCB& a_cb) const;
 	int voxelSliceLevel = 0;
+#endif
 
 	/** @brief V1b draw constants (b2 on the VOXEL variant of SnowStaticsShell). Layout must match VoxelDrawCB there. */
 	struct alignas(16) VoxelDrawCB
@@ -2553,13 +2594,16 @@ public:
 		float4 VoxDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
+#if SD_WITH_VOLUME
 	static constexpr float kVoxelShelterDust = 0.1f;
 
 	ID3D11ComputeShader* voxelSeedCS = nullptr;
 	ID3D11ComputeShader* voxelBlurZCS = nullptr;
 	ID3D11ComputeShader* voxelBlurCS = nullptr;
 	ConstantBuffer* voxelDrawCB = nullptr;
+#endif
 	ConstantBuffer* voxelDebugCB = nullptr;
+#if SD_WITH_VOLUME
 	winrt::com_ptr<ID3D11SamplerState> voxelWrapSampler;
 	ID3D11ComputeShader* voxelBrickListCS = nullptr;
 	ID3D11VertexShader* voxelShellVS = nullptr;
@@ -2579,8 +2623,10 @@ public:
 	ID3D11ComputeShader* voxelSliceCS = nullptr;
 	bool voxelShadersFailed = false;
 	bool showVoxelSlice = false;
+#endif
 	bool showVolumeRings = false;
 	bool debugForceVolumeRebuild = false;
+#if SD_WITH_VOLUME
 	bool voxelIdleSkipped = false;
 	uint32_t voxelIdleBlockers = 0;
 	float voxelSkipRate = -1.0f;
@@ -2602,6 +2648,7 @@ public:
 	void RenderVoxelVolume(const StaticsCB* a_records, uint32_t a_captureCount, bool a_recordsLive, uint32_t& a_parity);
 	/** @brief Writes the selected plane of the current volume to voxelSliceTexture. Implemented in SnowDeformation/Volume.cpp. */
 	void UpdateVoxelSliceTexture();
+#endif
 
 	static constexpr uint kMaxExclusions = 256;
 	static constexpr float kTorchClearRadius = 40.0f;
@@ -3135,8 +3182,10 @@ public:
 	void TickEffectCostProbe();
 	/** @brief DevBench: applies ground measurement args (shellKill, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
 	json DevBenchShellArgs(const json& a_args);
+#if SD_WITH_VOLUME
 	/** @brief DevBench: applies volume measurement args (memorySeconds, showRings) and returns the volume's live state per level. Implemented in DevBenchTools.cpp. */
 	json DevBenchVolumeArgs(const json& a_args);
+#endif
 	/** @brief DevBench: the reader gates' A/B switches (interior height maps, masks copy, march idle, blood latch, land-mask feature test, record growth) and their counters. Implemented in DevBenchTools.cpp. */
 	json DevBenchReaderGatesArgs(const json& a_args);
 	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
@@ -3513,6 +3562,7 @@ protected:
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
+#if SD_WITH_EVENTS
 	enum class SnowEventKind : uint8_t
 	{
 		KickUp,
@@ -3546,6 +3596,8 @@ protected:
 	void PushSnowEvent(const SnowEvent& a_event);
 	void CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, const RE::NiPoint3& a_position, float a_groundZ,
 		const StampBones* a_bones, const RE::NiAVObject* a_root);
+#endif
+#if SD_WITH_EVENTS
 	void TickSnowEvents();
 	std::vector<std::string> SnowEventCensusLines() const;
 	bool debugSnowEventCensus = false;
@@ -3592,7 +3644,9 @@ protected:
 		double windowStart = -1.0;
 	};
 	SnowEventCensus snowEventCensus;
+#endif
 
+#if SD_WITH_BODY_COAT
 	struct CoatAging
 	{
 		float heat = 0.0f;
@@ -3624,11 +3678,13 @@ protected:
 	};
 	CoatAging ComputeCoatAging(RE::Actor* a_actor) const;
 	std::vector<std::string> CoatAgingLines() const;
+#endif
 	SnowCondition SnowConditionAtHeight(float a_z) const;
 	uint32_t stampGatherFrame = UINT32_MAX;
 
 public:
 
+#if SD_WITH_BODY_COAT
 	struct BodyCoatActorCensus
 	{
 		std::string name;
@@ -3676,6 +3732,7 @@ public:
 		uint32_t firstOwned = 0;
 		uint32_t firstUnowned = 0;
 	};
+#endif
 	/** @brief One mapped skin's block at Lighting PS b8, bound per draw by offset. Mirror: SnowLighting.hlsli BodyCoatRecord. */
 	struct alignas(16) BodyCoatRecordCB
 	{
@@ -3693,6 +3750,7 @@ public:
 		float4 Fall;
 	};
 	STATIC_ASSERT_ALIGNAS_16(BodyCoatRecordCB);
+#if SD_WITH_BODY_COAT
 	static constexpr uint32_t kBodyCoatFlagFlatPaint = 1;
 	static constexpr uint32_t kBodyCoatFlagLiving = 2;
 	static constexpr uint32_t kBodyCoatFlagHairSpecks = 4;
@@ -3738,8 +3796,10 @@ public:
 	std::vector<std::string> BodyCoatFadeLines() const;
 	/** @brief The S5 tree's readout: the snowfall here and its slant, the load order's range, and per actor the most its snowfall can reach and its last snowfall update. */
 	std::vector<std::string> BodyCoatFallLines() const;
+#endif
 	/** @brief The engine's own decal geometries, by the names it gives them: blood and impact marks, skinned or not. Implemented in SnowDeformation/Statics.cpp. */
 	static bool IsEngineDecalName(const char* a_name);
+#if SD_WITH_BODY_COAT
 	bool debugBodyCoatCensus = false;
 	bool debugBodyCoatCensusDump = false;
 	bool debugBodyCoatDrawProbe = false;
@@ -3777,8 +3837,10 @@ public:
 	static constexpr uint32_t kBodyCoatSlotsPerRow = 32;
 	static constexpr uint32_t kBodyCoatSlotDim[3] = { 32, 16, 48 };
 	static constexpr float kBodyCoatVoxel = 2.5f;
+#endif
 
 protected:
+#if SD_WITH_BODY_COAT
 	void RunBodyCoatCensus(bool a_dump);
 	void TickBodyCoatStore();
 	void EnsureBodyCoatLumps();
@@ -3806,6 +3868,7 @@ protected:
 	winrt::com_ptr<ID3D11Texture3D> bodyCoatProbeTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> bodyCoatProbeSRV;
 	bool bodyCoatProbeBound = false;
+#endif
 
 	void LoadTraceBegin(const char* a_reason);
 	void LoadTraceMark(std::string_view a_what);
@@ -3959,9 +4022,11 @@ protected:
 		float reach = 0.0f;
 		float seed = 0.0f;
 	};
+#if SD_WITH_SPELLS
 	static constexpr uint32_t kPrintSpellCone = 1u;
 	static constexpr uint32_t kPrintSpellBowl = 2u;
 	static constexpr uint32_t kPrintSpellRay = 4u;
+#endif
 	static constexpr uint32_t kPrintSpellChurn = 8u;
 	static constexpr uint32_t kPrintSpellCap = 32;
 
@@ -3998,7 +4063,9 @@ protected:
 	ID3D11ComputeShader* printViewCS = nullptr;
 	ID3D11ComputeShader* printRimCS = nullptr;
 	ID3D11ComputeShader* printRayCS = nullptr;
+#if SD_WITH_SPELLS
 	std::vector<PrintSpellMark> printSpellMarks;
+#endif
 	struct HeldPrintSpell
 	{
 		PrintSpellMark mark;
@@ -4076,8 +4143,10 @@ protected:
 	ID3D11ComputeShader* GetPrintRimCS();
 	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
+#if SD_WITH_SPELLS
 	void QueueObjectSpellMark(const RE::NiPoint3& a_a, const RE::NiPoint3& a_b, float a_radius, float a_depth, float a_rate, uint32_t a_flags, float a_hold = 0.0f, float a_speed = 0.0f, float a_seed = 0.0f);
 	void ReplayHeldObjectSpellMarks(float a_deltaTime);
+#endif
 	PrintSpellMark HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const;
 	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
 	void PollPrintMirrors(ID3D11DeviceContext* a_context);
@@ -4112,6 +4181,7 @@ protected:
 		Force
 	};
 
+#if SD_WITH_SPELLS
 	enum class SpellMark
 	{
 		Melt,
@@ -4143,12 +4213,15 @@ protected:
 	std::unordered_map<uint32_t, float2> spellPrevPositions;
 
 	std::unordered_map<uint32_t, float2> spellTrailPrev;
+#endif
 
 	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
 
+#if SD_WITH_SPELLS
 	static SpellMark MarkForElement(SpellElement a_element);
 
 	void GatherSpellEmitters();
+#endif
 
 	float CrustBreakForce(float a_radius) const;
 
@@ -4158,6 +4231,7 @@ protected:
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
 	static bool IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property);
 
+#if SD_WITH_SPELLS
 	void LiftRefOntoSnow(RE::TESObjectREFR* a_ref, float a_lift, float a_minUpZ = -2.0f);
 	struct PendingLift
 	{
@@ -4170,7 +4244,9 @@ protected:
 	std::vector<PendingLift> spellLiftQueue;
 
 	float SnowLiftFor(const RE::NiPoint3& a_position, float a_fraction, float a_clearance, RE::TES* a_tes);
+#endif
 
+#if SD_WITH_ITEMS
 	static constexpr float kItemSinkRadius = 3000.0f;
 	static constexpr size_t kItemSinkMax = 32;
 	static constexpr uint32_t kItemSinkRecord = 'SNIS';
@@ -4239,9 +4315,13 @@ protected:
 	void SaveItemSink(const SKSE::SerializationInterface* a_intfc);
 	void LoadItemSink(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 	void RegisterItemSinkCoSave();
+#endif
 
+#if SD_WITH_SPELLS
 	std::unordered_set<uint32_t> liftedRefs;
+#endif
 
+#if SD_WITH_ITEMS
 	struct CreatureBuild
 	{
 		const RE::NiAVObject* root = nullptr;
@@ -4296,7 +4376,9 @@ protected:
 	std::atomic<float> creatureSinkMicros{ 0.0f };
 	bool MeasureCreatureBuild(RE::NiAVObject* a_root, CreatureBuild& a_build, bool a_upright, uint32_t a_frame, float a_baseZ);
 	float CreatureLiftOf(uint32_t a_formID, bool* a_havokFollows = nullptr, float* a_weight = nullptr);
+#endif
 
+#if SD_WITH_SPELLS
 	void ConsiderHazard(RE::TESObjectREFR* a_ref);
 
 	struct PendingBlast
@@ -4377,7 +4459,9 @@ protected:
 	};
 	std::vector<DashWatch> queuedDashes;
 	std::vector<DashWatch> dashWatches;
+#endif
 
+#if SD_WITH_SPELLS
 	void GatherDashGouges(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 
 	static bool SpellShoves(const RE::MagicItem* a_spell, float& a_force);
@@ -4411,6 +4495,7 @@ protected:
 		SpellElement element = SpellElement::None;
 	};
 	std::vector<QueuedHit> queuedHits;
+#endif
 
 	struct ElementalHit
 	{
@@ -4419,6 +4504,7 @@ protected:
 	};
 	std::unordered_map<uint32_t, ElementalHit> lastElementalHit;
 
+#if SD_WITH_SPELLS
 	void RegisterSpellCastSink();
 	float spellGameHours = -1.0f;
 	float spellGameDrift = 0.0f;
@@ -4458,6 +4544,7 @@ protected:
 	};
 	std::vector<CloakState> queuedCloaks;
 	std::unordered_map<uint32_t, CloakState> activeCloaks;
+#endif
 
 	struct InnateAuraRecord
 	{
@@ -4467,17 +4554,22 @@ protected:
 	};
 	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByRace;
 	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByBase;
+#if SD_WITH_SPELLS
 	std::unordered_map<uint32_t, CloakState> innateAuras;
 
 	std::unordered_map<uint32_t, CloakState> corpseEffects;
 
 	void ConsiderCorpseEffect(RE::Actor* a_actor, float a_deltaTime);
+#endif
 
 	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
 
+#if SD_WITH_SPELLS
 	static bool AuraFromActorRecords(RE::Actor* a_actor, InnateAuraRecord& a_out);
+#endif
 	static bool AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out);
 
+#if SD_WITH_SPELLS
 	void GatherActorMarks(float a_deltaTime, const RE::NiPoint3& a_cameraPosition, float a_cullRadius);
 
 	void OpenInnateDeathBlast(CloakState& a_state, const RE::NiPoint3& a_position);
@@ -4523,6 +4615,7 @@ protected:
 		float lastRadius = 0.0f;
 	};
 	SpellStats spellStats;
+#endif
 
 	struct StampStats
 	{

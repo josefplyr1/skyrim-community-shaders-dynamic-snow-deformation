@@ -186,6 +186,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 		}
 	}
 
+#if SD_WITH_BODY_COAT
 	// Snow on bodies: the coat's pixel shader reads the bind frame only its vertex shader writes, so the key
 	// takes both; the plain pair draws while either is compiling or failed.
 	constexpr auto bodyCoatFlag = static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::SnowBodyCoat);
@@ -201,6 +202,7 @@ bool Hooks::BSShader_BeginTechnique::thunk(RE::BSShader* shader, uint32_t vertex
 			pixelDescriptor &= ~bodyCoatFlag;
 		}
 	}
+#endif
 
 	state->updateShader = true;
 	state->currentShader = shader;

@@ -907,7 +907,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		bool liftInRagdoll = true;
 		float creatureWeight = 0.0f;
+#if SD_WITH_ITEMS
 		const float bodyLift = isDead ? 0.0f : CreatureLiftOf(formID, &liftInRagdoll, &creatureWeight);
+#else
+		const float bodyLift = 0.0f;
+#endif
 		float floatingGap = 0.0f;
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
@@ -989,8 +993,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
+#if SD_WITH_EVENTS
 		if (SnowEventsWanted())
 			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
+#endif
 
 		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
 		footImpact = std::min(footImpact * impactWeight, 1.0f);
@@ -1448,7 +1454,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		stampStats.propRefs++;
 		const auto position = root->world.translate;
 		const uint32_t formID = a_ref->formID;
+#if SD_WITH_ITEMS
 		ItemSinkNote(a_ref, position);
+#endif
 		auto prevIt = propPrevPositions.find(formID);
 		if (prevIt == propPrevPositions.end()) {
 			propPrevPositions[formID] = { position, propScanCycle };
@@ -1465,8 +1473,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			if (scanning)
 				propScanMovers[phase].push_back(a_ref->CreateRefHandle());
 		}
+#if SD_WITH_ITEMS
 		if (!propMoved && !ItemSinkWantsPrint(a_ref))
 			return;
+#else
+		if (!propMoved)
+			return;
+#endif
 		if (stampCount >= actorCeiling) {
 			budgetCutRefs.insert(formID);
 			return;
@@ -1620,8 +1633,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (!a_ref || a_ref->As<RE::Actor>())
 					return RE::BSContainer::ForEachResult::kContinue;
 				if (a_ref->GetFormType() == RE::FormType::PlacedHazard) {
+#if SD_WITH_SPELLS
 					ConsiderHazard(a_ref);
 					propScanHazards[phase].push_back(a_ref->CreateRefHandle());
+#endif
 					return RE::BSContainer::ForEachResult::kContinue;
 				}
 				considerProp(a_ref);
@@ -1647,9 +1662,11 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		for (uint32_t slice = 0; slice < kPropScanInterval; slice++) {
 			if (scanAll || slice == phase)
 				continue;
+#if SD_WITH_SPELLS
 			for (const auto& handle : propScanHazards[slice])
 				if (auto ref = handle.get(); ref)
 					ConsiderHazard(ref.get());
+#endif
 			for (const auto& handle : propScanMovers[slice])
 				if (auto ref = handle.get(); ref)
 					considerProp(ref.get());
@@ -1660,6 +1677,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 	stampStats.beforeSpells = stampCount;
 
+#if SD_WITH_SPELLS
 	if (spellEmitters.size() > kMaxSpellEmitters) {
 		spellStats.emittersCulled = static_cast<uint>(spellEmitters.size() - kMaxSpellEmitters);
 		std::partial_sort(spellEmitters.begin(), spellEmitters.begin() + kMaxSpellEmitters, spellEmitters.end(),
@@ -1711,6 +1729,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			kStampModeMelt, debugMeltEmitterRate };
 		stampCount++;
 	}
+#endif
 
 	if (!budgetCutRefs.empty()) {
 		for (const auto& [key, anchor] : stampPrevPositions) {

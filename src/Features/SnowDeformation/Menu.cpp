@@ -184,7 +184,9 @@ void SnowDeformation::ApplyQualityPreset(int a_preset)
 	settings.ParallaxDepth = p.parallaxDepth;
 	settings.ParallaxShadowStrength = p.parallaxShadow;
 	settings.SkinTessCapPx = p.skinTessCapPx;
+#if SD_WITH_VOLUME
 	settings.VolumeSnow = false;
+#endif
 	settings.SnowGlints = p.sparkle;
 	settings.SnowScreenSpaceShadows = p.contactShadows;
 	settings.ShellHorizonMarch = p.selfShadowing;
@@ -199,7 +201,10 @@ int SnowDeformation::MatchingQualityPreset() const
 		if (settings.DeformMapResolution == p.mapDim && settings.ObjectTrenchResolution == p.objectTrenchDim && settings.RangeTrenchesM == p.trenchesM &&
 			settings.RangeActorTrenchesM == p.actorTrenchesM && settings.RangeSkinsM == p.skinsM &&
 			settings.Tessellation && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
-			settings.SkinTessCapPx == p.skinTessCapPx && !settings.VolumeSnow &&
+			settings.SkinTessCapPx == p.skinTessCapPx &&
+#if SD_WITH_VOLUME
+			!settings.VolumeSnow &&
+#endif
 			settings.SnowGlints == p.sparkle && settings.SnowScreenSpaceShadows == p.contactShadows && settings.ShellHorizonMarch == p.selfShadowing &&
 			settings.ObjectSnowNearDetail == p.nearDetail && settings.SnowCastsShadows == p.castsShadows)
 			return i;
@@ -334,6 +339,7 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttFlattenParallax = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("flatten_parallax_under_snow_tooltip"), "The other answer to snow floating over parallax objects: on an object with projected snow, its Extended Materials parallax (PBR displacement and complex parallax) fades out as the snow covers the surface, the way real snow fills cracks and crevices, and the shadows the relief casts on itself fade with it. Where the snow lies solid the rock is flat, so the snow, its coat and the tracks in it sit on a surface that does not move; where it lies in patches part of the relief stays; bare rock keeps all of it. With Snow Follows Parallax also on, the patches follow the relief that stays. Objects on the older vanilla parallax shader carry no projected snow and are not affected. On by default, together with the other one."));
 
+#if SD_WITH_PAINT_TOGGLES
 		ImGui::Checkbox(T(TKEY("unprojected_shapes_bare"), "Unpainted Shapes Stay Bare"), &settings.UnprojectedShapesBare);
 		if (auto _ttBare = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("unprojected_shapes_bare_tooltip"), "A building whose snow is painted on by the game is drawn as several shapes, and some of them carry no snow at all. Those plain shapes are drawn over the snowy ones, and they wipe out the note the game leaves for the drape saying whether a spot was painted. With no note, the drape assumes nothing was ever decided and lays snow anyway - which is how door frames and posts under a roof end up sleeved in snow. On, a plain shape leaves the note \"considered, no snow here\" and the drape stays off it. Only objects with a real snow material are affected; snow-textured mesh replacements and drifts are not."));
@@ -341,6 +347,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("multipass_snow_follows_paint"), "Multipass Snow Follows Paint"), &settings.MultipassSnowFollowsPaint);
 		if (auto _ttMultipass = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("multipass_snow_follows_paint_tooltip"), "Objects whose snow material is drawn in two passes (vanilla glaciers and ice sheets, and every snow object under Simplicity of Snow) keep the drape only where the game's own snow pass paints. Off, the drape guesses on them and covers every face, stone included."));
+#endif
 
 		ImGui::SliderFloat(T(TKEY("seasons_snow_max_angle"), "Seasons Snow Max Angle"), &settings.SeasonsSnowMaxAngle, 0.0f, 90.0f, "%.0f deg");
 		if (auto _ttSeasons = Util::HoverTooltipWrapper())
@@ -372,6 +379,7 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttStc = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "Caps how finely road snow is subdivided (no other object snow is): no subdivision segment may be smaller on screen than this many pixels. At a distance, finer segments end up smaller than a pixel and cost GPU time for nothing visible. Higher = cheaper: up to about 20 it only trims the rounded edges at range; above that it coarsens the whole road surface. 0 turns the cap off. The Medium and Low presets raise it."));
 
+#if SD_WITH_VOLUME
 		ImGui::SeparatorText(T(TKEY("menu_experimental"), "Experimental"));
 
 		ImGui::Checkbox(T(TKEY("volume_snow"), "Volume Snow"), &settings.VolumeSnow);
@@ -513,6 +521,7 @@ void SnowDeformation::DrawSettings()
 			}
 #endif
 		}
+#endif
 
 		ImGui::TreePop();
 	}
@@ -557,6 +566,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
+#if SD_WITH_BLOOD
 	if (ImGui::TreeNodeEx(T(TKEY("menu_blood_splatter"), "Blood Splatter"), ImGuiTreeNodeFlags_Framed)) {
 		ImGui::Checkbox(T(TKEY("blood_on_snow"), "Blood on Snow"), &settings.BloodOnSnow);
 		if (auto _ttBlood = Util::HoverTooltipWrapper())
@@ -582,6 +592,7 @@ void SnowDeformation::DrawSettings()
 			WrapTextColoredF({ 1.0f, 0.35f, 0.35f, 1.0f }, "%s", T(TKEY("blood_status_failed"), "NOT RUNNING: a blood shader failed to compile - see CommunityShaders.log."));
 		ImGui::TreePop();
 	}
+#endif
 
 	if (ImGui::TreeNodeEx(T(TKEY("snow_refill"), "Snow Refill"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttRefillTree = Util::HoverTooltipWrapper())
@@ -850,9 +861,11 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttResist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Every new pass over the same snow carves the same share of what is left, so busy paths sink deeper the more they are walked. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
+#if SD_WITH_ITEMS
 		ImGui::Checkbox(T(TKEY("creature_sink"), "Creatures Sink by Weight"), &settings.CreatureSink);
 		if (auto _ttCreatureSink = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("creature_sink_tooltip"), "Creatures lighter than you sink only part way into the snow. Where the snow is firm enough to carry them, a hare or a fox stands up to half way up it and leaves a shallower trench; in loose new snow they sink further, but never past their belly, and never into something low overhead. Your own weight is the measure: people sink as you do, and anything as heavy as you or heavier stands on the ground under the snow. A creature that dies settles into the snow. Weight comes from each creature's own collision shapes, so modded creatures work too. The same weight sets how hard a creature hits the snow: a horse's gallop or landing throws more broken snow than a fox's. Off, every creature stands on the ground and hits the snow as you do."));
+#endif
 
 		ImGui::SliderFloat(T(TKEY("track_ageing"), "Track Ageing"), &settings.TrackAgeing, 0.0f, 2.0f, "%.2f");
 		if (auto _ttTrackAge = Util::HoverTooltipWrapper())
@@ -882,6 +895,7 @@ void SnowDeformation::DrawSettings()
 
 
 
+#if SD_WITH_ITEMS
 		ImGui::SeparatorText(T(TKEY("dropped_items_group"), "Dropped Items"));
 		ImGui::Checkbox(T(TKEY("item_sink"), "Enable Dynamic Object Sink Depth"), &settings.ItemSink);
 		if (auto _ttItemSink = Util::HoverTooltipWrapper())
@@ -897,6 +911,7 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttGrip = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("item_snow_grip_tooltip"), "Snow packs under what drops into it and stops it rolling. The deeper an item is in the snow and the slower it is travelling, the harder it is held: dropped straight into deep snow it stays where it lands, thrown hard it still slides until it slows, and in shallow snow it rolls almost as it would on bare ground. 0 = the game's own physics."));
 		ImGui::EndDisabled();
+#endif
 
 		ImGui::PushID("snow_trenches");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -934,6 +949,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::TreePop();
 	}
 
+#if SD_WITH_SPELLS
 	if (ImGui::TreeNodeEx(T(TKEY("spell_integration"), "Spell Integration"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttSpell = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("spell_integration_tooltip"), "How magic marks the snow. Each school marks it differently: fire melts basins, and the others arrive with their own steps."));
@@ -1184,6 +1200,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::TreePop();
 	}
+#endif
 
 #if !SNOW_ALPHA_BUILD
 	if (ImGui::TreeNodeEx(T(TKEY("debug_options"), "Debugging Options"), ImGuiTreeNodeFlags_Framed)) {
@@ -1353,11 +1370,13 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+#if SD_WITH_BLOOD
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_blood"), "Blood Decals"))) {
 			WrapTextDisabledF("%s", std::format("{} decals tracked, {} marks + {} discs deposited, {} drawn over object snow this frame", bloodSeenLive, bloodDepositsLast, bloodDiscsLast, bloodOverlaysLast).c_str());
 			WrapTextDisabledF("%s", std::format("Detail tiles: {} of {} live, {} merged this frame; mark bounds {} from vertices, {} guessed", bloodTilesLive, BloodTileCount(), bloodTileMergesLast, bloodTileBoundsRead, bloodTileBoundsGuessed).c_str());
 			ImGui::TreePop();
 		}
+#endif
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_cpu"), "CPU & Memory"))) {
 			{
@@ -1619,6 +1638,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+#if SD_WITH_SPELLS
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_melt_emitter"), "Melt Emitter"))) {
 			if (auto _ttEmitterCat = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("debug_cat_melt_emitter_tooltip"), "A stand-in heat source that answers to no spell at all. Kept for testing a mark on its own: when a school stops marking, this says whether the fault is in the detector or in the mark itself."));
@@ -1645,6 +1665,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::TreePop();
 		}
+#endif
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_object_snow"), "Object Snow"))) {
 			{
@@ -1880,6 +1901,7 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+#if SD_WITH_ITEMS
 		if (ImGui::TreeNodeEx("Weight sink")) {
 			itemSinkReadoutWanted.store(true, std::memory_order_release);
 			std::string readout;
@@ -1893,7 +1915,9 @@ void SnowDeformation::DrawSettings()
 			WrapTextF("Each item type logs its measure and roundness once to CommunityShaders.log ('item sink:').");
 			ImGui::TreePop();
 		}
+#endif
 
+#if SD_WITH_ITEMS
 		if (ImGui::TreeNodeEx("Creature weight")) {
 			creatureSinkReadoutWanted.store(true, std::memory_order_release);
 			std::string readout;
@@ -1907,6 +1931,7 @@ void SnowDeformation::DrawSettings()
 			WrapTextF("Each creature race logs its weight once to CommunityShaders.log ('creature weight:').");
 			ImGui::TreePop();
 		}
+#endif
 
 		if (ImGui::TreeNodeEx("Snow Events")) {
 			ImGui::Checkbox("Count Snow Events", &debugSnowEventCensus);
@@ -1917,12 +1942,15 @@ void SnowDeformation::DrawSettings()
 			ImGui::TreePop();
 		}
 
+#if SD_WITH_BODY_COAT
 		if (ImGui::TreeNodeEx("Snow Coat Aging")) {
 			for (const auto& line : CoatAgingLines())
 				WrapTextF("%s", line.c_str());
 			ImGui::TreePop();
 		}
+#endif
 
+#if SD_WITH_BODY_COAT
 		if (ImGui::TreeNodeEx("Snow on Bodies (S3 Contact)")) {
 			ImGui::Checkbox("Contact Coat", &debugBodyCoatContact);
 			if (auto _ttContact = Util::HoverTooltipWrapper())
@@ -2024,7 +2052,9 @@ void SnowDeformation::DrawSettings()
 				WrapTextF("%s", line.c_str());
 			ImGui::TreePop();
 		}
+#endif
 
+#if SD_WITH_SPELLS
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_spells"), "Spell Integration"))) {
 			if (ImGui::TreeNodeEx(T(TKEY("spell_cat_stats"), "Detected"))) {
 				WrapTextF("projectiles %u | streams %u | hazards %u | cloaks %u | ground hits %u | trails %u",
@@ -2082,6 +2112,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::TreePop();
 		}
+#endif
 
 		if (ImGui::TreeNodeEx(T(TKEY("debug_cat_shell_perf"), "Shell Shader Performance"))) {
 			ImGui::TextDisabled("%s", shellDeferredThisFrame ? T(TKEY("shell_deferred_active"), "Deferred pass: drawing") : T(TKEY("shell_deferred_inactive"), "Deferred pass: not drawing"));

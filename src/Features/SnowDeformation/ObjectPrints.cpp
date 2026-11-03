@@ -95,6 +95,7 @@ ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
 	return printRimCS;
 }
 
+#if SD_WITH_SPELLS
 ID3D11ComputeShader* SnowDeformation::GetPrintRayCS()
 {
 	if (!printRayCS && !printRayFailed) {
@@ -171,6 +172,7 @@ void SnowDeformation::QueueObjectSpellMarkFor(const RE::NiPoint3& a_a, const RE:
 		break;
 	}
 }
+#endif
 
 bool SnowDeformation::EnsurePrintShaders()
 {
@@ -280,6 +282,7 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 		Util::SetResourceName(printBlockSRV.get(), "SnowDeformation::PrintBlocks SRV");
 	}
 
+#if SD_WITH_SPELLS
 	if (!printSpellBuffer) {
 		D3D11_BUFFER_DESC spellDesc{};
 		spellDesc.ByteWidth = kPrintSpellCap * 3u * sizeof(float4);
@@ -318,6 +321,7 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(printRayHitBuffer.get(), &hitUavDesc, printRayHitUAV.put()));
 		Util::SetResourceName(printRayHitUAV.get(), "SnowDeformation::PrintRayHits UAV");
 	}
+#endif
 
 	if (!printWriteBuffer) {
 		constexpr uint32_t maxRow = 2048u / kPrintTileDim + 1u;
@@ -669,7 +673,11 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	}
 	cb.RefillQuanta = quanta;
 	cb.RimWidth = std::clamp(settings.ObjectPrintRimWidth, 0.0f, 15.0f);
+#if SD_WITH_SPELLS
 	const uint32_t spellCount = (printSpellBuffer && GetPrintRayCS()) ? (uint32_t)std::min<size_t>(printSpellMarks.size(), kPrintSpellCap) : 0u;
+#else
+	const uint32_t spellCount = 0;
+#endif
 	cb.SpellCount = spellCount;
 	printFrameCB->Update(cb);
 
@@ -787,11 +795,13 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			for (const auto& prop : contactProps)
 				stampRects.push_back(texelRect(prop.minX - pad, prop.minY - pad, prop.maxX + pad, prop.maxY + pad));
 		}
+#if SD_WITH_SPELLS
 		for (uint32_t i = 0; i < spellCount; i++) {
 			const auto& mark = printSpellMarks[i];
 			const float r = mark.radius + pad;
 			stampRects.push_back(texelRect(std::min(mark.a.x, mark.b.x) - r, std::min(mark.a.y, mark.b.y) - r, std::max(mark.a.x, mark.b.x) + r, std::max(mark.a.y, mark.b.y) + r));
 		}
+#endif
 		for (const auto& rect : stampRects)
 			addBlocks(rect);
 		const uint32_t blocks = (uint32_t)printBlockScratch.size();
@@ -802,7 +812,12 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShaderResources(2, 1, &blockSRV);
 			a_context->CSSetShaderResources(7, 3, contactSRVs);
 			a_context->CSSetShaderResources(10, 2, topSRVs);
+#if SD_WITH_SPELLS
 			ID3D11ShaderResourceView* spellSRVs[2] = { printSpellSRV.get(), printRayHitSRV.get() };
+#else
+			ID3D11ShaderResourceView* spellSRVs[2] = {};
+#endif
+#if SD_WITH_SPELLS
 			if (spellCount > 0) {
 				D3D11_MAPPED_SUBRESOURCE mapped{};
 				if (SUCCEEDED(a_context->Map(printSpellBuffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
@@ -823,6 +838,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 				ID3D11UnorderedAccessView* nullRay = nullptr;
 				a_context->CSSetUnorderedAccessViews(4, 1, &nullRay, nullptr);
 			}
+#endif
 			a_context->CSSetShaderResources(13, 2, spellSRVs);
 			ID3D11UnorderedAccessView* stampUAVs[2] = { mapUAV, printWriteUAV.get() };
 			a_context->CSSetUnorderedAccessViews(0, 2, stampUAVs, nullptr);

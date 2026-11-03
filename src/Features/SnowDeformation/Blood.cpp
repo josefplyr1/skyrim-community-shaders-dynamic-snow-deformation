@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cctype>
 
+#if SD_WITH_BLOOD
 void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 {
 	delete bloodMapTexture;
@@ -84,7 +85,9 @@ void SnowDeformation::CreateBloodTextures(const D3D11_TEXTURE2D_DESC& a_mapDesc)
 		bloodClockTexture = nullptr;
 	}
 }
+#endif
 
+#if SD_WITH_BLOOD
 ID3D11ComputeShader* SnowDeformation::GetBloodRingCS()
 {
 	if (!bloodRingCS) {
@@ -93,12 +96,15 @@ ID3D11ComputeShader* SnowDeformation::GetBloodRingCS()
 	}
 	return bloodRingCS;
 }
+#endif
 
 void SnowDeformation::ReleaseBloodShaders()
 {
+#if SD_WITH_BLOOD
 	if (bloodRingCS)
 		bloodRingCS->Release();
 	bloodRingCS = nullptr;
+#endif
 	for (auto** shader : { &bloodVS, &bloodSkinVS, &bloodDiscVS }) {
 		if (*shader)
 			(*shader)->Release();
@@ -115,9 +121,11 @@ void SnowDeformation::ReleaseBloodShaders()
 	if (bloodOverlayPS)
 		bloodOverlayPS->Release();
 	bloodOverlayPS = nullptr;
+#if SD_WITH_SPELLS
 	if (runePS)
 		runePS->Release();
 	runePS = nullptr;
+#endif
 	if (decalMaskVS)
 		decalMaskVS->Release();
 	decalMaskVS = nullptr;
@@ -128,13 +136,17 @@ void SnowDeformation::ReleaseBloodShaders()
 		decalMaskPS->Release();
 	decalMaskPS = nullptr;
 	decalMaskFailed = false;
+#if SD_WITH_SPELLS
 	runeResourcesFailed = false;
+#endif
 	bloodVSBlob = nullptr;
 	bloodSkinVSBlob = nullptr;
 	bloodILCache.clear();
 	bloodSkinILCache.clear();
 	bloodShadersFailed = false;
+#if SD_WITH_BLOOD
 	ReleaseBloodTiles();
+#endif
 }
 
 bool SnowDeformation::EnsureBloodResources()
@@ -479,6 +491,7 @@ void SnowDeformation::CaptureDecalOverlay(RE::BSRenderPass* a_pass)
 	RegisterDecalOverlay(capture);
 }
 
+#if SD_WITH_BLOOD
 void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 {
 	auto* geometry = a_pass->geometry;
@@ -570,7 +583,9 @@ void SnowDeformation::CaptureBloodDraw(RE::BSRenderPass* a_pass, bool a_skinned)
 	if (bloodCaptures.size() < 512)
 		bloodCaptures.push_back(std::move(capture));
 }
+#endif
 
+#if SD_WITH_SPELLS
 bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDecal)
 {
 	auto* geometry = a_pass->geometry;
@@ -648,6 +663,7 @@ bool SnowDeformation::CaptureRuneDraw(RE::BSRenderPass* a_pass, bool a_engineDec
 	captures.push_back(std::move(capture));
 	return true;
 }
+#endif
 
 bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 {
@@ -736,6 +752,7 @@ bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 	return true;
 }
 
+#if SD_WITH_SPELLS
 bool SnowDeformation::EnsureRuneResources()
 {
 	if (runeResourcesFailed)
@@ -810,7 +827,9 @@ bool SnowDeformation::EnsureRuneResources()
 	}
 	return true;
 }
+#endif
 
+#if SD_WITH_SPELLS
 namespace
 {
 	constexpr float kFrostFlatNormalZ = 0.5f;
@@ -991,7 +1010,9 @@ namespace
 		return gap <= double(kFrostTwinSlope) * scale;
 	}
 }
+#endif
 
+#if SD_WITH_SPELLS
 bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 {
 	if (frostPlanesFailed)
@@ -1064,7 +1085,9 @@ bool SnowDeformation::EnsureFrostPlanes(uint32_t a_marks, uint32_t a_entries)
 	}
 	return true;
 }
+#endif
 
+#if SD_WITH_SPELLS
 void SnowDeformation::BindFrostField(ID3D11DeviceContext* a_context, bool a_bind)
 {
 	ID3D11ShaderResourceView* srvs[11] = {};
@@ -1084,7 +1107,9 @@ void SnowDeformation::BindFrostField(ID3D11DeviceContext* a_context, bool a_bind
 		a_context->PSSetShaderResources(kGlowSlots[i], 1, &glow);
 	}
 }
+#endif
 
+#if SD_WITH_SPELLS
 void SnowDeformation::BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bind)
 {
 	ID3D11Buffer* buffer = (a_bind && runeCB) ? runeCB->CB() : nullptr;
@@ -1102,7 +1127,9 @@ void SnowDeformation::BindMarkReaders(ID3D11DeviceContext* a_context, bool a_bin
 	a_context->PSSetShaderResources(80, 2 * kRuneMaxTiles, textures);
 	BindFrostField(a_context, a_bind);
 }
+#endif
 
+#if SD_WITH_SPELLS
 void SnowDeformation::RenderRuneCapture()
 {
 	std::vector<RuneSite> sites;
@@ -1431,6 +1458,7 @@ void SnowDeformation::RenderRuneCapture()
 	frostCaptures.clear();
 	runeCaptureSet.clear();
 }
+#endif
 
 bool SnowDeformation::BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const
 {
@@ -1517,6 +1545,7 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 }
 
 
+#if SD_WITH_BLOOD
 void SnowDeformation::APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount)
 {
 	if (!APIIsActive() || !settings.BloodOnSnow || !(a_radius > 0.0f) || !(a_amount > 0.0f))
@@ -1526,6 +1555,11 @@ void SnowDeformation::APIDepositBlood(float a_x, float a_y, float a_z, float a_r
 		return;
 	bloodDiscQueue.push_back({ a_x, a_y, a_z, a_radius, std::clamp(a_r, 0.0f, 1.0f), std::clamp(a_g, 0.0f, 1.0f), std::clamp(a_b, 0.0f, 1.0f), std::clamp(a_amount, 0.0f, 1.0f) });
 }
+#else
+void SnowDeformation::APIDepositBlood(float, float, float, float, float, float, float, float)
+{
+}
+#endif
 
 uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS, UINT a_instances, bool a_ownClock, ID3D11VertexShader* a_skinnedVS)
 {
@@ -1706,6 +1740,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 	return drawn;
 }
 
+#if SD_WITH_BLOOD
 void SnowDeformation::RenderBloodCapture()
 {
 	bloodDepositsLast = 0;
@@ -1812,6 +1847,7 @@ void SnowDeformation::RenderBloodCapture()
 		bloodMapWritten = true;
 	}
 }
+#endif
 
 void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth)
 {
@@ -1826,7 +1862,9 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	bloodRectFrameValid = false;
 	decalMasksLast = 0;
 	std::unordered_set<const RE::BSGeometry*> marked;
+#if SD_WITH_SPELLS
 	marked.swap(markDecals);
+#endif
 	if (bloodOverlays.empty()) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		return;
@@ -1873,7 +1911,11 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	BloodCB cb{};
 	cb.MapDim = 1.0f;
 	cb.Intensity = 1.0f;
+#if SD_WITH_BLOOD
 	const bool shellPaintsOwn = bloodPreSkinDepthThisFrame && BloodTilesLive();
+#else
+	const bool shellPaintsOwn = false;
+#endif
 	bloodPreSkinDepthThisFrame = false;
 	cb.Spread = { 0.0f, shellPaintsOwn ? 1.0f : 0.0f, 0.0f, 0.0f };
 	const float W = std::max(bloodViewport.Width, 1.0f), H = std::max(bloodViewport.Height, 1.0f);
