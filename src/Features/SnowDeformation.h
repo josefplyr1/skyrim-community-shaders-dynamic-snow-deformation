@@ -2240,6 +2240,9 @@ public:
 	/** @brief 0 off, 1 edge-taper masks, 2 coverage alpha (see the PS debug block). */
 	int staticsDebugView = 0;
 
+	/** @brief PS t25 (Cloud Shadows' cube) as the frame's Lighting draws read it, taken at Prepass; null when Lighting has none. The shells bind this, not the cube. */
+	winrt::com_ptr<ID3D11ShaderResourceView> lightingCloudShadowSRV;
+
 	/** @brief The landscape snow diffuse, loaded from the modlist via the VFS. Null when unavailable (constant-albedo fallback). */
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
 	/** @brief TruePBR companion maps, auto-resolved by probing the Textures\PBR\ variant of the snow path: tangent normals (_n) and roughness/metal/AO/spec (_rmaos). Their presence also auto-selects linear color. */

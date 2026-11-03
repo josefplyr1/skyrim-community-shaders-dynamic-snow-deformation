@@ -2323,20 +2323,21 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
 		context->PSSetShaderResources(76, 2, iblSRVs);
 	}
-	// Terrain Shadows height map (t60) + Cloud Shadows cube copy (t25):
+	// Terrain Shadows height map (t60) + Cloud Shadows cube (t25):
 	// GetWorldShadow reads both, and the Prepass-time binds do not survive
 	// to this pass (the t102 lesson). Unbound t60 reads zeros, which the
 	// helper's ramp maps to shadow 1.0 — the far shell stood bright while
 	// the LOD terrain past the seam wore the mountain shadow. The statics
-	// skin inherits these like t22.
+	// skin inherits these like t22. t25 is whatever Lighting read this
+	// frame, null included; restored at the end of DrawShell.
 	if (globals::features::terrainShadows.loaded && globals::features::terrainShadows.texShadowHeight) {
 		ID3D11ShaderResourceView* terrainShadowSRV = globals::features::terrainShadows.texShadowHeight->srv.get();
 		context->PSSetShaderResources(60, 1, &terrainShadowSRV);
 	}
-	if (globals::features::cloudShadows.loaded && globals::features::cloudShadows.texCubemapCloudOccCopy) {
-		ID3D11ShaderResourceView* cloudShadowSRV = globals::features::cloudShadows.texCubemapCloudOccCopy->srv.get();
-		context->PSSetShaderResources(25, 1, &cloudShadowSRV);
-	}
+	winrt::com_ptr<ID3D11ShaderResourceView> prevCloudShadowSRV;
+	context->PSGetShaderResources(25, 1, prevCloudShadowSRV.put());
+	ID3D11ShaderResourceView* cloudShadowSRV = lightingCloudShadowSRV.get();
+	context->PSSetShaderResources(25, 1, &cloudShadowSRV);
 	// Comparison sampler (s2), shared by the crisp cascade path and the
 	// point-light shadow path.
 	if (cbData.CrispShadows > 0.5f || PointShadowAtlasSRV()) {
@@ -2649,5 +2650,7 @@ void SnowDeformation::DrawShell()
 	// After Depth Sync: its UAV write unbinds the blended depth from PS t17.
 	ID3D11ShaderResourceView* restoreFrostSlotSRVs[2] = { prevFrostSlotSRVs[0].get(), prevFrostSlotSRVs[1].get() };
 	context->PSSetShaderResources(16, 2, restoreFrostSlotSRVs);
+	ID3D11ShaderResourceView* restoreCloudShadowSRV = prevCloudShadowSRV.get();
+	context->PSSetShaderResources(25, 1, &restoreCloudShadowSRV);
 	spanClock.Lap(CpuCensus::kSpanShellTail);
 }

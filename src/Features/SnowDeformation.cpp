@@ -1133,6 +1133,9 @@ float SnowDeformation::ComputePrecipitationIntensity(RE::TESWeather::WeatherData
 
 void SnowDeformation::Prepass()
 {
+	// Cloud Shadows binds t25 only in the reflections prepass, which not every frame runs.
+	lightingCloudShadowSRV = nullptr;
+	globals::d3d::context->PSGetShaderResources(25, 1, lightingCloudShadowSRV.put());
 	PrepassSimulation();
 	DrawShellEarlyPrepass();
 	SyncSssDepth();
