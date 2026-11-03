@@ -78,28 +78,10 @@ namespace Util
 
 	/**
 	 * @brief Set a debug name on a D3D11 resource for RenderDoc debuggability.
-	 * A named texture or buffer also joins the live tally SumNamedResources reads, and leaves it when destroyed.
 	 * @param Resource The D3D11 device child to name.
 	 * @param Format A printf-style format string for the name.
 	 */
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...);
-
-	/** @brief One debug name's share of the live named resources. */
-	struct NamedResourceUse
-	{
-		std::string name;
-		std::string shape;  ///< e.g. "1920x1080 R16G16B16A16_FLOAT" or "buffer"; "various" when same-named resources differ.
-		uint64_t bytes = 0;
-		uint32_t count = 0;
-	};
-
-	/**
-	 * @brief Sum the GPU memory of every live texture and buffer whose debug name starts with a prefix.
-	 * @param a_prefix The name prefix, e.g. "SnowDeformation::".
-	 * @param a_byName When non-null, receives one entry per distinct name, largest first.
-	 * @return Bytes by descriptor, staging resources left out; driver padding is not counted.
-	 */
-	uint64_t SumNamedResources(std::string_view a_prefix, std::vector<NamedResourceUse>* a_byName = nullptr);
 
 	/**
 	 * @brief A texture's or buffer's size from its descriptor: every mip, array slice and sample.
@@ -137,15 +119,6 @@ namespace Util
 	 * @return The compiled shader object, or nullptr on failure. A failed compile is not retried until ClearShaderCompileFailures().
 	 */
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program = "main", ID3DBlob** OutBlob = nullptr);
-
-	/**
-	 * @brief Create the D3D11 shader object matching a shader model target from already-compiled bytecode.
-	 * @param Data Compiled bytecode.
-	 * @param Size Bytecode size in bytes.
-	 * @param ProgramType Shader model target the bytecode was compiled for.
-	 * @return The shader object, or nullptr for an unknown target.
-	 */
-	ID3D11DeviceChild* CreateShaderFromBlob(const void* Data, size_t Size, const char* ProgramType);
 
 	/**
 	 * @brief Allow previously failed CompileShader requests to compile again.

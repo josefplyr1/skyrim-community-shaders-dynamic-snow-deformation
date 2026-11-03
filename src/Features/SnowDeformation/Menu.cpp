@@ -918,18 +918,6 @@ void SnowDeformation::DrawSettings()
 					ImGui::Text("%s", T(TKEY("stamp_hash_ring_tooltip"), "Writes the last 300 frames' stamp checksums to the log. Record one with a lever off and one with it on, in the same scene with the same motion; matching sequences mean the change did not touch what reaches the deformation map."));
 			}
 
-			uint64_t vramUsageMB = 0, vramBudgetMB = 0;
-			QueryAdapterVRAM(vramUsageMB, vramBudgetMB);
-			std::string vramBreakdown;
-			const uint64_t vramFeatureMB = SumFeatureTextureBytes(vramBreakdown) >> 20;
-			WrapTextF("VRAM: adapter %llu / %llu MB (%llu%%), this feature ~%llu MB",
-				(unsigned long long)vramUsageMB, (unsigned long long)vramBudgetMB,
-				(unsigned long long)(vramBudgetMB ? vramUsageMB * 100 / vramBudgetMB : 0),
-				(unsigned long long)vramFeatureMB);
-			if (vramBudgetMB && vramUsageMB > vramBudgetMB)
-				WrapTextColoredF(ImVec4(1.0f, 0.35f, 0.25f, 1.0f), "OVER BUDGET: driver is demoting textures to system RAM; FPS stays degraded until the game restarts.");
-			WrapText(vramBreakdown.c_str());
-
 			ImGui::TreePop();
 		}
 

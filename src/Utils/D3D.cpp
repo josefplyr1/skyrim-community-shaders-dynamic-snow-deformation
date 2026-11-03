@@ -134,72 +134,6 @@ namespace Util
 
 	namespace
 	{
-		// The private-data slot holding a named resource's tally tracker; the
-		// resource releases the tracker when it is destroyed.
-		constexpr GUID kNamedResourceTrackerGuid = { 0x4815308f, 0xe7e9, 0x40c6, { 0xb4, 0xb6, 0x61, 0xf4, 0xe8, 0xc4, 0x0a, 0x3b } };
-
-		struct NamedResourceEntry
-		{
-			std::string name;
-			std::string shape;
-			uint64_t bytes = 0;
-			bool staging = false;
-		};
-
-		struct NamedResourceTally
-		{
-			std::mutex lock;
-			std::unordered_map<uint64_t, NamedResourceEntry> live;
-			uint64_t nextId = 1;
-		};
-
-		// Never freed: resources still die during shutdown, after statics.
-		NamedResourceTally& Tally()
-		{
-			static auto* tally = new NamedResourceTally();
-			return *tally;
-		}
-
-		class NamedResourceTracker final : public IUnknown
-		{
-		public:
-			explicit NamedResourceTracker(uint64_t a_id) :
-				id(a_id) {}
-
-			HRESULT STDMETHODCALLTYPE QueryInterface(REFIID a_riid, void** a_object) override
-			{
-				if (!a_object)
-					return E_POINTER;
-				if (a_riid != __uuidof(IUnknown)) {
-					*a_object = nullptr;
-					return E_NOINTERFACE;
-				}
-				*a_object = static_cast<IUnknown*>(this);
-				AddRef();
-				return S_OK;
-			}
-
-			ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
-
-			ULONG STDMETHODCALLTYPE Release() override
-			{
-				const ULONG left = --refs;
-				if (left == 0) {
-					{
-						auto& tally = Tally();
-						std::scoped_lock guard(tally.lock);
-						tally.live.erase(id);
-					}
-					delete this;
-				}
-				return left;
-			}
-
-		private:
-			std::atomic<ULONG> refs{ 1 };
-			const uint64_t id;
-		};
-
 		uint64_t MipChainBytes(DXGI_FORMAT a_format, uint32_t a_width, uint32_t a_height, uint32_t a_depth, uint32_t a_mips)
 		{
 			uint64_t bytes = 0;
@@ -272,27 +206,6 @@ namespace Util
 			}
 			return 0;
 		}
-
-		void TrackNamedResource(ID3D11DeviceChild* a_child, std::string_view a_name)
-		{
-			winrt::com_ptr<ID3D11Resource> resource;
-			if (FAILED(a_child->QueryInterface(__uuidof(ID3D11Resource), resource.put_void())))
-				return;
-			D3D11_USAGE usage;
-			std::string shape;
-			const uint64_t bytes = MeasureResource(resource.get(), usage, &shape);
-			auto& tally = Tally();
-			uint64_t id;
-			{
-				std::scoped_lock guard(tally.lock);
-				id = tally.nextId++;
-				tally.live.emplace(id, NamedResourceEntry{ std::string(a_name), std::move(shape), bytes, usage == D3D11_USAGE_STAGING });
-			}
-			// A rename replaces the older tracker, whose release drops its entry.
-			auto* tracker = new NamedResourceTracker(id);
-			resource->SetPrivateDataInterface(kNamedResourceTrackerGuid, tracker);
-			tracker->Release();
-		}
 	}
 
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...)
@@ -310,41 +223,6 @@ namespace Util
 		if (len < 0)
 			len = static_cast<int>(strnlen(buffer, sizeof(buffer)));
 		Resource->SetPrivateData(WKPDID_D3DDebugObjectNameT, static_cast<UINT>(len), buffer);
-		TrackNamedResource(Resource, std::string_view(buffer, size_t(len)));
-	}
-
-	uint64_t SumNamedResources(std::string_view a_prefix, std::vector<NamedResourceUse>* a_byName)
-	{
-		std::unordered_map<std::string, NamedResourceUse> groups;
-		uint64_t total = 0;
-		{
-			auto& tally = Tally();
-			std::scoped_lock guard(tally.lock);
-			for (const auto& entry : tally.live | std::views::values) {
-				if (entry.staging || !entry.name.starts_with(a_prefix))
-					continue;
-				total += entry.bytes;
-				if (a_byName) {
-					auto& use = groups[entry.name];
-					if (!use.count)
-						use.shape = entry.shape;
-					else if (use.shape != entry.shape)
-						use.shape = "various";
-					use.bytes += entry.bytes;
-					use.count++;
-				}
-			}
-		}
-		if (a_byName) {
-			a_byName->clear();
-			a_byName->reserve(groups.size());
-			for (auto& [name, use] : groups) {
-				use.name = name;
-				a_byName->push_back(std::move(use));
-			}
-			std::ranges::sort(*a_byName, std::ranges::greater{}, &NamedResourceUse::bytes);
-		}
-		return total;
 	}
 
 	uint64_t ResourceBytes(ID3D11Resource* a_resource)
@@ -366,37 +244,6 @@ namespace Util
 	{
 		std::lock_guard lock(shaderCompileFailuresMutex);
 		shaderCompileFailures.clear();
-	}
-
-	ID3D11DeviceChild* CreateShaderFromBlob(const void* Data, size_t Size, const char* ProgramType)
-	{
-		auto device = globals::d3d::device;
-		if (!_stricmp(ProgramType, "ps_5_0")) {
-			ID3D11PixelShader* regShader;
-			DX::ThrowIfFailed(device->CreatePixelShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "vs_5_0")) {
-			ID3D11VertexShader* regShader;
-			DX::ThrowIfFailed(device->CreateVertexShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "hs_5_0")) {
-			ID3D11HullShader* regShader;
-			DX::ThrowIfFailed(device->CreateHullShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "ds_5_0")) {
-			ID3D11DomainShader* regShader;
-			DX::ThrowIfFailed(device->CreateDomainShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "gs_5_0")) {
-			ID3D11GeometryShader* regShader;
-			DX::ThrowIfFailed(device->CreateGeometryShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		} else if (!_stricmp(ProgramType, "cs_5_0") || !_stricmp(ProgramType, "cs_4_0")) {
-			ID3D11ComputeShader* regShader;
-			DX::ThrowIfFailed(device->CreateComputeShader(Data, Size, nullptr, &regShader));
-			return regShader;
-		}
-		return nullptr;
 	}
 
 	// Disk cache for CompileShader's shaders, which the main shader cache does not cover (Data/ShaderCache/CompileShader).

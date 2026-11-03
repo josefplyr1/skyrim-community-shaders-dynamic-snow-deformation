@@ -1611,16 +1611,9 @@ public:
 
 	/** @brief Queries adapter VRAM usage/budget in MB via IDXGIAdapter3 (zeros when unavailable). Usage above budget = driver demotion to system RAM = the large persistent FPS-loss mode that survives disabling features. */
 	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB = nullptr);
-	/** @brief Sums every live resource named "SnowDeformation::" (Util::SumNamedResources, from descriptors) and fills a line with the largest by name. */
-	uint64_t SumFeatureTextureBytes(std::string& a_breakdown);
-	/** @brief Periodic VRAM log from Prepass: fires on a ~90 s cadence, on large usage deltas, and immediately (as a warning) when usage exceeds budget; lists every snow resource when the set changed, at most once a cadence. */
+	/** @brief VRAM-Aware Trench Map, from Prepass: drops a trench map above 2048 to 2048 for the session when the adapter nears its VRAM budget. */
 	void TickVRAMLog();
 	uint64_t vramTickCounter = 0;
-	uint64_t vramLastLoggedMB = 0;
-	uint64_t vramLastLogTick = 0;
-	uint64_t vramListedBytes = 0;
-	uint32_t vramListedResources = 0;
-	uint64_t vramListedTick = 0;
 	/** @brief Logs a snow profiler row far over its usual cost, with the adapter's memory and the frame's heaviest rows. */
 	void TickRowSpikeLog();
 	uint64_t rowSpikeQuietUntil = 0;
@@ -3296,7 +3289,7 @@ public:
 	}
 	std::thread snowPrimeThread;
 
-	/** @brief Util::CompileShader with the blob disk cache in front. Same contract; every snow shader compiles through this. */
+	/** @brief Util::CompileShader for the snow shaders; its disk cache keys on the preprocessed source, so every define reaches the key. */
 	ID3D11DeviceChild* CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry = "main");
 	/** @brief Content hash over every shader source under Data\Shaders; cached until ClearShaderCache drops it. */
 	std::string ShaderSourcesFingerprint();

@@ -2332,34 +2332,6 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 	}
 }
 
-namespace
-{
-	constexpr std::string_view kSnowResourcePrefix = "SnowDeformation::";
-}
-
-uint64_t SnowDeformation::SumFeatureTextureBytes(std::string& a_breakdown)
-{
-	static constexpr size_t kShown = 8;
-	std::vector<Util::NamedResourceUse> byName;
-	const uint64_t total = Util::SumNamedResources(kSnowResourcePrefix, &byName);
-
-	uint32_t resources = 0;
-	for (const auto& use : byName)
-		resources += use.count;
-	std::string line = std::format("{} resources", resources);
-	uint64_t shownBytes = 0;
-	for (size_t i = 0; i < std::min(byName.size(), kShown); i++) {
-		const auto& use = byName[i];
-		shownBytes += use.bytes;
-		line += std::format("{}{}{} {:.1f}", i ? ", " : " | largest (MB): ", use.name.substr(kSnowResourcePrefix.size()),
-			use.count > 1 ? std::format(" x{}", use.count) : std::string(), double(use.bytes) / (1 << 20));
-	}
-	if (byName.size() > kShown)
-		line += std::format(", the other {} {:.1f}", byName.size() - kShown, double(total - shownBytes) / (1 << 20));
-	a_breakdown = std::move(line);
-	return total;
-}
-
 void SnowDeformation::TickVRAMLog()
 {
 	vramTickCounter++;
@@ -2375,49 +2347,6 @@ void SnowDeformation::TickVRAMLog()
 			deformMapDimDirty = true;
 			logger::info("[SNOW DEFORMATION] VRAM-aware trench map: {} -> 2048 for this session (adapter {}/{} MB, the step frees ~{} MB)", deformMapDim, nowMB, nowBudgetMB, freesMB);
 		}
-	}
-
-	if (vramTickCounter % 120 != 1)
-		return;
-
-	uint64_t usageMB = 0, budgetMB = 0;
-	QueryAdapterVRAM(usageMB, budgetMB);
-	if (budgetMB == 0)
-		return;
-
-	constexpr uint64_t kCadenceTicks = 5400;
-	const bool overBudget = usageMB > budgetMB;
-	const bool bigDelta = usageMB > vramLastLoggedMB + 256 || vramLastLoggedMB > usageMB + 512;
-	const bool cadence = vramTickCounter - vramLastLogTick >= kCadenceTicks;
-	if (!overBudget && !bigDelta && !cadence)
-		return;
-	vramLastLoggedMB = usageMB;
-	vramLastLogTick = vramTickCounter;
-
-	std::string breakdown;
-	const uint64_t featureMB = SumFeatureTextureBytes(breakdown) >> 20;
-	if (overBudget)
-		logger::warn("[SNOW DEFORMATION] VRAM OVER BUDGET: adapter {}/{} MB, feature ~{} MB | {} | driver demotion likely = large persistent FPS loss until game restart",
-			usageMB, budgetMB, featureMB, breakdown);
-	else
-		logger::info("[SNOW DEFORMATION] VRAM: adapter {}/{} MB ({}%), feature ~{} MB | {}",
-			usageMB, budgetMB, budgetMB ? usageMB * 100 / budgetMB : 0, featureMB, breakdown);
-
-	std::vector<Util::NamedResourceUse> byName;
-	const uint64_t listBytes = Util::SumNamedResources(kSnowResourcePrefix, &byName);
-	uint32_t resources = 0;
-	for (const auto& use : byName)
-		resources += use.count;
-	if ((listBytes == vramListedBytes && resources == vramListedResources) || (vramListedTick && vramTickCounter - vramListedTick < kCadenceTicks))
-		return;
-	vramListedBytes = listBytes;
-	vramListedResources = resources;
-	vramListedTick = vramTickCounter;
-	logger::info("[SNOW DEFORMATION] VRAM by resource: {:.1f} MB over {} resources", double(listBytes) / (1 << 20), resources);
-	for (const auto& use : byName) {
-		const std::string size = use.bytes >= (1u << 20) ? std::format("{:7.1f} MB", double(use.bytes) / (1 << 20)) : std::format("{:7.1f} KB", double(use.bytes) / (1 << 10));
-		logger::info("[SNOW DEFORMATION]   {}  {}{}  ({})", size, use.name.substr(kSnowResourcePrefix.size()),
-			use.count > 1 ? std::format(" x{}", use.count) : std::string(), use.shape);
 	}
 }
 

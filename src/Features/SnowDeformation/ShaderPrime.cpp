@@ -5,8 +5,6 @@
 #include <functional>
 
 #include "Globals.h"
-#include "ShaderCache.h"
-#include "State.h"
 #include "Utils/D3D.h"
 
 static constexpr uint32_t kSnowBlobMagic = 0x53445343u;
@@ -132,42 +130,7 @@ void SnowDeformation::ShaderCacheStore(const std::string& a_key, const std::stri
 
 ID3D11DeviceChild* SnowDeformation::CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry)
 {
-	std::string defs;
-	for (const auto& define : a_defines) {
-		defs += define.first ? define.first : "";
-		if (define.second && *define.second) {
-			defs += '=';
-			defs += define.second;
-		}
-		defs += ';';
-	}
-	auto state = globals::state;
-	std::string global;
-	if (auto shaderDefines = state->GetDefines())
-		for (const auto& define : *shaderDefines)
-			global += define.first + "=" + define.second + ";";
-	const auto pathUtf8 = Util::WStringToString(a_path);
-	const auto key = std::format("v{}|fp{}|{}|{}|{}|defs:{}|glob:{}|env:d{}p{}f{}v{}",
-		kSnowBlobVersion, ShaderSourcesFingerprint(), pathUtf8, a_entry, a_target, defs, global,
-		state->IsDeveloperMode() ? 1 : 0,
-		state->enablePartialPrecision.load(std::memory_order_relaxed) ? 1 : 0,
-		state->enableAvoidFlowControl.load(std::memory_order_relaxed) ? 1 : 0,
-		globals::shaderCache->IsDiskCache() ? 1 : 0);
-
-	const auto file = std::format("{}_{}_{}_{:016x}.bin",
-		std::filesystem::path(a_path).stem().string(), a_target, a_entry,
-		ShaderKeyHash(std::format("{}|{}|{}|{}", pathUtf8, a_entry, a_target, defs)));
-
-	if (auto blob = ShaderCacheLoad(key, file))
-		return Util::CreateShaderFromBlob(blob->GetBufferPointer(), blob->GetBufferSize(), a_target);
-
-	ID3DBlob* raw = nullptr;
-	auto shader = Util::CompileShader(a_path, a_defines, a_target, a_entry, &raw);
-	winrt::com_ptr<ID3DBlob> blob;
-	blob.attach(raw);
-	if (shader && blob)
-		ShaderCacheStore(key, file, blob.get());
-	return shader;
+	return Util::CompileShader(a_path, a_defines, a_target, a_entry);
 }
 
 void SnowDeformation::DataLoaded()
