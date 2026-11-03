@@ -14,6 +14,8 @@
 #include "Utils/FileSystem.h"
 #include "Utils/Game.h"
 
+#include <bitset>
+
 // Snow on bodies (MD plans/BODY-SNOW-PLAN.md): R0's probes and S1's store and
 // mapping. Rationale in CODE-NOTES.md, "Snow on bodies".
 
@@ -77,6 +79,10 @@ namespace
 	constexpr uint32_t kCoatTileDim = 64;
 	constexpr uint32_t kCoatTiles = 4;
 	static_assert(kWritesPerFrame <= kCoatTiles);
+	// Round 10: the writer's two scratch volumes hold only the slots a frame's
+	// due actors draw into, not the whole atlas: four actors a frame, a body and
+	// a component each (estimate). A draw past them waits for the next update.
+	constexpr uint32_t kCoatScratchSlots = 8;
 	// Round 3: Snow Climate's moist snow (ClimateStickiness). Contact snow holds
 	// its full share of lumps from here up, drier snow fewer, as grains instead.
 	constexpr float kCoatMoistStickiness = 0.7f;
@@ -131,7 +137,8 @@ namespace
 		float From[3];
 		float TopZ;
 		float Moving;
-		float pad[3];
+		// Round 10: atlas texel to scratch texel, the slot's own scratch slot.
+		int32_t ScratchShift[3];
 	};
 	static_assert(sizeof(BodyCoatWriteCB) == 240);
 	struct alignas(16) BodyCoatTileCB
@@ -143,18 +150,20 @@ namespace
 	static_assert(sizeof(BodyCoatTileCB) == 80);
 	struct alignas(16) BodyCoatResolveCB
 	{
-		uint32_t Slots[32];
+		// Bits 0-7 the slot, 8-15 its scratch slot (0xFF: none, a fade alone).
+		uint32_t Slots[SnowDeformation::kBodyCoatSlots];
 		uint32_t Count;
 		uint32_t Cap;
 		uint32_t Seed;
 		uint32_t pad;
 		// S4: each slot half's fade (slot x 2 + half): the levels melted from R and
 		// G, then the shares of R and G shaken off, in 1/255, a byte each.
-		uint32_t Fade[64];
+		uint32_t Fade[2 * SnowDeformation::kBodyCoatSlots];
 		// S5: each slot half's snowfall, the fill's exponent at full exposure.
-		float Fall[64];
+		float Fall[2 * SnowDeformation::kBodyCoatSlots];
 	};
-	static_assert(sizeof(BodyCoatResolveCB) == 656);
+	static_assert(sizeof(BodyCoatResolveCB) == 1296);
+	constexpr uint32_t kNoScratch = 0xFFu;
 	constexpr auto kWritePath = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
 	bool IsLit(const RE::BSShaderProperty* a_property)
 	{
@@ -555,7 +564,12 @@ struct SnowDeformation::BodyCoatStore
 	std::vector<ContactProp> coatOnly;
 	uint32_t fallRobin = 0;
 	uint32_t roundRobin = 0;
-	uint32_t touched = 0;
+	std::bitset<kBodyCoatSlots> touched;
+	// Round 10: each slot's scratch slot this frame (-1: none), how many are
+	// taken, and the draws that found none (this frame, and for the readout).
+	int8_t scratchOf[kBodyCoatSlots] = {};
+	uint32_t scratchUsed = 0;
+	uint32_t scratchMissed = 0, scratchMissedLast = 0;
 	uint32_t capLevel = 0;
 	winrt::com_ptr<ID3D11Texture3D> contactScratch, fallScratch;
 	winrt::com_ptr<ID3D11UnorderedAccessView> contactUAV, fallUAV;
@@ -634,7 +648,7 @@ struct SnowDeformation::BodyCoatStore
 	float clockHours = -1.0f;
 	float timescale = 20.0f;
 	double realClock = 0.0;
-	uint64_t touchedHalves = 0;
+	std::bitset<2 * kBodyCoatSlots> touchedHalves;
 	float sinceFade = 0.0f;
 	float lastJumpHours = 0.0f;
 	double lastJumpAt = -1.0;
@@ -1066,6 +1080,11 @@ struct SnowDeformation::BodyCoatStore
 		}
 	}
 
+	// Round 10: a slot's first texel, kBodyCoatSlotsPerRow to a row along z, the
+	// rows along y.
+	static uint32_t OriginY(int a_slot) { return uint32_t(a_slot) / kBodyCoatSlotsPerRow * kBodyCoatSlotDim[1]; }
+	static uint32_t OriginZ(int a_slot) { return uint32_t(a_slot) % kBodyCoatSlotsPerRow * kBodyCoatSlotDim[2]; }
+
 	// The frame's bounds over its slot's texels: its longest axis along the
 	// slot's 48, the next along its 32 (16 for a half), the shortest along 16.
 	// A voxel of margin each side, so nothing at the surface clamps.
@@ -1074,7 +1093,7 @@ struct SnowDeformation::BodyCoatStore
 		a_frame.slot = a_slot;
 		a_frame.half = a_half;
 		const float dims[3] = { float(a_half < 0 ? kBodyCoatSlotDim[0] : kBodyCoatSlotDim[0] / 2), float(kBodyCoatSlotDim[1]), float(kBodyCoatSlotDim[2]) };
-		const float lo[3] = { a_half < 0 ? 0.0f : dims[0] * float(a_half), 0.0f, float(kBodyCoatSlotDim[2]) * float(a_slot) };
+		const float lo[3] = { a_half < 0 ? 0.0f : dims[0] * float(a_half), float(OriginY(a_slot)), float(OriginZ(a_slot)) };
 		float extent[3];
 		int order[3] = { 0, 1, 2 };
 		for (int c = 0; c < 3; ++c)
@@ -1107,8 +1126,8 @@ struct SnowDeformation::BodyCoatStore
 			return false;
 		// Typeless: Lighting reads it as UNORM, the writer's resolve as R32 words.
 		// Twice a slot wide: the impact store (D30) lies beside the coat along x.
-		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0] * 2, kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT,
-			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
+		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0] * 2, kBodyCoatSlotDim[1] * (kBodyCoatSlots / kBodyCoatSlotsPerRow), kBodyCoatSlotDim[2] * kBodyCoatSlotsPerRow, 1,
+			DXGI_FORMAT_R8G8B8A8_TYPELESS, D3D11_USAGE_DEFAULT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
 		D3D11_SUBRESOURCE_DATA init{ zero.data(), desc.Width * 4, desc.Width * desc.Height * 4 };
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
@@ -1195,7 +1214,7 @@ struct SnowDeformation::BodyCoatStore
 		Util::SetResourceName(resolveCS.get(), "SnowDeformation::BodyCoatResolveCS");
 		Util::SetResourceName(tileCS.get(), "SnowDeformation::BodyCoatTileCS");
 		Util::SetResourceName(topVS.get(), "SnowDeformation::BodyCoatTopVS");
-		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kBodyCoatSlots, 1, DXGI_FORMAT_R32_UINT, D3D11_USAGE_DEFAULT,
+		D3D11_TEXTURE3D_DESC desc{ kBodyCoatSlotDim[0], kBodyCoatSlotDim[1], kBodyCoatSlotDim[2] * kCoatScratchSlots, 1, DXGI_FORMAT_R32_UINT, D3D11_USAGE_DEFAULT,
 			D3D11_BIND_UNORDERED_ACCESS, 0, 0 };
 		std::vector<uint32_t> zero(size_t(desc.Width) * desc.Height * desc.Depth, 0u);
 		D3D11_SUBRESOURCE_DATA init{ zero.data(), desc.Width * 4, desc.Width * desc.Height * 4 };
@@ -1280,7 +1299,8 @@ struct SnowDeformation::BodyCoatStore
 		const uint32_t h = kBodyCoatSlotDim[1];
 		const uint32_t d = kBodyCoatSlotDim[2];
 		const uint32_t x0 = half < 0 ? 0u : w * uint32_t(half);
-		const uint32_t z0 = d * uint32_t(slot);
+		const uint32_t y0 = OriginY(slot);
+		const uint32_t z0 = OriginZ(slot);
 		auto byte = [](float a_v) { return uint32_t(std::clamp(a_v, 0.0f, 1.0f) * 255.0f + 0.5f); };
 		auto pack = [&](float a_r, float a_g, float a_b, float a_a) { return byte(a_r) | (byte(a_g) << 8) | (byte(a_b) << 16) | (byte(a_a) << 24); };
 		auto ramp = [](float a_inside) { return std::clamp(0.5f + a_inside / (4.0f * kBodyCoatVoxel), 0.0f, 1.0f); };
@@ -1305,7 +1325,7 @@ struct SnowDeformation::BodyCoatStore
 						texel = edge ? pack(1.0f, 1.0f, 1.0f, 1.0f) : pack(colour.x * k, colour.y * k, colour.z * k, 1.0f);
 						continue;
 					}
-					const float at[3] = { float(x0 + x), float(y), float(z0 + z) };
+					const float at[3] = { float(x0 + x), float(y0 + y), float(z0 + z) };
 					float canonical[3];
 					for (int a = 0; a < 3; ++a)
 						canonical[a_frame.axisOf[a]] = (at[a] + 0.5f - a_frame.offset[a]) / a_frame.scale[a];
@@ -1329,9 +1349,9 @@ struct SnowDeformation::BodyCoatStore
 					texel = pack(contact, fall, 0.5f, 0.5f);
 					impacts[index] = byte(contact);
 				}
-		const D3D11_BOX box{ x0, 0, z0, x0 + w, h, z0 + d };
+		const D3D11_BOX box{ x0, y0, z0, x0 + w, y0 + h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &box, texels.data(), w * 4, w * h * 4);
-		const D3D11_BOX impactBox{ x0 + kBodyCoatSlotDim[0], 0, z0, x0 + kBodyCoatSlotDim[0] + w, h, z0 + d };
+		const D3D11_BOX impactBox{ x0 + kBodyCoatSlotDim[0], y0, z0, x0 + kBodyCoatSlotDim[0] + w, y0 + h, z0 + d };
 		globals::d3d::context->UpdateSubresource(atlas.get(), 0, &impactBox, impacts.data(), w * 4, w * h * 4);
 	}
 
@@ -2347,7 +2367,7 @@ void SnowDeformation::TickBodyCoatStore()
 	// Each half's word; what its voxels can hold after (the share rounds down at
 	// most, then the whole levels); the owed fade paid.
 	BodyCoatResolveCB cb{};
-	uint32_t slots = 0;
+	std::bitset<kBodyCoatSlots> slots;
 	for (auto& [formID, a] : store.actors) {
 		uint32_t melt[2], share[2];
 		for (int c = 0; c < 2; ++c) {
@@ -2367,7 +2387,7 @@ void SnowDeformation::TickBodyCoatStore()
 				cb.Fade[first] = cb.Fade[first + 1] = word;
 			else
 				cb.Fade[first + uint32_t(a_frame.half)] = word;
-			slots |= 1u << a_frame.slot;
+			slots.set(size_t(a_frame.slot));
 			for (int c = 0; c < 2; ++c)
 				a_frame.bound[c] = std::max(0.0f, a_frame.bound[c] - std::floor(a_frame.bound[c] * float(share[c]) / 255.0f) - float(melt[c]));
 		};
@@ -2383,8 +2403,8 @@ void SnowDeformation::TickBodyCoatStore()
 		a.fading.resolves++;
 	}
 	for (uint32_t k = 0; k < kBodyCoatSlots; ++k)
-		if (slots & (1u << k))
-			cb.Slots[cb.Count++] = k;
+		if (slots.test(k))
+			cb.Slots[cb.Count++] = k | (kNoScratch << 8);
 	if (cb.Count) {
 		cb.Seed = frame ^ 0x9E3779B9u;
 		store.FadeResolve(context, cb);
@@ -2412,6 +2432,9 @@ bool SnowDeformation::BodyCoatWriteBegin(bool a_coatOnly)
 	auto& store = *bodyCoatStore;
 	if (!store.EnsureWriter())
 		return false;
+	std::fill(std::begin(store.scratchOf), std::end(store.scratchOf), int8_t(-1));
+	store.scratchUsed = 0;
+	store.scratchMissedLast = std::exchange(store.scratchMissed, 0u);
 	// Contact reads the snow as the shell draws it, placed for this frame
 	// (LandscapeSnowRefresh's recipe); snowfall needs none of it.
 	const bool shell = lastShellCBData && shellTerrainTexture && shellTerrainTexture->srv && GetDeformationSRV() && heightBottomFiltered &&
@@ -2594,19 +2617,29 @@ bool SnowDeformation::BodyCoatWriteShape(ID3D11DeviceContext* a_context, const R
 	for (const auto& row : record.ModelToAtlas)
 		if (const float length = std::sqrt(row.x * row.x + row.y * row.y + row.z * row.z); length > 0.0f)
 			voxel = std::max(voxel, 1.0f / length);
+	// Round 10: the slot's scratch slot, taken at its first draw this frame.
+	const uint32_t slot = record.Slot >> 1;
+	if (store.scratchOf[slot] < 0) {
+		if (store.scratchUsed >= kCoatScratchSlots) {
+			store.scratchMissed++;
+			return false;
+		}
+		store.scratchOf[slot] = int8_t(store.scratchUsed++);
+	}
 	// Round 8: a seed laid indoors for one come in from a storm reads no roof.
 	const float* from = store.From();
 	BodyCoatWriteCB cb{ { record.ModelToAtlas[0], record.ModelToAtlas[1], record.ModelToAtlas[2] }, record.AtlasLo, record.AtlasHi, a_write.x, { a_write.y, a_write.z },
 		a_write.w, store.currentTile, store.deformTexel, store.currentContact ? 1.0f : 0.0f, store.currentFall.z, store.skySRV && !store.currentOpenSky ? 1.0f : 0.0f,
 		{ record.ModelToCanonical[0], record.ModelToCanonical[1], record.ModelToCanonical[2] }, store.currentTop, { store.eye[0], store.eye[1], store.eye[2] }, voxel,
-		{ from[0], from[1], from[2] }, store.currentTopZ, store.currentMoving };
+		{ from[0], from[1], from[2] }, store.currentTopZ, store.currentMoving,
+		{ 0, -int32_t(BodyCoatStore::OriginY(int(slot))), int32_t(uint32_t(store.scratchOf[slot]) * kBodyCoatSlotDim[2]) - int32_t(BodyCoatStore::OriginZ(int(slot))) } };
 	D3D11_MAPPED_SUBRESOURCE mapped{};
 	if (FAILED(a_context->Map(store.writeCB.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		return false;
 	memcpy(mapped.pData, &cb, sizeof(cb));
 	a_context->Unmap(store.writeCB.get(), 0);
-	store.touched |= 1u << (record.Slot >> 1);
-	store.touchedHalves |= 1ull << record.Slot;
+	store.touched.set(slot);
+	store.touchedHalves.set(record.Slot);
 	if (store.currentDue < store.due.size())
 		store.due[store.currentDue].drawn = true;
 	return true;
@@ -2682,16 +2715,16 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 			store.raisedPending[oldest] = false;
 		}
 	}
-	if (!store.touched)
+	if (store.touched.none())
 		return;
 	globals::profiler->BeginPass("SnowDeformation::Bodies - Coat Update");
 	BodyCoatResolveCB cb{};
 	for (uint32_t k = 0; k < kBodyCoatSlots; ++k)
-		if (store.touched & (1u << k))
-			cb.Slots[cb.Count++] = k;
+		if (store.touched.test(k))
+			cb.Slots[cb.Count++] = k | (uint32_t(uint8_t(store.scratchOf[k])) << 8);
 	cb.Cap = store.capLevel;
 	cb.Seed = globals::state->frameCount;
-	store.touched = 0;
+	store.touched.reset();
 	// S5: each fall-due actor's halves fill by its snowfall, and may then hold up
 	// to what the fill brings at full exposure.
 	std::vector<std::pair<BodyCoatStore::Frame*, float>> fallen;
@@ -2750,9 +2783,9 @@ void SnowDeformation::BodyCoatWriteResolve(ID3D11DeviceContext* a_context, uint3
 		store.atlasBoundFrame = UINT32_MAX;
 	}
 	// S4: a half the writer drew into may now hold up to the cap.
-	const uint64_t halves = std::exchange(store.touchedHalves, 0ull);
+	const auto halves = std::exchange(store.touchedHalves, {});
 	for (uint32_t half = 0; half < 2 * kBodyCoatSlots; ++half)
-		if (halves & (1ull << half))
+		if (halves.test(half))
 			if (auto* coat = store.FrameAt(half >> 1, half & 1u))
 				coat->bound[0] = std::max(coat->bound[0], float(store.capLevel));
 	for (auto& [coat, fall] : fallen)
@@ -3091,11 +3124,12 @@ std::string SnowDeformation::BodyCoatWriterLine() const
 	const auto& store = *bodyCoatStore;
 	const char* writer = !debugBodyCoatContact ? "off" :
 	                     store.force != 0      ? "off while Force Coat is on" :
-	                     !store.writerTried    ? "waiting for an actor in snow" :
+	                     !store.writerTried    ? "waiting for the first coat update" :
 	                     store.writerReady     ? "on" :
 	                                             "failed (see CommunityShaders.log)";
-	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late). Due this frame: {}. Lumps only from impacts, at {:.2f} of their share (stickiness {:.2f}; the rest sits as grains).",
-		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.due.size(), store.amounts[3], GetSnowCondition().stickiness);
+	return std::format("Contact writer (S3): {}. Last update: {} actors, {} triangles tested, {} voxels raised (read a few frames late), {} slots of scratch of {}{}. Due this frame: {}. Lumps only from impacts, at {:.2f} of their share (stickiness {:.2f}; the rest sits as grains).",
+		writer, store.writtenActorsLast, store.writtenTrianglesLast, store.raisedLast, store.scratchUsed, kCoatScratchSlots,
+		store.scratchMissedLast ? std::format(" ({} draws waited for room)", store.scratchMissedLast) : std::string(), store.due.size(), store.amounts[3], GetSnowCondition().stickiness);
 }
 
 std::vector<std::string> SnowDeformation::BodyCoatFadeLines() const

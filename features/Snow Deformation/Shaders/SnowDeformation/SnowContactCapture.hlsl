@@ -208,6 +208,7 @@ static const uint kCoatTileDim = 64;
 // the snow comes from (world, unit; round 2: tilted by the wind as the game's
 // own falling snow is); and the height of the tops' centre. D30: how far it
 // has moved since, in deformation texels up to 1, the weight of its impacts.
+// Round 10: atlas texel to scratch texel, the slot's own scratch slot.
 cbuffer BodyCoatWriteCB : register(b3)
 {
 	float4 WriteModelToAtlas[3];
@@ -228,6 +229,7 @@ cbuffer BodyCoatWriteCB : register(b3)
 	float3 WriteFrom;
 	float WriteTopZ;
 	float WriteMoving;
+	int3 WriteScratchShift;
 }
 #	endif
 
@@ -377,12 +379,12 @@ void CoatPoint(float3 a_texel, float a_below, float a_wet, float a_target, float
 		GS_OUTPUT_COAT o;
 		// Pixel (0, 0) of the capture's target: every point is one PS invocation.
 		o.Position = float4(-1.0 + 1.0 / 2048.0, 1.0 - 1.0 / 2048.0, 0.5, 1.0);
-		o.Voxel = uint4(uint3(a_texel), a_growth | (uint(saturate(a_target) * 255.0 + 0.5) << 16) | (uint(saturate(a_impact) * 255.0 + 0.5) << 24));
+		o.Voxel = uint4(uint3(int3(a_texel) + WriteScratchShift), a_growth | (uint(saturate(a_target) * 255.0 + 0.5) << 16) | (uint(saturate(a_impact) * 255.0 + 0.5) << 24));
 		o.Fall = a_fall;
 		// The texel lies at least half a voxel inside the box, as the look clamps it.
 		const float3 low = floor(a_texel - 0.5);
 		const uint3 reach = low + 1.0 < WriteAtlasHi.xyz ? 1u : 0u;
-		o.Cell = uint4(uint3(low), reach.x | (reach.y << 1) | (reach.z << 2) | flags);
+		o.Cell = uint4(uint3(int3(low) + WriteScratchShift), reach.x | (reach.y << 1) | (reach.z << 2) | flags);
 		a_stream.Append(o);
 	}
 }
@@ -490,15 +492,19 @@ void main(uint3 id : SV_DispatchThreadID)
 // and beside it along x the impact store (D30: R the contact that came with an
 // impact, the lumps' only source).
 RWTexture3D<uint> CoatAtlasWords : register(u0);
-// BodyCoat.cpp kBodyCoatSlotDim[0]: the impact store's offset.
+// BodyCoat.cpp kBodyCoatSlotDim[0]: the impact store's offset. Round 10:
+// kBodyCoatSlotsPerRow slots along z a row, the rows along y.
 static const uint kCoatImpactX = 32;
+static const uint kCoatSlotsPerRow = 32;
+static const uint kCoatNoScratch = 0xFFu;
 RWTexture3D<uint> CoatContact : register(u1);
 // Bits 0-23 the snowfall (exposure over deposit), bit 31 the wash.
 RWTexture3D<uint> CoatFall : register(u2);
 // Voxels this resolve changed, for the readout.
 RWByteAddressBuffer CoatChanged : register(u3);
 
-// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into or that fade,
+// BodyCoat.cpp BodyCoatResolveCB: the slots the writer drew into or that fade
+// (round 10: bits 0-7 the slot, 8-15 its scratch slot, 0xFF none: a fade),
 // the contact cap in atlas levels, this update's rounding seed, and each slot
 // half's fade (S4, index slot x 2 + half): bits 0-7 the contact levels
 // melted, 8-15 the snowfall's, 16-23 the share of contact shaken off in
@@ -507,13 +513,13 @@ RWByteAddressBuffer CoatChanged : register(u3);
 // / the fill time), four halves to a register.
 cbuffer BodyCoatResolveCB : register(b0)
 {
-	uint4 ResolveSlots[8];
+	uint4 ResolveSlots[16];
 	uint ResolveCount;
 	uint ResolveCap;
 	uint ResolveSeed;
 	uint ResolvePad;
-	uint4 ResolveFade[16];
-	float4 ResolveFall[16];
+	uint4 ResolveFade[32];
+	float4 ResolveFall[32];
 }
 
 groupshared uint changedInGroup;
@@ -548,13 +554,21 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 	const uint k = id.z / 48u;
 	[branch] if (k < ResolveCount)
 	{
-		const uint slot = ResolveSlots[k >> 2][k & 3];
-		const uint3 t = uint3(id.xy, slot * 48u + id.z % 48u);
+		const uint entry = ResolveSlots[k >> 2][k & 3];
+		const uint slot = entry & 0xFFu;
+		const uint scratch = entry >> 8;
+		const uint3 t = uint3(id.x, (slot / kCoatSlotsPerRow) * 16u + id.y, (slot % kCoatSlotsPerRow) * 48u + id.z % 48u);
+		const uint3 ts = uint3(id.xy, scratch * 48u + id.z % 48u);
+		const bool drawn = scratch != kCoatNoScratch;
 		// A component holds half a slot, 16 texels across.
 		const uint side = slot * 2u + (id.x >> 4);
 		const uint fade = ResolveFade[side >> 2][side & 3];
-		const uint contact = CoatContact[t];
-		const uint fallWord = CoatFall[t];
+		uint contact = 0u, fallWord = 0u;
+		[branch] if (drawn)
+		{
+			contact = CoatContact[ts];
+			fallWord = CoatFall[ts];
+		}
 		[branch] if ((contact | fallWord | fade) != 0)
 		{
 			const uint was = CoatAtlasWords[t];
@@ -601,8 +615,11 @@ void main(uint3 id : SV_DispatchThreadID, uint index : SV_GroupIndex)
 			const uint now = (deposit << 16) | (g << 8) | r;
 			CoatAtlasWords[t] = now;
 			CoatAtlasWords[ti] = i;
-			CoatContact[t] = 0;
-			CoatFall[t] = 0;
+			[branch] if (drawn)
+			{
+				CoatContact[ts] = 0;
+				CoatFall[ts] = 0;
+			}
 			[branch] if (now != was || i != wasImpact)
 				InterlockedAdd(changedInGroup, 1u);
 		}

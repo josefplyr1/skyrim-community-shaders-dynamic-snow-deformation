@@ -5161,8 +5161,9 @@ public:
 	/** @brief 16 constants, the D3D11.1 offset granularity. */
 	static constexpr uint32_t kBodyCoatRecordStride = 256;
 	static constexpr uint32_t kBodyCoatRecordsMax = 1024;
-	/** @brief The atlas: kBodyCoatSlots slots of kBodyCoatSlotDim voxels (across, front-back, up) stacked in z. A body takes a slot; a component takes half of one, 16 across. */
-	static constexpr uint32_t kBodyCoatSlots = 32;
+	/** @brief The atlas: kBodyCoatSlots slots of kBodyCoatSlotDim voxels (across, front-back, up), kBodyCoatSlotsPerRow stacked in z (D3D11's 2048 caps a row at 42), the rows stacked in y. A body takes a slot; a component takes half of one, 16 across. */
+	static constexpr uint32_t kBodyCoatSlots = 64;
+	static constexpr uint32_t kBodyCoatSlotsPerRow = 32;
 	static constexpr uint32_t kBodyCoatSlotDim[3] = { 32, 16, 48 };
 	/** @brief A coat voxel's planned size: 32 x 16 x 48 over a human's ~80 x 50 x 150 units. */
 	static constexpr float kBodyCoatVoxel = 2.5f;

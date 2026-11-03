@@ -873,7 +873,7 @@ namespace SnowLighting
 	static const uint kCoatHairBeads = 64u;
 	static const uint kCoatLumpDepth = 32u;
 	static const uint kCoatLumpBlend = 128u;
-	static const float3 kCoatAtlasSize = float3(64.0, 16.0, 1536.0);
+	static const float3 kCoatAtlasSize = float3(64.0, 32.0, 1536.0);
 	static const float kCoatImpactX = 32.0;
 	// The clump field baked (BodyCoatLumps.dds from tools/lump-tiles/pack_field.py; section
 	// 5.26): CoatNoise periodic over 12 cells at 6 texels a cell, each axis's first texel
