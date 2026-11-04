@@ -24,7 +24,6 @@ void SnowDeformation::CaptureShadowAtlas()
 		liveAtlasSRV->GetResource(liveRes.put());
 		if (auto liveTex = liveRes.try_as<ID3D11Texture2D>()) {
 			liveTex->GetDesc(&atlasDesc);
-			dbgLodAtlasSlices = atlasDesc.ArraySize;
 		}
 		RecordSunCascadeSlices(atlasDesc.ArraySize);
 		if (settings.SnowCastsShadows)
@@ -217,7 +216,7 @@ void SnowDeformation::InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlas
 		return skipPatch("skip: no road meshes captured");
 	if (!ShellFootprintHasSnow() || GroundShellsSuspended())
 		return skipPatch("skip: no snow depth within the footprint");
-	if (!shellDrawGroundGated && !shellViewGateOff)
+	if (!shellDrawGroundGated)
 		return skipPatch("skip: no snow in view");
 	auto* patchCastVS = GetPatchShadowVS();
 	if (!patchCastVS)

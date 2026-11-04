@@ -1385,10 +1385,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	float4 blendedRMAOS = 0;
 #		endif
 
-#		if defined(SNOW_DEFORMATION)
-	SnowLighting::LandSnowness(snowState, input.LandBlendWeights1, input.LandBlendWeights2.xy);
-#		endif
-
 #		if defined(EMAT)
 	if (LANDSCAPE_PARALLAX_ENABLED) {
 		float terrainMaxTexDim = 0.0;
@@ -1461,9 +1457,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 			}
 		}
 	}
-#			if defined(SNOW_DEFORMATION)
-	SnowLighting::LandSnownessPostBlend(snowState, input.LandBlendWeights1, input.LandBlendWeights2.xy);
-#			endif
 #		endif  // EMAT
 #	endif      // LANDSCAPE
 
@@ -1538,10 +1531,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	normal = float4(blendedNormalRGB, blendedNormalAlpha);
 #		if defined(TRUE_PBR)
 	rawRMAOS = blendedRMAOS;
-#		endif
-
-#		if defined(SNOW_DEFORMATION)
-	SnowLighting::DebugLandOverlay(baseColor.xyz, input.WorldPosition.xy, snowState.landSnowness);
 #		endif
 #	else  // Non-landscape code
 	float4 sampledBaseColor;

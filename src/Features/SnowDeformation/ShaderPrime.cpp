@@ -6,7 +6,6 @@
 
 void SnowDeformation::DataLoaded()
 {
-	InstallDevBenchTools();
 	int expected = 0;
 	if (!snowPrimeState.compare_exchange_strong(expected, 1, std::memory_order_acq_rel))
 		return;
@@ -101,6 +100,5 @@ void SnowDeformation::RunShaderPrime()
 
 	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 	logger::info("[SNOW DEFORMATION] shader prime done in {:.1f} s", seconds);
-	LoadTraceMark(std::format("shader prime done in {:.1f} s", seconds));
 }
 

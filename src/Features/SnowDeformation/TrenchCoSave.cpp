@@ -120,8 +120,6 @@ void SnowDeformation::SaveTrenchStore(const SKSE::SerializationInterface* a_intf
 
 void SnowDeformation::LoadTrenchStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t)
 {
-	LoadTraceBegin("co-save trench store");
-	LoadTraceScope _loadTrace(this, "CoSave: LoadTrenchStore");
 	if (a_version != kTrenchRecordVersion && a_version != 1) {
 		logger::warn("[SNOW DEFORMATION] trench co-save is version {}, this build reads 1-{}; stored trenches dropped",
 			a_version, kTrenchRecordVersion);

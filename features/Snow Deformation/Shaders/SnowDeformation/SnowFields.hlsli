@@ -602,53 +602,6 @@ float2 SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_
 }
 #endif
 
-#if defined(SNOW_CONDITION_VIEW) || defined(SNOW_CONDITION_VIEW_RUNTIME)
-float4 SnowConditionAt(float a_worldZ)
-{
-	const float playerT = SnowClimate.x;
-	const float t = playerT - SnowClimate.y * (a_worldZ - SnowClimate.z);
-	const float fresh = SnowClimate.w;
-	const float wind = SnowClimate2.x;
-	const float wet = SnowClimateOverride.x >= 0.0 ? saturate(SnowClimateOverride.x) :
-	                                                 saturate(SnowClimate2.y + smoothstep(-1.5, 1.5, t) - smoothstep(-1.5, 1.5, playerT));
-	const float freshDensity = t <= 0.0 ? 67.9 + 51.3 * exp(t / 2.6) : 125.0 + 40.0 * min(t, 3.0);
-	const float density = clamp(lerp(freshDensity, 290.0, 1.0 - fresh) + 110.0 * wet + 150.0 * wind, 50.0, 560.0);
-	const float sticky = SnowClimateOverride.y >= 0.0 ? saturate(SnowClimateOverride.y) :
-	                                                    saturate(0.1 + 0.62 * smoothstep(-20.0, -1.5, t) * (0.3 + 0.7 * (1.0 - fresh)) +
-																 0.45 * wet * (1.0 - smoothstep(0.75, 1.0, wet)) + 0.25 * wind);
-	const float firm = SnowClimateOverride.z >= 0.0 ? saturate(SnowClimateOverride.z) : smoothstep(150.0, 460.0, density);
-	return float4(t, wet, sticky, firm);
-}
-
-float3 SnowConditionColor(float4 a_condition, float a_view, float2 a_track)
-{
-	const float t = a_condition.x;
-	const float band = t / 2.0;
-	const float bandWidth = fwidth(band);
-	float3 color;
-	[branch] if (a_view < 1.5)
-	{
-		const float3 cold = lerp(float3(1.0, 1.0, 1.0), float3(0.05, 0.25, 1.0), saturate(-t / 20.0));
-		const float3 warm = lerp(float3(1.0, 1.0, 1.0), float3(1.0, 0.25, 0.0), saturate(t / 4.0));
-		const float isotherm = 1.0 - smoothstep(0.0, 1.5 * bandWidth, abs(frac(band + 0.5) - 0.5));
-		color = (t < 0.0 ? cold : warm) * (1.0 - 0.6 * isotherm);
-	}
-	else if (a_view < 2.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(0.1, 0.35, 1.0), a_condition.y);
-	else if (a_view < 3.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(1.0, 0.45, 0.05), a_condition.z);
-	else if (a_view < 4.5)
-		color = lerp(float3(0.95, 0.95, 0.95), float3(0.55, 0.1, 0.85), a_condition.w);
-	else if (a_view < 5.5)
-		color = a_condition.yzw;
-	else if (a_view < 6.5)
-		color = lerp(float3(0.95, 0.95, 0.95), lerp(float3(0.15, 0.85, 0.2), float3(0.75, 0.2, 0.05), a_track.x), a_track.y);
-	else
-		color = lerp(float3(0.95, 0.95, 0.95), float3(0.05, 0.75, 1.0), a_track.x);
-	return color;
-}
-#endif
-
 float4 SampleBlood(float2 gridLocal, out float fresh)
 {
 	fresh = 0.0;

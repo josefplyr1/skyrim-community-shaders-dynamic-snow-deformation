@@ -650,8 +650,6 @@ bool SnowDeformation::LsCascadeMeetsSnow()
 	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
 	if (cascadeCountFrame != frame) {
 		cascadeCountFrame = frame;
-		cascadeRaisedLast = std::exchange(cascadeRaised, 0u);
-		cascadeSkippedLast = std::exchange(cascadeSkipped, 0u);
 		cascadeGateFrame = UINT32_MAX;
 	}
 	if (cascadeGateFrame == frame && std::memcmp(&cascadeGateVP, &m, sizeof(m)) == 0 && std::memcmp(&cascadeGateCam, &cam, sizeof(cam)) == 0)
@@ -668,7 +666,6 @@ bool SnowDeformation::LsCascadeMeetsSnow()
 		planes[i][3] -= planes[i][0] * cam.x + planes[i][1] * cam.y + planes[i][2] * cam.z;
 	}
 	cascadeGateMeets = SnowCellsMeetFootprints(&planes, 1, LsRiseReach(), false);
-	(cascadeGateMeets ? cascadeRaised : cascadeSkipped)++;
 	return cascadeGateMeets;
 }
 
@@ -1024,7 +1021,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		}
 		if (!ls.cbValid)
 			want = LsMode::kNone;
-		else if (want != LsMode::kNone && !cascadeRaiseGateOff && !LsCascadeMeetsSnow())
+		else if (want != LsMode::kNone && !LsCascadeMeetsSnow())
 			want = LsMode::kNone;
 	}
 	float2 boundXY{};
@@ -1195,140 +1192,3 @@ void SnowDeformation::LandscapeSnowRestore()
 		LsDetach();
 }
 
-std::string SnowDeformation::LandscapeSnowStatus() const
-{
-	uint32_t ready = 0, compiling = 0, failed = 0;
-	uint64_t tess = 0, raise = 0;
-	for (const auto& [key, e] : ls.entries) {
-		ready += e.state == 2 ? 1 : 0;
-		compiling += e.state == 1 ? 1 : 0;
-		failed += e.state == 3 ? 1 : 0;
-		tess += e.tessAttaches;
-		raise += e.raiseAttaches;
-	}
-	constexpr const char* kStates[4] = { "not started", "compiling", "ready", "FAILED" };
-	const auto& c = ls.shadeLast;
-	const std::string shade = std::format(" | Snow on Landscape: replay {}, {} draws captured, {} replayed ({} tessellated, {} culled by the camera passes), {} main-pass draws not captured", kStates[std::clamp(ls.shadeState, 0, 3)],
-		c.captures, c.replayDraws, c.replayTess, c.replayCulled, c.mainMissed);
-	return std::format("shader sets: {} ready, {} compiling, {} failed | draws raised so far: {} tessellated, {} vertex-only{}{}", ready, compiling, failed, tess, raise,
-		ls.cbValid ? "" : " | waiting for the shell's fields (no snow in the footprint, or not drawn yet)", shade);
-}
-
-json SnowDeformation::LandscapeSnowTool(const json& a_args)
-{
-	auto& c = ls.cfg;
-	const auto rdb = [&](const char* k, bool& v) {
-		if (a_args.contains(k) && a_args[k].is_boolean())
-			v = a_args[k].get<bool>();
-	};
-	const auto rdf = [&](const char* k, float& v) {
-		if (a_args.contains(k) && a_args[k].is_number())
-			v = a_args[k].get<float>();
-	};
-	rdb("tessellate", c.tessellate);
-	rdb("gate", c.gate);
-	rdb("cull", c.cull);
-	rdb("measure", c.measure);
-	rdb("stats", c.stats);
-	rdf("maxFactor", c.maxFactor);
-	rdf("guard", c.guard);
-	rdf("lift", c.lift);
-	rdf("tessReach", c.tessReach);
-	rdf("shadowTessReach", c.shadowTessReach);
-	rdf("blendBonus", c.blendBonus);
-	rdf("blendPenalty", c.blendPenalty);
-	rdb("culledLand", c.culledLand);
-	rdb("landRecolor", landRecolor);
-	if (a_args.contains("gateMask") && a_args["gateMask"].is_number_integer())
-		c.gateMask = std::clamp(a_args["gateMask"].get<int>(), 0, 31);
-	c.maxFactor = std::clamp(c.maxFactor, 1.0f, 64.0f);
-	if (a_args.contains("recompile") && a_args["recompile"].is_boolean() && a_args["recompile"].get<bool>()) {
-		for (auto it = ls.entries.begin(); it != ls.entries.end();)
-			it = it->second.state == 1 ? std::next(it) : ls.entries.erase(it);
-		if (ls.shadeState != 1) {
-			ls.shade = {};
-			ls.shadeState = 0;
-		}
-		Util::ClearShaderCompileFailures();
-	}
-
-	json out;
-	{
-		std::lock_guard lock(lsMutex);
-		if (a_args.contains("reset") && a_args["reset"].is_boolean() && a_args["reset"].get<bool>())
-			ls.totals = {};
-		const auto& t = ls.totals;
-		const double f = t.frames ? double(t.frames) : 1.0;
-		const double sf = t.statFrames ? double(t.statFrames) : 1.0;
-		json cats = json::object();
-		for (uint32_t i = 0; i < kLsCategories; i++) {
-			cats[kLsNames[i]] = { { "gpuMs", t.gpuMs[i] / f }, { "draws", t.draws[i] / f }, { "tessellated", t.tess[i] / f }, { "raised", t.raise[i] / f }, { "baseTris", t.tris[i] / f },
-				{ "stats", { { "iaPrims", t.ia[i] / sf }, { "vs", t.vs[i] / sf }, { "hs", t.hs[i] / sf }, { "ds", t.ds[i] / sf }, { "cInvocations", t.cinv[i] / sf }, { "cPrimitives", t.cprim[i] / sf } } } };
-		}
-		json targets = json::array();
-		for (uint32_t k = 0; k < ls.targetCount; k++) {
-			const auto& tg = ls.targets[k];
-			targets.push_back({ { "category", kLsNames[tg.category] }, { "texture", std::format("{:X}", reinterpret_cast<uintptr_t>(tg.texture)) }, { "slice", tg.slice },
-				{ "size", std::format("{}x{}x{}", tg.width, tg.height, tg.arraySize) }, { "gpuMs", t.targetMs[k] / f }, { "draws", t.targetDraws[k] / f }, { "baseTris", t.targetTris[k] / f } });
-		}
-		out["targets"] = targets;
-		out["totals"] = { { "frames", t.frames }, { "statFrames", t.statFrames }, { "lost", t.lost }, { "disjoint", t.disjoint }, { "overflow", t.overflow }, { "categories", cats } };
-	}
-	out["config"] = { { "tessellate", c.tessellate }, { "gate", c.gate }, { "cull", c.cull },
-		{ "measure", c.measure }, { "stats", c.stats }, { "maxFactor", c.maxFactor }, { "guard", c.guard }, { "lift", c.lift }, { "tessReach", c.tessReach }, { "shadowTessReach", c.shadowTessReach }, { "gateMask", c.gateMask },
-		{ "blendBonus", c.blendBonus }, { "blendPenalty", c.blendPenalty }, { "culledLand", c.culledLand },
-		{ "landRecolor", landRecolor }, { "landRecolorActive", LandRecolorActive() } };
-	json entries = json::array();
-	for (const auto& [key, e] : ls.entries)
-		entries.push_back({ { "descriptor", std::format("{:X}", uint32_t(key)) }, { "state", e.state },
-			{ "tessAttaches", e.tessAttaches }, { "raiseAttaches", e.raiseAttaches }, { "compileMs", e.shaders.compileMs }, { "defines", e.shaders.defines } });
-	out["shaders"] = entries;
-	out["surface"] = { { "valid", ls.cbValid }, { "gridOrigin", { lsCB.GridOrigin.x, lsCB.GridOrigin.y } },
-		{ "liveRect", { ls.liveRect.x, ls.liveRect.y, ls.liveRect.z, ls.liveRect.w } }, { "camera", { lsCB.CameraPosAdjust.x, lsCB.CameraPosAdjust.y, lsCB.CameraPosAdjust.z } } };
-	const auto& sc = ls.shadeLast;
-	const auto excl = [](const LsExclCounts& a_c) { return json{ { "draws", a_c.draws }, { "rects", a_c.rects }, { "overflow", a_c.overflow } }; };
-	out["shade"] = { { "replayState", ls.shadeState }, { "compileMs", ls.shade.compileMs }, { "fallbackFrames", ls.shadeFallbacks },
-		{ "lastFrame", { { "captures", sc.captures }, { "mainDraws", sc.mainDraws }, { "mainMissed", sc.mainMissed }, { "replayCalls", sc.replayCalls }, { "replayDraws", sc.replayDraws }, { "replayTessellated", sc.replayTess }, { "replayCulled", sc.replayCulled },
-						   { "replaySmallExclusions", excl(sc.replayExcl) }, { "raiseSmallExclusions", excl(sc.raiseExcl) } } } };
-	json sealed = json::array();
-	for (const auto& [posRadius, dirExtType] : staticExclusions)
-		if (dirExtType.w > 2.5f && sealed.size() < 32)
-			sealed.push_back({ posRadius.x, posRadius.y, posRadius.z, posRadius.w, dirExtType.z, std::atan2(dirExtType.x, dirExtType.y) });
-	out["sealed"] = sealed;
-	json cams = json::object();
-	for (uint32_t i = 0; i < kLsCategories; i++)
-		cams[kLsNames[i]] = { { "used", { ls.camUsed[i].x, ls.camUsed[i].y, ls.camUsed[i].z } }, { "perFrameBuffer", { ls.camFrame[i].x, ls.camFrame[i].y, ls.camFrame[i].z } } };
-	out["cameras"] = cams;
-	if (a_args.contains("mixed") && a_args["mixed"].is_boolean() && a_args["mixed"].get<bool>() && !shellBareScratch.empty()) {
-		const auto* camera = RE::Main::WorldRootCamera();
-		const RE::NiPoint3 eye = camera ? camera->world.translate : RE::NiPoint3{};
-		const float radius = a_args.contains("mixedRadius") && a_args["mixedRadius"].is_number() ? a_args["mixedRadius"].get<float>() : 3000.0f;
-		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
-		const float originX = shellWindowCellX * cellSize;
-		const float originY = shellWindowCellY * cellSize;
-		json texels = json::array();
-		uint32_t count = 0;
-		uint32_t histogram[11]{};
-		for (int ty = 0; ty < kShellWindowDim; ++ty) {
-			for (int tx = 0; tx < kShellWindowDim; ++tx) {
-				const uint8_t bare = shellBareScratch[size_t(ty) * kShellWindowDim + tx];
-				const float wx = originX + tx * kShellVertexSpacing;
-				const float wy = originY + ty * kShellVertexSpacing;
-				if ((wx - eye.x) * (wx - eye.x) + (wy - eye.y) * (wy - eye.y) > radius * radius)
-					continue;
-				const float snow = 1.0f - bare / 255.0f;
-				if (bare < 255)
-					histogram[bare == 0 ? 10 : std::min(int(snow * 10.0f), 9)]++;
-				if (snow < 0.2f || snow > 0.8f)
-					continue;
-				count++;
-				if (texels.size() < 64)
-					texels.push_back({ wx, wy, snow });
-			}
-		}
-		out["mixed"] = { { "count", count }, { "texels", texels }, { "snowWeightHistogram", histogram }, { "windowBlend", shellWindowLandBlend },
-			{ "windowBlendStart", shellWindowLandBlendStart } };
-	}
-	out["status"] = LandscapeSnowStatus();
-	return out;
-}

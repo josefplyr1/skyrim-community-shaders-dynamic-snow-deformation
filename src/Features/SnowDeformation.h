@@ -141,47 +141,6 @@ public:
 		uint32_t worldspaceID = 0;
 	};
 
-	struct ShellProbe
-	{
-		float worldX = 0.0f;
-		float worldY = 0.0f;
-		int cellX = 0;
-		int cellY = 0;
-		int vertexX = 0;
-		int vertexY = 0;
-		bool cellFound = false;
-		bool worldspaceMatch = false;
-		uint32_t cellWorldspace = 0;
-		uint32_t activeWorldspaceID = 0;
-		uint32_t windowWorldspaceID = 0;
-		float height = 0.0f;
-		float rampDepth = 0.0f;
-		float coverage = 0.0f;
-		struct Layer
-		{
-			std::string label;
-			float weight = 0.0f;
-			float depth = 0.0f;
-		};
-		std::vector<Layer> layers;
-	};
-
-	struct ObjectSnowProbe
-	{
-		struct Entry
-		{
-			std::string name;
-			std::string model;
-			float radius = 0.0f;
-			float topZ = 0.0f;
-			float distXY = 0.0f;
-			bool road = false;
-		};
-		size_t captured = 0;
-		size_t overlapping = 0;
-		std::vector<Entry> entries;
-	};
-
 	struct LandTextureEntry
 	{
 		std::string path;
@@ -570,7 +529,7 @@ public:
 
 	Texture2D* bermFieldTexture = nullptr;
 
-	/** @brief SRV of the deformation map (the single canonical texture), for shader sampling and debug UI. Physical (toroidal) layout - readers translate through DeformMapOrigin. */
+	/** @brief SRV of the deformation map (the single canonical texture), for shader sampling. Physical (toroidal) layout - readers translate through DeformMapOrigin. */
 	ID3D11ShaderResourceView* GetDeformationSRV() const { return deformationTextures[0] ? deformationTextures[0]->srv.get() : nullptr; }
 	/** @brief SRV of the baked berm field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetBermFieldSRV() const { return bermFieldTexture ? bermFieldTexture->srv.get() : nullptr; }
@@ -593,9 +552,6 @@ public:
 
 	Texture2D* bloodMapTexture = nullptr;
 	Texture2D* bloodClockTexture = nullptr;
-	bool bloodMapWritten = false;
-	float4 bloodWrittenBox = {};
-	bool bloodLatchOff = false;
 	float bloodBurialClock = 0.0f;
 	static constexpr float kRefillStep = 1.0f / 1024.0f;
 	float refillBank = 0.0f;
@@ -661,7 +617,6 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> bloodOverlayPS;
 	winrt::com_ptr<ID3D11BlendState> bloodOverlayBlendState;
 	winrt::com_ptr<ID3D11DepthStencilState> bloodOverlayDepthState;
-	uint32_t bloodOverlaysLast = 0;
 	/** @brief Draws this frame's blood decals over the object-snow coat, into the skin pass's targets. Called at the end of the skin pass. */
 	void DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth);
 	struct alignas(16) BloodCB
@@ -740,9 +695,6 @@ public:
 	uint32_t coatReachFrame = UINT32_MAX;
 	size_t coatReachMarked = 0;
 	void MarkCoatReach(float a_x, float a_y, float a_radius);
-	bool decalReachGateOff = false;
-	uint32_t decalReachMisses = 0;
-	uint32_t decalReachMissesLast = 0;
 	/** @brief From the capture hook: one of the engine's runtime decals that is not blood. Overlay only, never the blood map. */
 	void CaptureDecalOverlay(RE::BSRenderPass* a_pass);
 	bool DecalOverlayWanted() const { return settings.BloodOnSnow || settings.DecalsOnObjectSnow; }
@@ -814,7 +766,6 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDetailHeightSRV;
 	bool trenchDetailAttempted = false;
 	void EnsureTrenchDetailTextures();
-	bool debugTrenchDetailView = false;
 	struct alignas(16) UndulationFieldCB
 	{
 		float2 FieldOriginWorld;
@@ -853,7 +804,6 @@ public:
 		kTrackRebaseCS,
 		kDeformationEvolveCS,
 		kDeformationStampCS,
-		kContactViewCS,
 		kDeformationStampAllCS,
 		kDeformationScanEvolveCS,
 		kDeformationScanSnapshotCS,
@@ -873,7 +823,6 @@ public:
 		kSkinSssSyncMarkCS,
 		kTerrainFineCS,
 		kWindowFillCS,
-		kTrenchDebugCS,
 		kClusterCullCS,
 		kSkinCullCS,
 		kSnowCSCount
@@ -888,7 +837,6 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> stampTileSRV;
 	std::vector<uint32_t> stampTileScratch;
 	std::vector<uint32_t> stampTileBits;
-	uint32_t stampTilesLast = 0;
 	/** @brief Fills stampTileScratch with the deduped physical tiles the stamp inputs touch (wrap-aware). Returns the count, or UINT32_MAX on overflow past kStampTileCap. */
 	uint32_t BuildStampTileList(const PerFrame& a_data);
 
@@ -905,9 +853,7 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> snapshotTileSRV;
 	winrt::com_ptr<ID3D11Buffer> snapshotArgsBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> snapshotArgsUAV;
-	bool evolveSnapshotOff = false;
 	bool tileGridsNeedInit = true;
-	uint32_t evolveTilesLast = 0;
 
 	winrt::com_ptr<ID3D11Texture2D> bermDirtyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermDirtyUAV;
@@ -917,7 +863,6 @@ public:
 	winrt::com_ptr<ID3D11ShaderResourceView> bermTileSRV;
 	winrt::com_ptr<ID3D11Buffer> bermArgsBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermArgsUAV;
-	uint32_t bermTilesLast = 0;
 	winrt::com_ptr<ID3D11Texture2D> bermOccupancyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermOccupancyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bermOccupancySRV;
@@ -936,7 +881,7 @@ public:
 	void CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_src, int a_x0, int a_y0, int a_w, int a_h, DirectX::XMINT2 a_physOrigin);
 	virtual void ClearShaderCache() override;
 
-	/** @brief Draws the ImGui settings UI, including the debug view of the deformation map. Implemented in SnowDeformation/Menu.cpp. */
+	/** @brief Draws the ImGui settings UI. Implemented in SnowDeformation/Menu.cpp. */
 	virtual void DrawSettings() override;
 
 	virtual void LoadSettings(json& o_json) override;
@@ -1138,40 +1083,11 @@ public:
 	 */
 	void DrawShell();
 
-	bool shellPipelineStatsEnabled = false;
-	struct ShellStatsResult
-	{
-		uint64_t vsInvocations = 0;
-		uint64_t hsInvocations = 0;
-		uint64_t dsInvocations = 0;
-		uint64_t psInvocations = 0;
-		uint64_t rasterizedPrimitives = 0;
-		uint64_t samplesPassed = 0;
-		bool valid = false;
-	};
-	static constexpr int kShellStatsRing = 3;
-	winrt::com_ptr<ID3D11Query> shellStatsQuery[kShellStatsRing][2];
-	winrt::com_ptr<ID3D11Query> staticsStatsQuery[kShellStatsRing][2];
-	winrt::com_ptr<ID3D11Query> patchStatsQuery[kShellStatsRing][2];
-	bool patchStatsArmed = false;
-	bool shellStatsIssued[kShellStatsRing] = {};
-	int shellStatsRing = 0;
-	ShellStatsResult shellStatsLast;
-	ShellStatsResult staticsStatsLast;
-	ShellStatsResult patchStatsLast;
-	bool EnsureShellStatsQueries();
-	void ReadShellStatsQueries(ID3D11DeviceContext* a_context);
-	bool shellDeferredThisFrame = false;
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
 	winrt::com_ptr<ID3D11PixelShader> shellPSDeferred;
 	ID3D11PixelShader* GetShellPSDeferred();
-	winrt::com_ptr<ID3D11PixelShader> shellPSDeferredConditionView;
-	std::atomic<int> conditionViewShaderState = 0;
-	std::future<bool> conditionViewCompile;
-	/** @brief The condition-view deferred PS when the view is on and compiled; null otherwise (the normal shading draws). */
-	ID3D11PixelShader* ConditionViewPS();
 
 	Texture2D* marchHeight[3] = {};
 	Texture2D* marchSunEnvelope = nullptr;
@@ -1213,14 +1129,8 @@ public:
 	bool marchSunValid = false;
 	uint32_t marchSunRowCursor = 0;
 	uint32_t marchSunFastRows = 0;
-	static constexpr uint32_t kMarchCensusFrames = 300;
 	uint32_t marchIdleFrames = 0;
 	static constexpr uint32_t kMarchIdleFrames = 30;
-	uint64_t marchIdleSkipped = 0;
-	bool marchIdleOff = false;
-	std::array<uint8_t, kMarchCensusFrames> marchCensus{};
-	uint32_t marchCensusCursor = 0;
-	uint32_t marchCensusFilled = 0;
 	/** @brief Brings the caches up to date and binds them at PS t106-t108, the sun envelope at t100 (DrawShell, after the shell CB upload). False = no caches this frame: the marches must be switched off, as they read nothing else. */
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
@@ -1240,7 +1150,6 @@ public:
 	uint32_t shellEarlyFrame = UINT32_MAX;
 	std::unique_ptr<ShellCB> shellEarlyCB;
 	D3D11_VIEWPORT shellEarlyViewport{};
-	uint32_t shellEarlyViewMismatches = 0;
 	D3D11_VIEWPORT shellDrawViewport{};
 	uint32_t shellDrawViewportFrame = UINT32_MAX;
 	bool shellDrawGroundGated = false;
@@ -1280,8 +1189,6 @@ public:
 	ID3D11ComputeShader* GetSssChangedRaymarchCS();
 	winrt::com_ptr<ID3D11ComputeShader> sssChangedRaymarchCS;
 	uint32_t sssChangedRaymarchSamples = 0;
-	bool sssChangedMarchOff = false;
-	uint32_t sssChangedMarchFrame = UINT32_MAX;
 	/** @brief Copies the blended depth the first march read, on frames after one the skins marched in. */
 	void CopyFirstMarchDepth();
 	/** @brief (Re)creates sssChangedTiles for a depth of this size; true when it is usable. */
@@ -1345,8 +1252,6 @@ public:
 	static constexpr float kDecalViewportMaxDepth = 0.99997199f;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
 
-	int staticsDebugView = 0;
-
 	winrt::com_ptr<ID3D11ShaderResourceView> lightingCloudShadowSRV;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> shellSnowDiffuseSRV;
@@ -1394,9 +1299,6 @@ public:
 	/** @brief Snapshot of the per-index depths, taken once per window rebuild so the texel loop needs no lock. Implemented in SnowDeformation/TerrainData.cpp. */
 	std::vector<float> LandTextureDepthSnapshot();
 
-	/** @brief Reads the baked cell under a world position: which worldspace it came from, its height, and the textures resolving its depth. Implemented in SnowDeformation/TerrainData.cpp. */
-	ShellProbe ProbeShellData(float a_x, float a_y);
-
 	/** @brief Re-resolves one entry: user value, then shipped per-texture default, then the family depth. Caller holds landTextureMutex exclusively. */
 	void ResolveLandTextureDepthLocked(LandTextureEntry& a_entry);
 
@@ -1437,13 +1339,6 @@ public:
 
 	/** @brief Nominal (untrampled) snow depth in world units at a world XY, resolved from the baked cell data and the class depth sliders. Returns a_missing where no cell is baked (interiors, unvisited land). Implemented in SnowDeformation/TerrainData.cpp. */
 	float GetNominalSnowDepthAt(float a_x, float a_y, float a_missing);
-
-	/** @brief Thread-safe count of baked cells, for the settings UI. */
-	size_t ShellCellCountForUI()
-	{
-		const std::shared_lock lock(shellCellMutex);
-		return shellCells.size();
-	}
 
 	uint32_t shellStatCellsInWindow = 0;
 	uint32_t shellStatSnowTexels = 0;
@@ -1493,14 +1388,6 @@ public:
 	/** @brief Fills capturedWater from TESWaterSystem::waterObjects (every live body's shape, culled or not); not from the water shader's draws, which also carry the LOD quadtree, skirts, the displacement mesh and the waterline-crossing effect. */
 	void GatherWaterObjects();
 	ankerl::unordered_dense::set<void*> capturedStaticsSet;
-	std::atomic<uint32_t> statCapturedStatics{ 0 };
-
-	uint32_t statProjMatched = 0;
-	uint32_t statProjNoProjection = 0;
-	uint32_t statProjVetoed = 0;
-	uint32_t statProjMatchedPrev = 0;
-	uint32_t statProjNoProjectionPrev = 0;
-	uint32_t statProjVetoedPrev = 0;
 
 	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
 	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique);
@@ -1508,8 +1395,6 @@ public:
 	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds the snow set for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
 	void SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass);
 
-	/** @brief Lists this frame's captured statics whose bounds cover a world position, largest first: what the object snow is skinning there. Implemented in SnowDeformation/Statics.cpp. */
-	ObjectSnowProbe ProbeObjectSnow(float a_x, float a_y);
 	/** @brief Installs the SetupGeometry capture hook. Called from PostPostLoad; implemented in SnowDeformation/Statics.cpp. */
 	void InstallStaticsCaptureHook();
 	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
@@ -1528,16 +1413,8 @@ public:
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person, mount, bleedout (ragdoll, death), dragon and PCTransition, plus any non-free camera while the player is down: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would; while knocked down, ragdolled or dead, lift it straight up instead. */
 	void ClampCameraAboveSnow();
-	uint8_t cameraProbeState = 0;
-	uint32_t cameraProbeFired = 0;
-	uint32_t cameraProbeCamState = 0;
-	bool cameraProbeDown = false;
-	float cameraProbeZ = 0.0f;
-	float cameraProbeSurface = 0.0f;
-
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
-	bool masksCopyGateOff = false;
 	winrt::com_ptr<ID3D11Texture2D> preDecalMasksTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> preDecalMasksSRV;
 	uint32_t preDecalMasksFrame = UINT32_MAX;
@@ -1576,18 +1453,10 @@ public:
 	/** @brief Re-derives the camera-anchored placement fields of a ShellCB (the fields' frame) from THIS frame's camera. Shared by DrawShell, S1 and the shadow passes, so no pass reads the fields through a frame-old placement (a stale one slides a crisp shadow during camera motion). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust = nullptr);
 
-	uint32_t dbgLodDescriptorCount = 0;
-	float dbgLodEndSplits[3] = { 0.0f, 0.0f, 0.0f };
-	uint32_t dbgLodAtlasSlices = 0;
-
 	/** @brief Queries adapter VRAM usage/budget in MB via IDXGIAdapter3 (zeros when unavailable). Usage above budget = driver demotion to system RAM = the large persistent FPS-loss mode that survives disabling features. */
 	void QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB, uint64_t* a_nonLocalMB = nullptr);
 	/** @brief VRAM-Aware Trench Map, from Prepass: drops a trench map above 2048 to 2048 for the session when the adapter nears its VRAM budget. */
 	void TickVRAMLog();
-	uint64_t vramTickCounter = 0;
-	/** @brief Logs a snow profiler row far over its usual cost, with the adapter's memory and the frame's heaviest rows. */
-	void TickRowSpikeLog();
-	uint64_t rowSpikeQuietUntil = 0;
 
 	Buffer* pointShadowLights = nullptr;
 
@@ -1748,162 +1617,11 @@ public:
 	RangeAllocator clusterFree;
 	RangeAllocator clusterIndexPoolFree;
 
-	struct CpuCensus
-	{
-		int64_t hookTicks = 0;
-		uint32_t hookCalls = 0;
-		uint32_t hookBitCalls = 0;
-		int64_t actorTicks = 0;
-		uint32_t actors = 0;
-		int64_t landTicks = 0;
-		uint32_t landCalls = 0;
-		int64_t depthTicks = 0;
-		uint32_t depthCalls = 0;
-		int64_t traverseTicks = 0;
-		uint32_t traverseCalls = 0;
-		uint32_t skinLoopDraws = 0;
-		uint32_t skinLoopCBUpdates = 0;
-		uint64_t stampHash = 0;
-		uint32_t stampHashStable = 0;
-		uint64_t captureHash = 0;
-		uint32_t captureCount = 0;
-		static constexpr uint32_t kHashRing = 300;
-		uint64_t stampHashRing[kHashRing] = {};
-		uint32_t stampHashHead = 0;
-		bool stampHashDumpRequested = false;
-		enum Span : uint32_t
-		{
-			kSpanPrepass,
-			kSpanDrawShell,
-			kSpanShellSetup,
-			kSpanObjectHeightMap,
-			kSpanWaterCapture,
-			kSpanWaterCover,
-			kSpanBloodCapture,
-			kSpanRuneCapture,
-			kSpanGround,
-			kSpanStatics,
-			kSpanShellRestore,
-			kSpanShellTail,
-			kSpanPrepassHead,
-			kSpanPrepassArcsAndGate,
-			kSpanPrepassPerFrame,
-			kSpanTrenchTicks,
-			kSpanTrenchSweep,
-			kSpanTrenchDrain,
-			kSpanTrenchFlush,
-			kSpanTrenchRoll,
-			kSpanTrenchInject,
-			kSpanGather,
-			kSpanContact,
-			kSpanDirtyRows,
-			kSpanPolls,
-			kSpanIdleLogic,
-			kSpanDispatch,
-			kSpanPrepassTail,
-			kSpanContactActor,
-			kSpanContactUpload,
-			kSpanContactDynamic,
-			kSpanContactDraw,
-			kSpanContactGeometry,
-			kSpanContactSkinned,
-			kSpanExclusionGather,
-			kSpanCount
-		};
-		static constexpr const char* kSpanNames[kSpanCount] = { "Prepass", "DrawShell", "DrawShell.Setup", "DrawShell.ObjectHeightMap", "DrawShell.WaterCapture", "DrawShell.WaterCover", "DrawShell.BloodCapture", "DrawShell.RuneCapture", "DrawShell.Ground", "DrawShell.Statics", "DrawShell.Restore", "DrawShell.Tail",
-			"Prepass.Head", "Prepass.ArcsAndGate", "Prepass.PerFrame", "Prepass.TrenchTicks", "Prepass.TrenchSweep", "Prepass.TrenchDrain", "Prepass.TrenchFlush", "Prepass.TrenchRoll", "Prepass.TrenchInject", "Prepass.Gather", "Prepass.Contact", "Prepass.DirtyRows", "Prepass.Polls", "Prepass.IdleLogic", "Prepass.Dispatch", "Prepass.Tail",
-			"Contact.Actor", "Contact.Upload", "Contact.Dynamic", "Contact.Draw", "Contact.Geometry", "Contact.Skinned", "DrawShell.ExclusionGather" };
-		int64_t spanTicks[kSpanCount] = {};
-		uint32_t spanCalls[kSpanCount] = {};
-		uint64_t stampsTotal = 0;
-		uint64_t carveStampsTotal = 0;
-		uint64_t rowsMarkedTotal = 0;
-		uint64_t contactRectsTotal = 0;
-		uint64_t settledSkipsTotal = 0;
-		struct StampSource
-		{
-			uint32_t formID;
-			uint32_t stamps;
-		};
-		static constexpr uint32_t kStampSourceMax = 16;
-		StampSource stampSources[kStampSourceMax] = {};
-		uint32_t stampSourceCount = 0;
-		StampSource lastStampSources[kStampSourceMax] = {};
-		uint32_t lastStampSourceCount = 0;
-		uint32_t lastStampSourceFrame = 0;
-		enum StorePath : uint32_t
-		{
-			kStoreRoll,
-			kStoreRollStale,
-			kStoreBand,
-			kStoreBandStale,
-			kStoreJump,
-			kStorePathCount
-		};
-		static constexpr const char* kStorePathNames[kStorePathCount] = { "roll", "rollStale", "band", "bandStale", "jump" };
-		uint64_t storeCalls[kStorePathCount] = {};
-		uint64_t storeRaises[kStorePathCount] = {};
-		uint32_t trenchStorePath = kStoreRoll;
-		static constexpr uint32_t kFrameRing = 1200;
-		struct FrameRow
-		{
-			uint32_t frame;
-			float periodMs;
-			float hookMs, actorMs, landMs;
-			float spanMs[kSpanCount];
-		};
-		FrameRow frameRing[kFrameRing] = {};
-		uint32_t frameRingHead = 0;
-		uint32_t frameRingCount = 0;
-		std::mutex frameRingLock;
-	};
-	static inline CpuCensus cpuCensus;
-	static inline bool cpuCensusArmed = false;
-	uint32_t cpuCensusArmedUntil = 0;
-	struct CpuCensusShown
-	{
-		float hookMs = 0.0f, hookCalls = 0.0f, actorMs = 0.0f, actors = 0.0f, landMs = 0.0f, landCalls = 0.0f;
-		float depthMs = 0.0f, depthCalls = 0.0f, traverseMs = 0.0f, traverseCalls = 0.0f;
-		float skinLoopDraws = 0.0f, skinLoopCBUpdates = 0.0f;
-		float spanMs[CpuCensus::kSpanCount] = {};
-		float spanCalls[CpuCensus::kSpanCount] = {};
-	};
-	CpuCensusShown cpuShown;
-	struct ScopedTicks
-	{
-		int64_t& acc;
-		uint32_t& calls;
-		uint64_t t0;
-		ScopedTicks(int64_t& a_acc, uint32_t& a_calls) :
-			acc(a_acc), calls(a_calls), t0(cpuCensusArmed ? __rdtsc() : 0) {}
-		~ScopedTicks()
-		{
-			if (t0) {
-				acc += int64_t(__rdtsc() - t0);
-				calls++;
-			}
-		}
-	};
-	struct SpanClock
-	{
-		uint64_t t = __rdtsc();
-		void Lap(CpuCensus::Span a_span)
-		{
-			const uint64_t now = __rdtsc();
-			cpuCensus.spanTicks[a_span] += int64_t(now - t);
-			cpuCensus.spanCalls[a_span]++;
-			t = now;
-		}
-	};
 	template <class F>
 	static void TimedTraverse(RE::NiAVObject* a_root, F&& a_visitor)
 	{
-		ScopedTicks _t(cpuCensus.traverseTicks, cpuCensus.traverseCalls);
 		RE::BSVisit::TraverseScenegraphCollision(a_root, std::ref(a_visitor));
 	}
-	void RollCpuCensus();
-	uint32_t clusterSkinsLast = 0;
-	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
 	winrt::com_ptr<ID3D11ComputeShader> smoothAccumulateCS;
 	winrt::com_ptr<ID3D11ComputeShader> smoothResolveCS;
@@ -1985,25 +1703,18 @@ public:
 	uint32_t coneFusedRuns = 0;
 	Texture2D* coneVerifyTex = nullptr;
 	bool EnsureConeVerify();
-	bool deadGhostTilesOff = false;
 	bool combineVerify = false;
 	Texture2D* combineVerifyTex = nullptr;
 	bool EnsureCombineVerify();
-	/** @brief Only road skins, the trench patch, the march's road taps and the debug views read the cones and the near level: true when one of them can this frame. */
+	/** @brief Only road skins, the trench patch and the march's road taps read the cones and the near level: true when one of them can this frame. */
 	bool RoadMapsWanted() const;
 	bool skyOpenCurrent = true;
-	uint32_t heightProbeShownFrame = UINT32_MAX;
 	bool FineLevelOn() const { return settings.ObjectSnowNearDetail; }
 	static constexpr int kQualityPresetCount = 3;
 	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
 	int MatchingQualityPreset() const;
-	winrt::com_ptr<ID3D11Texture2D> probeStaging[2];
-	uint probeCursor = 0;
-	float probeVals[6] = {};
-	bool probeValid = false;
-	float3 probeWorldPos = {};
 	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
@@ -2046,8 +1757,6 @@ public:
 	winrt::com_ptr<ID3DBlob> waterCaptureVSBlob;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> waterILCache;
 	bool waterCaptureShadersFailed = false;
-	uint32_t statWaterCaptured = 0;
-	uint32_t statWaterDrawn = 0;
 	bool waterFirstLogged = false;
 	void RenderWaterCapture();
 	winrt::com_ptr<ID3D11VertexShader> heightVS;
@@ -2177,9 +1886,6 @@ public:
 		float4 VoxDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(VoxelDrawCB);
-	ConstantBuffer* voxelDebugCB = nullptr;
-	bool showVolumeRings = false;
-	bool debugForceVolumeRebuild = false;
 
 	static constexpr uint kMaxExclusions = 256;
 	static constexpr float kTorchClearRadius = 40.0f;
@@ -2246,12 +1952,9 @@ public:
 		{ "haybale", 100.0f, 0.0f, false, 1.0f, 1.0f, true },
 	};
 
-	uint32_t statTrampleCount = 0;
-
 	static constexpr const char* kSealedContainerSubstrings[] = {
 		"sarcophagus",
 	};
-	uint32_t statSealedCount = 0;
 
 	static constexpr float kGroundFireBand = 40.0f;
 
@@ -2306,8 +2009,6 @@ public:
 	std::vector<std::pair<float4, float4>> exclusionPending;
 	std::vector<size_t> exclusionPendingFlames;
 	std::vector<float4> exclusionPendingGuards;
-	uint32_t exclusionPendingTrample = 0;
-	uint32_t exclusionPendingSealed = 0;
 	uint32_t exclusionGatherSlot = 0;
 	uint32_t exclusionGatherSlots = 0;
 	bool exclusionGatherInterior = false;
@@ -2318,7 +2019,6 @@ public:
 	void FinishExclusionGather();
 	RE::BGSListForm* survivalHeatSources = nullptr;
 	bool survivalHeatSourcesResolved = false;
-	uint32_t statExclusionCount = 0;
 
 	/** @brief Creates the height-window textures. Implemented in SnowDeformation/Statics.cpp. */
 	void CreateHeightFieldResources();
@@ -2332,22 +2032,11 @@ public:
 	bool HeightMapIdleReady() const;
 	float4 heightGhostBox = {};
 	bool heightGhostsLive = true;
-	uint64_t heightIdleFrames = 0;
-	bool interiorHeightGateOff = false;
-	bool exteriorHeightGateOff = false;
 	bool cascadeSnowSoonLast = true;
-	bool cascadeHeightGateOff = false;
-	bool lodRasterGateOff = false;
-	bool lodCapturesIgnoredLast = false;
-	bool cascadeRaiseGateOff = false;
 	Matrix cascadeGateVP{};
 	float4 cascadeGateCam{};
 	uint32_t cascadeGateFrame = UINT32_MAX;
 	bool cascadeGateMeets = true;
-	uint32_t cascadeRaised = 0;
-	uint32_t cascadeSkipped = 0;
-	uint32_t cascadeRaisedLast = 0;
-	uint32_t cascadeSkippedLast = 0;
 	uint32_t cascadeCountFrame = UINT32_MAX;
 	static constexpr int kGatherJumpTexels = 32;
 
@@ -2395,8 +2084,6 @@ public:
 		float pad[2];
 	};
 	static constexpr uint32_t kSkinCullArgStride = 20;
-	static constexpr uint32_t kSkinCullReasons = 9;
-	static constexpr int kSkinCullRing = 3;
 	static constexpr float kSkinCullMargin = 24.0f;
 	static constexpr float kSkinCullDepthEps = 1.5e-5f;
 	ConstantBuffer* skinCullCB = nullptr;
@@ -2404,25 +2091,11 @@ public:
 	Buffer* skinCullArgs = nullptr;
 	Buffer* skinFootprint = nullptr;
 	uint32_t skinCullCapacity = 0;
-	winrt::com_ptr<ID3D11Buffer> skinCullArgsStaging[kSkinCullRing];
-	bool skinCullStagingIssued[kSkinCullRing] = {};
-	uint32_t skinCullStagingCount[kSkinCullRing] = {};
-	bool skinCullLogArmed = false;
-	bool debugLogAllJourneys = false;
-	std::vector<std::string> skinCullLogNames[kSkinCullRing];
-	int skinCullRing = 0;
 	Texture2D* skinCullHiZ = nullptr;
 	std::vector<Texture2D*> skinCullHiZScratch;
 	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
 	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
 	uint32_t skinCullLevels = 0;
-	uint32_t skinCullDrawnLast = 0;
-	uint32_t skinCullCulledLast = 0;
-	uint32_t skinCullTrisDrawnLast = 0;
-	uint32_t skinCullTrisTotalLast = 0;
-	uint32_t skinCullReasonLast[kSkinCullReasons] = {};
-	float skinCullHiZTopLast = -1.0f;
-	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
 	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);
 	winrt::com_ptr<ID3D11ComputeShader> hiZBuildUAVCS;
 	winrt::com_ptr<ID3D11ComputeShader> hiZBuildCS;
@@ -2457,24 +2130,6 @@ public:
 	static constexpr uint32_t kPatchBands = 4;
 	/** @brief The lattice's 8x8 blocks the hull's footprint lines cannot cull, as up to kPatchBands row bands in row order, each over its blocks' column span; returns the band count. */
 	uint32_t PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const;
-	bool patchBoxOff = false;
-	bool patchVerify = false;
-	Texture2D* patchVerifyRT[4] = {};
-	winrt::com_ptr<ID3D11Texture2D> patchVerifyDepth;
-	winrt::com_ptr<ID3D11DepthStencilView> patchVerifyDSV;
-	winrt::com_ptr<ID3D11ShaderResourceView> patchVerifyDepthSRV;
-	winrt::com_ptr<ID3D11ShaderResourceView> patchVerifyRealDepthSRV;
-	ID3D11Texture2D* patchVerifyRealDepth = nullptr;
-	winrt::com_ptr<ID3D11Buffer> patchVerifyCount;
-	winrt::com_ptr<ID3D11UnorderedAccessView> patchVerifyAllUAV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> patchVerifySlotUAV[5];
-	winrt::com_ptr<ID3D11Buffer> patchVerifyStaging[3];
-	bool patchVerifyStagingBusy[3] = {};
-	uint32_t patchVerifyRing = 0;
-	uint32_t patchVerifyFrames = 0;
-	uint64_t patchVerifyMismatch[5] = {};
-	bool EnsurePatchVerify(ID3D11DepthStencilView* a_dsv);
-	uint32_t patchBoxPatches = 0;
 	winrt::com_ptr<ID3D11VertexShader> patchTessVS;
 	winrt::com_ptr<ID3D11HullShader> patchHS;
 	winrt::com_ptr<ID3D11DomainShader> patchDS;
@@ -2486,12 +2141,7 @@ public:
 	Texture2D* patchDeferredMark = nullptr;
 	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
 	bool EnsurePatchDeferredResources();
-	winrt::com_ptr<ID3D11PixelShader> patchConditionViewPS;
-	std::future<ID3D11PixelShader*> patchConditionViewJob;
-	bool patchConditionViewTried = false;
-	/** @brief The condition view's patch shading PS while Debugging Options > Snow Condition is on and it has compiled; null otherwise. */
-	ID3D11PixelShader* PatchConditionViewPS();
-	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass, 2 shading pass with the condition view), compiled now; null on failure. */
+	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass), compiled now; null on failure. */
 	static ID3D11PixelShader* CompilePatchDeferredPS(int a_which);
 	/** @brief Shader-prime step (object snow group): compiles both deferred patch shaders on the prime worker. */
 	void PrimePatchDeferred();
@@ -2511,8 +2161,6 @@ public:
 	static constexpr uint32_t kStaticsRecordMax = 65536;
 	uint32_t staticsRecordCapacity = 0;
 	uint32_t staticsRecordRefused = 0;
-	uint64_t staticsRecordFallbacks = 0;
-	bool staticsRecordGrowOff = false;
 	bool EnsureStaticsRecordCB(uint32_t a_count);
 	/** @brief a_needed (optional, one byte per record): records left out are not copied; it must cover every record a draw binds. */
 	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed = nullptr);
@@ -2566,29 +2214,14 @@ public:
 	std::vector<uint32_t> contactPriority;
 	std::vector<RE::NiTransform> contactPaletteScratch;
 	std::vector<uint8_t> contactPaletteBuilt;
-	bool debugContactView = false;
-	float debugContactViewHalf = 192.0f;
-	int debugContactSolo = -1;
-	std::string contactSoloName;
-	static constexpr uint kContactViewPx = 512;
-	winrt::com_ptr<ID3D11Texture2D> contactViewTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> contactViewSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> contactViewUAV;
-	void EnsureContactViewTexture();
 	uint contactSkinDrawsLast = 0;
-	uint contactSkinMissingLast = 0;
 	uint contactCarriedLast = 0;
-	uint contactOverlaysLast = 0;
-	uint contactShellsLast = 0;
-	uint contactHiddenPartsLast = 0;
 	struct ContactSkinAudit
 	{
 		const void* partition = nullptr;
 		uint8_t indexing = 0;
 	};
 	std::unordered_map<const void*, ContactSkinAudit> contactSkinIndexing;
-	uint contactGlobalPartsLast = 0;
-	uint contactSweepLast = 0;
 	struct ContactSweep
 	{
 		RE::NiTransform world;
@@ -2606,11 +2239,6 @@ public:
 	static constexpr float kContactSkipMargin = 16.0f;
 	static constexpr uint16_t kContactStarveFrames = 60;
 	uint contactStarveLines = 0;
-	float2 contactViewCenter{};
-	float contactViewTexelSize = 0.0f;
-	float contactViewHalfUsed = 0.0f;
-	float2 contactViewBoundCenter{};
-	float contactViewBoundRadius = 0.0f;
 	bool EnsureContactResources();
 	/** @brief The contact capture; a_coatOnly (S5 round 8, while the deformation passes sleep) walks only the actors the body coat's snowfall is due. */
 	void DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly = false);
@@ -2625,14 +2253,6 @@ public:
 	/** @brief Publishes the cached snow mask for the material about to be drawn via ExtraFeatureDescriptor bits 11-16. */
 	void BSLightingShader_SetupMaterial(RE::BSLightingShaderMaterialBase const* material);
 
-	/** @brief Before each Lighting draw (SetupGeometry): a deferred-pass draw with the landscape property flag opens or extends the landscape run (one profiler pass over consecutive terrain draws); any other Lighting draw closes it. Implemented in TerrainData.cpp. */
-	void OnLightingDraw(RE::BSRenderPass* a_pass);
-	/** @brief Ends the open landscape run. Called on non-terrain Lighting draws, any other shader's SetupTechnique, and DrawShell entry. */
-	void CloseLandscapeRun();
-	/** @brief Installs SetupTechnique hooks on the non-Lighting batch-rendered BSShader vtables. Called from PostPostLoad. */
-	void InstallLandscapeTimingHook();
-	/** @brief Registers read-only DevBench tools (snowdeformation.shadertypes). No-op without devbench. Called from DataLoaded; implemented in DevBenchTools.cpp. */
-	void InstallDevBenchTools();
 	/** @brief Landscape snow (LANDSCAPE-SNOW-PLAN): hooks Lighting RestoreGeometry and Utility Setup/RestoreGeometry; Lighting's SetupGeometry side rides the statics capture hook. Implemented in LandscapeSnow.cpp. */
 	void InstallLandscapeSnow();
 	/** @brief After the game's SetupGeometry: captures a depth-prepass landscape draw for the ground snow's replay, and moves a sun-cascade one onto LandscapeSnow.hlsl, tessellated near the camera and through the raising VS beyond. */
@@ -2655,15 +2275,10 @@ public:
 	float2 LandBlendContest() const;
 	/** @brief The ground snow's prepass geometry: draws this frame's captured depth-prepass landscape through LandscapeSnowShell.hlsl. Binds VS/HS/DS, the HS/DS fields on a_cb (a_shellCB at b0) and the IA; the caller's PS, targets and depth state stay. IA buffers and the b11 slots go back as found. Returns the draws issued. */
 	uint32_t DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_context, const ShellCB& a_cb, ID3D11Buffer* a_shellCB);
-	/** @brief One-line status for the Debugging menu. */
-	std::string LandscapeSnowStatus() const;
-	/** @brief DevBench snowdeformation.landscape: switches, per-pass GPU timing, shader state. */
-	json LandscapeSnowTool(const json& a_args);
 	static constexpr float kLandBlendDepthStart = 0.50f;
-	bool landRecolor = true;
 	static constexpr float kLandRecolorLumLo = 0.48f;
 	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
-	bool LandRecolorActive() const { return landRecolor && settings.EnableSnowDeformation && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
+	bool LandRecolorActive() const { return settings.EnableSnowDeformation && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
 	static constexpr uint32_t kTrenchMarkSettleFrames = 60;
 	static constexpr uint32_t kTrenchMarkRefreshFrames = 600;
 	static constexpr float kTrenchMarkTolTexels = 2.0f;
@@ -2683,66 +2298,6 @@ public:
 	};
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchors;
 	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
-	uint32_t shellKillMask = 0;
-	struct EffectCostProbe
-	{
-		static constexpr uint32_t kEffects = 9;
-		static constexpr const char* kNames[kEffects] = { "Parallax", "Normal map", "Roughness / AO maps", "Crisp shadows", "Screen-space shadows",
-			"Glints", "Point lights", "Skylighting", "Snow albedo texture" };
-		static constexpr uint32_t kKillBits[kEffects] = { 0, 1, 2, 3, 4, 6, 7, 8, 9 };
-		bool running = false;
-		bool done = false;
-		uint32_t step = 0;
-		uint32_t frame = 0;
-		std::vector<float> samples;
-		uint32_t savedMask = 0;
-		float withMs[kEffects] = {};
-		float withoutMs[kEffects] = {};
-	};
-	EffectCostProbe effectCost;
-	void StartEffectCostProbe();
-	void TickEffectCostProbe();
-	/** @brief DevBench: applies ground measurement args (shellKill, shellStats, ...) and returns the current switches plus the last pipeline statistics. Implemented in DevBenchTools.cpp. */
-	json DevBenchShellArgs(const json& a_args);
-	/** @brief DevBench: the reader gates' A/B switches (interior height maps, masks copy, march idle, blood latch, land-mask feature test, record growth) and their counters. Implemented in DevBenchTools.cpp. */
-	json DevBenchReaderGatesArgs(const json& a_args);
-	/** @brief Stored trench depth (0-1) at a world position in the active worldspace, under the store lock. Any thread. Implemented in TrenchStore.cpp. */
-	float ProbeTrenchStore(float a_worldX, float a_worldY);
-	static constexpr uint32_t kLandscapeRunCap = 8;
-	bool landscapeRunOpen = false;
-	uint32_t landscapeRunFrame = 0;
-	uint32_t landscapeRunsThisFrame = 0;
-	uint32_t landscapeBatchesThisFrame = 0;
-	uint64_t landscapeCensusRuns = 0;
-	uint64_t landscapeCensusBatches = 0;
-	uint64_t landscapeCensusCapped = 0;
-	uint64_t landscapeCensusDropped = 0;
-	uint32_t landscapeCensusFrames = 0;
-	uint32_t landscapeCensusPeakRuns = 0;
-	bool landscapeCensusLogged = false;
-
-	std::atomic<uint64_t> landMaskHits{ 0 };
-	std::atomic<uint64_t> landMaskMisses{ 0 };
-	std::atomic<uint64_t> landMaskForeignHits{ 0 };
-	bool landMaskFeatureGateOff = false;
-
-	/** @brief Thread-safe size read for the settings UI. */
-	size_t snowMasksSizeForUI()
-	{
-		const std::shared_lock lock(snowMaskMutex);
-		return snowMasks.size();
-	}
-
-	bool showDebugTexture = false;
-	bool debugTerrainOverlay = false;
-
-	bool debugMeltEmitterActive = false;
-	RE::NiPoint3 debugMeltEmitterPos{};
-	float debugMeltEmitterRadius = 100.0f;
-	float debugMeltEmitterRate = 0.50f;
-	bool debugProjSnowView = false;
-	bool debugProjWeightView = false;
-	bool debugProjAlbedoView = false;
 
 protected:
 	void GatherStamps(PerFrame& perFrameData);
@@ -2768,15 +2323,12 @@ protected:
 	static constexpr float kViewGateMarginZ = 256.0f;
 	std::unordered_map<uint64_t, std::pair<float, float>> viewGateCellZ;
 	uint32_t viewGateCellZVersion = UINT32_MAX;
-	bool shellViewGateOff = false;
 	void CullUnseenCaptures(const ShellCB& a_cb);
 	float squareFloorZ = 0.0f;
 	bool squareFloorValid = false;
 	uint32_t squareFloorVersion = UINT32_MAX;
 	int squareFloorKey[4] = { INT_MIN, INT_MIN, INT_MIN, INT_MIN };
 	uint32_t captureViewCulled = 0;
-	uint32_t captureCullBail = 1;
-	bool captureViewCullOff = false;
 	bool GroundNearHasSnow(float a_x, float a_y);
 	std::unordered_map<uint64_t, uint8_t> groundSnowCellCache;
 	uint32_t groundSnowCellCacheVersion = 0;
@@ -2830,8 +2382,6 @@ protected:
 	uint deformMapVramCap = 0;
 	bool rangeInitApplied = false;
 
-	bool debugForceDeformationUpdate = false;
-	bool debugForceAllTilesDirty = false;
 	bool deformIdleSkipped = false;
 	winrt::com_ptr<ID3D11Buffer> deformActivityBuffer;
 	winrt::com_ptr<ID3D11UnorderedAccessView> deformActivityUAV;
@@ -2847,31 +2397,11 @@ protected:
 	bool evolveFlagActive = true;
 	uint64_t evolveVerdictSeq = 0;
 	uint64_t evolveLastArmSeq = 0;
-	bool evolveIdleLastFrame = false;
 	float bermReachBaked = 1.0f;
 	std::vector<float4> lastStampSet;
 	std::vector<float4> lastStampEnds;
 	std::vector<uint8_t> stampMatchUsed;
 	std::vector<uint32_t> stampMatchIndex;
-	uint32_t deformIdleBlockers = 0;
-	float deformSkipRate = -1.0f;
-	uint32_t deformSkipTallyFrames = 0;
-	uint32_t deformSkipTallySkipped = 0;
-	uint32_t stampSetCountChanges = 0, stampSetDriftChanges = 0;
-	uint32_t stampSetTallyCount = 0, stampSetTallyDrift = 0;
-	uint32_t deformChangedTexels = 0;
-	uint32_t deformChangedDepth = 0;
-	uint32_t deformChangedMelt = 0;
-	uint32_t deformChangedCrustDep = 0;
-	uint32_t deformChangedDeltaSum = 0;
-	uint32_t deformChangedMinX = 0, deformChangedMinY = 0;
-	uint32_t deformChangedMaxX = 0, deformChangedMaxY = 0;
-	bool debugActivityView = false;
-	winrt::com_ptr<ID3D11Texture2D> activityViewTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> activityViewSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> activityViewUAV;
-	uint32_t activityViewDim = 0;
-	void EnsureActivityViewTexture();
 	void PollDeformActivity(ID3D11DeviceContext* a_context);
 
 	static constexpr float kTrenchTileWorld = 512.0f;
@@ -2918,12 +2448,6 @@ protected:
 	double trenchAgeingTotal = 0.0;
 
 	std::vector<TrenchTileKey> trenchSweepQueue;
-	size_t trenchStatNonZero = 0;
-	size_t trenchStatThin = 0;
-	size_t trenchStatSweptTiles = 0;
-	size_t trenchAccumNonZero = 0;
-	size_t trenchAccumThin = 0;
-	size_t trenchAccumTiles = 0;
 	size_t trenchAccumErased = 0;
 	size_t trenchAccumEvicted = 0;
 	size_t trenchAccumAdded = 0;
@@ -2946,11 +2470,6 @@ protected:
 	winrt::com_ptr<ID3D11Texture2D> trenchInjectTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
 	std::vector<uint8_t> trenchInjectScratch;
-
-	winrt::com_ptr<ID3D11Texture2D> trenchDebugTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> trenchDebugSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> trenchDebugUAV;
-	void UpdateTrenchDebugTexture();
 
 	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
 	winrt::com_ptr<ID3D11Texture2D> trenchClockBandStaging[2][2];
@@ -2987,7 +2506,7 @@ protected:
 	void FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_clearing);
 	uint BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing);
 	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks);
-	bool StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, uint32_t a_path, bool a_wait);
+	bool StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, bool a_wait);
 	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh = nullptr);
 	static constexpr uint32_t kTrenchRecord = 'SNTR';
 	static constexpr uint32_t kTrenchRecordVersion = 2;
@@ -3063,15 +2582,6 @@ protected:
 	void TickSnowClimate();
 	void TickSnowAgeing();
 	float LandSnowShareAround(float a_x, float a_y);
-	bool debugClimateTemperatureOn = false;
-	float debugClimateTemperature = -5.0f;
-	float debugClimateShareOverride = -1.0f;
-	float debugClimateWetnessOverride = -1.0f;
-	float debugClimateStickinessOverride = -1.0f;
-	float debugClimateFirmnessOverride = -1.0f;
-	float debugAgeingRateOverride = -1.0f;
-	float debugClimateIceOverride = -1.0f;
-	int debugConditionView = 0;
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
@@ -3109,12 +2619,9 @@ protected:
 	void CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, const RE::NiPoint3& a_position, float a_groundZ,
 		const StampBones* a_bones, const RE::NiAVObject* a_root);
 	void TickSnowEvents();
-	std::vector<std::string> SnowEventCensusLines() const;
-	bool debugSnowEventCensus = false;
 	std::vector<SnowEvent> snowEventsBuilding;
 	std::vector<SnowEvent> snowEventsPublished;
 	uint32_t snowEventRequestFrame = UINT32_MAX;
-	uint32_t snowEventsDroppedFrame = 0;
 	struct SnowEventFoot
 	{
 		RE::NiPoint3 prev;
@@ -3141,19 +2648,6 @@ protected:
 	};
 	std::unordered_map<uint32_t, SnowEventBody> snowEventBodies;
 	std::unordered_map<uint64_t, uint32_t> snowEventMarksSeen;
-	struct SnowEventCensus
-	{
-		std::array<uint32_t, size_t(SnowEventKind::Count)> window{};
-		std::array<uint32_t, size_t(SnowEventKind::Count)> perSecond{};
-		std::array<uint64_t, size_t(SnowEventKind::Count)> total{};
-		std::array<SnowEvent, size_t(SnowEventKind::Count)> last{};
-		std::array<float, size_t(SnowEventKind::Count)> lastDistance{};
-		uint32_t droppedWindow = 0;
-		uint32_t droppedPerSecond = 0;
-		uint32_t logLines = 0;
-		double windowStart = -1.0;
-	};
-	SnowEventCensus snowEventCensus;
 
 	uint32_t stampGatherFrame = UINT32_MAX;
 
@@ -3180,52 +2674,6 @@ public:
 	static bool IsEngineDecalName(const char* a_name);
 
 protected:
-
-	void LoadTraceBegin(const char* a_reason);
-	void LoadTraceMark(std::string_view a_what);
-	void LoadTraceRecord(const char* a_name, double a_ms);
-	void LoadTraceFramePulse();
-
-	struct LoadTraceScope
-	{
-		LoadTraceScope(SnowDeformation* a_owner, const char* a_name) :
-			name(a_name)
-		{
-			owner = a_owner->loadTraceActive.load(std::memory_order_acquire) ? a_owner : nullptr;
-			if (owner)
-				start = std::chrono::steady_clock::now();
-		}
-		~LoadTraceScope()
-		{
-			if (owner)
-				owner->LoadTraceRecord(name, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
-		}
-		LoadTraceScope(const LoadTraceScope&) = delete;
-		LoadTraceScope& operator=(const LoadTraceScope&) = delete;
-
-		SnowDeformation* owner;
-		const char* name;
-		std::chrono::steady_clock::time_point start{};
-	};
-
-	struct LoadTracePhase
-	{
-		uint32_t count = 0;
-		double totalMs = 0.0;
-		double maxMs = 0.0;
-	};
-	std::atomic<bool> loadTraceActive = false;
-	std::mutex loadTraceMutex;
-	std::chrono::steady_clock::time_point loadTraceStart;
-	std::chrono::steady_clock::time_point loadTraceLastNotable;
-	std::chrono::steady_clock::time_point loadTraceLastFrame;
-	bool loadTraceFrameSeen = false;
-	std::map<std::string, LoadTracePhase, std::less<>> loadTracePhases;
-	std::vector<std::string> loadTraceTimeline;
-	uint32_t loadTraceFrames = 0;
-	uint32_t loadTraceStallFrames = 0;
-	double loadTraceWorstFrameMs = 0.0;
-	void LoadTraceReportLocked(const char* a_reason);
 
 public:
 
@@ -3263,21 +2711,6 @@ protected:
 	bool DecayTrenchTile(TrenchTile& a_tile);
 	void SweepTrenchStore();
 	void EnforceTrenchBudget();
-
-	struct TrenchStoreStats
-	{
-		size_t tiles;
-		size_t bytes;
-		size_t encoded;
-		float occupancy;
-		size_t thin;
-	};
-	TrenchStoreStats GetTrenchStoreStats() const
-	{
-		const size_t bytes = trenchStatTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
-		const size_t swept = trenchStatSweptTiles * (size_t)kTrenchTileDim * kTrenchTileDim;
-		return { trenchStatTiles, bytes, trenchEncodedTotal, swept ? (float)trenchStatNonZero / (float)swept : 0.0f, trenchStatThin };
-	}
 
 	static constexpr float kPrintTexel = 3.0f;
 	static constexpr int kPrintTileDim = 32;
@@ -3354,7 +2787,6 @@ protected:
 	winrt::com_ptr<ID3D11ComputeShader> printStampCS;
 	winrt::com_ptr<ID3D11ComputeShader> printRingCS;
 	winrt::com_ptr<ID3D11ComputeShader> printRefillCS;
-	winrt::com_ptr<ID3D11ComputeShader> printViewCS;
 	winrt::com_ptr<ID3D11ComputeShader> printRimCS;
 	winrt::com_ptr<ID3D11ComputeShader> printRayCS;
 	struct HeldPrintSpell
@@ -3406,11 +2838,7 @@ protected:
 	std::vector<uint8_t> printBlockSeen;
 	uint64_t printFrame = 0;
 	uint32_t printStampBlocksLast = 0;
-	uint32_t printRefillBlocksLast = 0;
-	uint32_t printMirrorsLast = 0;
 	uint32_t printInjectsLast = 0;
-	size_t printStoreTilesLast = 0;
-	bool debugObjectPrintView = false;
 	Texture2D* printTiles = nullptr;
 	std::vector<uint8_t> printTilesScratch;
 	std::vector<uint8_t> printTilesUploaded;
@@ -3420,9 +2848,6 @@ protected:
 	DirectX::XMINT2 printWindowTarget = { 0, 0 };
 	uint32_t printDimTarget = 0;
 	DirectX::XMINT4 printRectPublished = { 0, 0, 0, 0 };
-	uint32_t printTwinDrawsLast = 0;
-	uint32_t parallaxCapturesLast = 0;
-	uint32_t parallaxCoatDrawsLast = 0;
 
 	void UpdateObjectPrints(ID3D11DeviceContext* a_context, const PerFrame& a_frame, bool a_trenchPassRan);
 	void CreatePrintResources(uint32_t a_dim);
@@ -3430,7 +2855,6 @@ protected:
 	ID3D11ComputeShader* GetPrintStampCS();
 	ID3D11ComputeShader* GetPrintRingCS();
 	ID3D11ComputeShader* GetPrintRefillCS();
-	ID3D11ComputeShader* GetPrintViewCS();
 	ID3D11ComputeShader* GetPrintRimCS();
 	ID3D11ComputeShader* GetPrintRayCS();
 	void ReleaseObjectPrintShaders();
@@ -3535,45 +2959,6 @@ protected:
 	};
 	StampStats stampStats;
 
-	bool debugSkeletonProbe = false;
-	bool skeletonProbeDumpRequested = false;
-	uint32_t skeletonProbeTarget = 0;
-	struct SkeletonProbe
-	{
-		bool valid = false;
-		uint32_t formID = 0;
-		std::string actorName;
-		const char* verdict = "";
-		bool rasterCandidate = false;
-		struct FootRow
-		{
-			std::string name;
-			std::string toe;
-			float scale = 1.0f;
-			bool attached = false;
-			float zAboveRef = 0.0f;
-			float band = 0.0f;
-			bool planted = false;
-			bool stamped = false;
-			float radius = 0.0f;
-		};
-		std::vector<FootRow> feet;
-		uint usableFeet = 0;
-		uint limbs = 0;
-		uint limbsStamped = 0;
-		uint shapes = 0;
-		float dryTravel = 0.0f;
-		bool collisionFallback = false;
-		float bodyAlpha = 1.0f;
-		std::string bodyAlphaSource;
-		uint16_t alphaSettle = 0;
-		float gapToLand = 0.0f;
-		float floatingGap = 0.0f;
-		float shellDepth = -1.0f;
-		bool cellBaked = false;
-	};
-	SkeletonProbe skeletonProbe;
-
 	struct PropAnchor
 	{
 		RE::NiPoint3 pos;
@@ -3594,7 +2979,6 @@ protected:
 			n += slice.size();
 		return n;
 	}
-	uint propScanRefs = 0;
 
 	struct CorpseRest
 	{

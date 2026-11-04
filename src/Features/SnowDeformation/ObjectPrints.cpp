@@ -76,13 +76,6 @@ ID3D11ComputeShader* SnowDeformation::GetPrintRefillCS()
 	return printRefillCS.get();
 }
 
-ID3D11ComputeShader* SnowDeformation::GetPrintViewCS()
-{
-	if (!printViewCS)
-		printViewCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintViewCS")));
-	return printViewCS.get();
-}
-
 ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
 {
 	if (!printRimCS && !printRimFailed) {
@@ -109,7 +102,7 @@ bool SnowDeformation::EnsurePrintShaders()
 
 void SnowDeformation::ReleaseObjectPrintShaders()
 {
-	for (auto* cs : { &printStampCS, &printRingCS, &printRefillCS, &printViewCS, &printRimCS, &printRayCS })
+	for (auto* cs : { &printStampCS, &printRingCS, &printRefillCS, &printRimCS, &printRayCS })
 		*cs = nullptr;
 	printCSFailed = false;
 	printRimFailed = false;
@@ -461,7 +454,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	ID3D11ShaderResourceView* nullReaders[3] = {};
 	a_context->PSSetShaderResources(kPrintReaderSlot, 3, nullReaders);
 	printFrame++;
-	printStampBlocksLast = printRefillBlocksLast = printMirrorsLast = printInjectsLast = 0;
+	printStampBlocksLast = printInjectsLast = 0;
 
 	float clock;
 	{
@@ -511,7 +504,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			const bool keepsAll = overlaps && inside.z == kPrintTileDim && inside.w == kPrintTileDim;
 			if (!keepsAll && it->second.dirty && persist && !reinject && QueuePrintMirror(a_context, tx, ty, clock)) {
 				it->second.dirty = false;
-				printMirrorsLast++;
 			}
 			if (overlaps)
 				++it;
@@ -628,7 +620,6 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShader(printRefillCS.get(), nullptr, 0);
 			a_context->Dispatch(blocks, 1, 1);
 			a_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-			printRefillBlocksLast = blocks;
 		}
 		const float refill = (float)quanta / 1023.0f;
 		for (auto it = printLive.begin(); it != printLive.end();) {
@@ -749,28 +740,9 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			live.dirty = false;
 			queued++;
 		}
-		printMirrorsLast += queued;
-	}
-
-	if (debugContactView && debugObjectPrintView && contactViewUAV) {
-		if (auto* viewCS = GetPrintViewCS()) {
-			ID3D11ShaderResourceView* mapSRV = printMap->srv.get();
-			a_context->CSSetShaderResources(7, 3, contactSRVs);
-			a_context->CSSetShaderResources(10, 2, topSRVs);
-			a_context->CSSetShaderResources(12, 1, &mapSRV);
-			ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
-			a_context->CSSetUnorderedAccessViews(2, 1, &viewUAV, nullptr);
-			a_context->CSSetShader(viewCS, nullptr, 0);
-			a_context->Dispatch(kContactViewPx / 8, 2 * kContactViewPx / 8, 1);
-		}
 	}
 
 	PublishPrintTiles(a_context);
-
-	{
-		std::scoped_lock lock(printStoreMutex);
-		printStoreTilesLast = printStore.size();
-	}
 
 	printSpellsLast = spellCount;
 	a_context->CSSetShader(nullptr, nullptr, 0);

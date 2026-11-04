@@ -61,7 +61,6 @@ void SnowDeformation::CopyLogicalBox(ID3D11Texture2D* a_dst, ID3D11Texture2D* a_
 
 bool SnowDeformation::CreateTrenchStoreResources()
 {
-	LoadTraceScope _loadTrace(this, "TrenchStore: CreateTrenchStoreResources");
 	auto device = globals::d3d::device;
 	if (!device)
 		return false;
@@ -126,63 +125,9 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	}
 	trenchRollRow = 0;
 
-	trenchDebugTexture = nullptr;
-	trenchDebugSRV = nullptr;
-	trenchDebugUAV = nullptr;
-
 	trenchInjectScratch.assign((size_t)deformMapDim * deformMapDim * 2, 0);
 	trenchMapPrimed = false;
 	return true;
-}
-
-void SnowDeformation::UpdateTrenchDebugTexture()
-{
-	if (!showDebugTexture)
-		return;
-	if (!trenchDebugUAV) {
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = deformMapDim;
-		desc.Height = deformMapDim;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R8_UNORM;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		auto device = globals::d3d::device;
-		if (FAILED(device->CreateTexture2D(&desc, nullptr, trenchDebugTexture.put())))
-			return;
-		Util::SetResourceName(trenchDebugTexture.get(), "SnowDeformation::TrenchDebugDepth");
-		device->CreateShaderResourceView(trenchDebugTexture.get(), nullptr, trenchDebugSRV.put());
-		device->CreateUnorderedAccessView(trenchDebugTexture.get(), nullptr, trenchDebugUAV.put());
-		if (!trenchDebugUAV)
-			return;
-	}
-	if (snowPrimeState.load(std::memory_order_acquire) == 1)
-		return;
-
-	auto context = globals::d3d::context;
-	auto* live = deformationTextures[0];
-	auto* shader = GetSnowCS(kTrenchDebugCS);
-	if (!context || !live || !shader)
-		return;
-
-	ID3D11Buffer* cb = perFrame->CB();
-	context->CSSetConstantBuffers(0, 1, &cb);
-	ID3D11ShaderResourceView* srvs[] = { live->srv.get() };
-	ID3D11UnorderedAccessView* uavs[] = { trenchDebugUAV.get() };
-	context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
-	context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-	context->CSSetShader(shader, nullptr, 0);
-	context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
-
-	ID3D11ShaderResourceView* nullSrv[1] = { nullptr };
-	ID3D11UnorderedAccessView* nullUav[1] = { nullptr };
-	ID3D11Buffer* nullCB = nullptr;
-	context->CSSetConstantBuffers(0, 1, &nullCB);
-	context->CSSetShaderResources(0, 1, nullSrv);
-	context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
-	context->CSSetShader(nullptr, nullptr, 0);
 }
 
 void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
@@ -204,7 +149,6 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 		for (int row = row0; row <= row1; row++) {
 			uint32_t& word = trenchDirtyRows[(size_t)row >> 5];
 			const uint32_t bit = 1u << (row & 31);
-			cpuCensus.rowsMarkedTotal += (word & bit) ? 0 : 1;
 			word |= bit;
 		}
 	};
@@ -212,21 +156,18 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 	auto marks = [&](uint32_t a_age) {
 		if (a_age < kTrenchMarkSettleFrames || a_age % kTrenchMarkRefreshFrames == 0)
 			return true;
-		cpuCensus.settledSkipsTotal++;
 		return false;
 	};
 	const float tol = texel * kTrenchMarkTolTexels;
 	auto within = [tol](float a_a, float a_b) { return std::abs(a_a - a_b) <= tol; };
 	trenchStampAnchorClaimed.assign(trenchStampAnchors.size(), 0);
 
-	cpuCensus.stampsTotal += a_data.StampCount;
 	for (uint i = 0; i < a_data.StampCount && i < kMaxStamps; i++) {
 		const float stampMode = a_data.StampEnds[i].z;
 		if ((stampMode > kStampModeBody - 0.5f ? stampMode - kStampModeBody : stampMode) > 0.5f)
 			continue;
 		if (a_data.Stamps[i].z <= 0.0f)
 			continue;
-		cpuCensus.carveStampsTotal++;
 
 		const auto& s = a_data.Stamps[i];
 		const auto& e = a_data.StampEnds[i];
@@ -250,7 +191,6 @@ void SnowDeformation::MarkTrenchDirtyRows(const PerFrame& a_data)
 
 	for (const auto* draws : { &contactActors, &contactProps })
 		for (const auto& draw : *draws) {
-			cpuCensus.contactRectsTotal++;
 			const uint32_t handle = draw.ref.native_handle();
 			TrenchRectAnchor anchor{ draw.minX, draw.minY, draw.maxX, draw.maxY, 0 };
 			if (const auto it = trenchRectAnchors.find(handle); it != trenchRectAnchors.end()) {
@@ -301,7 +241,7 @@ void SnowDeformation::RollTrenchWindow()
 	trenchRollRing ^= 1;
 
 	if (trenchRollValid[ring]) {
-		StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], CpuCensus::kStoreRollStale, true);
+		StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], true);
 		trenchRollValid[ring] = false;
 	}
 
@@ -387,17 +327,12 @@ void SnowDeformation::SweepTrenchStore()
 
 	if (trenchTiles.empty()) {
 		trenchSweepQueue.clear();
-		trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
-		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
 		trenchStatTiles = 0;
 		trenchEncodedTotal = 0;
 		return;
 	}
 
 	if (trenchSweepQueue.empty()) {
-		trenchStatNonZero = trenchAccumNonZero;
-		trenchStatThin = trenchAccumThin;
-		trenchStatSweptTiles = trenchAccumTiles;
 		const size_t live = trenchTiles.size();
 		if (live != trenchStatTiles) {
 			const long long delta = (long long)live - (long long)trenchStatTiles;
@@ -407,7 +342,6 @@ void SnowDeformation::SweepTrenchStore()
 				trenchStatTiles, live, delta, trenchAccumErased, trenchAccumEvicted, trenchAccumAdded,
 				unexplained ? std::format(", UNEXPLAINED {:+}", unexplained) : "");
 		}
-		trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
 		trenchAccumErased = trenchAccumEvicted = trenchAccumAdded = 0;
 		trenchEncodedTotal = 0;
 		for (const auto& [key, tile] : trenchTiles)
@@ -421,7 +355,6 @@ void SnowDeformation::SweepTrenchStore()
 	}
 
 	constexpr int kPerFrame = 8;
-	constexpr size_t texels = (size_t)kTrenchTileDim * kTrenchTileDim;
 	for (int i = 0; i < kPerFrame && !trenchSweepQueue.empty(); i++) {
 		const TrenchTileKey key = trenchSweepQueue.back();
 		trenchSweepQueue.pop_back();
@@ -450,11 +383,6 @@ void SnowDeformation::SweepTrenchStore()
 			TrenchSimd::CountRuns(fresh.data(), fresh.size(), freshNonZero, freshPairs);
 			it->second.encodedBytes += std::min((uint32_t)(freshPairs * kTrenchRLEPairBytes), (uint32_t)fresh.size());
 		}
-
-		trenchAccumNonZero += nonZero;
-		trenchAccumTiles++;
-		if (nonZero * 20 < texels)
-			trenchAccumThin++;
 	}
 }
 
@@ -526,8 +454,6 @@ void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 	trenchStatTiles = 0;
 	trenchEncodedTotal = 0;
 	trenchSweepQueue.clear();
-	trenchStatNonZero = trenchStatThin = trenchStatSweptTiles = 0;
-	trenchAccumNonZero = trenchAccumThin = trenchAccumTiles = 0;
 	trenchAccumErased = trenchAccumEvicted = trenchAccumAdded = 0;
 	trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
 	trenchSampleTile = nullptr;
@@ -537,12 +463,6 @@ void SnowDeformation::ClearTrenchStoreLocked(const char* a_reason)
 		trenchRollValid[ring] = false;
 	}
 	trenchMapPrimed = false;
-}
-
-float SnowDeformation::ProbeTrenchStore(float a_worldX, float a_worldY)
-{
-	std::scoped_lock lock(trenchStoreMutex);
-	return SampleTrenchStore(activeWorldspace.load(std::memory_order_acquire), a_worldX, a_worldY);
 }
 
 float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh)
@@ -595,7 +515,6 @@ float SnowDeformation::SampleTrenchStore(uint32_t a_worldspace, float a_worldX, 
 
 void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks)
 {
-	cpuCensus.storeCalls[cpuCensus.trenchStorePath]++;
 	constexpr float storeTexel = kTrenchTileWorld / (float)kTrenchTileDim;
 	const float half = a_meta.texel * 0.5f;
 	const double sinceCopy = trenchAgeingTotal - a_meta.ageingTotal;
@@ -689,20 +608,17 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					continue;
 				const int lx0 = gx0 - key.x * kTrenchTileDim;
 				const int lx1 = gx1 - key.x * kTrenchTileDim;
-				uint64_t raised = 0;
 				uint8_t* freshBytes = freshByte ? freshOf(*tile) : nullptr;
 				for (int gy = gy0; gy <= gy1; gy++) {
 					const size_t lineStart = (size_t)(gy - key.y * kTrenchTileDim) * kTrenchTileDim;
 					uint8_t* line = tile->depth.data() + lineStart;
 					for (int lx = lx0; lx <= lx1; lx++) {
-						raised += quantised > line[lx];
 						line[lx] = std::max(line[lx], quantised);
 					}
 					if (freshBytes)
 						for (int lx = lx0; lx <= lx1; lx++)
 							freshBytes[lineStart + lx] = std::max(freshBytes[lineStart + lx], freshByte);
 				}
-				cpuCensus.storeRaises[cpuCensus.trenchStorePath] += raised;
 				continue;
 			}
 			for (int gy = gy0; gy <= gy1; gy++) {
@@ -714,8 +630,6 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 					const int lx = gx - key.x * kTrenchTileDim;
 					const int ly = gy - key.y * kTrenchTileDim;
 					uint8_t& stored = tile->depth[(size_t)ly * kTrenchTileDim + lx];
-					if (quantised > stored)
-						cpuCensus.storeRaises[cpuCensus.trenchStorePath]++;
 					stored = std::max(stored, quantised);
 					if (freshByte) {
 						uint8_t& storedFresh = freshOf(*tile)[(size_t)ly * kTrenchTileDim + lx];
@@ -730,7 +644,7 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	trenchSampleTile = nullptr;
 }
 
-bool SnowDeformation::StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, uint32_t a_path, bool a_wait)
+bool SnowDeformation::StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, bool a_wait)
 {
 	auto context = globals::d3d::context;
 	const UINT mapFlags = a_wait ? 0 : D3D11_MAP_FLAG_DO_NOT_WAIT;
@@ -743,7 +657,6 @@ bool SnowDeformation::StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Te
 		context->Unmap(a_staging, 0);
 		return false;
 	}
-	cpuCensus.trenchStorePath = a_path;
 	StoreTrenchBand(a_meta, mapped, dated ? &clocks : nullptr);
 	if (dated)
 		context->Unmap(a_clockStaging, 0);
@@ -762,14 +675,14 @@ void SnowDeformation::DrainTrenchBands()
 	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++) {
 			if (trenchBandValid[ring][axis] &&
-				StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], CpuCensus::kStoreBand, false))
+				StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], false))
 				trenchBandValid[ring][axis] = false;
 		}
 	}
 
 	for (int ring = 0; ring < 2; ring++) {
 		if (trenchRollValid[ring] &&
-			StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], CpuCensus::kStoreRoll, false))
+			StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], false))
 			trenchRollValid[ring] = false;
 	}
 }
@@ -816,7 +729,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 			CopyLogicalBox(fullClockStaging.get(), trackClockTexture->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
 
 		StoreStagedTrenchBand(fullStaging.get(), fullClockStaging.get(), { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim, TrackDateClock(), trenchAgeingTotal },
-			CpuCensus::kStoreJump, true);
+			true);
 		return;
 	}
 
@@ -842,7 +755,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		}
 
 		if (trenchBandValid[ring][axis]) {
-			StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], CpuCensus::kStoreBandStale, true);
+			StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], true);
 			trenchBandValid[ring][axis] = false;
 		}
 
@@ -858,7 +771,6 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 
 uint SnowDeformation::BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing)
 {
-	LoadTraceScope _loadTrace(this, "TrenchStore: BuildTrenchInject");
 	auto context = globals::d3d::context;
 	if (!settings.PersistTrenches || !trenchInjectTexture || !context)
 		return 0;

@@ -3,7 +3,6 @@
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
 #include "Features/SnowDeformation.h"
-#include "Features/SnowDeformation/HitchSampler.h"
 
 #include "Globals.h"
 #include "State.h"
@@ -336,88 +335,6 @@ static bool TryCollectStampBones(RE::NiAVObject* a_root, SnowDeformation::StampB
 
 static uint32_t boneWalkFaultsLogged = 0;
 
-static void DumpSkeletonToLog(RE::NiAVObject* a_obj, int a_depth)
-{
-	if (!a_obj || a_depth > 24)
-		return;
-	auto* node = a_obj->AsNode();
-	const char* name = a_obj->name.c_str() ? a_obj->name.c_str() : "";
-	const char* kind = "";
-	if (!node)
-		kind = " [geometry: never matches]";
-	else if (NameStartsWith(a_obj->name, "CME ") || NameStartsWith(a_obj->name, "MOV "))
-		kind = " [control: skipped]";
-	else if (GearNodeName(a_obj->name))
-		kind = " [gear: skipped]";
-	else if (NameContains(a_obj->name, "foot") || NameContains(a_obj->name, "hoof") || NameContains(a_obj->name, "paw"))
-		kind = " [FOOT]";
-	else if (NameContains(a_obj->name, "toe"))
-		kind = " [toe]";
-	else if (MatchLimb(a_obj->name))
-		kind = " [limb]";
-	logger::info("[SNOW DEFORMATION] skel {:{}}{} scale={:.3f} worldZ={:.1f}{}",
-		"", a_depth * 2, name, a_obj->world.scale, a_obj->world.translate.z, kind);
-	if (node)
-		for (auto& child : node->GetChildren())
-			DumpSkeletonToLog(child.get(), a_depth + 1);
-}
-
-static void DumpGeometryToLog(RE::NiAVObject* a_root)
-{
-	if (!a_root)
-		return;
-	const RE::NiPoint3 rootPos = a_root->world.translate;
-	RE::BSVisit::TraverseScenegraphGeometries(a_root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
-		auto& runtime = a_geometry->GetGeometryRuntimeData();
-		bool hidden = false;
-		for (const RE::NiAVObject* n = a_geometry; n && !hidden; n = n->parent)
-			hidden = n->GetAppCulled();
-		std::string skin = "rigid";
-		std::string boneTable;
-		if (auto* si = runtime.skinInstance.get()) {
-			uint32_t parts = si->skinPartition ? si->skinPartition->numPartitions : 0;
-			uint32_t bones = si->skinData ? si->skinData->GetBoneCount() : 0;
-			skin = std::format("skinned {} partitions / {} bones, {} matrices", parts, bones, si->numMatrices);
-			uint32_t nullNodes = 0, nullPointers = 0;
-			for (uint32_t b = 0; b < bones && b < 96; ++b) {
-				auto* node = si->bones ? si->bones[b] : nullptr;
-				const bool ptr = si->boneWorldTransforms && si->boneWorldTransforms[b];
-				if (!node)
-					nullNodes++;
-				if (!ptr)
-					nullPointers++;
-				if (!node || !ptr)
-					boneTable += std::format("[{}: node {} / ptr {}] ", b, node ? (node->name.c_str() ? node->name.c_str() : "?") : "NULL", ptr ? "ok" : "NULL");
-			}
-			boneTable = std::format(" | null nodes {} / null pointers {} of {}: ", nullNodes, nullPointers, bones) + boneTable;
-			if (auto* dismember = netimmerse_cast<RE::BSDismemberSkinInstance*>(si)) {
-				const auto& rd = dismember->GetRuntimeData();
-				boneTable += " | dismember: ";
-				for (int32_t p = 0; rd.partitions && p < rd.numPartitions; ++p)
-					boneTable += std::format("[p{} slot {} {}] ", p, rd.partitions[p].slot, rd.partitions[p].editorVisible ? "visible" : "HIDDEN");
-			}
-		}
-		const char* shader = "NO SHADER";
-		if (auto* sp = runtime.shaderProperty.get())
-			shader = sp->GetRTTI() && sp->GetRTTI()->GetName() ? sp->GetRTTI()->GetName() : "shader";
-		const auto& b = a_geometry->worldBound;
-		uint32_t tris = 0;
-		if (auto* si = runtime.skinInstance.get(); si && si->skinPartition && si->skinPartition->partitions.data()) {
-			for (uint32_t p = 0; p < si->skinPartition->numPartitions; ++p)
-				tris += si->skinPartition->partitions[p].triangles;
-		} else if (auto* ts = a_geometry->AsTriShape()) {
-			tris = ts->GetTrishapeRuntimeData().triangleCount;
-		}
-		logger::info("[SNOW DEFORMATION] geom '{}': {} | {} tris | {} | {} | bound rel root ({:.0f}, {:.0f}, {:.0f}) r {:.0f} | parent '{}'",
-			a_geometry->name.c_str() ? a_geometry->name.c_str() : "", skin, tris, shader, hidden ? "HIDDEN" : "visible",
-			b.center.x - rootPos.x, b.center.y - rootPos.y, b.center.z - rootPos.z, b.radius,
-			(a_geometry->parent && a_geometry->parent->name.c_str()) ? a_geometry->parent->name.c_str() : "");
-		if (!boneTable.empty())
-			logger::info("[SNOW DEFORMATION] geom '{}' bones{}", a_geometry->name.c_str() ? a_geometry->name.c_str() : "", boneTable);
-		return RE::BSVisit::BSVisitControl::kContinue;
-	});
-}
-
 bool SnowDeformation::IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property)
 {
 	if (a_geometry && (NameContains(a_geometry->name, "Virtual") ||
@@ -620,8 +537,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	const float texelFloor = deformWorldSize / (float)deformMapDim;
 	const float footRadiusFloor = std::max(kMinFootStampRadius, texelFloor);
 	const float limbRadiusFloor = std::max(kMinStampShapeRadius, texelFloor);
-	const bool probeActive = debugSkeletonProbe && skeletonProbeTarget != 0;
-	skeletonProbe.valid = false;
 	contactProps.clear();
 	contactActors.clear();
 	contactCorpseCount = 0;
@@ -650,7 +565,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	auto landZAt = [&](const RE::NiPoint3& a_position) {
 		float landZ = a_position.z;
 		if (const auto tesLand = globals::game::tes) {
-			ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
 			tesLand->GetLandHeight(a_position, landZ);
 		}
 		return landZ;
@@ -708,19 +622,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 
 		const uint32_t formID = actor->formID;
-		const bool probing = probeActive && formID == skeletonProbeTarget;
-		if (probing) {
-			skeletonProbe = {};
-			skeletonProbe.valid = true;
-			skeletonProbe.formID = formID;
-			skeletonProbe.actorName = actor->GetName() ? actor->GetName() : "";
-			skeletonProbe.verdict = "processing";
-		}
 		if (stampCount >= actorCeiling) {
 			budgetCutRefs.insert(formID);
 			stampStats.budgetTurnedAway++;
-			if (probing)
-				skeletonProbe.verdict = "gated: stamp budget exhausted";
 			return;
 		}
 		const bool isDead = actor->IsDead();
@@ -743,8 +647,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const bool rasterCandidate = !contactShadersFailed && !contactStarved &&
 		                             (isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID)) &&
 		                             inContactWindow(root->worldBound);
-		if (probing)
-			skeletonProbe.rasterCandidate = rasterCandidate;
 
 		auto* charController = actor->GetCharController();
 		float footImpact = 0.0f;
@@ -799,23 +701,17 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!isDead && !rasterCandidate && charController &&
 			(charController->context.currentState == RE::hkpCharacterStateType::kInAir ||
 				charController->context.currentState == RE::hkpCharacterStateType::kFlying)) {
-			if (probing)
-				skeletonProbe.verdict = "gated: airborne (controller in-air/flying)";
 			return;
 		}
 
 		if (!isDead) {
 			const float landZ = landZAt(position);
-			if (probing)
-				skeletonProbe.gapToLand = position.z - landZ;
 			if (position.z - landZ > kElevatedStampCutoff) {
 				footImpact = 0.0f;
 				knockImpact = 0.0f;
 				spoilSpeed = 0.0f;
 			}
 			if (position.z - landZ > kElevatedStampCutoff && !rasterCandidate) {
-				if (probing)
-					skeletonProbe.verdict = "gated: elevated surface (above land cutoff)";
 				return;
 			}
 		}
@@ -833,11 +729,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		const float nominalDepth = nominalDepthAt(position);
 		const float depthScale = StampDepthScale(nominalDepth);
-		if (probing) {
-			const float probeDepth = GetNominalSnowDepthAt(position.x, position.y, -10000.0f);
-			skeletonProbe.cellBaked = probeDepth > -9999.0f;
-			skeletonProbe.shellDepth = skeletonProbe.cellBaked ? probeDepth : -1.0f;
-		}
 
 		StampBones* bones = nullptr;
 		if (stampBoneCache.size() > 512 && !stampBoneCache.contains(formID))
@@ -924,33 +815,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				cache.collisionFallback = true;
 		};
 
-		if (probing) {
-			skeletonProbe.usableFeet = usableFeet;
-			skeletonProbe.dryTravel = cache.dryTravel;
-			skeletonProbe.collisionFallback = cache.collisionFallback;
-			skeletonProbe.bodyAlpha = cache.bodyAlpha;
-			skeletonProbe.bodyAlphaSource = cache.bodyAlphaSource.c_str() ? cache.bodyAlphaSource.c_str() : "";
-			skeletonProbe.alphaSettle = cache.alphaSettle;
-			skeletonProbe.limbs = (uint)cache.limbs.size();
-			for (const auto& foot : cache.feet) {
-				SkeletonProbe::FootRow row;
-				auto* n = foot.node.get();
-				row.name = n && n->name.c_str() ? n->name.c_str() : "<null>";
-				auto* t = foot.toe.get();
-				row.toe = t && t->name.c_str() ? t->name.c_str() : "-";
-				row.scale = n ? n->world.scale : 0.0f;
-				row.attached = n && NodeAttachedTo(n, root);
-				skeletonProbe.feet.push_back(std::move(row));
-			}
-			if (skeletonProbeDumpRequested) {
-				skeletonProbeDumpRequested = false;
-				logger::info("[SNOW DEFORMATION] Skeleton dump: {} ({:08X}), {} feet / {} limbs matched",
-					skeletonProbe.actorName, formID, cache.feet.size(), cache.limbs.size());
-				DumpSkeletonToLog(root, 0);
-				DumpGeometryToLog(root);
-			}
-		}
-
 		bool liftInRagdoll = true;
 		float creatureWeight = 0.0f;
 		const float bodyLift = 0.0f;
@@ -958,8 +822,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		bool floatingByFeet = false;
 		const bool floating = !isDead &&
 		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ + bodyLift, &floatingGap, &floatingByFeet);
-		if (probing)
-			skeletonProbe.floatingGap = floatingGap;
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
 		const bool elemental = ResolveInnateAura(actor.get()) != nullptr;
@@ -997,9 +859,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			stampStats.floating++;
 			if (floatingByFeet)
 				accumulateDry(dryStep);
-			if (probing)
-				skeletonProbe.verdict = floatingByFeet ? "gated: FLOATING (measured by feet)" :
-				                                         "gated: FLOATING (measured by collision/limbs)";
 			return;
 		}
 		if (incorporeal) {
@@ -1011,8 +870,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					         std::format("most opaque body surface '{}' at alpha {:.2f}",
 							 bones && bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "", bodyAlpha));
 			}
-			if (probing)
-				skeletonProbe.verdict = "gated: incorporeal (translucent/ghost)";
 			return;
 		}
 		if (!isDead && !elemental && bones && bones->anyAlpha >= 0.0f && bones->anyAlpha < kIncorporealAlpha &&
@@ -1026,8 +883,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		                          (settings.IncorporealMode == 1 || settings.IncorporealMode == 3);
 		if (!isDead && alphaGoverns && bones && bones->alphaSettle < kBodyAlphaSettleReads) {
 			stampStats.incorporeal++;
-			if (probing)
-				skeletonProbe.verdict = "gated: alpha settling (newly seen actor)";
 			return;
 		}
 
@@ -1142,8 +997,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 
 		if (footPath && bones) {
-			if (probing)
-				skeletonProbe.verdict = "carving: bone path";
 			bool footStamped = false;
 			{
 				const float footGroundZ = groundZ + bodyLift;
@@ -1173,13 +1026,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					const bool wasPlanted = stampPrevPositions.find(key) != stampPrevPositions.end();
 					const float releaseBand = plantBand * (wasPlanted ? 1.5f : 1.0f);
 					const bool planted = footWorld.translate.z - plantRef.z <= releaseBand;
-					if (probing && thisIndex < skeletonProbe.feet.size()) {
-						auto& row = skeletonProbe.feet[thisIndex];
-						row.zAboveRef = footWorld.translate.z - plantRef.z;
-						row.band = releaseBand;
-						row.planted = planted;
-						row.radius = radius;
-					}
 					if (!planted)
 						continue;
 
@@ -1188,8 +1034,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					emitStamp({ tip.x, tip.y, footReach, radius }, { segStart.x, segStart.y, kStampModeBody, CrustBreakForce(radius) });
 					stampStats.feet++;
 					footStamped = true;
-					if (probing && thisIndex < skeletonProbe.feet.size())
-						skeletonProbe.feet[thisIndex].stamped = true;
 				}
 			}
 
@@ -1207,8 +1051,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				emitStamp({ segment.b->x, segment.b->y, carve, segment.radius },
 					{ segment.a->x, segment.a->y, kStampModeBody, CrustBreakForce(segment.radius) });
 				stampStats.limbs++;
-				if (probing)
-					skeletonProbe.limbsStamped++;
 			}
 			if (footStamped) {
 				cache.dryTravel = 0.0f;
@@ -1221,16 +1063,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 
 		if (!isDead && cache.collisionFallback)
 			stampStats.fallbackActors++;
-		if (probing) {
-			if (isDead)
-				skeletonProbe.verdict = "corpse path";
-			else if (cache.collisionFallback)
-				skeletonProbe.verdict = "carving: collision shapes (failsafe latched)";
-			else if (cache.feet.empty())
-				skeletonProbe.verdict = "carving: collision shapes (no matched feet)";
-			else
-				skeletonProbe.verdict = "carving: collision shapes (feet unusable)";
-		}
 
 		const bool useCorpseBones = isDead && bones && !bones->limbs.empty();
 		if (useCorpseBones) {
@@ -1334,8 +1166,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					emitStamp({ shapeStamp.a.x, shapeStamp.a.y, carve, std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale, texelFloor) },
 						{ shapeStamp.b.x, shapeStamp.b.y, kStampModeBody, CrustBreakForce(radius) });
 					stampStats.shapes++;
-					if (probing)
-						skeletonProbe.shapes++;
 				}
 				return RE::BSVisit::BSVisitControl::kContinue;
 			});
@@ -1352,34 +1182,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 	};
 
-	cpuCensus.stampSourceCount = 0;
-	auto addStampsCounted = [&](RE::ActorHandle a_handle) {
-		const uint before = stampCount;
-		addStamps(a_handle);
-		auto& c = cpuCensus;
-		if (stampCount > before && c.stampSourceCount < CpuCensus::kStampSourceMax) {
-			auto actor = a_handle.get();
-			c.stampSources[c.stampSourceCount++] = { actor ? actor->formID : 0u, stampCount - before };
-		}
-	};
-
-	if (auto player = globals::game::player) {
-		ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
-		addStampsCounted(player->GetHandle());
-	}
+	if (auto player = globals::game::player)
+		addStamps(player->GetHandle());
 
 	if (const auto processLists = RE::ProcessLists::GetSingleton()) {
-		for (auto& actorHandle : processLists->highActorHandles) {
-			ScopedTicks _actor(cpuCensus.actorTicks, cpuCensus.actors);
-			addStampsCounted(actorHandle);
-		}
+		for (auto& actorHandle : processLists->highActorHandles)
+			addStamps(actorHandle);
 	}
-	if (cpuCensus.stampSourceCount > 0) {
-		std::copy_n(cpuCensus.stampSources, cpuCensus.stampSourceCount, cpuCensus.lastStampSources);
-		cpuCensus.lastStampSourceCount = cpuCensus.stampSourceCount;
-		cpuCensus.lastStampSourceFrame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
-	}
-	skeletonProbeTarget = stampStats.nearestValid ? stampStats.nearestFormID : 0;
 	globals::profiler->EndPass();
 
 	globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
@@ -1577,7 +1386,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				scanCell(cells[i]);
 		}
 		scanning = false;
-		propScanRefs = stampStats.propRefs;
 		for (uint32_t slice = 0; slice < kPropScanInterval; slice++) {
 			if (scanAll || slice == phase)
 				continue;
@@ -1601,77 +1409,4 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	stampPrevPositions = std::move(currentPositions);
 	perFrameData.StampCount = stampCount;
 	globals::profiler->EndPass();
-}
-
-void SnowDeformation::RollCpuCensus()
-{
-	SnowHitch::OnFrame();
-	static double ticksToMs = 0.0;
-	double periodMs = 0.0;
-	{
-		static LARGE_INTEGER qpcFreq = [] {
-			LARGE_INTEGER f;
-			QueryPerformanceFrequency(&f);
-			return f;
-		}();
-		static LARGE_INTEGER qpcPrev{};
-		static uint64_t tscPrev = 0;
-		LARGE_INTEGER qpcNow;
-		QueryPerformanceCounter(&qpcNow);
-		const uint64_t tscNow = __rdtsc();
-		if (tscPrev != 0 && tscNow > tscPrev) {
-			const double ms = 1000.0 * double(qpcNow.QuadPart - qpcPrev.QuadPart) / double(qpcFreq.QuadPart);
-			periodMs = ms;
-			const double ratio = ms / double(tscNow - tscPrev);
-			ticksToMs = ticksToMs == 0.0 ? ratio : ticksToMs + (ratio - ticksToMs) * 0.05;
-		}
-		qpcPrev = qpcNow;
-		tscPrev = tscNow;
-	}
-	auto ema = [](float& a_shown, float a_value) { a_shown += (a_value - a_shown) * (1.0f / 30.0f); };
-	auto& c = cpuCensus;
-	auto& s = cpuShown;
-	{
-		std::scoped_lock ringLock(c.frameRingLock);
-		auto& row = c.frameRing[c.frameRingHead];
-		row.frame = globals::state->frameCount;
-		row.periodMs = float(periodMs);
-		row.hookMs = float(c.hookTicks * ticksToMs);
-		row.actorMs = float(c.actorTicks * ticksToMs);
-		row.landMs = float(c.landTicks * ticksToMs);
-		for (uint32_t i = 0; i < CpuCensus::kSpanCount; i++)
-			row.spanMs[i] = float(c.spanTicks[i] * ticksToMs);
-		c.frameRingHead = (c.frameRingHead + 1) % CpuCensus::kFrameRing;
-		c.frameRingCount = std::min(c.frameRingCount + 1, CpuCensus::kFrameRing);
-	}
-	ema(s.hookMs, float(c.hookTicks * ticksToMs));
-	ema(s.hookCalls, float(c.hookCalls));
-	ema(s.actorMs, float(c.actorTicks * ticksToMs));
-	ema(s.actors, float(c.actors));
-	ema(s.landMs, float(c.landTicks * ticksToMs));
-	ema(s.landCalls, float(c.landCalls));
-	ema(s.depthMs, float(c.depthTicks * ticksToMs));
-	ema(s.depthCalls, float(c.depthCalls));
-	ema(s.traverseMs, float(c.traverseTicks * ticksToMs));
-	ema(s.traverseCalls, float(c.traverseCalls));
-	ema(s.skinLoopDraws, float(c.skinLoopDraws));
-	ema(s.skinLoopCBUpdates, float(c.skinLoopCBUpdates));
-	for (uint32_t i = 0; i < CpuCensus::kSpanCount; i++) {
-		ema(s.spanMs[i], float(c.spanTicks[i] * ticksToMs));
-		ema(s.spanCalls[i], float(c.spanCalls[i]));
-		c.spanTicks[i] = 0;
-		c.spanCalls[i] = 0;
-	}
-	c.hookTicks = c.actorTicks = c.landTicks = c.depthTicks = c.traverseTicks = 0;
-	c.hookCalls = c.hookBitCalls = c.actors = c.landCalls = c.depthCalls = c.traverseCalls = 0;
-	c.skinLoopDraws = c.skinLoopCBUpdates = 0;
-	if (c.stampHashDumpRequested) {
-		c.stampHashDumpRequested = false;
-		std::string line;
-		for (uint32_t i = 0; i < CpuCensus::kHashRing; i++) {
-			const uint64_t h = c.stampHashRing[(c.stampHashHead + i) % CpuCensus::kHashRing];
-			line += std::format("{:016X}{}", h, (i % 8 == 7) ? "\n" : " ");
-		}
-		logger::info("[SNOW DEFORMATION] stamp hash ring ({} frames, oldest first):\n{}", CpuCensus::kHashRing, line);
-	}
 }

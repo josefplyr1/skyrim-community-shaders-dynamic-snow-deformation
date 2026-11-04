@@ -55,7 +55,6 @@ cbuffer StaticCB : register(b1)
 #	define RoadField 0.0
 #	define ClassOverride 1.0
 #	define ProjPixelEnable 2.0
-#	define StaticsDebugView 0.0
 #endif
 
 Texture2D<float4> DeformationMap : register(t1);
@@ -104,9 +103,6 @@ static float2 gDeferredGridDx;
 static float2 gDeferredGridDy;
 static float gDeferredZDx;
 static float gDeferredZDy;
-#endif
-#if defined(PSHADER) && !defined(SNOW_CONDITION_VIEW) && !defined(PATCH)
-#	define SNOW_CONDITION_VIEW_RUNTIME
 #endif
 #include "SnowDeformation/SnowFields.hlsli"
 #if defined(PSHADER) && defined(SNOW_OBJECT_PRINTS)
@@ -822,15 +818,8 @@ VS_OUTPUT FinishPatchVertex(PatchVertex v)
 	vsout.WorldPos = float3(0.0, 0.0, 0.0);
 	vsout.NormalWS = v.NormalWS;
 	vsout.GridLocal = v.GridLocal;
-	vsout.Coverage = StaticsDebugView != 0.0 ? v.Deform : 1.0;
-	vsout.Flat = StaticsDebugView != 0.0 ?
-	                 saturate(v.SkinDepth / 8.0) * 0.49 + (v.RoadBit > 0.5 ? 0.5 : 0.0) :
-	                 0.0;
-	[flatten] if (StaticsDebugView > 7.5)
-	{
-		vsout.Coverage = 0.5 / 8.0;
-		vsout.Flat = 1.0;
-	}
+	vsout.Coverage = 1.0;
+	vsout.Flat = 0.0;
 	vsout.Lift = 1e6;
 	vsout.LiftTarget = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 	vsout.ProjFactor = 1.0;
@@ -1116,7 +1105,6 @@ struct SkinLift
 	float UpFacing;
 	float ProjFactor;
 	float ProjLinear;
-	float DebugLayer;
 	float Target;
 	float3 ShadeNormal;
 };
@@ -1133,7 +1121,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float upFacing = isFlat > 0.5 ? smoothstep(0.4, 0.7, weldNz) : smoothstep(0.05, 0.85, smoothWS.z);
 	float projFactor = 1.0;
 	float projLinear = 1.0;
-	float debugLayer = 0.0;
 	float3 shadeNormal = nrmWS;
 	[branch] if (ProjPixelEnable > 1.5)
 	{
@@ -1153,7 +1140,7 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	float support = 1.0;
 	float rimT = 1.0;
 	[branch] if (HasObjectTop > 0.5 && LegacySkin < 0.5 && depth > 0.001 &&
-				 (ProjPixelEnable < 1.5 || StaticsDebugView != 0.0 || depthTarget > kShelterDust))
+				 (ProjPixelEnable < 1.5 || depthTarget > kShelterDust))
 	{
 		float coneSeed = max(max(RoundedDepth, ObjectsDepth), kMinSkinLift);
 		rimT = saturate(ObjectConeDepth(worldBase.xy) / coneSeed);
@@ -1178,7 +1165,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 
 	[branch] if (ProjPixelEnable > 1.5)
 	{
-		debugLayer = 1.0;
 		depth = depthBase;
 		coverDepth = depth;
 		upFacing = 1.0;
@@ -1195,7 +1181,6 @@ SkinLift ApplySkinLift(float3 worldBase, float3 nrmWS, float3 smoothWS, float is
 	o.UpFacing = upFacing;
 	o.ProjFactor = projFactor;
 	o.ProjLinear = projLinear;
-	o.DebugLayer = debugLayer;
 	o.ShadeNormal = shadeNormal;
 	return o;
 }
@@ -1207,11 +1192,6 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 	[flatten] if (isFlat > 0.5)
 		blend = (1.0 - smoothstep(0.0, 0.35, rimT)) * 0.8;
 	return normalize(lerp(nrmWS, smoothWS, blend));
-}
-
-float ReconstructedProjMask(float nz, float vertexAlpha, float threshold)
-{
-	return saturate(nz * vertexAlpha - max(threshold, 0.0));
 }
 #endif
 
@@ -1292,26 +1272,8 @@ VS_OUTPUT main(VS_INPUT input)
 	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
 	vsout.WorldPos = rel;
 	vsout.NormalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
-	[flatten] if (StaticsDebugView > 7.5)
-	{
-		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
-		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, v.Flat), kMinSkinLift));
-	}
-	else [flatten] if (StaticsDebugView > 4.5)
-	{
-		vsout.Coverage = lift.UpFacing;
-		vsout.Flat = ReconstructedProjMask(v.NormalWS.z, v.VertexAlpha, ProjThreshold);
-	}
-	else [flatten] if (StaticsDebugView > 2.5)
-	{
-		vsout.Coverage = v.SmoothWS.z * 0.5 + 0.5;
-		vsout.Flat = v.Flat;
-	}
-	else
-	{
-		vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : v.NormalWS.z;
-		vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : v.Flat;
-	}
+	vsout.Coverage = v.NormalWS.z;
+	vsout.Flat = v.Flat;
 	vsout.GridLocal = lift.WorldAbs.xy - GridOrigin;
 	vsout.Lift = lift.CoverDepth;
 	vsout.LiftTarget = lift.Target;
@@ -1454,26 +1416,8 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 	vsout.WorldPos = rel;
 	vsout.NormalWS = normalWS;
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
-	[flatten] if (StaticsDebugView > 7.5)
-	{
-		vsout.Coverage = (lift.DebugLayer + 0.5) / 8.0;
-		vsout.Flat = saturate(lift.Depth / max(lerp(RoundedDepth, ObjectsDepth, isFlat), kMinSkinLift));
-	}
-	else [flatten] if (StaticsDebugView > 4.5)
-	{
-		vsout.Coverage = lift.UpFacing;
-		vsout.Flat = ReconstructedProjMask(smoothZ, vertexAlpha, ProjThreshold);
-	}
-	else [flatten] if (StaticsDebugView > 2.5)
-	{
-		vsout.Coverage = smoothZ * 0.5 + 0.5;
-		vsout.Flat = isFlat;
-	}
-	else
-	{
-		vsout.Coverage = StaticsDebugView != 0.0 ? lift.Support : smoothZ;
-		vsout.Flat = StaticsDebugView != 0.0 ? lift.UpFacing : isFlat;
-	}
+	vsout.Coverage = smoothZ;
+	vsout.Flat = isFlat;
 	vsout.GridLocal = gridLocal;
 	vsout.Lift = lift.CoverDepth;
 	vsout.LiftTarget = lift.Target;
@@ -1524,43 +1468,6 @@ float CoverageNoise(float2 worldXY)
 
 Texture2D<float> SceneDepth : register(t3);
 Texture2D<float> PreSkinMainDepth : register(t43);
-Texture2D<float> DebugPrepassDepth : register(t44);
-
-cbuffer VoxelSeedDebugCB : register(b3)
-{
-	int4 DbgOriginVox;
-	int4 DbgScrollDelta;
-	float DbgVoxelSize;
-	float DbgDecay;
-	int DbgPadDim;
-	int DbgSliceAxis;
-	int DbgSliceIndex;
-	int DbgSliceXray;
-	int DbgSliceSource;
-	int DbgBlurAxis;
-	float2 DbgHeightWindowCenter;
-	float DbgHeightHalfExtent;
-	float DbgShelterDust;
-	float DbgDepthVox;
-	float DbgFieldThreshold;
-	float DbgRoundSigma;
-	float DbgSlopeMinNz;
-	float4 DbgCentreVox;
-	float DbgSkyStrength;
-	float DbgForceDirty;
-	float DbgOverhangVox;
-	float DbgHeadroomVox;
-	float4 DbgEdgeParams;
-	float4 DbgLipParams;
-	int4 DbgDims;
-}
-Texture3D<float> DbgVoxOcc : register(t46);
-Texture3D<float> DbgVoxField : register(t47);
-Texture2D<uint> DbgVoxHeight : register(t48);
-Texture2DArray<uint> DbgVoxHeightUnder : register(t54);
-#define VOXEL_UNDER_LAYERS 4
-Texture2D<float2> DbgShelter : register(t49);
-Texture2D<float> DbgSky : register(t51);
 
 struct SkinShadeInput
 {
@@ -1593,26 +1500,9 @@ struct SkinShadeResult
 	float3 directSpecular;
 	float3 specularLobe;
 	float3 preLit;
-	float3 dbgMarch;
-	float dbgMarchRan;
 	float landVertexAO;
 	float snowRoughness;
-	float detailMask;
 };
-#if defined(SNOW_CONDITION_VIEW) && defined(PATCH)
-float2 PatchConditionTrack(float2 a_trenchGridLocal, float2 a_worldXY, float a_deform, float a_worldZ)
-{
-	float2 track = 0.0;
-	[branch] if (SnowClimate2.z < 6.5)
-	{
-		const float4 field = BermFieldPair(a_trenchGridLocal);
-		track = float2(lerp(TrackAgeOf(field.w), TrackAgeOf(field.z), smoothstep(0.0, 0.1, a_deform)), saturate(10.0 * max(a_deform, field.x)));
-	}
-	else
-		track.x = SnowIceLook(a_deform, saturate(SampleExclusionField(a_worldXY).y), a_worldZ, a_trenchGridLocal, true);
-	return track;
-}
-#endif
 
 SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 {
@@ -1636,7 +1526,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float detailHitH = 0.0;
 	float detailImpact = 0.0;
 	const float2 detailPlane = -normalWS.xy / max(normalWS.z, 0.1);
-	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
+	[branch] if (detailFade > 0.0 && (TrenchDetailRelief > 0.001 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 #	ifdef PATCH
 		const float4 patchField = BermFieldPair(input.trenchGridLocal);
@@ -1912,8 +1802,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 		float dynamicShadow = ShadowSampling::GetLightingShadow(shadePos, detailedShadow);
 		sunShadow = worldShadow * min(dynamicShadow, detailedShadow);
 	}
-	float3 dbgMarch = float3(0.0, 0.0, 0.0);
-	float dbgMarchRan = 0.0;
 	[branch] if ((ShellFlags.x & 1) != 0 && sunShadow > 0.01 && satNdotL > 0.001 && L.z > 0.01 && input.detail > 0.001)
 	{
 		const float sunLen2D = max(length(L.xy), 1e-4);
@@ -1956,7 +1844,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 						[flatten] if (all(abs(topLocal) < 0.98) && all(road > -50000.0))
 						{
 							horizon.x = max(horizon.x, (MarchCacheBilinear(road, fRoad) - surfZ - 1.0) / d);
-							dbgMarch.y += 0.2;
 						}
 					}
 				}
@@ -1974,8 +1861,6 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			float marchFactor = lerp(marchLight, 1.0, 0.7 * farShadowT);
 			marchFactor = lerp(1.0, marchFactor, smoothstep(0.04, 0.12, sunTan));
 			sunShadow *= marchFactor;
-			dbgMarch.x = 1.0 - marchFactor;
-			dbgMarchRan = 1.0;
 		}
 	}
 	const bool sssSeesSkin = SkinSssSeen > 0.5;
@@ -2074,15 +1959,8 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	r.directSpecular = directSpecular;
 	r.specularLobe = specularLobe;
 	r.preLit = preLit;
-	r.dbgMarch = dbgMarch;
-	r.dbgMarchRan = dbgMarchRan;
 	r.landVertexAO = landVertexAO;
 	r.snowRoughness = snowRoughness;
-#if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
-	r.detailMask = detailMask;
-#else
-	r.detailMask = 0.0;
-#endif
 	return r;
 }
 
@@ -2147,7 +2025,7 @@ PS_OUTPUT main(VS_OUTPUT input)
 	const float4 attrGridDeriv = float4(ddx_coarse(input.GridLocal), ddy_coarse(input.GridLocal));
 	const float2 attrZDeriv = float2(ddx_coarse(input.WorldPos.z), ddy_coarse(input.WorldPos.z));
 #endif
-	[branch] if (FadeExempt < 0.5 && StaticsDebugView == 0.0 && length(input.WorldPos.xy) >= SkinFadeEnd)
+	[branch] if (FadeExempt < 0.5 && length(input.WorldPos.xy) >= SkinFadeEnd)
 		discard;
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
@@ -2185,16 +2063,14 @@ PS_OUTPUT main(VS_OUTPUT input)
 
 	float shoulderWall = 0.0;
 	float wallClearance = 0.0;
-	float wallHasData = 0.0;
 #	ifndef PATCH
-	[branch] if (HasObjectTop > 0.5 && (!pdMode || LegacySkin > 0.5 || StaticsDebugView != 0.0))
+	[branch] if (HasObjectTop > 0.5 && (!pdMode || LegacySkin > 0.5))
 	{
 		float objTop = PatchTop(worldXY);
 		[flatten] if (objTop > -50000.0)
 		{
 			float liftBase = max(lerp(RoundedDepth, ObjectsDepth, input.Flat), kMinSkinLift);
 			wallClearance = ((input.WorldPos.z + ShellCameraPosAdjust.z) - objTop) / liftBase;
-			wallHasData = 1.0;
 			shoulderWall = smoothstep(0.0, 0.15, wallClearance);
 		}
 	}
@@ -2256,9 +2132,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 		pixelCoverage = pdCoverage;
 #	endif
 	pixelCoverage = max(pixelCoverage, shoulderWall);
-
-	float dbgFacing = pixelCoverage;
-	float dbgSeam = 1.0;
 
 	float pixelDeform = saturate(SampleDeformation(input.GridLocal));
 #ifdef PATCH
@@ -2363,7 +2236,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	[flatten] if (pdMode)
 		seamTotal = 1.0;
 	coverageAlpha *= seamTotal;
-	dbgSeam *= seamTotal;
 
 #	ifndef PATCH
 	[branch] if (!pdMode && HasSnowHeight > 0.5 && groundData.x > -50000.0 && groundData.y > 0.5 && pixelDist < 2048.0)
@@ -2509,12 +2381,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	}
 #	endif
 
-	float dbgAlpha = coverageAlpha * fadeAlpha;
-	[branch] if (StaticsDebugView != 0.0)
-	{
-		coverageAlpha = 1.0;
-		fadeAlpha = 1.0;
-	}
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
 	if (coverageAlpha < 0.5)
 		discard;
@@ -2573,227 +2439,8 @@ PS_OUTPUT main(VS_OUTPUT input)
 	float3 directSpecular = ssr.directSpecular;
 	float3 specularLobe = ssr.specularLobe;
 	float3 preLit = ssr.preLit;
-	float3 dbgMarch = ssr.dbgMarch;
-	float dbgMarchRan = ssr.dbgMarchRan;
 	float landVertexAO = ssr.landVertexAO;
 	float snowRoughness = ssr.snowRoughness;
-	[branch] if (StaticsDebugView != 0.0)
-	{
-#ifdef PATCH
-		[branch] if (StaticsDebugView > 7.5)
-		{
-			preLit = float3(0.1, 0.1, 0.1);
-		}
-		else [branch] if (StaticsDebugView > 4.5)
-		{
-			preLit = float3(0.1, 0.1, 0.1);
-		}
-		else [branch] if (StaticsDebugView > 3.5)
-		{
-			preLit = dbgMarchRan > 0.5 ? saturate(dbgMarch) : float3(0.15, 0.0, 0.15);
-		}
-		else
-		{
-			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
-		}
-#else
-		[branch] if (StaticsDebugView > 9.5)
-		{
-			float3 absPos = input.WorldPos + ShellCameraPosAdjust.xyz;
-			int3 logical = (int3)floor(absPos / max(DbgVoxelSize, 1e-3)) - DbgOriginVox.xyz;
-			int3 dmask = DbgDims.xyz - 1;
-			float3 dbgCol = float3(0.12, 0.12, 0.12);
-			[branch] if (DbgVoxelSize > 0.0 && all(logical >= 0) && all(logical < DbgDims.xyz))
-			{
-				uint3 ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
-				float f = 0.0;
-				[unroll] for (int fz = 0; fz <= 2; fz++)
-				{
-					int3 fv = logical + int3(0, 0, fz);
-					[flatten] if (fv.z < DbgDims.z)
-						f = max(f, DbgVoxField[(uint3)((fv + DbgOriginVox.xyz) & dmask)]);
-				}
-				float occ = DbgVoxOcc[ph];
-				[flatten] if (occ <= 0.0 && logical.z > 0)
-				{
-					logical.z -= 1;
-					ph = (uint3)((logical + DbgOriginVox.xyz) & dmask);
-					occ = DbgVoxOcc[ph];
-				}
-				[branch] if (f >= DbgFieldThreshold)
-					dbgCol = float3(0.1, 1.0, 0.1) * (0.4 + 0.6 * saturate(f));
-				else [branch] if (occ <= 0.0)
-				{
-					float near = 0.0;
-					[unroll] for (int nz = -1; nz <= 1; nz++)
-						[unroll] for (int ny = -1; ny <= 1; ny++)
-							[unroll] for (int nx = -1; nx <= 1; nx++)
-								near = max(near, DbgVoxOcc[(uint3)((logical + int3(nx, ny, nz) + DbgOriginVox.xyz) & dmask)]);
-					float column = 0.0;
-					[loop] for (int cz = 0; cz < DbgDims.z; cz++)
-						column = max(column, DbgVoxOcc[(uint3)((int3(logical.xy, cz) + DbgOriginVox.xyz) & dmask)]);
-					dbgCol = near > 0.0 ? float3(0.1, 0.9, 0.9) : (column > 0.0 ? float3(0.05, 0.4, 0.45) : float3(0.35, 0.35, 0.35));
-				}
-				else
-				{
-					{
-						bool open = true;
-						int headroom = (int)DbgHeadroomVox;
-						[loop] for (int k = 1; k <= headroom && open; k++)
-						{
-							int3 a = logical + int3(0, 0, k);
-							open = a.z >= DbgDims.z || DbgVoxOcc[(uint3)((a + DbgOriginVox.xyz) & dmask)] <= 0.0;
-						}
-						[branch] if (!open)
-							dbgCol = float3(1.0, 0.1, 0.1);
-						else
-						{
-							uint2 hb = ph.xy * 4;
-							float hmax = -1.0e4;
-							uint keys[16];
-							[unroll] for (int i = 0; i < 16; i++)
-							{
-								keys[i] = DbgVoxHeight[hb + uint2(i & 3, i >> 2)];
-								[flatten] if (keys[i] != 0u)
-									hmax = max(hmax, (asfloat(keys[i] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z);
-							}
-							uint q = (uint)round(occ * 255.0);
-							float nz = (float)(q >> 4) / 15.0 * 2.0 - 1.0;
-							[branch] if (hmax > -1.0e3 && hmax < (float)logical.z + 1.25)
-							{
-								float nsum = 0.0;
-								float nn = 0.0;
-								[unroll] for (int j = 0; j < 16; j++)
-								{
-									[flatten] if (keys[j] != 0u)
-									{
-										float hz = (asfloat(keys[j] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z;
-										[flatten] if (hz > hmax - 1.0)
-										{
-											nsum += (float)(keys[j] & 15u) / 15.0 * 2.0 - 1.0;
-											nn += 1.0;
-										}
-									}
-								}
-								nz = nsum / max(nn, 1.0);
-							}
-							else
-							{
-								uint2 hb2 = ph.xy * 2;
-								float h2max = -1.0e4;
-								uint keys2[4 * VOXEL_UNDER_LAYERS];
-								[unroll] for (int i2 = 0; i2 < 4 * VOXEL_UNDER_LAYERS; i2++)
-								{
-									keys2[i2] = DbgVoxHeightUnder[uint3(hb2 + uint2(i2 & 1, (i2 >> 1) & 1), i2 >> 2)];
-									[flatten] if (keys2[i2] != 0u)
-									{
-										float hz = (asfloat(keys2[i2] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z;
-										[flatten] if (hz < (float)logical.z + 1.25)
-											h2max = max(h2max, hz);
-									}
-								}
-								[branch] if (h2max > (float)logical.z - 1.25)
-								{
-									float nsum = 0.0;
-									float nn = 0.0;
-									[unroll] for (int j2 = 0; j2 < 4 * VOXEL_UNDER_LAYERS; j2++)
-									{
-										[flatten] if (keys2[j2] != 0u)
-										{
-											float hz = (asfloat(keys2[j2] & ~0xFu) - 32768.0) / DbgVoxelSize - (float)DbgOriginVox.z;
-											[flatten] if (hz > h2max - 1.0 && hz < (float)logical.z + 1.25)
-											{
-												nsum += (float)(keys2[j2] & 15u) / 15.0 * 2.0 - 1.0;
-												nn += 1.0;
-											}
-										}
-									}
-									nz = nsum / max(nn, 1.0);
-								}
-							}
-							float facing = smoothstep(DbgSlopeMinNz - 0.05, DbgSlopeMinNz + 0.05, nz);
-							[branch] if (facing <= 0.0)
-								dbgCol = float3(0.2, 0.3, 1.0);
-							else
-							{
-								float2 wxy = ((float2)(logical.xy + DbgOriginVox.xy) + 0.5) * DbgVoxelSize;
-								float2 shelter = 0.0;
-								float sky = 1.0;
-								[branch] if (DbgHeightHalfExtent > 0.0 && max(abs(wxy.x - DbgHeightWindowCenter.x), abs(wxy.y - DbgHeightWindowCenter.y)) < DbgHeightHalfExtent)
-								{
-									float2 local = (wxy - DbgHeightWindowCenter) / DbgHeightHalfExtent;
-									float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-									float2 sd;
-									DbgShelter.GetDimensions(sd.x, sd.y);
-									shelter = DbgShelter.Load(int3((int2)clamp(uv * sd, 0.0, sd - 1.0), 0));
-									float2 kd;
-									DbgSky.GetDimensions(kd.x, kd.y);
-									sky = DbgSky.Load(int3((int2)clamp(uv * kd, 0.0, kd - 1.0), 0));
-								}
-								float exposure = lerp(1.0, min(sky, 1.0 - shelter.y), DbgSkyStrength);
-								float seed = lerp(DbgShelterDust, 1.0, exposure) * (1.0 - shelter.x) * facing;
-								dbgCol = seed < 0.15 ? float3(1.0, 0.85, 0.1) * (0.4 + 4.0 * seed) : float3(1.0, 0.1, 1.0);
-							}
-						}
-					}
-				}
-			}
-			preLit = dbgCol;
-		}
-		else [branch] if (StaticsDebugView > 8.5)
-		{
-			float z = input.Position.z;
-			float slope = max(abs(ddx(z)), abs(ddy(z)));
-			float ulp = exp2(floor(log2(max(z, 1e-30))) - 23.0);
-			bool decal = DebugSkinId < 0.0;
-			float bias = decal ? max((-DebugSkinDepth.x - 1.0) * ulp - (DebugSkinDepth.y + 0.65) * slope, -100.0) :
-			                     max(-DebugSkinDepth.x * ulp - DebugSkinDepth.y * slope, -1e-5);
-			float own = z + bias;
-			float mainZ = PreSkinMainDepth.Load(int3(input.Position.xy, 0));
-			float wonZ = DebugPrepassDepth.Load(int3(input.Position.xy, 0));
-			float margin = mainZ - own;
-			bool won = wonZ < mainZ;
-			bool mineBiased = abs(own - wonZ) < 4.0 * ulp;
-			bool mineRaw = abs(z - wonZ) < 4.0 * ulp;
-			if (won && !mineBiased && !mineRaw)
-				discard;
-			if (!won && margin < -4e-4)
-				discard;
-			float bright = 0.25 + 0.75 * saturate(log2(1.0 + abs(margin) / ulp) / 10.0);
-			preLit = (won ? (mineBiased ? float3(0.1, 1.0, 0.1) : float3(0.1, 0.8, 1.0)) : float3(1.0, 0.1, 0.1)) * bright;
-			if (decal)
-				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
-		}
-		else [branch] if (StaticsDebugView > 7.5)
-		{
-			float h = frac(abs(DebugSkinId) * 0.618034);
-			preLit = saturate(abs(frac(h + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
-			if (DebugSkinId < 0.0)
-				preLit *= frac((input.Position.x + input.Position.y) / 12.0) < 0.5 ? 1.0 : 0.35;
-		}
-		else [branch] if (StaticsDebugView > 4.5)
-		{
-			bool noProjData = ProjThreshold < -0.5;
-			preLit = float3(noProjData ? 0.0 : smoothstep(0.0, 1.0, 5.0 * edgeW), noProjData ? 0.0 : saturate(input.Flat), noProjData ? 1.0 : 0.0);
-		}
-		else [branch] if (StaticsDebugView > 3.5)
-		{
-			preLit = dbgMarchRan > 0.5 ? saturate(dbgMarch) : float3(0.15, 0.0, 0.15);
-		}
-		else [branch] if (StaticsDebugView > 2.5)
-		{
-			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 0.0);
-		}
-		else [branch] if (StaticsDebugView > 1.5)
-		{
-			preLit = float3(dbgAlpha, dbgFacing, dbgSeam);
-		}
-		else
-		{
-			preLit = float3(saturate(input.Coverage), saturate(input.Flat), 1.0 - wallHasData);
-		}
-#endif
-	}
 
 	float stochasticBlend = (screenNoise * screenNoise) < coverageAlpha ? 1.0 : 0.0;
 
@@ -2816,16 +2463,6 @@ PS_OUTPUT main(VS_OUTPUT input)
 	psout.Reflectance = float4(specularLobe, coverageAlpha);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, coverageAlpha);
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, coverageAlpha);
-#	if defined(SNOW_CONDITION_VIEW_RUNTIME) && !defined(PATCH)
-	[branch] if (SnowClimate2.z > 0.5)
-	{
-		const float viewZ = input.WorldPos.z + ShellCameraPosAdjust.z;
-		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(viewZ), SnowClimate2.z, float2(SnowIceLook(0.0, 0.0, viewZ, 0.0, false), 0.0)) * 2.0;
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-#	endif
 	return psout;
 #endif
 }
@@ -2887,23 +2524,6 @@ PS_OUTPUT main(float4 pos : SV_Position)
 	psout.Reflectance = float4(ssr.specularLobe, 1.0);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ssr.ambientPart).x, 1.0);
 	psout.Masks2 = float4(1.0 - ssr.landVertexAO, 0.0, 0.0, 1.0);
-#ifdef SNOW_CONDITION_VIEW
-	{
-		psout.Diffuse.rgb = SnowConditionColor(SnowConditionAt(rel.z + ShellCameraPosAdjust.z), SnowClimate2.z,
-								PatchConditionTrack(grid.xy, GridOrigin + grid.xy, ssi.pixelDeform, rel.z + ShellCameraPosAdjust.z)) * 2.0;
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-#endif
-	[branch] if (TrenchDetailView != 0)
-	{
-		const float shade = dot(psout.Diffuse.rgb, float3(0.2126, 0.7152, 0.0722));
-		psout.Diffuse.rgb = lerp(shade.xxx, float3(1.0, 0.35, 0.08) * (shade * 1.6 + 0.08), ssr.detailMask);
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
 	return psout;
 }
 #endif

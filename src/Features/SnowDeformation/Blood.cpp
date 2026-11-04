@@ -223,10 +223,8 @@ void SnowDeformation::RegisterDecalOverlay(const BloodCapture& a_capture)
 	auto* geometry = a_capture.geometry.get();
 	if (bloodOverlaySet.contains(geometry))
 		return;
-	if (!decalReachGateOff && !DecalReachesSnow(geometry->worldBound)) {
-		decalReachMisses++;
+	if (!DecalReachesSnow(geometry->worldBound))
 		return;
-	}
 	const BloodCapture& capture = a_capture;
 	if (bloodOverlays.size() < 512 && bloodOverlaySet.insert(geometry).second) {
 		RECT rect{};
@@ -716,9 +714,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 
 void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_postSkinDepth)
 {
-	bloodOverlaysLast = 0;
 	bloodOverlaySet.clear();
-	decalReachMissesLast = std::exchange(decalReachMisses, 0u);
 	const bool copies = bloodPreSnowValid && bloodPreDecalValid;
 	bloodPreSnowValid = false;
 	bloodPreDecalValid = false;
@@ -868,7 +864,6 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	globals::profiler->EndPass();
 	globals::profiler->BeginPass(SnowDevSwitches::DecalOverlayRow("SnowDeformation::Decals - Overlay Composite"));
 	context->Draw(6, 0);
-	bloodOverlaysLast = uint32_t(decals);
 	if (!bloodOverlayLogged) {
 		bloodOverlayLogged = true;
 		logger::info("[SNOW DEFORMATION] blood overlay: first frame composited {} decals over object snow, rect {}x{}", decals, bloodCopyRect.right - bloodCopyRect.left, bloodCopyRect.bottom - bloodCopyRect.top);

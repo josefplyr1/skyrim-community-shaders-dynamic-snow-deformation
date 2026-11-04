@@ -18,7 +18,6 @@ namespace SnowLighting
 {
 	struct State
 	{
-		float landSnowness;
 		bool projMatch;
 		float3 projAlbedo;
 		float4 projRMAOS;
@@ -142,26 +141,6 @@ namespace SnowLighting
 #endif
 
 #if defined(LANDSCAPE)
-	void LandSnowness(inout State s, float4 blendWeights1, float2 blendWeights2)
-	{
-		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
-		{
-#	if defined(TRUE_PBR)
-			uint snowTileBits = (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLandIsSnowMask) >> Permutation::ExtraFeatureFlags::SnowLandIsSnowShift;
-			float4 snowIsSnow1to4 = float4(snowTileBits & 1, (snowTileBits >> 1) & 1, (snowTileBits >> 2) & 1, (snowTileBits >> 3) & 1);
-			float2 snowIsSnow5to6 = float2((snowTileBits >> 4) & 1, (snowTileBits >> 5) & 1);
-			s.landSnowness = saturate(dot(blendWeights1, snowIsSnow1to4) + dot(blendWeights2, snowIsSnow5to6));
-#	else
-			s.landSnowness = saturate(dot(blendWeights1, LandscapeTexture1to4IsSnow) + blendWeights2.x * LandscapeTexture5to6IsSnow.x + blendWeights2.y * LandscapeTexture5to6IsSnow.y);
-#	endif
-		}
-	}
-
-	void LandSnownessPostBlend(inout State s, float4 blendWeights1, float2 blendWeights2)
-	{
-		LandSnowness(s, blendWeights1, blendWeights2);
-	}
-
 	void WriteLandSnowOdds(float4 blendWeights1, float2 blendWeights2, inout float4 masks)
 	{
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 128) != 0)
@@ -227,11 +206,6 @@ namespace SnowLighting
 			s.landSnowRaw = shellAlbedo;
 			s.lodAlbedo = shellAlbedo;
 #	endif
-			[flatten] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 4) != 0)
-			{
-				s.landSnowRaw = float3(1.0, 0.0, 1.0);
-				s.lodAlbedo = float3(1.0, 0.0, 1.0);
-			}
 			s.landSnowNormal = 0.0;
 			[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 			{
@@ -277,18 +251,6 @@ namespace SnowLighting
 		s.lodReplaceW = s.landRecolor ? saturate(s.landSnowFrac) : 0.0;
 #	endif
 	}
-
-	void DebugLandOverlay(inout float3 baseColor, float2 worldXYRel, float snowness)
-	{
-		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 1) != 0)
-		{
-			float2 debugWorldXY = worldXYRel + FrameBuffer::CameraPosAdjust.xy;
-			float2 debugUV = SnowDeformation::GetDeformationUV(debugWorldXY);
-			float debugOutside = (all(debugUV > 0.0) && all(debugUV < 1.0)) ? 0.0 : 1.0;
-			float debugDeformation = SnowDeformation::GetDeformation(debugWorldXY);
-			baseColor = lerp(baseColor, float3(debugOutside, debugDeformation, snowness), 0.75);
-		}
-	}
 #endif
 
 #if (defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR)
@@ -320,8 +282,6 @@ namespace SnowLighting
 				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 				s.lodReplaceW = lodReplaceW;
 				s.lodAlbedo = SnowColor::SetAlbedo(snowSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-					s.lodAlbedo = float3(1.0, 0.0, 1.0);
 			}
 		}
 	}
@@ -459,12 +419,6 @@ namespace SnowLighting
 				{
 				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-					s.projAlbedo = float3(1.0, 0.0, 1.0);
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
-					s.projAlbedo = projectedMaterialWeight.xxx;
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 64) != 0)
-					s.projAlbedo = snowProjSample;
 				s.projRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
 				{
@@ -479,8 +433,6 @@ namespace SnowLighting
 				}
 			}
 		}
-		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !s.projMatch)
-			baseColor = float3(1.0, 0.0, 0.0);
 	}
 #		undef SNOW_PROJ_SAMPLER
 #	endif
@@ -538,10 +490,6 @@ namespace SnowLighting
 				}
 				float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
 				float3 snowTexAlbedo = SnowColor::SetAlbedo(snowTexSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
-					snowTexAlbedo = float3(1.0, 0.0, 1.0);
-				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0)
-					snowTexAlbedo = s.texWeight.xxx;
 #	if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
 				float4 snowTexRMAOS = kShellRMAOSDefault;

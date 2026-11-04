@@ -215,7 +215,6 @@ Texture2D* SD_MakeTexture2D(UINT a_width, UINT a_height, DXGI_FORMAT a_format, c
 
 void SnowDeformation::CreateDeformationTextures()
 {
-	LoadTraceScope _loadTrace(this, "CreateDeformationTextures");
 	for (uint i = 0; i < 2; i++) {
 		delete deformationTextures[i];
 		deformationTextures[i] = nullptr;
@@ -343,7 +342,6 @@ void SnowDeformation::CreateDeformationTextures()
 
 void SnowDeformation::SetupResources()
 {
-	LoadTraceScope _loadTrace(this, "SetupResources");
 	logger::info("[SNOW DEFORMATION] {}", kAttribution);
 
 	perFrame = new ConstantBuffer(ConstantBufferDesc<PerFrame>(), "SnowDeformation::PerFrame");
@@ -509,7 +507,7 @@ void SnowDeformation::SetupResources()
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
 {
 	static Util::FrameChecker frameChecker;
-	if (a_inWorld && (settings.EnableSnowDeformation || debugTerrainOverlay) && frameChecker.IsNewFrame()) {
+	if (a_inWorld && settings.EnableSnowDeformation && frameChecker.IsNewFrame()) {
 		auto eyePosFB = globals::game::frameBufferCached.GetCameraPosAdjust();
 		const float deformTexel = deformWorldSize / deformMapDim;
 		float2 desiredOrigin = {
@@ -531,8 +529,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.WindowOrigin = windowOrigin;
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
-	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
-	                           (settings.EnableSnowDeformation ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
+	data.DebugTerrainOverlay = (settings.EnableSnowDeformation ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
 		data.WaterWindowOrigin = { waterFineCenter.x - waterFineHalf, waterFineCenter.y - waterFineHalf };
@@ -610,66 +607,19 @@ void SnowDeformation::PollDeformActivity(ID3D11DeviceContext* a_context)
 		if (SUCCEEDED(hr)) {
 			const uint* value = static_cast<const uint*>(mapped.pData);
 			const uint flag = value[0];
-			const uint changed = value[1];
-			const uint cminX = value[2], cminY = value[3];
-			const uint maxX = value[4], maxY = value[5];
-			const uint countR = value[6], countG = value[7], countB = value[8];
-			const uint deltaSum = value[9];
 			const uint evolveFlag = value[10];
-			const uint evolveTiles = value[11];
-			const uint bermTiles = value[12];
 			a_context->Unmap(deformActivityStaging[i].get(), 0);
 			if (deformActivitySlotEvolveRan[i] && deformActivitySlotSeq[i] > evolveVerdictSeq) {
 				evolveVerdictSeq = deformActivitySlotSeq[i];
 				evolveFlagActive = evolveFlag != 0;
-				evolveTilesLast = evolveTiles;
 			}
 			if (deformActivitySlotSeq[i] > deformFlagSeq) {
 				deformFlagSeq = deformActivitySlotSeq[i];
 				deformFlagActive = flag != 0;
-				bermTilesLast = bermTiles;
-				deformChangedTexels = changed;
-				deformChangedDepth = countR;
-				deformChangedMelt = countG;
-				deformChangedCrustDep = countB;
-				deformChangedDeltaSum = deltaSum;
-				deformChangedMinX = 65535u - cminX;
-				deformChangedMinY = 65535u - cminY;
-				deformChangedMaxX = maxX;
-				deformChangedMaxY = maxY;
 			}
 		}
 		deformActivityPending[i] = false;
 	}
-}
-
-void SnowDeformation::EnsureActivityViewTexture()
-{
-	if (activityViewTexture && activityViewDim == deformMapDim)
-		return;
-	auto device = globals::d3d::device;
-	if (!device)
-		return;
-
-	activityViewTexture = nullptr;
-	activityViewSRV = nullptr;
-	activityViewUAV = nullptr;
-
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = deformMapDim;
-	desc.Height = deformMapDim;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	if (FAILED(device->CreateTexture2D(&desc, nullptr, activityViewTexture.put())))
-		return;
-	Util::SetResourceName(activityViewTexture.get(), "SnowDeformation::ActivityView");
-	device->CreateShaderResourceView(activityViewTexture.get(), nullptr, activityViewSRV.put());
-	device->CreateUnorderedAccessView(activityViewTexture.get(), nullptr, activityViewUAV.put());
-	activityViewDim = deformMapDim;
 }
 
 float SnowDeformation::GameClock::Read(std::atomic<bool>& a_unarm)
@@ -862,15 +812,9 @@ void SnowDeformation::PostPrepass()
 
 void SnowDeformation::PrepassSimulation()
 {
-	LoadTraceFramePulse();
-	RollCpuCensus();
-	cpuCensusArmed = globals::state->frameCount <= cpuCensusArmedUntil;
-	ScopedTicks _prepassTicks(cpuCensus.spanTicks[CpuCensus::kSpanPrepass], cpuCensus.spanCalls[CpuCensus::kSpanPrepass]);
-	SpanClock spanClock;
 	ApplyRangeSettings();
 
 	TickVRAMLog();
-	TickRowSpikeLog();
 
 	auto context = globals::d3d::context;
 
@@ -892,7 +836,6 @@ void SnowDeformation::PrepassSimulation()
 		if (auto* worldSpace = tes->GetRuntimeData2().worldSpace)
 			cityWorldspace = worldSpace->parentWorld != nullptr;
 
-	statCapturedStatics.store((uint32_t)capturedStatics.size(), std::memory_order_relaxed);
 	const size_t capturedLast = capturedStatics.size();
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
@@ -902,10 +845,6 @@ void SnowDeformation::PrepassSimulation()
 	capturedRoads = 0;
 	coatReachBounds[1].swap(coatReachBounds[0]);
 	coatReachBounds[0].clear();
-
-	statProjMatchedPrev = std::exchange(statProjMatched, 0u);
-	statProjNoProjectionPrev = std::exchange(statProjNoProjection, 0u);
-	statProjVetoedPrev = std::exchange(statProjVetoed, 0u);
 
 	UpdateActiveWorldspace();
 	snowfallIntensity = ComputeSnowfallIntensity();
@@ -921,14 +860,12 @@ void SnowDeformation::PrepassSimulation()
 		UpdateUndulationField();
 	}
 
-	if (!settings.EnableSnowDeformation && !debugTerrainOverlay)
+	if (!settings.EnableSnowDeformation)
 		return;
 
 	auto ui = globals::game::ui;
 	if (ui && ui->GameIsPaused())
 		return;
-
-	spanClock.Lap(CpuCensus::kSpanPrepassHead);
 
 	deformGateBareFrames = DeformationWindowHasReaders() ? 0 : std::min(deformGateBareFrames + 1, kShellGateBareFrames);
 	if (deformGateBareFrames >= kShellGateBareFrames) {
@@ -943,7 +880,6 @@ void SnowDeformation::PrepassSimulation()
 		clearRequested = true;
 		logger::debug("[SNOW DEFORMATION] Deformation passes resumed, clearing map");
 	}
-	spanClock.Lap(CpuCensus::kSpanPrepassArcsAndGate);
 
 	if (deformationCSFailed)
 		return;
@@ -1029,30 +965,21 @@ void SnowDeformation::PrepassSimulation()
 			perFrameData.RingTotalTexels += (uint)(arriving[i].w * arriving[i].h);
 		}
 	}
-	perFrameData.ForceAllDirty = debugForceAllTilesDirty ? 1u : 0u;
 
-	spanClock.Lap(CpuCensus::kSpanPrepassPerFrame);
 	TickTrenchClock();
 	TickSnowAgeing();
 	TickTrenchAgeing();
 	perFrameData.AgeingClock = snowClimate.ageingClock;
 	perFrameData.TrackRebase = trackClockTexture && bermFieldTexture ? snowClimate.ageingRebase : 0.0f;
-	spanClock.Lap(CpuCensus::kSpanTrenchTicks);
 	SweepTrenchStore();
-	spanClock.Lap(CpuCensus::kSpanTrenchSweep);
 	DrainTrenchBands();
-	spanClock.Lap(CpuCensus::kSpanTrenchDrain);
 	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);
-	spanClock.Lap(CpuCensus::kSpanTrenchFlush);
 	RollTrenchWindow();
-	spanClock.Lap(CpuCensus::kSpanTrenchRoll);
 	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
-	spanClock.Lap(CpuCensus::kSpanTrenchInject);
 
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
 	TickSnowEvents();
-	spanClock.Lap(CpuCensus::kSpanGather);
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
@@ -1067,38 +994,13 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.TerrainTexelSize = kShellVertexSpacing;
 		perFrameData.TerrainDim = float(kShellWindowDim);
 	}
-	perFrameData.ViewCenter = contactCenter;
-	perFrameData.ViewHalf = std::clamp(debugContactViewHalf, 64.0f, kContactHalfExtent);
-	contactViewBoundRadius = 0.0f;
-	if (debugContactView) {
-		if (auto* player = globals::game::player) {
-			if (auto* root = player->Get3D(false)) {
-				perFrameData.ViewCenter = { root->worldBound.center.x, root->worldBound.center.y };
-				contactViewBoundCenter = perFrameData.ViewCenter;
-				contactViewBoundRadius = root->worldBound.radius;
-			}
-		}
-	}
-	contactViewCenter = perFrameData.ViewCenter;
-	contactViewHalfUsed = perFrameData.ViewHalf;
-	contactViewTexelSize = perFrameData.TexelSize;
-
-	spanClock.Lap(CpuCensus::kSpanContact);
 	MarkTrenchDirtyRows(perFrameData);
-	spanClock.Lap(CpuCensus::kSpanDirtyRows);
-
-	if (debugActivityView)
-		EnsureActivityViewTexture();
-	perFrameData.DebugActivityView = (debugActivityView && activityViewUAV) ? 1u : 0u;
 
 	PollDeformActivity(context);
-	spanClock.Lap(CpuCensus::kSpanPolls);
 
 	const float kStampTol = std::max(2.0f, perFrameData.TexelSize);
 	const float kStampTolSq = kStampTol * kStampTol;
 	bool stampsQuiet = perFrameData.StampCount == (uint)lastStampSet.size();
-	if (!stampsQuiet)
-		stampSetTallyCount++;
 	if (stampsQuiet && perFrameData.StampCount > 0) {
 		stampMatchUsed.assign(lastStampSet.size(), 0);
 		stampMatchIndex.resize(perFrameData.StampCount);
@@ -1125,8 +1027,6 @@ void SnowDeformation::PrepassSimulation()
 			}
 			stampsQuiet = found;
 		}
-		if (!stampsQuiet)
-			stampSetTallyDrift++;
 	}
 	if (stampsQuiet) {
 		for (uint i = 0; i < perFrameData.StampCount; i++) {
@@ -1144,42 +1044,15 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.ContactDim < 0.5f
 		;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
-	deformIdleBlockers =
-		((scroll.x != 0 || scroll.y != 0) ? 1u : 0u) |
-		(!stampsQuiet ? 2u : 0u) |
-		(perFrameData.InjectValid != 0 ? 4u : 0u) |
-		(perFrameData.RefillAmount > 0.0f ? 8u : 0u) |
-		(perFrameData.ClearMap != 0 ? 16u : 0u) |
-		(deformFlagActive ? 32u : 0u) |
-		(deformFlagSeq <= deformLastNonIdleSeq ? 64u : 0u) |
-		(perFrameData.ContactDim > 0.5f ? 128u : 0u)
-		;
 	const bool bermReachStale = perFrameData.BermReach != bermReachBaked;
-	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && perFrameData.TrackRebase <= 0.0f &&
-	                    !(debugForceDeformationUpdate || debugContactView);
-
-	deformSkipTallyFrames++;
-	if (deformIdleSkipped)
-		deformSkipTallySkipped++;
-	if (deformSkipTallyFrames >= 300) {
-		deformSkipRate = (float)deformSkipTallySkipped / (float)deformSkipTallyFrames;
-		deformSkipTallyFrames = 0;
-		deformSkipTallySkipped = 0;
-		stampSetCountChanges = stampSetTallyCount;
-		stampSetDriftChanges = stampSetTallyDrift;
-		stampSetTallyCount = 0;
-		stampSetTallyDrift = 0;
-	}
+	deformIdleSkipped = inputsIdle && mapQuiet && !bermReachStale && perFrameData.TrackRebase <= 0.0f;
 
 	if (deformIdleSkipped) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 	}
 
 	const bool evolveQuiet = !evolveFlagActive && evolveVerdictSeq > evolveLastArmSeq;
-	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet ||
-	                          (debugForceDeformationUpdate || debugContactView);
-	evolveIdleLastFrame = !deformIdleSkipped && !evolveNeeded;
-	spanClock.Lap(CpuCensus::kSpanIdleLogic);
+	const bool evolveNeeded = perFrameData.RefillAmount > 0.0f || !evolveQuiet;
 
 	if (!deformIdleSkipped) {
 		perFrame->Update(perFrameData);
@@ -1187,24 +1060,6 @@ void SnowDeformation::PrepassSimulation()
 		auto* map = deformationTextures[0];
 		auto* scratch = deformationTextures[1];
 		const bool ringRan = perFrameData.RingTotalTexels > 0;
-		{
-			uint64_t h = 1469598103934665603ull;
-			auto mix = [&](const void* a_p, size_t a_n) {
-				const auto* b = static_cast<const uint8_t*>(a_p);
-				for (size_t i = 0; i < a_n; i++) {
-					h ^= b[i];
-					h *= 1099511628211ull;
-				}
-			};
-			mix(&perFrameData.StampCount, sizeof(perFrameData.StampCount));
-			mix(perFrameData.Stamps, perFrameData.StampCount * sizeof(perFrameData.Stamps[0]));
-			mix(perFrameData.StampEnds, perFrameData.StampCount * sizeof(perFrameData.StampEnds[0]));
-			mix(perFrameData.StampCones, perFrameData.StampCount * sizeof(perFrameData.StampCones[0]));
-			cpuCensus.stampHashStable = h == cpuCensus.stampHash ? cpuCensus.stampHashStable + 1 : 0;
-			cpuCensus.stampHash = h;
-			cpuCensus.stampHashRing[cpuCensus.stampHashHead] = h;
-			cpuCensus.stampHashHead = (cpuCensus.stampHashHead + 1) % CpuCensus::kHashRing;
-		}
 		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.ContactDim > 0.5f;
 		bool stampDispatched = stampRan;
 
@@ -1218,10 +1073,6 @@ void SnowDeformation::PrepassSimulation()
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);
-			if (perFrameData.DebugActivityView) {
-				const FLOAT zeroView[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-				context->ClearUnorderedAccessViewFloat(activityViewUAV.get(), zeroView);
-			}
 
 			if (tileGridsNeedInit) {
 				const UINT allDirty[4] = { 1, 1, 1, 1 };
@@ -1251,7 +1102,7 @@ void SnowDeformation::PrepassSimulation()
 			}
 
 			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),
-				perFrameData.DebugActivityView ? activityViewUAV.get() : nullptr,
+				nullptr,
 				occupancyUAV.get() };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			ID3D11UnorderedAccessView* dirtyUAV = bermDirtyUAV.get();
@@ -1285,7 +1136,7 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				auto* scanSnapshotCS = GetSnowCS(kDeformationScanSnapshotCS);
 				auto* snapshotCS = GetSnowCS(kDeformationSnapshotCS);
-				if (!evolveSnapshotOff && scanSnapshotCS && snapshotCS && snapshotTileUAV && snapshotTileSRV && snapshotArgsUAV) {
+				if (scanSnapshotCS && snapshotCS && snapshotTileUAV && snapshotTileSRV && snapshotArgsUAV) {
 					ID3D11UnorderedAccessView* snapUAVs[2] = { snapshotTileUAV.get(), snapshotArgsUAV.get() };
 					context->CSSetUnorderedAccessViews(4, 2, snapUAVs, nullptr);
 					context->CSSetShader(scanSnapshotCS, nullptr, 0);
@@ -1353,8 +1204,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 			}
 			if (stampRan) {
-				const uint32_t tileCount = debugForceAllTilesDirty ? UINT32_MAX : BuildStampTileList(perFrameData);
-				stampTilesLast = tileCount == UINT32_MAX ? kStampTileCap + 1 : tileCount;
+				const uint32_t tileCount = BuildStampTileList(perFrameData);
 				bool tiled = tileCount > 0 && tileCount != UINT32_MAX;
 				if (tiled) {
 					D3D11_MAPPED_SUBRESOURCE mapped{};
@@ -1382,19 +1232,7 @@ void SnowDeformation::PrepassSimulation()
 					globals::profiler->EndPass();
 				}
 			} else {
-				stampTilesLast = 0;
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
-			}
-			if (debugContactView && !debugObjectPrintView) {
-				EnsureContactViewTexture();
-				if (auto* viewCS = GetSnowCS(kContactViewCS); viewCS && contactViewUAV) {
-					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
-					context->CSSetUnorderedAccessViews(2, 1, &viewUAV, nullptr);
-					context->CSSetShader(viewCS, nullptr, 0);
-					context->Dispatch(kContactViewPx / 8, 2 * kContactViewPx / 8, 1);
-					ID3D11UnorderedAccessView* nullView = nullptr;
-					context->CSSetUnorderedAccessViews(2, 1, &nullView, nullptr);
-				}
 			}
 			{
 				ID3D11ShaderResourceView* nullContact[3] = {};
@@ -1500,9 +1338,7 @@ void SnowDeformation::PrepassSimulation()
 		}
 	}
 
-	spanClock.Lap(CpuCensus::kSpanDispatch);
 	UpdateObjectPrints(context, perFrameData, !deformIdleSkipped);
-	UpdateTrenchDebugTexture();
 
 	trenchMapOrigin = windowOrigin;
 	trenchMapTexel = perFrameData.TexelSize;
@@ -1515,7 +1351,6 @@ void SnowDeformation::PrepassSimulation()
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 	BindPrintReaders(context);
-	spanClock.Lap(CpuCensus::kSpanPrepassTail);
 }
 
 ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
@@ -1532,7 +1367,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "TrackRebaseCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "EvolveCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ContactViewCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampAllCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanEvolveCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanSnapshotCS", nullptr },
@@ -1552,7 +1386,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssSyncMarkCS", "SKIN_SSS_MARK" },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "TerrainFineCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", "main", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", "main", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "ClusterCullCS", "SNOW_CLUSTER_CULL" },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinCullCS", nullptr },
 	};
@@ -1565,29 +1398,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		slot.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(shader.path, defines, "cs_5_0", shader.entry)));
 	}
 	return slot.get();
-}
-
-void SnowDeformation::EnsureContactViewTexture()
-{
-	if (contactViewTexture)
-		return;
-	auto device = globals::d3d::device;
-	if (!device)
-		return;
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = kContactViewPx;
-	desc.Height = 2 * kContactViewPx;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	if (FAILED(device->CreateTexture2D(&desc, nullptr, contactViewTexture.put())))
-		return;
-	Util::SetResourceName(contactViewTexture.get(), "SnowDeformation::ContactView");
-	device->CreateShaderResourceView(contactViewTexture.get(), nullptr, contactViewSRV.put());
-	device->CreateUnorderedAccessView(contactViewTexture.get(), nullptr, contactViewUAV.put());
 }
 
 namespace
@@ -1759,9 +1569,6 @@ void SnowDeformation::ClearShaderCache()
 	undulationFieldValid = false;
 	for (auto& cs : snowCS)
 		cs = nullptr;
-	if (conditionViewCompile.valid())
-		conditionViewCompile.wait();
-	conditionViewShaderState.store(0, std::memory_order_release);
 	ReleaseMarchCache();
 	for (auto& attrPS : shellPSPrepassAttr)
 		attrPS = nullptr;
@@ -1786,10 +1593,6 @@ void SnowDeformation::ClearShaderCache()
 	skinCullHiZScratch.clear();
 	skinCullHiZSRVs.clear();
 	skinCullHiZUAVs.clear();
-	for (auto& st : skinCullArgsStaging)
-		st = nullptr;
-	for (auto& st : skinCullHiZTopStaging)
-		st = nullptr;
 	skinCullCapacity = 0;
 	skinCullLevels = 0;
 	staticsVSParallaxBlob = nullptr;
@@ -1813,7 +1616,7 @@ void SnowDeformation::ClearShaderCache()
 	for (auto& key : heightRasterKey)
 		key.clear();
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
-	release(shellPSDeferred, shellPSDeferredConditionView, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
+	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
 	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
 	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass, staticsPSDrapePrintsNoDepth);
 	release(staticsVSParallax, staticsPSDrapeParallax, staticsPSDrapePrintsParallax, patchVS, patchShadowVS, patchTessVS, patchHS, patchDS, patchPS);
@@ -1863,8 +1666,6 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 
 void SnowDeformation::TickVRAMLog()
 {
-	vramTickCounter++;
-
 	if (settings.VRAMAwareTrenchMap && !deformMapVramCap && deformMapDim > 2048u) {
 		uint64_t nowMB = 0, nowBudgetMB = 0;
 		QueryAdapterVRAM(nowMB, nowBudgetMB);
@@ -1877,39 +1678,4 @@ void SnowDeformation::TickVRAMLog()
 			logger::info("[SNOW DEFORMATION] VRAM-aware trench map: {} -> 2048 for this session (adapter {}/{} MB, the step frees ~{} MB)", deformMapDim, nowMB, nowBudgetMB, freesMB);
 		}
 	}
-}
-
-void SnowDeformation::TickRowSpikeLog()
-{
-	constexpr float kSpikeMs = 4.0f;
-	if (vramTickCounter < rowSpikeQuietUntil)
-		return;
-	const auto& results = globals::profiler->GetResults();
-	const Profiler::TimerResult* spike = nullptr;
-	for (const auto& r : results)
-		if (r.valid && r.gpuTimeMs > kSpikeMs && r.name.starts_with("SnowDeformation::") && (!spike || r.gpuTimeMs > spike->gpuTimeMs))
-			spike = &r;
-	if (!spike)
-		return;
-	rowSpikeQuietUntil = vramTickCounter + 120;
-
-	uint64_t usageMB = 0, budgetMB = 0, nonLocalMB = 0;
-	QueryAdapterVRAM(usageMB, budgetMB, &nonLocalMB);
-	auto top = [&](bool a_cpu) {
-		std::vector<const Profiler::TimerResult*> rows;
-		for (const auto& r : results)
-			if (r.valid)
-				rows.push_back(&r);
-		const size_t n = std::min<size_t>(rows.size(), 4);
-		std::partial_sort(rows.begin(), rows.begin() + n, rows.end(), [a_cpu](auto* a, auto* b) {
-			return a_cpu ? a->cpuTimeMs > b->cpuTimeMs : a->gpuTimeMs > b->gpuTimeMs;
-		});
-		std::string line;
-		for (size_t i = 0; i < n; i++)
-			line += std::format("{}{} {:.2f}", i ? ", " : "", rows[i]->name, a_cpu ? rows[i]->cpuTimeMs : rows[i]->gpuTimeMs);
-		return line;
-	};
-	logger::warn("[SNOW DEFORMATION] Row spike: {} GPU {:.2f} ms (avg {:.2f}), CPU {:.2f} ms | all rows GPU {:.2f}, CPU {:.2f} ms | VRAM {}/{} MB, system {} MB | top GPU: {} | top CPU: {}",
-		spike->name, spike->gpuTimeMs, spike->avgMs, spike->cpuTimeMs, globals::profiler->GetTotalTimeMs(), globals::profiler->GetCpuTotalTimeMs(),
-		usageMB, budgetMB, nonLocalMB, top(false), top(true));
 }

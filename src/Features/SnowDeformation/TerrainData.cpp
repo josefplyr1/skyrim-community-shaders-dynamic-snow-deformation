@@ -475,7 +475,6 @@ void SnowDeformation::RefreshLandMeshHeights()
 
 void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 {
-	LoadTraceScope _loadTrace(this, "TerrainData: BakeShellCell");
 	auto cell = land->GetSaveParentCell();
 	if (!cell)
 		return;
@@ -613,7 +612,6 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missing)
 {
-	ScopedTicks _depth(cpuCensus.depthTicks, cpuCensus.depthCalls);
 	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
 	const int cellX = (int)std::floor(a_x / kCellSize);
 	const int cellY = (int)std::floor(a_y / kCellSize);
@@ -685,46 +683,6 @@ float SnowDeformation::LandBlendDepth(float a_depth, float a_snowWeight) const
 	return a_depth * t * t * (3.0f - 2.0f * t);
 }
 
-SnowDeformation::ShellProbe SnowDeformation::ProbeShellData(float a_x, float a_y)
-{
-	ShellProbe probe;
-	probe.worldX = a_x;
-	probe.worldY = a_y;
-	probe.activeWorldspaceID = activeWorldspace.load(std::memory_order_acquire);
-	probe.windowWorldspaceID = shellWindowWorldspace;
-
-	constexpr float kCellSize = kShellVertexSpacing * 32.0f;
-	probe.cellX = (int)std::floor(a_x / kCellSize);
-	probe.cellY = (int)std::floor(a_y / kCellSize);
-	probe.vertexX = std::clamp((int)std::lround((a_x - probe.cellX * kCellSize) / kShellVertexSpacing), 0, 32);
-	probe.vertexY = std::clamp((int)std::lround((a_y - probe.cellY * kCellSize) / kShellVertexSpacing), 0, 32);
-
-	const uint64_t key = CellKey(probe.cellX, probe.cellY);
-	const std::shared_lock lock(shellCellMutex);
-	const auto it = shellCells.find(key);
-	if (it == shellCells.end())
-		return probe;
-
-	probe.cellFound = true;
-	probe.cellWorldspace = it->second.worldspaceID;
-	probe.worldspaceMatch = probe.cellWorldspace == probe.activeWorldspaceID;
-
-	const uint32_t idx = uint32_t(probe.vertexY) * 33 + uint32_t(probe.vertexX);
-	probe.height = it->second.height[idx];
-
-	const std::shared_lock textureLock(landTextureMutex);
-	for (uint32_t slot = 0; slot < kShellVertexLayers; ++slot) {
-		const uint16_t texture = it->second.layerTexture[idx][slot];
-		const float weight = it->second.layerWeight[idx][slot] / 255.0f;
-		if (texture >= landTextures.size() || weight <= 0.0f)
-			continue;
-		probe.layers.push_back({ landTextures[texture].label, weight, landTextures[texture].depth });
-		probe.rampDepth += weight * landTextures[texture].depth;
-		probe.coverage += weight;
-	}
-	return probe;
-}
-
 void SnowDeformation::UpdateActiveWorldspace()
 {
 	auto* tes = globals::game::tes;
@@ -745,7 +703,6 @@ void SnowDeformation::UpdateActiveWorldspace()
 
 void SnowDeformation::UpdateShellTerrainWindow()
 {
-	LoadTraceScope _loadTrace(this, "TerrainData: UpdateShellTerrainWindow");
 	auto eyeFB = globals::game::frameBufferCached.GetCameraPosAdjust();
 	int camCellX = (int)std::floor(eyeFB.x / (kShellVertexSpacing * kShellTexelsPerCell));
 	int camCellY = (int)std::floor(eyeFB.y / (kShellVertexSpacing * kShellTexelsPerCell));
@@ -882,7 +839,6 @@ void SnowDeformation::UpdateShellTerrainWindow()
 
 void SnowDeformation::BuildTerrainFineWindow()
 {
-	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
 	shellFineValid = false;
 	auto* cs = GetSnowCS(kTerrainFineCS);
 	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv)
@@ -955,7 +911,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 
 ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY)
 {
-	LoadTraceScope _loadTrace(this, "TerrainData: GetLODTile");
 	const uint64_t key = CellKey(a_cellX, a_cellY);
 	if (auto it = lodTileCache.find(key); it != lodTileCache.end())
 		return it->second.get();
@@ -982,7 +937,6 @@ ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_world
 
 void SnowDeformation::FillShellWindowFromHeightmap()
 {
-	LoadTraceScope _loadTrace(this, "TerrainData: FillShellWindowFromHeightmap");
 	auto& terrainShadows = globals::features::terrainShadows;
 	if (!terrainShadows.loaded || !terrainShadows.texHeightMap || !terrainShadows.IsHeightMapReady()) {
 		lastFillWorldspace.clear();
@@ -1055,30 +1009,25 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	if (material == nullptr || !(debugTerrainOverlay || settings.EnableSnowDeformation))
+	if (material == nullptr || !settings.EnableSnowDeformation)
 		return;
 
 	const auto feature = material->GetFeature();
 	const bool landFeature = feature == RE::BSShaderMaterial::Feature::kMultiTexLand ||
 	                         feature == RE::BSShaderMaterial::Feature::kMultiTexLandLODBlend ||
 	                         feature == static_cast<RE::BSShaderMaterial::Feature>(33);
-	if (!landFeature && !landMaskFeatureGateOff)
+	if (!landFeature)
 		return;
 	uint8_t mask = 0;
 	{
 		const std::shared_lock lock(snowMaskMutex);
 		auto it = snowMasks.find(reinterpret_cast<uintptr_t>(material));
 		if (it == snowMasks.end()) {
-			if (landFeature)
-				landMaskMisses.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
 		mask = it->second;
 	}
 
-	if (!landFeature)
-		landMaskForeignHits.fetch_add(1, std::memory_order_relaxed);
-	landMaskHits.fetch_add(1, std::memory_order_relaxed);
 	state->permutationData.ExtraFeatureDescriptor |= uint32_t(mask) << kSnowLandIsSnowShift;
 
 	if (mask != 0 && LandRecolorActive()) {
@@ -1092,59 +1041,6 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 		ID3D11ShaderResourceView* bermSRV = GetBermFieldSRV();
 		context->PSSetShaderResources(kLandBermSlot, 1, &bermSRV);
 	}
-}
-
-void SnowDeformation::OnLightingDraw(RE::BSRenderPass* a_pass)
-{
-	const bool landscape = settings.EnableSnowDeformation && shellGateBareFrames < kShellGateBareFrames &&
-	                       globals::deferred->deferredPass && a_pass && a_pass->shaderProperty &&
-	                       a_pass->shaderProperty->flags.all(RE::BSShaderProperty::EShaderPropertyFlag::kMultiTextureLandscape);
-	if (!landscape) {
-		CloseLandscapeRun();
-		return;
-	}
-
-	const uint32_t frame = globals::state->frameCountAtomic.load(std::memory_order_relaxed);
-	if (frame != landscapeRunFrame) {
-		CloseLandscapeRun();
-		const auto* player = globals::game::player;
-		if (!landscapeCensusLogged && landscapeRunsThisFrame > 0 && player && player->GetParentCell()) {
-			landscapeCensusRuns += landscapeRunsThisFrame;
-			landscapeCensusBatches += landscapeBatchesThisFrame;
-			landscapeCensusPeakRuns = std::max(landscapeCensusPeakRuns, landscapeRunsThisFrame);
-			if (++landscapeCensusFrames == 600) {
-				landscapeCensusLogged = true;
-				logger::info("[SNOW DEFORMATION] landscape timer census over 600 terrain frames: {:.1f} runs/frame (peak {}), {:.1f} terrain draws/frame, {} runs past the cap of {}, {} dropped at the frame boundary",
-					landscapeCensusRuns / 600.0, landscapeCensusPeakRuns, landscapeCensusBatches / 600.0, landscapeCensusCapped, kLandscapeRunCap, landscapeCensusDropped);
-			}
-		}
-		landscapeRunFrame = frame;
-		landscapeRunsThisFrame = 0;
-		landscapeBatchesThisFrame = 0;
-	}
-
-	landscapeBatchesThisFrame++;
-	if (landscapeRunOpen)
-		return;
-	if (landscapeRunsThisFrame >= kLandscapeRunCap) {
-		landscapeCensusCapped++;
-		return;
-	}
-	landscapeRunsThisFrame++;
-	landscapeRunOpen = true;
-	globals::profiler->BeginPass("Game Terrain::Deferred Draws (game's own, timed by Snow)");
-}
-
-void SnowDeformation::CloseLandscapeRun()
-{
-	if (!landscapeRunOpen)
-		return;
-	landscapeRunOpen = false;
-	if (globals::state->frameCountAtomic.load(std::memory_order_relaxed) != landscapeRunFrame) {
-		landscapeCensusDropped++;
-		return;
-	}
-	globals::profiler->EndPass();
 }
 
 struct SD_TESObjectLAND_SetupMaterial
@@ -1175,32 +1071,6 @@ struct SD_BSLightingShader_SetupMaterial
 	static inline REL::Relocation<decltype(thunk)> func;
 };
 
-template <int Slot>
-struct SD_OtherShader_SetupTechnique
-{
-	static bool thunk(RE::BSShader* shader, uint32_t a_technique)
-	{
-		auto& snowDeformation = globals::features::snowDeformation;
-		if (snowDeformation.loaded)
-			snowDeformation.CloseLandscapeRun();
-		return func(shader, a_technique);
-	}
-	static inline REL::Relocation<decltype(thunk)> func;
-};
-
-void SnowDeformation::InstallLandscapeTimingHook()
-{
-	logger::info("[SNOW DEFORMATION] Hooking BSShader::SetupTechnique on 8 non-Lighting shader types (landscape timer)");
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<0>>(RE::VTABLE_BSGrassShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<1>>(RE::VTABLE_BSEffectShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<2>>(RE::VTABLE_BSWaterShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<3>>(RE::VTABLE_BSSkyShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<4>>(RE::VTABLE_BSParticleShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<5>>(RE::VTABLE_BSBloodSplatterShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<6>>(RE::VTABLE_BSDistantTreeShader[0]);
-	stl::write_vfunc<0x2, SD_OtherShader_SetupTechnique<7>>(RE::VTABLE_BSUtilityShader[0]);
-}
-
 void SnowDeformation::PostPostLoad()
 {
 	logger::info("[SNOW DEFORMATION] Hooking TESObjectLAND");
@@ -1210,7 +1080,6 @@ void SnowDeformation::PostPostLoad()
 	stl::write_vfunc<0x4, SD_BSLightingShader_SetupMaterial>(RE::VTABLE_BSLightingShader[0]);
 
 	InstallStaticsCaptureHook();
-	InstallLandscapeTimingHook();
 	InstallCameraHook();
 	InstallAPI();
 	InstallLandscapeSnow();
@@ -1441,7 +1310,7 @@ bool SnowDeformation::CascadeSnowSoon()
 		return true;
 	FootprintPlanes footprints[kMaxSunFootprints];
 	size_t footprintCount = 0;
-	if (!cascadeHeightGateOff && SunCascadeFootprints(footprints, footprintCount))
+	if (SunCascadeFootprints(footprints, footprintCount))
 		return SnowCellsMeetFootprints(footprints, footprintCount, LsRiseReach(), true);
 	if (CellRangeSnowVerdict(sqMinX, sqMinY, sqMaxX, sqMaxY) != kSnowGateBare)
 		return true;
@@ -1459,7 +1328,7 @@ bool SnowDeformation::CascadeSnowSoon()
 uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, const ShellCB& a_cb)
 {
 	const uint32_t verdict = CellRangeSnowVerdict(a_minX, a_minY, a_maxX, a_maxY);
-	if (verdict != kSnowGateSnowy || shellViewGateOff)
+	if (verdict != kSnowGateSnowy)
 		return verdict;
 	const auto& m = a_cb.CameraViewProj;
 	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
@@ -1505,10 +1374,8 @@ uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, in
 void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 {
 	captureViewCulled = 0;
-	captureCullBail = 1;
-	if (captureViewCullOff || capturedStatics.empty() || InInteriorCell())
+	if (capturedStatics.empty() || InInteriorCell())
 		return;
-	captureCullBail = 2;
 	int sqMinX, sqMinY, sqMaxX, sqMaxY;
 	if (!LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
 		return;
@@ -1537,15 +1404,12 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 			}
 		}
 	}
-	captureCullBail = 3;
 	if (!squareFloorValid)
 		return;
-	captureCullBail = 4;
 	const double cam[3] = { a_cb.CameraPosAdjust.x, a_cb.CameraPosAdjust.y, a_cb.CameraPosAdjust.z };
 	const double drop = cam[2] - squareFloorZ;
 	if (drop <= 0.0)
 		return;
-	captureCullBail = 5;
 	const auto& m = a_cb.CameraViewProj;
 	using V = std::array<double, 3>;
 	auto row = [&](int a_r, double a_s) {
@@ -1571,11 +1435,9 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 			hi[c] = std::max(hi[c], cam[c] + d[c] * t);
 		}
 	}
-	captureCullBail = 6;
 	if (lo[0] < sqMinX * double(kCellSize) || lo[1] < sqMinY * double(kCellSize) ||
 		hi[0] > (sqMaxX + 1) * double(kCellSize) || hi[1] > (sqMaxY + 1) * double(kCellSize))
 		return;
-	captureCullBail = 0;
 	for (int c = 0; c < 3; c++) {
 		lo[c] -= kViewGateMarginZ;
 		hi[c] += kViewGateMarginZ;
@@ -1687,14 +1549,10 @@ bool SnowDeformation::SampleShellSurface(float a_x, float a_y, float& a_surface)
 
 void SnowDeformation::ClampCameraAboveSnow()
 {
-	cameraProbeFired++;
-	cameraProbeState = 5;
 	auto* camera = RE::PlayerCamera::GetSingleton();
 	auto* player = globals::game::player;
 	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
 		return;
-	cameraProbeState = 4;
-	cameraProbeCamState = camera && camera->currentState ? uint32_t(camera->currentState->id) : 99u;
 	if (!camera || !camera->cameraRoot || !camera->currentState)
 		return;
 	const uint32_t thirdPerson = REL::Module::IsVR() ? RE::CameraState::kVRThirdPerson : RE::CameraState::kThirdPerson;
@@ -1702,29 +1560,22 @@ void SnowDeformation::ClampCameraAboveSnow()
 	const bool followState = (state >= thirdPerson && state <= thirdPerson + 3) || state == RE::CameraState::kPCTransition;
 	const bool down = player->IsInRagdollState() || player->IsDead() ||
 	                  player->AsActorState()->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal;
-	cameraProbeDown = down;
 	if (!followState && !(down && state != RE::CameraState::kFree))
 		return;
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;
-	cameraProbeZ = cam.z;
 	const float clearance = 24.0f + std::clamp(settings.UndulationStrength, 0.0f, 32.0f);
 	float surface;
 	if (!SampleShellSurface(cam.x, cam.y, surface)) {
-		cameraProbeState = 1;
 		return;
 	}
-	cameraProbeSurface = surface;
 	if (cam.z >= surface + clearance) {
-		cameraProbeState = 2;
 		return;
 	}
 	RE::NiPoint3 target = cam;
 	if (down) {
-		cameraProbeState = 6;
 		target.z = surface + clearance;
 	} else {
-		cameraProbeState = 3;
 		const RE::NiPoint3 anchor = player->GetPosition() + RE::NiPoint3{ 0.0f, 0.0f, 120.0f };
 		float anchorSurface;
 		if (SampleShellSurface(anchor.x, anchor.y, anchorSurface) && anchor.z < anchorSurface + clearance)

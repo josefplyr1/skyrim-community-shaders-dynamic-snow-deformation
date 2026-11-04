@@ -1071,7 +1071,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const float2 detailPlane = gradZ;
 	float3 shadePos = input.WorldPos;
 #if defined(SNOW_NOISE_TABLE)
-	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || TrenchDetailView != 0 || abs(TrenchDetailRoughness - 1.0) > 0.001))
+	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		const float4 detailField = BermFieldPair(gridLocal);
 		const float detailReach = detailFade * (1.0 - objectMeet.x);
@@ -1346,28 +1346,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	psout.Reflectance = float4(specularLobe, alpha);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
-#if defined(SNOW_SHELL_DEFERRED) && defined(SNOW_CONDITION_VIEW)
-	{
-		const float4 trackField = BermFieldPair(gridLocal);
-		const float2 track = SnowClimate2.z < 6.5 ? float2(lerp(TrackAgeOf(trackField.w), TrackAgeOf(trackField.z), smoothstep(0.0, 0.1, pixelCarve)), saturate(10.0 * max(pixelCarve, bermCenter))) :
-		                                             float2(SnowIceLook(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true), 0.0);
-		const float3 conditionColor = SnowConditionColor(SnowConditionAt(input.WorldPos.z + ShellCameraPosAdjust.z), SnowClimate2.z, track);
-		psout.Diffuse.rgb = conditionColor * 2.0;
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-#endif
-#if defined(SNOW_SHELL_DEFERRED)
-	[branch] if (TrenchDetailView != 0)
-	{
-		const float shade = dot(psout.Diffuse.rgb, float3(0.2126, 0.7152, 0.0722));
-		psout.Diffuse.rgb = lerp(shade.xxx, float3(1.0, 0.35, 0.08) * (shade * 1.6 + 0.08), detailMask);
-		psout.Albedo.rgb = 0.0;
-		psout.Specular.rgb = 0.0;
-		psout.Reflectance.rgb = 0.0;
-	}
-#endif
 
 	return psout;
 #endif

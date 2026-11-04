@@ -147,8 +147,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.UndulationAmp, a_cb.UndulationScale, settings.BermHeight, settings.RimLip,
 		a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f, a_cb.ExclusionFieldWindow.w, a_cb.FineWindow.z,
 		a_cb.ObjectHeightHalfExtent, a_cb.FieldDims.x, a_cb.FieldDims.y, a_cb.FieldDims.z, a_cb.FieldDims.w,
-		settings.FreshSnowSoftness, debugFreshnessOverride, settings.SnowClimateStrength, debugClimateTemperatureOn ? debugClimateTemperature : -1000.0f,
-		debugClimateShareOverride, debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, settings.TrackAgeing };
+		settings.FreshSnowSoftness, settings.SnowClimateStrength, settings.TrackAgeing };
 	mix(keyFloats, sizeof(keyFloats));
 	mix(&dim, sizeof(dim));
 	const bool keyChanged = key != marchCacheKey;
@@ -191,9 +190,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const uint32_t sunRows = MarchRows(sunFull, dim, kMarchSunRows, kMarchSunFastRows, marchSunFastRows, marchSunRowCursor, sunStart);
 	const float sunLen2D = std::max(std::hypot(marchSunDir[0], marchSunDir[1]), 1e-4f);
 	const float4 sunCB = { marchSunDir[0] / sunLen2D, marchSunDir[1] / sunLen2D, std::min(marchSunDir[2] / sunLen2D, 100.0f), 0.0f };
-	marchCensus[marchCensusCursor] = uint8_t((keyChanged ? 1u : 0u) | (full ? 2u : 0u) | (farFull ? 4u : 0u));
-	marchCensusCursor = (marchCensusCursor + 1) % kMarchCensusFrames;
-	marchCensusFilled = std::min(marchCensusFilled + 1, kMarchCensusFrames);
 
 	auto context = globals::d3d::context;
 	globals::profiler->BeginPass("SnowDeformation::Ground - March Cache");

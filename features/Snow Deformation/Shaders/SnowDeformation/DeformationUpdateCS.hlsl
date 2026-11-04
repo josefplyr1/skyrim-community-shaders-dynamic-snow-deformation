@@ -120,8 +120,6 @@ groupshared uint gDeltaSum;
 groupshared uint gNonZero;
 groupshared uint gClockMoved;
 
-RWTexture2D<float4> ActivityView : register(u2);
-
 float4 StoredDelta(float4 a, float4 b)
 {
 	float4 d = abs(a - b);
@@ -164,10 +162,6 @@ void ActivityAccumulate(float4 delta, uint2 pixel)
 		float maxDelta = max(max(delta.x, delta.y), max(delta.z, delta.w));
 		InterlockedAdd(gDeltaSum, min((uint)(maxDelta * 1e6 + 0.5), 1000000u));
 	}
-	[branch] if (DebugActivityView)
-		ActivityView[pixel] = max(ActivityView[pixel],
-			float4(saturate(delta.x * 512.0), saturate(delta.y * 512.0),
-				saturate(max(delta.z, delta.w) * 512.0), 1.0));
 }
 
 void ActivityPublish(uint GIdx)
@@ -858,58 +852,6 @@ bool StampTexel(uint2 phys)
 	}
 }
 
-#define VIEW_PX 512
-[numthreads(8, 8, 1)] void ContactViewCS(uint3 DTid
-										 : SV_DispatchThreadID) {
-	const uint dim = (uint)ContactDim;
-	if (any(DTid.xy >= uint2(VIEW_PX, 2 * VIEW_PX)))
-		return;
-	if (dim == 0 && DTid.y < VIEW_PX)
-	{
-		ActivityView[DTid.xy] = float4(0.0, 0.0, 0.0, 1.0);
-		return;
-	}
-	const bool mapHalf = DTid.y >= VIEW_PX;
-	const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
-	float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);
-	float2 worldPos = ViewCenter + rel * ViewHalf;
-	float4 color = float4(0.0, 0.0, 0.0, 1.0);
-	[branch] if (!mapHalf)
-	{
-		float2 crel = (worldPos - ContactCenter) / ContactHalfExtent;
-		[branch] if (all(abs(crel) < 1.0))
-		{
-			int2 ct = int2((crel.x * 0.5 + 0.5) * ContactDim, (0.5 - crel.y * 0.5) * ContactDim);
-			const float2 contactXY = ContactHeight.Load(int3(clamp(ct, 0, (int)dim - 1), 0));
-			const float contact = min(contactXY.x, contactXY.y);
-			[branch] if (contact < CONTACT_NONE * 0.5)
-			{
-				float above = ContactAboveDrawn(worldPos, contact, max(UndulationNorm(worldPos, UndulationScale) * UndulationAmp, 0.0));
-				color = float4(saturate(1.0 - above), saturate(above), saturate(-above), 1.0);
-			}
-		}
-	}
-	else
-	{
-		uint2 dims;
-		CurrentDeformation.GetDimensions(dims.x, dims.y);
-		float2 t = (worldPos - WindowOrigin) / TexelSize;
-		int2 logical = int2(floor(t));
-		[branch] if (all(logical >= 0) && all(logical < int2(dims)))
-		{
-			uint2 phys = uint2((logical + MapOrigin) & (int2(dims) - 1));
-			const float depth = CurrentDeformation[phys].x;
-			color = float4(depth, depth * 0.25, 0.0, 1.0);
-			float2 f = frac(t);
-			if (any(f < 0.08))
-				color.b = 0.3;
-		}
-	}
-	if (px.x == VIEW_PX / 2 || px.y == VIEW_PX / 2)
-		color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
-	ActivityView[DTid.xy] = color;
-}
-
 #define PRINT_TEXEL 3.0
 #define PRINT_Z_OFFSET 524288.0
 #define PRINT_SAME_SURFACE 12.0
@@ -1305,44 +1247,4 @@ uint PrintDepthAt(uint2 a_phys, float a_z)
 	}
 	const uint strength = min((uint)round(best), 1023u);
 	PrintRim[phys] = strength > 0u ? (bestZ << 10) | strength : 0u;
-}
-
-[numthreads(8, 8, 1)] void PrintViewCS(uint3 DTid
-									   : SV_DispatchThreadID) {
-	[branch] if (all(DTid.xy < uint2(VIEW_PX, 2 * VIEW_PX)))
-	{
-		const bool mapHalf = DTid.y >= VIEW_PX;
-		const uint2 px = uint2(DTid.x, mapHalf ? DTid.y - VIEW_PX : DTid.y);
-		const float2 rel = float2((px.x + 0.5) / VIEW_PX * 2.0 - 1.0, 1.0 - (px.y + 0.5) / VIEW_PX * 2.0);
-		const float2 worldPos = ViewCenter + rel * ViewHalf;
-		uint3 dims;
-		PrintMapIn.GetDimensions(dims.x, dims.y, dims.z);
-		const int2 world = int2(floor(worldPos / PRINT_TEXEL));
-		float4 color = float4(0.0, 0.0, 0.0, 1.0);
-		[branch] if (!mapHalf)
-		{
-			const float3 verdict = PrintVerdict((float2(world) + 0.5) * PRINT_TEXEL);
-			[flatten] if (verdict.z > 2.5)
-				color.rgb = lerp(float3(0.1, 0.45, 0.1), float3(1.0, 1.0, 0.2), verdict.y);
-			else if (verdict.z > 1.5)
-				color.rgb = float3(0.8, 0.1, 0.8);
-			else if (verdict.z > 0.5)
-				color.rgb = float3(0.1, 0.2, 0.8);
-		}
-		else [branch] if (all(world >= PrintWindowMin) && all(world < PrintWindowMin + int(dims.x)))
-		{
-			const uint2 phys = uint2(world & int(dims.x - 1));
-			const uint a = PrintMapIn.Load(int4(phys, 0, 0));
-			const uint b = PrintMapIn.Load(int4(phys, 1, 0));
-			color.rgb = float3((a & 1023u) / 1023.0, (b & 1023u) / 1023.0, 0.0);
-			const float2 f = frac(worldPos / PRINT_TEXEL);
-			[flatten] if (ViewHalf < 400.0 && any(f < 0.08))
-				color.b = 0.3;
-		}
-		else
-			color.rgb = 0.15;
-		if (px.x == VIEW_PX / 2 || px.y == VIEW_PX / 2)
-			color = lerp(color, float4(0.2, 0.4, 1.0, 1.0), 0.5);
-		ActivityView[DTid.xy] = color;
-	}
 }

@@ -12,7 +12,6 @@ namespace
 	constexpr const char* kSnowEventNames[] = { "kick-up", "crumble", "landing", "knockdown", "rush", "body drop", "shout", "blast", "lightning" };
 	constexpr float kGravityMetres = 9.8f;
 	constexpr float kDropSettleShare = 0.25f;
-	constexpr uint32_t kCensusLogLinesPerSecond = 20;
 	constexpr uint32_t kTrackerExpiryFrames = 300;
 
 	uint32_t MixSeed(uint64_t a_key)
@@ -31,17 +30,13 @@ void SnowDeformation::RequestSnowEvents()
 
 bool SnowDeformation::SnowEventsWanted() const
 {
-	if (debugSnowEventCensus)
-		return true;
 	return snowEventRequestFrame != UINT32_MAX && globals::state->frameCount - snowEventRequestFrame <= 2;
 }
 
 void SnowDeformation::PushSnowEvent(const SnowEvent& a_event)
 {
-	if (snowEventsBuilding.size() >= kMaxSnowEventsPerFrame) {
-		snowEventsDroppedFrame++;
+	if (snowEventsBuilding.size() >= kMaxSnowEventsPerFrame)
 		return;
-	}
 	snowEventsBuilding.push_back(a_event);
 }
 
@@ -227,87 +222,15 @@ void SnowDeformation::TickSnowEvents()
 			snowEventBodies.clear();
 			snowEventMarksSeen.clear();
 		}
-		snowEventsDroppedFrame = 0;
-		snowEventCensus.windowStart = -1.0;
 		return;
 	}
 
 	snowEventsPublished.swap(snowEventsBuilding);
 	snowEventsBuilding.clear();
-	const uint32_t dropped = snowEventsDroppedFrame;
-	snowEventsDroppedFrame = 0;
 
 	if (frame % kTrackerExpiryFrames == 0) {
 		std::erase_if(snowEventFeet, [frame](const auto& a_entry) { return frame - a_entry.second.frame > kTrackerExpiryFrames; });
 		std::erase_if(snowEventBodies, [frame](const auto& a_entry) { return frame - a_entry.second.frame > kTrackerExpiryFrames; });
 	}
-
-	if (!debugSnowEventCensus)
-		return;
-	auto& census = snowEventCensus;
-	const double now = passClockSeconds;
-	if (census.windowStart < 0.0) {
-		census = {};
-		census.windowStart = now;
-	}
-	auto* player = globals::game::player;
-	const RE::NiPoint3 eye = player ? player->GetPosition() : RE::NiPoint3{};
-	for (const auto& event : snowEventsPublished) {
-		const size_t kind = size_t(event.kind);
-		census.window[kind]++;
-		census.total[kind]++;
-		census.last[kind] = event;
-		census.lastDistance[kind] = player ? eye.GetDistance(event.position) : -1.0f;
-		if (event.kind == SnowEventKind::KickUp || event.kind == SnowEventKind::Crumble || census.logLines >= kCensusLogLinesPerSecond)
-			continue;
-		census.logLines++;
-		logger::info("[SNOW DEFORMATION] snow event: {} {:08X} strength {:.2f} amount {:.0f} snow {:.0f} deep, {:.1f} m from the player",
-			kSnowEventNames[kind], event.formID, event.strength, event.amount, event.snowDepth, census.lastDistance[kind] / kUnitsPerMeter);
-	}
-	census.droppedWindow += dropped;
-	if (now - census.windowStart >= 1.0) {
-		census.perSecond = census.window;
-		census.droppedPerSecond = census.droppedWindow;
-		uint32_t any = census.droppedWindow;
-		std::string summary;
-		for (size_t kind = 0; kind < size_t(SnowEventKind::Count); kind++) {
-			any += census.window[kind];
-			summary += std::format("{}{} {}", kind ? ", " : "", kSnowEventNames[kind], census.window[kind]);
-		}
-		if (any)
-			logger::info("[SNOW DEFORMATION] snow events/s: {}, dropped {}", summary, census.droppedWindow);
-		census.window.fill(0);
-		census.droppedWindow = 0;
-		census.logLines = 0;
-		census.windowStart = now;
-	}
 }
 
-std::vector<std::string> SnowDeformation::SnowEventCensusLines() const
-{
-	std::vector<std::string> lines;
-	if (!debugSnowEventCensus) {
-		lines.push_back(SnowEventsWanted() ? "Not counting. A consumer is collecting events." : "Off: nothing is collected.");
-		return lines;
-	}
-	const auto& census = snowEventCensus;
-	std::string perSecond = "Last second:";
-	std::string totals = "Since counting began:";
-	for (size_t kind = 0; kind < size_t(SnowEventKind::Count); kind++) {
-		perSecond += std::format("{} {} {}", kind ? "," : "", kSnowEventNames[kind], census.perSecond[kind]);
-		totals += std::format("{} {} {}", kind ? "," : "", kSnowEventNames[kind], census.total[kind]);
-	}
-	lines.push_back(perSecond);
-	lines.push_back(totals);
-	for (size_t kind = 0; kind < size_t(SnowEventKind::Count); kind++) {
-		if (!census.total[kind])
-			continue;
-		const auto& last = census.last[kind];
-		lines.push_back(std::format("Last {}: strength {:.2f}, amount {:.0f}, snow {:.0f} deep, stickiness {:.2f}, {:.1f} m from the player{}",
-			kSnowEventNames[kind], last.strength, last.amount, last.snowDepth, last.stickiness, census.lastDistance[kind] / kUnitsPerMeter,
-			last.formID ? std::format(" ({:08X})", last.formID) : std::string()));
-	}
-	lines.push_back(std::format("Dropped past {} a frame: {} last second", kMaxSnowEventsPerFrame, census.droppedPerSecond));
-	lines.push_back("CommunityShaders.log gets a total per second, and one line per event for every kind but kick-up and crumble (at most 20 a second).");
-	return lines;
-}

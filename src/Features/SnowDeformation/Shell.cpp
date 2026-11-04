@@ -139,7 +139,6 @@ void SnowDeformation::EnsureShellSnowTextures()
 {
 	if (shellSnowTextureAttempted)
 		return;
-	LoadTraceScope _loadTrace(this, "Shell: EnsureShellSnowTextures (load)");
 	shellSnowTextureAttempted = true;
 	shellSnowDiffuseSRV = nullptr;
 	shellSnowNormalSRV = nullptr;
@@ -280,60 +279,6 @@ void SnowDeformation::RefreshSnowPBRParams()
 	} else {
 		snowGlintLogDensity = 0.0f;
 	}
-}
-
-bool SnowDeformation::EnsureShellStatsQueries()
-{
-	if (shellStatsQuery[kShellStatsRing - 1][1])
-		return true;
-	auto device = globals::d3d::device;
-	for (int ring = 0; ring < kShellStatsRing; ++ring) {
-		for (int kind = 0; kind < 2; ++kind) {
-			D3D11_QUERY_DESC desc{};
-			desc.Query = kind == 0 ? D3D11_QUERY_PIPELINE_STATISTICS : D3D11_QUERY_OCCLUSION;
-			if (FAILED(device->CreateQuery(&desc, shellStatsQuery[ring][kind].put())) ||
-				FAILED(device->CreateQuery(&desc, staticsStatsQuery[ring][kind].put())) ||
-				FAILED(device->CreateQuery(&desc, patchStatsQuery[ring][kind].put()))) {
-				logger::error("SnowDeformation: pipeline statistics query creation failed");
-				for (auto& r : shellStatsQuery)
-					for (auto& q : r)
-						q = nullptr;
-				for (auto& r : staticsStatsQuery)
-					for (auto& q : r)
-						q = nullptr;
-				for (auto& r : patchStatsQuery)
-					for (auto& q : r)
-						q = nullptr;
-				return false;
-			}
-		}
-	}
-	return true;
-}
-
-void SnowDeformation::ReadShellStatsQueries(ID3D11DeviceContext* a_context)
-{
-	const int ring = (shellStatsRing + 1) % kShellStatsRing;
-	if (!shellStatsIssued[ring])
-		return;
-	auto read = [&](winrt::com_ptr<ID3D11Query> (&queries)[2], ShellStatsResult& out) {
-		D3D11_QUERY_DATA_PIPELINE_STATISTICS stats{};
-		UINT64 samples = 0;
-		if (a_context->GetData(queries[0].get(), &stats, sizeof(stats), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
-			a_context->GetData(queries[1].get(), &samples, sizeof(samples), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK)
-			return false;
-		out.vsInvocations = stats.VSInvocations;
-		out.hsInvocations = stats.HSInvocations;
-		out.dsInvocations = stats.DSInvocations;
-		out.psInvocations = stats.PSInvocations;
-		out.rasterizedPrimitives = stats.CInvocations;
-		out.samplesPassed = samples;
-		out.valid = true;
-		return true;
-	};
-	if (read(shellStatsQuery[ring], shellStatsLast) && read(staticsStatsQuery[ring], staticsStatsLast) &&
-		read(patchStatsQuery[ring], patchStatsLast))
-		shellStatsIssued[ring] = false;
 }
 
 ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
@@ -668,33 +613,6 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 	return shellPSDeferred.get();
 }
 
-ID3D11PixelShader* SnowDeformation::ConditionViewPS()
-{
-	if (debugConditionView <= 0)
-		return nullptr;
-	int state = conditionViewShaderState.load(std::memory_order_acquire);
-	if (state == 0) {
-		conditionViewShaderState.store(1, std::memory_order_release);
-		conditionViewCompile = std::async(std::launch::async, [this] {
-			auto defines = ShellPSDefines();
-			defines.emplace_back("SNOW_SHELL_DEFERRED", "");
-			defines.emplace_back("SNOW_CONDITION_VIEW", "");
-			shellPSDeferredConditionView.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
-			return shellPSDeferredConditionView.get() != nullptr;
-		});
-		return nullptr;
-	}
-	if (state == 1) {
-		if (conditionViewCompile.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-			return nullptr;
-		state = conditionViewCompile.get() ? 2 : 3;
-		conditionViewShaderState.store(state, std::memory_order_release);
-		if (state == 3)
-			logger::warn("[SNOW DEFORMATION] Snow condition view: SnowShell.hlsl failed to compile, the view stays off");
-	}
-	return state == 2 ? shellPSDeferredConditionView.get() : nullptr;
-}
-
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
 {
 	auto& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
@@ -901,47 +819,6 @@ void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_c
 		std::fmod(a_cb.GridOrigin.x, kSnowUVTile),
 		std::fmod(a_cb.GridOrigin.y, kSnowUVTile)
 	};
-}
-
-void SnowDeformation::StartEffectCostProbe()
-{
-	auto& p = effectCost;
-	if (p.running)
-		return;
-	p = {};
-	p.running = true;
-	p.savedMask = shellKillMask;
-	shellKillMask = 0;
-}
-
-void SnowDeformation::TickEffectCostProbe()
-{
-	auto& p = effectCost;
-	if (!p.running)
-		return;
-	constexpr uint32_t kSettleFrames = 20;
-	constexpr uint32_t kSampleFrames = 120;
-	float total = 0.0f;
-	for (const auto& r : globals::profiler->GetResults())
-		if (r.valid && r.name.starts_with("SnowDeformation::") && (r.name.ends_with(" Shading") || r.name.ends_with(" Depth Prepass")))
-			total += r.gpuTimeMs;
-	if (p.frame >= kSettleFrames)
-		p.samples.push_back(total);
-	if (++p.frame < kSettleFrames + kSampleFrames)
-		return;
-	std::nth_element(p.samples.begin(), p.samples.begin() + p.samples.size() / 2, p.samples.end());
-	const float median = p.samples.empty() ? 0.0f : p.samples[p.samples.size() / 2];
-	(p.step % 2 ? p.withoutMs : p.withMs)[p.step / 2] = median;
-	p.step++;
-	p.frame = 0;
-	p.samples.clear();
-	if (p.step < 2 * EffectCostProbe::kEffects) {
-		shellKillMask = p.step % 2 ? 1u << EffectCostProbe::kKillBits[p.step / 2] : 0u;
-	} else {
-		shellKillMask = p.savedMask;
-		p.running = false;
-		p.done = true;
-	}
 }
 
 float SnowDeformation::ShellTessTargetRenderPx() const
@@ -1431,7 +1308,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
 	const bool restoreInside = shellSssSyncFrame != globals::state->frameCount ||
 	                           (shellSssRect.left >= rect.left && shellSssRect.top >= rect.top && shellSssRect.right <= rect.right && shellSssRect.bottom <= rect.bottom);
-	const bool mark = !sssChangedMarchOff && restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
+	const bool mark = restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
 	                  sssFirstMarchDepth->desc.Width >= rect.right && sssFirstMarchDepth->desc.Height >= rect.bottom &&
 	                  ss.marchFrame == globals::state->frameCount && ss.marchDepthSRV == tb.blendedDepthTexture->srv.get() &&
 	                  Util::GetCurrentSceneDepthSRV(false) == ss.marchDepthSRV && GetSnowCS(kSkinSssSyncMarkCS) && GetSssChangedRaymarchCS() &&
@@ -1461,8 +1338,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	}
 	dispatch(mark ? GetSnowCS(kSkinSssSyncMarkCS) : GetSnowCS(kSkinSssSyncCS));
 	globals::profiler->EndPass();
-	if (ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS.get() : nullptr))
-		sssChangedMarchFrame = globals::state->frameCount;
+	ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS.get() : nullptr);
 	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
 	dispatch(GetSnowCS(kSkinSssRestoreCS));
 	ID3D11ShaderResourceView* maskSRV = ss.screenSpaceShadowsTexture->srv.get();
@@ -1474,19 +1350,14 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 
 void SnowDeformation::DrawShell()
 {
-	TickEffectCostProbe();
-	CloseLandscapeRun();
 	if (!settings.EnableSnowDeformation)
 		return;
 	if (SnowShadersPending(1))
 		return;
-	LoadTraceScope _loadTrace(this, "Shell: DrawShell");
 
 	if (!globals::state->inWorld)
 		return;
 
-	ScopedTicks _drawShellTicks(cpuCensus.spanTicks[CpuCensus::kSpanDrawShell], cpuCensus.spanCalls[CpuCensus::kSpanDrawShell]);
-	SpanClock spanClock;
 	auto context = globals::d3d::context;
 	auto renderer = globals::game::renderer;
 	auto& fb = globals::game::frameBufferCached;
@@ -1501,7 +1372,6 @@ void SnowDeformation::DrawShell()
 
 	RefreshShellGridPlacement(cbData);
 	cbData.ShellFlags.y = capturedRoads > 0 ? 1 : 0;
-	cbData.StaticsDebugView = float(staticsDebugView);
 	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 
 	cbData.SeamRampInv = 0.0f;
@@ -1542,7 +1412,6 @@ void SnowDeformation::DrawShell()
 	cbData.TrenchDetailRoughness = trenchDetail ? std::clamp(settings.TrenchDetailRoughness, 0.3f, 1.5f) : 1.0f;
 	cbData.TrenchDetailCoverage = std::clamp(settings.TrenchDetailCoverage, 0.0f, 2.5f);
 	cbData.TrenchDetailShadow = trenchDetail ? std::clamp(settings.ParallaxDepth, 0.0f, 1.0f) : 0.0f;
-	cbData.TrenchDetailView = (trenchDetail && debugTrenchDetailView) ? 1u : 0u;
 	cbData.SpeedSpoil = trenchDetail && settings.SpeedSpoil ? 1.0f : 0.0f;
 	{
 		const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
@@ -1564,8 +1433,8 @@ void SnowDeformation::DrawShell()
 		const SnowCondition condition = GetSnowCondition();
 		auto* player = RE::PlayerCharacter::GetSingleton();
 		cbData.SnowClimate = { condition.temperature, kClimateLapse, player ? player->GetPosition().z : 0.0f, condition.freshness };
-		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, (float)std::clamp(debugConditionView, 0, 7), 1.0f - look.strength };
-		cbData.SnowClimateOverride = { debugClimateWetnessOverride, debugClimateStickinessOverride, debugClimateFirmnessOverride, 0.0f };
+		cbData.SnowClimate2 = { condition.windPacking, condition.wetness, 0.0f, 1.0f - look.strength };
+		cbData.SnowClimateOverride = { -1.0f, -1.0f, -1.0f, 0.0f };
 		std::copy(look.lut.begin(), look.lut.end(), cbData.SnowClimateLUT);
 	}
 	cbData.DebugNoFarPad = 0.0f;
@@ -1597,39 +1466,6 @@ void SnowDeformation::DrawShell()
 	auto& skylighting = globals::features::skylighting;
 	cbData.SkylightingActive = (skylighting.loaded && skylighting.texProbeArray) ? 1.0f : 0.0f;
 
-	dbgLodDescriptorCount = 0;
-	if (auto* shadowSceneNode = globals::game::smState->shadowSceneNode[0]) {
-		if (auto* sunShadowLight = shadowSceneNode->GetRuntimeData().sunShadowDirLight) {
-			auto& dirLightData = sunShadowLight->GetShadowDirectionalLightRuntimeData();
-			dbgLodDescriptorCount = (uint32_t)sunShadowLight->GetRuntimeData().shadowmapDescriptors.size();
-			dbgLodEndSplits[0] = dirLightData.endSplitDistances[0];
-			dbgLodEndSplits[1] = dirLightData.endSplitDistances[1];
-			dbgLodEndSplits[2] = dirLightData.endSplitDistances[2];
-		}
-	}
-
-	if (const uint32_t kill = shellKillMask) {
-		if (kill & (1u << 0)) {
-			cbData.SnowParallax.y = 0.0f;
-			cbData.SnowParallax.z = 0.0f;
-		}
-		if (kill & (1u << 1))
-			cbData.HasSnowNormal = 0.0f;
-		if (kill & (1u << 2))
-			cbData.HasSnowRmaos = 0.0f;
-		if (kill & (1u << 3))
-			cbData.CrispShadows = 0.0f;
-		if (kill & (1u << 4))
-			cbData.ScreenSpaceShadowsActive = 0.0f;
-		if (kill & (1u << 6))
-			cbData.EnableGlints = 0.0f;
-		if (kill & (1u << 7))
-			cbData.PointLightsActive = 0.0f;
-		if (kill & (1u << 8))
-			cbData.SkylightingActive = 0.0f;
-		if (kill & (1u << 9))
-			cbData.HasSnowTexture = 0;
-	}
 	shellCB->Update(cbData);
 
 	winrt::com_ptr<ID3D11RasterizerState> prevRaster;
@@ -1670,17 +1506,15 @@ void SnowDeformation::DrawShell()
 	const bool cascadeReads = settings.SnowCastsShadows && !GroundShellsSuspended();
 	const bool interior = InInteriorCell();
 	cascadeSnowSoonLast = !interior && CascadeSnowSoon();
-	const bool landscapeReads = cascadeReads && (interior ? interiorHeightGateOff : (cascadeSnowSoonLast || exteriorHeightGateOff));
+	const bool landscapeReads = cascadeReads && !interior && cascadeSnowSoonLast;
 	if (!shellGround && !landscapeReads && !settings.VolumeSnow)
 		CullUnseenCaptures(cbData);
 	else {
 		captureViewCulled = 0;
-		captureCullBail = 1;
 	}
 
-	spanClock.Lap(CpuCensus::kSpanShellSetup);
 	bool rasterReaders = capturedLoaded > 0;
-	if (!rasterReaders && !lodRasterGateOff) {
+	if (!rasterReaders) {
 		const auto& eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 		const float reach = ObjectRasterHalfExtent() + 2.0f * ObjectRasterHalfExtent() / kHeightMapDim;
 		auto inWindow = [&](const RE::NiBound& a_b, float a_x, float a_y) {
@@ -1693,10 +1527,7 @@ void SnowDeformation::DrawShell()
 				break;
 			}
 		}
-	} else if (!rasterReaders) {
-		rasterReaders = !capturedStatics.empty();
 	}
-	lodCapturesIgnoredLast = !rasterReaders && !capturedStatics.empty();
 	const bool nothingDraws = !shellGround && !landscapeReads && !rasterReaders && !settings.VolumeSnow;
 	const bool idleInterior = nothingDraws && cascadeReads && interior;
 	if (idleInterior && HeightMapIdleReady())
@@ -1705,11 +1536,8 @@ void SnowDeformation::DrawShell()
 		SkipObjectHeightMap();
 	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
 		RenderObjectHeightMap();
-	spanClock.Lap(CpuCensus::kSpanObjectHeightMap);
 	RenderWaterCapture();
-	spanClock.Lap(CpuCensus::kSpanWaterCapture);
 	CoverWaterWindow();
-	spanClock.Lap(CpuCensus::kSpanWaterCover);
 	UpdateTerrainWet();
 	shellDrawTerrainVersion = shellTerrainVersion;
 	if (prevViewportCount)
@@ -1754,13 +1582,12 @@ void SnowDeformation::DrawShell()
 
 	UnbindMarchCaches();
 	const bool marchReaders = shellGround || !capturedStatics.empty();
-	marchIdleFrames = (marchReaders || marchIdleOff) ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
+	marchIdleFrames = marchReaders ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
 	const bool marchIdle = marchIdleFrames >= kMarchIdleFrames;
 	if (marchIdle) {
 		marchCacheValid = false;
 		marchFarValid = false;
 		marchSunValid = false;
-		marchIdleSkipped++;
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - March Cache");
 	}
 	if ((cbData.ShellFlags.x & 1) != 0 && (marchIdle || !UpdateMarchCaches(cbData))) {
@@ -1771,7 +1598,7 @@ void SnowDeformation::DrawShell()
 
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
-		const bool masksReaders = masksCopyGateOff ? !nothingDraws : (shellGround || !capturedStatics.empty());
+		const bool masksReaders = shellGround || !capturedStatics.empty();
 		if (masksRT.SRV && masksRT.texture && masksReaders) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
@@ -1948,17 +1775,7 @@ void SnowDeformation::DrawShell()
 	ID3D11SamplerState* shellSamplers[2] = { shellSnowSampler.get(), shellLinearSampler.get() };
 	context->PSSetSamplers(0, 2, shellSamplers);
 
-	if (early && (std::memcmp(&shellDrawViewport, &shellEarlyViewport, sizeof(D3D11_VIEWPORT)) != 0 ||
-					 std::memcmp(&cbData.CameraViewProj, &shellEarlyCB->CameraViewProj, sizeof(cbData.CameraViewProj)) != 0))
-		shellEarlyViewMismatches++;
-	const bool shellStats = ground && shellPipelineStatsEnabled && EnsureShellStatsQueries();
-	if (shellStats) {
-		ReadShellStatsQueries(context);
-		context->Begin(shellStatsQuery[shellStatsRing][0].get());
-		context->Begin(shellStatsQuery[shellStatsRing][1].get());
-	}
 	const bool earlyMarks = ground && early && shellPSEarlyResolve && shellEarlyPending && shellEarlyMarks;
-	shellDeferredThisFrame = ground;
 	if (!ground) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Shell Shading");
 	} else {
@@ -2036,8 +1853,7 @@ void SnowDeformation::DrawShell()
 		context->DSSetShader(nullptr, nullptr, 0);
 		ID3D11ShaderResourceView* attrSRVs[3] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get() };
 		context->PSSetShaderResources(91, 3, attrSRVs);
-		ID3D11PixelShader* conditionView = ConditionViewPS();
-		context->PSSetShader(conditionView ? conditionView : shellPSDeferred.get(), nullptr, 0);
+		context->PSSetShader(shellPSDeferred.get(), nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
@@ -2045,36 +1861,11 @@ void SnowDeformation::DrawShell()
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		globals::profiler->EndPass();
 	}
-	if (shellStats) {
-		context->End(shellStatsQuery[shellStatsRing][1].get());
-		context->End(shellStatsQuery[shellStatsRing][0].get());
-	}
-
-	spanClock.Lap(CpuCensus::kSpanGround);
 	if (auto* skinRaster = GetSkinRasterState())
 		context->RSSetState(skinRaster);
-	if (shellStats) {
-		context->Begin(staticsStatsQuery[shellStatsRing][0].get());
-		context->Begin(staticsStatsQuery[shellStatsRing][1].get());
-	}
 	const bool rasterMarks = ground && shellRasterDepth && shellRasterDepth->srv;
 	shellGroundMarksSRV = rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr;
-	patchStatsArmed = shellStats;
 	DrawCapturedStatics();
-	spanClock.Lap(CpuCensus::kSpanStatics);
-	if (patchStatsArmed) {
-		context->Begin(patchStatsQuery[shellStatsRing][0].get());
-		context->Begin(patchStatsQuery[shellStatsRing][1].get());
-		context->End(patchStatsQuery[shellStatsRing][1].get());
-		context->End(patchStatsQuery[shellStatsRing][0].get());
-		patchStatsArmed = false;
-	}
-	if (shellStats) {
-		context->End(staticsStatsQuery[shellStatsRing][1].get());
-		context->End(staticsStatsQuery[shellStatsRing][0].get());
-		shellStatsIssued[shellStatsRing] = true;
-		shellStatsRing = (shellStatsRing + 1) % kShellStatsRing;
-	}
 	context->RSSetState(shellRasterState.get());
 
 	{
@@ -2126,7 +1917,6 @@ void SnowDeformation::DrawShell()
 	if (prevViewportCount)
 		context->RSSetViewports(prevViewportCount, prevViewports);
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
-	spanClock.Lap(CpuCensus::kSpanShellRestore);
 
 	auto& tb = globals::features::terrainBlending;
 	const bool syncable = rasterMarks || preSnowDepthThisFrame;
@@ -2165,5 +1955,4 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(16, 2, restoreFrostSlotSRVs);
 	ID3D11ShaderResourceView* restoreCloudShadowSRV = prevCloudShadowSRV.get();
 	context->PSSetShaderResources(25, 1, &restoreCloudShadowSRV);
-	spanClock.Lap(CpuCensus::kSpanShellTail);
 }

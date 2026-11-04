@@ -67,8 +67,6 @@ void SnowDeformation::SaveAccumulation(const SKSE::SerializationInterface* a_int
 
 void SnowDeformation::LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length)
 {
-	LoadTraceBegin("co-save accumulation");
-	LoadTraceScope _loadTrace(this, "CoSave: LoadAccumulation");
 	if (a_version != kAccumRecordVersion) {
 		logger::warn("[SNOW DEFORMATION] accumulation co-save is version {}, this build reads {}; dropped",
 			a_version, kAccumRecordVersion);
