@@ -161,8 +161,8 @@ namespace
 	};
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
 		{ 1024u, 512u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
-		{ 2048u, 1024u, 115.0f, 105.0f, 150.0f, 1.0f, 0.5f, 24.0f, false, false, true, false, true },
-		{ 4096u, 2048u, 200.0f, 200.0f, SnowDeformation::kMaxRangeSkinsM, 1.0f, 0.5f, 16.0f, true, true, true, true, true },
+		{ 2048u, 1024u, 115.0f, 105.0f, 150.0f, 0.25f, 0.13f, 24.0f, false, false, true, false, true },
+		{ 4096u, 2048u, 200.0f, 200.0f, SnowDeformation::kMaxRangeSkinsM, 0.5f, 0.25f, 16.0f, true, true, true, true, true },
 	};
 }
 

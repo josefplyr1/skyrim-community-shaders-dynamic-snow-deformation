@@ -317,8 +317,8 @@ public:
 		float UndulationStrength = 8.0f;
 		float UndulationSpacing = 0.5f;
 		bool Tessellation = true;
-		float ParallaxShadowStrength = 0.5f;
-		float ParallaxDepth = 1.0f;
+		float ParallaxShadowStrength = 0.25f;
+		float ParallaxDepth = 0.5f;
 		float BermHeight = 0.50f;
 		float BermSteepness = 0.75f;
 		float RimLip = 0.05f;
@@ -370,7 +370,7 @@ public:
 		bool UnprojectedShapesBare = true;
 		bool SnowFollowsParallax = true;
 		bool FlattenParallaxUnderSnow = true;
-		float ShelterMaxHeight = 150.0f;
+		float ShelterMaxHeight = 275.0f;
 		float ShelterDriftAngle = 30.0f;
 		float ObjectMeetBand = 12.0f;
 		bool LODObjectSnow = true;
