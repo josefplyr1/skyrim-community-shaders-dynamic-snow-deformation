@@ -55,118 +55,7 @@ static float gDeferredRampDepth;
 		}
 #endif
 
-#ifndef SNOW_SHELL_CB_REGISTER
-#	define SNOW_SHELL_CB_REGISTER b0
-#endif
-cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
-{
-	row_major float4x4 CameraViewProj;
-	row_major float4x4 CameraViewProjUnjittered;
-	row_major float4x4 CameraPreviousViewProjUnjittered;
-	row_major float4x4 CameraView;
-
-	float4 ShellCameraPosAdjust;
-	float4 ShellCameraPreviousPosAdjust;
-
-	float2 GridOrigin;
-	float GridSpacing;
-	float TerrainTexelSize;
-
-	float2 GridToTerrainOffset;
-	float2 GridToDeformOffset;
-
-	float WarpedHalfSpan;
-	uint LayoutKeeper6;
-	uint TerrainDim;
-	uint TrenchDetailView;
-
-	float DeformInvWorldSize;
-	uint HasSnowTexture;
-	float SnowTextureIsLinear;
-	float HasSnowNormal;
-
-	float HasSnowRmaos;
-	float SnowRoughnessScale;
-	float2 SnowUVOffset;
-
-	float4 SnowGlintParams;
-
-	float SnowSpecularLevel;
-	float EnableGlints;
-	float TrenchDetailRelief;
-	float TrenchDetailRoughness;
-
-	float LayoutKeeper5;
-	float TrenchDetailCoverage;
-	float ShellCullBare;
-	float SkinFadeStart;
-
-	float SkinFadeEnd;
-	float ObjectLiftCap;
-	float2 ObjectHeightCenter;
-
-	float ObjectHeightHalfExtent;
-	float CrispShadows;
-	float ScreenSpaceShadowsActive;
-	float UndulationAmp;
-
-	float UndulationScale;
-	float SkinTessCapSlope;
-	float PointLightsActive;
-	float SkylightingActive;
-
-	float HasSnowHeight;
-	float SnowReliefDepth;
-	float StaticsDebugView;
-	float BermHeightAmp;
-
-	float SpeedSpoil;
-	float LayoutKeeper9;
-	float DebugNoFarPad;
-	float LayoutKeeper4;
-
-	float LayoutKeeper7;
-	float TrenchDetailShadow;
-	float LayoutKeeper3;
-	float ObjectMeetBand;
-
-	float BermReach;
-	uint LayoutKeeper10;
-	float SeamRampInv;
-	float BermBakeActive;
-
-	float4 SeamBounds;
-
-	float4 ExclusionFieldWindow;
-
-	float4 SnowParallax;
-
-	float4 SpellShading;
-	float4 TrackAge;
-	float4 padCrustLook2;
-	float4 BorderStyle;
-	float4 CompactLook;
-	float4 RimStyle;
-
-	float4 UndulationFieldWindow;
-
-	int2 DeformMapOrigin;
-	int2 ShellFlags;
-
-	float4 FineWindow;
-	float4 SlopeDrape;
-	float4 DebugSkinDepth;
-	float4 BloodLook;
-	float4 BloodLook2;
-	float4 BloodLook3;
-	float4 TrampleStyle;
-	float4 TessScreen;
-	float4 FieldDims;
-	float4 SnowClimate;
-	float4 SnowClimate2;
-	float4 SnowClimateOverride;
-	float4 SnowClimateLUT[3];
-}
+#include "SnowDeformation/SnowShellCB.hlsli"
 
 Texture2D<float4> TerrainWindow : register(t0);
 Texture2D<float> WaterWindow : register(t27);
@@ -185,11 +74,6 @@ Texture2D<float4> TerrainWindowWet : register(t58);
 Texture2D<float> TerrainBare : register(t26);
 Texture2D<float> TerrainFine : register(t13);
 Texture2D<float4> DeformationMap : register(t1);
-
-int3 DeformTexel(int2 t, int2 dims)
-{
-	return int3((t + DeformMapOrigin) & (dims - 1), 0);
-}
 
 Texture2D<float4> SnowDiffuse : register(t2);
 Texture2D<float> SceneDepth : register(t3);
@@ -274,11 +158,7 @@ float ShellBandStep(float2 gridLocal)
 
 float3 SampleTerrain(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 
 	float3 s00 = TerrainWindowWet.Load(int3(t0.x, t0.y, 0)).xyz;
 	float3 s10 = TerrainWindowWet.Load(int3(t1.x, t0.y, 0)).xyz;
@@ -304,56 +184,6 @@ float2 ShellSeamClamp(float2 gridLocal)
 	return gridLocal;
 }
 
-float SampleDeformationBilinear(float2 t, float2 dims)
-{
-	t = clamp(t, 0.0, dims - 1.001);
-#ifdef SNOW_DEFORM_SAMPLER
-	return saturate(DeformationMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0).x);
-#else
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
-	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
-	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
-	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
-
-	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
-#endif
-}
-
-float SampleDeformation(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = uv * dims - 0.5;
-	float2 i = floor(t);
-	float2 f = t - i;
-
-	float2 f2 = f * f;
-	float2 f3 = f2 * f;
-	float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
-	float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-	float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
-	float2 w3 = f3 / 6.0;
-
-	float2 g0 = w0 + w1;
-	float2 g1 = w2 + w3;
-	float2 h0 = i - 1.0 + w1 / g0;
-	float2 h1 = i + 1.0 + w3 / g1;
-
-	float v00 = SampleDeformationBilinear(float2(h0.x, h0.y), dims);
-	float v10 = SampleDeformationBilinear(float2(h1.x, h0.y), dims);
-	float v01 = SampleDeformationBilinear(float2(h0.x, h1.y), dims);
-	float v11 = SampleDeformationBilinear(float2(h1.x, h1.y), dims);
-
-	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
-}
-
 float SampleDeformationFast(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
@@ -362,11 +192,6 @@ float SampleDeformationFast(float2 gridLocal)
 
 	SNOW_DEFORM_DIMS(dims);
 	return SampleDeformationBilinear(uv * dims - 0.5, dims);
-}
-
-float SampleDeformationMarch(float2 gridLocal)
-{
-	return SampleDeformationFast(gridLocal);
 }
 
 float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
@@ -380,14 +205,17 @@ float2 ObjectMapTexel(float2 worldXY, out float2 dims, out bool valid)
 
 static const float kBareDepthFloor = -7.9;
 
+#define SHELL_TERRAIN_RANGE(lo, hi)                               \
+	float2 tLo = (GridToTerrainOffset + (lo)) / TerrainTexelSize; \
+	float2 tHi = (GridToTerrainOffset + (hi)) / TerrainTexelSize; \
+	float maxTexel = (float)(TerrainDim - 1);                     \
+	int2 i0 = (int2)clamp(floor(tLo), 0.0, maxTexel);             \
+	int2 i1 = (int2)clamp(floor(tHi) + 1.0, 0.0, maxTexel);       \
+	i1 = min(i1, i0 + 3)
+
 bool ShellTerrainAllBare(float2 lo, float2 hi)
 {
-	float2 tLo = (GridToTerrainOffset + lo) / TerrainTexelSize;
-	float2 tHi = (GridToTerrainOffset + hi) / TerrainTexelSize;
-	float maxTexel = (float)(TerrainDim - 1);
-	int2 i0 = (int2)clamp(floor(tLo), 0.0, maxTexel);
-	int2 i1 = (int2)clamp(floor(tHi) + 1.0, 0.0, maxTexel);
-	i1 = min(i1, i0 + 3);
+	SHELL_TERRAIN_RANGE(lo, hi);
 
 	float maxDepth = -1e9;
 	[loop] for (int y = i0.y; y <= i1.y; ++y)
@@ -554,11 +382,7 @@ float BermField(float2 gridLocal)
 
 float2 SampleWaterHeight(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 	int r0 = (int)TerrainDim - 1 - t0.y;
 	int r1 = (int)TerrainDim - 1 - t1.y;
 	float w00 = WaterRawWindow.Load(int3(t0.x, r0, 0));
@@ -577,11 +401,7 @@ float WaterNearTexels(int3 a_t)
 
 float SampleWaterNear(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 	int r0 = (int)TerrainDim - 1 - t0.y;
 	int r1 = (int)TerrainDim - 1 - t1.y;
 	float n00 = WaterNearTexels(int3(t0.x, r0, 0));
@@ -605,11 +425,7 @@ float KneeMin(float a, float b, float k)
 
 float TerrainHeightAt(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
 	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
 	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
@@ -625,11 +441,7 @@ static const float kDecalShowDepth = 14.0;
 
 float LandSnowWeight(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 	float b00 = TerrainBare.Load(int3(t0.x, t0.y, 0));
 	float b10 = TerrainBare.Load(int3(t1.x, t0.y, 0));
 	float b01 = TerrainBare.Load(int3(t0.x, t1.y, 0));
@@ -639,12 +451,7 @@ float LandSnowWeight(float2 gridLocal)
 
 bool LandRectNoSnow(float2 lo, float2 hi)
 {
-	float2 tLo = (GridToTerrainOffset + lo) / TerrainTexelSize;
-	float2 tHi = (GridToTerrainOffset + hi) / TerrainTexelSize;
-	float maxTexel = (float)(TerrainDim - 1);
-	int2 i0 = (int2)clamp(floor(tLo), 0.0, maxTexel);
-	int2 i1 = (int2)clamp(floor(tHi) + 1.0, 0.0, maxTexel);
-	i1 = min(i1, i0 + 3);
+	SHELL_TERRAIN_RANGE(lo, hi);
 	float bare = 1.0;
 	[loop] for (int y = i0.y; y <= i1.y; ++y)
 	{
@@ -721,7 +528,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 
 		[flatten] if (depth > 0.0)
 		{
-			float deformation = saturate(SampleDeformation(gridLocal));
+			float deformation = saturate(SampleDeformationSmooth(gridLocal));
 			float4 bermPair = BermFieldPair(gridLocal);
 			float bermD = bermPair.x;
 			float uncarved = depth;
@@ -814,7 +621,7 @@ float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainH
 	[branch] if (HasSnowHeight > 0.5 && descentBlend > 1.0 && z > terrainHeight && wEdge < 0.999)
 	{
 		float hDescent = SampleSnowHeight(ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal), 0.0.xx, snowMip);
-		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformation(gridLocal)))) *
+		float billowW = (1.0 - smoothstep(0.05, 0.4, saturate(SampleDeformationSmooth(gridLocal)))) *
 		                (1.0 - saturate(SampleExclusionMask(GridOrigin + gridLocal).y * 2.0));
 		const float kEdgeBillowShift = 0.35;
 		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
@@ -830,7 +637,7 @@ float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainH
 		{
 			SnowTaps reliefTaps = ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal);
 			float h = SampleSnowHeight(reliefTaps, 0.0.xx, snowMip);
-			float carve = saturate(SampleDeformation(gridLocal));
+			float carve = saturate(SampleDeformationSmooth(gridLocal));
 			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
 		}
 	}
@@ -1080,7 +887,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const bool pixelUntouched = ShellUntouched(gridLocal);
 	float pixelCarve = 0.0;
 	[branch] if (!pixelUntouched)
-		pixelCarve = saturate(SampleDeformation(gridLocal));
+		pixelCarve = saturate(SampleDeformationSmooth(gridLocal));
 	float2 pixelShelter = SampleExclusionMask(GridOrigin + gridLocal);
 	float pixelMelt = saturate(pixelShelter.y);
 	float carveOverride = smoothstep(0.1, 0.5, pixelCarve) * smoothstep(0.5, 1.0, pixelTerrain.y);
@@ -1209,10 +1016,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			bermAge = TrackAgeOf(dates.y);
 		}
 		const float step = 4.0;
-		float dXP = SampleDeformation(gridLocal + float2(step, 0.0));
-		float dXN = SampleDeformation(gridLocal - float2(step, 0.0));
-		float dYP = SampleDeformation(gridLocal + float2(0.0, step));
-		float dYN = SampleDeformation(gridLocal - float2(0.0, step));
+		float dXP = SampleDeformationSmooth(gridLocal + float2(step, 0.0));
+		float dXN = SampleDeformationSmooth(gridLocal - float2(step, 0.0));
+		float dYP = SampleDeformationSmooth(gridLocal + float2(0.0, step));
+		float dYN = SampleDeformationSmooth(gridLocal - float2(0.0, step));
 		const float3 carveLook = TrackCarveLook(pixelAge);
 		float4 blur = saturate(float4(dXP, dXN, dYP, dYN));
 		[branch] if (CompactLook.w > 0.0 || carveLook.x > 0.0)
@@ -1228,10 +1035,10 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
 		[branch] if (bStep < step - 0.01)
 		{
-			mXP = SampleDeformation(gridLocal + float2(bStep, 0.0));
-			mXN = SampleDeformation(gridLocal - float2(bStep, 0.0));
-			mYP = SampleDeformation(gridLocal + float2(0.0, bStep));
-			mYN = SampleDeformation(gridLocal - float2(0.0, bStep));
+			mXP = SampleDeformationSmooth(gridLocal + float2(bStep, 0.0));
+			mXN = SampleDeformationSmooth(gridLocal - float2(bStep, 0.0));
+			mYP = SampleDeformationSmooth(gridLocal + float2(0.0, bStep));
+			mYN = SampleDeformationSmooth(gridLocal - float2(0.0, bStep));
 		}
 		float bermXP = BermField(gridLocal + float2(bStep, 0.0));
 		float bermXN = BermField(gridLocal - float2(bStep, 0.0));
@@ -1321,8 +1128,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	snowTapsSide.duvdx = (snowSideDropsX ? float2(gDeferredGridDx.y, gDeferredZDx) : float2(gDeferredGridDx.x, gDeferredZDx)) / kSnowUVTile;
 	snowTapsSide.duvdy = (snowSideDropsX ? float2(gDeferredGridDy.y, gDeferredZDy) : float2(gDeferredGridDy.x, gDeferredZDy)) / kSnowUVTile;
 	float snowHeightMipSide = SnowHeightMipGrad(snowTapsSide.duvdx, snowTapsSide.duvdy);
-	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), frameNormalWS) + float3(1e-5, 0.0, 0.0));
-	float3 bumpB = cross(frameNormalWS, bumpT);
+	SNOW_TANGENT_FRAME(bumpT, bumpB, frameNormalWS);
 
 	float3 V = -normalize(input.WorldPos);
 
@@ -1615,15 +1421,21 @@ RWTexture2D<float4> TerrainWetOut : register(u4);
 }
 #endif
 
-#ifdef SNOW_MARCH_HEIGHT_CS
-RWTexture2D<float> MarchHeightOut : register(u0);
+#if defined(SNOW_MARCH_HEIGHT_CS) || defined(SNOW_MARCH_SUN_CS)
 StructuredBuffer<uint> MarchTilesIn : register(t63);
 cbuffer MarchCacheCB : register(b2)
 {
 	uint MarchRowStart;
 	uint MarchRowCount;
 	uint2 MarchCachePad;
+#	ifdef SNOW_MARCH_SUN_CS
+	float4 MarchSun;
+#	endif
 }
+#endif
+
+#ifdef SNOW_MARCH_HEIGHT_CS
+RWTexture2D<float> MarchHeightOut : register(u0);
 
 float MarchTapHeight(float2 a_gridLocal)
 {
@@ -1631,7 +1443,7 @@ float MarchTapHeight(float2 a_gridLocal)
 	const float3 st = SampleTerrain(gridLocal);
 	float depth = max(st.y, 0.0);
 	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
-	const float deform = SampleDeformationMarch(gridLocal);
+	const float deform = SampleDeformationFast(gridLocal);
 	const float4 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float4(0.0, deform, TrackAge.x, TrackAge.x);
 	depth = CarveProfileNoTeeth(deform, berm.y, depth, TrackCarveLook(TrackAgeOf(berm.z))) +
 	        BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth) * TrackBermScale(TrackAgeOf(berm.w));
@@ -1677,14 +1489,6 @@ void MarchHeightTexel(uint2 phys)
 
 #ifdef SNOW_MARCH_SUN_CS
 RWTexture2D<float> MarchSunOut : register(u0);
-StructuredBuffer<uint> MarchTilesIn : register(t63);
-cbuffer MarchCacheCB : register(b2)
-{
-	uint MarchRowStart;
-	uint MarchRowCount;
-	uint2 MarchCachePad;
-	float4 MarchSun;
-}
 
 void MarchSunTexel(int2 a_phys)
 {

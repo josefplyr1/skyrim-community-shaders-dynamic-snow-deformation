@@ -38,114 +38,7 @@ float EMParallaxCustomHeight(float2 uv, float mip);
 #	include "SnowDeformation/SnowLights.hlsli"
 #endif
 
-cbuffer ShellCB : register(b0)
-{
-	row_major float4x4 CameraViewProj;
-	row_major float4x4 CameraViewProjUnjittered;
-	row_major float4x4 CameraPreviousViewProjUnjittered;
-	row_major float4x4 CameraView;
-
-	float4 ShellCameraPosAdjust;
-	float4 ShellCameraPreviousPosAdjust;
-
-	float2 GridOrigin;
-	float GridSpacing;
-	float TerrainTexelSize;
-
-	float2 GridToTerrainOffset;
-	float2 GridToDeformOffset;
-
-	float WarpedHalfSpan;
-	uint LayoutKeeper6;
-	uint TerrainDim;
-	uint TrenchDetailView;
-
-	float DeformInvWorldSize;
-	uint HasSnowTexture;
-	float SnowTextureIsLinear;
-	float HasSnowNormal;
-
-	float HasSnowRmaos;
-	float SnowRoughnessScale;
-	float2 SnowUVOffset;
-
-	float4 SnowGlintParams;
-
-	float SnowSpecularLevel;
-	float EnableGlints;
-	float TrenchDetailRelief;
-	float TrenchDetailRoughness;
-
-	float LayoutKeeper5;
-	float TrenchDetailCoverage;
-	float ShellCullBare;
-	float SkinFadeStart;
-
-	float SkinFadeEnd;
-	float ObjectLiftCap;
-	float2 ObjectHeightCenter;
-
-	float ObjectHeightHalfExtent;
-	float CrispShadows;
-	float ScreenSpaceShadowsActive;
-	float UndulationAmp;
-
-	float UndulationScale;
-	float SkinTessCapSlope;
-	float PointLightsActive;
-	float SkylightingActive;
-
-	float HasSnowHeight;
-	float SnowReliefDepth;
-	float StaticsDebugView;
-	float BermHeightAmp;
-
-	float SpeedSpoil;
-	float LayoutKeeper9;
-	float DebugNoFarPad;
-	float LayoutKeeper4;
-
-	float LayoutKeeper7;
-	float TrenchDetailShadow;
-	float LayoutKeeper3;
-	float ObjectMeetBand;
-
-	float BermReach;
-	uint LayoutKeeper10;
-	float SeamRampInv;
-	float BermBakeActive;
-
-	float4 SeamBounds;
-	float4 ExclusionFieldWindow;
-
-	float4 SnowParallax;
-
-	float4 SpellShading;
-	float4 TrackAge;
-	float4 padCrustLook2;
-	float4 BorderStyle;
-	float4 CompactLook;
-	float4 RimStyle;
-
-	float4 UndulationFieldWindow;
-
-	int2 DeformMapOrigin;
-	int2 ShellFlags;
-
-	float4 FineWindow;
-	float4 SlopeDrape;
-	float4 DebugSkinDepth;
-	float4 BloodLook;
-	float4 BloodLook2;
-	float4 BloodLook3;
-	float4 TrampleStyle;
-	float4 TessScreen;
-	float4 FieldDims;
-	float4 SnowClimate;
-	float4 SnowClimate2;
-	float4 SnowClimateOverride;
-	float4 SnowClimateLUT[3];
-}
+#include "SnowDeformation/SnowShellCB.hlsli"
 
 cbuffer StaticCB : register(b1)
 {
@@ -216,12 +109,6 @@ cbuffer StaticCB : register(b1)
 #endif
 
 Texture2D<float4> DeformationMap : register(t1);
-
-int3 DeformTexel(int2 t, int2 dims)
-{
-	return int3((t + DeformMapOrigin) & (dims - 1), 0);
-}
-
 Texture2D<float4> BermFieldMap : register(t14);
 Texture2D<uint> UntouchedTiles : register(t57);
 Texture2D<float4> BloodMap : register(t30);
@@ -238,11 +125,7 @@ Texture2D<float4> TerrainWindow : register(t0);
 
 float3 SampleTerrainStatics(float2 gridLocal)
 {
-	float2 t = (GridToTerrainOffset + gridLocal) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
+	SHELL_TERRAIN_TEXEL(gridLocal);
 
 	float3 s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).xyz;
 	float3 s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).xyz;
@@ -439,53 +322,6 @@ float BermField(float2 gridLocal)
 {
 	return BermFieldPair(gridLocal).x;
 }
-
-#ifdef PATCH
-float PatchDeformBilinear(float2 t, float2 dims)
-{
-	t = clamp(t, 0.0, dims - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
-	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
-	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
-	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
-	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
-}
-
-float SampleDeformationSmooth(float2 gridLocal)
-{
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = uv * dims - 0.5;
-	float2 i = floor(t);
-	float2 f = t - i;
-
-	float2 f2 = f * f;
-	float2 f3 = f2 * f;
-	float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
-	float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-	float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
-	float2 w3 = f3 / 6.0;
-
-	float2 g0 = w0 + w1;
-	float2 g1 = w2 + w3;
-	float2 h0 = i - 1.0 + w1 / g0;
-	float2 h1 = i + 1.0 + w3 / g1;
-
-	float v00 = PatchDeformBilinear(float2(h0.x, h0.y), dims);
-	float v10 = PatchDeformBilinear(float2(h1.x, h0.y), dims);
-	float v01 = PatchDeformBilinear(float2(h0.x, h1.y), dims);
-	float v11 = PatchDeformBilinear(float2(h1.x, h1.y), dims);
-
-	return g0.y * (g0.x * v00 + g1.x * v10) + g1.y * (g0.x * v01 + g1.x * v11);
-}
-#endif
 
 struct VS_INPUT
 {
@@ -2000,8 +1836,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
 #endif
 
-	float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), frameNormalWS) + float3(1e-5, 0.0, 0.0));
-	float3 bumpB = cross(frameNormalWS, bumpT);
+	SNOW_TANGENT_FRAME(bumpT, bumpB, frameNormalWS);
 
 	float3 V = -normalize(input.WorldPos);
 

@@ -8,6 +8,7 @@
 static uint PBRFlags = 0;
 
 #include "Common/LightingEval.hlsli"
+#include "SnowDeformation/SnowCommon.hlsli"
 
 #if defined(SNOW_EXP_HEIGHT_FOG)
 #	define SampColorSampler ShellLinearSampler
@@ -71,8 +72,7 @@ SnowMaterialCtx SnowBuildMaterial(float3 normalWS,
 	[branch] if (material.GlintLogMicrofacetDensity > 1.1)
 		Glints::PrecomputeGlints(glintNoise, glintUV, uvDDX, uvDDY, material.GlintScreenSpaceScale, material.GlintCache);
 
-	float3 glintT = normalize(cross(float3(0.0, 1.0, 0.0), normalWS) + float3(1e-5, 0.0, 0.0));
-	float3 glintB = cross(normalWS, glintT);
+	SNOW_TANGENT_FRAME(glintT, glintB, normalWS);
 
 	SnowMaterialCtx ctx;
 	ctx.material = material;

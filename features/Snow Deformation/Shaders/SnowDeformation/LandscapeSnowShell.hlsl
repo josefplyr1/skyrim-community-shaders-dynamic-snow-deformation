@@ -51,16 +51,7 @@ bool LssOffView(float3 g0, float3 g1, float3 g2)
 	const float3 up = float3(0.0, 0.0, LsGeometry.w);
 	const float k = 1.0 + LsCull.x;
 	float3 pts[6] = { g0 + down, g1 + down, g2 + down, g0 + up, g1 + up, g2 + up };
-	bool l = true, r = true, b = true, t = true, n = true;
-	[unroll] for (uint i = 0; i < 6; i++)
-	{
-		float4 c = mul(CameraViewProj, float4(pts[i] + camLocal, 1.0));
-		l = l && (c.x + c.w * k < 0.0);
-		r = r && (c.w * k - c.x < 0.0);
-		b = b && (c.y + c.w * k < 0.0);
-		t = t && (c.w * k - c.y < 0.0);
-		n = n && (c.z < 0.0);
-	}
+	LS_OFF_VIEW(k, mul(CameraViewProj, float4(pts[i] + camLocal, 1.0)))
 	return l || r || b || t || n;
 }
 

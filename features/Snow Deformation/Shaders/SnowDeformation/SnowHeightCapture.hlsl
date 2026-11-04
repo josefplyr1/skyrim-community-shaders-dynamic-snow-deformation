@@ -2,6 +2,8 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowCommon.hlsli"
+
 cbuffer StaticCB : register(b1)
 {
 	float4 WorldRow0;
@@ -192,23 +194,9 @@ cbuffer HeightProcessCB : register(b0)
 
 Texture2D<float4> TerrainWindowCapture : register(t2);
 
-float CaptureTerrainHeight(float2 worldXY)
-{
-	float2 t = (worldXY - TerrainWindowOriginH) / TerrainTexelSizeH;
-	t = clamp(t, 0.0, (float)(TerrainDimH - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDimH - 1, TerrainDimH - 1));
-	float s00 = TerrainWindowCapture.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = TerrainWindowCapture.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = TerrainWindowCapture.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = TerrainWindowCapture.Load(int3(t1.x, t1.y, 0)).x;
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
-}
-
 float2 main(VS_OUTPUT input) : SV_Target0
 {
-	float terrain = CaptureTerrainHeight(input.WorldXY);
+	float terrain = TerrainWindowHeight(TerrainWindowCapture, (input.WorldXY - TerrainWindowOriginH) / TerrainTexelSizeH, TerrainDimH);
 	float bottom = input.WorldZ - terrain < 40.0 ? 100000.0 : input.WorldZ;
 	return float2(input.WorldZ, -bottom);
 }

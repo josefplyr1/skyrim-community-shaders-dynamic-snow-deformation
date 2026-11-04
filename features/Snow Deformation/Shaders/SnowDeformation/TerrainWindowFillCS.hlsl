@@ -2,6 +2,8 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowCommon.hlsli"
+
 RWTexture2D<float4> TerrainWindow : register(u0);
 Texture2D<float> HeightMap : register(t0);
 Texture2D<float4> LODTile00 : register(t1);
@@ -32,10 +34,8 @@ cbuffer WindowFillCB : register(b0)
 
 float ClassifyLODSnow(float3 color)
 {
-	float luminance = dot(color, float3(0.2126, 0.7152, 0.0722));
-	float saturation = max(color.r, max(color.g, color.b)) - min(color.r, min(color.g, color.b));
-	float lumLo = 0.62 - 0.64 * saturate(LODSnowSensitivity);
-	return smoothstep(lumLo, lumLo + 0.12, luminance) * (1.0 - smoothstep(0.10, 0.22, saturation));
+	SNOW_TEXEL_SCORE(score, color, 0.62 - 0.64 * saturate(LODSnowSensitivity), 0.12);
+	return score;
 }
 
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {

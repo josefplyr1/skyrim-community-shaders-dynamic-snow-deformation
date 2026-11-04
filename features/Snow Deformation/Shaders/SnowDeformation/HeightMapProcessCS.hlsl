@@ -43,6 +43,7 @@ cbuffer GhostCB : register(b2)
 	float4 GhostCameraPosAdjust;
 }
 
+#include "SnowDeformation/SnowCommon.hlsli"
 #include "SnowDeformation/SnowExclusions.hlsli"
 
 Texture2D<float> InA : register(t0);
@@ -66,22 +67,6 @@ float2 TexelWorldXY(uint2 p, uint2 dims)
 	return float2(
 		HeightWindowCenter.x + (float(p.x) - dims.x * 0.5 + 0.5) * texel,
 		HeightWindowCenter.y + (dims.y * 0.5 - float(p.y) - 0.5) * texel);
-}
-
-float SampleTerrainHeight(float2 worldXY)
-{
-	float2 t = (worldXY - TerrainWindowOrigin) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-
-	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 bool GhostInView(float2 worldXY, float worldZ)
@@ -254,7 +239,7 @@ groupshared uint combineElevated;
 	}
 
 	float2 worldXY = TexelWorldXY(dtid.xy, dims);
-	float terrain = SampleTerrainHeight(worldXY);
+	float terrain = TerrainWindowHeight(TerrainWindow, (worldXY - TerrainWindowOrigin) / TerrainTexelSize, TerrainDim);
 	float suppress = 0.0;
 	float melt = 0.0;
 

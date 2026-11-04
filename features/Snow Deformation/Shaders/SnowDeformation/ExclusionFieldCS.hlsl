@@ -2,6 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowCommon.hlsli"
 #include "SnowDeformation/SnowExclusions.hlsli"
 
 Texture2D<float4> TerrainWindow : register(t0);
@@ -26,22 +27,6 @@ groupshared uint TileList[MAX_EXCLUSIONS];
 float2 FieldTexelWorldXY(uint2 texel, float2 dims)
 {
 	return FieldCenter + (float2(texel) - dims * 0.5 + 0.5) * FieldTexelSize;
-}
-
-float SampleTerrainHeight(float2 worldXY)
-{
-	float2 t = (worldXY - TerrainWindowOrigin) / TerrainTexelSize;
-	t = clamp(t, 0.0, (float)(TerrainDim - 1) - 0.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(TerrainDim - 1, TerrainDim - 1));
-
-	float s00 = TerrainWindow.Load(int3(t0.x, t0.y, 0)).x;
-	float s10 = TerrainWindow.Load(int3(t1.x, t0.y, 0)).x;
-	float s01 = TerrainWindow.Load(int3(t0.x, t1.y, 0)).x;
-	float s11 = TerrainWindow.Load(int3(t1.x, t1.y, 0)).x;
-
-	return lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 }
 
 [numthreads(TILE_DIM, TILE_DIM, 1)]
@@ -83,7 +68,7 @@ void main(uint3 dtid : SV_DispatchThreadID, uint3 gid : SV_GroupID, uint gindex 
 	[branch] if (tileCount > 0)
 	{
 		float2 worldXY = FieldTexelWorldXY(dtid.xy, dims);
-		float terrain = SampleTerrainHeight(worldXY);
+		float terrain = TerrainWindowHeight(TerrainWindow, (worldXY - TerrainWindowOrigin) / TerrainTexelSize, TerrainDim);
 		for (uint listI = 0; listI < tileCount; listI++) {
 			ExclusionResult one = EvaluateExclusionAt(TileList[listI], worldXY, terrain);
 			suppress = max(suppress, one.Suppress);

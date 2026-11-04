@@ -117,16 +117,7 @@ bool LsOffView(float3 p0, float3 p1, float3 p2)
 	const float3 lift = float3(0.0, 0.0, LsGeometry.w);
 	const float k = 1.0 + LsCull.x;
 	float3 pts[6] = { p0, p1, p2, p0 + lift, p1 + lift, p2 + lift };
-	bool l = true, r = true, b = true, t = true, n = true;
-	[unroll] for (uint i = 0; i < 6; i++)
-	{
-		float4 c = LsClip(pts[i]);
-		l = l && (c.x + c.w * k < 0.0);
-		r = r && (c.w * k - c.x < 0.0);
-		b = b && (c.y + c.w * k < 0.0);
-		t = t && (c.w * k - c.y < 0.0);
-		n = n && (c.z < 0.0);
-	}
+	LS_OFF_VIEW(k, LsClip(pts[i]))
 #if defined(RENDER_SHADOWMAP)
 	n = false;
 #endif

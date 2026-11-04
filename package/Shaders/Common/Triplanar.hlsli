@@ -22,15 +22,6 @@ namespace Triplanar
 		       tex.Sample(samp, worldPos.xy * scale) * weights.z;
 	}
 
-	/// Weighted triplanar sample at an explicit mip — for stages without
-	/// derivatives (vertex/domain).
-	float4 SampleLevel(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float level)
-	{
-		return tex.SampleLevel(samp, worldPos.yz * scale, level) * weights.x +
-		       tex.SampleLevel(samp, worldPos.xz * scale, level) * weights.y +
-		       tex.SampleLevel(samp, worldPos.xy * scale, level) * weights.z;
-	}
-
 	/// Weighted triplanar sample with caller-supplied gradients — for sampling
 	/// inside flow control, where implicit derivatives are illegal. Pair with
 	/// ComputeGradients called outside the branch.

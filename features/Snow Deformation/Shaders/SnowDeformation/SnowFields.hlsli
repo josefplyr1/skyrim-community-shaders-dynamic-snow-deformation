@@ -6,6 +6,7 @@
 #define __SNOW_FIELDS_DEPENDENCY_HLSL__
 
 #include "SnowDeformation/SnowNoise.hlsli"
+#include "SnowDeformation/SnowCommon.hlsli"
 
 #if defined(SNOW_NOISE_TABLE)
 Texture2D<float> SnowNoiseHash : register(t109);
@@ -232,6 +233,36 @@ float MarchNearLight(float2 a_horizon, float a_sunTan, float a_soft, float a_sof
 	return min(smoothstep(-1.5 * a_soft, 1.5 * a_soft, a_sunTan - a_horizon.x), smoothstep(-a_softUnits, a_softUnits, -a_horizon.y));
 }
 #endif
+
+float SampleDeformationBilinear(float2 t, float2 dims)
+{
+	t = clamp(t, 0.0, dims - 1.001);
+#ifdef SNOW_DEFORM_SAMPLER
+	return saturate(DeformationMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0).x);
+#else
+	int2 t0 = (int2)t;
+	float2 f = t - t0;
+	int2 t1 = min(t0 + 1, int2(dims) - 1);
+
+	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
+	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
+	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
+	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
+
+	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
+#endif
+}
+
+float SampleDeformationSmooth(float2 gridLocal)
+{
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
+	if (any(uv < 0.0) || any(uv > 1.0))
+		return 0.0;
+
+	SNOW_DEFORM_DIMS(dims);
+	SNOW_DEFORM_BSPLINE(SampleDeformationBilinear, uv, dims);
+	return bspline;
+}
 
 bool ShellUntouched(float2 gridLocal)
 {
@@ -768,6 +799,16 @@ float CarveSlough(float deformation, float deformBlur, float a_round)
 	return lerp(d, deformBlur, a_round);
 }
 
+#define CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, look)                \
+	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);                         \
+	d = lerp(soft, d, depthT);                                                      \
+	float profile = uncarvedDepth * (1.0 - d);                                      \
+	[branch] if (RimStyle.x > 0.001)                                                \
+	{                                                                               \
+		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d)); \
+		profile += look.z * uncarvedDepth * hump * depthT;                          \
+	}
+
 float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY, float3 a_look)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
@@ -784,15 +825,7 @@ float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, flo
 		}
 	}
 
-	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
-	d = lerp(soft, d, depthT);
-	float profile = uncarvedDepth * (1.0 - d);
-
-	[branch] if (RimStyle.x > 0.001)
-	{
-		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += a_look.z * uncarvedDepth * hump * depthT;
-	}
+	CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, a_look)
 	return profile;
 }
 
@@ -800,14 +833,7 @@ float CarveProfileNoTeeth(float deformation, float deformBlur, float uncarvedDep
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = CarveSlough(deformation, deformBlur, a_look.x);
-	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);
-	d = lerp(soft, d, depthT);
-	float profile = uncarvedDepth * (1.0 - d);
-	[branch] if (RimStyle.x > 0.001)
-	{
-		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d));
-		profile += a_look.z * uncarvedDepth * hump * depthT;
-	}
+	CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, a_look)
 	return profile;
 }
 

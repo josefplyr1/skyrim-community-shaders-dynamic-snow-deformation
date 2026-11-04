@@ -11,6 +11,18 @@ cbuffer LandscapeSnowCB : register(b11)
 	float4 LsExclAxis[16];
 };
 
+#define LS_OFF_VIEW(k, clip)                               \
+	bool l = true, r = true, b = true, t = true, n = true; \
+	[unroll] for (uint i = 0; i < 6; i++)                  \
+	{                                                      \
+		float4 c = clip;                                   \
+		l = l && (c.x + c.w * k < 0.0);                    \
+		r = r && (c.w * k - c.x < 0.0);                    \
+		b = b && (c.y + c.w * k < 0.0);                    \
+		t = t && (c.w * k - c.y < 0.0);                    \
+		n = n && (c.z < 0.0);                              \
+	}
+
 #if defined(HULLSHADER) || defined(SNOW_SURFACE_ONLY)
 bool LsBoxUntouched(float2 lo, float2 hi)
 {

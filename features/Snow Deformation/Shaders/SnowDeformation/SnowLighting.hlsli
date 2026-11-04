@@ -12,6 +12,7 @@
 #	include "SnowDeformation/SnowParallaxFollow.hlsli"
 #endif
 #include "SnowDeformation/SnowColor.hlsli"
+#include "SnowDeformation/SnowCommon.hlsli"
 
 namespace SnowLighting
 {
@@ -39,10 +40,8 @@ namespace SnowLighting
 
 	float LandSnowTexel(float3 g)
 	{
-		float lum = dot(g, float3(0.2126, 0.7152, 0.0722));
-		float sat = max(g.r, max(g.g, g.b)) - min(g.r, min(g.g, g.b));
-		float lo = SharedData::snowDeformationSettings.LandRecolorLumLo;
-		return smoothstep(lo, lo + 0.18, lum) * (1.0 - smoothstep(0.10, 0.22, sat));
+		SNOW_TEXEL_SCORE(score, g, SharedData::snowDeformationSettings.LandRecolorLumLo, 0.18);
+		return score;
 	}
 
 	float3 SampleEncoded(float3 sampled)
@@ -248,25 +247,21 @@ namespace SnowLighting
 		}
 	}
 
-	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal, inout float4 layerRMAOS)
+	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal
+#	if defined(TRUE_PBR)
+		,
+		inout float4 layerRMAOS
+#	endif
+	)
 	{
 		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
 		{
 			float w = LandSnowTexel(LayerEncoded(layerColor));
 			layerColor = lerp(layerColor, s.landSnowRaw, w);
 			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
+#	if defined(TRUE_PBR)
 			layerRMAOS = lerp(layerRMAOS, s.landSnowRMAOS, w);
-			s.landSnowFrac += weight * w;
-		}
-	}
-
-	void LandRecolorLayer(inout State s, uint tile, float weight, inout float3 layerColor, inout float3 layerNormal)
-	{
-		[branch] if (s.landRecolor && ((s.landSnowBits >> tile) & 1) != 0)
-		{
-			float w = LandSnowTexel(LayerEncoded(layerColor));
-			layerColor = lerp(layerColor, s.landSnowRaw, w);
-			layerNormal = lerp(layerNormal, float3(0.5, 0.5, 1.0), w);
+#	endif
 			s.landSnowFrac += weight * w;
 		}
 	}
@@ -275,8 +270,7 @@ namespace SnowLighting
 	{
 		[branch] if (s.landSnowFrac > 0.003 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 		{
-			float3 bumpT = normalize(cross(float3(0.0, 1.0, 0.0), worldNormal) + float3(1e-5, 0.0, 0.0));
-			float3 bumpB = cross(worldNormal, bumpT);
+			SNOW_TANGENT_FRAME(bumpT, bumpB, worldNormal);
 			worldNormal = normalize(worldNormal + (bumpT * s.landSnowNormal.x + bumpB * s.landSnowNormal.y) * saturate(s.landSnowFrac));
 		}
 #	if !defined(TRUE_PBR) && !defined(WORLD_MAP)
@@ -435,6 +429,11 @@ namespace SnowLighting
 #	endif
 
 #	if !defined(FACEGEN) && !defined(MULTI_LAYER_PARALLAX) && !defined(PARALLAX)
+#		if defined(SPARKLE)
+#			define SNOW_PROJ_SAMPLER SampColorSampler
+#		else
+#			define SNOW_PROJ_SAMPLER SampProjDiffuseSampler
+#		endif
 	void ProjectedRecolor(inout State s, float projWeight, float3 vertexNormal, float3 projWorldPos, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
@@ -453,20 +452,12 @@ namespace SnowLighting
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
-#		if defined(SPARKLE)
-					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
-#		else
-					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
-#		endif
+					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
 				[branch] if (projectedMaterialWeight > 0.003)
 				{
-#		if defined(SPARKLE)
-				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
-#		else
-				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
-#		endif
+				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 4) != 0)
 					s.projAlbedo = float3(1.0, 0.0, 1.0);
@@ -477,11 +468,7 @@ namespace SnowLighting
 				s.projRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
 				{
-#		if defined(SPARKLE)
-					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SampColorSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
-#		else
-					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SampProjDiffuseSampler, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
-#		endif
+					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
 				}
 #		if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
@@ -495,6 +482,7 @@ namespace SnowLighting
 		[flatten] if ((uint(SharedData::snowDeformationSettings.DebugTerrainOverlay) & 32) != 0 && !s.projMatch)
 			baseColor = float3(1.0, 0.0, 0.0);
 	}
+#		undef SNOW_PROJ_SAMPLER
 #	endif
 #endif
 

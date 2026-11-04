@@ -2,6 +2,7 @@
 // Copyright (c) 2026 josefplyr1. GPL-3.0-or-later.
 // Source: github.com/community-shaders/skyrim-community-shaders/pull/2659
 
+#include "SnowDeformation/SnowCommon.hlsli"
 #include "SnowDeformation/SnowPrints.hlsli"
 
 namespace SnowDeformation
@@ -41,10 +42,8 @@ namespace SnowDeformation
 
 	float ClassifyLODSnow(float3 gammaColor)
 	{
-		float luminance = dot(gammaColor, float3(0.2126, 0.7152, 0.0722));
-		float saturation = max(gammaColor.r, max(gammaColor.g, gammaColor.b)) - min(gammaColor.r, min(gammaColor.g, gammaColor.b));
-		float lumLo = 0.62 - 0.64 * saturate(SharedData::snowDeformationSettings.LODSnowSensitivity);
-		return smoothstep(lumLo, lumLo + 0.12, luminance) * (1.0 - smoothstep(0.10, 0.22, saturation));
+		SNOW_TEXEL_SCORE(score, gammaColor, 0.62 - 0.64 * saturate(SharedData::snowDeformationSettings.LODSnowSensitivity), 0.12);
+		return score;
 	}
 
 	float2 GetDeformationUV(float2 absWorldXY)
@@ -84,28 +83,8 @@ namespace SnowDeformation
 		{
 			float2 mapDim;
 			DeformationMap.GetDimensions(mapDim.x, mapDim.y);
-			float2 t = uv * mapDim - 0.5;
-			float2 i = floor(t);
-			float2 f = t - i;
-			float2 f2 = f * f;
-			float2 f3 = f2 * f;
-
-			float2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
-			float2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
-			float2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
-			float2 w3 = f3 / 6.0;
-
-			float2 g0 = w0 + w1;
-			float2 g1 = w2 + w3;
-			float2 h0 = i - 1.0 + w1 / g0;
-			float2 h1 = i + 1.0 + w3 / g1;
-
-			float s00 = DeformBilinear(float2(h0.x, h0.y), mapDim);
-			float s10 = DeformBilinear(float2(h1.x, h0.y), mapDim);
-			float s01 = DeformBilinear(float2(h0.x, h1.y), mapDim);
-			float s11 = DeformBilinear(float2(h1.x, h1.y), mapDim);
-
-			deformation = (g0.y * (g0.x * s00 + g1.x * s10) + g1.y * (g0.x * s01 + g1.x * s11)) * border;
+			SNOW_DEFORM_BSPLINE(DeformBilinear, uv, mapDim);
+			deformation = bspline * border;
 		}
 		return deformation;
 	}

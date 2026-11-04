@@ -40,32 +40,7 @@ static const float2 kSlumpAxis[SLUMP_AXES] = {
 
 cbuffer PerFrame : register(b0)
 {
-	float2 WindowOrigin;
-	int2 MapOrigin;
-
-	float TexelSize;
-	uint StampCount;
-	float RefillAmount;
-	uint ClearMap;
-
-	float StampFalloffStart;
-	float BermReach;
-	float2 WindBias;
-
-	float DeltaTime;
-	float MeltPersistence;
-	float MeltFloorStart;
-	float MeltEdgeNoise;
-
-	float CrustPrintDepth;
-	float CrustThaw;
-	float CrustBreakOnCarve;
-	float SlumpRate;
-
-	uint InjectValid;
-	float GameDeltaTime;
-	uint DebugActivityView;
-	float AgeingClock;
+#include "SnowDeformation/DeformationFrame.hlsli"
 
 	int4 RingRects[2];
 	uint RingRectCount;
