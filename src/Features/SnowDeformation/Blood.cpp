@@ -67,51 +67,38 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
 	if (!bloodVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER"));
-		if (blob) {
-			bloodVSBlob = blob;
-			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodVS)))
-				Util::SetResourceName(bloodVS, "SnowDeformation::BloodCaptureVS");
-		}
+		bloodVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &bloodVSBlob));
+		if (bloodVS)
+			Util::SetResourceName(bloodVS, "SnowDeformation::BloodCaptureVS");
 	}
 	if (!bloodSkinVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED"));
-		if (blob) {
-			bloodSkinVSBlob = blob;
-			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodSkinVS)))
-				Util::SetResourceName(bloodSkinVS, "SnowDeformation::BloodCaptureSkinVS");
-		}
+		bloodSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &bloodSkinVSBlob));
+		if (bloodSkinVS)
+			Util::SetResourceName(bloodSkinVS, "SnowDeformation::BloodCaptureSkinVS");
 	}
 	if (!bloodDiscVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "DISC"));
-		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodDiscVS)))
+		bloodDiscVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "DISC" }));
+		if (bloodDiscVS)
 			Util::SetResourceName(bloodDiscVS, "SnowDeformation::BloodCaptureDiscVS");
 	}
 	if (!bloodPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodPS)))
+		bloodPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0"));
+		if (bloodPS)
 			Util::SetResourceName(bloodPS, "SnowDeformation::BloodCapturePS");
 	}
 	if (!bloodDiscPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "DISC"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodDiscPS)))
+		bloodDiscPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "DISC" }));
+		if (bloodDiscPS)
 			Util::SetResourceName(bloodDiscPS, "SnowDeformation::BloodCaptureDiscPS");
 	}
 	if (!bloodOverlayVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "OVERLAY"));
-		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlayVS)))
+		bloodOverlayVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "OVERLAY" }));
+		if (bloodOverlayVS)
 			Util::SetResourceName(bloodOverlayVS, "SnowDeformation::BloodOverlayVS");
 	}
 	if (!bloodOverlayPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "OVERLAY"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &bloodOverlayPS)))
+		bloodOverlayPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "OVERLAY" }));
+		if (bloodOverlayPS)
 			Util::SetResourceName(bloodOverlayPS, "SnowDeformation::BloodOverlayPS");
 	}
 	if (!bloodVS || !bloodSkinVS || !bloodDiscVS || !bloodPS || !bloodDiscPS || !bloodOverlayVS || !bloodOverlayPS) {
@@ -398,21 +385,18 @@ bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
 	if (!decalMaskVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "MASK"));
-		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &decalMaskVS)))
+		decalMaskVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "MASK" }));
+		if (decalMaskVS)
 			Util::SetResourceName(decalMaskVS, "SnowDeformation::DecalMaskVS");
 	}
 	if (!decalMaskSkinVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED", "MASK"));
-		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &decalMaskSkinVS)))
+		decalMaskSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED", "MASK" }));
+		if (decalMaskSkinVS)
 			Util::SetResourceName(decalMaskSkinVS, "SnowDeformation::DecalMaskSkinVS");
 	}
 	if (!decalMaskPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "MASK"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &decalMaskPS)))
+		decalMaskPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "MASK" }));
+		if (decalMaskPS)
 			Util::SetResourceName(decalMaskPS, "SnowDeformation::DecalMaskPS");
 	}
 	if (!decalMaskBlendState) {

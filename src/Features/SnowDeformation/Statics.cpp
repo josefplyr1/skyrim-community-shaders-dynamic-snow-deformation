@@ -1026,82 +1026,15 @@ void SnowDeformation::InstallStaticsCaptureHook()
 	stl::write_vfunc<0x6, SD_BSLightingShader_SetupGeometry>(RE::VTABLE_BSLightingShader[0]);
 }
 
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine, const char* a_extraDefine2, const char* a_extraDefine3, const char* a_extraDefine4, const char* a_extraDefine5, const char* a_extraDefine6)
+ID3D11DeviceChild* SD_CompileShader(const wchar_t* a_path, const char* a_target, std::initializer_list<const char*> a_defines, winrt::com_ptr<ID3DBlob>* a_blob)
 {
-	auto& snow = globals::features::snowDeformation;
-	auto defs = std::format("{};{};{};{}", a_stageDefine,
-		a_extraDefine ? a_extraDefine : "", a_extraDefine2 ? a_extraDefine2 : "", a_extraDefine3 ? a_extraDefine3 : "");
-	if (a_extraDefine4)
-		defs += std::format(";{}", a_extraDefine4);
-	if (a_extraDefine5)
-		defs += std::format(";{}", a_extraDefine5);
-	if (a_extraDefine6)
-		defs += std::format(";{}", a_extraDefine6);
-	const auto pathUtf8 = Util::WStringToString(a_path);
-	const auto cacheFile = std::format("{}_{}_blob_{:016x}.bin",
-		std::filesystem::path(a_path).stem().string(), a_target,
-		SnowDeformation::ShaderKeyHash(std::format("{}|{}|{}", pathUtf8, a_target, defs)));
-	const auto cacheKey = std::format("v1|fp{}|{}|{}|env:sdblob|defs:{}",
-		snow.ShaderSourcesFingerprint(), pathUtf8, a_target, defs);
-	if (auto cached = snow.ShaderCacheLoad(cacheKey, cacheFile))
-		return cached.detach();
-
-	struct ShaderInclude : public ID3DInclude
-	{
-		HRESULT Open(D3D_INCLUDE_TYPE, LPCSTR pFileName, LPCVOID, LPCVOID* ppData, UINT* pBytes) override
-		{
-			std::filesystem::path filePath = pFileName;
-			filePath = L"Data\\Shaders" / filePath;
-			std::ifstream file(filePath, std::ios::binary);
-			if (!file.is_open()) {
-				*ppData = nullptr;
-				*pBytes = 0;
-				return E_FAIL;
-			}
-			file.seekg(0, std::ios::end);
-			UINT size = static_cast<UINT>(file.tellg());
-			file.seekg(0, std::ios::beg);
-			char* data = new char[size];
-			file.read(data, size);
-			*ppData = data;
-			*pBytes = size;
-			return S_OK;
-		}
-		HRESULT Close(LPCVOID pData) override
-		{
-			delete[] static_cast<const char*>(pData);
-			return S_OK;
-		}
-	} includeHandler;
-
-	D3D_SHADER_MACRO macros[] = {
-		{ a_stageDefine, "" },
-		{ a_extraDefine ? a_extraDefine : "DX11", "" },
-		{ a_extraDefine2 ? a_extraDefine2 : "DX11", "" },
-		{ a_extraDefine3 ? a_extraDefine3 : "DX11", "" },
-		{ a_extraDefine4 ? a_extraDefine4 : "DX11", "" },
-		{ a_extraDefine5 ? a_extraDefine5 : "DX11", "" },
-		{ a_extraDefine6 ? a_extraDefine6 : "DX11", "" },
-		{ "WINPC", "" },
-		{ "DX11", "" },
-		{ nullptr, nullptr }
-	};
-
-	ID3DBlob* blob = nullptr;
-	ID3DBlob* errors = nullptr;
-	if (FAILED(D3DCompileFromFile(a_path, macros, &includeHandler, "main", a_target,
-			D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &blob, &errors))) {
-		logger::warn("[SNOW DEFORMATION] Statics skin {} compile failed:\n{}", a_target,
-			errors ? static_cast<char*>(errors->GetBufferPointer()) : "unknown error");
-		if (errors)
-			errors->Release();
-		return nullptr;
-	}
-	if (errors)
-		errors->Release();
-	if (blob)
-		snow.ShaderCacheStore(cacheKey, cacheFile, blob);
-	return blob;
+	std::vector<std::pair<const char*, const char*>> defines;
+	for (const auto* define : a_defines)
+		if (define)
+			defines.emplace_back(define, "");
+	if (a_blob)
+		*a_blob = nullptr;
+	return Util::CompileShader(a_path, defines, a_target, "main", a_blob ? a_blob->put() : nullptr);
 }
 
 bool SnowDeformation::RoadMapsWanted() const
@@ -1238,12 +1171,9 @@ ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 {
 	if (!patchShadowVS) {
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_SHADOW_CAST", "SNOW_PATCH_INDEXED"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchShadowVS)))
-				Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
-		}
+		patchShadowVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_SHADOW_CAST", "SNOW_PATCH_INDEXED" }));
+		if (patchShadowVS)
+			Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
 	}
 	return patchShadowVS;
 }
@@ -1350,11 +1280,9 @@ ID3D11PixelShader* SnowDeformation::CompilePatchDeferredPS(int a_which)
 	static constexpr const char* kName[3] = { "SnowDeformation::TrenchPatchPS Attributes", "SnowDeformation::TrenchPatchPS Deferred", "SnowDeformation::TrenchPatchPS Condition View" };
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-	winrt::com_ptr<ID3DBlob> blob;
-	blob.attach(SD_CompileShaderBlob(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine, kDefine[a_which],
-		a_which == 2 ? "SNOW_CONDITION_VIEW" : nullptr));
-	ID3D11PixelShader* ps = nullptr;
-	if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &ps)))
+	auto* ps = static_cast<ID3D11PixelShader*>(SD_CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", "ps_5_0",
+		{ "PATCH", ehfDefine, iblDefine, kDefine[a_which], a_which == 2 ? "SNOW_CONDITION_VIEW" : nullptr }));
+	if (ps)
 		Util::SetResourceName(ps, kName[a_which]);
 	else
 		logger::warn("[SNOW DEFORMATION] trench patch: the {} PS failed to compile, the patch draws forward", kDefine[a_which]);
@@ -1443,175 +1371,113 @@ bool SnowDeformation::EnsureStaticsShaders()
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 
 	if (!staticsVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsVS))) {
-				staticsVSBlob = blob;
-				Util::SetResourceName(staticsVS, "SnowDeformation::StaticsShellVS");
-			}
-		}
+		staticsVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &staticsVSBlob));
+		if (staticsVS)
+			Util::SetResourceName(staticsVS, "SnowDeformation::StaticsShellVS");
 	}
 	if (!staticsTessVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SNOW_TESS"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsTessVS)))
-				Util::SetResourceName(staticsTessVS, "SnowDeformation::StaticsShellTessVS");
-		}
+		staticsTessVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_TESS" }));
+		if (staticsTessVS)
+			Util::SetResourceName(staticsTessVS, "SnowDeformation::StaticsShellTessVS");
 	}
 	if (!staticsHS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "hs_5_0", "HULLSHADER"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateHullShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsHS)))
-				Util::SetResourceName(staticsHS, "SnowDeformation::StaticsShellHS");
-		}
+		staticsHS = static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0"));
+		if (staticsHS)
+			Util::SetResourceName(staticsHS, "SnowDeformation::StaticsShellHS");
 	}
 	if (!staticsDS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ds_5_0", "DOMAINSHADER"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateDomainShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsDS)))
-				Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
-		}
+		staticsDS = static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0"));
+		if (staticsDS)
+			Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
 	}
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
 
 	if (!staticsPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPS)))
-				Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
-		}
+		staticsPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine }));
+		if (staticsPS)
+			Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
 	}
 
 	if (!staticsPSNoDepth) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSNoDepth)))
-				Util::SetResourceName(staticsPSNoDepth, "SnowDeformation::StaticsShellPS NoDepth");
-		}
+		staticsPSNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT" }));
+		if (staticsPSNoDepth)
+			Util::SetResourceName(staticsPSNoDepth, "SnowDeformation::StaticsShellPS NoDepth");
 	}
 
 	if (!staticsPSPrepassNoDepth) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSPrepassNoDepth)))
-				Util::SetResourceName(staticsPSPrepassNoDepth, "SnowDeformation::StaticsShellPS Prepass NoDepth");
-		}
+		staticsPSPrepassNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS" }));
+		if (staticsPSPrepassNoDepth)
+			Util::SetResourceName(staticsPSPrepassNoDepth, "SnowDeformation::StaticsShellPS Prepass NoDepth");
 	}
 
 	if (!staticsPSDrapeNoDepth) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapeNoDepth)))
-				Util::SetResourceName(staticsPSDrapeNoDepth, "SnowDeformation::StaticsShellPS Drape NoDepth");
-		}
+		staticsPSDrapeNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE" }));
+		if (staticsPSDrapeNoDepth)
+			Util::SetResourceName(staticsPSDrapeNoDepth, "SnowDeformation::StaticsShellPS Drape NoDepth");
 	}
 	if (!staticsPSDrapePrepass) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrepass)))
-				Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
-		}
+		staticsPSDrapePrepass = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE" }));
+		if (staticsPSDrapePrepass)
+			Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
 	}
 	if (!staticsPSDrapePrintsNoDepth) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrintsNoDepth)))
-				Util::SetResourceName(staticsPSDrapePrintsNoDepth, "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
-		}
+		staticsPSDrapePrintsNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS" }));
+		if (staticsPSDrapePrintsNoDepth)
+			Util::SetResourceName(staticsPSDrapePrintsNoDepth, "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
 	}
 
 	if (!patchVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchVS)))
-				Util::SetResourceName(patchVS, "SnowDeformation::TrenchPatchVS");
-		}
+		patchVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH" }));
+		if (patchVS)
+			Util::SetResourceName(patchVS, "SnowDeformation::TrenchPatchVS");
 	}
 	if (!patchPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "PATCH", ehfDefine, iblDefine));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchPS)))
-				Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
-		}
+		patchPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "PATCH", ehfDefine, iblDefine }));
+		if (patchPS)
+			Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
 	}
 	if (!patchTessVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "PATCH", "SNOW_TESS"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchTessVS)))
-				Util::SetResourceName(patchTessVS, "SnowDeformation::TrenchPatchTessVS");
-		}
+		patchTessVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_TESS" }));
+		if (patchTessVS)
+			Util::SetResourceName(patchTessVS, "SnowDeformation::TrenchPatchTessVS");
 	}
 	if (!patchHS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "hs_5_0", "HULLSHADER", "PATCH"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateHullShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchHS)))
-				Util::SetResourceName(patchHS, "SnowDeformation::TrenchPatchHS");
-		}
+		patchHS = static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0", { "PATCH" }));
+		if (patchHS)
+			Util::SetResourceName(patchHS, "SnowDeformation::TrenchPatchHS");
 	}
 	if (!patchDS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ds_5_0", "DOMAINSHADER", "PATCH"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateDomainShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &patchDS)))
-				Util::SetResourceName(patchDS, "SnowDeformation::TrenchPatchDS");
-		}
+		patchDS = static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0", { "PATCH" }));
+		if (patchDS)
+			Util::SetResourceName(patchDS, "SnowDeformation::TrenchPatchDS");
 	}
 
 	constexpr auto heightPath = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
 	if (!heightVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "vs_5_0", "VSHADER"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightVS)))
-				Util::SetResourceName(heightVS, "SnowDeformation::HeightCaptureVS");
-		}
+		heightVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(heightPath, "vs_5_0"));
+		if (heightVS)
+			Util::SetResourceName(heightVS, "SnowDeformation::HeightCaptureVS");
 	}
 	if (!heightPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPS)))
-				Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
-		}
+		heightPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0"));
+		if (heightPS)
+			Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
 	}
 	if (!heightPeelPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "PEEL"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPeelPS)))
-				Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
-		}
+		heightPeelPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "PEEL" }));
+		if (heightPeelPS)
+			Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
 	}
 	if (!heightPSTopOnly) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "TOP_ONLY"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPSTopOnly)))
-				Util::SetResourceName(heightPSTopOnly, "SnowDeformation::HeightCapturePS TopOnly");
-		}
+		heightPSTopOnly = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "TOP_ONLY" }));
+		if (heightPSTopOnly)
+			Util::SetResourceName(heightPSTopOnly, "SnowDeformation::HeightCapturePS TopOnly");
 	}
 	if (!heightPSSkinDepth) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(heightPath, "ps_5_0", "PSHADER", "SKIN_DEPTH"));
-		if (blob) {
-			if (SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &heightPSSkinDepth)))
-				Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
-		}
+		heightPSSkinDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "SKIN_DEPTH" }));
+		if (heightPSSkinDepth)
+			Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
 	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
@@ -4662,19 +4528,14 @@ bool SnowDeformation::EnsureCoatParallaxShaders()
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SNOW_COAT_PARALLAX"));
-		if (blob && SUCCEEDED(globals::d3d::device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsVSParallax))) {
-			staticsVSParallaxBlob = blob;
+		staticsVSParallax = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_COAT_PARALLAX" }, &staticsVSParallaxBlob));
+		if (staticsVSParallax)
 			Util::SetResourceName(staticsVSParallax, "SnowDeformation::StaticsShellVS Parallax");
-		}
-		blob = nullptr;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX"));
-		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapeParallax)))
+		staticsPSDrapeParallax = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX" }));
+		if (staticsPSDrapeParallax)
 			Util::SetResourceName(staticsPSDrapeParallax, "SnowDeformation::StaticsShellPS Drape Parallax");
-		blob = nullptr;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX"));
-		if (blob && SUCCEEDED(globals::d3d::device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &staticsPSDrapePrintsParallax)))
+		staticsPSDrapePrintsParallax = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX" }));
+		if (staticsPSDrapePrintsParallax)
 			Util::SetResourceName(staticsPSDrapePrintsParallax, "SnowDeformation::StaticsShellPS Drape Prints Parallax");
 		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}, prints {}",
 			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED", staticsPSDrapePrintsParallax ? "ok" : "FAILED");
@@ -4715,12 +4576,9 @@ void SnowDeformation::RenderWaterCapture()
 	}
 	if (!waterCaptureVS) {
 		const auto path = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
-		waterCaptureVSBlob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "WATER"));
-		winrt::com_ptr<ID3DBlob> psBlob;
-		psBlob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER", "WATER"));
-		if (!waterCaptureVSBlob || !psBlob ||
-			FAILED(globals::d3d::device->CreateVertexShader(waterCaptureVSBlob->GetBufferPointer(), waterCaptureVSBlob->GetBufferSize(), nullptr, &waterCaptureVS)) ||
-			FAILED(globals::d3d::device->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &waterCapturePS))) {
+		waterCaptureVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "WATER" }, &waterCaptureVSBlob));
+		waterCapturePS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "WATER" }));
+		if (!waterCaptureVS || !waterCapturePS) {
 			logger::error("[SNOW DEFORMATION] Water capture shaders failed; the shell will not end at water");
 			waterCaptureShadersFailed = true;
 			capturedWater.clear();
@@ -4955,25 +4813,19 @@ bool SnowDeformation::EnsureContactResources()
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
 	if (!contactVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER"));
-		if (blob && SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactVS)))
+		contactVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0"));
+		if (contactVS)
 			Util::SetResourceName(contactVS, "SnowDeformation::ContactCaptureVS");
 	}
 	if (!contactPS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "ps_5_0", "PSHADER"));
-		if (blob && SUCCEEDED(device->CreatePixelShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactPS)))
+		contactPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0"));
+		if (contactPS)
 			Util::SetResourceName(contactPS, "SnowDeformation::ContactCapturePS");
 	}
 	if (!contactSkinVS) {
-		winrt::com_ptr<ID3DBlob> blob;
-		blob.attach(SD_CompileShaderBlob(path, "vs_5_0", "VSHADER", "SKINNED"));
-		if (blob) {
-			contactSkinVSBlob = blob;
-			if (SUCCEEDED(device->CreateVertexShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &contactSkinVS)))
-				Util::SetResourceName(contactSkinVS, "SnowDeformation::ContactCaptureSkinVS");
-		}
+		contactSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &contactSkinVSBlob));
+		if (contactSkinVS)
+			Util::SetResourceName(contactSkinVS, "SnowDeformation::ContactCaptureSkinVS");
 	}
 	if (!contactSkinCB) {
 		D3D11_BUFFER_DESC cbDesc{};

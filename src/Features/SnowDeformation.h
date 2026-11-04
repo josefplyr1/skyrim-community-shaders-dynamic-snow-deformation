@@ -12,7 +12,8 @@
 #include <list>
 #include <intrin.h>
 
-ID3DBlob* SD_CompileShaderBlob(const wchar_t* a_path, const char* a_target, const char* a_stageDefine, const char* a_extraDefine = nullptr, const char* a_extraDefine2 = nullptr, const char* a_extraDefine3 = nullptr, const char* a_extraDefine4 = nullptr, const char* a_extraDefine5 = nullptr, const char* a_extraDefine6 = nullptr);
+/** @brief Util::CompileShader for a snow shader's main(); null defines are skipped, and a_blob receives the bytecode. */
+ID3D11DeviceChild* SD_CompileShader(const wchar_t* a_path, const char* a_target, std::initializer_list<const char*> a_defines = {}, winrt::com_ptr<ID3DBlob>* a_blob = nullptr);
 uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
 struct SnowDeformation : Feature
@@ -3291,18 +3292,8 @@ public:
 
 	/** @brief Util::CompileShader for the snow shaders; its disk cache keys on the preprocessed source, so every define reaches the key. */
 	ID3D11DeviceChild* CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry = "main");
-	/** @brief Content hash over every shader source under Data\Shaders; cached until ClearShaderCache drops it. */
-	std::string ShaderSourcesFingerprint();
-	/** @brief Loads a cached blob whose stored key matches a_key exactly; null on any mismatch. */
-	winrt::com_ptr<ID3DBlob> ShaderCacheLoad(const std::string& a_key, const std::string& a_file);
-	void ShaderCacheStore(const std::string& a_key, const std::string& a_file, ID3DBlob* a_blob);
-	static uint64_t ShaderKeyHash(std::string_view a_text);
 	/** @brief Compiles the three SmoothNormalsCS variants; shared by the primer and EnsureSmoothedNormals. Implemented in SnowDeformation/Statics.cpp. */
 	bool EnsureSmoothNormalsCS();
-	std::mutex snowShaderCacheMutex;
-	std::string snowSourcesFingerprint;
-	std::atomic<uint32_t> snowShaderCacheHits = 0;
-	std::atomic<uint32_t> snowShaderCacheMisses = 0;
 
 protected:
 

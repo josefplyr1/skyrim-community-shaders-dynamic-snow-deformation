@@ -2000,10 +2000,6 @@ void SnowDeformation::ClearShaderCache()
 {
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
-	{
-		std::scoped_lock lock(snowShaderCacheMutex);
-		snowSourcesFingerprint.clear();
-	}
 	deformationCSFailed = false;
 	if (deformationRingCS)
 		deformationRingCS->Release();
