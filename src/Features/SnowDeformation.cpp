@@ -1564,15 +1564,15 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "ClusterCullCS", "SNOW_CLUSTER_CULL" },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinCullCS", nullptr },
 	};
-	auto*& slot = snowCS[a_which];
+	auto& slot = snowCS[a_which];
 	if (!slot) {
 		const Shader& shader = kShaders[a_which];
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (shader.define)
 			defines.emplace_back(shader.define, "");
-		slot = static_cast<ID3D11ComputeShader*>(Util::CompileShader(shader.path, defines, "cs_5_0", shader.entry));
+		slot.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(shader.path, defines, "cs_5_0", shader.entry)));
 	}
-	return slot;
+	return slot.get();
 }
 
 void SnowDeformation::EnsureContactViewTexture()
@@ -1765,54 +1765,15 @@ void SnowDeformation::ClearShaderCache()
 	ReleaseObjectPrintShaders();
 	noiseHashBaked = false;
 	undulationFieldValid = false;
-	for (auto*& cs : snowCS) {
-		if (cs)
-			cs->Release();
+	for (auto& cs : snowCS)
 		cs = nullptr;
-	}
-	if (shellPSDeferred)
-		shellPSDeferred->Release();
-	shellPSDeferred = nullptr;
 	if (conditionViewCompile.valid())
 		conditionViewCompile.wait();
-	if (shellPSDeferredConditionView)
-		shellPSDeferredConditionView->Release();
-	shellPSDeferredConditionView = nullptr;
 	conditionViewShaderState.store(0, std::memory_order_release);
 	ReleaseMarchCache();
-	for (auto& attrPS : shellPSPrepassAttr) {
-		if (attrPS)
-			attrPS->Release();
+	for (auto& attrPS : shellPSPrepassAttr)
 		attrPS = nullptr;
-	}
-	if (shellPSPrepassEarly)
-		shellPSPrepassEarly->Release();
-	shellPSPrepassEarly = nullptr;
-	if (shellPSEarlyResolve)
-		shellPSEarlyResolve->Release();
-	shellPSEarlyResolve = nullptr;
-	if (shellFillPSClaim)
-		shellFillPSClaim->Release();
-	shellFillPSClaim = nullptr;
-	if (shellFillVS)
-		shellFillVS->Release();
-	shellFillVS = nullptr;
-	if (shellFillRectVS)
-		shellFillRectVS->Release();
-	shellFillRectVS = nullptr;
-	if (shellFillPS)
-		shellFillPS->Release();
-	shellFillPS = nullptr;
-	if (shellFillPSPreSnow)
-		shellFillPSPreSnow->Release();
-	shellFillPSPreSnow = nullptr;
 	shellTerrainWetValid = false;
-	if (sssChangedRaymarchCS)
-		sssChangedRaymarchCS->Release();
-	sssChangedRaymarchCS = nullptr;
-	if (preSnowCopyCS)
-		preSnowCopyCS->Release();
-	preSnowCopyCS = nullptr;
 	delete depthSyncRectCB;
 	depthSyncRectCB = nullptr;
 	delete terrainFineCB;
@@ -1820,12 +1781,6 @@ void SnowDeformation::ClearShaderCache()
 	delete shellTerrainFine;
 	shellTerrainFine = nullptr;
 	shellFineValid = false;
-	if (hiZBuildCS)
-		hiZBuildCS->Release();
-	hiZBuildCS = nullptr;
-	if (hiZBuildUAVCS)
-		hiZBuildUAVCS->Release();
-	hiZBuildUAVCS = nullptr;
 	delete skinCullCB;
 	skinCullCB = nullptr;
 	delete skinCullBounds;
@@ -1845,81 +1800,15 @@ void SnowDeformation::ClearShaderCache()
 		st = nullptr;
 	skinCullCapacity = 0;
 	skinCullLevels = 0;
-	if (staticsVS)
-		staticsVS->Release();
-	staticsVS = nullptr;
-	if (staticsTessVS)
-		staticsTessVS->Release();
-	staticsTessVS = nullptr;
-	if (staticsHS)
-		staticsHS->Release();
-	staticsHS = nullptr;
-	if (staticsDS)
-		staticsDS->Release();
-	staticsDS = nullptr;
-	if (staticsPS)
-		staticsPS->Release();
-	staticsPS = nullptr;
-	if (staticsPSNoDepth)
-		staticsPSNoDepth->Release();
-	staticsPSNoDepth = nullptr;
-	if (staticsPSPrepassNoDepth)
-		staticsPSPrepassNoDepth->Release();
-	staticsPSPrepassNoDepth = nullptr;
-	if (staticsPSDrapeNoDepth)
-		staticsPSDrapeNoDepth->Release();
-	staticsPSDrapeNoDepth = nullptr;
-	if (staticsPSDrapePrepass)
-		staticsPSDrapePrepass->Release();
-	staticsPSDrapePrepass = nullptr;
-	if (staticsPSDrapePrintsNoDepth)
-		staticsPSDrapePrintsNoDepth->Release();
-	staticsPSDrapePrintsNoDepth = nullptr;
-	if (staticsVSParallax)
-		staticsVSParallax->Release();
-	staticsVSParallax = nullptr;
 	staticsVSParallaxBlob = nullptr;
-	if (staticsPSDrapeParallax)
-		staticsPSDrapeParallax->Release();
-	staticsPSDrapeParallax = nullptr;
-	if (staticsPSDrapePrintsParallax)
-		staticsPSDrapePrintsParallax->Release();
-	staticsPSDrapePrintsParallax = nullptr;
 	coatParallaxTried = false;
-	if (patchVS)
-		patchVS->Release();
-	patchVS = nullptr;
-	if (patchShadowVS)
-		patchShadowVS->Release();
-	patchShadowVS = nullptr;
 	delete patchCullCB;
 	patchCullCB = nullptr;
-	if (patchTessVS)
-		patchTessVS->Release();
-	patchTessVS = nullptr;
-	if (patchHS)
-		patchHS->Release();
-	patchHS = nullptr;
-	if (patchDS)
-		patchDS->Release();
-	patchDS = nullptr;
-	if (patchPS)
-		patchPS->Release();
-	patchPS = nullptr;
 	ReleasePatchDeferred();
 	staticsVSBlob = nullptr;
 	staticsILCache.clear();
 	staticsILParallaxCache.clear();
 	staticsShadersFailed = false;
-	if (smoothAccumulateCS)
-		smoothAccumulateCS->Release();
-	smoothAccumulateCS = nullptr;
-	if (smoothBoundsCS)
-		smoothBoundsCS->Release();
-	smoothBoundsCS = nullptr;
-	if (smoothClusterCS)
-		smoothClusterCS->Release();
-	smoothClusterCS = nullptr;
 	delete clusterBounds;
 	clusterBounds = nullptr;
 	delete clusterIndexPool;
@@ -1929,41 +1818,14 @@ void SnowDeformation::ClearShaderCache()
 	delete meshBounds;
 	meshBounds = nullptr;
 	ResetSmoothedNormals(true);
-	if (smoothResolveCS)
-		smoothResolveCS->Release();
-	smoothResolveCS = nullptr;
-	if (smoothFlatStatsCS)
-		smoothFlatStatsCS->Release();
-	smoothFlatStatsCS = nullptr;
-	if (heightVS)
-		heightVS->Release();
-	heightVS = nullptr;
-	if (heightPS)
-		heightPS->Release();
-	heightPS = nullptr;
-	if (heightPSTopOnly)
-		heightPSTopOnly->Release();
-	heightPSTopOnly = nullptr;
-	if (heightPSSkinDepth)
-		heightPSSkinDepth->Release();
-	heightPSSkinDepth = nullptr;
-	if (heightScrollCS)
-		heightScrollCS->Release();
-	heightScrollCS = nullptr;
-	if (heightScrollTopCS)
-		heightScrollTopCS->Release();
-	heightScrollTopCS = nullptr;
-	if (heightScrollRasterCS)
-		heightScrollRasterCS->Release();
-	heightScrollRasterCS = nullptr;
-	if (heightRasterCompareCS)
-		heightRasterCompareCS->Release();
-	heightRasterCompareCS = nullptr;
 	for (auto& key : heightRasterKey)
 		key.clear();
-	if (heightCombineCS)
-		heightCombineCS->Release();
-	heightCombineCS = nullptr;
+	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
+	release(shellPSDeferred, shellPSDeferredConditionView, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
+	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
+	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass, staticsPSDrapePrintsNoDepth);
+	release(staticsVSParallax, staticsPSDrapeParallax, staticsPSDrapePrintsParallax, patchVS, patchShadowVS, patchTessVS, patchHS, patchDS, patchPS);
+	release(heightVS, heightPS, heightPSTopOnly, heightPSSkinDepth, heightScrollCS, heightScrollTopCS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

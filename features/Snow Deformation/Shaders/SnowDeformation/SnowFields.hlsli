@@ -430,65 +430,40 @@ float TrenchDetailSunShadow(TrenchDetailTaps a_t, float a_h, float3 L, float2 g,
 	return lit;
 }
 
+#define SNOW_DEFORM_BILINEAR4(v, gridLocal)                                      \
+	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;           \
+	if (any(uv < 0.0) || any(uv > 1.0))                                          \
+		return 0.0;                                                              \
+	SNOW_DEFORM_DIMS(dims);                                                      \
+	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);                      \
+	int2 t0 = (int2)t;                                                           \
+	float2 f = t - t0;                                                           \
+	int2 t1 = min(t0 + 1, int2(dims) - 1);                                       \
+	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))); \
+	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))); \
+	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))); \
+	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))); \
+	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y)
+
 float SampleMelted(float2 gridLocal)
 {
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	SNOW_DEFORM_BILINEAR4(v, gridLocal);
 	return saturate(v.y);
 }
 
 float2 SampleDetailMarks(float2 gridLocal)
 {
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	SNOW_DEFORM_BILINEAR4(v, gridLocal);
 	return float2(saturate(v.y), saturate(v.w));
 }
 
 float SampleScorch(float2 gridLocal)
 {
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	SNOW_DEFORM_DIMS(dims);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	SNOW_DEFORM_BILINEAR4(v, gridLocal);
 	return saturate(-v.y);
 }
+
+#undef SNOW_DEFORM_BILINEAR4
 
 static const float kSpellMarkStart = 0.02;
 float SampleSpellMark(float2 gridLocal)

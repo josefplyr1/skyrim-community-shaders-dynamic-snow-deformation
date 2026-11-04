@@ -657,8 +657,8 @@ public:
 	D3D11_VIEWPORT bloodViewport{};
 	bool BloodScreenRect(const RE::BSGeometry* a_geometry, RECT& a_rect) const;
 	void CopyBloodTargets(bool a_preDecal);
-	ID3D11VertexShader* bloodOverlayVS = nullptr;
-	ID3D11PixelShader* bloodOverlayPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> bloodOverlayVS;
+	winrt::com_ptr<ID3D11PixelShader> bloodOverlayPS;
 	winrt::com_ptr<ID3D11BlendState> bloodOverlayBlendState;
 	winrt::com_ptr<ID3D11DepthStencilState> bloodOverlayDepthState;
 	uint32_t bloodOverlaysLast = 0;
@@ -698,11 +698,11 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(BloodSkinCB);
 	ConstantBuffer* bloodCB = nullptr;
 	ConstantBuffer* bloodSkinCB = nullptr;
-	ID3D11VertexShader* bloodVS = nullptr;
-	ID3D11VertexShader* bloodSkinVS = nullptr;
-	ID3D11VertexShader* bloodDiscVS = nullptr;
-	ID3D11PixelShader* bloodPS = nullptr;
-	ID3D11PixelShader* bloodDiscPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> bloodVS;
+	winrt::com_ptr<ID3D11VertexShader> bloodSkinVS;
+	winrt::com_ptr<ID3D11VertexShader> bloodDiscVS;
+	winrt::com_ptr<ID3D11PixelShader> bloodPS;
+	winrt::com_ptr<ID3D11PixelShader> bloodDiscPS;
 	winrt::com_ptr<ID3DBlob> bloodVSBlob;
 	winrt::com_ptr<ID3DBlob> bloodSkinVSBlob;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> bloodILCache;
@@ -752,9 +752,9 @@ public:
 	winrt::com_ptr<ID3D11DeviceContext1> decalMaskContext1;
 	bool decalMaskClearView = false;
 	bool decalMaskClearViewChecked = false;
-	ID3D11VertexShader* decalMaskVS = nullptr;
-	ID3D11VertexShader* decalMaskSkinVS = nullptr;
-	ID3D11PixelShader* decalMaskPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> decalMaskVS;
+	winrt::com_ptr<ID3D11VertexShader> decalMaskSkinVS;
+	winrt::com_ptr<ID3D11PixelShader> decalMaskPS;
 	winrt::com_ptr<ID3D11BlendState> decalMaskBlendState;
 	bool decalMaskFailed = false;
 	bool decalMaskLogged = false;
@@ -880,7 +880,7 @@ public:
 	};
 	/** @brief Returns one of the trail map's compute shaders, compiling it on first use; null if it failed to compile. */
 	ID3D11ComputeShader* GetSnowCS(SnowCS a_which);
-	ID3D11ComputeShader* snowCS[kSnowCSCount] = {};
+	winrt::com_ptr<ID3D11ComputeShader> snowCS[kSnowCSCount];
 	bool deformationCSFailed = false;
 
 	static constexpr uint kStampTileCap = 16384;
@@ -1165,9 +1165,9 @@ public:
 	Texture2D* shellDeferredAttr[3] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> shellDeferredDepthState;
 	bool EnsureDeferredResources();
-	ID3D11PixelShader* shellPSDeferred = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellPSDeferred;
 	ID3D11PixelShader* GetShellPSDeferred();
-	ID3D11PixelShader* shellPSDeferredConditionView = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellPSDeferredConditionView;
 	std::atomic<int> conditionViewShaderState = 0;
 	std::future<bool> conditionViewCompile;
 	/** @brief The condition-view deferred PS when the view is on and compiled; null otherwise (the normal shading draws). */
@@ -1225,7 +1225,7 @@ public:
 	bool UpdateMarchCaches(const ShellCB& a_cb);
 	void UnbindMarchCaches();
 	void ReleaseMarchCache();
-	ID3D11PixelShader* shellPSPrepassAttr[2] = {};
+	winrt::com_ptr<ID3D11PixelShader> shellPSPrepassAttr[2];
 	ID3D11PixelShader* GetShellPSPrepassAttr(bool a_keepHidden);
 
 	enum class EarlyPrepass : uint8_t
@@ -1250,10 +1250,10 @@ public:
 	Texture2D* shellEarlyMarks = nullptr;
 	bool EnsureEarlyPrepassResources();
 	void DrawShellEarlyPrepass();
-	ID3D11PixelShader* shellPSPrepassEarly = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellPSPrepassEarly;
 	ID3D11PixelShader* GetShellPSPrepassEarly();
 
-	ID3D11PixelShader* shellPSEarlyResolve = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellPSEarlyResolve;
 	ID3D11PixelShader* GetShellPSEarlyResolve();
 
 	uint32_t shellSssSyncFrame = UINT32_MAX;
@@ -1278,7 +1278,7 @@ public:
 	Texture2D* sssChangedTiles = nullptr;
 	/** @brief Screen-Space Shadows' raymarch with SSS_CHANGED_TILES, for its current scaled sample count (sssChangedRaymarchSamples); null without that feature. */
 	ID3D11ComputeShader* GetSssChangedRaymarchCS();
-	ID3D11ComputeShader* sssChangedRaymarchCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> sssChangedRaymarchCS;
 	uint32_t sssChangedRaymarchSamples = 0;
 	bool sssChangedMarchOff = false;
 	uint32_t sssChangedMarchFrame = UINT32_MAX;
@@ -1286,7 +1286,7 @@ public:
 	void CopyFirstMarchDepth();
 	/** @brief (Re)creates sssChangedTiles for a depth of this size; true when it is usable. */
 	bool EnsureSssChangedTiles(UINT a_width, UINT a_height);
-	ID3D11PixelShader* shellFillPSClaim = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellFillPSClaim;
 	ID3D11PixelShader* GetShellFillPSClaim();
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
 
@@ -1294,9 +1294,9 @@ public:
 	/** @brief FillVS over the skins' footprint (skinFootprint at VS t62) instead of the whole viewport. */
 	ID3D11VertexShader* GetShellFillRectVS();
 	ID3D11PixelShader* GetShellFillPS();
-	ID3D11VertexShader* shellFillVS = nullptr;
-	ID3D11VertexShader* shellFillRectVS = nullptr;
-	ID3D11PixelShader* shellFillPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> shellFillVS;
+	winrt::com_ptr<ID3D11VertexShader> shellFillRectVS;
+	winrt::com_ptr<ID3D11PixelShader> shellFillPS;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
@@ -1314,7 +1314,7 @@ public:
 	/** @brief PreSnowCopyCS: the main depth's floats over a_box into an R32F UAV, with the output-merger bindings saved and restored around it. A depth-stencil source cannot be copied in part. */
 	void CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV, const D3D11_BOX& a_box, ID3D11UnorderedAccessView* a_uav);
 	ID3D11PixelShader* GetShellFillPSPreSnow();
-	ID3D11PixelShader* shellFillPSPreSnow = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> shellFillPSPreSnow;
 	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution. */
 	struct alignas(16) DepthSyncRectCB
 	{
@@ -1325,7 +1325,7 @@ public:
 	/** @brief depthSyncRectCB, created on first use. */
 	ConstantBuffer* DepthSyncRectBuffer();
 	ID3D11ComputeShader* GetPreSnowCopyCS();
-	ID3D11ComputeShader* preSnowCopyCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> preSnowCopyCS;
 	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target with no viewport. */
 	D3D11_BOX ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const;
 	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
@@ -1731,7 +1731,7 @@ public:
 	static constexpr uint32_t kMeshBoundsSlots = 1024;
 	Buffer* meshBounds = nullptr;
 	RangeAllocator meshBoundsFree;
-	ID3D11ComputeShader* smoothBoundsCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> smoothBoundsCS;
 
 	static constexpr uint32_t kClusterGroup = 256;
 	static constexpr uint32_t kClusterTrisBase = 64;
@@ -1740,7 +1740,7 @@ public:
 	static constexpr uint32_t kClusterScratchMaxIndices = 8u * 1024u * 1024u;
 	uint32_t clusterScratchCapacity = 0;
 	uint32_t clusterScratchNeeded = 0;
-	ID3D11ComputeShader* smoothClusterCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> smoothClusterCS;
 	bool EnsureClusterResources(uint32_t a_scratchIndices);
 	Buffer* clusterBounds = nullptr;
 	Buffer* clusterIndexPool = nullptr;
@@ -1905,9 +1905,9 @@ public:
 	uint32_t clusterSkinsLast = 0;
 	uint32_t clusterScratchUsedLast = 0;
 	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
-	ID3D11ComputeShader* smoothAccumulateCS = nullptr;
-	ID3D11ComputeShader* smoothResolveCS = nullptr;
-	ID3D11ComputeShader* smoothFlatStatsCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> smoothAccumulateCS;
+	winrt::com_ptr<ID3D11ComputeShader> smoothResolveCS;
+	winrt::com_ptr<ID3D11ComputeShader> smoothFlatStatsCS;
 	ConstantBuffer* smoothCB = nullptr;
 
 	/** @brief The smoothed-normal entry for a captured geometry, built on first sight (SmoothNormalsCS passes) and cached thereafter; usable once ready. Null without one (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
@@ -2041,8 +2041,8 @@ public:
 	std::vector<WaterBakeKey> waterBakeKeys;
 	std::vector<WaterBakeKey> waterBakeScratch;
 	bool waterBakeValid = false;
-	ID3D11VertexShader* waterCaptureVS = nullptr;
-	ID3D11PixelShader* waterCapturePS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> waterCaptureVS;
+	winrt::com_ptr<ID3D11PixelShader> waterCapturePS;
 	winrt::com_ptr<ID3DBlob> waterCaptureVSBlob;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> waterILCache;
 	bool waterCaptureShadersFailed = false;
@@ -2050,14 +2050,14 @@ public:
 	uint32_t statWaterDrawn = 0;
 	bool waterFirstLogged = false;
 	void RenderWaterCapture();
-	ID3D11VertexShader* heightVS = nullptr;
-	ID3D11PixelShader* heightPS = nullptr;
-	ID3D11PixelShader* heightPSTopOnly = nullptr;
-	ID3D11PixelShader* heightPSSkinDepth = nullptr;
-	ID3D11PixelShader* heightPeelPS = nullptr;
-	ID3D11ComputeShader* heightScrollCS = nullptr;
-	ID3D11ComputeShader* heightScrollTopCS = nullptr;
-	ID3D11ComputeShader* heightScrollRasterCS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> heightVS;
+	winrt::com_ptr<ID3D11PixelShader> heightPS;
+	winrt::com_ptr<ID3D11PixelShader> heightPSTopOnly;
+	winrt::com_ptr<ID3D11PixelShader> heightPSSkinDepth;
+	winrt::com_ptr<ID3D11PixelShader> heightPeelPS;
+	winrt::com_ptr<ID3D11ComputeShader> heightScrollCS;
+	winrt::com_ptr<ID3D11ComputeShader> heightScrollTopCS;
+	winrt::com_ptr<ID3D11ComputeShader> heightScrollRasterCS;
 	std::vector<uint8_t> heightRasterKey[3];
 	bool heightRasterCacheOff = false;
 	bool heightRasterVerify = false;
@@ -2074,7 +2074,7 @@ public:
 	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyStaging[3];
 	uint32_t heightRasterVerifyStagingLevels[3] = {};
 	uint32_t heightRasterVerifyRing = 0;
-	ID3D11ComputeShader* heightRasterCompareCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> heightRasterCompareCS;
 	struct HeightRasterSample
 	{
 		uint32_t target, x, y;
@@ -2083,12 +2083,12 @@ public:
 	std::vector<HeightRasterSample> heightRasterSamples;
 	std::mutex heightRasterDebugLock;
 	bool EnsureHeightRasterVerify();
-	ID3D11ComputeShader* heightCombineCS = nullptr;
-	ID3D11ComputeShader* heightWaterCoverCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> heightCombineCS;
+	winrt::com_ptr<ID3D11ComputeShader> heightWaterCoverCS;
 	ID3D11ComputeShader* objectConeSeedCS = nullptr;
 	ID3D11ComputeShader* objectConeCS = nullptr;
-	ID3D11ComputeShader* objectSkyOpenCS = nullptr;
-	ID3D11ComputeShader* objectConeDiffuseCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> objectSkyOpenCS;
+	winrt::com_ptr<ID3D11ComputeShader> objectConeDiffuseCS;
 	ID3D11ComputeShader* objectConeFusedCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
@@ -2351,17 +2351,17 @@ public:
 	uint32_t cascadeCountFrame = UINT32_MAX;
 	static constexpr int kGatherJumpTexels = 32;
 
-	ID3D11VertexShader* staticsVS = nullptr;
-	ID3D11PixelShader* staticsPS = nullptr;
-	ID3D11PixelShader* staticsPSNoDepth = nullptr;
-	ID3D11PixelShader* staticsPSPrepassNoDepth = nullptr;
-	ID3D11PixelShader* staticsPSDrapeNoDepth = nullptr;
-	ID3D11PixelShader* staticsPSDrapePrepass = nullptr;
-	ID3D11PixelShader* staticsPSDrapePrintsNoDepth = nullptr;
-	ID3D11VertexShader* staticsVSParallax = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> staticsVS;
+	winrt::com_ptr<ID3D11PixelShader> staticsPS;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSNoDepth;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSPrepassNoDepth;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeNoDepth;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrepass;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrintsNoDepth;
+	winrt::com_ptr<ID3D11VertexShader> staticsVSParallax;
 	winrt::com_ptr<ID3DBlob> staticsVSParallaxBlob;
-	ID3D11PixelShader* staticsPSDrapeParallax = nullptr;
-	ID3D11PixelShader* staticsPSDrapePrintsParallax = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeParallax;
+	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrintsParallax;
 	bool coatParallaxTried = false;
 	/** @brief Compiles the three on first use (the setting on); true when the VS and the drape PS exist. */
 	bool EnsureCoatParallaxShaders();
@@ -2424,15 +2424,15 @@ public:
 	float skinCullHiZTopLast = -1.0f;
 	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
 	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);
-	ID3D11ComputeShader* hiZBuildUAVCS = nullptr;
-	ID3D11ComputeShader* hiZBuildCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> hiZBuildUAVCS;
+	winrt::com_ptr<ID3D11ComputeShader> hiZBuildCS;
 	/** @brief a_extentW/H: the pixels the pyramid covers from the depth's origin (the rendered rectangle's far corner). */
 	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH);
-	ID3D11VertexShader* staticsTessVS = nullptr;
-	ID3D11HullShader* staticsHS = nullptr;
-	ID3D11DomainShader* staticsDS = nullptr;
-	ID3D11VertexShader* patchVS = nullptr;
-	ID3D11VertexShader* patchShadowVS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> staticsTessVS;
+	winrt::com_ptr<ID3D11HullShader> staticsHS;
+	winrt::com_ptr<ID3D11DomainShader> staticsDS;
+	winrt::com_ptr<ID3D11VertexShader> patchVS;
+	winrt::com_ptr<ID3D11VertexShader> patchShadowVS;
 	winrt::com_ptr<ID3D11Buffer> patchCasterIB;
 	uint32_t patchCasterIndexCount = 0;
 	bool EnsurePatchCasterIB();
@@ -2475,18 +2475,18 @@ public:
 	uint64_t patchVerifyMismatch[5] = {};
 	bool EnsurePatchVerify(ID3D11DepthStencilView* a_dsv);
 	uint32_t patchBoxPatches = 0;
-	ID3D11VertexShader* patchTessVS = nullptr;
-	ID3D11HullShader* patchHS = nullptr;
-	ID3D11DomainShader* patchDS = nullptr;
-	ID3D11PixelShader* patchPS = nullptr;
-	ID3D11PixelShader* patchDeferredPS[2] = {};
+	winrt::com_ptr<ID3D11VertexShader> patchTessVS;
+	winrt::com_ptr<ID3D11HullShader> patchHS;
+	winrt::com_ptr<ID3D11DomainShader> patchDS;
+	winrt::com_ptr<ID3D11PixelShader> patchPS;
+	winrt::com_ptr<ID3D11PixelShader> patchDeferredPS[2];
 	std::future<ID3D11PixelShader*> patchDeferredJob[2];
 	bool patchDeferredTried[2] = {};
 	winrt::com_ptr<ID3D11DepthStencilState> patchDeferredDepthState;
 	Texture2D* patchDeferredMark = nullptr;
 	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
 	bool EnsurePatchDeferredResources();
-	ID3D11PixelShader* patchConditionViewPS = nullptr;
+	winrt::com_ptr<ID3D11PixelShader> patchConditionViewPS;
 	std::future<ID3D11PixelShader*> patchConditionViewJob;
 	bool patchConditionViewTried = false;
 	/** @brief The condition view's patch shading PS while Debugging Options > Snow Condition is on and it has compiled; null otherwise. */
@@ -2528,8 +2528,8 @@ public:
 	winrt::com_ptr<ID3D11BlendState> contactMinBlendBodies;
 	winrt::com_ptr<ID3D11BlendState> contactMinBlendProps;
 	winrt::com_ptr<ID3D11RasterizerState> contactRasterState;
-	ID3D11VertexShader* contactVS = nullptr;
-	ID3D11PixelShader* contactPS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> contactVS;
+	winrt::com_ptr<ID3D11PixelShader> contactPS;
 	bool contactShadersFailed = false;
 	struct ContactProp
 	{
@@ -2553,7 +2553,7 @@ public:
 	};
 	STATIC_ASSERT_ALIGNAS_16(ContactSkinCB);
 	ConstantBuffer* contactSkinCB = nullptr;
-	ID3D11VertexShader* contactSkinVS = nullptr;
+	winrt::com_ptr<ID3D11VertexShader> contactSkinVS;
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> contactSkinILCache;
 	winrt::com_ptr<ID3DBlob> contactSkinVSBlob;
 	/** @brief a_dynamicPositionBytes 0 = positions in the game's vertex buffer; 16 or 8 = a second stream of float4/half4 positions copied from a BSDynamicTriShape's dynamicData (RaceMenu BodyMorph, OBody, facegen). */
@@ -3355,12 +3355,12 @@ protected:
 	ConstantBuffer* printFrameCB = nullptr;
 	winrt::com_ptr<ID3D11Buffer> printBlockBuffer;
 	winrt::com_ptr<ID3D11ShaderResourceView> printBlockSRV;
-	ID3D11ComputeShader* printStampCS = nullptr;
-	ID3D11ComputeShader* printRingCS = nullptr;
-	ID3D11ComputeShader* printRefillCS = nullptr;
-	ID3D11ComputeShader* printViewCS = nullptr;
-	ID3D11ComputeShader* printRimCS = nullptr;
-	ID3D11ComputeShader* printRayCS = nullptr;
+	winrt::com_ptr<ID3D11ComputeShader> printStampCS;
+	winrt::com_ptr<ID3D11ComputeShader> printRingCS;
+	winrt::com_ptr<ID3D11ComputeShader> printRefillCS;
+	winrt::com_ptr<ID3D11ComputeShader> printViewCS;
+	winrt::com_ptr<ID3D11ComputeShader> printRimCS;
+	winrt::com_ptr<ID3D11ComputeShader> printRayCS;
 	struct HeldPrintSpell
 	{
 		PrintSpellMark mark;

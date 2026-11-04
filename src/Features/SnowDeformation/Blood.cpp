@@ -16,30 +16,15 @@
 
 void SnowDeformation::ReleaseBloodShaders()
 {
-	for (auto** shader : { &bloodVS, &bloodSkinVS, &bloodDiscVS }) {
-		if (*shader)
-			(*shader)->Release();
-		*shader = nullptr;
-	}
-	for (auto** shader : { &bloodPS, &bloodDiscPS }) {
-		if (*shader)
-			(*shader)->Release();
-		*shader = nullptr;
-	}
-	if (bloodOverlayVS)
-		bloodOverlayVS->Release();
+	bloodVS = nullptr;
+	bloodSkinVS = nullptr;
+	bloodDiscVS = nullptr;
+	bloodPS = nullptr;
+	bloodDiscPS = nullptr;
 	bloodOverlayVS = nullptr;
-	if (bloodOverlayPS)
-		bloodOverlayPS->Release();
 	bloodOverlayPS = nullptr;
-	if (decalMaskVS)
-		decalMaskVS->Release();
 	decalMaskVS = nullptr;
-	if (decalMaskSkinVS)
-		decalMaskSkinVS->Release();
 	decalMaskSkinVS = nullptr;
-	if (decalMaskPS)
-		decalMaskPS->Release();
 	decalMaskPS = nullptr;
 	decalMaskFailed = false;
 	bloodVSBlob = nullptr;
@@ -67,39 +52,39 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
 	if (!bloodVS) {
-		bloodVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &bloodVSBlob));
+		bloodVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &bloodVSBlob)));
 		if (bloodVS)
-			Util::SetResourceName(bloodVS, "SnowDeformation::BloodCaptureVS");
+			Util::SetResourceName(bloodVS.get(), "SnowDeformation::BloodCaptureVS");
 	}
 	if (!bloodSkinVS) {
-		bloodSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &bloodSkinVSBlob));
+		bloodSkinVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &bloodSkinVSBlob)));
 		if (bloodSkinVS)
-			Util::SetResourceName(bloodSkinVS, "SnowDeformation::BloodCaptureSkinVS");
+			Util::SetResourceName(bloodSkinVS.get(), "SnowDeformation::BloodCaptureSkinVS");
 	}
 	if (!bloodDiscVS) {
-		bloodDiscVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "DISC" }));
+		bloodDiscVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "DISC" })));
 		if (bloodDiscVS)
-			Util::SetResourceName(bloodDiscVS, "SnowDeformation::BloodCaptureDiscVS");
+			Util::SetResourceName(bloodDiscVS.get(), "SnowDeformation::BloodCaptureDiscVS");
 	}
 	if (!bloodPS) {
-		bloodPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0"));
+		bloodPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0")));
 		if (bloodPS)
-			Util::SetResourceName(bloodPS, "SnowDeformation::BloodCapturePS");
+			Util::SetResourceName(bloodPS.get(), "SnowDeformation::BloodCapturePS");
 	}
 	if (!bloodDiscPS) {
-		bloodDiscPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "DISC" }));
+		bloodDiscPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "DISC" })));
 		if (bloodDiscPS)
-			Util::SetResourceName(bloodDiscPS, "SnowDeformation::BloodCaptureDiscPS");
+			Util::SetResourceName(bloodDiscPS.get(), "SnowDeformation::BloodCaptureDiscPS");
 	}
 	if (!bloodOverlayVS) {
-		bloodOverlayVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "OVERLAY" }));
+		bloodOverlayVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "OVERLAY" })));
 		if (bloodOverlayVS)
-			Util::SetResourceName(bloodOverlayVS, "SnowDeformation::BloodOverlayVS");
+			Util::SetResourceName(bloodOverlayVS.get(), "SnowDeformation::BloodOverlayVS");
 	}
 	if (!bloodOverlayPS) {
-		bloodOverlayPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "OVERLAY" }));
+		bloodOverlayPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "OVERLAY" })));
 		if (bloodOverlayPS)
-			Util::SetResourceName(bloodOverlayPS, "SnowDeformation::BloodOverlayPS");
+			Util::SetResourceName(bloodOverlayPS.get(), "SnowDeformation::BloodOverlayPS");
 	}
 	if (!bloodVS || !bloodSkinVS || !bloodDiscVS || !bloodPS || !bloodDiscPS || !bloodOverlayVS || !bloodOverlayPS) {
 		bloodShadersFailed = true;
@@ -385,19 +370,19 @@ bool SnowDeformation::EnsureDecalMask(uint32_t a_width, uint32_t a_height)
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowBloodCapture.hlsl";
 	if (!decalMaskVS) {
-		decalMaskVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "MASK" }));
+		decalMaskVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "MASK" })));
 		if (decalMaskVS)
-			Util::SetResourceName(decalMaskVS, "SnowDeformation::DecalMaskVS");
+			Util::SetResourceName(decalMaskVS.get(), "SnowDeformation::DecalMaskVS");
 	}
 	if (!decalMaskSkinVS) {
-		decalMaskSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED", "MASK" }));
+		decalMaskSkinVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED", "MASK" })));
 		if (decalMaskSkinVS)
-			Util::SetResourceName(decalMaskSkinVS, "SnowDeformation::DecalMaskSkinVS");
+			Util::SetResourceName(decalMaskSkinVS.get(), "SnowDeformation::DecalMaskSkinVS");
 	}
 	if (!decalMaskPS) {
-		decalMaskPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "MASK" }));
+		decalMaskPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "MASK" })));
 		if (decalMaskPS)
-			Util::SetResourceName(decalMaskPS, "SnowDeformation::DecalMaskPS");
+			Util::SetResourceName(decalMaskPS.get(), "SnowDeformation::DecalMaskPS");
 	}
 	if (!decalMaskBlendState) {
 		D3D11_BLEND_DESC blendDesc{};
@@ -626,7 +611,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 			UINT offset = 0;
 			auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
 			auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-			context->VSSetShader(a_rigidVS ? a_rigidVS : bloodVS, nullptr, 0);
+			context->VSSetShader(a_rigidVS ? a_rigidVS : bloodVS.get(), nullptr, 0);
 			context->IASetInputLayout(layout);
 			context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 			context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
@@ -670,7 +655,7 @@ uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const st
 		a_cb.WorldRow1 = { 0, 1, 0, 0 };
 		a_cb.WorldRow2 = { 0, 0, 1, 0 };
 		bloodCB->Update(a_cb);
-		context->VSSetShader(a_skinnedVS ? a_skinnedVS : bloodSkinVS, nullptr, 0);
+		context->VSSetShader(a_skinnedVS ? a_skinnedVS : bloodSkinVS.get(), nullptr, 0);
 		ID3D11Buffer* cb2 = bloodSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &cb2);
 		RE::BSGraphics::TriShape* rangeBuff = nullptr;
@@ -782,8 +767,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 	context->DSSetShader(nullptr, nullptr, 0);
 	context->IASetInputLayout(nullptr);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->VSSetShader(bloodOverlayVS, nullptr, 0);
-	context->PSSetShader(bloodOverlayPS, nullptr, 0);
+	context->VSSetShader(bloodOverlayVS.get(), nullptr, 0);
+	context->PSSetShader(bloodOverlayPS.get(), nullptr, 0);
 
 	BloodCB cb{};
 	cb.MapDim = 1.0f;
@@ -833,7 +818,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		ID3D11RenderTargetView* maskRTV = decalMaskTexture->rtv.get();
 		context->OMSetRenderTargets(1, &maskRTV, nullptr);
 		context->OMSetBlendState(decalMaskBlendState.get(), nullptr, 0xFFFFFFFF);
-		context->PSSetShader(decalMaskPS, nullptr, 0);
+		context->PSSetShader(decalMaskPS.get(), nullptr, 0);
 		winrt::com_ptr<ID3D11SamplerState> savedSampler;
 		context->PSGetSamplers(0, 1, savedSampler.put());
 		ID3D11SamplerState* sampler = bloodSampler.get();
@@ -853,7 +838,7 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		const auto kept = std::remove_if(overlays.begin(), overlays.end(), [&](const BloodCapture& a_capture) { return marked.contains(a_capture.geometry.get()); });
 		const bool excluded = kept != overlays.end();
 		overlays.erase(kept, overlays.end());
-		const uint32_t drawn = DrawBloodList(context, overlays, maskCB, decalMaskVS, 1u, false, decalMaskSkinVS);
+		const uint32_t drawn = DrawBloodList(context, overlays, maskCB, decalMaskVS.get(), 1u, false, decalMaskSkinVS.get());
 		decalMasksLast = uint32_t(std::count_if(overlays.begin(), overlays.end(), [](const BloodCapture& a_capture) { return a_capture.mask; }));
 		ID3D11SamplerState* restoreSampler = savedSampler.get();
 		context->PSSetSamplers(0, 1, &restoreSampler);
@@ -872,8 +857,8 @@ void SnowDeformation::DrawBloodOverlay(ID3D11DeviceContext* a_context, ID3D11Sha
 		context->OMSetBlendState(bloodOverlayBlendState.get(), nullptr, 0xFFFFFFFF);
 		context->IASetInputLayout(nullptr);
 		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		context->VSSetShader(bloodOverlayVS, nullptr, 0);
-		context->PSSetShader(bloodOverlayPS, nullptr, 0);
+		context->VSSetShader(bloodOverlayVS.get(), nullptr, 0);
+		context->PSSetShader(bloodOverlayPS.get(), nullptr, 0);
 		bloodCB->Update(cb);
 	}
 	context->PSSetShaderResources(15, 1, &maskSRV);

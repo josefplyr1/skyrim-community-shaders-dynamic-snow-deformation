@@ -1159,11 +1159,11 @@ ID3D11VertexShader* SnowDeformation::GetPatchShadowVS()
 {
 	if (!patchShadowVS) {
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
-		patchShadowVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_SHADOW_CAST", "SNOW_PATCH_INDEXED" }));
+		patchShadowVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_SHADOW_CAST", "SNOW_PATCH_INDEXED" })));
 		if (patchShadowVS)
-			Util::SetResourceName(patchShadowVS, "SnowDeformation::TrenchPatchShadowVS");
+			Util::SetResourceName(patchShadowVS.get(), "SnowDeformation::TrenchPatchShadowVS");
 	}
-	return patchShadowVS;
+	return patchShadowVS.get();
 }
 
 bool SnowDeformation::EnsurePatchCasterIB()
@@ -1283,7 +1283,7 @@ void SnowDeformation::PrimePatchDeferred()
 		if (patchDeferredPS[i] || patchDeferredTried[i])
 			continue;
 		patchDeferredTried[i] = true;
-		patchDeferredPS[i] = CompilePatchDeferredPS(i);
+		patchDeferredPS[i].attach(CompilePatchDeferredPS(i));
 	}
 }
 
@@ -1294,7 +1294,7 @@ bool SnowDeformation::PatchDeferredReady()
 			continue;
 		if (patchDeferredJob[i].valid()) {
 			if (patchDeferredJob[i].wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-				patchDeferredPS[i] = patchDeferredJob[i].get();
+				patchDeferredPS[i].attach(patchDeferredJob[i].get());
 		} else if (!patchDeferredTried[i]) {
 			patchDeferredTried[i] = true;
 			patchDeferredJob[i] = std::async(std::launch::async, [i] { return CompilePatchDeferredPS(i); });
@@ -1315,13 +1315,13 @@ ID3D11PixelShader* SnowDeformation::PatchConditionViewPS()
 	if (!patchConditionViewPS) {
 		if (patchConditionViewJob.valid()) {
 			if (patchConditionViewJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-				patchConditionViewPS = patchConditionViewJob.get();
+				patchConditionViewPS.attach(patchConditionViewJob.get());
 		} else if (!patchConditionViewTried) {
 			patchConditionViewTried = true;
 			patchConditionViewJob = std::async(std::launch::async, [] { return CompilePatchDeferredPS(2); });
 		}
 	}
-	return patchConditionViewPS;
+	return patchConditionViewPS.get();
 }
 
 void SnowDeformation::ReleasePatchDeferred()
@@ -1331,8 +1331,6 @@ void SnowDeformation::ReleasePatchDeferred()
 			if (auto* ps = patchDeferredJob[i].get())
 				ps->Release();
 		}
-		if (patchDeferredPS[i])
-			patchDeferredPS[i]->Release();
 		patchDeferredPS[i] = nullptr;
 		patchDeferredTried[i] = false;
 	}
@@ -1340,8 +1338,6 @@ void SnowDeformation::ReleasePatchDeferred()
 		if (auto* ps = patchConditionViewJob.get())
 			ps->Release();
 	}
-	if (patchConditionViewPS)
-		patchConditionViewPS->Release();
 	patchConditionViewPS = nullptr;
 	patchConditionViewTried = false;
 }
@@ -1359,131 +1355,131 @@ bool SnowDeformation::EnsureStaticsShaders()
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 
 	if (!staticsVS) {
-		staticsVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &staticsVSBlob));
+		staticsVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &staticsVSBlob)));
 		if (staticsVS)
-			Util::SetResourceName(staticsVS, "SnowDeformation::StaticsShellVS");
+			Util::SetResourceName(staticsVS.get(), "SnowDeformation::StaticsShellVS");
 	}
 	if (!staticsTessVS) {
-		staticsTessVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_TESS" }));
+		staticsTessVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_TESS" })));
 		if (staticsTessVS)
-			Util::SetResourceName(staticsTessVS, "SnowDeformation::StaticsShellTessVS");
+			Util::SetResourceName(staticsTessVS.get(), "SnowDeformation::StaticsShellTessVS");
 	}
 	if (!staticsHS) {
-		staticsHS = static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0"));
+		staticsHS.attach(static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0")));
 		if (staticsHS)
-			Util::SetResourceName(staticsHS, "SnowDeformation::StaticsShellHS");
+			Util::SetResourceName(staticsHS.get(), "SnowDeformation::StaticsShellHS");
 	}
 	if (!staticsDS) {
-		staticsDS = static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0"));
+		staticsDS.attach(static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0")));
 		if (staticsDS)
-			Util::SetResourceName(staticsDS, "SnowDeformation::StaticsShellDS");
+			Util::SetResourceName(staticsDS.get(), "SnowDeformation::StaticsShellDS");
 	}
 	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
 
 	if (!staticsPS) {
-		staticsPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine }));
+		staticsPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine })));
 		if (staticsPS)
-			Util::SetResourceName(staticsPS, "SnowDeformation::StaticsShellPS");
+			Util::SetResourceName(staticsPS.get(), "SnowDeformation::StaticsShellPS");
 	}
 
 	if (!staticsPSNoDepth) {
-		staticsPSNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT" }));
+		staticsPSNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT" })));
 		if (staticsPSNoDepth)
-			Util::SetResourceName(staticsPSNoDepth, "SnowDeformation::StaticsShellPS NoDepth");
+			Util::SetResourceName(staticsPSNoDepth.get(), "SnowDeformation::StaticsShellPS NoDepth");
 	}
 
 	if (!staticsPSPrepassNoDepth) {
-		staticsPSPrepassNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS" }));
+		staticsPSPrepassNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS" })));
 		if (staticsPSPrepassNoDepth)
-			Util::SetResourceName(staticsPSPrepassNoDepth, "SnowDeformation::StaticsShellPS Prepass NoDepth");
+			Util::SetResourceName(staticsPSPrepassNoDepth.get(), "SnowDeformation::StaticsShellPS Prepass NoDepth");
 	}
 
 	if (!staticsPSDrapeNoDepth) {
-		staticsPSDrapeNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE" }));
+		staticsPSDrapeNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE" })));
 		if (staticsPSDrapeNoDepth)
-			Util::SetResourceName(staticsPSDrapeNoDepth, "SnowDeformation::StaticsShellPS Drape NoDepth");
+			Util::SetResourceName(staticsPSDrapeNoDepth.get(), "SnowDeformation::StaticsShellPS Drape NoDepth");
 	}
 	if (!staticsPSDrapePrepass) {
-		staticsPSDrapePrepass = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE" }));
+		staticsPSDrapePrepass.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE" })));
 		if (staticsPSDrapePrepass)
-			Util::SetResourceName(staticsPSDrapePrepass, "SnowDeformation::StaticsShellPS Drape Prepass");
+			Util::SetResourceName(staticsPSDrapePrepass.get(), "SnowDeformation::StaticsShellPS Drape Prepass");
 	}
 	if (!staticsPSDrapePrintsNoDepth) {
-		staticsPSDrapePrintsNoDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS" }));
+		staticsPSDrapePrintsNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS" })));
 		if (staticsPSDrapePrintsNoDepth)
-			Util::SetResourceName(staticsPSDrapePrintsNoDepth, "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
+			Util::SetResourceName(staticsPSDrapePrintsNoDepth.get(), "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
 	}
 
 	if (!patchVS) {
-		patchVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH" }));
+		patchVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH" })));
 		if (patchVS)
-			Util::SetResourceName(patchVS, "SnowDeformation::TrenchPatchVS");
+			Util::SetResourceName(patchVS.get(), "SnowDeformation::TrenchPatchVS");
 	}
 	if (!patchPS) {
-		patchPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "PATCH", ehfDefine, iblDefine }));
+		patchPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "PATCH", ehfDefine, iblDefine })));
 		if (patchPS)
-			Util::SetResourceName(patchPS, "SnowDeformation::TrenchPatchPS");
+			Util::SetResourceName(patchPS.get(), "SnowDeformation::TrenchPatchPS");
 	}
 	if (!patchTessVS) {
-		patchTessVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_TESS" }));
+		patchTessVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "PATCH", "SNOW_TESS" })));
 		if (patchTessVS)
-			Util::SetResourceName(patchTessVS, "SnowDeformation::TrenchPatchTessVS");
+			Util::SetResourceName(patchTessVS.get(), "SnowDeformation::TrenchPatchTessVS");
 	}
 	if (!patchHS) {
-		patchHS = static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0", { "PATCH" }));
+		patchHS.attach(static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0", { "PATCH" })));
 		if (patchHS)
-			Util::SetResourceName(patchHS, "SnowDeformation::TrenchPatchHS");
+			Util::SetResourceName(patchHS.get(), "SnowDeformation::TrenchPatchHS");
 	}
 	if (!patchDS) {
-		patchDS = static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0", { "PATCH" }));
+		patchDS.attach(static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0", { "PATCH" })));
 		if (patchDS)
-			Util::SetResourceName(patchDS, "SnowDeformation::TrenchPatchDS");
+			Util::SetResourceName(patchDS.get(), "SnowDeformation::TrenchPatchDS");
 	}
 
 	constexpr auto heightPath = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
 	if (!heightVS) {
-		heightVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(heightPath, "vs_5_0"));
+		heightVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(heightPath, "vs_5_0")));
 		if (heightVS)
-			Util::SetResourceName(heightVS, "SnowDeformation::HeightCaptureVS");
+			Util::SetResourceName(heightVS.get(), "SnowDeformation::HeightCaptureVS");
 	}
 	if (!heightPS) {
-		heightPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0"));
+		heightPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0")));
 		if (heightPS)
-			Util::SetResourceName(heightPS, "SnowDeformation::HeightCapturePS");
+			Util::SetResourceName(heightPS.get(), "SnowDeformation::HeightCapturePS");
 	}
 	if (!heightPeelPS) {
-		heightPeelPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "PEEL" }));
+		heightPeelPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "PEEL" })));
 		if (heightPeelPS)
-			Util::SetResourceName(heightPeelPS, "SnowDeformation::HeightPeelPS");
+			Util::SetResourceName(heightPeelPS.get(), "SnowDeformation::HeightPeelPS");
 	}
 	if (!heightPSTopOnly) {
-		heightPSTopOnly = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "TOP_ONLY" }));
+		heightPSTopOnly.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "TOP_ONLY" })));
 		if (heightPSTopOnly)
-			Util::SetResourceName(heightPSTopOnly, "SnowDeformation::HeightCapturePS TopOnly");
+			Util::SetResourceName(heightPSTopOnly.get(), "SnowDeformation::HeightCapturePS TopOnly");
 	}
 	if (!heightPSSkinDepth) {
-		heightPSSkinDepth = static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "SKIN_DEPTH" }));
+		heightPSSkinDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "SKIN_DEPTH" })));
 		if (heightPSSkinDepth)
-			Util::SetResourceName(heightPSSkinDepth, "SnowDeformation::HeightCapturePS SkinDepth");
+			Util::SetResourceName(heightPSSkinDepth.get(), "SnowDeformation::HeightCapturePS SkinDepth");
 	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
-		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
+		heightScrollCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS")));
 	if (!heightScrollTopCS)
-		heightScrollTopCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS"));
+		heightScrollTopCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS")));
 	if (!heightScrollRasterCS)
-		heightScrollRasterCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS"));
+		heightScrollRasterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS")));
 	if (!heightCombineCS)
-		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
+		heightCombineCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS")));
 	if (!heightWaterCoverCS)
-		heightWaterCoverCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "WaterCoverCS"));
+		heightWaterCoverCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "WaterCoverCS")));
 	if (!objectConeSeedCS)
 		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
 		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
 	if (!objectConeDiffuseCS)
-		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
+		objectConeDiffuseCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS")));
 	if (!objectConeFusedCS)
 		objectConeFusedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeFusedCS"));
 
@@ -1530,7 +1526,7 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 		return true;
 	auto device = globals::d3d::device;
 	if (!heightRasterCompareCS)
-		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+		heightRasterCompareCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS")));
 	if (!heightRasterCompareCS || !heightRaster || !heightSkinDepth || !heightTopRawFine || !heightTopRawFar)
 		return false;
 	Texture2D* const twins[kHeightVerifyRasterSlots] = { heightRaster, heightSkinDepth, heightTopRawFine, heightTopRawFar };
@@ -1629,7 +1625,7 @@ bool SnowDeformation::EnsurePatchVerify(ID3D11DepthStencilView* a_dsv)
 		return false;
 	auto device = globals::d3d::device;
 	if (!heightRasterCompareCS)
-		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+		heightRasterCompareCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS")));
 	if (!heightRasterCompareCS)
 		return false;
 	winrt::com_ptr<ID3D11Resource> depthResource;
@@ -2007,7 +2003,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 1, &tileUAV, nullptr);
-		context->CSSetShader(fromRaster ? heightScrollRasterCS : (bottoms ? heightScrollCS : heightScrollTopCS), nullptr, 0);
+		context->CSSetShader(fromRaster ? heightScrollRasterCS.get() : (bottoms ? heightScrollCS.get() : heightScrollTopCS.get()), nullptr, 0);
 		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
 		if (fromRaster)
 			context->CSSetShaderResources(6, 1, nullCsSRVs);
@@ -2032,8 +2028,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
 	context->RSSetViewports(1, &heightViewport);
 
-	context->VSSetShader(heightVS, nullptr, 0);
-	context->PSSetShader(heightPS, nullptr, 0);
+	context->VSSetShader(heightVS.get(), nullptr, 0);
+	context->PSSetShader(heightPS.get(), nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
@@ -2304,7 +2300,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(0, 1, &compareCB);
 		context->CSSetShaderResources(8, 2, compareSRVs);
 		context->CSSetUnorderedAccessViews(4, 1, &countUAV, nullptr);
-		context->CSSetShader(heightRasterCompareCS, nullptr, 0);
+		context->CSSetShader(heightRasterCompareCS.get(), nullptr, 0);
 		context->Dispatch((a_kept->desc.Width + 7) / 8, (a_kept->desc.Height + 7) / 8, 1);
 		context->CSSetShaderResources(8, 2, nullCompareSRVs);
 		context->CSSetUnorderedAccessViews(4, 1, nullCsUAVs, nullptr);
@@ -2333,16 +2329,16 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->ClearRenderTargetView(a_raster, rasterClear);
 		context->ClearRenderTargetView(a_skin, skinDepthClear);
 		context->OMSetRenderTargets(1, &a_raster, nullptr);
-		context->PSSetShader(heightPS, nullptr, 0);
+		context->PSSetShader(heightPS.get(), nullptr, 0);
 		drawList(layer1Draws, false);
 		if (roadRaster) {
 			context->OMSetRenderTargets(1, &a_skin, nullptr);
-			context->PSSetShader(heightPSSkinDepth, nullptr, 0);
+			context->PSSetShader(heightPSSkinDepth.get(), nullptr, 0);
 			drawList(layer1Draws, true);
 		}
 	};
-	const bool layer1Kept = levelKept(0, rasterKey(layer1Draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(heightPS),
-															 reinterpret_cast<uint64_t>(heightPSSkinDepth), reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
+	const bool layer1Kept = levelKept(0, rasterKey(layer1Draws, { reinterpret_cast<uint64_t>(heightVS.get()), reinterpret_cast<uint64_t>(heightPS.get()),
+															 reinterpret_cast<uint64_t>(heightPSSkinDepth.get()), reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
 															 std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.x), std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.y),
 															 std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim, roadRaster ? 1u : 0u }));
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
@@ -2358,7 +2354,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
-	context->PSSetShader(heightPS, nullptr, 0);
+	context->PSSetShader(heightPS.get(), nullptr, 0);
 	if (verifyLayer1) {
 		compareKept(heightRaster, heightRasterVerifyTex[0], 0);
 		compareKept(heightSkinDepth, heightRasterVerifyTex[1], 1);
@@ -2370,9 +2366,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
 
-	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly : heightPS;
+	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly.get() : heightPS.get();
 	auto drawTopOnly = [&](uint32_t a_level, Texture2D* a_target, const std::vector<HeightRasterDraw>& a_draws) {
-		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS), reinterpret_cast<uint64_t>(topOnlyPS) }));
+		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS.get()), reinterpret_cast<uint64_t>(topOnlyPS) }));
 		const bool verify = verifyOn && (kept || heightRasterVerifyMiss);
 		context->PSSetShader(topOnlyPS, nullptr, 0);
 		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow(a_level == 1 ? "SnowDeformation::Objects - Height Maps Fine" : "SnowDeformation::Objects - Height Maps Far"));
@@ -2430,7 +2426,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (heightPeelPS && peelTarget && !keepEmpty) {
 		ID3D11RenderTargetView* peelRTVs[1] = { peelTarget->rtv.get() };
 		context->OMSetRenderTargets(1, peelRTVs, nullptr);
-		context->PSSetShader(heightPeelPS, nullptr, 0);
+		context->PSSetShader(heightPeelPS.get(), nullptr, 0);
 		ID3D11ShaderResourceView* peelSRVs[1] = { heightTopRaw[heightCurrent]->srv.get() };
 		context->PSSetShaderResources(3, 1, peelSRVs);
 		context->PSSetConstantBuffers(1, 1, &cb1);
@@ -2526,7 +2522,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(1, 1, &exclusionCB);
 		context->CSSetShaderResources(0, 2, combineSRVs);
 		context->CSSetShaderResources(5, 1, &exclusionListSRV);
-		context->CSSetShader(heightCombineCS, nullptr, 0);
+		context->CSSetShader(heightCombineCS.get(), nullptr, 0);
 		auto combine = [&](Texture2D* a_mask, ID3D11ShaderResourceView* a_tiles) {
 			ID3D11UnorderedAccessView* combineUAVs[3] = { nullptr, nullptr, a_mask->uav.get() };
 			context->CSSetShaderResources(4, 1, &a_tiles);
@@ -2577,7 +2573,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		auto settleCone = [&](Texture2D*& a_in, Texture2D*& a_out) {
 			if (!objectConeDiffuseCS)
 				return;
-			context->CSSetShader(objectConeDiffuseCS, nullptr, 0);
+			context->CSSetShader(objectConeDiffuseCS.get(), nullptr, 0);
 			for (int settleI = 0; settleI < 2; settleI++) {
 				ID3D11ShaderResourceView* settleSRV = a_in->srv.get();
 				ID3D11UnorderedAccessView* settleUAV = a_out->uav.get();
@@ -2813,15 +2809,15 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 bool SnowDeformation::EnsureSmoothNormalsCS()
 {
 	if (!smoothAccumulateCS)
-		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
+		smoothAccumulateCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0")));
 	if (!smoothResolveCS)
-		smoothResolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
+		smoothResolveCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0")));
 	if (!smoothFlatStatsCS)
-		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+		smoothFlatStatsCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0")));
 	if (!smoothBoundsCS)
-		smoothBoundsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0"));
+		smoothBoundsCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0")));
 	if (!smoothClusterCS)
-		smoothClusterCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0"));
+		smoothClusterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0")));
 	if (!meshBounds && smoothBoundsCS) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = kMeshBoundsSlots * 2 * 16;
@@ -3278,16 +3274,16 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	ID3D11UnorderedAccessView* csUAVs[2] = { tableUAV, smoothedNormalsChunks[chunk].uav.get() };
 	context->CSSetUnorderedAccessViews(0, 2, csUAVs, nullptr);
 	const uint32_t groups = (vertexCount + 63) / 64;
-	context->CSSetShader(smoothAccumulateCS, nullptr, 0);
+	context->CSSetShader(smoothAccumulateCS.get(), nullptr, 0);
 	context->Dispatch(groups, 1, 1);
-	context->CSSetShader(smoothResolveCS, nullptr, 0);
+	context->CSSetShader(smoothResolveCS.get(), nullptr, 0);
 	context->Dispatch(groups, 1, 1);
-	context->CSSetShader(smoothFlatStatsCS, nullptr, 0);
+	context->CSSetShader(smoothFlatStatsCS.get(), nullptr, 0);
 	context->Dispatch(1, 1, 1);
 	if (wantBounds) {
 		ID3D11UnorderedAccessView* boundsUAV = meshBounds->uav.get();
 		context->CSSetUnorderedAccessViews(2, 1, &boundsUAV, nullptr);
-		context->CSSetShader(smoothBoundsCS, nullptr, 0);
+		context->CSSetShader(smoothBoundsCS.get(), nullptr, 0);
 		context->Dispatch(1, 1, 1);
 		ID3D11UnorderedAccessView* nullBoundsUAV = nullptr;
 		context->CSSetUnorderedAccessViews(2, 1, &nullBoundsUAV, nullptr);
@@ -3298,7 +3294,7 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 		context->CSSetShaderResources(1, 1, &poolSRV);
 		ID3D11UnorderedAccessView* clusterUAV = clusterBounds->uav.get();
 		context->CSSetUnorderedAccessViews(3, 1, &clusterUAV, nullptr);
-		context->CSSetShader(smoothClusterCS, nullptr, 0);
+		context->CSSetShader(smoothClusterCS.get(), nullptr, 0);
 		context->Dispatch((clusterCount + 63) / 64, 1, 1);
 		ID3D11ShaderResourceView* nullPoolSRV = nullptr;
 		context->CSSetShaderResources(1, 1, &nullPoolSRV);
@@ -3396,8 +3392,8 @@ void SnowDeformation::DrawCapturedStatics()
 
 	auto context = globals::d3d::context;
 
-	context->PSSetShader(staticsPS, nullptr, 0);
-	ID3D11PixelShader* boundStaticsPS = staticsPS;
+	context->PSSetShader(staticsPS.get(), nullptr, 0);
+	ID3D11PixelShader* boundStaticsPS = staticsPS.get();
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 	context->PSSetConstantBuffers(1, 1, &cb1);
@@ -3409,9 +3405,9 @@ void SnowDeformation::DrawCapturedStatics()
 		skinStagesTess = a_tess;
 		skinVSParallax = false;
 		if (a_tess) {
-			context->VSSetShader(staticsTessVS, nullptr, 0);
-			context->HSSetShader(staticsHS, nullptr, 0);
-			context->DSSetShader(staticsDS, nullptr, 0);
+			context->VSSetShader(staticsTessVS.get(), nullptr, 0);
+			context->HSSetShader(staticsHS.get(), nullptr, 0);
+			context->DSSetShader(staticsDS.get(), nullptr, 0);
 			ID3D11Buffer* cb0 = shellCB->CB();
 			context->HSSetConstantBuffers(0, 1, &cb0);
 			context->DSSetConstantBuffers(0, 1, &cb0);
@@ -3428,7 +3424,7 @@ void SnowDeformation::DrawCapturedStatics()
 			context->DSSetSamplers(0, 1, &dsSampler);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
 		} else {
-			context->VSSetShader(staticsVS, nullptr, 0);
+			context->VSSetShader(staticsVS.get(), nullptr, 0);
 			context->HSSetShader(nullptr, nullptr, 0);
 			context->DSSetShader(nullptr, nullptr, 0);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -3865,7 +3861,7 @@ void SnowDeformation::DrawCapturedStatics()
 				bindSkinStages(wantTess);
 			const bool wantParallaxVS = !wantTess && d.layoutParallax != nullptr;
 			if (wantParallaxVS != skinVSParallax) {
-				context->VSSetShader(wantParallaxVS ? staticsVSParallax : staticsVS, nullptr, 0);
+				context->VSSetShader(wantParallaxVS ? staticsVSParallax.get() : staticsVS.get(), nullptr, 0);
 				skinVSParallax = wantParallaxVS;
 			}
 			if (!a_prepass) {
@@ -3883,16 +3879,16 @@ void SnowDeformation::DrawCapturedStatics()
 			}
 
 			const bool drapePS = d.s4Shell && staticsDebugView == 0;
-			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth : staticsPSDrapeNoDepth;
+			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth.get() : staticsPSDrapeNoDepth.get();
 			if (d.layoutParallax)
-				drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? (staticsPSDrapePrintsParallax ? staticsPSDrapePrintsParallax : staticsPSDrapePrintsNoDepth) : staticsPSDrapeParallax;
+				drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? (staticsPSDrapePrintsParallax ? staticsPSDrapePrintsParallax.get() : staticsPSDrapePrintsNoDepth.get()) : staticsPSDrapeParallax.get();
 			ID3D11PixelShader* wantPS = nullptr;
 			if (a_prepass)
-				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass : staticsPSPrepassNoDepth;
+				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass.get() : staticsPSPrepassNoDepth.get();
 			else if (!needsDepth && staticsPSNoDepth)
-				wantPS = (drapePS && drapeShadePS) ? drapeShadePS : staticsPSNoDepth;
+				wantPS = (drapePS && drapeShadePS) ? drapeShadePS : staticsPSNoDepth.get();
 			else
-				wantPS = staticsPS;
+				wantPS = staticsPS.get();
 			if (wantPS != boundStaticsPS) {
 				context->PSSetShader(wantPS, nullptr, 0);
 				boundStaticsPS = wantPS;
@@ -4048,9 +4044,9 @@ void SnowDeformation::DrawCapturedStatics()
 		PatchCullCB cullData{};
 		winrt::com_ptr<ID3D11Buffer> prevPatchVSCB11;
 		if (tessellatePatch) {
-			context->VSSetShader(patchTessVS, nullptr, 0);
-			context->HSSetShader(patchHS, nullptr, 0);
-			context->DSSetShader(patchDS, nullptr, 0);
+			context->VSSetShader(patchTessVS.get(), nullptr, 0);
+			context->HSSetShader(patchHS.get(), nullptr, 0);
+			context->DSSetShader(patchDS.get(), nullptr, 0);
 			ID3D11Buffer* cb0 = shellCB->CB();
 			context->HSSetConstantBuffers(0, 1, &cb0);
 			context->DSSetConstantBuffers(0, 1, &cb0);
@@ -4084,12 +4080,12 @@ void SnowDeformation::DrawCapturedStatics()
 			context->VSSetConstantBuffers(11, 1, &cullCB);
 			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST);
 		} else {
-			context->VSSetShader(patchVS, nullptr, 0);
+			context->VSSetShader(patchVS.get(), nullptr, 0);
 		}
 		bool deferredPatch = staticsDebugView == 0 && PatchDeferredReady() && EnsurePatchDeferredResources();
 		ID3D11VertexShader* patchFillVS = deferredPatch ? GetShellFillVS() : nullptr;
 		deferredPatch = deferredPatch && patchFillVS;
-		context->PSSetShader(deferredPatch ? patchDeferredPS[0] : patchPS, nullptr, 0);
+		context->PSSetShader(deferredPatch ? patchDeferredPS[0].get() : patchPS.get(), nullptr, 0);
 		ID3D11ShaderResourceView* patchTopSRV = heightTopRaw[heightCurrent]->srv.get();
 		context->PSSetShaderResources(11, 1, &patchTopSRV);
 		context->PSSetShaderResources(40, 1, &farTopSRV);
@@ -4189,7 +4185,7 @@ void SnowDeformation::DrawCapturedStatics()
 				};
 				winrt::com_ptr<ID3D11ComputeShader> prevVerifyCS;
 				context->CSGetShader(prevVerifyCS.put(), nullptr, nullptr);
-				context->CSSetShader(heightRasterCompareCS, nullptr, 0);
+				context->CSSetShader(heightRasterCompareCS.get(), nullptr, 0);
 				for (uint32_t t = 0; t < 5; t++) {
 					ID3D11ShaderResourceView* srvs[2] = { pairs[t][0], pairs[t][1] };
 					ID3D11UnorderedAccessView* uav = patchVerifySlotUAV[t].get();
@@ -4228,7 +4224,7 @@ void SnowDeformation::DrawCapturedStatics()
 			context->RSSetState(shellRasterState.get());
 			context->VSSetShader(patchFillVS, nullptr, 0);
 			ID3D11PixelShader* patchConditionView = PatchConditionViewPS();
-			context->PSSetShader(patchConditionView ? patchConditionView : patchDeferredPS[1], nullptr, 0);
+			context->PSSetShader(patchConditionView ? patchConditionView : patchDeferredPS[1].get(), nullptr, 0);
 			ID3D11ShaderResourceView* savedAttrSRVs[4] = {};
 			context->PSGetShaderResources(91, 4, savedAttrSRVs);
 			ID3D11ShaderResourceView* attrSRVs[4] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get(), patchDeferredMark->srv.get() };
@@ -4430,15 +4426,15 @@ bool SnowDeformation::EnsureCoatParallaxShaders()
 		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
 		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
 		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-		staticsVSParallax = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_COAT_PARALLAX" }, &staticsVSParallaxBlob));
+		staticsVSParallax.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_COAT_PARALLAX" }, &staticsVSParallaxBlob)));
 		if (staticsVSParallax)
-			Util::SetResourceName(staticsVSParallax, "SnowDeformation::StaticsShellVS Parallax");
-		staticsPSDrapeParallax = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX" }));
+			Util::SetResourceName(staticsVSParallax.get(), "SnowDeformation::StaticsShellVS Parallax");
+		staticsPSDrapeParallax.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX" })));
 		if (staticsPSDrapeParallax)
-			Util::SetResourceName(staticsPSDrapeParallax, "SnowDeformation::StaticsShellPS Drape Parallax");
-		staticsPSDrapePrintsParallax = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX" }));
+			Util::SetResourceName(staticsPSDrapeParallax.get(), "SnowDeformation::StaticsShellPS Drape Parallax");
+		staticsPSDrapePrintsParallax.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX" })));
 		if (staticsPSDrapePrintsParallax)
-			Util::SetResourceName(staticsPSDrapePrintsParallax, "SnowDeformation::StaticsShellPS Drape Prints Parallax");
+			Util::SetResourceName(staticsPSDrapePrintsParallax.get(), "SnowDeformation::StaticsShellPS Drape Prints Parallax");
 		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}, prints {}",
 			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED", staticsPSDrapePrintsParallax ? "ok" : "FAILED");
 	}
@@ -4478,16 +4474,16 @@ void SnowDeformation::RenderWaterCapture()
 	}
 	if (!waterCaptureVS) {
 		const auto path = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
-		waterCaptureVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "WATER" }, &waterCaptureVSBlob));
-		waterCapturePS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "WATER" }));
+		waterCaptureVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "WATER" }, &waterCaptureVSBlob)));
+		waterCapturePS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { "WATER" })));
 		if (!waterCaptureVS || !waterCapturePS) {
 			logger::error("[SNOW DEFORMATION] Water capture shaders failed; the shell will not end at water");
 			waterCaptureShadersFailed = true;
 			capturedWater.clear();
 			return;
 		}
-		Util::SetResourceName(waterCaptureVS, "SnowDeformation::WaterCaptureVS");
-		Util::SetResourceName(waterCapturePS, "SnowDeformation::WaterCapturePS");
+		Util::SetResourceName(waterCaptureVS.get(), "SnowDeformation::WaterCaptureVS");
+		Util::SetResourceName(waterCapturePS.get(), "SnowDeformation::WaterCapturePS");
 	}
 	if (!waterHeightTexture) {
 		waterHeightTexture = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::WaterWindow", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
@@ -4554,8 +4550,8 @@ void SnowDeformation::RenderWaterCapture()
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &nullWaterSRV);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->VSSetShader(waterCaptureVS, nullptr, 0);
-	context->PSSetShader(waterCapturePS, nullptr, 0);
+	context->VSSetShader(waterCaptureVS.get(), nullptr, 0);
+	context->PSSetShader(waterCapturePS.get(), nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
@@ -4657,7 +4653,7 @@ void SnowDeformation::CoverWaterWindow()
 	context->CSSetConstantBuffers(0, 1, &processCB);
 	context->CSSetShaderResources(0, 3, srvs);
 	context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
-	context->CSSetShader(heightWaterCoverCS, nullptr, 0);
+	context->CSSetShader(heightWaterCoverCS.get(), nullptr, 0);
 	context->Dispatch((kShellWindowDim + 7) / 8, (kShellWindowDim + 7) / 8, 1);
 	ID3D11ShaderResourceView* nullSRVs[3] = { nullptr, nullptr, nullptr };
 	ID3D11UnorderedAccessView* nullUAVs[2] = { nullptr, nullptr };
@@ -4674,19 +4670,19 @@ bool SnowDeformation::EnsureContactResources()
 	auto* device = globals::d3d::device;
 	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowContactCapture.hlsl";
 	if (!contactVS) {
-		contactVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0"));
+		contactVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0")));
 		if (contactVS)
-			Util::SetResourceName(contactVS, "SnowDeformation::ContactCaptureVS");
+			Util::SetResourceName(contactVS.get(), "SnowDeformation::ContactCaptureVS");
 	}
 	if (!contactPS) {
-		contactPS = static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0"));
+		contactPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0")));
 		if (contactPS)
-			Util::SetResourceName(contactPS, "SnowDeformation::ContactCapturePS");
+			Util::SetResourceName(contactPS.get(), "SnowDeformation::ContactCapturePS");
 	}
 	if (!contactSkinVS) {
-		contactSkinVS = static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &contactSkinVSBlob));
+		contactSkinVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SKINNED" }, &contactSkinVSBlob)));
 		if (contactSkinVS)
-			Util::SetResourceName(contactSkinVS, "SnowDeformation::ContactCaptureSkinVS");
+			Util::SetResourceName(contactSkinVS.get(), "SnowDeformation::ContactCaptureSkinVS");
 	}
 	if (!contactSkinCB) {
 		D3D11_BUFFER_DESC cbDesc{};
@@ -4754,8 +4750,8 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	D3D11_VIEWPORT viewport{ 0.0f, 0.0f, float(kContactDim), float(kContactDim), 0.0f, 1.0f };
 	context->RSSetViewports(1, &viewport);
 	context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	context->VSSetShader(contactVS, nullptr, 0);
-	context->PSSetShader(contactPS, nullptr, 0);
+	context->VSSetShader(contactVS.get(), nullptr, 0);
+	context->PSSetShader(contactPS.get(), nullptr, 0);
 	ID3D11Buffer* cb1 = staticsCB->CB();
 	context->VSSetConstantBuffers(1, 1, &cb1);
 
@@ -4878,7 +4874,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	if ((!contactActors.empty() || coatFall) && contactSkinVS && contactSkinCB) {
 		globals::profiler->BeginPass("SnowDeformation::Trails - Gather & Contact");
 		context->OMSetBlendState(contactMinBlendBodies.get(), nullptr, 0xFFFFFFFF);
-		context->VSSetShader(contactSkinVS, nullptr, 0);
+		context->VSSetShader(contactSkinVS.get(), nullptr, 0);
 		ID3D11Buffer* skinCB = contactSkinCB->CB();
 		context->VSSetConstantBuffers(2, 1, &skinCB);
 		bool skinnedVSBound = true;
@@ -4956,7 +4952,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 					if (coatPass || coatTopPass)
 						return RE::BSVisit::BSVisitControl::kContinue;
 					if (skinnedVSBound) {
-						context->VSSetShader(contactVS, nullptr, 0);
+						context->VSSetShader(contactVS.get(), nullptr, 0);
 						skinnedVSBound = false;
 					}
 					if (drawRigid(a_geometry, true))
@@ -4966,7 +4962,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				tally.skinned++;
 				ScopedTicks _skinnedTicks(cpuCensus.spanTicks[CpuCensus::kSpanContactSkinned], cpuCensus.spanCalls[CpuCensus::kSpanContactSkinned]);
 				if (!skinnedVSBound) {
-					context->VSSetShader(contactSkinVS, nullptr, 0);
+					context->VSSetShader(contactSkinVS.get(), nullptr, 0);
 					skinnedVSBound = true;
 				}
 				++geometryIndex;
@@ -5288,15 +5284,15 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 
 ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS(bool a_fromUAV)
 {
-	auto*& slot = a_fromUAV ? hiZBuildUAVCS : hiZBuildCS;
+	auto& slot = a_fromUAV ? hiZBuildUAVCS : hiZBuildCS;
 	if (!slot) {
 		logger::debug("Compiling DepthSyncCS HiZBuildCS{}", a_fromUAV ? " (from UAV)" : "");
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (a_fromUAV)
 			defines.push_back({ "HIZ_FROM_UAV", "" });
-		slot = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS"));
+		slot.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS")));
 	}
-	return slot;
+	return slot.get();
 }
 
 bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH)

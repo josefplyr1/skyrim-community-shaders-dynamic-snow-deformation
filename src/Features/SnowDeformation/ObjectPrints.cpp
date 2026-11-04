@@ -58,41 +58,41 @@ namespace
 ID3D11ComputeShader* SnowDeformation::GetPrintStampCS()
 {
 	if (!printStampCS)
-		printStampCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintStampCS"));
-	return printStampCS;
+		printStampCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintStampCS")));
+	return printStampCS.get();
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRingCS()
 {
 	if (!printRingCS)
-		printRingCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRingCS"));
-	return printRingCS;
+		printRingCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRingCS")));
+	return printRingCS.get();
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRefillCS()
 {
 	if (!printRefillCS)
-		printRefillCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRefillCS"));
-	return printRefillCS;
+		printRefillCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRefillCS")));
+	return printRefillCS.get();
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintViewCS()
 {
 	if (!printViewCS)
-		printViewCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintViewCS"));
-	return printViewCS;
+		printViewCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintViewCS")));
+	return printViewCS.get();
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
 {
 	if (!printRimCS && !printRimFailed) {
-		printRimCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRimCS"));
+		printRimCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRimCS")));
 		if (!printRimCS) {
 			printRimFailed = true;
 			logger::warn("[SNOW DEFORMATION] print rim kernel failed to compile; object prints go on without their rim");
 		}
 	}
-	return printRimCS;
+	return printRimCS.get();
 }
 
 bool SnowDeformation::EnsurePrintShaders()
@@ -109,11 +109,8 @@ bool SnowDeformation::EnsurePrintShaders()
 
 void SnowDeformation::ReleaseObjectPrintShaders()
 {
-	for (auto** cs : { &printStampCS, &printRingCS, &printRefillCS, &printViewCS, &printRimCS, &printRayCS }) {
-		if (*cs)
-			(*cs)->Release();
+	for (auto* cs : { &printStampCS, &printRingCS, &printRefillCS, &printViewCS, &printRimCS, &printRayCS })
 		*cs = nullptr;
-	}
 	printCSFailed = false;
 	printRimFailed = false;
 	printRayFailed = false;
@@ -564,7 +561,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	if (ringTotal > 0) {
 		ID3D11UnorderedAccessView* ringUAVs[4] = { mapUAV, nullptr, nullptr, printRim ? printRim->uav.get() : nullptr };
 		a_context->CSSetUnorderedAccessViews(0, 4, ringUAVs, nullptr);
-		a_context->CSSetShader(printRingCS, nullptr, 0);
+		a_context->CSSetShader(printRingCS.get(), nullptr, 0);
 		a_context->Dispatch((ringTotal + 63) / 64, 1, 1);
 		a_context->CSSetUnorderedAccessViews(0, 4, nullUAV, nullptr);
 	}
@@ -628,7 +625,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 		if (uploadBlocks()) {
 			a_context->CSSetShaderResources(2, 1, &blockSRV);
 			a_context->CSSetUnorderedAccessViews(0, 1, &mapUAV, nullptr);
-			a_context->CSSetShader(printRefillCS, nullptr, 0);
+			a_context->CSSetShader(printRefillCS.get(), nullptr, 0);
 			a_context->Dispatch(blocks, 1, 1);
 			a_context->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
 			printRefillBlocksLast = blocks;
@@ -685,7 +682,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShaderResources(13, 2, spellSRVs);
 			ID3D11UnorderedAccessView* stampUAVs[2] = { mapUAV, printWriteUAV.get() };
 			a_context->CSSetUnorderedAccessViews(0, 2, stampUAVs, nullptr);
-			a_context->CSSetShader(printStampCS, nullptr, 0);
+			a_context->CSSetShader(printStampCS.get(), nullptr, 0);
 			globals::profiler->BeginPass("SnowDeformation::Objects - Trench Prints");
 			a_context->Dispatch(blocks, 1, 1);
 			globals::profiler->EndPass();
@@ -725,7 +722,7 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 			a_context->CSSetShaderResources(12, 1, &mapSRV);
 			ID3D11UnorderedAccessView* rimUAVs[4] = { nullptr, nullptr, nullptr, printRim->uav.get() };
 			a_context->CSSetUnorderedAccessViews(0, 4, rimUAVs, nullptr);
-			a_context->CSSetShader(printRimCS, nullptr, 0);
+			a_context->CSSetShader(printRimCS.get(), nullptr, 0);
 			globals::profiler->BeginPass("SnowDeformation::Objects - Trench Prints");
 			a_context->Dispatch(blocks, 1, 1);
 			globals::profiler->EndPass();

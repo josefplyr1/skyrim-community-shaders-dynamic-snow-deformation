@@ -387,45 +387,37 @@ std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines
 
 ID3D11VertexShader* SnowDeformation::GetShellFillVS()
 {
-	if (!shellFillVS) {
-		logger::debug("Compiling DepthSyncCS FillVS");
-		shellFillVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillVS"));
-	}
-	return shellFillVS;
+	if (!shellFillVS)
+		shellFillVS.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillVS")));
+	return shellFillVS.get();
 }
 
 ID3D11VertexShader* SnowDeformation::GetShellFillRectVS()
 {
 	if (!shellFillRectVS)
-		shellFillRectVS = static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillRectVS"));
-	return shellFillRectVS;
+		shellFillRectVS.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillRectVS")));
+	return shellFillRectVS.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 {
-	if (!shellFillPS) {
-		logger::debug("Compiling DepthSyncCS FillPS");
-		shellFillPS = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "ps_5_0", "FillPS"));
-	}
-	return shellFillPS;
+	if (!shellFillPS)
+		shellFillPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "ps_5_0", "FillPS")));
+	return shellFillPS.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellFillPSPreSnow()
 {
-	if (!shellFillPSPreSnow) {
-		logger::debug("Compiling DepthSyncCS FillPS (pre-snow)");
-		shellFillPSPreSnow = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_PRE_SNOW", "" } }, "ps_5_0", "FillPS"));
-	}
-	return shellFillPSPreSnow;
+	if (!shellFillPSPreSnow)
+		shellFillPSPreSnow.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_PRE_SNOW", "" } }, "ps_5_0", "FillPS")));
+	return shellFillPSPreSnow.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellFillPSClaim()
 {
-	if (!shellFillPSClaim) {
-		logger::debug("Compiling DepthSyncCS FillPS (claim)");
-		shellFillPSClaim = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_CLAIM", "" } }, "ps_5_0", "FillPS"));
-	}
-	return shellFillPSClaim;
+	if (!shellFillPSClaim)
+		shellFillPSClaim.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_CLAIM", "" } }, "ps_5_0", "FillPS")));
+	return shellFillPSClaim.get();
 }
 
 ID3D11ShaderResourceView* SnowDeformation::ShellWaterSRV() const
@@ -669,12 +661,11 @@ bool SnowDeformation::EnsureDeferredResources()
 ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 {
 	if (!shellPSDeferred) {
-		logger::debug("Compiling SnowShell PS (deferred)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
-		shellPSDeferred = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellPSDeferred.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
 	}
-	return shellPSDeferred;
+	return shellPSDeferred.get();
 }
 
 ID3D11PixelShader* SnowDeformation::ConditionViewPS()
@@ -688,8 +679,8 @@ ID3D11PixelShader* SnowDeformation::ConditionViewPS()
 			auto defines = ShellPSDefines();
 			defines.emplace_back("SNOW_SHELL_DEFERRED", "");
 			defines.emplace_back("SNOW_CONDITION_VIEW", "");
-			shellPSDeferredConditionView = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
-			return shellPSDeferredConditionView != nullptr;
+			shellPSDeferredConditionView.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
+			return shellPSDeferredConditionView.get() != nullptr;
 		});
 		return nullptr;
 	}
@@ -701,44 +692,40 @@ ID3D11PixelShader* SnowDeformation::ConditionViewPS()
 		if (state == 3)
 			logger::warn("[SNOW DEFORMATION] Snow condition view: SnowShell.hlsl failed to compile, the view stays off");
 	}
-	return state == 2 ? shellPSDeferredConditionView : nullptr;
+	return state == 2 ? shellPSDeferredConditionView.get() : nullptr;
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
 {
-	auto*& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
+	auto& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
 	if (!slot) {
-		logger::debug("Compiling SnowShell PS (depth prepass, deferred attributes{})", a_keepHidden ? ", hidden kept" : "");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
 		defines.emplace_back("SNOW_PREPASS_ATTR", "");
 		if (a_keepHidden)
 			defines.emplace_back("SNOW_PREPASS_KEEP_HIDDEN", "");
-		slot = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		slot.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
 	}
-	return slot;
+	return slot.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassEarly()
 {
 	if (!shellPSPrepassEarly) {
-		logger::debug("Compiling SnowShell PS (early depth prepass)");
 		auto defines = ShellPSDefines();
 		defines.emplace_back("SNOW_SHELL_DEPTH_PREPASS", "");
 		defines.emplace_back("SNOW_PREPASS_ATTR", "");
 		defines.emplace_back("SNOW_PREPASS_EARLY", "");
-		shellPSPrepassEarly = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0"));
+		shellPSPrepassEarly.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
 	}
-	return shellPSPrepassEarly;
+	return shellPSPrepassEarly.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellPSEarlyResolve()
 {
-	if (!shellPSEarlyResolve) {
-		logger::debug("Compiling SnowShell PS (early prepass resolve)");
-		shellPSEarlyResolve = static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellPSDefines("SNOW_S1_RESOLVE"), "ps_5_0"));
-	}
-	return shellPSEarlyResolve;
+	if (!shellPSEarlyResolve)
+		shellPSEarlyResolve.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", ShellPSDefines("SNOW_S1_RESOLVE"), "ps_5_0")));
+	return shellPSEarlyResolve.get();
 }
 
 bool SnowDeformation::EnsureEarlyPrepassResources()
@@ -793,12 +780,10 @@ void SnowDeformation::SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, 
 
 ID3D11ComputeShader* SnowDeformation::GetPreSnowCopyCS()
 {
-	if (!preSnowCopyCS) {
-		logger::debug("Compiling DepthSyncCS PreSnowCopyCS");
-		preSnowCopyCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "PreSnowCopyCS"));
-	}
+	if (!preSnowCopyCS)
+		preSnowCopyCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "PreSnowCopyCS")));
 	DepthSyncRectBuffer();
-	return preSnowCopyCS;
+	return preSnowCopyCS.get();
 }
 
 ConstantBuffer* SnowDeformation::DepthSyncRectBuffer()
@@ -870,19 +855,16 @@ ID3D11ComputeShader* SnowDeformation::GetSssChangedRaymarchCS()
 	if (!ss.loaded)
 		return nullptr;
 	const uint32_t samples = ss.GetScaledSampleCount();
-	if (sssChangedRaymarchCS && sssChangedRaymarchSamples != samples) {
-		sssChangedRaymarchCS->Release();
+	if (sssChangedRaymarchCS && sssChangedRaymarchSamples != samples)
 		sssChangedRaymarchCS = nullptr;
-	}
 	if (!sssChangedRaymarchCS) {
-		logger::debug("Compiling RaymarchCS SSS_CHANGED_TILES SAMPLE_COUNT={}", samples);
 		const auto count = std::format("{}", samples);
 		auto defines = ss.GetRaymarchDefines(count);
 		defines.push_back({ "SSS_CHANGED_TILES", "" });
-		sssChangedRaymarchCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0"));
+		sssChangedRaymarchCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0")));
 		sssChangedRaymarchSamples = samples;
 	}
-	return sssChangedRaymarchCS;
+	return sssChangedRaymarchCS.get();
 }
 
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
@@ -1479,7 +1461,7 @@ void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3
 	}
 	dispatch(mark ? GetSnowCS(kSkinSssSyncMarkCS) : GetSnowCS(kSkinSssSyncCS));
 	globals::profiler->EndPass();
-	if (ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS : nullptr))
+	if (ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS.get() : nullptr))
 		sssChangedMarchFrame = globals::state->frameCount;
 	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
 	dispatch(GetSnowCS(kSkinSssRestoreCS));
@@ -2033,7 +2015,7 @@ void SnowDeformation::DrawShell()
 			context->PSSetShaderResources(61, 2, resolveSRVs);
 			ID3D11ShaderResourceView* attrDepthSRV = shellDeferredAttr[2]->srv.get();
 			context->PSSetShaderResources(93, 1, &attrDepthSRV);
-			context->PSSetShader(shellPSEarlyResolve, nullptr, 0);
+			context->PSSetShader(shellPSEarlyResolve.get(), nullptr, 0);
 			context->Draw(3, 0);
 			ID3D11ShaderResourceView* nullResolveSRVs[2] = {};
 			context->PSSetShaderResources(61, 2, nullResolveSRVs);
@@ -2055,7 +2037,7 @@ void SnowDeformation::DrawShell()
 		ID3D11ShaderResourceView* attrSRVs[3] = { shellDeferredAttr[0]->srv.get(), shellDeferredAttr[1]->srv.get(), shellDeferredAttr[2]->srv.get() };
 		context->PSSetShaderResources(91, 3, attrSRVs);
 		ID3D11PixelShader* conditionView = ConditionViewPS();
-		context->PSSetShader(conditionView ? conditionView : shellPSDeferred, nullptr, 0);
+		context->PSSetShader(conditionView ? conditionView : shellPSDeferred.get(), nullptr, 0);
 		context->Draw(3, 0);
 		ID3D11ShaderResourceView* nullAttrSRVs[3] = {};
 		context->PSSetShaderResources(91, 3, nullAttrSRVs);
