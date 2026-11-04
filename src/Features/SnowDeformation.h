@@ -3007,9 +3007,7 @@ protected:
 	static constexpr float kFreshenHours = 2.0f;
 	std::atomic<float> snowFreshness{ 0.0f };
 	float debugFreshnessOverride = -1.0f;
-	void TickSnowCondition();
 	float GetSnowSoftness() const;
-	void RegisterSnowConditionCoSave();
 
 	static constexpr float kAgeingClockStart = 1024.0f;
 	static constexpr float kClimateLapse = 0.0005f;
@@ -3047,14 +3045,11 @@ protected:
 		float windPacking;
 	};
 	SnowCondition GetSnowCondition() const;
-	void TickSnowIce(float a_elapsed, float a_snowing);
 	float SnowIceShown(uint32_t a_row) const;
 	float SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const;
 	float SnowWetIceStrength() const;
 	static constexpr uint32_t kIceRecord = 'SNIC';
 	static constexpr uint32_t kIceRecordVersion = 2;
-	void RegisterSnowIceCoSave();
-	SnowCondition SnowConditionAt(float a_temperature) const;
 	struct SnowClimateLook
 	{
 		float strength = 0.0f;
@@ -3160,7 +3155,6 @@ protected:
 	};
 	SnowEventCensus snowEventCensus;
 
-	SnowCondition SnowConditionAtHeight(float a_z) const;
 	uint32_t stampGatherFrame = UINT32_MAX;
 
 public:

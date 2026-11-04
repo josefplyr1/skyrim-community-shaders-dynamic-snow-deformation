@@ -558,13 +558,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
-	const float wetIce = SnowWetIceStrength();
-	data.LandIce = wetIce * SnowIceShown(1);
-	data.IceClock = TrackDateClock();
-	for (uint32_t k = 0; k < kIceHistoryBins; ++k) {
-		const auto& entry = snowClimate.iceHistory[k];
-		data.IceHistory[k] = { wetIce * entry[0], wetIce * entry[1], wetIce * entry[2], 0.0f };
-	}
 	data.PrintFullDepth = BodyPrintScale();
 	data.PrintRect = PrintRectForFrame();
 	if (globals::state->isMapMenuOpen) {
@@ -918,7 +911,6 @@ void SnowDeformation::PrepassSimulation()
 	snowfallIntensity = ComputeSnowfallIntensity();
 	weatherClock.Read(weatherClockUnarm);
 	TickAccumulation();
-	TickSnowCondition();
 	TickSnowClimate();
 
 	if (SnowShadersPending(1))

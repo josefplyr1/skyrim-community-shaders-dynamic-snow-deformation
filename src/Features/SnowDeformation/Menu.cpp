@@ -672,26 +672,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttResist = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("snow_resistance_tooltip"), "How much of a body's push the snow holds back. Feet stand on the ground beneath the snow, so at 0% every step cuts to the bottom and anything low - a long skirt, a hand, a blade - cuts as deep as it reaches. At 50% one pass carves half of that: legs sink into the snow and the trench behind stays shallow. Every new pass over the same snow carves the same share of what is left, so busy paths sink deeper the more they are walked. Dropped items, spells and melt keep their own depths. Affects new trenches only."));
 
-		ImGui::SliderFloat(T(TKEY("track_ageing"), "Track Ageing"), &settings.TrackAgeing, 0.0f, 2.0f, "%.2f");
-		if (auto _ttTrackAge = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("track_ageing_tooltip"), "How fast tracks age. An old track's walls round off, shallower and wider, its rim loses its teeth and lip, its berm settles, and new snow covers the broken snow and the dark wet print. Snowfall ages tracks fastest: at 1.00 an hour of it does what a day of calm cold does. Walking an old track again makes it fresh where your feet reach the floor. Ages are kept in saves. 0 = tracks never age."));
-
-		ImGui::SliderFloat(T(TKEY("snow_climate"), "Snow Climate"), &settings.SnowClimateStrength, 0.0f, 1.0f, "%.2f");
-		if (auto _ttClimate = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_climate_tooltip"), "How much the kind of snow decides what a trench looks like. The snow's temperature comes from how snowy the land is, the weather, the sun and the height. At 1.00, cold powder leaves holes with no ridge and loose snow fallen back into them; settled snow just below freezing keeps the full ridge, lip and teeth; wet snow leaves dark prints with crisp walls. Berm Height, Rim Lip and Rim Teeth are the most the snow can give. At 0 the look is the fixed one set by the sliders and Fresh Snow Softness. Debugging Options > Snow Condition shows what the snow asks for."));
-
-		ImGui::Checkbox(T(TKEY("wet_snow_ice"), "Wet Snow and Ice"), &settings.WetSnowAndIce);
-		if (auto _ttWetIce = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("wet_snow_ice_tooltip"), "Snow soaked by rain or a thaw turns greyer and stops sparkling, and the packed snow of prints and paths reads as slush. When the cold comes back, the water held in packed snow freezes: trampled paths and roads glaze over, smooth, glossy and faintly blue, until a thaw or fresh snow ends the ice. Only prints that were there while the water froze glaze; a print made in snow that has already frozen breaks the crust and stays unglazed until the next thaw and freeze. The rest of the snow takes a faint crust of the same glaze. Higher ground freezes first. Follows Snow Climate. Off, only the dark wet print remains."));
-
-		ImGui::SliderFloat(T(TKEY("fresh_snow_softness"), "Fresh Snow Softness"), &settings.FreshSnowSoftness, 0.0f, 1.0f, "%.2f");
-		if (auto _ttFresh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_softness_tooltip"), "New snow is loose: it cannot hold a cut wall, and it packs down under a boot instead of being thrown aside. While it snows, and for a while after, the ridge beside trenches shrinks and the rim loses its lip and teeth; trenches cut by distant creatures, spells and shouts also get sloped sides instead of sharp walls. As the snow settles over the following days, the look you set with Berm Height, Rim Lip and Rim Teeth comes back and those walls sharpen again; a trench keeps the walls it was cut with. 0 = off, the snow is always firm. Snow Climate takes over from this as it rises: at 1.00 fresh snow acts through its stickiness and density instead."));
-
-		ImGui::SliderFloat(T(TKEY("fresh_snow_settle"), "Fresh Snow Settles In"), &settings.FreshSnowSettleHours, 6.0f, 168.0f, "%.0f game hours");
-		if (auto _ttSettle = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("fresh_snow_settle_tooltip"), "How long clear weather takes to turn loose new snow fully firm. About two game hours of heavy snowfall makes it fully fresh again; lighter snow takes longer."));
-
 		ImGui::SeparatorText(T(TKEY("trampled_group"), "Trampled Ground"));
 
 		ImGui::SliderFloat(T(TKEY("trampled_flattening"), "Flattening"), &settings.TrampledFlattening, 0.0f, 1.0f, "%.2fx");
