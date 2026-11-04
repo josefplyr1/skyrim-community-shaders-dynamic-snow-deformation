@@ -273,12 +273,7 @@ void SnowDeformation::CreateDeformationTextures()
 		evolveTileBuffer = nullptr;
 		evolveTileUAV = nullptr;
 		evolveTileSRV = nullptr;
-		D3D11_BUFFER_DESC listDesc{};
-		listDesc.ByteWidth = (tiles * tiles + 1) * sizeof(uint32_t);
-		listDesc.Usage = D3D11_USAGE_DEFAULT;
-		listDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		listDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		listDesc.StructureByteStride = sizeof(uint32_t);
+		D3D11_BUFFER_DESC listDesc = StructuredBufferDesc<uint32_t>(uint64_t(tiles * tiles + 1));
 		DX::ThrowIfFailed(device->CreateBuffer(&listDesc, nullptr, evolveTileBuffer.put()));
 		Util::SetResourceName(evolveTileBuffer.get(), "SnowDeformation::EvolveTiles");
 		DX::ThrowIfFailed(device->CreateUnorderedAccessView(evolveTileBuffer.get(), nullptr, evolveTileUAV.put()));
@@ -375,13 +370,7 @@ void SnowDeformation::SetupResources()
 			Util::SetResourceName(deformActivityStaging[i].get(), "SnowDeformation::DeformActivityStaging");
 		}
 
-		D3D11_BUFFER_DESC tileDesc{};
-		tileDesc.ByteWidth = kStampTileCap * sizeof(uint32_t);
-		tileDesc.Usage = D3D11_USAGE_DYNAMIC;
-		tileDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		tileDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		tileDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		tileDesc.StructureByteStride = sizeof(uint32_t);
+		D3D11_BUFFER_DESC tileDesc = StructuredBufferDesc<uint32_t>(uint64_t(kStampTileCap), false, true);
 		DX::ThrowIfFailed(device->CreateBuffer(&tileDesc, nullptr, stampTileBuffer.put()));
 		Util::SetResourceName(stampTileBuffer.get(), "SnowDeformation::StampTiles");
 		D3D11_SHADER_RESOURCE_VIEW_DESC tileSrvDesc{};

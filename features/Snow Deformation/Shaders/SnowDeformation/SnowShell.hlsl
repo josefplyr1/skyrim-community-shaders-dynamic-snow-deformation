@@ -11,28 +11,7 @@
 #include "SnowDeformation/SnowColor.hlsli"
 
 #ifdef PSHADER
-#	define TERRAIN_SHADOWS
-#	define CLOUD_SHADOWS
-#	define VOLUMETRIC_SHADOWS
-SamplerState ShellLinearSampler : register(s1);
-#	define LinearSampler ShellLinearSampler
-#	include "Common/ShadowSampling.hlsli"
-#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
-#	include "Skylighting/Skylighting.hlsli"
-#	include "SnowDeformation/SnowShadow.hlsli"
-#	define EM_PARALLAX_CUSTOM_HEIGHT
-float EMParallaxCustomHeight(float2 uv, float mip);
-#	ifndef TERRAIN_VARIATION
-#		define TERRAIN_VARIATION
-#		define SNOW_EM_TERRAIN_VARIATION
-#	endif
-#	include "ExtendedMaterials/ExtendedMaterials.hlsli"
-#	ifdef SNOW_EM_TERRAIN_VARIATION
-#		undef TERRAIN_VARIATION
-#		undef SNOW_EM_TERRAIN_VARIATION
-#	endif
-#	include "SnowDeformation/SnowShading.hlsli"
-#	include "SnowDeformation/SnowLights.hlsli"
+#	include "SnowDeformation/SnowShellPS.hlsli"
 #endif
 
 #if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
@@ -84,13 +63,7 @@ Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
 Texture2D<float4> SnowHeightMap : register(t8);
 Texture2D<float3> LandMasksCopy : register(t10);
-Texture2D<float4> BermFieldMap : register(t14);
-Texture2D<uint> UntouchedTiles : register(t57);
-Texture2D<float4> BloodMap : register(t30);
-Texture2D<float2> BloodClock : register(t31);
-Texture2D<float2> ExclusionFieldMap : register(t15);
-
-Texture2D<float4> UndulationFieldMap : register(t29);
+#include "SnowDeformation/SnowFieldMaps.hlsli"
 
 SamplerState SnowSampler : register(s0);
 #if defined(PSHADER) && defined(SNOW_SHELL_DEFERRED)
@@ -656,14 +629,7 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 
 struct PS_OUTPUT
 {
-	float4 Diffuse : SV_Target0;
-	float4 MotionVectors : SV_Target1;
-	float4 NormalGlossiness : SV_Target2;
-	float4 Albedo : SV_Target3;
-	float4 Specular : SV_Target4;
-	float4 Reflectance : SV_Target5;
-	float4 Masks : SV_Target6;
-	float4 Masks2 : SV_Target7;
+	SNOW_GBUFFER_TARGETS
 };
 
 struct PS_PREPASS_OUTPUT
@@ -1169,13 +1135,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float snowRoughness = kSnowRoughness;
 	float3 snowF0 = kSnowF0;
 	float snowAO = 1.0;
-	[branch] if (HasSnowRmaos > 0.5)
-	{
-		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
-		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
-		snowAO = rmaos.z;
-		snowF0 = rmaos.w * SnowSpecularLevel;
-	}
+	SNOW_RMAOS(snowRoughness, snowF0, snowAO, snowTaps, snowTapsSide, snowSteepness)
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 
 	snowRoughness *= 1.0 - wetLook.x;
@@ -1321,17 +1281,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (pixelVertexAO < 0.0)
 		pixelVertexAO = SampleTerrainVertexAO(gridLocal);
 	float landVertexAO = ColorManagement::SRGBToWorking(pixelVertexAO);
-	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
-	[branch] if (SkylightingActive > 0.5)
-	{
-		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
-		ambientPart = ColorManagement::SceneColor::ScaleByLinear(ambientPart, MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
-	}
-	ambientPart *= Color::PBRLightingScale;
-	directDiffuse *= Color::PBRLightingScale;
-	directSpecular *= Color::PBRLightingScale;
-	diffuseLobe *= Color::PBRLightingScale;
+	SNOW_SKYLIGHTING(ambientPart, diffuseLobe, directDiffuse, directSpecular, landVertexAO, shadePos, normalWS);
 	float3 preLit = ambientPart + directDiffuse;
 
 	float alpha = coverageAlpha;
@@ -1400,16 +1350,7 @@ RWTexture2D<float4> TerrainWetOut : register(u4);
 #endif
 
 #if defined(SNOW_MARCH_HEIGHT_CS) || defined(SNOW_MARCH_SUN_CS)
-StructuredBuffer<uint> MarchTilesIn : register(t63);
-cbuffer MarchCacheCB : register(b2)
-{
-	uint MarchRowStart;
-	uint MarchRowCount;
-	uint2 MarchCachePad;
-#	ifdef SNOW_MARCH_SUN_CS
-	float4 MarchSun;
-#	endif
-}
+#	include "SnowDeformation/SnowMarchCacheCB.hlsli"
 #endif
 
 #ifdef SNOW_MARCH_HEIGHT_CS

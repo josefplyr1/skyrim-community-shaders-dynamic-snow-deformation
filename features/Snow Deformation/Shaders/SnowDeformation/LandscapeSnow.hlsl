@@ -101,12 +101,6 @@ LS_CP LS_VS(VS_INPUT input)
 	return o;
 }
 
-struct LS_HSConst
-{
-	float Edges[3] : SV_TessFactor;
-	float Inside : SV_InsideTessFactor;
-};
-
 float4 LsClip(float3 p)
 {
 	return mul(mul(FrameBuffer::CameraViewProj, World), float4(p, 1.0));

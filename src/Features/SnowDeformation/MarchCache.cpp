@@ -48,7 +48,6 @@ ID3D11ComputeShader* SnowDeformation::GetMarchHeightCS(MarchCS a_which)
 	if (!slot) {
 		const bool road = a_which == kRoadTilesCS || a_which == kRoadRowsCS;
 		const bool sun = a_which == kSunTilesCS || a_which == kSunRowsCS;
-		logger::debug("Compiling {} {}", road ? "SnowStaticsShell" : "SnowShell", entries[a_which]);
 		slot = static_cast<ID3D11ComputeShader*>(road ?
 				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", { { "SNOW_ROAD_MARCH_CS", "" } }, "cs_5_0", entries[a_which]) :
 				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));

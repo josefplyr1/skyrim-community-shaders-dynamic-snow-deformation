@@ -939,23 +939,26 @@ float2 PrintContact(float2 a_worldPos)
 	return contact;
 }
 
+#define SNOW_PRINT_TOPS(tops, local)                                                \
+	float2 dims;                                                                    \
+	PrintTops1.GetDimensions(dims.x, dims.y);                                       \
+	const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);             \
+	const int2 t0 = int2(clamp(uv * dims - 0.5, 0.0, dims - 1.001));                \
+	const int2 t1 = min(t0 + 1, int2(dims) - 1);                                    \
+	const float tops[8] = {                                                         \
+		PrintTops1.Load(int3(t0.x, t0.y, 0)), PrintTops1.Load(int3(t1.x, t0.y, 0)), \
+		PrintTops1.Load(int3(t0.x, t1.y, 0)), PrintTops1.Load(int3(t1.x, t1.y, 0)), \
+		PrintTops2.Load(int3(t0.x, t0.y, 0)), PrintTops2.Load(int3(t1.x, t0.y, 0)), \
+		PrintTops2.Load(int3(t0.x, t1.y, 0)), PrintTops2.Load(int3(t1.x, t1.y, 0))  \
+	}
+
 float PrintTopGap(float2 a_worldPos, float a_contact)
 {
 	float gap = -1.0;
 	const float2 local = (a_worldPos - HeightWindowCenter) / HeightHalfExtent;
 	[branch] if (all(abs(local) < 1.0))
 	{
-		float2 dims;
-		PrintTops1.GetDimensions(dims.x, dims.y);
-		const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-		const int2 t0 = int2(clamp(uv * dims - 0.5, 0.0, dims - 1.001));
-		const int2 t1 = min(t0 + 1, int2(dims) - 1);
-		const float tops[8] = {
-			PrintTops1.Load(int3(t0.x, t0.y, 0)), PrintTops1.Load(int3(t1.x, t0.y, 0)),
-			PrintTops1.Load(int3(t0.x, t1.y, 0)), PrintTops1.Load(int3(t1.x, t1.y, 0)),
-			PrintTops2.Load(int3(t0.x, t0.y, 0)), PrintTops2.Load(int3(t1.x, t0.y, 0)),
-			PrintTops2.Load(int3(t0.x, t1.y, 0)), PrintTops2.Load(int3(t1.x, t1.y, 0))
-		};
+		SNOW_PRINT_TOPS(tops, local);
 		float best = 1e9;
 		[unroll] for (uint i = 0; i < 8; i++)
 		{
@@ -974,17 +977,7 @@ float PrintTopNear(float2 a_worldPos, float a_z, float a_below, float a_above)
 	const float2 local = (a_worldPos - HeightWindowCenter) / HeightHalfExtent;
 	[branch] if (all(abs(local) < 1.0))
 	{
-		float2 dims;
-		PrintTops1.GetDimensions(dims.x, dims.y);
-		const float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-		const int2 t0 = int2(clamp(uv * dims - 0.5, 0.0, dims - 1.001));
-		const int2 t1 = min(t0 + 1, int2(dims) - 1);
-		const float tops[8] = {
-			PrintTops1.Load(int3(t0.x, t0.y, 0)), PrintTops1.Load(int3(t1.x, t0.y, 0)),
-			PrintTops1.Load(int3(t0.x, t1.y, 0)), PrintTops1.Load(int3(t1.x, t1.y, 0)),
-			PrintTops2.Load(int3(t0.x, t0.y, 0)), PrintTops2.Load(int3(t1.x, t0.y, 0)),
-			PrintTops2.Load(int3(t0.x, t1.y, 0)), PrintTops2.Load(int3(t1.x, t1.y, 0))
-		};
+		SNOW_PRINT_TOPS(tops, local);
 		float best = 1e9;
 		[unroll] for (uint i = 0; i < 8; i++)
 		{
@@ -998,6 +991,8 @@ float PrintTopNear(float2 a_worldPos, float a_z, float a_below, float a_above)
 	}
 	return found;
 }
+
+#undef SNOW_PRINT_TOPS
 
 float4 PrintSpellVerdict(float2 a_worldPos)
 {

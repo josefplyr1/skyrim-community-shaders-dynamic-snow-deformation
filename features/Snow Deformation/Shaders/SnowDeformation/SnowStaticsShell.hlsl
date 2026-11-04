@@ -14,28 +14,7 @@
 #include "SnowDeformation/SnowColor.hlsli"
 
 #ifdef PSHADER
-#	define TERRAIN_SHADOWS
-#	define CLOUD_SHADOWS
-#	define VOLUMETRIC_SHADOWS
-SamplerState ShellLinearSampler : register(s1);
-#	define LinearSampler ShellLinearSampler
-#	include "Common/ShadowSampling.hlsli"
-#	include "ScreenSpaceShadows/ScreenSpaceShadows.hlsli"
-#	include "Skylighting/Skylighting.hlsli"
-#	include "SnowDeformation/SnowShadow.hlsli"
-#	define EM_PARALLAX_CUSTOM_HEIGHT
-float EMParallaxCustomHeight(float2 uv, float mip);
-#	ifndef TERRAIN_VARIATION
-#		define TERRAIN_VARIATION
-#		define SNOW_EM_TERRAIN_VARIATION
-#	endif
-#	include "ExtendedMaterials/ExtendedMaterials.hlsli"
-#	ifdef SNOW_EM_TERRAIN_VARIATION
-#		undef TERRAIN_VARIATION
-#		undef SNOW_EM_TERRAIN_VARIATION
-#	endif
-#	include "SnowDeformation/SnowShading.hlsli"
-#	include "SnowDeformation/SnowLights.hlsli"
+#	include "SnowDeformation/SnowShellPS.hlsli"
 #endif
 
 #include "SnowDeformation/SnowShellCB.hlsli"
@@ -58,12 +37,7 @@ cbuffer StaticCB : register(b1)
 #endif
 
 Texture2D<float4> DeformationMap : register(t1);
-Texture2D<float4> BermFieldMap : register(t14);
-Texture2D<uint> UntouchedTiles : register(t57);
-Texture2D<float4> BloodMap : register(t30);
-Texture2D<float2> BloodClock : register(t31);
-Texture2D<float2> ExclusionFieldMap : register(t15);
-Texture2D<float4> UndulationFieldMap : register(t29);
+#include "SnowDeformation/SnowFieldMaps.hlsli"
 Texture2D<float4> ProjNoiseMap : register(t21);
 Texture2D<float4> GameShadowMask : register(t24);
 Texture2D<float3> PreSkinMasks : register(t32);
@@ -240,23 +214,8 @@ static const float kRimBandMax = 0.25;
 
 float SampleDeformation(float2 gridLocal)
 {
-	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
-	if (any(uv < 0.0) || any(uv > 1.0))
-		return 0.0;
-
-	float2 dims;
-	DeformationMap.GetDimensions(dims.x, dims.y);
-	float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-	int2 t0 = (int2)t;
-	float2 f = t - t0;
-	int2 t1 = min(t0 + 1, int2(dims) - 1);
-
-	float s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))).x;
-	float s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))).x;
-	float s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))).x;
-	float s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))).x;
-
-	return saturate(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y));
+	SNOW_DEFORM_BILINEAR4(v, gridLocal);
+	return saturate(v.x);
 }
 
 float4 BermFieldPair(float2 gridLocal)
@@ -364,39 +323,33 @@ float2 FarTexel(float2 worldXY, float2 dims)
 	return clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
 }
 
+#	define SNOW_FAR_TOP(result, reduce, worldXY)                                                                    \
+		float result = -1000000.0;                                                                                  \
+		float2 d = abs(worldXY - float2(FarWindowCenterX, FarWindowCenterY));                                       \
+		[branch] if (FarHalfExtent > 0.0 && max(d.x, d.y) <= FarHalfExtent)                                         \
+		{                                                                                                           \
+			float2 dims;                                                                                            \
+			ObjectTopFar.GetDimensions(dims.x, dims.y);                                                             \
+			float2 tf = FarTexel(worldXY, dims);                                                                    \
+			int2 t0 = (int2)tf;                                                                                     \
+			int2 t1 = min(t0 + 1, int2(dims) - 1);                                                                  \
+			result = reduce(reduce(ObjectTopFar.Load(int3(t0.x, t0.y, 0)), ObjectTopFar.Load(int3(t1.x, t0.y, 0))), \
+				reduce(ObjectTopFar.Load(int3(t0.x, t1.y, 0)), ObjectTopFar.Load(int3(t1.x, t1.y, 0))));            \
+		}
+
 float FarTop(float2 worldXY)
 {
-	float result = -1000000.0;
-	float2 d = abs(worldXY - float2(FarWindowCenterX, FarWindowCenterY));
-	[branch] if (FarHalfExtent > 0.0 && max(d.x, d.y) <= FarHalfExtent)
-	{
-		float2 dims;
-		ObjectTopFar.GetDimensions(dims.x, dims.y);
-		float2 tf = FarTexel(worldXY, dims);
-		int2 t0 = (int2)tf;
-		int2 t1 = min(t0 + 1, int2(dims) - 1);
-		result = max(max(ObjectTopFar.Load(int3(t0.x, t0.y, 0)), ObjectTopFar.Load(int3(t1.x, t0.y, 0))),
-			max(ObjectTopFar.Load(int3(t0.x, t1.y, 0)), ObjectTopFar.Load(int3(t1.x, t1.y, 0))));
-	}
+	SNOW_FAR_TOP(result, max, worldXY)
 	return result;
 }
 
 float FarTopMin(float2 worldXY)
 {
-	float result = -1000000.0;
-	float2 d = abs(worldXY - float2(FarWindowCenterX, FarWindowCenterY));
-	[branch] if (FarHalfExtent > 0.0 && max(d.x, d.y) <= FarHalfExtent)
-	{
-		float2 dims;
-		ObjectTopFar.GetDimensions(dims.x, dims.y);
-		float2 tf = FarTexel(worldXY, dims);
-		int2 t0 = (int2)tf;
-		int2 t1 = min(t0 + 1, int2(dims) - 1);
-		result = min(min(ObjectTopFar.Load(int3(t0.x, t0.y, 0)), ObjectTopFar.Load(int3(t1.x, t0.y, 0))),
-			min(ObjectTopFar.Load(int3(t0.x, t1.y, 0)), ObjectTopFar.Load(int3(t1.x, t1.y, 0))));
-	}
+	SNOW_FAR_TOP(result, min, worldXY)
 	return result;
 }
+
+#	undef SNOW_FAR_TOP
 
 float PatchTop(float2 worldXY)
 {
@@ -854,38 +807,7 @@ cbuffer PatchCullCB : register(b11)
 }
 #endif
 
-#if defined(VSHADER) && defined(PATCH) && !defined(SNOW_TESS)
-VS_OUTPUT main(uint vertexID : SV_VertexID)
-{
-#	ifdef SNOW_PATCH_INDEXED
-	const uint latticeStride = kPatchGridDim + 1;
-	float2 gridXY = float2(vertexID % latticeStride, vertexID / latticeStride);
-#	else
-	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	uint quadIndex = vertexID / 6;
-	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kCorners[vertexID % 6];
-#	endif
-	float2 worldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
-	return FinishPatchVertex(BuildPatchVertex(worldXY, false, float2(0.0, 1.0)));
-}
-#elif defined(VSHADER) && defined(PATCH)
-struct TessControlPointPatch
-{
-	float2 WorldXY : TEXCOORD0;
-};
-
-TessControlPointPatch main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
-{
-	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	uint quadIndex = (PatchRowStart + instanceID) * kPatchGridDim + PatchColStart + vertexID / 4;
-	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kPatchCorners[vertexID % 4];
-	TessControlPointPatch cp;
-	cp.WorldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
-	return cp;
-}
-#endif
-
-#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && defined(PATCH)
+#if (defined(HULLSHADER) || defined(DOMAINSHADER) || defined(SNOW_TESS)) && defined(PATCH)
 struct TessControlPointPatch
 {
 	float2 WorldXY : TEXCOORD0;
@@ -902,6 +824,32 @@ struct TessFactorsPatch
 	float Edge[4] : SV_TessFactor;
 	float Inside[2] : SV_InsideTessFactor;
 };
+#endif
+
+#if defined(VSHADER) && defined(PATCH) && !defined(SNOW_TESS)
+VS_OUTPUT main(uint vertexID : SV_VertexID)
+{
+#	ifdef SNOW_PATCH_INDEXED
+	const uint latticeStride = kPatchGridDim + 1;
+	float2 gridXY = float2(vertexID % latticeStride, vertexID / latticeStride);
+#	else
+	static const float2 kCorners[6] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = vertexID / 6;
+	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kCorners[vertexID % 6];
+#	endif
+	float2 worldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
+	return FinishPatchVertex(BuildPatchVertex(worldXY, false, float2(0.0, 1.0)));
+}
+#elif defined(VSHADER) && defined(PATCH)
+TessControlPointPatch main(uint vertexID : SV_VertexID, uint instanceID : SV_InstanceID)
+{
+	static const float2 kPatchCorners[4] = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
+	uint quadIndex = (PatchRowStart + instanceID) * kPatchGridDim + PatchColStart + vertexID / 4;
+	float2 gridXY = float2(quadIndex % kPatchGridDim, quadIndex / kPatchGridDim) + kPatchCorners[vertexID % 4];
+	TessControlPointPatch cp;
+	cp.WorldXY = WorldRow0.xy + PatchWarpXY(gridXY - kPatchGridDim * 0.5);
+	return cp;
+}
 #endif
 
 #if defined(PSHADER) && defined(SNOW_COAT_PARALLAX)
@@ -1195,6 +1143,38 @@ float3 SkinShadingNormal(float3 nrmWS, float3 smoothWS, float isFlat, float dept
 }
 #endif
 
+#define SNOW_SKIN_CLIP(vsout, worldAbs)                                               \
+	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;                                 \
+	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;                     \
+	[flatten] if (ProjPixelEnable > 1.5)                                              \
+	{                                                                                 \
+		float3 toEye = normalize(rel);                                                \
+		rel -= toEye * kEdgeFlankLift;                                                \
+		prevRel -= toEye * kEdgeFlankLift;                                            \
+	}                                                                                 \
+	VS_OUTPUT vsout;                                                                  \
+	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));                           \
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));              \
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0)); \
+	vsout.WorldPos = rel
+
+#if (defined(HULLSHADER) || defined(DOMAINSHADER) || defined(SNOW_TESS)) && !defined(PATCH)
+struct TessControlPoint
+{
+	float3 WorldBase : TEXCOORD0;
+	float3 NormalWS : TEXCOORD1;
+	float3 SmoothWS : TEXCOORD2;
+	float Flat : TEXCOORD3;
+	float VertexAlpha : TEXCOORD4;
+};
+
+struct TessFactors
+{
+	float Edge[3] : SV_TessFactor;
+	float Inside : SV_InsideTessFactor;
+};
+#endif
+
 #if defined(VSHADER) && !defined(PATCH)
 struct SkinVertex
 {
@@ -1257,20 +1237,7 @@ VS_OUTPUT main(VS_INPUT input)
 	SkinVertex v = BuildSkinVertex(input);
 	SkinLift lift = ApplySkinLift(v.WorldBase, v.NormalWS, v.SmoothWS, v.Flat, v.VertexAlpha);
 
-	float3 rel = lift.WorldAbs - ShellCameraPosAdjust.xyz;
-	float3 prevRel = lift.WorldAbs - ShellCameraPreviousPosAdjust.xyz;
-	[flatten] if (ProjPixelEnable > 1.5)
-	{
-		float3 toEye = normalize(rel);
-		rel -= toEye * kEdgeFlankLift;
-		prevRel -= toEye * kEdgeFlankLift;
-	}
-
-	VS_OUTPUT vsout;
-	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	vsout.WorldPos = rel;
+	SNOW_SKIN_CLIP(vsout, lift.WorldAbs);
 	vsout.NormalWS = ProjPixelEnable > 1.5 ? lift.ShadeNormal : SkinShadingNormal(v.NormalWS, v.SmoothWS, v.Flat, lift.Depth, lift.RimT);
 	vsout.Coverage = v.NormalWS.z;
 	vsout.Flat = v.Flat;
@@ -1288,15 +1255,6 @@ VS_OUTPUT main(VS_INPUT input)
 	return vsout;
 }
 #else
-struct TessControlPoint
-{
-	float3 WorldBase : TEXCOORD0;
-	float3 NormalWS : TEXCOORD1;
-	float3 SmoothWS : TEXCOORD2;
-	float Flat : TEXCOORD3;
-	float VertexAlpha : TEXCOORD4;
-};
-
 TessControlPoint main(VS_INPUT input)
 {
 	SkinVertex v = BuildSkinVertex(input);
@@ -1309,23 +1267,6 @@ TessControlPoint main(VS_INPUT input)
 	return cp;
 }
 #endif
-#endif
-
-#if (defined(HULLSHADER) || defined(DOMAINSHADER)) && !defined(PATCH)
-struct TessControlPoint
-{
-	float3 WorldBase : TEXCOORD0;
-	float3 NormalWS : TEXCOORD1;
-	float3 SmoothWS : TEXCOORD2;
-	float Flat : TEXCOORD3;
-	float VertexAlpha : TEXCOORD4;
-};
-
-struct TessFactors
-{
-	float Edge[3] : SV_TessFactor;
-	float Inside : SV_InsideTessFactor;
-};
 #endif
 
 #if defined(HULLSHADER) && !defined(PATCH)
@@ -1400,20 +1341,7 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 		}
 	}
 
-	float3 rel = worldAbs - ShellCameraPosAdjust.xyz;
-	float3 prevRel = worldAbs - ShellCameraPreviousPosAdjust.xyz;
-	[flatten] if (ProjPixelEnable > 1.5)
-	{
-		float3 toEye = normalize(rel);
-		rel -= toEye * kEdgeFlankLift;
-		prevRel -= toEye * kEdgeFlankLift;
-	}
-
-	VS_OUTPUT vsout;
-	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
-	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
-	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(prevRel, 1.0));
-	vsout.WorldPos = rel;
+	SNOW_SKIN_CLIP(vsout, worldAbs);
 	vsout.NormalWS = normalWS;
 	float smoothZ = nSum.z / max(length(nSum), 1e-3);
 	vsout.Coverage = smoothZ;
@@ -1426,18 +1354,13 @@ VS_OUTPUT main(TessFactors factors, float3 bary : SV_DomainLocation, const Outpu
 }
 #endif
 
+#undef SNOW_SKIN_CLIP
+
 #ifdef PSHADER
 
 struct PS_OUTPUT
 {
-	float4 Diffuse : SV_Target0;
-	float4 MotionVectors : SV_Target1;
-	float4 NormalGlossiness : SV_Target2;
-	float4 Albedo : SV_Target3;
-	float4 Specular : SV_Target4;
-	float4 Reflectance : SV_Target5;
-	float4 Masks : SV_Target6;
-	float4 Masks2 : SV_Target7;
+	SNOW_GBUFFER_TARGETS
 #	if !defined(PATCH) && !defined(SNOW_STATICS_NO_DEPTH_EXPORT)
 	float Depth : SV_Depth;
 #	endif
@@ -1763,13 +1686,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float snowRoughness = kSnowRoughness;
 	float3 snowF0 = kSnowF0;
 	float snowAO = 1.0;
-	[branch] if (HasSnowRmaos > 0.5)
-	{
-		float4 rmaos = SampleSnowPlanar(SnowRmaosMap, snowTaps, snowTapsSide, snowSteepness);
-		snowRoughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);
-		snowAO = rmaos.z;
-		snowF0 = rmaos.w * SnowSpecularLevel;
-	}
+	SNOW_RMAOS(snowRoughness, snowF0, snowAO, snowTaps, snowTapsSide, snowSteepness)
 #if defined(PATCH) || defined(SNOW_OBJECT_PRINTS)
 	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
 #endif
@@ -1938,17 +1855,7 @@ SkinShadeResult SkinShadeSurface(SkinShadeInput input, float3 normalWS)
 	float3 ambientPart = ambientColor * diffuseLobe;
 	float2 terrainLocal = (shadePos.xy + ShellCameraPosAdjust.xy) - GridOrigin;
 	float landVertexAO = ColorManagement::SRGBToWorking(SampleTerrainVertexAO(terrainLocal));
-	landVertexAO = lerp(1.0, landVertexAO, SharedData::truePBRSettings.VertexAOStrength);
-	[branch] if (SkylightingActive > 0.5)
-	{
-		sh2 skylightingSH = Skylighting::Sample(shadePos, normalWS);
-		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, shadePos, normalWS, landVertexAO);
-		ambientPart = ColorManagement::SceneColor::ScaleByLinear(ambientPart, MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse));
-	}
-	ambientPart *= Color::PBRLightingScale;
-	directDiffuse *= Color::PBRLightingScale;
-	directSpecular *= Color::PBRLightingScale;
-	diffuseLobe *= Color::PBRLightingScale;
+	SNOW_SKYLIGHTING(ambientPart, diffuseLobe, directDiffuse, directSpecular, landVertexAO, shadePos, normalWS);
 	float3 preLit = ambientPart + directDiffuse;
 
 	SkinShadeResult r;
@@ -2531,13 +2438,7 @@ PS_OUTPUT main(float4 pos : SV_Position)
 
 #if defined(COMPUTESHADER) && defined(SNOW_ROAD_MARCH_CS)
 RWTexture2D<float> RoadMarchOut : register(u0);
-StructuredBuffer<uint> MarchTilesIn : register(t63);
-cbuffer MarchCacheCB : register(b2)
-{
-	uint MarchRowStart;
-	uint MarchRowCount;
-	uint2 MarchCachePad;
-}
+#	include "SnowDeformation/SnowMarchCacheCB.hlsli"
 
 float RoadTapHeight(float2 sampleLocal)
 {

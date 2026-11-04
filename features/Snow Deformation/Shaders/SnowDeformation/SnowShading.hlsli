@@ -30,6 +30,19 @@ float3 SnowAmbientColor(float3 normalWS)
 	return ambientColor;
 }
 
+#define SNOW_SKYLIGHTING(ambientPart, diffuseLobe, directDiffuse, directSpecular, vertexAO, pos, n)                                                      \
+	vertexAO = lerp(1.0, vertexAO, SharedData::truePBRSettings.VertexAOStrength);                                                                        \
+	[branch] if (SkylightingActive > 0.5)                                                                                                                \
+	{                                                                                                                                                    \
+		sh2 skylightingSH = Skylighting::Sample(pos, n);                                                                                                 \
+		float skylightingDiffuse = Skylighting::GetSkylightingDiffuse(skylightingSH, pos, n, vertexAO);                                                  \
+		ambientPart = ColorManagement::SceneColor::ScaleByLinear(ambientPart, MultiBounceAO(diffuseLobe * Color::PBRLightingScale, skylightingDiffuse)); \
+	}                                                                                                                                                    \
+	ambientPart *= Color::PBRLightingScale;                                                                                                              \
+	directDiffuse *= Color::PBRLightingScale;                                                                                                            \
+	directSpecular *= Color::PBRLightingScale;                                                                                                           \
+	diffuseLobe *= Color::PBRLightingScale
+
 struct SnowSunLighting
 {
 	float3 directDiffuse;

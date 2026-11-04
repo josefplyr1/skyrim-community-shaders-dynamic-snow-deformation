@@ -135,13 +135,7 @@ void SnowDeformation::UpdatePointShadowLights()
 	auto context = globals::d3d::context;
 
 	if (!pointShadowLights) {
-		D3D11_BUFFER_DESC sbDesc{};
-		sbDesc.Usage = D3D11_USAGE_DYNAMIC;
-		sbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		sbDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		sbDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		sbDesc.StructureByteStride = sizeof(PointShadowLightData);
-		sbDesc.ByteWidth = sizeof(PointShadowLightData) * kPointShadowMaxLights;
+		D3D11_BUFFER_DESC sbDesc = StructuredBufferDesc<PointShadowLightData>(uint64_t(kPointShadowMaxLights), false, true);
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;

@@ -11,6 +11,12 @@ cbuffer LandscapeSnowCB : register(b11)
 	float4 LsExclAxis[16];
 };
 
+struct LS_HSConst
+{
+	float Edges[3] : SV_TessFactor;
+	float Inside : SV_InsideTessFactor;
+};
+
 #define LS_OFF_VIEW(k, clip)                               \
 	bool l = true, r = true, b = true, t = true, n = true; \
 	[unroll] for (uint i = 0; i < 6; i++)                  \

@@ -11,12 +11,6 @@ struct LSS_CP
 	float3 Local : LSSLOCAL;
 };
 
-struct LSS_Const
-{
-	float Edges[3] : SV_TessFactor;
-	float Inside : SV_InsideTessFactor;
-};
-
 #if defined(VSHADER)
 LSS_CP main(float4 position : POSITION)
 {
@@ -55,9 +49,9 @@ bool LssOffView(float3 g0, float3 g1, float3 g2)
 	return l || r || b || t || n;
 }
 
-LSS_Const LSS_PatchConst(InputPatch<LSS_CP, 3> p)
+LS_HSConst LSS_PatchConst(InputPatch<LSS_CP, 3> p)
 {
-	LSS_Const o;
+	LS_HSConst o;
 	o.Edges[0] = 0.0;
 	o.Edges[1] = 0.0;
 	o.Edges[2] = 0.0;
@@ -102,7 +96,7 @@ LSS_CP main(InputPatch<LSS_CP, 3> p, uint i : SV_OutputControlPointID)
 
 #if defined(DOMAINSHADER)
 [domain("tri")]
-VS_OUTPUT main(LSS_Const c, float3 uvw : SV_DomainLocation, const OutputPatch<LSS_CP, 3> p)
+VS_OUTPUT main(LS_HSConst c, float3 uvw : SV_DomainLocation, const OutputPatch<LSS_CP, 3> p)
 {
 	float2 gridLocal = p[0].Local.xy * uvw.x + p[1].Local.xy * uvw.y + p[2].Local.xy * uvw.z;
 	float coverage;

@@ -176,13 +176,7 @@ void SnowDeformation::CreatePrintResources(uint32_t a_dim)
 		printFrameCB = new ConstantBuffer(ConstantBufferDesc<PrintFrameCB>(), "SnowDeformation::PrintFrameCB");
 
 	if (!printBlockBuffer) {
-		D3D11_BUFFER_DESC blockDesc{};
-		blockDesc.ByteWidth = kPrintBlockCap * sizeof(uint32_t);
-		blockDesc.Usage = D3D11_USAGE_DYNAMIC;
-		blockDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		blockDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		blockDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		blockDesc.StructureByteStride = sizeof(uint32_t);
+		D3D11_BUFFER_DESC blockDesc = StructuredBufferDesc<uint32_t>(uint64_t(kPrintBlockCap), false, true);
 		DX::ThrowIfFailed(device->CreateBuffer(&blockDesc, nullptr, printBlockBuffer.put()));
 		Util::SetResourceName(printBlockBuffer.get(), "SnowDeformation::PrintBlocks");
 		D3D11_SHADER_RESOURCE_VIEW_DESC blockSrvDesc{};

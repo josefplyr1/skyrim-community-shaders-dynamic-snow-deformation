@@ -1018,23 +1018,26 @@ uint32_t SnowDeformation::FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a
 	return count;
 }
 
+static double PatchWarpMagnitude(int a_u)
+{
+	static constexpr double kBandVerts[5] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
+	static constexpr double kBandMul[5] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
+	double a = std::abs(double(a_u));
+	double off = 0.0;
+	for (int band = 0; band < 5; band++) {
+		const double take = std::min(a, kBandVerts[band]);
+		off += take * kBandMul[band];
+		a -= take;
+	}
+	return (off + a * kBandMul[4]) * 8.0;
+}
+
 uint32_t SnowDeformation::PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const
 {
 	static constexpr uint32_t kBlock = 8;
 	static constexpr uint32_t kBlocks = (kPatchGridDim + kBlock - 1) / kBlock;
 	static constexpr double kMargin = 16.0 + 8.0;
-	const auto warp = [](int a_u) {
-		static constexpr double kBandVerts[5] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
-		static constexpr double kBandMul[5] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
-		double a = std::abs(double(a_u));
-		double off = 0.0;
-		for (int band = 0; band < 5; band++) {
-			const double take = std::min(a, kBandVerts[band]);
-			off += take * kBandMul[band];
-			a -= take;
-		}
-		return (a_u < 0 ? -1.0 : 1.0) * (off + a * kBandMul[4]) * 8.0;
-	};
+	const auto warp = [](int a_u) { return (a_u < 0 ? -1.0 : 1.0) * PatchWarpMagnitude(a_u); };
 	double edgeX[kBlocks + 1];
 	double edgeY[kBlocks + 1];
 	for (uint32_t b = 0; b <= kBlocks; b++) {
@@ -1101,18 +1104,7 @@ bool SnowDeformation::EnsurePatchCasterIB()
 		return true;
 	constexpr uint32_t stride = kPatchGridDim + 1;
 	static constexpr uint32_t kCorners[6][2] = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 0 }, { 1, 1 }, { 0, 1 } };
-	const auto warp = [](int a_u) {
-		static constexpr double kBandVerts[5] = { 128.0, 16.0, 8.0, 4.0, 57.0 };
-		static constexpr double kBandMul[5] = { 1.0, 2.0, 4.0, 8.0, 32.0 };
-		double a = std::abs(double(a_u));
-		double off = 0.0;
-		for (int band = 0; band < 5; band++) {
-			const double take = std::min(a, kBandVerts[band]);
-			off += take * kBandMul[band];
-			a -= take;
-		}
-		return (off + a * kBandMul[4]) * 8.0;
-	};
+	const auto warp = PatchWarpMagnitude;
 	std::vector<uint8_t> casts(size_t(stride) * stride);
 	for (uint32_t y = 0; y < stride; y++) {
 		for (uint32_t x = 0; x < stride; x++) {
@@ -1161,24 +1153,8 @@ bool SnowDeformation::EnsurePatchDeferredResources()
 		delete patchDeferredMark;
 		patchDeferredMark = nullptr;
 	}
-	if (!patchDeferredMark) {
-		D3D11_TEXTURE2D_DESC desc = base;
-		desc.Format = DXGI_FORMAT_R8_UNORM;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		patchDeferredMark = new Texture2D(desc, "SnowDeformation::TrenchPatchDeferredMark");
-		patchDeferredMark->CreateSRV(srvDesc);
-		patchDeferredMark->CreateRTV(rtvDesc);
-	}
+	if (!patchDeferredMark)
+		patchDeferredMark = SD_MakeTexture2D(base.Width, base.Height, DXGI_FORMAT_R8_UNORM, "SnowDeformation::TrenchPatchDeferredMark", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 	if (!patchDeferredDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
 		dsDesc.DepthEnable = FALSE;
@@ -2498,12 +2474,7 @@ bool SnowDeformation::EnsureSmoothNormalsCS()
 	if (!smoothClusterCS)
 		smoothClusterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0")));
 	if (!meshBounds && smoothBoundsCS) {
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = kMeshBoundsSlots * 2 * 16;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		desc.StructureByteStride = 16;
+		D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(kMeshBoundsSlots * 2));
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
@@ -2522,12 +2493,7 @@ bool SnowDeformation::EnsureSmoothNormalsCS()
 bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
 {
 	if (!clusterBounds) {
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = kClusterSlots * 2 * 16;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		desc.StructureByteStride = 16;
+		D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(kClusterSlots * 2));
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
 		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
 		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
@@ -2740,12 +2706,7 @@ bool SnowDeformation::AllocateSmoothedNormals(uint32_t a_count, uint32_t& a_chun
 		}
 	}
 	const uint32_t capacity = std::max(kSmoothedNormalsChunkElements, a_count);
-	D3D11_BUFFER_DESC desc{};
-	desc.ByteWidth = capacity * 16;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-	desc.StructureByteStride = 16;
+	D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(capacity));
 	SmoothedNormalsChunk chunk;
 	auto device = globals::d3d::device;
 	if (FAILED(device->CreateBuffer(&desc, nullptr, chunk.buffer.put())))
@@ -2835,24 +2796,7 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 	if (stride == 0 || vertexCount == 0)
 		return nullptr;
 
-	uint32_t positionBytes = stride;
-	static constexpr std::pair<RE::BSGraphics::Vertex::Flags, RE::BSGraphics::Vertex::Attribute> kSmoothAttrs[] = {
-		{ RE::BSGraphics::Vertex::VF_UV, RE::BSGraphics::Vertex::VA_TEXCOORD0 },
-		{ RE::BSGraphics::Vertex::VF_UV_2, RE::BSGraphics::Vertex::VA_TEXCOORD1 },
-		{ RE::BSGraphics::Vertex::VF_NORMAL, RE::BSGraphics::Vertex::VA_NORMAL },
-		{ RE::BSGraphics::Vertex::VF_TANGENT, RE::BSGraphics::Vertex::VA_BINORMAL },
-		{ RE::BSGraphics::Vertex::VF_COLORS, RE::BSGraphics::Vertex::VA_COLOR },
-		{ RE::BSGraphics::Vertex::VF_SKINNED, RE::BSGraphics::Vertex::VA_SKINNING },
-		{ RE::BSGraphics::Vertex::VF_LANDDATA, RE::BSGraphics::Vertex::VA_LANDDATA },
-		{ RE::BSGraphics::Vertex::VF_EYEDATA, RE::BSGraphics::Vertex::VA_EYEDATA },
-	};
-	for (auto [flag, attr] : kSmoothAttrs) {
-		if (desc.HasFlag(flag)) {
-			uint32_t attrOffset = desc.GetAttributeOffset(attr);
-			if (attrOffset > 0 && attrOffset < positionBytes)
-				positionBytes = attrOffset;
-		}
-	}
+	const uint32_t positionBytes = SD_PositionBytes(descKey, desc);
 	const uint32_t normalOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
 	uint32_t colorOffset = 0;
 	bool hasColor = false;
@@ -4714,7 +4658,6 @@ ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS(bool a_fromUAV)
 {
 	auto& slot = a_fromUAV ? hiZBuildUAVCS : hiZBuildCS;
 	if (!slot) {
-		logger::debug("Compiling DepthSyncCS HiZBuildCS{}", a_fromUAV ? " (from UAV)" : "");
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (a_fromUAV)
 			defines.push_back({ "HIZ_FROM_UAV", "" });
@@ -4837,13 +4780,7 @@ bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderReso
 		delete skinCullArgs;
 		skinCullArgs = nullptr;
 
-		D3D11_BUFFER_DESC boundsDesc{};
-		boundsDesc.Usage = D3D11_USAGE_DYNAMIC;
-		boundsDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		boundsDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		boundsDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		boundsDesc.StructureByteStride = sizeof(SkinCullBound);
-		boundsDesc.ByteWidth = sizeof(SkinCullBound) * capacity;
+		D3D11_BUFFER_DESC boundsDesc = StructuredBufferDesc<SkinCullBound>(uint64_t(capacity), false, true);
 		D3D11_SHADER_RESOURCE_VIEW_DESC boundsSRV{};
 		boundsSRV.Format = DXGI_FORMAT_UNKNOWN;
 		boundsSRV.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;

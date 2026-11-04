@@ -105,6 +105,15 @@ float4 SampleSnowPlanar(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTa
 	return c;
 }
 
+#	define SNOW_RMAOS(roughness, f0, ao, topTaps, sideTaps, sideWeight)                   \
+		[branch] if (HasSnowRmaos > 0.5)                                                  \
+		{                                                                                 \
+			float4 rmaos = SampleSnowPlanar(SnowRmaosMap, topTaps, sideTaps, sideWeight); \
+			roughness = clamp(rmaos.x * SnowRoughnessScale, 0.05, 1.0);                   \
+			ao = rmaos.z;                                                                 \
+			f0 = rmaos.w * SnowSpecularLevel;                                             \
+		}
+
 float3 SampleSnowNormalOffset(Texture2D<float4> tex, SnowTaps topTaps, SnowTaps sideTaps, float sideWeight, float3 n,
 	float3 topT, float3 topB, bool sideDropsX)
 {

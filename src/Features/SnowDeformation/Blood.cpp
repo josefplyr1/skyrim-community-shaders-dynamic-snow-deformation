@@ -185,13 +185,7 @@ bool SnowDeformation::EnsureBloodResourcesImpl()
 		}
 	}
 	if (!bloodDiscBuffer) {
-		D3D11_BUFFER_DESC bufDesc{};
-		bufDesc.ByteWidth = sizeof(float4) * 2 * kBloodMaxDiscs;
-		bufDesc.Usage = D3D11_USAGE_DYNAMIC;
-		bufDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		bufDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		bufDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		bufDesc.StructureByteStride = sizeof(float4);
+		D3D11_BUFFER_DESC bufDesc = StructuredBufferDesc<float4>(uint64_t(2 * kBloodMaxDiscs), false, true);
 		if (FAILED(device->CreateBuffer(&bufDesc, nullptr, bloodDiscBuffer.put()))) {
 			logger::error("[SNOW DEFORMATION] blood: disc buffer failed");
 			bloodShadersFailed = true;

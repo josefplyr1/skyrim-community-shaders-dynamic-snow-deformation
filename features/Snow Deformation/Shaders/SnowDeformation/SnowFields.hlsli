@@ -463,8 +463,6 @@ float SampleScorch(float2 gridLocal)
 	return saturate(-v.y);
 }
 
-#undef SNOW_DEFORM_BILINEAR4
-
 static const float kSpellMarkStart = 0.02;
 float SampleSpellMark(float2 gridLocal)
 {

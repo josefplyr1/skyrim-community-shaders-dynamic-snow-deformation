@@ -466,30 +466,9 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		shellTestDepth = nullptr;
 	}
 	if (!shellRasterDepth) {
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = depthDesc.Width;
-		desc.Height = depthDesc.Height;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		shellRasterDepth = new Texture2D(desc, "SnowDeformation::ShellRasterDepth");
-		shellRasterDepth->CreateSRV(srvDesc);
-		shellRasterDepth->CreateRTV(rtvDesc);
+		shellRasterDepth = SD_MakeTexture2D(depthDesc.Width, depthDesc.Height, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellRasterDepth", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 
-		D3D11_TEXTURE2D_DESC testDesc = desc;
+		D3D11_TEXTURE2D_DESC testDesc = shellRasterDepth->desc;
 		testDesc.Format = DXGI_FORMAT_R32_TYPELESS;
 		testDesc.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
 		if (FAILED(device->CreateTexture2D(&testDesc, nullptr, shellTestDepth.put())))
@@ -514,7 +493,7 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		preSnowDepthSRV = nullptr;
 		preSnowDepthUAV = nullptr;
 		preSnowDepthRTV = nullptr;
-		D3D11_TEXTURE2D_DESC copyDesc = desc;
+		D3D11_TEXTURE2D_DESC copyDesc = shellRasterDepth->desc;
 		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
 		D3D11_UNORDERED_ACCESS_VIEW_DESC copyUavDesc{};
 		copyUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
@@ -524,7 +503,7 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		copyRtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 		if (SUCCEEDED(device->CreateTexture2D(&copyDesc, nullptr, preSnowDepth.put()))) {
 			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
-			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &srvDesc, preSnowDepthSRV.put())) ||
+			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &testSrvDesc, preSnowDepthSRV.put())) ||
 				FAILED(device->CreateUnorderedAccessView(preSnowDepth.get(), &copyUavDesc, preSnowDepthUAV.put())) ||
 				FAILED(device->CreateRenderTargetView(preSnowDepth.get(), &copyRtvDesc, preSnowDepthRTV.put()))) {
 				preSnowDepth = nullptr;
@@ -572,24 +551,8 @@ bool SnowDeformation::EnsureDeferredResources()
 			delete attr;
 			attr = nullptr;
 		}
-		if (!attr) {
-			D3D11_TEXTURE2D_DESC desc = base;
-			desc.Format = kFormats[i];
-			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-			};
-			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = 0 }
-			};
-			attr = new Texture2D(desc, kNames[i]);
-			attr->CreateSRV(srvDesc);
-			attr->CreateRTV(rtvDesc);
-		}
+		if (!attr)
+			attr = SD_MakeTexture2D(base.Width, base.Height, kFormats[i], kNames[i], D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 	}
 	if (!shellDeferredDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
@@ -656,34 +619,9 @@ bool SnowDeformation::EnsureEarlyPrepassResources()
 			delete a_tex;
 			a_tex = nullptr;
 		}
-		if (!a_tex) {
-			D3D11_TEXTURE2D_DESC desc = base;
-			desc.Format = a_format;
-			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-			if (a_uav)
-				desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
-			D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-				.Format = a_format,
-				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-			};
-			D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-				.Format = a_format,
-				.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = 0 }
-			};
-			a_tex = new Texture2D(desc, a_name);
-			a_tex->CreateSRV(srvDesc);
-			a_tex->CreateRTV(rtvDesc);
-			if (a_uav) {
-				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-					.Format = a_format,
-					.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-					.Texture2D = { .MipSlice = 0 }
-				};
-				a_tex->CreateUAV(uavDesc);
-			}
-		}
+		if (!a_tex)
+			a_tex = SD_MakeTexture2D(base.Width, base.Height, a_format, a_name,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | (a_uav ? D3D11_BIND_UNORDERED_ACCESS : 0u));
 		return a_tex->srv && a_tex->rtv;
 	};
 	return ensure(shellEarlyPending, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::ShellEarlyPending", false) &&
