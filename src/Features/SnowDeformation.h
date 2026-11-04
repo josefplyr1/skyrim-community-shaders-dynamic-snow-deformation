@@ -2763,6 +2763,7 @@ protected:
 	bool WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy = false, uint32_t* a_verdictOut = nullptr) const;
 	bool LoadedCellSquare(int& a_minX, int& a_minY, int& a_maxX, int& a_maxY) const;
 	uint32_t CellRangeSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY) const;
+	uint32_t CellWalkSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, bool a_unknownIsSnowy) const;
 	uint32_t ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, const ShellCB& a_cb);
 	static constexpr float kViewGateMarginZ = 256.0f;
 	std::unordered_map<uint64_t, std::pair<float, float>> viewGateCellZ;
@@ -2986,6 +2987,7 @@ protected:
 	void FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_clearing);
 	uint BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing);
 	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks);
+	bool StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, uint32_t a_path, bool a_wait);
 	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh = nullptr);
 	static constexpr uint32_t kTrenchRecord = 'SNTR';
 	static constexpr uint32_t kTrenchRecordVersion = 2;

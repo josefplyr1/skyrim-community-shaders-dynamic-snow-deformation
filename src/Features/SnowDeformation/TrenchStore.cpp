@@ -301,16 +301,7 @@ void SnowDeformation::RollTrenchWindow()
 	trenchRollRing ^= 1;
 
 	if (trenchRollValid[ring]) {
-		D3D11_MAPPED_SUBRESOURCE stale{};
-		D3D11_MAPPED_SUBRESOURCE staleClocks{};
-		if (SUCCEEDED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &stale))) {
-			const bool dated = SUCCEEDED(context->Map(trenchClockRollStaging[ring].get(), 0, D3D11_MAP_READ, 0, &staleClocks));
-			cpuCensus.trenchStorePath = CpuCensus::kStoreRollStale;
-			StoreTrenchBand(trenchRollMeta[ring], stale, dated ? &staleClocks : nullptr);
-			if (dated)
-				context->Unmap(trenchClockRollStaging[ring].get(), 0);
-			context->Unmap(trenchRollStaging[ring].get(), 0);
-		}
+		StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], CpuCensus::kStoreRollStale, true);
 		trenchRollValid[ring] = false;
 	}
 
@@ -739,6 +730,27 @@ void SnowDeformation::StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_
 	trenchSampleTile = nullptr;
 }
 
+bool SnowDeformation::StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, uint32_t a_path, bool a_wait)
+{
+	auto context = globals::d3d::context;
+	const UINT mapFlags = a_wait ? 0 : D3D11_MAP_FLAG_DO_NOT_WAIT;
+	D3D11_MAPPED_SUBRESOURCE mapped{};
+	D3D11_MAPPED_SUBRESOURCE clocks{};
+	if (FAILED(context->Map(a_staging, 0, D3D11_MAP_READ, mapFlags, &mapped)))
+		return false;
+	const bool dated = a_clockStaging && SUCCEEDED(context->Map(a_clockStaging, 0, D3D11_MAP_READ, mapFlags, &clocks));
+	if (!dated && !a_wait) {
+		context->Unmap(a_staging, 0);
+		return false;
+	}
+	cpuCensus.trenchStorePath = a_path;
+	StoreTrenchBand(a_meta, mapped, dated ? &clocks : nullptr);
+	if (dated)
+		context->Unmap(a_clockStaging, 0);
+	context->Unmap(a_staging, 0);
+	return true;
+}
+
 void SnowDeformation::DrainTrenchBands()
 {
 	auto context = globals::d3d::context;
@@ -749,40 +761,16 @@ void SnowDeformation::DrainTrenchBands()
 
 	for (int ring = 0; ring < 2; ring++) {
 		for (int axis = 0; axis < 2; axis++) {
-			if (!trenchBandValid[ring][axis])
-				continue;
-			D3D11_MAPPED_SUBRESOURCE mapped{};
-			D3D11_MAPPED_SUBRESOURCE clocks{};
-			if (FAILED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
-				continue;
-			if (FAILED(context->Map(trenchClockBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &clocks))) {
-				context->Unmap(trenchBandStaging[ring][axis].get(), 0);
-				continue;
-			}
-			cpuCensus.trenchStorePath = CpuCensus::kStoreBand;
-			StoreTrenchBand(trenchBandMeta[ring][axis], mapped, &clocks);
-			context->Unmap(trenchClockBandStaging[ring][axis].get(), 0);
-			context->Unmap(trenchBandStaging[ring][axis].get(), 0);
-			trenchBandValid[ring][axis] = false;
+			if (trenchBandValid[ring][axis] &&
+				StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], CpuCensus::kStoreBand, false))
+				trenchBandValid[ring][axis] = false;
 		}
 	}
 
 	for (int ring = 0; ring < 2; ring++) {
-		if (!trenchRollValid[ring])
-			continue;
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		D3D11_MAPPED_SUBRESOURCE clocks{};
-		if (FAILED(context->Map(trenchRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
-			continue;
-		if (FAILED(context->Map(trenchClockRollStaging[ring].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &clocks))) {
-			context->Unmap(trenchRollStaging[ring].get(), 0);
-			continue;
-		}
-		cpuCensus.trenchStorePath = CpuCensus::kStoreRoll;
-		StoreTrenchBand(trenchRollMeta[ring], mapped, &clocks);
-		context->Unmap(trenchClockRollStaging[ring].get(), 0);
-		context->Unmap(trenchRollStaging[ring].get(), 0);
-		trenchRollValid[ring] = false;
+		if (trenchRollValid[ring] &&
+			StoreStagedTrenchBand(trenchRollStaging[ring].get(), trenchClockRollStaging[ring].get(), trenchRollMeta[ring], CpuCensus::kStoreRoll, false))
+			trenchRollValid[ring] = false;
 	}
 }
 
@@ -827,17 +815,8 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		if (fullClockStaging)
 			CopyLogicalBox(fullClockStaging.get(), trackClockTexture->resource.get(), 0, 0, dim, dim, trenchMapPhysOrigin);
 
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		D3D11_MAPPED_SUBRESOURCE clocks{};
-		if (SUCCEEDED(context->Map(fullStaging.get(), 0, D3D11_MAP_READ, 0, &mapped))) {
-			const bool dated = fullClockStaging && SUCCEEDED(context->Map(fullClockStaging.get(), 0, D3D11_MAP_READ, 0, &clocks));
-			cpuCensus.trenchStorePath = CpuCensus::kStoreJump;
-			StoreTrenchBand({ trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim, TrackDateClock(), trenchAgeingTotal }, mapped,
-				dated ? &clocks : nullptr);
-			if (dated)
-				context->Unmap(fullClockStaging.get(), 0);
-			context->Unmap(fullStaging.get(), 0);
-		}
+		StoreStagedTrenchBand(fullStaging.get(), fullClockStaging.get(), { trenchMapOrigin, trenchMapTexel, trenchMapWorldspace, 0, 0, dim, dim, TrackDateClock(), trenchAgeingTotal },
+			CpuCensus::kStoreJump, true);
 		return;
 	}
 
@@ -863,16 +842,7 @@ void SnowDeformation::FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_cl
 		}
 
 		if (trenchBandValid[ring][axis]) {
-			D3D11_MAPPED_SUBRESOURCE stale{};
-			D3D11_MAPPED_SUBRESOURCE staleClocks{};
-			if (SUCCEEDED(context->Map(trenchBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, 0, &stale))) {
-				const bool dated = SUCCEEDED(context->Map(trenchClockBandStaging[ring][axis].get(), 0, D3D11_MAP_READ, 0, &staleClocks));
-				cpuCensus.trenchStorePath = CpuCensus::kStoreBandStale;
-				StoreTrenchBand(trenchBandMeta[ring][axis], stale, dated ? &staleClocks : nullptr);
-				if (dated)
-					context->Unmap(trenchClockBandStaging[ring][axis].get(), 0);
-				context->Unmap(trenchBandStaging[ring][axis].get(), 0);
-			}
+			StoreStagedTrenchBand(trenchBandStaging[ring][axis].get(), trenchClockBandStaging[ring][axis].get(), trenchBandMeta[ring][axis], CpuCensus::kStoreBandStale, true);
 			trenchBandValid[ring][axis] = false;
 		}
 

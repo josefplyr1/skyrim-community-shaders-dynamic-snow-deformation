@@ -57,6 +57,29 @@ static std::string CapturedModelPath(RE::NiAVObject* a_object)
 	return "<no reference>";
 }
 
+static RE::TESObjectREFR* OwningRefOf(RE::NiAVObject* a_object)
+{
+	RE::TESObjectREFR* refr = nullptr;
+	for (RE::NiAVObject* node = a_object; node && !refr; node = node->parent)
+		refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+	return refr;
+}
+
+static const char* DiffusePathOf(RE::BSLightingShaderMaterialBase* a_material)
+{
+	auto* textureSet = a_material ? a_material->textureSet.get() : nullptr;
+	return textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+}
+
+static void SetWorldRows(const RE::NiTransform& a_world, SnowDeformation::StaticsCB& a_cb)
+{
+	const auto& rot = a_world.rotate;
+	const float scale = a_world.scale;
+	a_cb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_world.translate.x };
+	a_cb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_world.translate.y };
+	a_cb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_world.translate.z };
+}
+
 SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, float a_y)
 {
 	ObjectSnowProbe probe;
@@ -272,6 +295,35 @@ struct SD_DrawBinds
 	}
 };
 
+struct RigidDraw
+{
+	RE::BSTriShape* triShape;
+	ID3D11Buffer* vb;
+	ID3D11Buffer* ib;
+	uint32_t indexCount;
+	RE::BSGraphics::VertexDesc desc;
+	uint64_t descKey;
+};
+
+static bool RigidDrawOf(RE::BSGeometry* a_geometry, RigidDraw& a_out)
+{
+	auto triShape = a_geometry->AsTriShape();
+	if (!triShape)
+		return false;
+	auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
+	if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
+		return false;
+	const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
+	if (indexCount == 0)
+		return false;
+	auto desc = rendererData->vertexDesc;
+	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
+		return false;
+	a_out = { triShape, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), indexCount, desc, 0 };
+	memcpy(&a_out.descKey, &desc, sizeof(a_out.descKey));
+	return true;
+}
+
 static void SampleLODDecision(RE::BSGeometry* a_geometry, float a_radius, bool a_rejected, bool a_cameraInside)
 {
 	static std::atomic<uint32_t> loggedKept{ 0 };
@@ -299,9 +351,7 @@ namespace
 
 	MatoClass ClassifyProjectedMato(RE::BSGeometry* a_geometry)
 	{
-		RE::TESObjectREFR* refr = nullptr;
-		for (RE::NiAVObject* node = a_geometry; node && !refr; node = node->parent)
-			refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+		auto* refr = OwningRefOf(a_geometry);
 		if (!refr)
 			return MatoClass::kNoReference;
 		auto* base = refr->GetBaseObject();
@@ -413,17 +463,11 @@ namespace
 		if (!logged.insert((uint64_t)(uintptr_t)geometry ^ ((uint64_t)(uintptr_t)a_outcome << 1)).second)
 			return;
 		const char* texPath = "";
-		if (material) {
-			if (auto textureSet = material->textureSet.get()) {
-				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse); path)
-					texPath = path;
-			}
-		}
+		if (auto path = DiffusePathOf(material))
+			texPath = path;
 		using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 		const auto& flags = a_pass->shaderProperty->flags;
-		RE::TESObjectREFR* refr = nullptr;
-		for (RE::NiAVObject* node = geometry; node && !refr; node = node->parent)
-			refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+		auto* refr = OwningRefOf(geometry);
 		auto* alpha = geometry->GetGeometryRuntimeData().alphaProperty.get();
 		logger::info("[SNOW DEFORMATION] ice journey '{}' r={:.0f} proj={} snow={} lodObj={} hdLod={} lodLand={} decalMode={} alphaTest={} alphaBlend={} ref={:08X} tex='{}' -> {}",
 			geometry->name.empty() ? "<unnamed>" : geometry->name.c_str(),
@@ -444,32 +488,30 @@ namespace
 			pathCache.clear();
 		auto [it, inserted] = pathCache.try_emplace(a_material, SnowPathMatch{});
 		if (inserted) {
-			if (auto textureSet = a_material->textureSet.get()) {
-				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-					const std::string lowered = Util::ToLower(path);
-					it->second.base = lowered.find("drift") != std::string::npos ||
-					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
-					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
-					                            lowered.find("iceberg") != std::string::npos;
-					it->second.mountain = lowered.find("mountain") != std::string::npos ||
-					                      lowered.find("cliff") != std::string::npos;
-					const size_t slash = lowered.find_last_of("\\/");
-					const std::string file = slash == std::string::npos ? lowered : lowered.substr(slash + 1);
-					it->second.snowNamed = file.find("snow") != std::string::npos &&
-					                       file.find("snowberr") == std::string::npos &&
-					                       file.find("nosnow") == std::string::npos;
-					const std::string folder = slash == std::string::npos ? std::string() : lowered.substr(0, slash);
-					it->second.groundSnow = it->second.snowNamed && file.rfind("snow", 0) == 0 &&
-					                        folder.find("landscape") != std::string::npos &&
-					                        folder.find("tree") == std::string::npos && folder.find("grass") == std::string::npos &&
-					                        folder.find("plant") == std::string::npos && folder.find("road") == std::string::npos &&
-					                        folder.find("flower") == std::string::npos;
-					it->second.architecture = lowered.find("architecture") != std::string::npos &&
-					                          lowered.find("ivy") == std::string::npos && lowered.find("vine") == std::string::npos &&
-					                          lowered.find("leaf") == std::string::npos && lowered.find("leaves") == std::string::npos &&
-					                          lowered.find("grass") == std::string::npos && lowered.find("branch") == std::string::npos &&
-					                          lowered.find("moss") == std::string::npos;
-				}
+			if (auto path = DiffusePathOf(a_material)) {
+				const std::string lowered = Util::ToLower(path);
+				it->second.base = lowered.find("drift") != std::string::npos ||
+				                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
+				it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
+				                            lowered.find("iceberg") != std::string::npos;
+				it->second.mountain = lowered.find("mountain") != std::string::npos ||
+				                      lowered.find("cliff") != std::string::npos;
+				const size_t slash = lowered.find_last_of("\\/");
+				const std::string file = slash == std::string::npos ? lowered : lowered.substr(slash + 1);
+				it->second.snowNamed = file.find("snow") != std::string::npos &&
+				                       file.find("snowberr") == std::string::npos &&
+				                       file.find("nosnow") == std::string::npos;
+				const std::string folder = slash == std::string::npos ? std::string() : lowered.substr(0, slash);
+				it->second.groundSnow = it->second.snowNamed && file.rfind("snow", 0) == 0 &&
+				                        folder.find("landscape") != std::string::npos &&
+				                        folder.find("tree") == std::string::npos && folder.find("grass") == std::string::npos &&
+				                        folder.find("plant") == std::string::npos && folder.find("road") == std::string::npos &&
+				                        folder.find("flower") == std::string::npos;
+				it->second.architecture = lowered.find("architecture") != std::string::npos &&
+				                          lowered.find("ivy") == std::string::npos && lowered.find("vine") == std::string::npos &&
+				                          lowered.find("leaf") == std::string::npos && lowered.find("leaves") == std::string::npos &&
+				                          lowered.find("grass") == std::string::npos && lowered.find("branch") == std::string::npos &&
+				                          lowered.find("moss") == std::string::npos;
 			}
 		}
 		return it->second;
@@ -493,8 +535,7 @@ namespace
 				return RE::BSVisit::BSVisitControl::kContinue;
 			auto* property = netimmerse_cast<RE::BSLightingShaderProperty*>(a_mate->GetGeometryRuntimeData().shaderProperty.get());
 			auto* material = property ? static_cast<RE::BSLightingShaderMaterialBase*>(property->material) : nullptr;
-			auto* textureSet = material ? material->textureSet.get() : nullptr;
-			const char* diffuse = textureSet ? textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse) : nullptr;
+			const char* diffuse = DiffusePathOf(material);
 			if (!diffuse || ContainsNoCase(diffuse, "bridge"))
 				return RE::BSVisit::BSVisitControl::kContinue;
 			const bool paving = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
@@ -572,14 +613,12 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 			r.pathArchitecture = path.architecture;
 			r.pathSnowNamed = path.snowNamed;
 			r.pathGroundSnow = path.groundSnow;
-			if (auto textureSet = a_material->textureSet.get()) {
-				if (auto diffuse = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-					r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
-					r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
-					r.landscapeTex = ContainsNoCase(diffuse, "landscape");
-					r.pavingTex = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
-					r.bloodTex = ContainsNoCase(diffuse, "blood");
-				}
+			if (auto diffuse = DiffusePathOf(a_material)) {
+				r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
+				r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
+				r.landscapeTex = ContainsNoCase(diffuse, "landscape");
+				r.pavingTex = (ContainsNoCase(diffuse, "floor") || ContainsNoCase(diffuse, "slate")) && !ContainsNoCase(diffuse, "roof");
+				r.bloodTex = ContainsNoCase(diffuse, "blood");
 			}
 		}
 		r.mato = ClassifyProjectedMato(a_geometry);
@@ -598,9 +637,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		}
 		if (!r.seasonsProj) {
 			static std::unordered_map<uint32_t, bool> sosBase;
-			RE::TESObjectREFR* refr = nullptr;
-			for (RE::NiAVObject* node = a_geometry; node && !refr; node = node->parent)
-				refr = static_cast<RE::TESObjectREFR*>(node->GetUserData());
+			auto* refr = OwningRefOf(a_geometry);
 			if (auto* base = refr ? refr->GetBaseObject() : nullptr) {
 				auto [sosIt, sosInserted] = sosBase.try_emplace(base->GetFormID(), false);
 				if (sosInserted) {
@@ -800,9 +837,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		const float by = wb.center.y - eye.y;
 		const bool cameraInside = (bx * bx + by * by) < (wb.radius * wb.radius);
 		if (cameraInside && wb.radius > kMergedLODRadius) {
-			bool referenced = false;
-			for (RE::NiAVObject* node = a_pass->geometry; node && !referenced; node = node->parent)
-				referenced = node->GetUserData() != nullptr;
+			bool referenced = OwningRefOf(a_pass->geometry) != nullptr;
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
 			const bool iceSheet = rec.pathNatural;
@@ -897,10 +932,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	if (!nameFacts.capturedLogged) {
 		nameFacts.capturedLogged = true;
 		const char* diffusePath = "";
-		if (auto* logMaterial = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material))
-			if (auto textureSet = logMaterial->textureSet.get())
-				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
-					diffusePath = path;
+		if (auto path = DiffusePathOf(static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material)))
+			diffusePath = path;
 		logger::info("[SNOW DEFORMATION] captured '{}' road={} (via {}) tex='{}'",
 			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, diffusePath);
 	}
@@ -2075,23 +2108,13 @@ void SnowDeformation::RenderObjectHeightMap()
 			continue;
 		if (cap.lodBatch)
 			continue;
-		auto triShape = geometry->AsTriShape();
-		if (!triShape)
+		RigidDraw draw;
+		if (!RigidDrawOf(geometry, draw))
 			continue;
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-			continue;
-		if (triShape->GetTrishapeRuntimeData().triangleCount == 0)
-			continue;
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-			continue;
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto layoutIt = staticsILCache.find(descKey);
+		auto layoutIt = staticsILCache.find(draw.descKey);
 		if (layoutIt == staticsILCache.end() || !layoutIt->second)
 			continue;
-		if (uint32_t(descKey & 0xF) == 0)
+		if (uint32_t(draw.descKey & 0xF) == 0)
 			continue;
 
 		const bool inWindow = !outsideWindow(geometry, halfExtent);
@@ -2100,17 +2123,13 @@ void SnowDeformation::RenderObjectHeightMap()
 		if (fineLevel)
 			recordNeeded[size_t(captureCount) * 2 + ci] = uint8_t(!outsideWindow(geometry, FineRasterHalfExtent()));
 
-		const auto& rot = cap.world.rotate;
-		const float scale = cap.world.scale;
-		const float vertexCountF = float(triShape->GetTrishapeRuntimeData().vertexCount);
+		const float vertexCountF = float(draw.triShape->GetTrishapeRuntimeData().vertexCount);
 		const auto* smooth = SmoothedNormalsFor(cap);
 		ID3D11ShaderResourceView* smoothSRV = smooth && smooth->ready ? smooth->srv.get() : nullptr;
 		captureSmoothSRVs[ci] = smoothSRV;
 
 		StaticsCB& scb = captureRecords[ci];
-		scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, cap.world.translate.x };
-		scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, cap.world.translate.y };
-		scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, cap.world.translate.z };
+		SetWorldRows(cap.world, scb);
 		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
 		maxSeedDepth = std::max(maxSeedDepth, std::max(scb.ObjectsDepth, scb.RoundedDepth));
@@ -2172,28 +2191,16 @@ void SnowDeformation::RenderObjectHeightMap()
 	};
 	auto collectDraw = [&](uint32_t a_ci, uint32_t a_record, std::vector<HeightRasterDraw>& a_out) {
 		auto* geometry = capturedStatics[a_ci].geometry.get();
-		auto triShape = geometry ? geometry->AsTriShape() : nullptr;
-		if (!triShape)
+		RigidDraw draw;
+		if (!geometry || !RigidDrawOf(geometry, draw))
 			return;
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-			return;
-		const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0)
-			return;
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-			return;
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto layoutIt = staticsILCache.find(descKey);
+		auto layoutIt = staticsILCache.find(draw.descKey);
 		if (layoutIt == staticsILCache.end() || !layoutIt->second)
 			return;
-		const UINT stride = uint32_t(descKey & 0xF) * 4;
+		const UINT stride = uint32_t(draw.descKey & 0xF) * 4;
 		if (stride == 0)
 			return;
-		a_out.push_back({ layoutIt->second.get(), reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
-			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), stride, indexCount, a_ci, a_record });
+		a_out.push_back({ layoutIt->second.get(), draw.vb, draw.ib, stride, draw.indexCount, a_ci, a_record });
 	};
 	std::vector<uint8_t> inheritedState;
 	{
@@ -2442,36 +2449,25 @@ void SnowDeformation::RenderObjectHeightMap()
 				continue;
 			if (outsideWindow(geometry, halfExtent))
 				continue;
-			auto triShape = geometry->AsTriShape();
-			if (!triShape)
+			RigidDraw draw;
+			if (!RigidDrawOf(geometry, draw))
 				continue;
-			auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-			if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-				continue;
-			uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-			if (indexCount == 0)
-				continue;
-			auto desc = rendererData->vertexDesc;
-			if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-				continue;
-			uint64_t descKey;
-			memcpy(&descKey, &desc, sizeof(descKey));
-			auto layoutIt = staticsILCache.find(descKey);
+			auto layoutIt = staticsILCache.find(draw.descKey);
 			if (layoutIt == staticsILCache.end() || !layoutIt->second)
 				continue;
 			peelBinds.Layout(context, layoutIt->second.get());
-			UINT stride = uint32_t(descKey & 0xF) * 4;
+			UINT stride = uint32_t(draw.descKey & 0xF) * 4;
 			if (stride == 0)
 				continue;
-			peelBinds.Vertex(context, reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer), stride);
-			peelBinds.Index(context, reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer), DXGI_FORMAT_R16_UINT);
+			peelBinds.Vertex(context, draw.vb, stride);
+			peelBinds.Index(context, draw.ib, DXGI_FORMAT_R16_UINT);
 
 			peelBinds.Smooth(context, captureSmoothSRVs[ci]);
 			if (captureRecordsLive)
 				BindStaticsRecord(captureCount + ci, true, false, captureParity);
 			else
 				staticsCB->Update(captureRecords[size_t(captureCount) + ci]);
-			context->DrawIndexed(indexCount, 0, 0);
+			context->DrawIndexed(draw.indexCount, 0, 0);
 		}
 		globals::profiler->EndPass();
 
@@ -2764,11 +2760,7 @@ void SnowDeformation::RenderObjectHeightMap()
 
 void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const
 {
-	const auto& rot = a_cap.world.rotate;
-	const float scale = a_cap.world.scale;
-	a_scb.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, a_cap.world.translate.x };
-	a_scb.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, a_cap.world.translate.y };
-	a_scb.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, a_cap.world.translate.z };
+	SetWorldRows(a_cap.world, a_scb);
 	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
 	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
 	a_scb.VertexCountF = a_vertexCount;
@@ -4601,11 +4593,7 @@ void SnowDeformation::RenderWaterCapture()
 		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
 		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
-		const auto& rot = water.world.rotate;
-		const float scale = water.world.scale;
-		rec.WorldRow0 = { rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, water.world.translate.x };
-		rec.WorldRow1 = { rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, water.world.translate.y };
-		rec.WorldRow2 = { rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, water.world.translate.z };
+		SetWorldRows(water.world, rec);
 		staticsCB->Update(rec);
 		context->DrawIndexed(indexCount, 0, 0);
 		statWaterDrawn++;
@@ -4757,41 +4745,23 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 
 	constexpr float kContactSweepTeleport = 200.0f;
 	auto drawRigid = [&](RE::BSGeometry* a_geometry, bool a_sweep = false) -> bool {
-		auto& runtime = a_geometry->GetGeometryRuntimeData();
-		auto* triShape = a_geometry->AsTriShape();
-		if (!triShape)
+		RigidDraw draw;
+		if (!RigidDrawOf(a_geometry, draw))
 			return false;
-		auto* rendererData = runtime.rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer)
-			return false;
-		const uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0)
-			return false;
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-			return false;
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto* layout = StaticsInputLayoutFor(descKey, desc);
+		auto* layout = StaticsInputLayoutFor(draw.descKey, draw.desc);
 		if (!layout)
 			return false;
-		const UINT stride = uint32_t(descKey & 0xF) * 4;
+		const UINT stride = uint32_t(draw.descKey & 0xF) * 4;
 		if (stride == 0)
 			return false;
 		UINT offset = 0;
-		auto* vb = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-		auto* ib = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
 		context->IASetInputLayout(layout);
-		context->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
-		context->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
+		context->IASetVertexBuffers(0, 1, &draw.vb, &stride, &offset);
+		context->IASetIndexBuffer(draw.ib, DXGI_FORMAT_R16_UINT, 0);
 
 		const auto& world = a_geometry->world;
 		auto rowsFrom = [&](const RE::NiTransform& a_x, StaticsCB& a_cb) {
-			const auto& r = a_x.rotate;
-			const float sc = a_x.scale;
-			a_cb.WorldRow0 = { r.entry[0][0] * sc, r.entry[0][1] * sc, r.entry[0][2] * sc, a_x.translate.x };
-			a_cb.WorldRow1 = { r.entry[1][0] * sc, r.entry[1][1] * sc, r.entry[1][2] * sc, a_x.translate.y };
-			a_cb.WorldRow2 = { r.entry[2][0] * sc, r.entry[2][1] * sc, r.entry[2][2] * sc, a_x.translate.z };
+			SetWorldRows(a_x, a_cb);
 			a_cb.HeightWindowCenter = contactCenter;
 			a_cb.HeightHalfExtent = kContactHalfExtent;
 		};
@@ -4800,11 +4770,11 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 		RE::NiTransform previous;
 		if (a_sweep) {
 			auto& state = contactSweepStates[a_geometry];
-			const bool fresh = state.frame + 1 != contactSweepFrame || state.buffer != rendererData->vertexBuffer;
+			const bool fresh = state.frame + 1 != contactSweepFrame || state.buffer != draw.vb;
 			previous = state.world;
 			state.world = world;
 			state.frame = contactSweepFrame;
-			state.buffer = rendererData->vertexBuffer;
+			state.buffer = draw.vb;
 			if (!fresh) {
 				const float radius = a_geometry->worldBound.radius;
 				float trace = 0.0f;
@@ -4836,7 +4806,7 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 				contactSweepLast++;
 			}
 			staticsCB->Update(scb);
-			context->DrawIndexed(indexCount, 0, 0);
+			context->DrawIndexed(draw.indexCount, 0, 0);
 		}
 		return true;
 	};

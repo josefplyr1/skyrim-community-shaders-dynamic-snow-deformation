@@ -64,6 +64,20 @@ static std::string LandTextureLabel(const std::string& a_path)
 	return a_path.substr(begin, end - begin);
 }
 
+static uint64_t CellKey(int a_x, int a_y)
+{
+	return (uint64_t(uint32_t(a_x)) << 32) | uint32_t(a_y);
+}
+
+template <class Planes>
+static bool BoxInsidePlanes(const double (&a_box)[2][3], const Planes& a_planes)
+{
+	for (const auto& p : a_planes)
+		if (p[0] * a_box[p[0] >= 0.0][0] + p[1] * a_box[p[1] >= 0.0][1] + p[2] * a_box[p[2] >= 0.0][2] + p[3] < 0.0)
+			return false;
+	return true;
+}
+
 uint16_t SnowDeformation::RegisterLandTexture(RE::TESLandTexture* a_landTexture)
 {
 	if (!a_landTexture)
@@ -389,7 +403,7 @@ void SnowDeformation::RefreshLandMeshHeights()
 			if (!land || !land->loadedData || !coords)
 				continue;
 			nLand++;
-			const uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+			const uint64_t key = CellKey(coords->cellX, coords->cellY);
 			std::array<uint8_t, 4> levels{};
 			bool ready = true;
 			for (uint32_t quadI = 0; quadI < 4; ++quadI) {
@@ -552,7 +566,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 
 	if (!painted && maxHeight - minHeight < 1.0f) {
 		const std::unique_lock lock(shellCellMutex);
-		uint64_t fillerKey = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+		uint64_t fillerKey = CellKey(coords->cellX, coords->cellY);
 		if (shellFillerCells.size() > 4096)
 			shellFillerCells.clear();
 		shellFillerCells[fillerKey] = data.worldspaceID;
@@ -565,7 +579,7 @@ void SnowDeformation::BakeShellCell(RE::TESObjectLAND* land)
 		return;
 	}
 
-	uint64_t key = (uint64_t(uint32_t(coords->cellX)) << 32) | uint32_t(coords->cellY);
+	uint64_t key = CellKey(coords->cellX, coords->cellY);
 	ReadLandMeshHeights(land, data);
 	{
 		const std::unique_lock lock(shellCellMutex);
@@ -606,7 +620,7 @@ float SnowDeformation::GetNominalSnowDepthAt(float a_x, float a_y, float a_missi
 	const int vx = std::clamp((int)std::lround((a_x - cellX * kCellSize) / kShellVertexSpacing), 0, 32);
 	const int vy = std::clamp((int)std::lround((a_y - cellY * kCellSize) / kShellVertexSpacing), 0, 32);
 
-	const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+	const uint64_t key = CellKey(cellX, cellY);
 	const std::shared_lock lock(shellCellMutex);
 	const auto it = shellCells.find(key);
 	if (it == shellCells.end() || it->second.worldspaceID != activeWorldspace.load(std::memory_order_acquire))
@@ -640,7 +654,7 @@ float SnowDeformation::LandSnowShareAround(float a_x, float a_y)
 	const std::shared_lock textureLock(landTextureMutex);
 	for (int dy = -2; dy <= 2; ++dy) {
 		for (int dx = -2; dx <= 2; ++dx) {
-			const uint64_t key = (uint64_t(uint32_t(cellX + dx)) << 32) | uint32_t(cellY + dy);
+			const uint64_t key = CellKey(cellX + dx, cellY + dy);
 			const auto it = shellCells.find(key);
 			if (it == shellCells.end() || it->second.worldspaceID != worldspace)
 				continue;
@@ -685,7 +699,7 @@ SnowDeformation::ShellProbe SnowDeformation::ProbeShellData(float a_x, float a_y
 	probe.vertexX = std::clamp((int)std::lround((a_x - probe.cellX * kCellSize) / kShellVertexSpacing), 0, 32);
 	probe.vertexY = std::clamp((int)std::lround((a_y - probe.cellY * kCellSize) / kShellVertexSpacing), 0, 32);
 
-	const uint64_t key = (uint64_t(uint32_t(probe.cellX)) << 32) | uint32_t(probe.cellY);
+	const uint64_t key = CellKey(probe.cellX, probe.cellY);
 	const std::shared_lock lock(shellCellMutex);
 	const auto it = shellCells.find(key);
 	if (it == shellCells.end())
@@ -791,7 +805,7 @@ void SnowDeformation::UpdateShellTerrainWindow()
 				int cellX = shellWindowCellX + tx / kShellTexelsPerCell;
 				int vx = tx % kShellTexelsPerCell;
 
-				uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+				uint64_t key = CellKey(cellX, cellY);
 				if (key != rowKey) {
 					flushRowCell();
 					rowSnowy = false;
@@ -924,7 +938,7 @@ void SnowDeformation::BuildTerrainFineWindow()
 		const std::shared_lock lock(shellCellMutex);
 		for (int cy = 0; cy < kShellFineCells; ++cy)
 			for (int cx = 0; cx < kShellFineCells; ++cx) {
-				const uint64_t key = (uint64_t(uint32_t(cell0X + cx)) << 32) | uint32_t(cell0Y + cy);
+				const uint64_t key = CellKey(cell0X + cx, cell0Y + cy);
 				auto it = shellCells.find(key);
 				if (it == shellCells.end() || it->second.worldspaceID != worldspace || it->second.fine.empty())
 					continue;
@@ -942,7 +956,7 @@ void SnowDeformation::BuildTerrainFineWindow()
 ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY)
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: GetLODTile");
-	const uint64_t key = (uint64_t(uint32_t(a_cellX)) << 32) | uint32_t(a_cellY);
+	const uint64_t key = CellKey(a_cellX, a_cellY);
 	if (auto it = lodTileCache.find(key); it != lodTileCache.end())
 		return it->second.get();
 	if (lodTileMisses.contains(key))
@@ -1240,44 +1254,10 @@ bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSno
 		}
 	}
 
+	const uint32_t verdict = CellWalkSnowVerdict(cellMinX, cellMinY, cellMaxX, cellMaxY, a_unknownIsSnowy);
 	if (a_verdictOut)
-		*a_verdictOut = kSnowGateBare;
-	{
-		const std::shared_lock lock(shellSnowyCellMutex);
-		if (shellSnowyCells.empty() && shellStatCellsInWindow == 0) {
-			if (a_verdictOut)
-				*a_verdictOut = kSnowGateUnknown;
-			return true;
-		}
-		for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
-			for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
-				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
-				if (shellSnowyCells.find(key) != shellSnowyCells.end()) {
-					if (a_verdictOut)
-						*a_verdictOut = kSnowGateSnowy;
-					return true;
-				}
-			}
-		}
-	}
-
-	if (a_unknownIsSnowy) {
-		const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
-		const std::shared_lock lock(shellCellMutex);
-		for (int cy = cellMinY; cy <= cellMaxY; ++cy) {
-			for (int cx = cellMinX; cx <= cellMaxX; ++cx) {
-				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
-				if (auto it = shellCells.find(key); it != shellCells.end() && it->second.worldspaceID == worldspace)
-					continue;
-				if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == worldspace)
-					continue;
-				if (a_verdictOut)
-					*a_verdictOut = kSnowGateUnknown;
-				return true;
-			}
-		}
-	}
-	return false;
+		*a_verdictOut = verdict;
+	return verdict != kSnowGateBare;
 }
 
 bool SnowDeformation::DeformationWindowHasReaders() const
@@ -1322,23 +1302,30 @@ uint32_t SnowDeformation::CellRangeSnowVerdict(int a_minX, int a_minY, int a_max
 {
 	if (a_minX > a_maxX || a_minY > a_maxY)
 		return kSnowGateBare;
+	return CellWalkSnowVerdict(a_minX, a_minY, a_maxX, a_maxY, true);
+}
+
+uint32_t SnowDeformation::CellWalkSnowVerdict(int a_minX, int a_minY, int a_maxX, int a_maxY, bool a_unknownIsSnowy) const
+{
 	{
 		const std::shared_lock lock(shellSnowyCellMutex);
 		if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
 			return kSnowGateUnknown;
 		for (int cy = a_minY; cy <= a_maxY; ++cy) {
 			for (int cx = a_minX; cx <= a_maxX; ++cx) {
-				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				const uint64_t key = CellKey(cx, cy);
 				if (shellSnowyCells.find(key) != shellSnowyCells.end())
 					return kSnowGateSnowy;
 			}
 		}
 	}
+	if (!a_unknownIsSnowy)
+		return kSnowGateBare;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	const std::shared_lock lock(shellCellMutex);
 	for (int cy = a_minY; cy <= a_maxY; ++cy) {
 		for (int cx = a_minX; cx <= a_maxX; ++cx) {
-			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			const uint64_t key = CellKey(cx, cy);
 			if (auto it = shellCells.find(key); it != shellCells.end() && it->second.worldspaceID == worldspace)
 				continue;
 			if (auto ft = shellFillerCells.find(key); ft != shellFillerCells.end() && ft->second == worldspace)
@@ -1384,9 +1371,8 @@ bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, s
 	const std::shared_lock cellLock(shellCellMutex);
 	if (shellSnowyCells.empty() && shellStatCellsInWindow == 0)
 		return true;
-	auto keyOf = [](int a_cx, int a_cy) { return (uint64_t(uint32_t(a_cx)) << 32) | uint32_t(a_cy); };
 	auto landRange = [&](int a_cx, int a_cy) -> const std::pair<float, float>* {
-		const uint64_t key = keyOf(a_cx, a_cy);
+		const uint64_t key = CellKey(a_cx, a_cy);
 		if (auto z = viewGateCellZ.find(key); z != viewGateCellZ.end())
 			return &z->second;
 		auto it = shellCells.find(key);
@@ -1423,23 +1409,15 @@ bool SnowDeformation::SnowCellsMeetFootprints(const FootprintPlanes* a_planes, s
 			return true;
 		const double box[2][3] = { { a_cx * double(kCellSize) - grow, a_cy * double(kCellSize) - grow, a_z.first },
 			{ (a_cx + 1) * double(kCellSize) + grow, (a_cy + 1) * double(kCellSize) + grow, double(a_z.second) + a_rise } };
-		for (size_t f = 0; f < a_count; ++f) {
-			bool inside = true;
-			for (const auto& p : a_planes[f]) {
-				if (p[0] * box[p[0] >= 0.0][0] + p[1] * box[p[1] >= 0.0][1] + p[2] * box[p[2] >= 0.0][2] + p[3] < 0.0) {
-					inside = false;
-					break;
-				}
-			}
-			if (inside)
+		for (size_t f = 0; f < a_count; ++f)
+			if (BoxInsidePlanes(box, a_planes[f]))
 				return true;
-		}
 		return false;
 	};
 	const int ring = a_soon ? 1 : 0;
 	for (int cy = sqMinY - ring; cy <= sqMaxY + ring; ++cy) {
 		for (int cx = sqMinX - ring; cx <= sqMaxX + ring; ++cx) {
-			const uint64_t key = keyOf(cx, cy);
+			const uint64_t key = CellKey(cx, cy);
 			if (shellSnowyCells.contains(key)) {
 				if (meets(cx, cy, blockRange(cx, cy)))
 					return true;
@@ -1472,7 +1450,7 @@ bool SnowDeformation::CascadeSnowSoon()
 	const std::shared_lock lock(shellSnowyCellMutex);
 	for (int cy = sqMinY - 1; cy <= sqMaxY + 1; ++cy) {
 		for (int cx = sqMinX - 1; cx <= sqMaxX + 1; ++cx) {
-			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			const uint64_t key = CellKey(cx, cy);
 			if (shellSnowyCells.contains(key))
 				return true;
 		}
@@ -1506,7 +1484,7 @@ uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, in
 	const std::shared_lock cellLock(shellCellMutex);
 	for (int cy = a_minY; cy <= a_maxY; ++cy) {
 		for (int cx = a_minX; cx <= a_maxX; ++cx) {
-			const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+			const uint64_t key = CellKey(cx, cy);
 			if (!shellSnowyCells.contains(key))
 				continue;
 			auto [z, inserted] = viewGateCellZ.try_emplace(key, std::pair{ -1e9f, 1e9f });
@@ -1519,15 +1497,7 @@ uint32_t SnowDeformation::ViewSnowVerdict(int a_minX, int a_minY, int a_maxX, in
 			}
 			const double box[2][3] = { { cx * kCellSize, cy * kCellSize, z->second.first },
 				{ (cx + 1) * kCellSize, (cy + 1) * kCellSize, z->second.second } };
-			bool inside = true;
-			for (const auto& p : planes) {
-				const double d = p[0] * box[p[0] >= 0.0][0] + p[1] * box[p[1] >= 0.0][1] + p[2] * box[p[2] >= 0.0][2] + p[3];
-				if (d < 0.0) {
-					inside = false;
-					break;
-				}
-			}
-			if (inside)
+			if (BoxInsidePlanes(box, planes))
 				return kSnowGateSnowy;
 		}
 	}
@@ -1559,7 +1529,7 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 		const std::shared_lock lock(shellCellMutex);
 		for (int cy = sqMinY; cy <= sqMaxY && squareFloorValid; ++cy) {
 			for (int cx = sqMinX; cx <= sqMaxX; ++cx) {
-				const uint64_t key = (uint64_t(uint32_t(cx)) << 32) | uint32_t(cy);
+				const uint64_t key = CellKey(cx, cy);
 				auto it = shellCells.find(key);
 				if (it == shellCells.end() || it->second.worldspaceID != worldspace) {
 					squareFloorValid = false;
@@ -1682,7 +1652,7 @@ bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)
 		}
 		return groundSnowSquareVerdict != kSnowGateBare;
 	}
-	const uint64_t key = (uint64_t(uint32_t(cellX)) << 32) | uint32_t(cellY);
+	const uint64_t key = CellKey(cellX, cellY);
 	auto [it, inserted] = groundSnowCellCache.try_emplace(key, uint8_t(kSnowGateUnknown));
 	if (inserted)
 		it->second = (uint8_t)CellRangeSnowVerdict(minX, minY, maxX, maxY);

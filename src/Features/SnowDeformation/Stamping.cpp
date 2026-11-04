@@ -99,6 +99,36 @@ static bool LimbStretched(SnowDeformation::StampBones::Limb& a_limb, float a_len
 	return a_length > std::max(a_radius, 1.0f) * kLimbAspectGate;
 }
 
+struct LimbSegment
+{
+	const RE::NiPoint3* a;
+	const RE::NiPoint3* b;
+	float radius;
+};
+
+static bool LimbSegmentOf(SnowDeformation::StampBones::Limb& a_limb, const RE::NiPoint3& a_actorPos, float a_depthScale, float a_radiusFloor, LimbSegment& a_out)
+{
+	auto* nodeA = a_limb.a.get();
+	auto* nodeB = a_limb.b.get();
+	if (!nodeA || !nodeB)
+		return false;
+	const auto& aWorld = nodeA->world;
+	const auto& bWorld = nodeB->world;
+	if (!LimbEndpointValid(aWorld, a_actorPos) || !LimbEndpointValid(bWorld, a_actorPos))
+		return false;
+	const float boneScale = aWorld.scale;
+	if (LimbStretched(a_limb, aWorld.translate.GetDistance(bWorld.translate), a_limb.radius * boneScale))
+		return false;
+	a_out = { &aWorld.translate, &bWorld.translate,
+		std::clamp(a_limb.radius * boneScale * a_depthScale, a_radiusFloor, kMaxStampShapeRadius) };
+	return true;
+}
+
+static float StampDepthScale(float a_nominalDepth)
+{
+	return std::clamp(a_nominalDepth / kStampDepthReference, kStampDepthScaleMin, kStampDepthScaleMax);
+}
+
 static bool NameContains(const RE::BSFixedString& a_name, const char* a_needle)
 {
 	const char* hay = a_name.c_str();
@@ -596,6 +626,38 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 	contactActors.clear();
 	contactCorpseCount = 0;
 	contactCenter = { windowOrigin.x + deformWorldSize * 0.5f, windowOrigin.y + deformWorldSize * 0.5f };
+	auto emitStamp = [&](const float4& a_stamp, const float4& a_end) {
+		perFrameData.Stamps[stampCount] = a_stamp;
+		perFrameData.StampEnds[stampCount] = a_end;
+		stampCount++;
+	};
+	auto trailFrom = [&](uint64_t a_key, float2 a_current) {
+		float2 previous = a_current;
+		auto it = stampPrevPositions.find(a_key);
+		if (it != stampPrevPositions.end()) {
+			float2 delta = { a_current.x - it->second.x, a_current.y - it->second.y };
+			if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
+				previous = it->second;
+		}
+		currentPositions[a_key] = a_current;
+		return previous;
+	};
+	auto inContactWindow = [&](const RE::NiBound& a_bound) {
+		return a_bound.radius > 0.0f &&
+		       std::abs(a_bound.center.x - contactCenter.x) + a_bound.radius < kContactHalfExtent &&
+		       std::abs(a_bound.center.y - contactCenter.y) + a_bound.radius < kContactHalfExtent;
+	};
+	auto landZAt = [&](const RE::NiPoint3& a_position) {
+		float landZ = a_position.z;
+		if (const auto tesLand = globals::game::tes) {
+			ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
+			tesLand->GetLandHeight(a_position, landZ);
+		}
+		return landZ;
+	};
+	auto nominalDepthAt = [&](const RE::NiPoint3& a_position) {
+		return std::max(GetNominalSnowDepthAt(a_position.x, a_position.y, kStampDepthReference), 1.0f);
+	};
 
 	contactPriority.clear();
 	if (!contactShadersFailed) {
@@ -680,9 +742,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				contactStarved = it->second.contactStarved > 0;
 		const bool rasterCandidate = !contactShadersFailed && !contactStarved &&
 		                             (isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID)) &&
-		                             root->worldBound.radius > 0.0f &&
-		                             std::abs(root->worldBound.center.x - contactCenter.x) + root->worldBound.radius < kContactHalfExtent &&
-		                             std::abs(root->worldBound.center.y - contactCenter.y) + root->worldBound.radius < kContactHalfExtent;
+		                             inContactWindow(root->worldBound);
 		if (probing)
 			skeletonProbe.rasterCandidate = rasterCandidate;
 
@@ -745,11 +805,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		}
 
 		if (!isDead) {
-			float landZ = position.z;
-			if (const auto tesLand = globals::game::tes) {
-				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
-				tesLand->GetLandHeight(position, landZ);
-			}
+			const float landZ = landZAt(position);
 			if (probing)
 				skeletonProbe.gapToLand = position.z - landZ;
 			if (position.z - landZ > kElevatedStampCutoff) {
@@ -764,12 +820,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 		}
 
-		float groundZ = position.z;
-		if (isDead)
-			if (const auto tesGround = globals::game::tes) {
-				ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
-				tesGround->GetLandHeight(position, groundZ);
-			}
+		const float groundZ = isDead ? landZAt(position) : position.z;
 
 		if (rest) {
 			const float dt = globals::game::deltaTime ? std::max(*globals::game::deltaTime, 1e-4f) : 1.0f / 60.0f;
@@ -780,10 +831,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				return;
 		}
 
-		const float nominalDepth = std::max(
-			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
-		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
-			kStampDepthScaleMin, kStampDepthScaleMax);
+		const float nominalDepth = nominalDepthAt(position);
+		const float depthScale = StampDepthScale(nominalDepth);
 		if (probing) {
 			const float probeDepth = GetNominalSnowDepthAt(position.x, position.y, -10000.0f);
 			skeletonProbe.cellBaked = probeDepth > -9999.0f;
@@ -921,11 +970,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			const float distSq = cameraPosition.GetSquaredDistance(position);
 			if (!stampStats.nearestValid || distSq < nearestDistSq) {
 				nearestDistSq = distSq;
-				float landZ = position.z;
-				if (const auto tesNear = globals::game::tes) {
-					ScopedTicks _land(cpuCensus.landTicks, cpuCensus.landCalls);
-					tesNear->GetLandHeight(position, landZ);
-				}
+				const float landZ = landZAt(position);
 				stampStats.nearestValid = true;
 				stampStats.nearestGapToRoot = floatingGap;
 				stampStats.nearestGapToLand = position.z - landZ;
@@ -995,16 +1040,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const float impactReach = std::clamp(settings.ImpactReach, 0.5f, 4.0f);
 		const bool footStrikes = footPath && bones;
 		const float bodyImpact = footStrikes ? knockImpact : std::max(footImpact, knockImpact);
-		if (bodyImpact > kImpactStampMin && stampCount < actorCeiling) {
-			float4 stamp{};
-			stamp.x = position.x;
-			stamp.y = position.y;
-			stamp.z = 0.0f;
-			stamp.w = std::clamp(std::clamp(root->worldBound.radius * 0.45f, 16.0f, 120.0f) * impactReach, limbRadiusFloor, kMaxStampShapeRadius);
-			perFrameData.Stamps[stampCount] = stamp;
-			perFrameData.StampEnds[stampCount] = { impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * bodyImpact, 0.0f };
-			stampCount++;
-		}
+		if (bodyImpact > kImpactStampMin && stampCount < actorCeiling)
+			emitStamp({ position.x, position.y, 0.0f, std::clamp(std::clamp(root->worldBound.radius * 0.45f, 16.0f, 120.0f) * impactReach, limbRadiusFloor, kMaxStampShapeRadius) },
+				{ impactFrom.x, impactFrom.y, kStampModeCarve + kStampImpactScale * bodyImpact, 0.0f });
 		if (footStrikes && footImpact > kImpactStampMin) {
 			const auto plantRef = FootPlantRefOf(*bones, groundZ + bodyLift);
 			for (const auto& foot : bones->feet) {
@@ -1016,10 +1054,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				const auto print = FootPrintOf(footNode, foot.toe.get(), depthScale, footRadiusFloor);
 				if (!landed && footNode->world.translate.z - plantRef.z > FootPlantBand(plantRef, footNode->world.scale, print.length))
 					continue;
-				perFrameData.Stamps[stampCount] = { print.tip.x, print.tip.y, 0.0f,
-					std::clamp(print.radius * impactReach, footRadiusFloor, kMaxStampShapeRadius) };
-				perFrameData.StampEnds[stampCount] = { print.heel.x, print.heel.y, kStampModeCarve + kStampImpactScale * footImpact, 0.0f };
-				stampCount++;
+				emitStamp({ print.tip.x, print.tip.y, 0.0f, std::clamp(print.radius * impactReach, footRadiusFloor, kMaxStampShapeRadius) },
+					{ print.heel.x, print.heel.y, kStampModeCarve + kStampImpactScale * footImpact, 0.0f });
 			}
 		}
 		if (settings.SpeedSpoil && footPath && bones) {
@@ -1047,10 +1083,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					for (const float spoilSide : { -1.0f, 1.0f }) {
 						const float armX = backX * kSpoilSpreadCos - backY * kSpoilSpreadSin * spoilSide;
 						const float armY = backY * kSpoilSpreadCos + backX * kSpoilSpreadSin * spoilSide;
-						perFrameData.Stamps[stampCount] = { spoilState.last.x + armX * wedgeLength, spoilState.last.y + armY * wedgeLength, 0.0f,
-							std::clamp(kSpoilArmWidth * wedgeLength, 4.0f, kMaxStampShapeRadius) };
-						perFrameData.StampEnds[stampCount] = { spoilState.last.x, spoilState.last.y, kStampModeCarve + kStampImpactScale * spoilEnergy, 0.0f };
-						stampCount++;
+						emitStamp({ spoilState.last.x + armX * wedgeLength, spoilState.last.y + armY * wedgeLength, 0.0f, std::clamp(kSpoilArmWidth * wedgeLength, 4.0f, kMaxStampShapeRadius) },
+							{ spoilState.last.x, spoilState.last.y, kStampModeCarve + kStampImpactScale * spoilEnergy, 0.0f });
 					}
 					speedSpoilWedges++;
 				}
@@ -1064,9 +1098,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		if (!contactShadersFailed && !contactStarved) {
 			const auto& bound = root->worldBound;
 			const bool budget = isDead ? contactCorpseCount < kContactMaxCorpses : prioritized(formID);
-			if (budget && bound.radius > 0.0f &&
-				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
-				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
+			if (budget && inContactWindow(bound)) {
 				bool draw = true;
 				if (isDead && rest) {
 					const RE::NiPoint3 center = bound.center;
@@ -1151,24 +1183,9 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					if (!planted)
 						continue;
 
-					float2 segStart = heel;
-					auto it = stampPrevPositions.find(key);
-					if (it != stampPrevPositions.end()) {
-						float2 delta = { heel.x - it->second.x, heel.y - it->second.y };
-						if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-							segStart = it->second;
-					}
-					currentPositions[key] = heel;
+					const float2 segStart = trailFrom(key, heel);
 
-					float4 stamp{};
-					stamp.x = tip.x;
-					stamp.y = tip.y;
-					stamp.z = footReach;
-					stamp.w = radius;
-					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { segStart.x, segStart.y, kStampModeBody,
-						CrustBreakForce(radius) };
-					stampCount++;
+					emitStamp({ tip.x, tip.y, footReach, radius }, { segStart.x, segStart.y, kStampModeBody, CrustBreakForce(radius) });
 					stampStats.feet++;
 					footStamped = true;
 					if (probing && thisIndex < skeletonProbe.feet.size())
@@ -1179,33 +1196,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			for (auto& limb : bones->limbs) {
 				if (stampCount >= actorCeiling)
 					break;
-				auto* nodeA = limb.a.get();
-				auto* nodeB = limb.b.get();
-				if (!nodeA || !nodeB)
+				LimbSegment segment;
+				if (!LimbSegmentOf(limb, position, depthScale, limbRadiusFloor, segment))
 					continue;
-				const auto& aWorld = nodeA->world;
-				const auto& bWorld = nodeB->world;
-				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
-					continue;
-				const float boneScale = aWorld.scale;
-				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
-					continue;
-				const float radius = std::clamp(limb.radius * boneScale * depthScale,
-					limbRadiusFloor, kMaxStampShapeRadius);
-				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - groundZ;
+				const float heightAbove = std::min(segment.a->z, segment.b->z) - segment.radius - groundZ;
 				const float carve = std::min(1.0f - heightAbove / nominalDepth, 1.0f);
 				if (carve < kMinLimbCarve)
 					continue;
 
-				float4 stamp{};
-				stamp.x = bWorld.translate.x;
-				stamp.y = bWorld.translate.y;
-				stamp.z = carve;
-				stamp.w = radius;
-				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, kStampModeBody,
-					CrustBreakForce(radius) };
-				stampCount++;
+				emitStamp({ segment.b->x, segment.b->y, carve, segment.radius },
+					{ segment.a->x, segment.a->y, kStampModeBody, CrustBreakForce(segment.radius) });
 				stampStats.limbs++;
 				if (probing)
 					skeletonProbe.limbsStamped++;
@@ -1252,20 +1252,10 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					budgetCutRefs.insert(formID);
 					break;
 				}
-				auto* nodeA = limb.a.get();
-				auto* nodeB = limb.b.get();
-				if (!nodeA || !nodeB)
+				LimbSegment segment;
+				if (!LimbSegmentOf(limb, position, depthScale, limbRadiusFloor, segment))
 					continue;
-				const auto& aWorld = nodeA->world;
-				const auto& bWorld = nodeB->world;
-				if (!LimbEndpointValid(aWorld, position) || !LimbEndpointValid(bWorld, position))
-					continue;
-				const float boneScale = aWorld.scale;
-				if (LimbStretched(limb, aWorld.translate.GetDistance(bWorld.translate), limb.radius * boneScale))
-					continue;
-				const float radius = std::clamp(limb.radius * boneScale * depthScale,
-					limbRadiusFloor, kMaxStampShapeRadius);
-				const RE::NiPoint3 center = (aWorld.translate + bWorld.translate) * 0.5f;
+				const RE::NiPoint3 center = (*segment.a + *segment.b) * 0.5f;
 
 				float2 current = { center.x, center.y };
 				const uint64_t key = (uint64_t(formID) << 16) | (kLimbKeyBit | uint64_t(thisIndex & 0x3FFF));
@@ -1285,20 +1275,13 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				}
 				currentPositions[key] = current;
 
-				const float heightAbove = std::min(aWorld.translate.z, bWorld.translate.z) - radius - corpseGroundZ;
+				const float heightAbove = std::min(segment.a->z, segment.b->z) - segment.radius - corpseGroundZ;
 				const float carve = std::clamp(1.0f - heightAbove / nominalDepth, 0.0f, 1.0f);
 				if (carve < kMinLimbCarve)
 					continue;
 
-				float4 stamp{};
-				stamp.x = bWorld.translate.x;
-				stamp.y = bWorld.translate.y;
-				stamp.z = carve;
-				stamp.w = radius;
-				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { aWorld.translate.x, aWorld.translate.y, kStampModeBody,
-					CrustBreakForce(radius) };
-				stampCount++;
+				emitStamp({ segment.b->x, segment.b->y, carve, segment.radius },
+					{ segment.a->x, segment.a->y, kStampModeBody, CrustBreakForce(segment.radius) });
 				stampStats.limbs++;
 			}
 		}
@@ -1348,16 +1331,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 						1.0f - (centerPos.z - shapeStamp.halfHeight - bandRefZ) / nominalDepth, 0.0f, 1.0f);
 					if (carve < kMinLimbCarve)
 						return RE::BSVisit::BSVisitControl::kContinue;
-					float4 stamp{};
-					stamp.x = shapeStamp.a.x;
-					stamp.y = shapeStamp.a.y;
-					stamp.z = carve;
-					stamp.w = std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale,
-						texelFloor);
-					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, kStampModeBody,
-						CrustBreakForce(radius) };
-					stampCount++;
+					emitStamp({ shapeStamp.a.x, shapeStamp.a.y, carve, std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale, texelFloor) },
+						{ shapeStamp.b.x, shapeStamp.b.y, kStampModeBody, CrustBreakForce(radius) });
 					stampStats.shapes++;
 					if (probing)
 						skeletonProbe.shapes++;
@@ -1476,9 +1451,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		const bool elevated = position.z - groundZ > kElevatedStampCutoff;
 		if (!contactShadersFailed) {
 			const auto& bound = root->worldBound;
-			if (bound.radius > 0.0f &&
-				std::abs(bound.center.x - contactCenter.x) + bound.radius < kContactHalfExtent &&
-				std::abs(bound.center.y - contactCenter.y) + bound.radius < kContactHalfExtent) {
+			if (inContactWindow(bound)) {
 				bool skinned = false;
 				RE::BSVisit::TraverseScenegraphGeometries(root, [&](RE::BSGeometry* a_geometry) -> RE::BSVisit::BSVisitControl {
 					if (!a_geometry->GetGeometryRuntimeData().skinInstance)
@@ -1486,7 +1459,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 					skinned = true;
 					return RE::BSVisit::BSVisitControl::kStop;
 				});
-				(skinned ? contactActors : contactProps).push_back({ a_ref->CreateRefHandle(), bound.center.x - bound.radius, bound.center.y - bound.radius, bound.center.x + bound.radius, bound.center.y + bound.radius, false, groundZ, std::max(GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f) });
+				(skinned ? contactActors : contactProps).push_back({ a_ref->CreateRefHandle(), bound.center.x - bound.radius, bound.center.y - bound.radius, bound.center.x + bound.radius, bound.center.y + bound.radius, false, groundZ, nominalDepthAt(position) });
 				stampStats.propsRasterized++;
 				return;
 			}
@@ -1495,10 +1468,8 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		const float supportZ = std::max(groundZ, position.z);
 
-		const float nominalDepth = std::max(
-			GetNominalSnowDepthAt(position.x, position.y, kStampDepthReference), 1.0f);
-		const float depthScale = std::clamp(nominalDepth / kStampDepthReference,
-			kStampDepthScaleMin, kStampDepthScaleMax);
+		const float nominalDepth = nominalDepthAt(position);
+		const float depthScale = StampDepthScale(nominalDepth);
 		uint32_t shapeIndex = 0;
 		SnowDeformation::TimedTraverse(root, [&](RE::bhkNiCollisionObject* a_object) -> RE::BSVisit::BSVisitControl {
 			RE::NiPoint3 centerPos;
@@ -1514,31 +1485,16 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				if (radius > kMaxStampShapeRadius)
 					return RE::BSVisit::BSVisitControl::kContinue;
 
-				float2 current = { centerPos.x, centerPos.y };
-				float2 previous = current;
-				const uint64_t key = (uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF);
-				auto it = stampPrevPositions.find(key);
-				if (it != stampPrevPositions.end()) {
-					float2 delta = { current.x - it->second.x, current.y - it->second.y };
-					if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-						previous = it->second;
-				}
-				currentPositions[key] = current;
+				const float2 current = { centerPos.x, centerPos.y };
+				const float2 previous = trailFrom((uint64_t(formID) << 16) | uint64_t(thisIndex & 0xFFFF), current);
 
 				const ShapeStamp shapeStamp = ShapeStampFor(a_object, current, previous, radius);
 				const float carve = std::clamp(
 					1.0f - (centerPos.z - shapeStamp.halfHeight - supportZ) / nominalDepth, 0.0f, 1.0f);
 				if (carve < kMinLimbCarve)
 					return RE::BSVisit::BSVisitControl::kContinue;
-				float4 stamp{};
-				stamp.x = shapeStamp.a.x;
-				stamp.y = shapeStamp.a.y;
-				stamp.z = carve;
-				stamp.w = std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
-				perFrameData.Stamps[stampCount] = stamp;
-				perFrameData.StampEnds[stampCount] = { shapeStamp.b.x, shapeStamp.b.y, 0.0f,
-					CrustBreakForce(radius) };
-				stampCount++;
+				emitStamp({ shapeStamp.a.x, shapeStamp.a.y, carve, std::max(shapeStamp.radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius) },
+					{ shapeStamp.b.x, shapeStamp.b.y, 0.0f, CrustBreakForce(radius) });
 				stampStats.props++;
 			}
 			return RE::BSVisit::BSVisitControl::kContinue;
@@ -1550,29 +1506,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			const auto& bound = root->worldBound;
 			float radius = std::clamp(bound.radius, kMinStampShapeRadius, kMaxStampShapeRadius);
 			if (bound.center.z - radius <= supportZ + kStampSurfaceBand) {
-				float2 current = { bound.center.x, bound.center.y };
-				float2 previous = current;
-				const uint64_t key = (uint64_t(formID) << 16) | 0xFFFFull;
-				auto it = stampPrevPositions.find(key);
-				if (it != stampPrevPositions.end()) {
-					float2 delta = { current.x - it->second.x, current.y - it->second.y };
-					if (delta.x * delta.x + delta.y * delta.y < kTrailBreakDistance * kTrailBreakDistance)
-						previous = it->second;
-				}
-				currentPositions[key] = current;
+				const float2 current = { bound.center.x, bound.center.y };
+				const float2 previous = trailFrom((uint64_t(formID) << 16) | 0xFFFFull, current);
 
 				const float carve = std::clamp(
 					1.0f - (bound.center.z - radius - supportZ) / nominalDepth, 0.0f, 1.0f);
 				if (carve >= kMinLimbCarve) {
-					float4 stamp{};
-					stamp.x = current.x;
-					stamp.y = current.y;
-					stamp.z = carve;
-					stamp.w = std::max(radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius);
-					perFrameData.Stamps[stampCount] = stamp;
-					perFrameData.StampEnds[stampCount] = { previous.x, previous.y, 0.0f,
-						CrustBreakForce(radius) };
-					stampCount++;
+					emitStamp({ current.x, current.y, carve, std::max(radius * kStampRadius / kStampRadiusNeutral * depthScale, kMinPropStampRadius) },
+						{ previous.x, previous.y, 0.0f, CrustBreakForce(radius) });
 					stampStats.props++;
 				}
 			}
