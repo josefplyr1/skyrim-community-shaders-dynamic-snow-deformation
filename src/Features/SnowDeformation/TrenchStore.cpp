@@ -135,14 +135,6 @@ bool SnowDeformation::CreateTrenchStoreResources()
 	return true;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetTrenchDebugCS()
-{
-	if (!trenchDebugCS)
-		trenchDebugCS = static_cast<ID3D11ComputeShader*>(
-			CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", {}, "cs_5_0"));
-	return trenchDebugCS;
-}
-
 void SnowDeformation::UpdateTrenchDebugTexture()
 {
 	if (!showDebugTexture)
@@ -171,7 +163,7 @@ void SnowDeformation::UpdateTrenchDebugTexture()
 
 	auto context = globals::d3d::context;
 	auto* live = deformationTextures[0];
-	auto* shader = GetTrenchDebugCS();
+	auto* shader = GetSnowCS(kTrenchDebugCS);
 	if (!context || !live || !shader)
 		return;
 

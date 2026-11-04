@@ -58,35 +58,35 @@ namespace
 ID3D11ComputeShader* SnowDeformation::GetPrintStampCS()
 {
 	if (!printStampCS)
-		printStampCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintStampCS"));
+		printStampCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintStampCS"));
 	return printStampCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRingCS()
 {
 	if (!printRingCS)
-		printRingCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRingCS"));
+		printRingCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRingCS"));
 	return printRingCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRefillCS()
 {
 	if (!printRefillCS)
-		printRefillCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRefillCS"));
+		printRefillCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRefillCS"));
 	return printRefillCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintViewCS()
 {
 	if (!printViewCS)
-		printViewCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintViewCS"));
+		printViewCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintViewCS"));
 	return printViewCS;
 }
 
 ID3D11ComputeShader* SnowDeformation::GetPrintRimCS()
 {
 	if (!printRimCS && !printRimFailed) {
-		printRimCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRimCS"));
+		printRimCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "PrintRimCS"));
 		if (!printRimCS) {
 			printRimFailed = true;
 			logger::warn("[SNOW DEFORMATION] print rim kernel failed to compile; object prints go on without their rim");

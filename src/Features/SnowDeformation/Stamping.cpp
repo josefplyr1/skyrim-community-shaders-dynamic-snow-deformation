@@ -5,8 +5,6 @@
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/HitchSampler.h"
 
-#include "Features/SnowDeformation/AlphaBuild.h"
-
 #include "Globals.h"
 #include "State.h"
 #include "Features/SnowDeformation/ShapeBounds.h"

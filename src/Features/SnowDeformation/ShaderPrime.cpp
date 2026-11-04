@@ -3,12 +3,6 @@
 #include <functional>
 
 #include "Globals.h"
-#include "Utils/D3D.h"
-
-ID3D11DeviceChild* SnowDeformation::CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry)
-{
-	return Util::CompileShader(a_path, a_defines, a_target, a_entry);
-}
 
 void SnowDeformation::DataLoaded()
 {
@@ -38,42 +32,42 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellPSPrepassAttr(false); },
 		[&] { GetShellPSEarlyResolve(); },
 		[&] { GetShellPSDeferred(); },
-		[&] { GetNoiseHashCS(); },
+		[&] { GetSnowCS(kNoiseHashCS); },
 		[&] { GetShellFillVS(); },
 		[&] { GetShellFillRectVS(); },
 		[&] { GetShellFillPS(); },
 		[&] { GetShellFillPSClaim(); },
 		[&] { GetShellFillPSPreSnow(); },
-		[&] { GetShellTerrainCutCS(); },
-		[&] { GetDepthSyncCS(); },
+		[&] { GetSnowCS(kShellTerrainCutCS); },
+		[&] { GetSnowCS(kDepthSyncCS); },
 		[&] { GetPreSnowCopyCS(); },
-		[&] { GetSssSyncCS(); },
-		[&] { GetSssRestoreCS(); },
-		[&] { GetSkinSssSyncCS(); },
-		[&] { GetSkinSssRestoreCS(); },
-		[&] { GetSkinSssSyncMarkCS(); },
+		[&] { GetSnowCS(kSssSyncCS); },
+		[&] { GetSnowCS(kSssRestoreCS); },
+		[&] { GetSnowCS(kSkinSssSyncCS); },
+		[&] { GetSnowCS(kSkinSssRestoreCS); },
+		[&] { GetSnowCS(kSkinSssSyncMarkCS); },
 		[&] { GetHiZBuildCS(); },
-		[&] { GetSkinCullCS(); },
-		[&] { GetClusterCullCS(); },
-		[&] { GetTerrainFineCS(); },
-		[&] { GetExclusionFieldCS(); },
-		[&] { GetBermFieldTiledCS(); },
-		[&] { GetUntouchedTilesCS(); },
-		[&] { GetDeformationRingCS(); },
-		[&] { GetTrackRebaseCS(); },
-		[&] { GetDeformationEvolveCS(); },
-		[&] { GetDeformationStampCS(); },
-		[&] { GetDeformationStampAllCS(); },
-		[&] { GetDeformationScanEvolveCS(); },
-		[&] { GetDeformationScanSnapshotCS(); },
-		[&] { GetDeformationSnapshotCS(); },
-		[&] { GetDeformationSnapshotFullCS(); },
-		[&] { GetDeformationScanBermCS(); },
+		[&] { GetSnowCS(kSkinCullCS); },
+		[&] { GetSnowCS(kClusterCullCS); },
+		[&] { GetSnowCS(kTerrainFineCS); },
+		[&] { GetSnowCS(kExclusionFieldCS); },
+		[&] { GetSnowCS(kBermFieldTiledCS); },
+		[&] { GetSnowCS(kUntouchedTilesCS); },
+		[&] { GetSnowCS(kDeformationRingCS); },
+		[&] { GetSnowCS(kTrackRebaseCS); },
+		[&] { GetSnowCS(kDeformationEvolveCS); },
+		[&] { GetSnowCS(kDeformationStampCS); },
+		[&] { GetSnowCS(kDeformationStampAllCS); },
+		[&] { GetSnowCS(kDeformationScanEvolveCS); },
+		[&] { GetSnowCS(kDeformationScanSnapshotCS); },
+		[&] { GetSnowCS(kDeformationSnapshotCS); },
+		[&] { GetSnowCS(kDeformationSnapshotFullCS); },
+		[&] { GetSnowCS(kDeformationScanBermCS); },
 		[&] { GetPrintStampCS(); },
 		[&] { GetPrintRingCS(); },
 		[&] { GetPrintRefillCS(); },
-		[&] { GetUndulationFieldCS(); },
-		[&] { GetWindowFillCS(); },
+		[&] { GetSnowCS(kUndulationFieldCS); },
+		[&] { GetSnowCS(kWindowFillCS); },
 	};
 	const std::function<void()> objectSteps[] = {
 		[&] { EnsureStaticsShaders(); },

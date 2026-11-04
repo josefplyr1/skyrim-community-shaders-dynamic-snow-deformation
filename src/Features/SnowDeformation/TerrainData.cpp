@@ -4,7 +4,6 @@
 
 #include "Features/SnowDeformation.h"
 
-#include "Features/SnowDeformation/AlphaBuild.h"
 #include "Features/SnowDeformation/CoSave.h"
 
 #include <DDSTextureLoader.h>
@@ -18,6 +17,7 @@
 #include "State.h"
 #include "TruePBR.h"
 #include "Utils/D3D.h"
+#include "Utils/Format.h"
 #include "Utils/Game.h"
 
 static constexpr uint32_t kSnowLandIsSnowShift = 11;
@@ -25,12 +25,8 @@ static_assert(uint32_t(State::ExtraFeatureDescriptors::SnowLandIsSnowMask) == (0
 
 static std::string LandTexturePath(RE::BGSTextureSet* a_textureSet)
 {
-	if (auto path = a_textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-		std::string lowered(path);
-		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-		return lowered;
-	}
+	if (auto path = a_textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse))
+		return Util::ToLower(path);
 	return {};
 }
 
@@ -668,9 +664,9 @@ float SnowDeformation::LandSnowShareAround(float a_x, float a_y)
 
 float SnowDeformation::LandBlendDepth(float a_depth, float a_snowWeight) const
 {
-	if (a_depth <= 0.0f || !LandBlendActive())
+	if (a_depth <= 0.0f || !settings.EnableSnowDeformation)
 		return a_depth;
-	const float start = LandBlendDepthStart();
+	const float start = kLandBlendDepthStart;
 	const float t = std::clamp((std::min(a_snowWeight, 1.0f) - start) / std::max(1.0f - start, 1e-3f), 0.0f, 1.0f);
 	return a_depth * t * t * (3.0f - 2.0f * t);
 }
@@ -749,8 +745,8 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	bool fillChanged = lastFillWorldspace != fillWorldspace;
 	const uint32_t worldspace = activeWorldspace.load(std::memory_order_acquire);
 	bool worldspaceChanged = worldspace != shellWindowWorldspace;
-	const bool landBlend = LandBlendActive();
-	const float landBlendStart = landBlend ? LandBlendDepthStart() : 1.0f;
+	const bool landBlend = settings.EnableSnowDeformation;
+	const float landBlendStart = landBlend ? kLandBlendDepthStart : 1.0f;
 	if (landBlend != shellWindowLandBlend || landBlendStart != shellWindowLandBlendStart)
 		shellDataDirty.store(true, std::memory_order_release);
 	RefreshLandMeshHeights();
@@ -870,47 +866,16 @@ void SnowDeformation::UpdateShellTerrainWindow()
 	BuildTerrainFineWindow();
 }
 
-ID3D11ComputeShader* SnowDeformation::GetTerrainFineCS()
-{
-	if (!terrainFineCS) {
-		logger::debug("Compiling DepthSyncCS TerrainFineCS");
-		terrainFineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "TerrainFineCS"));
-	}
-	return terrainFineCS;
-}
-
 void SnowDeformation::BuildTerrainFineWindow()
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: BuildTerrainFineWindow");
 	shellFineValid = false;
-	auto* cs = GetTerrainFineCS();
+	auto* cs = GetSnowCS(kTerrainFineCS);
 	if (!cs || !shellTerrainTexture || !shellTerrainTexture->srv)
 		return;
 	auto context = globals::d3d::context;
-	if (!shellTerrainFine) {
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = kShellFineDim;
-		desc.Height = kShellFineDim;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		shellTerrainFine = new Texture2D(desc, "SnowDeformation::ShellTerrainFine");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		shellTerrainFine->CreateSRV(srvDesc);
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		shellTerrainFine->CreateUAV(uavDesc);
-	}
+	if (!shellTerrainFine)
+		shellTerrainFine = SD_MakeTexture2D(kShellFineDim, kShellFineDim, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::ShellTerrainFine");
 	if (!terrainFineCB)
 		terrainFineCB = new ConstantBuffer(ConstantBufferDesc<TerrainFineCB>(), "SnowDeformation::TerrainFineCB");
 	if (!shellTerrainFine->srv || !shellTerrainFine->uav)
@@ -974,15 +939,6 @@ void SnowDeformation::BuildTerrainFineWindow()
 	shellFineValid = true;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetWindowFillCS()
-{
-	if (!windowFillCS) {
-		logger::debug("Compiling TerrainWindowFillCS");
-		windowFillCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", {}, "cs_5_0"));
-	}
-	return windowFillCS;
-}
-
 ID3D11ShaderResourceView* SnowDeformation::GetLODTile(const std::string& a_worldspace, int a_cellX, int a_cellY)
 {
 	LoadTraceScope _loadTrace(this, "TerrainData: GetLODTile");
@@ -1018,7 +974,7 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 		lastFillWorldspace.clear();
 		return;
 	}
-	auto cs = GetWindowFillCS();
+	auto cs = GetSnowCS(kWindowFillCS);
 	if (!cs || !shellTerrainTexture->uav)
 		return;
 
@@ -1085,7 +1041,7 @@ void SnowDeformation::BSLightingShader_SetupMaterial(RE::BSLightingShaderMateria
 
 	state->permutationData.ExtraFeatureDescriptor &= ~uint(State::ExtraFeatureDescriptors::SnowLandIsSnowMask);
 
-	if (material == nullptr || !(debugTerrainOverlay || LandBlendActive()))
+	if (material == nullptr || !(debugTerrainOverlay || settings.EnableSnowDeformation))
 		return;
 
 	const auto feature = material->GetFeature();
@@ -1836,10 +1792,6 @@ struct SD_PlayerCamera_Update
 
 void SnowDeformation::InstallCameraHook()
 {
-	SD_PlayerCamera_Update::func = REL::RelocationID(49852, 50784).address();
-	DetourTransactionBegin();
-	DetourUpdateThread(GetCurrentThread());
-	const LONG attach = DetourAttach(reinterpret_cast<PVOID*>(&SD_PlayerCamera_Update::func), reinterpret_cast<PVOID>(SD_PlayerCamera_Update::thunk));
-	const LONG commit = DetourTransactionCommit();
-	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update at {:#x}: attach {}, commit {}", REL::RelocationID(49852, 50784).address(), attach, commit);
+	logger::info("[SNOW DEFORMATION] Hooking PlayerCamera::Update");
+	stl::detour_thunk<SD_PlayerCamera_Update>(REL::RelocationID(49852, 50784));
 }

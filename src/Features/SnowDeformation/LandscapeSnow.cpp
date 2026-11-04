@@ -294,12 +294,11 @@ namespace
 		std::vector<std::pair<const char*, const char*>> defs;
 		for (const auto& [k, v] : parsed)
 			defs.emplace_back(k.c_str(), v.c_str());
-		auto& snow = globals::features::snowDeformation;
 		const wchar_t* path = L"Data\\Shaders\\SnowDeformation\\LandscapeSnow.hlsl";
-		out.vsRaise.attach(static_cast<ID3D11VertexShader*>(snow.CompileSnowShader(path, defs, "vs_5_0", "LS_VSRaise")));
-		out.vs.attach(static_cast<ID3D11VertexShader*>(snow.CompileSnowShader(path, defs, "vs_5_0", "LS_VS")));
-		out.hs.attach(static_cast<ID3D11HullShader*>(snow.CompileSnowShader(path, defs, "hs_5_0", "LS_HS")));
-		out.ds.attach(static_cast<ID3D11DomainShader*>(snow.CompileSnowShader(path, defs, "ds_5_0", "LS_DS")));
+		out.vsRaise.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(path, defs, "vs_5_0", "LS_VSRaise")));
+		out.vs.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(path, defs, "vs_5_0", "LS_VS")));
+		out.hs.attach(static_cast<ID3D11HullShader*>(Util::CompileShader(path, defs, "hs_5_0", "LS_HS")));
+		out.ds.attach(static_cast<ID3D11DomainShader*>(Util::CompileShader(path, defs, "ds_5_0", "LS_DS")));
 		out.compileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 		return out;
 	}
@@ -308,12 +307,11 @@ namespace
 	{
 		LssShaders out;
 		const auto t0 = std::chrono::steady_clock::now();
-		auto& snow = globals::features::snowDeformation;
 		const wchar_t* path = L"Data\\Shaders\\SnowDeformation\\LandscapeSnowShell.hlsl";
 		std::vector<std::pair<const char*, const char*>> defs;
-		out.vs.attach(static_cast<ID3D11VertexShader*>(snow.CompileSnowShader(path, defs, "vs_5_0")));
-		out.hs.attach(static_cast<ID3D11HullShader*>(snow.CompileSnowShader(path, defs, "hs_5_0")));
-		out.ds.attach(static_cast<ID3D11DomainShader*>(snow.CompileSnowShader(path, defs, "ds_5_0")));
+		out.vs.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(path, defs, "vs_5_0")));
+		out.hs.attach(static_cast<ID3D11HullShader*>(Util::CompileShader(path, defs, "hs_5_0")));
+		out.ds.attach(static_cast<ID3D11DomainShader*>(Util::CompileShader(path, defs, "ds_5_0")));
 		out.compileMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 		return out;
 	}
@@ -764,16 +762,6 @@ bool SnowDeformation::LandscapeShadeReady()
 	if (!ready)
 		ls.shadeFallbacks++;
 	return ready;
-}
-
-bool SnowDeformation::LandBlendActive() const
-{
-	return settings.EnableSnowDeformation;
-}
-
-float SnowDeformation::LandBlendDepthStart() const
-{
-	return kLandBlendDepthStart;
 }
 
 float2 SnowDeformation::LandBlendContest() const

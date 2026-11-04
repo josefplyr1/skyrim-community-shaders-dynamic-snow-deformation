@@ -5,6 +5,7 @@
 #include "SnowDeformation.h"
 
 #include "Globals.h"
+#include "Menu.h"
 #include "State.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
@@ -190,6 +191,28 @@ void from_json(const nlohmann::json& j, SnowDeformation::Settings& s)
 #undef X
 }
 
+Texture2D* SD_MakeTexture2D(UINT a_width, UINT a_height, DXGI_FORMAT a_format, const char* a_name, UINT a_bind)
+{
+	D3D11_TEXTURE2D_DESC desc = {
+		.Width = a_width,
+		.Height = a_height,
+		.MipLevels = 1,
+		.ArraySize = 1,
+		.Format = a_format,
+		.SampleDesc = { .Count = 1 },
+		.Usage = D3D11_USAGE_DEFAULT,
+		.BindFlags = a_bind
+	};
+	auto* texture = new Texture2D(desc, a_name);
+	if (a_bind & D3D11_BIND_SHADER_RESOURCE)
+		texture->CreateSRV({ .Format = a_format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
+	if (a_bind & D3D11_BIND_UNORDERED_ACCESS)
+		texture->CreateUAV({ .Format = a_format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+	if (a_bind & D3D11_BIND_RENDER_TARGET)
+		texture->CreateRTV({ .Format = a_format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
+	return texture;
+}
+
 void SnowDeformation::CreateDeformationTextures()
 {
 	LoadTraceScope _loadTrace(this, "CreateDeformationTextures");
@@ -198,106 +221,32 @@ void SnowDeformation::CreateDeformationTextures()
 		deformationTextures[i] = nullptr;
 	}
 
-	D3D11_TEXTURE2D_DESC texDesc = {
-		.Width = deformMapDim,
-		.Height = deformMapDim,
-		.MipLevels = 1,
-		.ArraySize = 1,
-		.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-		.SampleDesc = { .Count = 1 },
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-	};
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-		.Format = texDesc.Format,
-		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-		.Texture2D = {
-			.MostDetailedMip = 0,
-			.MipLevels = 1 }
-	};
-
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-		.Format = texDesc.Format,
-		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MipSlice = 0 }
-	};
-
-	deformationTextures[0] = new Texture2D(texDesc, "SnowDeformation::DeformationMap");
-	deformationTextures[0]->CreateSRV(srvDesc);
-	deformationTextures[0]->CreateUAV(uavDesc);
-	{
-		D3D11_TEXTURE2D_DESC snapDesc = texDesc;
-		snapDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC snapSrv = srvDesc;
-		snapSrv.Format = snapDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC snapUav = uavDesc;
-		snapUav.Format = snapDesc.Format;
-		deformationTextures[1] = new Texture2D(snapDesc, "SnowDeformation::EvolveScratch");
-		deformationTextures[1]->CreateSRV(snapSrv);
-		deformationTextures[1]->CreateUAV(snapUav);
-	}
+	deformationTextures[0] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::DeformationMap");
+	deformationTextures[1] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::EvolveScratch");
 
 	if (!CreateTrenchStoreResources()) {
 		logger::warn("[SNOW DEFORMATION] Trench store resources failed; trenches will not survive leaving the window");
 	}
 
-	{
-		D3D11_TEXTURE2D_DESC bermDesc = texDesc;
-		bermDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC bermSrvDesc = srvDesc;
-		bermSrvDesc.Format = bermDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC bermUavDesc = uavDesc;
-		bermUavDesc.Format = bermDesc.Format;
-		delete bermFieldTexture;
-		bermFieldTexture = new Texture2D(bermDesc, "SnowDeformation::BermField");
-		bermFieldTexture->CreateSRV(bermSrvDesc);
-		bermFieldTexture->CreateUAV(bermUavDesc);
-	}
+	delete bermFieldTexture;
+	bermFieldTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::BermField");
 
 	{
-		D3D11_TEXTURE2D_DESC passDesc = texDesc;
-		passDesc.Format = DXGI_FORMAT_R16_UINT;
-		passDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC passUavDesc = uavDesc;
-		passUavDesc.Format = passDesc.Format;
 		delete passStateTexture;
-		passStateTexture = new Texture2D(passDesc, "SnowDeformation::PassState");
-		passStateTexture->CreateUAV(passUavDesc);
+		passStateTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16_UINT, "SnowDeformation::PassState", D3D11_BIND_UNORDERED_ACCESS);
 		const UINT zero[4] = { 0, 0, 0, 0 };
 		globals::d3d::context->ClearUnorderedAccessViewUint(passStateTexture->uav.get(), zero);
 	}
 
-	{
-		D3D11_TEXTURE2D_DESC reachDesc = texDesc;
-		reachDesc.Format = DXGI_FORMAT_R8_UNORM;
-		D3D11_SHADER_RESOURCE_VIEW_DESC reachSrvDesc = srvDesc;
-		reachSrvDesc.Format = reachDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC reachUavDesc = uavDesc;
-		reachUavDesc.Format = reachDesc.Format;
-		delete bodyReachTexture;
-		bodyReachTexture = new Texture2D(reachDesc, "SnowDeformation::BodyReach");
-		bodyReachTexture->CreateSRV(reachSrvDesc);
-		bodyReachTexture->CreateUAV(reachUavDesc);
-		const FLOAT zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		globals::d3d::context->ClearUnorderedAccessViewFloat(bodyReachTexture->uav.get(), zero);
-	}
+	const FLOAT zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	delete bodyReachTexture;
+	bodyReachTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R8_UNORM, "SnowDeformation::BodyReach");
+	globals::d3d::context->ClearUnorderedAccessViewFloat(bodyReachTexture->uav.get(), zero);
 
-	{
-		D3D11_TEXTURE2D_DESC clockDesc = texDesc;
-		clockDesc.Format = DXGI_FORMAT_R16_FLOAT;
-		D3D11_SHADER_RESOURCE_VIEW_DESC clockSrvDesc = srvDesc;
-		clockSrvDesc.Format = clockDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC clockUavDesc = uavDesc;
-		clockUavDesc.Format = clockDesc.Format;
-		delete trackClockTexture;
-		trackClockTexture = new Texture2D(clockDesc, "SnowDeformation::TrackClock");
-		trackClockTexture->CreateSRV(clockSrvDesc);
-		trackClockTexture->CreateUAV(clockUavDesc);
-		const FLOAT zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		globals::d3d::context->ClearUnorderedAccessViewFloat(trackClockTexture->uav.get(), zero);
-		snowClimate.ageingRebase = 0.0f;
-	}
+	delete trackClockTexture;
+	trackClockTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16_FLOAT, "SnowDeformation::TrackClock");
+	globals::d3d::context->ClearUnorderedAccessViewFloat(trackClockTexture->uav.get(), zero);
+	snowClimate.ageingRebase = 0.0f;
 
 	{
 		auto device = globals::d3d::device;
@@ -470,113 +419,19 @@ void SnowDeformation::SetupResources()
 		Util::SetResourceName(snapshotArgsUAV.get(), "SnowDeformation::SnapshotArgs UAV");
 	}
 
-	{
-		D3D11_TEXTURE2D_DESC fieldDesc = {
-			.Width = kExclusionFieldDim,
-			.Height = kExclusionFieldDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R8G8_UNORM,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC fieldSrvDesc = {
-			.Format = fieldDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC fieldUavDesc = {
-			.Format = fieldDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		exclusionFieldTexture = new Texture2D(fieldDesc, "SnowDeformation::ExclusionField");
-		exclusionFieldTexture->CreateSRV(fieldSrvDesc);
-		exclusionFieldTexture->CreateUAV(fieldUavDesc);
-		exclusionFieldCB = new ConstantBuffer(ConstantBufferDesc<ExclusionFieldCB>(), "SnowDeformation::ExclusionFieldCB");
-	}
+	exclusionFieldTexture = SD_MakeTexture2D(kExclusionFieldDim, kExclusionFieldDim, DXGI_FORMAT_R8G8_UNORM, "SnowDeformation::ExclusionField");
+	exclusionFieldCB = new ConstantBuffer(ConstantBufferDesc<ExclusionFieldCB>(), "SnowDeformation::ExclusionFieldCB");
 
-	{
-		D3D11_TEXTURE2D_DESC undDesc = {
-			.Width = kUndulationFieldDim,
-			.Height = kUndulationFieldDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC undSrvDesc = {
-			.Format = undDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC undUavDesc = {
-			.Format = undDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		undulationFieldTexture = new Texture2D(undDesc, "SnowDeformation::UndulationField");
-		undulationFieldTexture->CreateSRV(undSrvDesc);
-		undulationFieldTexture->CreateUAV(undUavDesc);
-		undulationFieldCB = new ConstantBuffer(ConstantBufferDesc<UndulationFieldCB>(), "SnowDeformation::UndulationFieldCB");
-		undulationFieldValid = false;
+	undulationFieldTexture = SD_MakeTexture2D(kUndulationFieldDim, kUndulationFieldDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::UndulationField");
+	undulationFieldCB = new ConstantBuffer(ConstantBufferDesc<UndulationFieldCB>(), "SnowDeformation::UndulationFieldCB");
+	undulationFieldValid = false;
 
-		D3D11_TEXTURE2D_DESC hashDesc = undDesc;
-		hashDesc.Width = hashDesc.Height = kNoiseHashDim;
-		hashDesc.Format = DXGI_FORMAT_R16_UNORM;
-		D3D11_SHADER_RESOURCE_VIEW_DESC hashSrvDesc = undSrvDesc;
-		hashSrvDesc.Format = hashDesc.Format;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC hashUavDesc = undUavDesc;
-		hashUavDesc.Format = hashDesc.Format;
-		noiseHashTexture = new Texture2D(hashDesc, "SnowDeformation::NoiseHash");
-		noiseHashTexture->CreateSRV(hashSrvDesc);
-		noiseHashTexture->CreateUAV(hashUavDesc);
-		noiseHashBaked = false;
-	}
+	noiseHashTexture = SD_MakeTexture2D(kNoiseHashDim, kNoiseHashDim, DXGI_FORMAT_R16_UNORM, "SnowDeformation::NoiseHash");
+	noiseHashBaked = false;
 
-	{
-		D3D11_TEXTURE2D_DESC terrainDesc = {
-			.Width = kShellWindowDim,
-			.Height = kShellWindowDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32G32B32A32_FLOAT,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS
-		};
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC terrainSrvDesc = {
-			.Format = terrainDesc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = {
-				.MostDetailedMip = 0,
-				.MipLevels = 1 }
-		};
-
-		D3D11_UNORDERED_ACCESS_VIEW_DESC terrainUavDesc = {
-			.Format = terrainDesc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-
-		shellTerrainTexture = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWindow");
-		shellTerrainTexture->CreateSRV(terrainSrvDesc);
-		shellTerrainTexture->CreateUAV(terrainUavDesc);
-		shellTerrainWet = new Texture2D(terrainDesc, "SnowDeformation::ShellTerrainWet");
-		shellTerrainWet->CreateSRV(terrainSrvDesc);
-		shellTerrainWet->CreateUAV(terrainUavDesc);
-		D3D11_TEXTURE2D_DESC bareDesc = terrainDesc;
-		bareDesc.Format = DXGI_FORMAT_R8_UNORM;
-		bareDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		D3D11_SHADER_RESOURCE_VIEW_DESC bareSrvDesc = terrainSrvDesc;
-		bareSrvDesc.Format = bareDesc.Format;
-		shellTerrainBare = new Texture2D(bareDesc, "SnowDeformation::ShellTerrainBare");
-		shellTerrainBare->CreateSRV(bareSrvDesc);
-	}
+	shellTerrainTexture = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R32G32B32A32_FLOAT, "SnowDeformation::ShellTerrainWindow");
+	shellTerrainWet = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R32G32B32A32_FLOAT, "SnowDeformation::ShellTerrainWet");
+	shellTerrainBare = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R8_UNORM, "SnowDeformation::ShellTerrainBare", D3D11_BIND_SHADER_RESOURCE);
 
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
@@ -677,7 +532,7 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.DeformMapOrigin = mapOrigin;
 	data.InvWorldSize = 1.0f / deformWorldSize;
 	data.DebugTerrainOverlay = (debugTerrainOverlay ? 1u : 0u) | (debugProjSnowView ? 4u : 0u) | (debugProjWeightView ? 32u : 0u) | (debugProjAlbedoView ? 64u : 0u) |
-	                           (LandBlendActive() ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
+	                           (settings.EnableSnowDeformation ? 128u : 0u) | (LandRecolorActive() ? 256u : 0u) | (shellSnowRmaosSRV ? 512u : 0u);
 	data.WaterWindowDim = 0.0f;
 	if (settings.EnableSnowDeformation && waterFineTexture && waterFineTexture->srv && waterFineValid) {
 		data.WaterWindowOrigin = { waterFineCenter.x - waterFineHalf, waterFineCenter.y - waterFineHalf };
@@ -1100,8 +955,8 @@ void SnowDeformation::PrepassSimulation()
 
 	if (deformationCSFailed)
 		return;
-	if (!GetDeformationRingCS() || !GetDeformationScanEvolveCS() || !GetDeformationEvolveCS() ||
-		!GetDeformationStampCS() || !GetDeformationStampAllCS() || !GetDeformationScanBermCS()) {
+	if (!GetSnowCS(kDeformationRingCS) || !GetSnowCS(kDeformationScanEvolveCS) || !GetSnowCS(kDeformationEvolveCS) ||
+		!GetSnowCS(kDeformationStampCS) || !GetSnowCS(kDeformationStampAllCS) || !GetSnowCS(kDeformationScanBermCS)) {
 		deformationCSFailed = true;
 		logger::error("[SNOW DEFORMATION] DeformationUpdateCS failed to compile, deformation passes disabled");
 		return;
@@ -1392,7 +1247,7 @@ void SnowDeformation::PrepassSimulation()
 			}
 
 			if (perFrameData.TrackRebase > 0.0f) {
-				if (auto* rebaseCS = GetTrackRebaseCS()) {
+				if (auto* rebaseCS = GetSnowCS(kTrackRebaseCS)) {
 					ID3D11UnorderedAccessView* rebaseUavs[2] = { trackClockTexture->uav.get(), bermFieldTexture->uav.get() };
 					context->CSSetUnorderedAccessViews(0, 2, rebaseUavs, nullptr);
 					context->CSSetShader(rebaseCS, nullptr, 0);
@@ -1418,7 +1273,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
 				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
-				context->CSSetShader(GetDeformationRingCS(), nullptr, 0);
+				context->CSSetShader(GetSnowCS(kDeformationRingCS), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
@@ -1436,8 +1291,8 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(4, 1, &occSRV);
 				const uint tilesPerAxis = deformMapDim / 8;
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
-				auto* scanSnapshotCS = GetDeformationScanSnapshotCS();
-				auto* snapshotCS = GetDeformationSnapshotCS();
+				auto* scanSnapshotCS = GetSnowCS(kDeformationScanSnapshotCS);
+				auto* snapshotCS = GetSnowCS(kDeformationSnapshotCS);
 				if (!evolveSnapshotOff && scanSnapshotCS && snapshotCS && snapshotTileUAV && snapshotTileSRV && snapshotArgsUAV) {
 					ID3D11UnorderedAccessView* snapUAVs[2] = { snapshotTileUAV.get(), snapshotArgsUAV.get() };
 					context->CSSetUnorderedAccessViews(4, 2, snapUAVs, nullptr);
@@ -1456,7 +1311,7 @@ void SnowDeformation::PrepassSimulation()
 					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 					ID3D11ShaderResourceView* nullSRV = nullptr;
 					context->CSSetShaderResources(0, 1, &nullSRV);
-				} else if (auto* fullSnapshotCS = GetDeformationSnapshotFullCS()) {
+				} else if (auto* fullSnapshotCS = GetSnowCS(kDeformationSnapshotFullCS)) {
 					ID3D11ShaderResourceView* mapSRV = map->srv.get();
 					ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
 					context->CSSetShaderResources(0, 1, &mapSRV);
@@ -1471,7 +1326,7 @@ void SnowDeformation::PrepassSimulation()
 
 				ID3D11UnorderedAccessView* scanUAVs[2] = { evolveTileUAV.get(), evolveArgsUAV.get() };
 				context->CSSetUnorderedAccessViews(4, 2, scanUAVs, nullptr);
-				context->CSSetShader(GetDeformationScanEvolveCS(), nullptr, 0);
+				context->CSSetShader(GetSnowCS(kDeformationScanEvolveCS), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
 				globals::profiler->EndPass();
@@ -1485,7 +1340,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
 				context->CSSetShaderResources(3, 1, &listSRV);
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
-				context->CSSetShader(GetDeformationEvolveCS(), nullptr, 0);
+				context->CSSetShader(GetSnowCS(kDeformationEvolveCS), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->DispatchIndirect(evolveArgsBuffer.get(), 0);
 				globals::profiler->EndPass();
@@ -1524,12 +1379,12 @@ void SnowDeformation::PrepassSimulation()
 				} else if (tiled) {
 					ID3D11ShaderResourceView* tileSRV = stampTileSRV.get();
 					context->CSSetShaderResources(2, 1, &tileSRV);
-					context->CSSetShader(GetDeformationStampCS(), nullptr, 0);
+					context->CSSetShader(GetSnowCS(kDeformationStampCS), nullptr, 0);
 					globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 					context->Dispatch(tileCount, 1, 1);
 					globals::profiler->EndPass();
 				} else {
-					context->CSSetShader(GetDeformationStampAllCS(), nullptr, 0);
+					context->CSSetShader(GetSnowCS(kDeformationStampAllCS), nullptr, 0);
 					globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 					context->Dispatch(deformMapDim / 8, deformMapDim / 8, 1);
 					globals::profiler->EndPass();
@@ -1540,7 +1395,7 @@ void SnowDeformation::PrepassSimulation()
 			}
 			if (debugContactView && !debugObjectPrintView) {
 				EnsureContactViewTexture();
-				if (auto* viewCS = GetContactViewCS(); viewCS && contactViewUAV) {
+				if (auto* viewCS = GetSnowCS(kContactViewCS); viewCS && contactViewUAV) {
 					ID3D11UnorderedAccessView* viewUAV = contactViewUAV.get();
 					context->CSSetUnorderedAccessViews(2, 1, &viewUAV, nullptr);
 					context->CSSetShader(viewCS, nullptr, 0);
@@ -1571,7 +1426,7 @@ void SnowDeformation::PrepassSimulation()
 			context->CSSetUnorderedAccessViews(5, 1, &bermArgs, nullptr);
 			ID3D11UnorderedAccessView* bermListUAV = bermTileUAV.get();
 			context->CSSetUnorderedAccessViews(7, 1, &bermListUAV, nullptr);
-			context->CSSetShader(GetDeformationScanBermCS(), nullptr, 0);
+			context->CSSetShader(GetSnowCS(kDeformationScanBermCS), nullptr, 0);
 			const uint tilesPerAxis = deformMapDim / 8;
 			context->Dispatch((tilesPerAxis + 7) / 8, (tilesPerAxis + 7) / 8, 1);
 			context->CSSetUnorderedAccessViews(7, 1, &nullUav, nullptr);
@@ -1579,7 +1434,7 @@ void SnowDeformation::PrepassSimulation()
 			ID3D11ShaderResourceView* nullDirty = nullptr;
 			context->CSSetShaderResources(6, 1, &nullDirty);
 
-			if (auto* bermCS = GetBermFieldTiledCS()) {
+			if (auto* bermCS = GetSnowCS(kBermFieldTiledCS)) {
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				ID3D11ShaderResourceView* bermSrvs[3] = { map->srv.get(), bermTileSRV.get(), trackClockTexture ? trackClockTexture->srv.get() : nullptr };
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
@@ -1604,7 +1459,7 @@ void SnowDeformation::PrepassSimulation()
 			}
 			globals::profiler->EndPass();
 
-			if (auto* untouchedCS = GetUntouchedTilesCS()) {
+			if (auto* untouchedCS = GetSnowCS(kUntouchedTilesCS)) {
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				ID3D11UnorderedAccessView* nullTileUavs[4] = {};
 				context->CSSetUnorderedAccessViews(0, 4, nullTileUavs, nullptr);
@@ -1671,58 +1526,53 @@ void SnowDeformation::PrepassSimulation()
 	spanClock.Lap(CpuCensus::kSpanPrepassTail);
 }
 
-ID3D11ComputeShader* SnowDeformation::GetExclusionFieldCS()
+ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 {
-	if (!exclusionFieldCS) {
-		logger::debug("Compiling ExclusionFieldCS");
-		exclusionFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", {}, "cs_5_0"));
+	struct Shader
+	{
+		const wchar_t* path;
+		const char* entry;
+		const char* define;
+	};
+	static constexpr Shader kShaders[kSnowCSCount] = {
+		{ L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", "main", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "RingCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "TrackRebaseCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "EvolveCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ContactViewCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampAllCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanEvolveCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanSnapshotCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "SnapshotCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "SnapshotFullCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanBermCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", "UntouchedCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", "BermTiledCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", "main", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", "NoiseHashCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", "TerrainCutCS", "SNOW_TERRAIN_CUT_CS" },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "main", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SssSyncCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SssRestoreCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssSyncCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssRestoreCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssSyncMarkCS", "SKIN_SSS_MARK" },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "TerrainFineCS", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", "main", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\TrenchDebugCS.hlsl", "main", nullptr },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "ClusterCullCS", "SNOW_CLUSTER_CULL" },
+		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinCullCS", nullptr },
+	};
+	auto*& slot = snowCS[a_which];
+	if (!slot) {
+		const Shader& shader = kShaders[a_which];
+		std::vector<std::pair<const char*, const char*>> defines;
+		if (shader.define)
+			defines.emplace_back(shader.define, "");
+		slot = static_cast<ID3D11ComputeShader*>(Util::CompileShader(shader.path, defines, "cs_5_0", shader.entry));
 	}
-	return exclusionFieldCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationRingCS()
-{
-	if (!deformationRingCS) {
-		logger::debug("Compiling DeformationUpdateCS:RingCS");
-		deformationRingCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "RingCS"));
-	}
-	return deformationRingCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetTrackRebaseCS()
-{
-	if (!trackRebaseCS) {
-		logger::debug("Compiling DeformationUpdateCS:TrackRebaseCS");
-		trackRebaseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "TrackRebaseCS"));
-	}
-	return trackRebaseCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationEvolveCS()
-{
-	if (!deformationEvolveCS) {
-		logger::debug("Compiling DeformationUpdateCS:EvolveCS");
-		deformationEvolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "EvolveCS"));
-	}
-	return deformationEvolveCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationStampCS()
-{
-	if (!deformationStampCS) {
-		logger::debug("Compiling DeformationUpdateCS:StampCS");
-		deformationStampCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampCS"));
-	}
-	return deformationStampCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetContactViewCS()
-{
-	if (!contactViewCS) {
-		logger::debug("Compiling DeformationUpdateCS:ContactViewCS");
-		contactViewCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ContactViewCS"));
-	}
-	return contactViewCS;
+	return slot;
 }
 
 void SnowDeformation::EnsureContactViewTexture()
@@ -1748,96 +1598,6 @@ void SnowDeformation::EnsureContactViewTexture()
 	device->CreateUnorderedAccessView(contactViewTexture.get(), nullptr, contactViewUAV.put());
 }
 
-ID3D11ComputeShader* SnowDeformation::GetDeformationStampAllCS()
-{
-	if (!deformationStampAllCS) {
-		logger::debug("Compiling DeformationUpdateCS:StampAllCS");
-		deformationStampAllCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "StampAllCS"));
-	}
-	return deformationStampAllCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationScanEvolveCS()
-{
-	if (!deformationScanEvolveCS) {
-		logger::debug("Compiling DeformationUpdateCS:ScanEvolveCS");
-		deformationScanEvolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanEvolveCS"));
-	}
-	return deformationScanEvolveCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationScanSnapshotCS()
-{
-	if (!deformationScanSnapshotCS) {
-		logger::debug("Compiling DeformationUpdateCS:ScanSnapshotCS");
-		deformationScanSnapshotCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanSnapshotCS"));
-	}
-	return deformationScanSnapshotCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationSnapshotCS()
-{
-	if (!deformationSnapshotCS) {
-		logger::debug("Compiling DeformationUpdateCS:SnapshotCS");
-		deformationSnapshotCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "SnapshotCS"));
-	}
-	return deformationSnapshotCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationSnapshotFullCS()
-{
-	if (!deformationSnapshotFullCS) {
-		logger::debug("Compiling DeformationUpdateCS:SnapshotFullCS");
-		deformationSnapshotFullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "SnapshotFullCS"));
-	}
-	return deformationSnapshotFullCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetDeformationScanBermCS()
-{
-	if (!deformationScanBermCS) {
-		logger::debug("Compiling DeformationUpdateCS:ScanBermCS");
-		deformationScanBermCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", {}, "cs_5_0", "ScanBermCS"));
-	}
-	return deformationScanBermCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetUntouchedTilesCS()
-{
-	if (!untouchedTilesCS) {
-		logger::debug("Compiling BermFieldCS:UntouchedCS");
-		untouchedTilesCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "UntouchedCS"));
-	}
-	return untouchedTilesCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetBermFieldTiledCS()
-{
-	if (!bermFieldTiledCS) {
-		logger::debug("Compiling BermFieldCS:BermTiledCS");
-		bermFieldTiledCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", {}, "cs_5_0", "BermTiledCS"));
-	}
-	return bermFieldTiledCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetUndulationFieldCS()
-{
-	if (!undulationFieldCS) {
-		logger::debug("Compiling UndulationFieldCS");
-		undulationFieldCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0"));
-	}
-	return undulationFieldCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetNoiseHashCS()
-{
-	if (!noiseHashCS) {
-		logger::debug("Compiling UndulationFieldCS NoiseHashCS");
-		noiseHashCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\UndulationFieldCS.hlsl", {}, "cs_5_0", "NoiseHashCS"));
-	}
-	return noiseHashCS;
-}
-
 namespace
 {
 	void BakeNoiseTexture(ID3D11DeviceContext* a_context, ID3D11ComputeShader* a_cs, Texture2D* a_tex, UINT a_slot)
@@ -1858,7 +1618,7 @@ ID3D11ShaderResourceView* SnowDeformation::NoiseHashSRV()
 	if (!noiseHashTexture || !noiseHashTexture->srv)
 		return nullptr;
 	if (!noiseHashBaked) {
-		auto* cs = GetNoiseHashCS();
+		auto* cs = GetSnowCS(kNoiseHashCS);
 		if (!cs || !context)
 			return nullptr;
 		BakeNoiseTexture(context, cs, noiseHashTexture, 1);
@@ -1889,7 +1649,7 @@ void SnowDeformation::UpdateUndulationField()
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
 		return;
 	}
-	auto* cs = GetUndulationFieldCS();
+	auto* cs = GetSnowCS(kUndulationFieldCS);
 	if (!cs) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Field Bakes");
 		return;
@@ -2001,55 +1761,15 @@ void SnowDeformation::ClearShaderCache()
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 	deformationCSFailed = false;
-	if (deformationRingCS)
-		deformationRingCS->Release();
-	deformationRingCS = nullptr;
-	if (trackRebaseCS)
-		trackRebaseCS->Release();
-	trackRebaseCS = nullptr;
 	ReleaseBloodShaders();
 	ReleaseObjectPrintShaders();
-	if (deformationEvolveCS)
-		deformationEvolveCS->Release();
-	deformationEvolveCS = nullptr;
-	if (deformationStampCS)
-		deformationStampCS->Release();
-	deformationStampCS = nullptr;
-	if (deformationStampAllCS)
-		deformationStampAllCS->Release();
-	deformationStampAllCS = nullptr;
-	if (deformationScanEvolveCS)
-		deformationScanEvolveCS->Release();
-	deformationScanEvolveCS = nullptr;
-	if (deformationScanSnapshotCS)
-		deformationScanSnapshotCS->Release();
-	deformationScanSnapshotCS = nullptr;
-	if (deformationSnapshotCS)
-		deformationSnapshotCS->Release();
-	deformationSnapshotCS = nullptr;
-	if (deformationSnapshotFullCS)
-		deformationSnapshotFullCS->Release();
-	deformationSnapshotFullCS = nullptr;
-	if (deformationScanBermCS)
-		deformationScanBermCS->Release();
-	deformationScanBermCS = nullptr;
-	if (bermFieldTiledCS)
-		bermFieldTiledCS->Release();
-	bermFieldTiledCS = nullptr;
-	if (untouchedTilesCS)
-		untouchedTilesCS->Release();
-	untouchedTilesCS = nullptr;
-	if (undulationFieldCS)
-		undulationFieldCS->Release();
-	undulationFieldCS = nullptr;
-	if (noiseHashCS)
-		noiseHashCS->Release();
-	noiseHashCS = nullptr;
 	noiseHashBaked = false;
 	undulationFieldValid = false;
-	if (exclusionFieldCS)
-		exclusionFieldCS->Release();
-	exclusionFieldCS = nullptr;
+	for (auto*& cs : snowCS) {
+		if (cs)
+			cs->Release();
+		cs = nullptr;
+	}
 	if (shellPSDeferred)
 		shellPSDeferred->Release();
 	shellPSDeferred = nullptr;
@@ -2086,28 +1806,7 @@ void SnowDeformation::ClearShaderCache()
 	if (shellFillPSPreSnow)
 		shellFillPSPreSnow->Release();
 	shellFillPSPreSnow = nullptr;
-	if (shellTerrainCutCS)
-		shellTerrainCutCS->Release();
-	shellTerrainCutCS = nullptr;
 	shellTerrainWetValid = false;
-	if (depthSyncCS)
-		depthSyncCS->Release();
-	depthSyncCS = nullptr;
-	if (sssSyncCS)
-		sssSyncCS->Release();
-	sssSyncCS = nullptr;
-	if (sssRestoreCS)
-		sssRestoreCS->Release();
-	sssRestoreCS = nullptr;
-	if (skinSssSyncCS)
-		skinSssSyncCS->Release();
-	skinSssSyncCS = nullptr;
-	if (skinSssRestoreCS)
-		skinSssRestoreCS->Release();
-	skinSssRestoreCS = nullptr;
-	if (skinSssSyncMarkCS)
-		skinSssSyncMarkCS->Release();
-	skinSssSyncMarkCS = nullptr;
 	if (sssChangedRaymarchCS)
 		sssChangedRaymarchCS->Release();
 	sssChangedRaymarchCS = nullptr;
@@ -2116,9 +1815,6 @@ void SnowDeformation::ClearShaderCache()
 	preSnowCopyCS = nullptr;
 	delete depthSyncRectCB;
 	depthSyncRectCB = nullptr;
-	if (terrainFineCS)
-		terrainFineCS->Release();
-	terrainFineCS = nullptr;
 	delete terrainFineCB;
 	terrainFineCB = nullptr;
 	delete shellTerrainFine;
@@ -2130,9 +1826,6 @@ void SnowDeformation::ClearShaderCache()
 	if (hiZBuildUAVCS)
 		hiZBuildUAVCS->Release();
 	hiZBuildUAVCS = nullptr;
-	if (skinCullCS)
-		skinCullCS->Release();
-	skinCullCS = nullptr;
 	delete skinCullCB;
 	skinCullCB = nullptr;
 	delete skinCullBounds;
@@ -2152,9 +1845,6 @@ void SnowDeformation::ClearShaderCache()
 		st = nullptr;
 	skinCullCapacity = 0;
 	skinCullLevels = 0;
-	if (windowFillCS)
-		windowFillCS->Release();
-	windowFillCS = nullptr;
 	if (staticsVS)
 		staticsVS->Release();
 	staticsVS = nullptr;
@@ -2230,9 +1920,6 @@ void SnowDeformation::ClearShaderCache()
 	if (smoothClusterCS)
 		smoothClusterCS->Release();
 	smoothClusterCS = nullptr;
-	if (clusterCullCS)
-		clusterCullCS->Release();
-	clusterCullCS = nullptr;
 	delete clusterBounds;
 	clusterBounds = nullptr;
 	delete clusterIndexPool;
@@ -2308,24 +1995,16 @@ void SnowDeformation::QueryAdapterVRAM(uint64_t& a_usageMB, uint64_t& a_budgetMB
 	a_budgetMB = 0;
 	if (a_nonLocalMB)
 		*a_nonLocalMB = 0;
-	static winrt::com_ptr<IDXGIAdapter3> adapter3;
-	if (!adapter3 && globals::d3d::device) {
-		winrt::com_ptr<IDXGIDevice> dxgiDevice;
-		if (SUCCEEDED(globals::d3d::device->QueryInterface(__uuidof(IDXGIDevice), dxgiDevice.put_void()))) {
-			winrt::com_ptr<IDXGIAdapter> adapter;
-			if (SUCCEEDED(dxgiDevice->GetAdapter(adapter.put())))
-				adapter->QueryInterface(__uuidof(IDXGIAdapter3), adapter3.put_void());
-		}
+	const auto adapter3 = globals::menu ? globals::menu->GetDXGIAdapter3() : nullptr;
+	if (!adapter3)
+		return;
+	DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+	if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
+		a_usageMB = info.CurrentUsage >> 20;
+		a_budgetMB = info.Budget >> 20;
 	}
-	if (adapter3) {
-		DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-		if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info))) {
-			a_usageMB = info.CurrentUsage >> 20;
-			a_budgetMB = info.Budget >> 20;
-		}
-		if (a_nonLocalMB && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &info)))
-			*a_nonLocalMB = info.CurrentUsage >> 20;
-	}
+	if (a_nonLocalMB && SUCCEEDED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &info)))
+		*a_nonLocalMB = info.CurrentUsage >> 20;
 }
 
 void SnowDeformation::TickVRAMLog()

@@ -17,6 +17,7 @@
 #include "State.h"
 #include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/D3D.h"
+#include "Utils/Format.h"
 
 #include <bit>
 
@@ -86,17 +87,7 @@ SnowDeformation::ObjectSnowProbe SnowDeformation::ProbeObjectSnow(float a_x, flo
 
 static bool ContainsNoCase(const char* a_text, const char* a_needle)
 {
-	if (!a_text || !a_needle || !*a_needle)
-		return false;
-	const size_t n = strlen(a_needle);
-	for (const char* p = a_text; *p; ++p) {
-		size_t i = 0;
-		while (i < n && p[i] && (char)std::tolower((unsigned char)p[i]) == a_needle[i])
-			++i;
-		if (i == n)
-			return true;
-	}
-	return false;
+	return a_text && a_needle && clib_util::string::icontains(a_text, a_needle);
 }
 
 static constexpr std::array kNotSnowKeywords{ "sand", "moss", "dirt", "mud", "gravel", "ash", "coast", "falmer", "glow", "sulfur", "leaves", "dust" };
@@ -329,8 +320,7 @@ namespace
 					matoPath = edid;
 				matoPath += '|';
 				matoPath += mato->GetModel();
-				std::transform(matoPath.begin(), matoPath.end(), matoPath.begin(),
-					[](unsigned char c) { return (char)std::tolower(c); });
+				matoPath = Util::ToLower(std::move(matoPath));
 				if (matoPath.starts_with("sos_win_snowmaterialobject")) {
 					it->second = MatoClass::kSnowSeasons;
 				} else if (matoPath.find("snow") != std::string::npos) {
@@ -456,9 +446,7 @@ namespace
 		if (inserted) {
 			if (auto textureSet = a_material->textureSet.get()) {
 				if (auto path = textureSet->GetTexturePath(RE::BSTextureSet::Texture::kDiffuse)) {
-					std::string lowered(path);
-					std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-						[](unsigned char c) { return (char)std::tolower(c); });
+					const std::string lowered = Util::ToLower(path);
 					it->second.base = lowered.find("drift") != std::string::npos ||
 					                  (lowered.find("landscape") != std::string::npos && lowered.find("snow") != std::string::npos);
 					it->second.naturalFeature = lowered.find("glacier") != std::string::npos ||
@@ -1481,23 +1469,23 @@ bool SnowDeformation::EnsureStaticsShaders()
 	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
 	if (!heightScrollCS)
-		heightScrollCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ScrollCS"));
+		heightScrollCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS"));
 	if (!heightScrollTopCS)
-		heightScrollTopCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS"));
+		heightScrollTopCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS"));
 	if (!heightScrollRasterCS)
-		heightScrollRasterCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS"));
+		heightScrollRasterCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS"));
 	if (!heightCombineCS)
-		heightCombineCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "CombineCS"));
+		heightCombineCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS"));
 	if (!heightWaterCoverCS)
-		heightWaterCoverCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "WaterCoverCS"));
+		heightWaterCoverCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "WaterCoverCS"));
 	if (!objectConeSeedCS)
-		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
+		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
 	if (!objectConeCS)
-		objectConeCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
+		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
 	if (!objectConeDiffuseCS)
-		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
+		objectConeDiffuseCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS"));
 	if (!objectConeFusedCS)
-		objectConeFusedCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(processPath, {}, "cs_5_0", "ConeFusedCS"));
+		objectConeFusedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeFusedCS"));
 
 	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightPSSkinDepth || !heightScrollCS || !heightScrollRasterCS || !heightCombineCS) {
 		staticsShadersFailed = true;
@@ -1510,100 +1498,23 @@ bool SnowDeformation::EnsureStaticsShaders()
 void SnowDeformation::CreateHeightFieldResources()
 {
 	LoadTraceScope _loadTrace(this, "Statics: CreateHeightFieldResources");
-	D3D11_TEXTURE2D_DESC heightDesc = {
-		.Width = kHeightMapDim,
-		.Height = kHeightMapDim,
-		.MipLevels = 1,
-		.ArraySize = 1,
-		.Format = DXGI_FORMAT_R32_FLOAT,
-		.SampleDesc = { .Count = 1 },
-		.Usage = D3D11_USAGE_DEFAULT,
-		.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS
-	};
-	D3D11_SHADER_RESOURCE_VIEW_DESC heightSrvDesc = {
-		.Format = heightDesc.Format,
-		.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-	};
-	D3D11_RENDER_TARGET_VIEW_DESC heightRtvDesc = {
-		.Format = heightDesc.Format,
-		.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MipSlice = 0 }
-	};
-	D3D11_UNORDERED_ACCESS_VIEW_DESC heightUavDesc = {
-		.Format = heightDesc.Format,
-		.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-		.Texture2D = { .MipSlice = 0 }
-	};
-
-	auto makeHeightTexture = [&](const char* a_name) {
-		auto* texture = new Texture2D(heightDesc, a_name);
-		texture->CreateSRV(heightSrvDesc);
-		texture->CreateRTV(heightRtvDesc);
-		texture->CreateUAV(heightUavDesc);
-		return texture;
+	auto makeHeightTexture = [](const char* a_name) {
+		return SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R32_FLOAT, a_name, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS);
 	};
 	heightTopRaw[0] = makeHeightTexture("SnowDeformation::HeightTopRaw0");
 	heightTopRaw[1] = makeHeightTexture("SnowDeformation::HeightTopRaw1");
 	heightBottomRaw[0] = makeHeightTexture("SnowDeformation::HeightBottomRaw0");
 	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
-	{
-		D3D11_TEXTURE2D_DESC rasterDesc = heightDesc;
-		rasterDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
-		rasterDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_SHADER_RESOURCE_VIEW_DESC rasterSrvDesc = heightSrvDesc;
-		rasterSrvDesc.Format = rasterDesc.Format;
-		D3D11_RENDER_TARGET_VIEW_DESC rasterRtvDesc = heightRtvDesc;
-		rasterRtvDesc.Format = rasterDesc.Format;
-		heightRaster = new Texture2D(rasterDesc, "SnowDeformation::HeightRaster");
-		heightRaster->CreateSRV(rasterSrvDesc);
-		heightRaster->CreateRTV(rasterRtvDesc);
-	}
-	D3D11_TEXTURE2D_DESC maskDesc = heightDesc;
-	maskDesc.Format = DXGI_FORMAT_R16G16_FLOAT;
-	D3D11_SHADER_RESOURCE_VIEW_DESC maskSrvDesc = heightSrvDesc;
-	maskSrvDesc.Format = maskDesc.Format;
-	D3D11_RENDER_TARGET_VIEW_DESC maskRtvDesc = heightRtvDesc;
-	maskRtvDesc.Format = maskDesc.Format;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC maskUavDesc = heightUavDesc;
-	maskUavDesc.Format = maskDesc.Format;
-	heightBottomFiltered = new Texture2D(maskDesc, "SnowDeformation::HeightShelterMask");
-	heightBottomFiltered->CreateSRV(maskSrvDesc);
-	heightBottomFiltered->CreateRTV(maskRtvDesc);
-	heightBottomFiltered->CreateUAV(maskUavDesc);
+	heightRaster = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::HeightRaster", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
+	heightBottomFiltered = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::HeightShelterMask", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS);
 	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
 	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
 	heightTop2Raw[1] = makeHeightTexture("SnowDeformation::HeightTop2Raw1");
 	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
 	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
-	D3D11_TEXTURE2D_DESC openDesc = heightDesc;
-	openDesc.Width = kHeightMapDim / 2;
-	openDesc.Height = kHeightMapDim / 2;
-	openDesc.Format = DXGI_FORMAT_R8_UNORM;
-	openDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 	static_assert(kHeightMapDim % 8 == 0, "HeightMapProcessCS clamps tiles to dims / 8");
-	D3D11_TEXTURE2D_DESC tileDesc = openDesc;
-	tileDesc.Width = kHeightMapDim / 8;
-	tileDesc.Height = kHeightMapDim / 8;
-	tileDesc.Format = DXGI_FORMAT_R8_UINT;
-	D3D11_SHADER_RESOURCE_VIEW_DESC tileSrvDesc = heightSrvDesc;
-	tileSrvDesc.Format = tileDesc.Format;
-	D3D11_UNORDERED_ACCESS_VIEW_DESC tileUavDesc = heightUavDesc;
-	tileUavDesc.Format = tileDesc.Format;
-	heightTileEmpty = new Texture2D(tileDesc, "SnowDeformation::HeightTileEmpty");
-	heightTileEmpty->CreateSRV(tileSrvDesc);
-	heightTileEmpty->CreateUAV(tileUavDesc);
-
-	D3D11_TEXTURE2D_DESC skinDepthDesc = heightDesc;
-	skinDepthDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
-	skinDepthDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-	D3D11_SHADER_RESOURCE_VIEW_DESC skinDepthSrvDesc = heightSrvDesc;
-	skinDepthSrvDesc.Format = skinDepthDesc.Format;
-	D3D11_RENDER_TARGET_VIEW_DESC skinDepthRtvDesc = heightRtvDesc;
-	skinDepthRtvDesc.Format = skinDepthDesc.Format;
-	heightSkinDepth = new Texture2D(skinDepthDesc, "SnowDeformation::HeightSkinDepth");
-	heightSkinDepth->CreateSRV(skinDepthSrvDesc);
-	heightSkinDepth->CreateRTV(skinDepthRtvDesc);
+	heightTileEmpty = SD_MakeTexture2D(kHeightMapDim / 8, kHeightMapDim / 8, DXGI_FORMAT_R8_UINT, "SnowDeformation::HeightTileEmpty");
+	heightSkinDepth = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::HeightSkinDepth", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 }
 
 static constexpr UINT kHeightVerifySamples = 8;
@@ -1619,7 +1530,7 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 		return true;
 	auto device = globals::d3d::device;
 	if (!heightRasterCompareCS)
-		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
 	if (!heightRasterCompareCS || !heightRaster || !heightSkinDepth || !heightTopRawFine || !heightTopRawFar)
 		return false;
 	Texture2D* const twins[kHeightVerifyRasterSlots] = { heightRaster, heightSkinDepth, heightTopRawFine, heightTopRawFar };
@@ -1718,7 +1629,7 @@ bool SnowDeformation::EnsurePatchVerify(ID3D11DepthStencilView* a_dsv)
 		return false;
 	auto device = globals::d3d::device;
 	if (!heightRasterCompareCS)
-		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
+		heightRasterCompareCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS"));
 	if (!heightRasterCompareCS)
 		return false;
 	winrt::com_ptr<ID3D11Resource> depthResource;
@@ -2902,15 +2813,15 @@ void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4S
 bool SnowDeformation::EnsureSmoothNormalsCS()
 {
 	if (!smoothAccumulateCS)
-		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
+		smoothAccumulateCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0"));
 	if (!smoothResolveCS)
-		smoothResolveCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
+		smoothResolveCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0"));
 	if (!smoothFlatStatsCS)
-		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
+		smoothFlatStatsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0"));
 	if (!smoothBoundsCS)
-		smoothBoundsCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0"));
+		smoothBoundsCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0"));
 	if (!smoothClusterCS)
-		smoothClusterCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0"));
+		smoothClusterCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0"));
 	if (!meshBounds && smoothBoundsCS) {
 		D3D11_BUFFER_DESC desc{};
 		desc.ByteWidth = kMeshBoundsSlots * 2 * 16;
@@ -2931,15 +2842,6 @@ bool SnowDeformation::EnsureSmoothNormalsCS()
 		meshBounds->CreateUAV(uavDesc);
 	}
 	return smoothAccumulateCS && smoothResolveCS && smoothFlatStatsCS;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetClusterCullCS()
-{
-	if (!clusterCullCS) {
-		logger::debug("Compiling DepthSyncCS ClusterCullCS");
-		clusterCullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "SNOW_CLUSTER_CULL", "" } }, "cs_5_0", "ClusterCullCS"));
-	}
-	return clusterCullCS;
 }
 
 bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
@@ -3726,7 +3628,7 @@ void SnowDeformation::DrawCapturedStatics()
 		globals::profiler->BeginPass(a_name);
 	};
 	auto* hiZBuild = GetHiZBuildCS();
-	auto* skinCull = hiZBuild ? GetSkinCullCS() : nullptr;
+	auto* skinCull = hiZBuild ? GetSnowCS(kSkinCullCS) : nullptr;
 	const uint32_t hiZExtentW = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
 	const uint32_t hiZExtentH = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
 	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
@@ -3828,7 +3730,7 @@ void SnowDeformation::DrawCapturedStatics()
 		context->CSSetUnorderedAccessViews(7, 1, &footprintUAV, nullptr);
 		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
 
-		auto* clusterCull = clusterSkins > 0 ? GetClusterCullCS() : nullptr;
+		auto* clusterCull = clusterSkins > 0 ? GetSnowCS(kClusterCullCS) : nullptr;
 		const bool clusterPass = clusterCull && clusterScratchIB && clusterScratchIB->uav;
 		skinFootprintLive = clusterSkins == 0 || clusterPass;
 		if (clusterPass) {
@@ -4382,7 +4284,7 @@ void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
 		exclusionFieldValid = false;
 		return;
 	}
-	auto* cs = GetExclusionFieldCS();
+	auto* cs = GetSnowCS(kExclusionFieldCS);
 	if (!cs) {
 		exclusionFieldValid = false;
 		return;
@@ -4588,54 +4490,13 @@ void SnowDeformation::RenderWaterCapture()
 		Util::SetResourceName(waterCapturePS, "SnowDeformation::WaterCapturePS");
 	}
 	if (!waterHeightTexture) {
-		D3D11_TEXTURE2D_DESC desc = {
-			.Width = kShellWindowDim,
-			.Height = kShellWindowDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32_FLOAT,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		waterHeightTexture = new Texture2D(desc, "SnowDeformation::WaterWindow");
-		waterHeightTexture->CreateSRV(srvDesc);
-		waterHeightTexture->CreateRTV(rtvDesc);
+		waterHeightTexture = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::WaterWindow", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 		waterWindowCellX = INT_MIN;
 		waterBakeValid = false;
-		{
-			D3D11_TEXTURE2D_DESC visDesc = desc;
-			visDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-			waterVisibleTexture = new Texture2D(visDesc, "SnowDeformation::WaterVisible");
-			waterVisibleTexture->CreateSRV(srvDesc);
-			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = 0 }
-			};
-			waterVisibleTexture->CreateUAV(uavDesc);
-			D3D11_TEXTURE2D_DESC nearDesc = visDesc;
-			nearDesc.Format = DXGI_FORMAT_R8_UINT;
-			waterNearTexture = new Texture2D(nearDesc, "SnowDeformation::WaterNear");
-			waterNearTexture->CreateSRV({ .Format = nearDesc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-			waterNearTexture->CreateUAV({ .Format = nearDesc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
-			waterCoverDirty = true;
-		}
-		desc.Width = kWaterFineDim;
-		desc.Height = kWaterFineDim;
-		waterFineTexture = new Texture2D(desc, "SnowDeformation::WaterFine");
-		waterFineTexture->CreateSRV(srvDesc);
-		waterFineTexture->CreateRTV(rtvDesc);
+		waterVisibleTexture = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::WaterVisible");
+		waterNearTexture = SD_MakeTexture2D(kShellWindowDim, kShellWindowDim, DXGI_FORMAT_R8_UINT, "SnowDeformation::WaterNear");
+		waterCoverDirty = true;
+		waterFineTexture = SD_MakeTexture2D(kWaterFineDim, kWaterFineDim, DXGI_FORMAT_R32_FLOAT, "SnowDeformation::WaterFine", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 		waterFineValid = false;
 	}
 	GatherWaterObjects();
@@ -4840,31 +4701,8 @@ bool SnowDeformation::EnsureContactResources()
 		logger::warn("[SNOW DEFORMATION] Prop contact capture disabled (shader compilation failed)");
 		return false;
 	}
-	if (!contactHeight) {
-		D3D11_TEXTURE2D_DESC desc = {
-			.Width = kContactDim,
-			.Height = kContactDim,
-			.MipLevels = 1,
-			.ArraySize = 1,
-			.Format = DXGI_FORMAT_R32G32_FLOAT,
-			.SampleDesc = { .Count = 1 },
-			.Usage = D3D11_USAGE_DEFAULT,
-			.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET
-		};
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		contactHeight = new Texture2D(desc, "SnowDeformation::ContactHeight");
-		contactHeight->CreateSRV(srvDesc);
-		contactHeight->CreateRTV(rtvDesc);
-	}
+	if (!contactHeight)
+		contactHeight = SD_MakeTexture2D(kContactDim, kContactDim, DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::ContactHeight", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 	auto makeMinBlend = [&](winrt::com_ptr<ID3D11BlendState>& a_state, UINT8 a_mask) {
 		if (a_state)
 			return true;
@@ -5456,18 +5294,9 @@ ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS(bool a_fromUAV)
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (a_fromUAV)
 			defines.push_back({ "HIZ_FROM_UAV", "" });
-		slot = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS"));
+		slot = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS"));
 	}
 	return slot;
-}
-
-ID3D11ComputeShader* SnowDeformation::GetSkinCullCS()
-{
-	if (!skinCullCS) {
-		logger::debug("Compiling DepthSyncCS SkinCullCS");
-		skinCullCS = static_cast<ID3D11ComputeShader*>(CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "SkinCullCS"));
-	}
-	return skinCullCS;
 }
 
 bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH)
@@ -5746,9 +5575,7 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 	bool genericFlame = false;
 	std::string lowered;
 	if (modelPath && modelPath[0]) {
-		lowered.assign(modelPath);
-		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
+		lowered = Util::ToLower(modelPath);
 		if (lowered.find("torchbug") == std::string::npos) {
 			if (lowered.find("fxfire") != std::string::npos) {
 				genericFlame = true;

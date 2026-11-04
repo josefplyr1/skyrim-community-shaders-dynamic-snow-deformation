@@ -50,8 +50,8 @@ ID3D11ComputeShader* SnowDeformation::GetMarchHeightCS(MarchCS a_which)
 		const bool sun = a_which == kSunTilesCS || a_which == kSunRowsCS;
 		logger::debug("Compiling {} {}", road ? "SnowStaticsShell" : "SnowShell", entries[a_which]);
 		slot = static_cast<ID3D11ComputeShader*>(road ?
-				CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", { { "SNOW_ROAD_MARCH_CS", "" } }, "cs_5_0", entries[a_which]) :
-				CompileSnowShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
+				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", { { "SNOW_ROAD_MARCH_CS", "" } }, "cs_5_0", entries[a_which]) :
+				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
 	}
 	return slot;
 }
@@ -81,30 +81,8 @@ namespace
 	{
 		if (a_tex && a_tex->desc.Width == a_dim)
 			return a_tex;
-		delete a_tex;
-		a_tex = nullptr;
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = a_dim;
-		desc.Height = a_dim;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		a_tex = new Texture2D(desc, a_name);
-		a_tex->CreateSRV(srvDesc);
-		a_tex->CreateUAV(uavDesc);
+		delete std::exchange(a_tex, nullptr);
+		a_tex = SD_MakeTexture2D(a_dim, a_dim, DXGI_FORMAT_R32_FLOAT, a_name);
 		a_created = true;
 		return a_tex->srv && a_tex->uav ? a_tex : nullptr;
 	}

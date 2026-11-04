@@ -15,6 +15,8 @@
 /** @brief Util::CompileShader for a snow shader's main(); null defines are skipped, and a_blob receives the bytecode. */
 ID3D11DeviceChild* SD_CompileShader(const wchar_t* a_path, const char* a_target, std::initializer_list<const char*> a_defines = {}, winrt::com_ptr<ID3DBlob>* a_blob = nullptr);
 uint32_t SD_PositionBytes(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
+/** @brief A one-mip 2D texture with an SRV, UAV and RTV for each of those bind flags in a_bind. */
+Texture2D* SD_MakeTexture2D(UINT a_width, UINT a_height, DXGI_FORMAT a_format, const char* a_name, UINT a_bind = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
 
 struct SnowDeformation : Feature
 {
@@ -576,8 +578,6 @@ public:
 	Texture2D* passStateTexture = nullptr;
 	Texture2D* bodyReachTexture = nullptr;
 	Texture2D* trackClockTexture = nullptr;
-	ID3D11ComputeShader* trackRebaseCS = nullptr;
-	ID3D11ComputeShader* GetTrackRebaseCS();
 	static constexpr float kTrackAgeSpan = 24.0f;
 	/** @brief ShellCB::TrackAge: the ageing clock now and the age per clock unit (Track Ageing / kTrackAgeSpan; 0 = tracks never age). */
 	float4 TrackAgeConstants() const;
@@ -803,14 +803,10 @@ public:
 	static constexpr float kUndulationFieldSnap = 512.0f;
 
 	Texture2D* undulationFieldTexture = nullptr;
-	ID3D11ComputeShader* undulationFieldCS = nullptr;
-	ID3D11ComputeShader* GetUndulationFieldCS();
 	static constexpr uint32_t kNoiseHashDim = 256;
 	static constexpr uint32_t kNoiseHashSlot = 109;
 	Texture2D* noiseHashTexture = nullptr;
 	bool noiseHashBaked = false;
-	ID3D11ComputeShader* noiseHashCS = nullptr;
-	ID3D11ComputeShader* GetNoiseHashCS();
 	/** @brief Bakes the hash table on the first call after it was created; the bound SRV, or null until baked. */
 	ID3D11ShaderResourceView* NoiseHashSRV();
 	static constexpr uint32_t kTrenchDetailSlot = 112;
@@ -850,20 +846,41 @@ public:
 	/** @brief Puts back the blended depth SyncSssDepth changed; runs after Screen-Space Shadows' PostPrepass march (feature order). */
 	virtual void PostPrepass() override;
 
-	/** @brief Returns the ring compute shader (rewrites the texels a scroll reassigned: inject or pristine), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationRingCS();
-	/** @brief Returns the map-evolution compute shader (refill/decay/slump - the neighbour-reading pass), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationEvolveCS();
-	/** @brief Returns the stamp compute shader (in-place RMW, one group per CPU-listed tile), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationStampCS();
-	/** @brief Returns the full-map stamp fallback (tile list past its cap, or force-all-dirty). */
-	ID3D11ComputeShader* GetDeformationStampAllCS();
-	ID3D11ComputeShader* GetContactViewCS();
-	ID3D11ComputeShader* deformationRingCS = nullptr;
-	ID3D11ComputeShader* deformationEvolveCS = nullptr;
-	ID3D11ComputeShader* deformationStampCS = nullptr;
-	ID3D11ComputeShader* deformationStampAllCS = nullptr;
-	ID3D11ComputeShader* contactViewCS = nullptr;
+	enum SnowCS : uint32_t
+	{
+		kExclusionFieldCS,
+		kDeformationRingCS,
+		kTrackRebaseCS,
+		kDeformationEvolveCS,
+		kDeformationStampCS,
+		kContactViewCS,
+		kDeformationStampAllCS,
+		kDeformationScanEvolveCS,
+		kDeformationScanSnapshotCS,
+		kDeformationSnapshotCS,
+		kDeformationSnapshotFullCS,
+		kDeformationScanBermCS,
+		kUntouchedTilesCS,
+		kBermFieldTiledCS,
+		kUndulationFieldCS,
+		kNoiseHashCS,
+		kShellTerrainCutCS,
+		kDepthSyncCS,
+		kSssSyncCS,
+		kSssRestoreCS,
+		kSkinSssSyncCS,
+		kSkinSssRestoreCS,
+		kSkinSssSyncMarkCS,
+		kTerrainFineCS,
+		kWindowFillCS,
+		kTrenchDebugCS,
+		kClusterCullCS,
+		kSkinCullCS,
+		kSnowCSCount
+	};
+	/** @brief Returns one of the trail map's compute shaders, compiling it on first use; null if it failed to compile. */
+	ID3D11ComputeShader* GetSnowCS(SnowCS a_which);
+	ID3D11ComputeShader* snowCS[kSnowCSCount] = {};
 	bool deformationCSFailed = false;
 
 	static constexpr uint kStampTileCap = 16384;
@@ -892,25 +909,6 @@ public:
 	bool tileGridsNeedInit = true;
 	uint32_t evolveTilesLast = 0;
 
-	/** @brief Returns the evolve-scan compute shader (occupancy + halo -> tile list), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationScanEvolveCS();
-	/** @brief Returns the berm-scan compute shader (dirty grid + tap-reach halo -> tile list), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationScanBermCS();
-	/** @brief Returns the tiled berm bake (indirect over the berm tile list), compiling it on first use. */
-	ID3D11ComputeShader* GetBermFieldTiledCS();
-	ID3D11ComputeShader* deformationScanEvolveCS = nullptr;
-	/** @brief Returns the snapshot scan (occupancy + twice the evolve halo -> tile list), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationScanSnapshotCS();
-	/** @brief Returns the snapshot copy (indirect over the snapshot list, map -> evolve's scratch), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationSnapshotCS();
-	/** @brief Returns the whole-map snapshot copy (evolveSnapshotOff, or the listed copy unavailable), compiling it on first use. */
-	ID3D11ComputeShader* GetDeformationSnapshotFullCS();
-	ID3D11ComputeShader* deformationScanSnapshotCS = nullptr;
-	ID3D11ComputeShader* deformationSnapshotCS = nullptr;
-	ID3D11ComputeShader* deformationSnapshotFullCS = nullptr;
-	ID3D11ComputeShader* deformationScanBermCS = nullptr;
-	ID3D11ComputeShader* bermFieldTiledCS = nullptr;
-
 	winrt::com_ptr<ID3D11Texture2D> bermDirtyTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> bermDirtyUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> bermDirtySRV;
@@ -926,9 +924,6 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> untouchedTilesTexture;
 	winrt::com_ptr<ID3D11UnorderedAccessView> untouchedTilesUAV;
 	winrt::com_ptr<ID3D11ShaderResourceView> untouchedTilesSRV;
-	/** @brief Returns BermFieldCS.hlsl:UntouchedCS, compiling it on first use. */
-	ID3D11ComputeShader* GetUntouchedTilesCS();
-	ID3D11ComputeShader* untouchedTilesCS = nullptr;
 
 	struct ArrivalRect
 	{
@@ -959,8 +954,6 @@ public:
 	static constexpr UINT kTBMaskSlot = 110;
 	bool shellWindowLandBlend = false;
 	float shellWindowLandBlendStart = 1.0f;
-	ID3D11ComputeShader* shellTerrainCutCS = nullptr;
-	ID3D11ComputeShader* GetShellTerrainCutCS();
 	/** @brief Rebuilds shellTerrainWet when its inputs changed. Call after the water cover pass, before any landscape-shell pass. */
 	void UpdateTerrainWet();
 	/** @brief SampleTerrain's t21: the cut window while it is current, else the raw window. */
@@ -1001,8 +994,6 @@ public:
 		float FineTexel;
 	};
 	ConstantBuffer* terrainFineCB = nullptr;
-	ID3D11ComputeShader* terrainFineCS = nullptr;
-	ID3D11ComputeShader* GetTerrainFineCS();
 	void BuildTerrainFineWindow();
 	static constexpr float kShellTessTargetPx = 16.0f;
 	/** @brief kShellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
@@ -1273,12 +1264,6 @@ public:
 	void RestoreSssDepth();
 	/** @brief a_cs over shellSssRect with t1 the raster depth, u0 the blended depth, u1 the marks; CS t1, u0-u1, b2 and the shader go back as found. */
 	void DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass);
-	ID3D11ComputeShader* sssSyncCS = nullptr;
-	ID3D11ComputeShader* sssRestoreCS = nullptr;
-	/** @brief DepthSyncCS's SssSyncCS entry, compiled on first use. */
-	ID3D11ComputeShader* GetSssSyncCS();
-	/** @brief DepthSyncCS's SssRestoreCS entry, compiled on first use. */
-	ID3D11ComputeShader* GetSssRestoreCS();
 
 	uint32_t skinSssMarchFrame = UINT32_MAX;
 	ID3D11ShaderResourceView* shellGroundMarksSRV = nullptr;
@@ -1287,19 +1272,10 @@ public:
 	bool SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport);
 	/** @brief Skin and ground-snow pixels (a_skinDepthSRV, the skins' private depth, against the pre-snow copy and shellGroundMarksSRV) into the 32-bit blended depth over a_viewport's rect, ScreenSpaceShadows::DrawShadows, the blended depth back; rebinds PS t3 (a_sceneDepthSRV) and t45 for the skin shading. */
 	void MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport);
-	ID3D11ComputeShader* skinSssSyncCS = nullptr;
-	ID3D11ComputeShader* skinSssRestoreCS = nullptr;
-	/** @brief DepthSyncCS's SkinSssSyncCS entry, compiled on first use. */
-	ID3D11ComputeShader* GetSkinSssSyncCS();
-	/** @brief DepthSyncCS's SkinSssRestoreCS entry, compiled on first use. */
-	ID3D11ComputeShader* GetSkinSssRestoreCS();
 	Texture2D* sssFirstMarchDepth = nullptr;
 	uint32_t sssFirstMarchFrame = UINT32_MAX;
 	D3D11_BOX skinSssRectLast{};
 	Texture2D* sssChangedTiles = nullptr;
-	ID3D11ComputeShader* skinSssSyncMarkCS = nullptr;
-	/** @brief DepthSyncCS's SkinSssSyncMarkCS entry (SKIN_SSS_MARK), compiled on first use. */
-	ID3D11ComputeShader* GetSkinSssSyncMarkCS();
 	/** @brief Screen-Space Shadows' raymarch with SSS_CHANGED_TILES, for its current scaled sample count (sssChangedRaymarchSamples); null without that feature. */
 	ID3D11ComputeShader* GetSssChangedRaymarchCS();
 	ID3D11ComputeShader* sssChangedRaymarchCS = nullptr;
@@ -1368,10 +1344,6 @@ public:
 	float skinRasterSlopeBuilt = 0.0f;
 	static constexpr float kDecalViewportMaxDepth = 0.99997199f;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
-
-	/** @brief Returns the depth sync compute shader (shell depth -> Terrain Blending's blended depth copies), compiling it on first use. Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11ComputeShader* GetDepthSyncCS();
-	ID3D11ComputeShader* depthSyncCS = nullptr;
 
 	int staticsDebugView = 0;
 
@@ -1461,8 +1433,6 @@ public:
 
 	/** @brief Fills sentinel window texels from the Terrain Shadows xLODGen heightmap (height + snow-line coverage, provenance in .w). Runs after each window upload. Implemented in SnowDeformation/TerrainData.cpp. */
 	void FillShellWindowFromHeightmap();
-	ID3D11ComputeShader* GetWindowFillCS();
-	ID3D11ComputeShader* windowFillCS = nullptr;
 	std::string lastFillWorldspace;
 
 	/** @brief Nominal (untrampled) snow depth in world units at a world XY, resolved from the baked cell data and the class depth sliders. Returns a_missing where no cell is baked (interiors, unvisited land). Implemented in SnowDeformation/TerrainData.cpp. */
@@ -1771,8 +1741,6 @@ public:
 	uint32_t clusterScratchCapacity = 0;
 	uint32_t clusterScratchNeeded = 0;
 	ID3D11ComputeShader* smoothClusterCS = nullptr;
-	ID3D11ComputeShader* clusterCullCS = nullptr;
-	ID3D11ComputeShader* GetClusterCullCS();
 	bool EnsureClusterResources(uint32_t a_scratchIndices);
 	Buffer* clusterBounds = nullptr;
 	Buffer* clusterIndexPool = nullptr;
@@ -2308,9 +2276,6 @@ public:
 	STATIC_ASSERT_ALIGNAS_16(ExclusionFieldCB);
 	ConstantBuffer* exclusionFieldCB = nullptr;
 
-	/** @brief Returns the exclusion field bake compute shader, compiling it on first use. */
-	ID3D11ComputeShader* GetExclusionFieldCS();
-	ID3D11ComputeShader* exclusionFieldCS = nullptr;
 	/** @brief SRV of the wide exclusion field; null before SetupResources. */
 	ID3D11ShaderResourceView* GetExclusionFieldSRV() const { return exclusionFieldTexture ? exclusionFieldTexture->srv.get() : nullptr; }
 
@@ -2460,9 +2425,7 @@ public:
 	winrt::com_ptr<ID3D11Texture2D> skinCullHiZTopStaging[kSkinCullRing];
 	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);
 	ID3D11ComputeShader* hiZBuildUAVCS = nullptr;
-	ID3D11ComputeShader* GetSkinCullCS();
 	ID3D11ComputeShader* hiZBuildCS = nullptr;
-	ID3D11ComputeShader* skinCullCS = nullptr;
 	/** @brief a_extentW/H: the pixels the pyramid covers from the depth's origin (the rendered rectangle's far corner). */
 	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH);
 	ID3D11VertexShader* staticsTessVS = nullptr;
@@ -2686,11 +2649,7 @@ public:
 	void LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs);
 	/** @brief The ground snow can draw this frame: the replay's shaders are ready and this frame's depth prepass has been captured. Counts the frames that wanted it and drew no ground. */
 	bool LandscapeShadeReady();
-	/** @brief The land-blended edges (LANDSCAPE-SNOW-PLAN Phase 5), on whenever the feature is: wherever the land is mixed, its own height blend decides snow or ground (Lighting writes its snow odds into Masks.y); trenches reach the ground; the window bake keeps snow depth only where the land is nearly all snow. */
-	bool LandBlendActive() const;
-	/** @brief The land's snow-texture weight from which the bake keeps snow depth (smoothstep to 1). */
-	float LandBlendDepthStart() const;
-	/** @brief A blended class depth under the land-blend rule: positive depth scaled by smoothstep(LandBlendDepthStart, 1, snow weight); unchanged when the mode is off. Shared by the window bake and GetNominalSnowDepthAt. */
+	/** @brief A blended class depth under the land-blend rule: positive depth scaled by smoothstep(kLandBlendDepthStart, 1, snow weight); unchanged when the feature is off. Shared by the window bake and GetNominalSnowDepthAt. */
 	float LandBlendDepth(float a_depth, float a_snowWeight) const;
 	/** @brief The resolve's depth bonus (log2 odds per unit of remaining snow) and carve penalty (log2 odds at a full carve). */
 	float2 LandBlendContest() const;
@@ -2704,7 +2663,7 @@ public:
 	bool landRecolor = true;
 	static constexpr float kLandRecolorLumLo = 0.48f;
 	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
-	bool LandRecolorActive() const { return landRecolor && LandBlendActive() && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
+	bool LandRecolorActive() const { return landRecolor && settings.EnableSnowDeformation && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
 	static constexpr uint32_t kTrenchMarkSettleFrames = 60;
 	static constexpr uint32_t kTrenchMarkRefreshFrames = 600;
 	static constexpr float kTrenchMarkTolTexels = 2.0f;
@@ -2990,8 +2949,6 @@ protected:
 	winrt::com_ptr<ID3D11Texture2D> trenchDebugTexture;
 	winrt::com_ptr<ID3D11ShaderResourceView> trenchDebugSRV;
 	winrt::com_ptr<ID3D11UnorderedAccessView> trenchDebugUAV;
-	ID3D11ComputeShader* trenchDebugCS = nullptr;
-	ID3D11ComputeShader* GetTrenchDebugCS();
 	void UpdateTrenchDebugTexture();
 
 	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
@@ -3290,8 +3247,6 @@ public:
 	}
 	std::thread snowPrimeThread;
 
-	/** @brief Util::CompileShader for the snow shaders; its disk cache keys on the preprocessed source, so every define reaches the key. */
-	ID3D11DeviceChild* CompileSnowShader(const wchar_t* a_path, const std::vector<std::pair<const char*, const char*>>& a_defines, const char* a_target, const char* a_entry = "main");
 	/** @brief Compiles the three SmoothNormalsCS variants; shared by the primer and EnsureSmoothedNormals. Implemented in SnowDeformation/Statics.cpp. */
 	bool EnsureSmoothNormalsCS();
 
