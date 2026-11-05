@@ -42,9 +42,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetPreSnowCopyCS(); },
 		[&] { GetSnowCS(kSssSyncCS); },
 		[&] { GetSnowCS(kSssRestoreCS); },
-		[&] { GetSnowCS(kSkinSssSyncCS); },
-		[&] { GetSnowCS(kSkinSssRestoreCS); },
-		[&] { GetSnowCS(kSkinSssSyncMarkCS); },
 		[&] { GetHiZBuildCS(); },
 		[&] { GetSnowCS(kSkinCullCS); },
 		[&] { GetSnowCS(kClusterCullCS); },
@@ -67,7 +64,6 @@ void SnowDeformation::RunShaderPrime()
 	};
 	const std::function<void()> objectSteps[] = {
 		[&] { EnsureStaticsShaders(); },
-		[&] { GetSssChangedRaymarchCS(); },
 		[&] { EnsureSmoothNormalsCS(); },
 	};
 	const std::function<void()> effectSteps[] = {

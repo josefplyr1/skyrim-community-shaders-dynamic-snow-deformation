@@ -613,9 +613,6 @@ public:
 		kDepthSyncCS,
 		kSssSyncCS,
 		kSssRestoreCS,
-		kSkinSssSyncCS,
-		kSkinSssRestoreCS,
-		kSkinSssSyncMarkCS,
 		kTerrainFineCS,
 		kWindowFillCS,
 		kClusterCullCS,
@@ -969,25 +966,7 @@ public:
 	/** @brief a_cs over shellSssRect with t1 the raster depth, u0 the blended depth, u1 the marks; CS t1, u0-u1, b2 and the shader go back as found. */
 	void DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass);
 
-	uint32_t skinSssMarchFrame = UINT32_MAX;
 	ID3D11ShaderResourceView* shellGroundMarksSRV = nullptr;
-	Texture2D* skinSssSaved = nullptr;
-	/** @brief The conditions under which ScreenSpaceShadows::PostPrepass marches, plus this pass's resources (skinSssSaved over a_viewport's extent) and shaders. */
-	bool SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport);
-	/** @brief Skin and ground-snow pixels (a_skinDepthSRV, the skins' private depth, against the pre-snow copy and shellGroundMarksSRV) into the 32-bit blended depth over a_viewport's rect, ScreenSpaceShadows::DrawShadows, the blended depth back; rebinds PS t3 (a_sceneDepthSRV) and t45 for the skin shading. */
-	void MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport);
-	Texture2D* sssFirstMarchDepth = nullptr;
-	uint32_t sssFirstMarchFrame = UINT32_MAX;
-	D3D11_BOX skinSssRectLast{};
-	Texture2D* sssChangedTiles = nullptr;
-	/** @brief Screen-Space Shadows' raymarch with SSS_CHANGED_TILES, for its current scaled sample count (sssChangedRaymarchSamples); null without that feature. */
-	ID3D11ComputeShader* GetSssChangedRaymarchCS();
-	winrt::com_ptr<ID3D11ComputeShader> sssChangedRaymarchCS;
-	uint32_t sssChangedRaymarchSamples = 0;
-	/** @brief Copies the blended depth the first march read, on frames after one the skins marched in. */
-	void CopyFirstMarchDepth();
-	/** @brief (Re)creates sssChangedTiles for a depth of this size; true when it is usable. */
-	bool EnsureSssChangedTiles(UINT a_width, UINT a_height);
 	winrt::com_ptr<ID3D11PixelShader> shellFillPSClaim;
 	ID3D11PixelShader* GetShellFillPSClaim();
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);

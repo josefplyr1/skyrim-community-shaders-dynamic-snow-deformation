@@ -3026,10 +3026,6 @@ void SnowDeformation::DrawCapturedStatics()
 		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
 	}
 
-	const bool skinSssMarch = prepass && !skinDraws.empty() && (fillPreSnow || preSnowDepthThisFrame) && SkinSssMarchReady(vpCount ? &vps[0] : nullptr);
-	if (!skinSssMarch) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Shadows - Snow Depth Sync");
-	}
 	static std::vector<StaticsCB> sSkinRecords;
 	sSkinRecords.assign(skinDraws.size(), StaticsCB{});
 	auto& skinRecords = sSkinRecords;
@@ -3039,7 +3035,6 @@ void SnowDeformation::DrawCapturedStatics()
 		skinSmoothSRVs[si] = d.smoothSRV;
 		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
 			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinRecords[si]);
-		skinRecords[si].SkinSssSeen = skinSssMarch ? 1.0f : 0.0f;
 		if (d.layoutParallax) {
 			skinRecords[si].ObjParallaxUV = d.cap->parallaxUV;
 			skinRecords[si].ObjParallax = d.cap->parallax;
@@ -3169,7 +3164,7 @@ void SnowDeformation::DrawCapturedStatics()
 		};
 
 		statsRow("SnowDeformation::Objects - Depth Prepass");
-		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch;
+		const bool firstFillFootprint = fillRectVS && !fillPreSnow;
 		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
 		if (fillPreSnow) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
@@ -3181,10 +3176,6 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(true);
 		ID3D11ShaderResourceView* nullPreSkinSRV = nullptr;
 		context->PSSetShaderResources(43, 1, &nullPreSkinSRV);
-		if (skinSssMarch) {
-			statsRow("SnowDeformation::Shadows - Snow Depth Sync");
-			MarchSkinSss(shellTestDepthSRV.get(), sceneDepthSRV, vpCount ? &vps[0] : nullptr);
-		}
 		statsRow("SnowDeformation::Objects - Shading");
 
 		context->OMSetRenderTargets(8, rtvPtrs, shellTestDepthDSV.get());

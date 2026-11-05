@@ -1342,9 +1342,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "main", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SssSyncCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SssRestoreCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssSyncCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssRestoreCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinSssSyncMarkCS", "SKIN_SSS_MARK" },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "TerrainFineCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", "main", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "ClusterCullCS", "SNOW_CLUSTER_CULL" },
@@ -1572,7 +1569,7 @@ void SnowDeformation::ClearShaderCache()
 	for (auto& key : heightRasterKey)
 		key.clear();
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
-	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
+	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS);
 	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
 	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass);
 	release(staticsVSParallax, staticsPSDrapeParallax);

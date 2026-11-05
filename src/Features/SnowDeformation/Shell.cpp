@@ -665,24 +665,6 @@ void SnowDeformation::CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11Shader
 		rawDSV->Release();
 }
 
-ID3D11ComputeShader* SnowDeformation::GetSssChangedRaymarchCS()
-{
-	auto& ss = globals::features::screenSpaceShadows;
-	if (!ss.loaded)
-		return nullptr;
-	const uint32_t samples = ss.GetScaledSampleCount();
-	if (sssChangedRaymarchCS && sssChangedRaymarchSamples != samples)
-		sssChangedRaymarchCS = nullptr;
-	if (!sssChangedRaymarchCS) {
-		const auto count = std::format("{}", samples);
-		auto defines = ss.GetRaymarchDefines(count);
-		defines.push_back({ "SSS_CHANGED_TILES", "" });
-		sssChangedRaymarchCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\ScreenSpaceShadows\\RaymarchCS.hlsl", defines, "cs_5_0")));
-		sssChangedRaymarchSamples = samples;
-	}
-	return sssChangedRaymarchCS.get();
-}
-
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
 {
 	auto& fb = globals::game::frameBufferCached;
@@ -1040,82 +1022,8 @@ void SnowDeformation::SyncSssDepth()
 
 void SnowDeformation::RestoreSssDepth()
 {
-	CopyFirstMarchDepth();
 	if (shellSssSyncFrame == globals::state->frameCount)
 		DispatchSssDepth(GetSnowCS(kSssRestoreCS), "SnowDeformation::Shadows - Snow Depth Sync");
-}
-
-void SnowDeformation::CopyFirstMarchDepth()
-{
-	auto& ss = globals::features::screenSpaceShadows;
-	auto& tb = globals::features::terrainBlending;
-	auto* blended = tb.blendedDepthTexture;
-	const uint32_t frame = globals::state->frameCount;
-	if (!settings.EnableSnowDeformation || !globals::state->inWorld || skinSssMarchFrame + 1 != frame || ss.marchFrame != frame || !blended ||
-		!blended->resource || !blended->srv || ss.marchDepthSRV != blended->srv.get())
-		return;
-	const UINT width = std::clamp(skinSssRectLast.right, 1u, blended->desc.Width);
-	const UINT height = std::clamp(skinSssRectLast.bottom, 1u, blended->desc.Height);
-	if (sssFirstMarchDepth && (sssFirstMarchDepth->desc.Width != width || sssFirstMarchDepth->desc.Height != height ||
-								  sssFirstMarchDepth->desc.Format != blended->desc.Format)) {
-		delete sssFirstMarchDepth;
-		sssFirstMarchDepth = nullptr;
-	}
-	if (!sssFirstMarchDepth) {
-		D3D11_TEXTURE2D_DESC desc = blended->desc;
-		desc.Width = width;
-		desc.Height = height;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.CPUAccessFlags = 0;
-		desc.MiscFlags = 0;
-		sssFirstMarchDepth = new Texture2D(desc, "SnowDeformation::SssFirstMarchDepth");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = DXGI_FORMAT_R32_FLOAT,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		sssFirstMarchDepth->CreateSRV(srvDesc);
-		if (!sssFirstMarchDepth->srv)
-			return;
-	}
-	const D3D11_BOX box{ 0, 0, 0, width, height, 1 };
-	globals::d3d::context->CopySubresourceRegion(sssFirstMarchDepth->resource.get(), 0, 0, 0, 0, blended->resource.get(), 0, &box);
-	sssFirstMarchFrame = frame;
-}
-
-bool SnowDeformation::EnsureSssChangedTiles(UINT a_width, UINT a_height)
-{
-	const UINT w = (a_width + 7) / 8;
-	const UINT h = (a_height + 7) / 8;
-	if (sssChangedTiles && (sssChangedTiles->desc.Width != w || sssChangedTiles->desc.Height != h)) {
-		delete sssChangedTiles;
-		sssChangedTiles = nullptr;
-	}
-	if (!sssChangedTiles) {
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = w;
-		desc.Height = h;
-		desc.MipLevels = 1;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R8_UINT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		sssChangedTiles = new Texture2D(desc, "SnowDeformation::SssChangedTiles");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 }
-		};
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		sssChangedTiles->CreateSRV(srvDesc);
-		sssChangedTiles->CreateUAV(uavDesc);
-	}
-	return sssChangedTiles->srv && sssChangedTiles->uav;
 }
 
 void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_pass)
@@ -1159,91 +1067,6 @@ void SnowDeformation::DispatchSssDepth(ID3D11ComputeShader* a_cs, const char* a_
 			u->Release();
 	if (prevCB)
 		prevCB->Release();
-}
-
-bool SnowDeformation::SkinSssMarchReady(const D3D11_VIEWPORT* a_viewport)
-{
-	auto& ss = globals::features::screenSpaceShadows;
-	auto& tb = globals::features::terrainBlending;
-	auto* blended = tb.blendedDepthTexture;
-	auto sky = globals::game::sky;
-	if (!settings.SnowScreenSpaceShadows || !ss.loaded || !ss.screenSpaceShadowsTexture || !ss.screenSpaceShadowsTexture->srv || !ss.bendSettings.Enable ||
-		!sky || sky->mode.get() != RE::Sky::Mode::kFull || !tb.loaded || !tb.settings.Enabled || !blended || !blended->uav || !preSnowDepthSRV)
-		return false;
-	const D3D11_BOX extent = ScreenRectBox(a_viewport, blended->desc.Width, blended->desc.Height, 0);
-	const UINT width = std::max(extent.right, 1u);
-	const UINT height = std::max(extent.bottom, 1u);
-	if (skinSssSaved && (skinSssSaved->desc.Width != width || skinSssSaved->desc.Height != height)) {
-		delete skinSssSaved;
-		skinSssSaved = nullptr;
-	}
-	if (!skinSssSaved) {
-		D3D11_TEXTURE2D_DESC desc = blended->desc;
-		desc.Width = width;
-		desc.Height = height;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		skinSssSaved = new Texture2D(desc, "SnowDeformation::SkinSssSaved");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-			.Format = DXGI_FORMAT_R32_FLOAT,
-			.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MipSlice = 0 }
-		};
-		skinSssSaved->CreateUAV(uavDesc);
-	}
-	return skinSssSaved->uav && GetSnowCS(kSkinSssSyncCS) && GetSnowCS(kSkinSssRestoreCS) && DepthSyncRectBuffer();
-}
-
-void SnowDeformation::MarchSkinSss(ID3D11ShaderResourceView* a_skinDepthSRV, ID3D11ShaderResourceView* a_sceneDepthSRV, const D3D11_VIEWPORT* a_viewport)
-{
-	auto context = globals::d3d::context;
-	auto& ss = globals::features::screenSpaceShadows;
-	auto& tb = globals::features::terrainBlending;
-	const auto& blendedDesc = tb.blendedDepthTexture->desc;
-	const D3D11_BOX rect = ScreenRectBox(a_viewport, blendedDesc.Width, blendedDesc.Height, 0);
-	DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };
-	depthSyncRectCB->Update(rectData);
-	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-	const bool restoreInside = shellSssSyncFrame != globals::state->frameCount ||
-	                           (shellSssRect.left >= rect.left && shellSssRect.top >= rect.top && shellSssRect.right <= rect.right && shellSssRect.bottom <= rect.bottom);
-	const bool mark = restoreInside && sssFirstMarchFrame == globals::state->frameCount && sssFirstMarchDepth && sssFirstMarchDepth->srv &&
-	                  sssFirstMarchDepth->desc.Width >= rect.right && sssFirstMarchDepth->desc.Height >= rect.bottom &&
-	                  ss.marchFrame == globals::state->frameCount && ss.marchDepthSRV == tb.blendedDepthTexture->srv.get() &&
-	                  Util::GetCurrentSceneDepthSRV(false) == ss.marchDepthSRV && GetSnowCS(kSkinSssSyncMarkCS) && GetSssChangedRaymarchCS() &&
-	                  EnsureSssChangedTiles(blendedDesc.Width, blendedDesc.Height);
-	ID3D11ShaderResourceView* srvs[4] = { a_skinDepthSRV, shellGroundMarksSRV, preSnowDepthSRV.get(), mark ? sssFirstMarchDepth->srv.get() : nullptr };
-	ID3D11UnorderedAccessView* uavs[3] = { tb.blendedDepthTexture->uav.get(), skinSssSaved->uav.get(), mark ? sssChangedTiles->uav.get() : nullptr };
-	const UINT srvCount = mark ? 4 : 3;
-	const UINT uavCount = mark ? 3 : 2;
-	const auto dispatch = [&](ID3D11ComputeShader* a_cs) {
-		context->CSSetConstantBuffers(2, 1, &rectCB);
-		context->CSSetShaderResources(0, srvCount, srvs);
-		context->CSSetUnorderedAccessViews(0, uavCount, uavs, nullptr);
-		context->CSSetShader(a_cs, nullptr, 0);
-		context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
-		ID3D11ShaderResourceView* nullSRVs[4] = {};
-		ID3D11UnorderedAccessView* nullUAVs[3] = {};
-		ID3D11Buffer* nullCB = nullptr;
-		context->CSSetShaderResources(0, srvCount, nullSRVs);
-		context->CSSetUnorderedAccessViews(0, uavCount, nullUAVs, nullptr);
-		context->CSSetConstantBuffers(2, 1, &nullCB);
-		context->CSSetShader(nullptr, nullptr, 0);
-	};
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-	if (mark) {
-		const UINT zero[4] = {};
-		context->ClearUnorderedAccessViewUint(sssChangedTiles->uav.get(), zero);
-	}
-	dispatch(mark ? GetSnowCS(kSkinSssSyncMarkCS) : GetSnowCS(kSkinSssSyncCS));
-	globals::profiler->EndPass();
-	ss.DrawShadows(mark ? sssChangedTiles->srv.get() : nullptr, mark ? sssChangedRaymarchCS.get() : nullptr);
-	globals::profiler->BeginPass("SnowDeformation::Shadows - Snow Depth Sync");
-	dispatch(GetSnowCS(kSkinSssRestoreCS));
-	ID3D11ShaderResourceView* maskSRV = ss.screenSpaceShadowsTexture->srv.get();
-	context->PSSetShaderResources(3, 1, &a_sceneDepthSRV);
-	context->PSSetShaderResources(45, 1, &maskSRV);
-	skinSssMarchFrame = globals::state->frameCount;
-	skinSssRectLast = rect;
 }
 
 void SnowDeformation::DrawShell()

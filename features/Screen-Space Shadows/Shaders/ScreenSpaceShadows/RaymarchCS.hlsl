@@ -35,51 +35,6 @@ cbuffer PerFrame : register(b1)
 	float ShadowContrast;
 };
 
-#if defined(SSS_CHANGED_TILES)
-// A repeat march over a depth that differs from the frame's first march only
-// in the 8x8 tiles marked here (each mark covering its neighbours): a group
-// whose depth reads all land on unmarked tiles writes what the first march
-// already wrote, so it returns.
-Texture2D<uint> ChangedTiles : register(t1);
-groupshared uint gReadsChanged;
-
-// The group's reads are one line, pixel_xy(thread step 0) - xy_delta * w over
-// READ_COUNT wave lengths of w. Samples at most 7.2 px apart per axis leave
-// every read, bilinear neighbour included, within 8 texels of one: inside
-// the marks' one-tile reach.
-bool ReadsChangedDepth(DispatchParameters inParameters, int3 inGroupID, int inGroupThreadID)
-{
-	half2 xy_delta;
-	half2 start_xy;
-	half pixel_distance;
-	bool x_axis_major;
-	ComputeWavefrontExtents(inParameters, inGroupID, inParameters.LightCoordinate.w > 0.0f ? 0 : WAVE_SIZE - 1, xy_delta, start_xy, pixel_distance, x_axis_major);
-#	if defined(RIGHT)
-	start_xy.x += 1.0 / inParameters.InvDepthTextureSize.x;
-#	endif
-	uint2 dims;
-	DepthTexture.GetDimensions(dims.x, dims.y);
-	uint2 tiles;
-	ChangedTiles.GetDimensions(tiles.x, tiles.y);
-	const float2 toTexel = inParameters.InvDepthTextureSize * inParameters.DynamicRes * float2(dims);
-	if (any(toTexel > 1.001))
-		return true;
-	const float2 toTile = toTexel * 0.125;
-	const float span = READ_COUNT - 1.0 / WAVE_SIZE;
-	const float lo = -inParameters.LightCoordinate.w < 0.0 ? 0.0 : 1.0 - READ_COUNT;
-	const float step = 7.2 / max(abs(xy_delta.x), abs(xy_delta.y));
-	const uint count = (uint)ceil(span / step) + 1;
-	bool changed = false;
-	[loop] for (uint k = inGroupThreadID; k < count; k += WAVE_SIZE)
-	{
-		const float2 read_xy = floor(start_xy - xy_delta * (lo + min(k * step, span))) + 0.5;
-		const int2 tile = clamp(int2(floor(read_xy * toTile)), 0, int2(tiles) - 1);
-		changed = changed || ChangedTiles.Load(int3(tile, 0)) != 0;
-	}
-	return changed;
-}
-#endif
-
 [numthreads(WAVE_SIZE, 1, 1)] void main(
 	int3 groupID : SV_GroupID,
 	int groupThreadID : SV_GroupThreadID) {
@@ -102,17 +57,6 @@ bool ReadsChangedDepth(DispatchParameters inParameters, int3 inGroupID, int inGr
 	parameters.DynamicRes = DynamicRes;
 
 	parameters.UsePrecisionOffset = true;
-
-#if defined(SSS_CHANGED_TILES)
-	if (groupThreadID == 0)
-		gReadsChanged = 0;
-	GroupMemoryBarrierWithGroupSync();
-	if (ReadsChangedDepth(parameters, groupID, groupThreadID))
-		InterlockedOr(gReadsChanged, 1u);
-	GroupMemoryBarrierWithGroupSync();
-	if (gReadsChanged == 0)
-		return;
-#endif
 
 	WriteScreenSpaceShadow(parameters, groupID, groupThreadID);
 }
