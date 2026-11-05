@@ -166,11 +166,6 @@ void State::Draw()
 		if (currentShader && updateShader) {
 			if (currentShader->shaderType.get() == RE::BSShader::Type::Utility) {
 				if (currentPixelDescriptor & static_cast<uint32_t>(SIE::ShaderCache::UtilityShaderFlags::RenderShadowmask)) {
-					// Snow FIRST (round 26): it injects the snow shell into the
-					// live sun maps, and every other capture here (VolumetricShadows'
-					// shared VSM, height fog, skylighting) copies from them - taken
-					// before the injection they carried a shell-less atlas, so
-					// every VSM-path receiver lost the shell's shadow.
 					if (globals::features::snowDeformation.loaded)
 						globals::features::snowDeformation.CaptureShadowAtlas();
 					if (volumetricShadows.loaded)

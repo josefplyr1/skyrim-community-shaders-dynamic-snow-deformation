@@ -57,9 +57,7 @@ cbuffer PerFrame : register(b0)
 	float2 ViewCenter;
 	float ViewHalf;
 	float BodyPrint;
-	float2 HeightWindowCenter;
-	float HeightHalfExtent;
-	float HasRoadRaster;
+	float4 RoadRasterPad;
 	uint PassClock;
 	uint PassGap;
 	uint2 PassPad;
@@ -86,11 +84,9 @@ RWStructuredBuffer<uint> EvolveTiles : register(u4);
 StructuredBuffer<uint> EvolveTilesIn : register(t3);
 Texture2D<float2> ContactHeight : register(t7);
 Texture2D<float4> TerrainWindow : register(t8);
-Texture2D<float2> ObjectSkinDepth : register(t9);
 RWTexture2D<uint> PassState : register(u7);
 RWTexture2D<unorm float> BodyReachMax : register(u5);
 #define CONTACT_NONE 1.0e30
-static const float kNoRoadTop = -1000000.0;
 RWByteAddressBuffer TileArgs : register(u5);
 
 RWTexture2D<uint> BermDirty : register(u6);
@@ -536,22 +532,7 @@ float ContactAboveDrawn(float2 worldPos, float contact, float dune)
 float ContactAbove(float2 worldPos, float contact)
 {
 	float2 groundLayer = TerrainGroundLayer(worldPos);
-	float above = (contact - groundLayer.x) / groundLayer.y;
-	[branch] if (HasRoadRaster > 0.5 && all(abs(worldPos - HeightWindowCenter) < HeightHalfExtent))
-	{
-		float2 dims;
-		ObjectSkinDepth.GetDimensions(dims.x, dims.y);
-		float2 local = (worldPos - HeightWindowCenter) / HeightHalfExtent;
-		float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-		float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
-		int2 t0 = (int2)t;
-		int2 t1 = min(t0 + 1, int2(dims) - 1);
-		float2 s = max(max(ObjectSkinDepth.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t0.y, 0))),
-			max(ObjectSkinDepth.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepth.Load(int3(t1.x, t1.y, 0))));
-		[flatten] if (s.y > kNoRoadTop * 0.5 && s.x >= 1.0)
-			above = min(above, (contact - s.y) / s.x);
-	}
-	return above;
+	return (contact - groundLayer.x) / groundLayer.y;
 }
 
 float4 ShoutMark(float2 worldPos, float2 apex, float2 seg, float segLenSq, float3 cone)

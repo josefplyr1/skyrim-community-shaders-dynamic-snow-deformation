@@ -4,7 +4,6 @@
 
 #include <d3d11_1.h>
 #include <deque>
-#include <future>
 #include <list>
 #include <intrin.h>
 
@@ -452,9 +451,7 @@ public:
 		float2 ViewCenter;
 		float ViewHalf;
 		float BodyPrint;
-		float2 HeightWindowCenter;
-		float HeightHalfExtent;
-		float HasRoadRaster;
+		float RoadRasterPad[4];
 		uint PassClock;
 		uint PassGap;
 		uint PassPad[2];
@@ -1218,23 +1215,13 @@ public:
 	winrt::com_ptr<ID3D11SamplerState> shadowCmpSampler;
 	winrt::com_ptr<ID3D11SamplerState> shellLinearSampler;
 
-	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Injects the trench patch as a caster, then keeps the atlas for the crisp shell shadows to read in place. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
+	/** @brief Called from State::Draw while the game renders the shadow MASK (Utility shader, RenderShadowmask); the only point where PS t4 genuinely holds the sun cascade atlas (at any other time it holds whatever texture the last draw bound). Keeps the atlas for the crisp shell shadows to read in place. Same trigger VolumetricShadows and Skylighting use. Implemented in SnowDeformation/Shadows.cpp. */
 	void CaptureShadowAtlas();
-
-	/** @brief Lazily compiles the trench patch's shadow-caster VS (SNOW_PATCH_INDEXED, drawn through patchCasterIB). Implemented in SnowDeformation/Statics.cpp. */
-	ID3D11VertexShader* GetPatchShadowVS();
 
 	std::unique_ptr<ShellCB> lastShellCBData;
 
-	winrt::com_ptr<ID3D11DepthStencilView> shadowAtlasDSV[4];
-	ID3D11Texture2D* shadowAtlasDSVTexture = nullptr;
-	uint32_t shadowAtlasDSVSlice[4] = { 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu };
 	uint32_t sunCascadeSlice[2] = { 0, 1 };
-	winrt::com_ptr<ID3D11RasterizerState> shadowCastRS;
-	winrt::com_ptr<ID3D11DepthStencilState> shadowCastDSS;
 
-	/** @brief Depth-renders the road trench patch into the live cascade slices; the ground snow casts through the raised landscape (LandscapeSnow.cpp). The statics skins deliberately do NOT cast: a skin hovers a few units above its object's own surface, so the object beneath always reads as shadowed by its own snow cap. Called from CaptureShadowAtlas before the snow reads the atlas. Implemented in SnowDeformation/Shadows.cpp. */
-	void InjectShellShadowCasters(ID3D11ShaderResourceView* a_atlasSRV);
 	/** @brief The sun cascades' real atlas slices into sunCascadeSlice every frame (the snow's shadow reads), whether or not anything casts. */
 	void RecordSunCascadeSlices(uint32_t a_atlasSlices);
 
@@ -1423,7 +1410,7 @@ public:
 	uint32_t smoothedNormalsResets = 0;
 	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
 	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const;
-	/** @brief ONE StaticsCB recipe for the trench patch, shared by the visible patch draw and its shadow caster for the same drift reason as FillSkinDrawCB. Implemented in SnowDeformation/Statics.cpp. */
+	/** @brief The StaticsCB recipe of the trench patch lattice, which the road march cache reads. Implemented in SnowDeformation/Statics.cpp. */
 	void FillPatchDrawCB(StaticsCB& a_scb) const;
 
 	static constexpr uint kHeightMapDim = 2048;
@@ -1681,7 +1668,6 @@ public:
 
 	static constexpr float kNoRoadTop = -1000000.0f;
 
-	static constexpr uint32_t kPatchGridDim = 426;
 	static constexpr float kPatchSnap = 256.0f;
 	static constexpr float kFarPatchReach = 16384.0f;
 	static constexpr float kHeatClearRadiusMin = 40.0f;
@@ -1890,52 +1876,8 @@ public:
 	winrt::com_ptr<ID3D11VertexShader> staticsTessVS;
 	winrt::com_ptr<ID3D11HullShader> staticsHS;
 	winrt::com_ptr<ID3D11DomainShader> staticsDS;
-	winrt::com_ptr<ID3D11VertexShader> patchVS;
-	winrt::com_ptr<ID3D11VertexShader> patchShadowVS;
-	winrt::com_ptr<ID3D11Buffer> patchCasterIB;
-	uint32_t patchCasterIndexCount = 0;
-	bool EnsurePatchCasterIB();
-	/** @brief The tessellated patch hull's frustum footprint lines (SnowStaticsShell.hlsl PatchCullCB, b11). */
-	struct alignas(16) PatchCullCB
-	{
-		float4 Lines[6];
-		uint32_t LineCount;
-		uint32_t RowStart;
-		uint32_t ColStart;
-		uint32_t pad;
-	};
-	ConstantBuffer* patchCullCB = nullptr;
-	/** @brief The view frustum's five planes (rows of CameraViewProj, camera-relative) with z eliminated: lines in world XY, inside where dot(xy, p) + z >= 0. */
-	uint32_t FillPatchCullLines(const ShellCB& a_cb, PatchCullCB& a_out) const;
 	/** @brief The trench patch lattice's centre, snapped to its coarsest band step (StaticsCB::WorldRow0.xy). */
 	float2 PatchLatticeCentre() const;
-	struct PatchBand
-	{
-		uint32_t x0, x1, y0, y1;
-	};
-	static constexpr uint32_t kPatchBands = 4;
-	/** @brief The lattice's 8x8 blocks the hull's footprint lines cannot cull, as up to kPatchBands row bands in row order, each over its blocks' column span; returns the band count. */
-	uint32_t PatchLatticeBands(const PatchCullCB& a_lines, float2 a_centre, PatchBand (&a_bands)[kPatchBands]) const;
-	winrt::com_ptr<ID3D11VertexShader> patchTessVS;
-	winrt::com_ptr<ID3D11HullShader> patchHS;
-	winrt::com_ptr<ID3D11DomainShader> patchDS;
-	winrt::com_ptr<ID3D11PixelShader> patchPS;
-	winrt::com_ptr<ID3D11PixelShader> patchDeferredPS[2];
-	std::future<ID3D11PixelShader*> patchDeferredJob[2];
-	bool patchDeferredTried[2] = {};
-	winrt::com_ptr<ID3D11DepthStencilState> patchDeferredDepthState;
-	Texture2D* patchDeferredMark = nullptr;
-	/** @brief The mark target and the shading pass's depth-off state; false leaves the patch forward. */
-	bool EnsurePatchDeferredResources();
-	/** @brief One deferred patch PS (0 attribute pass, 1 shading pass), compiled now; null on failure. */
-	static ID3D11PixelShader* CompilePatchDeferredPS(int a_which);
-	/** @brief Shader-prime step (object snow group): compiles both deferred patch shaders on the prime worker. */
-	void PrimePatchDeferred();
-	/** @brief Both deferred patch shaders, once compiled (the first call starts any compile the prime did not run). */
-	bool PatchDeferredReady();
-	/** @brief A deferred patch shader is compiling. */
-	bool PatchDeferredCompiling() const;
-	void ReleasePatchDeferred();
 	winrt::com_ptr<ID3DBlob> staticsVSBlob;
 	bool staticsShadersFailed = false;
 	ConstantBuffer* staticsCB = nullptr;

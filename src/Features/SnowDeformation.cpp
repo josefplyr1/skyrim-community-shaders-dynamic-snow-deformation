@@ -964,10 +964,6 @@ void SnowDeformation::PrepassSimulation()
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;
 	perFrameData.ContactDim = (contactDrawsLast > 0 || contactSkinDrawsLast > 0 || contactCarriedLast > 0) ? float(kContactDim) : 0.0f;
-	const bool roadRaster = heightMapValid && heightSkinDepth && heightSkinDepth->srv;
-	perFrameData.HeightWindowCenter = heightWindowCenter;
-	perFrameData.HeightHalfExtent = ObjectRasterHalfExtent();
-	perFrameData.HasRoadRaster = roadRaster ? 1.0f : 0.0f;
 	{
 		constexpr float cellSize = kShellVertexSpacing * kShellTexelsPerCell;
 		perFrameData.TerrainWindowOrigin = { shellWindowCellX * cellSize, shellWindowCellY * cellSize };
@@ -1169,12 +1165,11 @@ void SnowDeformation::PrepassSimulation()
 			}
 
 			{
-				ID3D11ShaderResourceView* contactSRVs[3] = {
+				ID3D11ShaderResourceView* contactSRVs[2] = {
 					(contactHeight && perFrameData.ContactDim > 0.5f) ? contactHeight->srv.get() : nullptr,
-					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr,
-					perFrameData.HasRoadRaster > 0.5f ? heightSkinDepth->srv.get() : nullptr
+					shellTerrainTexture ? shellTerrainTexture->srv.get() : nullptr
 				};
-				context->CSSetShaderResources(7, 3, contactSRVs);
+				context->CSSetShaderResources(7, 2, contactSRVs);
 				ID3D11UnorderedAccessView* passUAV = passStateTexture ? passStateTexture->uav.get() : nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &passUAV, nullptr);
 				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
@@ -1212,8 +1207,8 @@ void SnowDeformation::PrepassSimulation()
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
 			{
-				ID3D11ShaderResourceView* nullContact[3] = {};
-				context->CSSetShaderResources(7, 3, nullContact);
+				ID3D11ShaderResourceView* nullContact[2] = {};
+				context->CSSetShaderResources(7, 2, nullContact);
 				ID3D11UnorderedAccessView* nullPass = nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &nullPass, nullptr);
 				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
@@ -1561,9 +1556,6 @@ void SnowDeformation::ClearShaderCache()
 	skinCullLevels = 0;
 	staticsVSParallaxBlob = nullptr;
 	coatParallaxTried = false;
-	delete patchCullCB;
-	patchCullCB = nullptr;
-	ReleasePatchDeferred();
 	staticsVSBlob = nullptr;
 	staticsILCache.clear();
 	staticsILParallaxCache.clear();
@@ -1583,7 +1575,7 @@ void SnowDeformation::ClearShaderCache()
 	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
 	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
 	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass);
-	release(staticsVSParallax, staticsPSDrapeParallax, patchVS, patchShadowVS, patchTessVS, patchHS, patchDS, patchPS);
+	release(staticsVSParallax, staticsPSDrapeParallax);
 	release(heightVS, heightPS, heightPSTopOnly, heightPSSkinDepth, heightScrollCS, heightScrollTopCS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
 }
 
