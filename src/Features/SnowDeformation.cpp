@@ -15,8 +15,6 @@
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
 	X(EnableSnowAccumulation) \
-	X(RecoloredSnowAccumulates) \
-	X(SteepFaceThinning) \
 	X(AccumulationPeak) \
 	X(AccumulationHours) \
 	X(AccumulationMeltHours) \
@@ -61,7 +59,6 @@
 	X(ForceTrackDepth) \
 	X(LiftFrostEffects) \
 	X(LiftRunes) \
-	X(DecalsOnObjectSnow) \
 	X(RuneDecalsOnSnow) \
 	X(FrostDecalsOnSnow) \
 	X(ItemEmbedPercent) 	X(ItemSink) 	X(ItemMinRoundness) \
@@ -82,8 +79,6 @@
 	X(SnowClassDepths) \
 	X(TextureDepths) \
 	X(ObjectRasterReachM) \
-	X(SkinEdgeFlankWidth) \
-	X(RoadMeshesDepth) \
 	X(SnowTexturePath) \
 	X(SnowPBRConfig) \
 	X(TrampleZoneScale) \
@@ -114,7 +109,6 @@
 	X(SnowGlints) \
 	X(SnowScreenSpaceShadows) \
 	X(SnowCastsShadows) \
-	X(ObjectSnowNearDetail) \
 	X(CameraAboveSnow) \
 	X(BloodOnSnow) \
 	X(BloodIntensity) \
@@ -124,14 +118,8 @@
 	X(BloodSpreadSeconds) \
 	X(DeformMapResolution) \
 	X(VRAMAwareTrenchMap) \
-	X(ObjectTrenchResolution) \
-	X(ObjectPrintRimWidth) \
 	X(RangeTrenchesM) \
 	X(RangeActorTrenchesM) \
-	X(RangeSkinsM) \
-	X(SkinDepthBias) \
-	X(SkinSlopeDepthBias) \
-	X(SkinTessCapPx) \
 	X(SlopeDrape) \
 	X(CityShells) \
 	X(LODSnowSensitivity) \
@@ -141,7 +129,6 @@
 	X(MultipassSnowFollowsPaint) \
 	X(ShelterMaxHeight) \
 	X(ShelterDriftAngle) \
-	X(ObjectMeetBand) \
 	X(LODObjectSnow) \
 	X(SnowTexturedRecolor) \
 	X(ProjSnowNormals) \
@@ -1541,7 +1528,6 @@ void SnowDeformation::ClearShaderCache()
 void SnowDeformation::LoadSettings(json& o_json)
 {
 	settings = o_json;
-	settings.RangeSkinsM = std::clamp(settings.RangeSkinsM, kMinRangeSkinsM, kMaxRangeSkinsM);
 	trenchRangeDirty = true;
 	deformMapDimDirty = true;
 	RefreshLandTextureDepths();

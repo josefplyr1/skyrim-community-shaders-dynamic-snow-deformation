@@ -76,23 +76,19 @@ namespace
 	struct QualityPreset
 	{
 		uint32_t mapDim;
-		uint32_t objectTrenchDim;
 		float trenchesM;
 		float actorTrenchesM;
-		float skinsM;
 		float parallaxDepth;
 		float parallaxShadow;
-		float skinTessCapPx;
 		bool sparkle;
 		bool contactShadows;
 		bool selfShadowing;
-		bool nearDetail;
 		bool castsShadows;
 	};
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
-		{ 1024u, 512u, 29.0f, 10.0f, SnowDeformation::kMinRangeSkinsM, 0.0f, 0.0f, 32.0f, false, false, false, false, false },
-		{ 2048u, 1024u, 115.0f, 105.0f, 150.0f, 0.25f, 0.13f, 24.0f, false, false, true, false, true },
-		{ 4096u, 2048u, 200.0f, 200.0f, SnowDeformation::kMaxRangeSkinsM, 0.5f, 0.25f, 16.0f, true, true, true, true, true },
+		{ 1024u, 29.0f, 10.0f, 0.0f, 0.0f, false, false, false, false },
+		{ 2048u, 115.0f, 105.0f, 0.25f, 0.13f, false, false, true, true },
+		{ 4096u, 200.0f, 200.0f, 0.5f, 0.25f, true, true, true, true },
 	};
 }
 
@@ -107,17 +103,13 @@ void SnowDeformation::ApplyQualityPreset(int a_preset)
 		settings.RangeTrenchesM = p.trenchesM;
 		trenchRangeDirty = true;
 	}
-	settings.ObjectTrenchResolution = p.objectTrenchDim;
 	settings.RangeActorTrenchesM = p.actorTrenchesM;
-	settings.RangeSkinsM = p.skinsM;
 	settings.Tessellation = true;
 	settings.ParallaxDepth = p.parallaxDepth;
 	settings.ParallaxShadowStrength = p.parallaxShadow;
-	settings.SkinTessCapPx = p.skinTessCapPx;
 	settings.SnowGlints = p.sparkle;
 	settings.SnowScreenSpaceShadows = p.contactShadows;
 	settings.ShellHorizonMarch = p.selfShadowing;
-	settings.ObjectSnowNearDetail = p.nearDetail;
 	settings.SnowCastsShadows = p.castsShadows;
 }
 
@@ -125,12 +117,11 @@ int SnowDeformation::MatchingQualityPreset() const
 {
 	for (int i = 0; i < kQualityPresetCount; i++) {
 		const auto& p = kQualityPresets[i];
-		if (settings.DeformMapResolution == p.mapDim && settings.ObjectTrenchResolution == p.objectTrenchDim && settings.RangeTrenchesM == p.trenchesM &&
-			settings.RangeActorTrenchesM == p.actorTrenchesM && settings.RangeSkinsM == p.skinsM &&
+		if (settings.DeformMapResolution == p.mapDim && settings.RangeTrenchesM == p.trenchesM &&
+			settings.RangeActorTrenchesM == p.actorTrenchesM &&
 			settings.Tessellation && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
-			settings.SkinTessCapPx == p.skinTessCapPx &&
 			settings.SnowGlints == p.sparkle && settings.SnowScreenSpaceShadows == p.contactShadows && settings.ShellHorizonMarch == p.selfShadowing &&
-			settings.ObjectSnowNearDetail == p.nearDetail && settings.SnowCastsShadows == p.castsShadows)
+			settings.SnowCastsShadows == p.castsShadows)
 			return i;
 	}
 	return -1;
@@ -149,7 +140,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows, Object Snow Near Detail), with Trenches at 115 m, NPC Trenches at 105 m, Object Snow at 150 m, a 24 px Object Snow Tessellation Cap and Snow Trenches on Objects at 22 m. Low turns all five off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m, Object Snow at 50 m, NPC Trenches at 10 m, a 32 px cap and Snow Trenches on Objects at 11 m. Every preset turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the performance settings in one click. High is the default: every effect on, every reach at its maximum and a 4096 Deformation Map. Medium keeps the snow's shadows (Snow Casts Shadows, Snow Self-Shadowing) and turns off the close-up extras (Snow Sparkle, Snow Contact Shadows), with Trenches at 115 m and NPC Trenches at 105 m. Low turns all four off, and parallax too, with a 1024 Deformation Map, Trenches at 29 m and NPC Trenches at 10 m. Every preset turns Tessellate Trenches on and the experimental Volume Snow off. Everything else keeps its value; change any of these afterwards and the preset shows as Custom. Applying can clear existing trenches (a resolution or Trenches-range change does); remembered trenches are re-injected."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {
@@ -193,13 +184,13 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("snow_glints"), "Snow Sparkle"), &settings.SnowGlints);
 		if (auto _ttGlints = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_glints_tooltip"), "The glitter of light catching single snow crystals, on the ground snow and on object snow, using Community Shaders' TruePBR glints (needs TruePBR). The Medium and Low presets turn it off."));
+			ImGui::Text("%s", T(TKEY("snow_glints_tooltip"), "The glitter of light catching single snow crystals, on the ground snow, using Community Shaders' TruePBR glints (needs TruePBR). The Medium and Low presets turn it off."));
 		ImGui::Checkbox(T(TKEY("snow_screen_space_shadows"), "Snow Contact Shadows"), &settings.SnowScreenSpaceShadows);
 		if (auto _ttSnowSSS = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_screen_space_shadows_tooltip"), "Community Shaders' Screen-Space Shadows on the ground snow and object snow: the small, sharp shadows where grass, feet and objects meet the snow (needs Screen-Space Shadows). Off, the snow is shaded by the sun's shadows and its own self-shadowing only. The Medium and Low presets turn it off."));
+			ImGui::Text("%s", T(TKEY("snow_screen_space_shadows_tooltip"), "Community Shaders' Screen-Space Shadows on the ground snow: the small, sharp shadows where grass, feet and objects meet the snow (needs Screen-Space Shadows). Off, the snow is shaded by the sun's shadows and its own self-shadowing only. The Medium and Low presets turn it off."));
 		ImGui::Checkbox(T(TKEY("snow_casts_shadows"), "Snow Casts Shadows"), &settings.SnowCastsShadows);
 		if (auto _ttSnowCasts = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_casts_shadows_tooltip"), "The ground snow and road snow are drawn into the sun's shadows, so deep snow, banks and trench walls cast shadows onto the world and onto the snow itself. Off, the snow still receives shadows but casts none. The Low preset turns it off."));
+			ImGui::Text("%s", T(TKEY("snow_casts_shadows_tooltip"), "The ground snow is drawn into the sun's shadows, so deep snow, banks and trench walls cast shadows onto the world and onto the snow itself. Off, the snow still receives shadows but casts none. The Low preset turns it off."));
 
 		ImGui::PushID("general_settings");
 		if (ImGui::TreeNodeEx(T(TKEY("menu_advanced"), "Advanced"))) {
@@ -209,7 +200,7 @@ void SnowDeformation::DrawSettings()
 
 			ImGui::Checkbox(T(TKEY("shell_horizon_march"), "Snow Self-Shadowing"), &settings.ShellHorizonMarch);
 			if (auto _ttHm = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow shades itself: bumps, drifts, berms and trench rims cast soft shadows onto the snow behind them, found by a short march toward the sun over the snow's height, on the ground snow and on object snow. It fades out as the sun nears the horizon, where the game's own shadows take over. Off, the snow is shaded by the game's shadows and Snow Contact Shadows only. The Low preset turns it off."));
+				ImGui::Text("%s", T(TKEY("shell_horizon_march_tooltip"), "The snow shades itself: bumps, drifts, berms and trench rims cast soft shadows onto the snow behind them, found by a short march toward the sun over the snow's height, on the ground snow. It fades out as the sun nears the horizon, where the game's own shadows take over. Off, the snow is shaded by the game's shadows and Snow Contact Shadows only. The Low preset turns it off."));
 			ImGui::SliderFloat(T(TKEY("shelter_max_height"), "Shelter Max Height"), &settings.ShelterMaxHeight, 100.0f, 1000.0f, "%.0f units");
 			if (auto _ttShelterMax = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("shelter_max_height_tooltip"), "Snow under a roof, bridge or archway thins out, because the structure keeps the snowfall off. A structure whose underside is higher above the ground than this no longer counts: a wide archway with plenty of air under it is as open as the sky, and the snow beneath it keeps its full depth. Fades out over the next 100 units. 70 units is about a metre."));
@@ -224,10 +215,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttWch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("workspace_clearing_height_tooltip"), "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second."));
 
-			ImGui::SliderFloat(T(TKEY("object_meet_band"), "Object Meeting Blend"), &settings.ObjectMeetBand, 0.0f, 64.0f, "%.0f units");
-			if (auto _ttMeet = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_meet_band_tooltip"), "Where the ground snow meets a snow-covered object, the two blend toward each other so they read as one surface instead of meeting at a lit line. This is the width of that meeting, split in half: at the default 12, the ground snow's shading eases toward the object's slope over its last 6 units, and the object's snow eases toward the ground's over the first 6 units up from it, meeting in the middle. Higher = a wider, softer meeting; 0 = off, the two meet as they are. Shading only - no geometry moves. 70 units is about a metre."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -237,61 +224,31 @@ void SnowDeformation::DrawSettings()
 
 	if (ImGui::TreeNodeEx(T(TKEY("model_depths"), "Object Snow"), ImGuiTreeNodeFlags_Framed)) {
 		if (auto _ttModels = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Object snow: the recolor of the game's projected snow and the dials that shape the drape over it. Flat vs round is classified automatically per mesh."));
-
-		ImGui::Checkbox(T(TKEY("object_snow_near_detail"), "Object Snow Near Detail"), &settings.ObjectSnowNearDetail);
-		if (auto _ttNearDetail = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_snow_near_detail_tooltip"), "Near you - over a quarter of the Object Height Map Range, 25 m at its default - road snow and the trenches in it read their shape from a map four times finer: about 1.7 world units a texel instead of 6.8 at the default range. Off, roads use the coarser map everywhere: slightly softer road edges and trenches up close, a little less GPU time. The Medium and Low presets turn it off."));
+			ImGui::Text("%s", T(TKEY("model_depths_tooltip"), "Object snow: the recolor of the game's projected snow."));
 
 		ImGui::Checkbox(T(TKEY("proj_snow_match"), "Recolor Projected Snow"), &settings.ProjSnowMatch);
 		if (auto _ttPsm = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow, and owns the DRAPE that does it. Two halves: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included; and near the camera the shell lays its own material over the parts the game paints solidly, which is what gives the drape the shell's snow rather than a tint of it. Edge Lump Reach shapes that second half - how far it spreads past the paint. Every pixel the game paints solidly (its own half blend and up) takes the full snow, all or nothing; a faint dusting stays bare. The drape lies flat on the mesh; nothing of ours stands above an object. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
+			ImGui::Text("%s", T(TKEY("proj_snow_match_tooltip"), "Makes the game's painted-on projected snow look like this mod's snow: inside the object's own shader the projection's texture and material are swapped for the snow shell's set, which works from every angle, overhangs included. Every pixel the game paints solidly (its own half blend and up) takes the full snow, all or nothing; a faint dusting stays bare. Only draws whose projected material really is snow are touched, so sand and moss projections keep their look."));
 
 		ImGui::Checkbox(T(TKEY("snow_textured_recolor"), "Recolor Snow-Textured Meshes"), &settings.SnowTexturedRecolor);
 		if (auto _ttStr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, rock piles and their skirts, a season mod's winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives them the shell's snow in the object's own shader, on the texels that read as snow; a plain ground snow texture (snow01, snowrocks01) takes it on every texel where it lies flat, so the stones in a rock pile's ground turn to snow too. Solid shapes also take the drape's coat over that snow; blended overlays such as rock skirts keep their own soft edge and take no coat. Needs Recolor Projected Snow."));
+			ImGui::Text("%s", T(TKEY("snow_textured_recolor_tooltip"), "Some meshes wear snow as a plain texture rather than the game's projected paint: dirt cliffs with a snow01 top, rock piles and their skirts, a season mod's winter variants, the vanilla drifts. The projected-snow recolor never sees those, so they keep their own snow texture and mismatch the shell. This gives them the shell's snow in the object's own shader, on the texels that read as snow; a plain ground snow texture (snow01, snowrocks01) takes it on every texel where it lies flat, so the stones in a rock pile's ground turn to snow too. Needs Recolor Projected Snow."));
 
 		ImGui::Checkbox(T(TKEY("proj_snow_normals"), "Recolor Projected Snow Normals"), &settings.ProjSnowNormals);
 		if (auto _ttProjNormals = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief, perturbed exactly the way the drape's coat does, so the drape and the bare snow beside it share one grain. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface wherever the drape does not cover it."));
+			ImGui::Text("%s", T(TKEY("proj_snow_normals_tooltip"), "Recolored projected snow also takes the snow's own surface relief. Without it the game's projected snow keeps the plank's or the stone's own bump - the game never sends its own snow normal to the deferred buffer - and the snow reads as paint on the surface."));
 
 		ImGui::Checkbox(T(TKEY("snow_follows_parallax"), "Snow Follows Parallax"), &settings.SnowFollowsParallax);
 		if (auto _ttFollowParallax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (PBR displacement and complex parallax), the snow lies on the surface the parallax draws instead of on the flat mesh under it: its edge and its own texture move with the stone as the camera moves, so the stone no longer slides beneath the snow and the snow stops looking like it floats. Both the game's recolored projected snow and the drape's coat over it follow. With Flatten Parallax Under Snow also on, they follow the relief the flatten leaves. The first time it is switched on, the coat compiles its shaders, a stall of a few seconds once. Objects on the older vanilla parallax shader are not affected. On by default, together with the other one."));
+			ImGui::Text("%s", T(TKEY("snow_follows_parallax_tooltip"), "On objects drawn with Extended Materials parallax (PBR displacement and complex parallax), the game's recolored projected snow lies on the surface the parallax draws instead of on the flat mesh under it: its edge and its own texture move with the stone as the camera moves, so the stone no longer slides beneath the snow and the snow stops looking like it floats. With Flatten Parallax Under Snow also on, it follows the relief the flatten leaves. Objects on the older vanilla parallax shader are not affected. On by default, together with the other one."));
 
 		ImGui::Checkbox(T(TKEY("flatten_parallax_under_snow"), "Flatten Parallax Under Snow"), &settings.FlattenParallaxUnderSnow);
 		if (auto _ttFlattenParallax = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("flatten_parallax_under_snow_tooltip"), "The other answer to snow floating over parallax objects: on an object with projected snow, its Extended Materials parallax (PBR displacement and complex parallax) fades out as the snow covers the surface, the way real snow fills cracks and crevices, and the shadows the relief casts on itself fade with it. Where the snow lies solid the rock is flat, so the snow, its coat and the tracks in it sit on a surface that does not move; where it lies in patches part of the relief stays; bare rock keeps all of it. With Snow Follows Parallax also on, the patches follow the relief that stays. Objects on the older vanilla parallax shader carry no projected snow and are not affected. On by default, together with the other one."));
+			ImGui::Text("%s", T(TKEY("flatten_parallax_under_snow_tooltip"), "The other answer to snow floating over parallax objects: on an object with projected snow, its Extended Materials parallax (PBR displacement and complex parallax) fades out as the snow covers the surface, the way real snow fills cracks and crevices, and the shadows the relief casts on itself fade with it. Where the snow lies solid the rock is flat, so the snow sits on a surface that does not move; where it lies in patches part of the relief stays; bare rock keeps all of it. With Snow Follows Parallax also on, the patches follow the relief that stays. Objects on the older vanilla parallax shader carry no projected snow and are not affected. On by default, together with the other one."));
 
 		ImGui::SliderFloat(T(TKEY("seasons_snow_max_angle"), "Seasons Snow Max Angle"), &settings.SeasonsSnowMaxAngle, 0.0f, 90.0f, "%.0f deg");
 		if (auto _ttSeasons = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask; 90 keeps Seasons' own coverage, which the recolor and the drape then follow exactly, and lower cuts the snow off steeper faces for them only. Authored snow objects keep their own angle and mask."));
-
-		{
-			const bool reachDriven = settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates;
-			float reachShown = reachDriven ? snowAccumulation.load(std::memory_order_relaxed) : settings.SkinEdgeFlankWidth;
-			ImGui::BeginDisabled(reachDriven);
-			if (ImGui::SliderFloat(T(TKEY("edge_lump_reach"), "Edge Lump Reach"), &reachShown, 0.0f, 1.0f, reachDriven ? "%.3f (snow accumulation)" : "%.3f") && !reachDriven)
-				settings.SkinEdgeFlankWidth = reachShown;
-			ImGui::EndDisabled();
-		}
-		if (auto _ttEdgeR = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("edge_lump_reach_tooltip"), "How far the snow on rocks and buildings reaches past the patches the game paints, onto the bare surface. At 0 it is exactly the game's paint. Raising it lets the snow creep outward along the game's own falloff - slope, painted alpha and the projection's noise - so thin dustings thicken first and steep faces stay bare longest. The same from every angle. Needs Recolor Projected Snow, and only objects that carry the game's own projected-snow data take part."));
-		ImGui::SliderFloat(T(TKEY("steep_face_thinning"), "Steep Face Thinning"), &settings.SteepFaceThinning, 0.0f, 1.0f, "%.2f");
-		if (auto _ttSteep = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("steep_face_thinning_tooltip"), "How much less the accumulating snow spreads onto steep faces. Snow does not settle on a vertical post or wall the way it does on a roof: at 1 a vertical face takes none of the spread that Edge Lump Reach (or snowfall) adds, at 0 it takes all of it, and slopes gentler than about 60 degrees always take all of it. The game's own painted snow is never touched - with Edge Lump Reach at 0 this setting does nothing. Needs Recolor Projected Snow."));
-
-		ImGui::SliderFloat(T(TKEY("skin_depth_bias"), "Object Snow Depth Bias"), &settings.SkinDepthBias, 0.0f, 128.0f, "%.0f");
-		if (auto _ttSdb = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_depth_bias_tooltip"), "How far the object snow layer is nudged toward the camera in the depth buffer, in the buffer's own smallest steps. The layer is rasterised from the same vertices as the object under it, so at a distance the two land on the same depth value and fight - snow that flickers, or shows from one angle and not another. A few steps settle the fight; more than needed makes the layer stand in front of things that should hide it. Constant with distance in depth terms, which is what the contest needs."));
-
-		ImGui::SliderFloat(T(TKEY("skin_slope_depth_bias"), "Object Snow Slope Bias"), &settings.SkinSlopeDepthBias, 0.0f, 4.0f, "%.2f");
-		if (auto _ttSsb = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_slope_depth_bias_tooltip"), "The part of the depth bias that grows with how steeply a face is seen. Faces at a grazing angle cover a large depth range per pixel and fight hardest; this scales the nudge with that slope. Capped internally so no angle can push the layer far in front of its object."));
-
-		ImGui::SliderFloat(T(TKEY("skin_tess_cap_px"), "Object Snow Tessellation Cap"), &settings.SkinTessCapPx, 0.0f, 32.0f, "%.0f px");
-		if (auto _ttStc = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("skin_tess_cap_px_tooltip"), "Caps how finely road snow is subdivided (no other object snow is): no subdivision segment may be smaller on screen than this many pixels. At a distance, finer segments end up smaller than a pixel and cost GPU time for nothing visible. Higher = cheaper: up to about 20 it only trims the rounded edges at range; above that it coarsens the whole road surface. 0 turns the cap off. The Medium and Low presets raise it."));
+			ImGui::Text("%s", T(TKEY("seasons_snow_max_angle_tooltip"), "Steepest slope that keeps snow on objects Seasons of Skyrim paints at runtime. Those projections come with the record default of 90 degrees and no painted mask; 90 keeps Seasons' own coverage, which the recolor then follows exactly, and lower cuts the snow off steeper faces for them only. Authored snow objects keep their own angle and mask."));
 
 		ImGui::TreePop();
 	}
@@ -322,13 +279,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttRat = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("range_actor_trenches_tooltip"), "How far from the camera NPCs, creatures and corpses still carve trenches. Past it they leave no prints, and the work of following their bodies is skipped. You always carve. It never reaches past the Trenches range. Lower saves CPU time where many people or animals are on the move. Applies live."));
 
-		ImGui::SliderFloat(T(TKEY("range_skins"), "Object Snow"), &settings.RangeSkinsM, kMinRangeSkinsM, kMaxRangeSkinsM, "%.0f m");
-		if (auto _ttRk = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("range_skins_tooltip"), "Capture radius for snow skins on objects (rocks, cliffs, roofs); skins dissolve softly over the last ~29 m of it. Applies live."));
-
 		ImGui::SliderFloat(T(TKEY("object_raster_reach"), "Object Height Map Range"), &settings.ObjectRasterReachM, 29.0f, 234.0f, "%.0f m");
 		if (auto _ttOrr = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far around you the top-down height map of the objects reaches. Inside it, snow thins under roofs, bridges and archways, road snow takes its shape and its trenches, footprints can be laid on objects, and Volume Snow finds what shelters it. Past it there is no shelter under cover and no footprints on objects, and road snow goes on from a coarser road-only map to the edge of the loaded cells. Keep it at or above the reach of Snow Trenches on Objects, or footprints on objects stop at this range. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: a texel is about 7 world units at the default 100 m, 4 at 58 m. Costs nothing extra to raise; it coarsens the map near you instead."));
+			ImGui::Text("%s", T(TKEY("object_raster_reach_tooltip"), "How far around you the top-down height map of the objects reaches. Inside it, snow thins under roofs, bridges and archways, and Volume Snow finds what shelters it. Past it there is no shelter under cover. The map is a fixed 2048 texels however far it reaches, so this trades detail against range: a texel is about 7 world units at the default 100 m, 4 at 58 m. Costs nothing extra to raise; it coarsens the map near you instead."));
 
 		if (distantChanged)
 			shellDataDirty.store(true, std::memory_order_release);
@@ -349,15 +302,11 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SeparatorText(T(TKEY("snow_accumulation"), "Snow Accumulation"));
 		if (auto _ttAccumCat = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only - snow sitting on objects keeps its fixed depth."));
+			ImGui::Text("%s", T(TKEY("snow_accumulation_tooltip"), "The snow layer deepens while it snows and settles back when it stops, so a long storm leaves the world deeper than it found it. Landscape snow only."));
 
 		ImGui::Checkbox(T(TKEY("enable_accumulation"), "Snow Accumulation"), &settings.EnableSnowAccumulation);
 		if (auto _ttAccumEnable = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("enable_accumulation_tooltip"), "Let snowfall deepen the snow. Off holds every kind of ground at its set depth whatever the weather does, which is how the mod behaved before this existed - useful for comparing the two."));
-
-		ImGui::Checkbox(T(TKEY("recolored_snow_accumulates"), "Recolored Snow Accumulates"), &settings.RecoloredSnowAccumulates);
-		if (auto _ttAccumRecolor = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("recolored_snow_accumulates_tooltip"), "The snow on rocks and buildings creeps out from its painted patches as it snows and draws back as it melts: Edge Lump Reach runs from 0 to 1 over Accumulation Time, back over Melt Time and Accumulated Snow Fade, whatever the Accumulation Peak. Off, the Edge Lump Reach slider is used as set."));
 
 		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
 		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
@@ -404,13 +353,9 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttClasses = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("class_depths_tooltip"), "Starting height for each snow texture family (classified by the vanilla LTEX filenames every retexture mod overrides). This is the DEFAULT a texture uses until it is given its own value below. Negative values submerge the shell below the surface. Retunes live from cached data."));
 		ImGui::SeparatorText(T(TKEY("roads_group"), "Roads"));
-		ImGui::Checkbox(T(TKEY("city_shells"), "Landscape And Road Snow In Cities"), &settings.CityShells);
+		ImGui::Checkbox(T(TKEY("city_shells"), "Landscape Snow In Cities"), &settings.CityShells);
 		if (auto _ttCity = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell and road snow inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there stays as the game draws it."));
-
-		ImGui::SliderFloat(T(TKEY("road_meshes_depth"), "Road Meshes"), &settings.RoadMeshesDepth, 0.0f, 64.0f, "%.0f units");
-		if (auto _ttRoad = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("road_meshes_depth_tooltip"), "Snow layer on road meshes; bridges are ordinary objects. Kept below the surrounding snow classes so the road's course stays readable through the snowfield."));
+			ImGui::Text("%s", T(TKEY("city_shells_tooltip"), "Draws the landscape shell inside the walled cities (their own worldspaces). Off, cities keep object snow only; the ground there stays as the game draws it."));
 
 		ImGui::SeparatorText(T(TKEY("landscape_class_group"), "Landscape Texture Class"));
 		bool classDepthsChanged = false;
@@ -506,26 +451,17 @@ void SnowDeformation::DrawSettings()
 				ImGui::TextDisabled("%s %u", T(TKEY("vram_aware_map_active"), "Video memory over budget this session, map running at"), deformMapDim);
 		}
 
-		{
-			static const uint kPrintDims[] = { 512u, 1024u, 2048u };
-			int printIndex = settings.ObjectTrenchResolution <= 512u ? 0 : (settings.ObjectTrenchResolution >= 2048u ? 2 : 1);
-			if (ImGui::Combo(T(TKEY("object_trench_reach"), "Snow Trenches on Objects"), &printIndex, "11 m\0" "22 m\0" "44 m\0"))
-				settings.ObjectTrenchResolution = kPrintDims[printIndex];
-			if (auto _ttObjectTrench = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("object_trench_reach_tooltip"), "How far around you footprints in the snow on objects - roofs, floorboards, rocks, logs, bridges - are kept: 11, 22 or 44 m. They are always on. Like trenches in the ground they refill while it snows, and with Remember Trenches on they are kept when you walk away and saved with the game. The print map takes 2, 8 or 32 MB of video memory. Changing it keeps remembered footprints and drops the last moments not yet stored."));
-		}
-
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
+			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
 
 		ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
 		if (auto _ttDetail = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The shape and surface of disturbed snow: the raised berm along trench edges, the broken snow in and around trenches and the broken rim. Road trenches wear all of it; snow on objects takes the berm."));
+			ImGui::Text("%s", T(TKEY("trench_detail_group_tooltip"), "The shape and surface of disturbed snow: the raised berm along trench edges, the broken snow in and around trenches and the broken rim."));
 
 		ImGui::SliderFloat(T(TKEY("berm_height"), "Berm Height"), &settings.BermHeight, 0.0f, 1.0f, "%.2fx");
 		if (auto _ttBh = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm. On objects the same value shades a ridge rather than raising one."));
+			ImGui::Text("%s", T(TKEY("berm_height_tooltip"), "Height of the pushed-aside snow ridge along trench edges, as a fraction of the local snow depth. 0 removes the berm."));
 
 		ImGui::SliderFloat(T(TKEY("berm_steepness"), "Berm Steepness"), &settings.BermSteepness, 0.0f, 2.0f, "%.2f");
 		if (auto _ttBs = Util::HoverTooltipWrapper())
@@ -533,7 +469,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_relief"), "Detail Relief"), &settings.TrenchDetailRelief, 0.0f, 2.0f, "%.2fx");
 		if (auto _ttTdRelief = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches, on the ground and on roads. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening). Disturbed snow wears the powder detail in every weather; where something hits it hard - a sprint, a dodge, a landing, a body knocked down, lightning, a Force shout - it turns to the impact detail, the harder the more, and rises up to 1.5x. Snow fire has melted wears the impact detail too. 1 = as authored, 0 = off."));
+			ImGui::Text("%s", T(TKEY("trench_detail_relief_tooltip"), "Height of the broken snow in and around trenches. It is drawn with parallax occlusion: each pixel follows its view ray into the clods, crumbs and slabs, so nearer ones hide what lies behind them and shade it from the sun, while the snow keeps your snow texture's colour, sparkle and lighting. It eases off on thin snow and on trampled floors (Flattening). Disturbed snow wears the powder detail in every weather; where something hits it hard - a sprint, a dodge, a landing, a body knocked down, lightning, a Force shout - it turns to the impact detail, the harder the more, and rises up to 1.5x. Snow fire has melted wears the impact detail too. 1 = as authored, 0 = off."));
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_roughness"), "Detail Roughness"), &settings.TrenchDetailRoughness, 0.3f, 1.5f, "%.2fx");
 		if (auto _ttTdRough = Util::HoverTooltipWrapper())
@@ -541,11 +477,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::SliderFloat(T(TKEY("trench_detail_coverage"), "Detail Coverage"), &settings.TrenchDetailCoverage, 0.0f, 2.5f, "%.2f");
 		if (auto _ttTdCover = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth, and the detail fades out where a trench meets an object."));
-
-		ImGui::SliderFloat(T(TKEY("object_print_rim"), "Object Print Rim"), &settings.ObjectPrintRimWidth, 0.0f, 15.0f, "%.1f units");
-		if (auto _ttPrintRim = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("object_print_rim_tooltip"), "How far past a footprint's edge the snow on objects - roofs, floorboards, rocks, logs - is broken up, in units. The trench detail (Detail Coverage, at twice Detail Relief) runs this far around each print and fades out, strongest at the print's edge. 0 = only the print's own edge."));
+			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth."));
 
 		ImGui::SliderFloat(T(TKEY("impact_reach"), "Impact Reach"), &settings.ImpactReach, 0.5f, 4.0f, "%.2fx");
 		if (auto _ttImpactReach = Util::HoverTooltipWrapper())
@@ -553,7 +485,7 @@ void SnowDeformation::DrawSettings()
 
 		ImGui::Checkbox(T(TKEY("speed_spoil"), "Speed Spoil"), &settings.SpeedSpoil);
 		if (auto _ttSpoil = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running. On the ground and on roads."));
+			ImGui::Text("%s", T(TKEY("speed_spoil_tooltip"), "A foot leaving its print faster than a run throws snow back from it in a wedge - the faster, and the heavier the creature, the longer and stronger - and the impact detail shows that thrown snow, past the trench too, until snowfall buries it. It carves nothing; it shows which way someone was running."));
 		if (settings.SpeedSpoil) {
 			ImGui::SliderFloat(T(TKEY("speed_spoil_size"), "Spoil Size"), &settings.SpeedSpoilSize, 0.1f, 2.0f, "%.2fx");
 			if (auto _ttSpoilSize = Util::HoverTooltipWrapper())

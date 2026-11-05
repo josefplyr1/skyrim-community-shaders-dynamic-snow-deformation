@@ -60,7 +60,6 @@ public:
 	static constexpr uint kSpellStampReserve = 48;
 
 	static constexpr float kUnitsPerMeter = 70.0f;
-	static constexpr float kMinRangeSkinsM = 50.0f;
 	static constexpr float kMaxRangeSkinsM = 200.0f;
 
 	static constexpr uint kShellGridDim = 640;
@@ -190,8 +189,6 @@ public:
 		bool RefillOnlyWhenSnowing = true;
 		float AccumulationPeak = 1.5f;
 		bool EnableSnowAccumulation = true;
-		bool RecoloredSnowAccumulates = true;
-		float SteepFaceThinning = 1.0f;
 		float AccumulationHours = 1.0f;
 		float AccumulationMeltHours = 1.0f;
 		float AccumulationFadeDays = 3.0f;
@@ -230,7 +227,6 @@ public:
 		float ShoutStreakLength = 1.0f;
 		bool LiftFrostEffects = true;
 		bool LiftRunes = true;
-		bool DecalsOnObjectSnow = true;
 		bool RuneDecalsOnSnow = true;
 		bool FrostDecalsOnSnow = true;
 		float ForceTrackDepth = 0.45f;
@@ -252,8 +248,6 @@ public:
 		float MeltEdgeIrregularity = 0.15f;
 		std::array<float, kSnowClassCount> SnowClassDepths = { 14.0f, 18.0f, 30.0f, 30.0f, 30.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f, -8.0f };
 		std::map<std::string, float> TextureDepths;
-		float SkinEdgeFlankWidth = 0.0f;
-		float RoadMeshesDepth = 10.0f;
 		bool CityShells = false;
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
 		std::string SnowPBRConfig = "";
@@ -290,7 +284,6 @@ public:
 		bool SnowGlints = true;
 		bool SnowScreenSpaceShadows = true;
 		bool SnowCastsShadows = true;
-		bool ObjectSnowNearDetail = true;
 		bool CameraAboveSnow = true;
 		bool BloodOnSnow = true;
 		float BloodIntensity = 1.0f;
@@ -300,15 +293,9 @@ public:
 		float BloodSpreadSeconds = 1.5f;
 		uint32_t DeformMapResolution = 4096;
 		bool VRAMAwareTrenchMap = true;
-		uint32_t ObjectTrenchResolution = 2048;
-		float ObjectPrintRimWidth = 7.5f;
 		float RangeTrenchesM = 200.0f;
 		float RangeActorTrenchesM = 200.0f;
-		float RangeSkinsM = kMaxRangeSkinsM;
 		float ObjectRasterReachM = 100.0f;
-		float SkinDepthBias = 64.0f;
-		float SkinSlopeDepthBias = 0.0f;
-		float SkinTessCapPx = 16.0f;
 		float SlopeDrape = 1.0f;
 		float LODSnowSensitivity = 0.5f;
 		bool HorizonSnow = true;
@@ -322,7 +309,6 @@ public:
 		bool FlattenParallaxUnderSnow = true;
 		float ShelterMaxHeight = 275.0f;
 		float ShelterDriftAngle = 30.0f;
-		float ObjectMeetBand = 12.0f;
 		bool LODObjectSnow = true;
 		bool VolumeSnow = false;
 		float VolumeSnowDepth = 10.0f;
