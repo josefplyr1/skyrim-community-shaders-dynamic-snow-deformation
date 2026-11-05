@@ -5,7 +5,6 @@
 
 #include "Features/InteriorSun.h"
 #include "Features/LinearLighting.h"
-#include "Features/SnowDeformation.h"
 #include "Hooks.h"
 #include "I18n/I18n.h"
 #include "ShaderCache.h"

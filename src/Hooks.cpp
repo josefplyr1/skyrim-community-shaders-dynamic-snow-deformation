@@ -30,7 +30,6 @@
 #include "Features/ScreenshotFeature.h"
 #include "Features/Skin.h"
 #include "Features/SkySync.h"
-#include "Features/SnowDeformation.h"
 #include "Features/Upscaling.h"
 #include "Features/VolumetricLighting.h"
 
