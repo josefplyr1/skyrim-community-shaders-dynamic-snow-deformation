@@ -495,6 +495,8 @@ void SnowDeformation::SetupResources()
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
 {
+	if (!loaded)
+		return {};
 	static Util::FrameChecker frameChecker;
 	if (a_inWorld && settings.EnableSnowDeformation && frameChecker.IsNewFrame()) {
 		auto eyePosFB = globals::game::frameBufferCached.GetCameraPosAdjust();
