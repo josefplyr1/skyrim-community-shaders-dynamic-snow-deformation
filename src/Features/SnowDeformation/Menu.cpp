@@ -479,6 +479,10 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttTdCover = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("trench_detail_coverage_tooltip"), "How far across a trench the detail reaches. 0 = the trench floor only, 1 = the floor and walls to just past the rim, 2 = out over the berm, 2.5 = the berm's whole apron. The edge fades softly at every setting and every snow depth."));
 
+		ImGui::Checkbox(T(TKEY("trench_detail_linear_mix"), "Linear Detail Mix (A/B test)"), &trenchDetailLinearMix);
+		if (auto _ttTdLinear = Util::HoverTooltipWrapper())
+			ImGui::Text("%s", T(TKEY("trench_detail_linear_mix_tooltip"), "Test switch, not saved. Mixes the broken snow's two texture reads evenly, instead of letting the taller clod win where they overlap. It is cheaper; compare the clods with it on and off."));
+
 		ImGui::SliderFloat(T(TKEY("impact_reach"), "Impact Reach"), &settings.ImpactReach, 0.5f, 4.0f, "%.2fx");
 		if (auto _ttImpactReach = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("impact_reach_tooltip"), "How far the impact detail spreads around a hard hit - a sprint, a dodge, a landing, a body knocked down - as a share of what hit the snow. At 1 a foot's impact covers its own print and a thin ring around it, and a body knocked down an area about its own size; 2 is twice as wide. The snow it throws is Speed Spoil's. Applies to new impacts."));
