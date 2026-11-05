@@ -359,10 +359,6 @@ void SnowDeformation::DrawSettings()
 		if (auto _ttAccumRecolor = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("recolored_snow_accumulates_tooltip"), "The snow on rocks and buildings creeps out from its painted patches as it snows and draws back as it melts: Edge Lump Reach runs from 0 to 1 over Accumulation Time, back over Melt Time and Accumulated Snow Fade, whatever the Accumulation Peak. Off, the Edge Lump Reach slider is used as set."));
 
-		ImGui::Checkbox(T(TKEY("persist_accumulation"), "Remember Snow Accumulation"), &settings.PersistAccumulation);
-		if (auto _ttAccumPersist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("persist_accumulation_tooltip"), "How deep the layer has grown is written to the save and comes back with it, so loading in the middle of a week-long winter finds the world as deep as you left it. Off, every load starts at the authored depth and the layer has to build again from whatever the sky is doing - which is also what to use when comparing, since the depth then depends only on the weather since the load."));
-
 		ImGui::SliderFloat(T(TKEY("accumulation_peak"), "Accumulation Peak"), &settings.AccumulationPeak, 1.0f, 2.0f, "%.2fx");
 		if (auto _ttAccumPeak = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("accumulation_peak_tooltip"), "How deep the snow gets after a long storm, as a multiple of its normal depth. Every kind of ground grows by the same proportion, so paths and roads stay lower than the fields around them - in fact the gap between them widens as it snows, which keeps a road readable. 1.00x means snowfall never deepens anything."));
@@ -522,21 +518,6 @@ void SnowDeformation::DrawSettings()
 		ImGui::Checkbox(T(TKEY("tessellation"), "Tessellate Trenches"), &settings.Tessellation);
 		if (auto _ttTess = Util::HoverTooltipWrapper())
 			ImGui::Text("%s", T(TKEY("tessellation_tooltip"), "Adds vertex density to the ground snow and the road trench patch near the camera, keyed off the deformation map, so carves resolve as smooth walls instead of following the ground's own triangles. This is what trench smoothness actually depends on. Off leaves every trench as angular as the triangles beneath it."));
-
-		if (ImGui::Checkbox(T(TKEY("persist_trenches"), "Remember Trenches"), &settings.PersistTrenches) && !settings.PersistTrenches)
-			ClearTrenchStore("the Remember Trenches toggle");
-		if (auto _ttPersist = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("persist_trenches_tooltip"), "Trenches survive leaving the area. Snow deformation is drawn in a window that follows the camera, and without this everything outside it is discarded: walk a few hundred metres away and your trail is gone when you come back. On, departing ground is kept in a sparse store, put back on return, and written to the save so it is still there after a reload. Off restores the old behaviour and frees the store."));
-
-		if (settings.PersistTrenches) {
-			ImGui::SliderFloat(T(TKEY("trench_memory"), "Trench Memory"), &settings.TrenchMemoryMB, 0.02f, 8.0f, "%.2f MB");
-			if (auto _ttMemory = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("trench_memory_tooltip"), "How much the world is allowed to remember, measured as the space it will take up in your save. Past it, the ground you visited longest ago is forgotten first. 1 MB is around three thousand patches of trodden ground - far more than snowfall usually leaves standing, so weather normally clears old trenches long before this limit matters and it sits here as a backstop for weather that never comes. Note this is the SAVE cost: trench data packs down more than forty times over, so it takes far more RAM than this while you play, and every save file carries its own copy."));
-
-			ImGui::SliderFloat(T(TKEY("stored_trench_fade"), "Stored Trench Fade"), &settings.StoredTrenchFadeDays, 0.0f, 30.0f, "%.0f days");
-			if (auto _ttFade = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("stored_trench_fade_tooltip"), "How long a remembered trench lasts with no snowfall at all. Snowfall does the real erasing, at the same rate it erases the ground in front of you, so a trench behaves the same whether or not you are looking at it - this is the slow floor underneath that, so a world where it never snows still forgets eventually instead of remembering for ever. 0 turns the floor off and leaves snowfall as the only thing that clears stored trenches."));
-		}
 
 		ImGui::SeparatorText(T(TKEY("trench_detail_group"), "Trench Detail"));
 		if (auto _ttDetail = Util::HoverTooltipWrapper())

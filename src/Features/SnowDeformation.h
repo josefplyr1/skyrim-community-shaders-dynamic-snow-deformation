@@ -189,12 +189,8 @@ public:
 		float SlumpRate = 0.1f;
 		float RefillRateMultiplier = 1.0f;
 		bool RefillOnlyWhenSnowing = true;
-		bool PersistTrenches = true;
-		float StoredTrenchFadeDays = 3.0f;
-		float TrenchMemoryMB = 1.0f;
 		float AccumulationPeak = 1.5f;
 		bool EnableSnowAccumulation = true;
-		bool PersistAccumulation = true;
 		bool RecoloredSnowAccumulates = true;
 		float SteepFaceThinning = 1.0f;
 		float AccumulationHours = 1.0f;
@@ -432,7 +428,7 @@ public:
 		float CrustBreakOnCarve;
 		float SlumpRate;
 
-		uint InjectValid;
+		uint FramePad;
 		float GameDeltaTime;
 		uint DebugActivityView;
 		float AgeingClock;
@@ -538,8 +534,6 @@ public:
 	float4 TrackAgeConstants() const;
 	/** @brief The ageing clock in the frame the track dates stand in now: ahead of ageingClock by a rebase the next update has yet to apply. */
 	float TrackDateClock() const { return snowClimate.ageingClock + snowClimate.ageingRebase; }
-	/** @brief Mirrors the unwrapped ageing clock into the store, under its lock; after TickSnowAgeing. */
-	void TickTrenchAgeing();
 	static constexpr float kTrackAgeHorizon = 128.0f;
 	double passClockSeconds = 256.0;
 	static constexpr UINT kUntouchedTilesSlot = 57;
@@ -2389,125 +2383,12 @@ protected:
 	std::vector<uint32_t> stampMatchIndex;
 	void PollDeformActivity(ID3D11DeviceContext* a_context);
 
-	static constexpr float kTrenchTileWorld = 512.0f;
-	static constexpr int kTrenchTileDim = 128;
-	static constexpr float kTrenchStoreEpsilon = 0.02f;
-	static constexpr int kTrenchBandMax = 32;
-
-	struct TrenchTileKey
-	{
-		uint32_t worldspace;
-		int32_t x;
-		int32_t y;
-		bool operator==(const TrenchTileKey&) const = default;
-	};
-
-	struct TrenchTileKeyHash
-	{
-		size_t operator()(const TrenchTileKey& a_key) const noexcept
-		{
-			size_t h = a_key.worldspace * 0x9E3779B9u;
-			h ^= (size_t)(uint32_t)a_key.x + 0x9E3779B9u + (h << 6) + (h >> 2);
-			h ^= (size_t)(uint32_t)a_key.y + 0x9E3779B9u + (h << 6) + (h >> 2);
-			return h;
-		}
-	};
-
-	struct TrenchTile
-	{
-		std::vector<uint8_t> depth;
-		std::vector<uint8_t> fresh;
-		float clock = 0.0f;
-		double freshClock = 0.0;
-		float lastTouch = 0.0f;
-		uint32_t encodedBytes = 0;
-	};
-
-	static constexpr uint32_t kTrenchTileHeaderBytes = 32;
-	static constexpr double kTrackFreshPerUnit = 255.0 / kTrackAgeHorizon;
-	static constexpr uint32_t kTrenchRLEPairBytes = 2;
-
-	std::unordered_map<TrenchTileKey, TrenchTile, TrenchTileKeyHash> trenchTiles;
-
-	float trenchDecayClock = 0.0f;
-	double trenchAgeingTotal = 0.0;
-
-	std::vector<TrenchTileKey> trenchSweepQueue;
-	size_t trenchAccumErased = 0;
-	size_t trenchAccumEvicted = 0;
-	size_t trenchAccumAdded = 0;
-	size_t trenchStatTiles = 0;
-	size_t trenchEncodedTotal = 0;
-	std::vector<std::pair<float, TrenchTileKey>> trenchEvictScratch;
-
-	float trenchKeepRadiusSq = std::numeric_limits<float>::max();
-
-	struct TrenchBandCopy
-	{
-		float2 origin;
-		float texel;
-		uint32_t worldspace;
-		int32_t x0, y0, w, h;
-		float ageingClock = 0.0f;
-		double ageingTotal = 0.0;
-	};
-
-	winrt::com_ptr<ID3D11Texture2D> trenchInjectTexture;
-	winrt::com_ptr<ID3D11ShaderResourceView> trenchInjectSRV;
-	std::vector<uint8_t> trenchInjectScratch;
-
-	winrt::com_ptr<ID3D11Texture2D> trenchBandStaging[2][2];
-	winrt::com_ptr<ID3D11Texture2D> trenchClockBandStaging[2][2];
-	bool trenchBandValid[2][2] = {};
-	TrenchBandCopy trenchBandMeta[2][2] = {};
-	int trenchBandRing = 0;
-
-	static constexpr int kTrenchRollRows = 128;
-	winrt::com_ptr<ID3D11Texture2D> trenchRollStaging[2];
-	winrt::com_ptr<ID3D11Texture2D> trenchClockRollStaging[2];
-	bool trenchRollValid[2] = {};
-	TrenchBandCopy trenchRollMeta[2] = {};
-	int trenchRollRing = 0;
-	int trenchRollRow = 0;
-
-	std::vector<uint32_t> trenchDirtyRows;
-
-	void MarkTrenchDirtyRows(const PerFrame& a_data);
-	void RollTrenchWindow();
-
-	std::atomic<bool> trenchReinjectRequested{ false };
-
-	float2 trenchMapOrigin = { 0, 0 };
-	float trenchMapTexel = 0.0f;
-	uint32_t trenchMapWorldspace = 0;
-	DirectX::XMINT2 trenchMapPhysOrigin = { 0, 0 };
-	bool trenchMapPrimed = false;
-
-	TrenchTileKey trenchSampleKey = { 0, INT32_MIN, INT32_MIN };
-	const TrenchTile* trenchSampleTile = nullptr;
-
-	bool CreateTrenchStoreResources();
-	void DrainTrenchBands();
-	void FlushDepartingTrenches(DirectX::XMINT2 a_scroll, bool a_clearing);
-	uint BuildTrenchInject(DirectX::XMINT2 a_scroll, bool a_clearing);
-	void StoreTrenchBand(const TrenchBandCopy& a_meta, const D3D11_MAPPED_SUBRESOURCE& a_mapped, const D3D11_MAPPED_SUBRESOURCE* a_clocks);
-	bool StoreStagedTrenchBand(ID3D11Texture2D* a_staging, ID3D11Texture2D* a_clockStaging, const TrenchBandCopy& a_meta, bool a_wait);
-	float SampleTrenchStore(uint32_t a_worldspace, float a_worldX, float a_worldY, float* o_fresh = nullptr);
-	static constexpr uint32_t kTrenchRecord = 'SNTR';
-	static constexpr uint32_t kTrenchRecordVersion = 2;
-
-	static constexpr uint32_t kAccumRecord = 'SNAC';
-	static constexpr uint32_t kAccumRecordVersion = 2;
-
 	std::atomic<float> accumWeatherIntensity{ 0.0f };
 
 	std::atomic<float> snowAccumulation{ 0.0f };
 	void TickAccumulation();
 	float GetAccumulationDepthScale() const;
-	void RegisterAccumulationCoSave();
 
-	static constexpr uint32_t kFreshRecord = 'SNFR';
-	static constexpr uint32_t kFreshRecordVersion = 1;
 	static constexpr float kFreshenHours = 2.0f;
 	std::atomic<float> snowFreshness{ 0.0f };
 	float debugFreshnessOverride = -1.0f;
@@ -2567,8 +2448,6 @@ protected:
 	void TickSnowClimate();
 	void TickSnowAgeing();
 	float LandSnowShareAround(float a_x, float a_y);
-	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
-	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 
 	uint32_t stampGatherFrame = UINT32_MAX;
 
@@ -2617,22 +2496,6 @@ public:
 
 protected:
 
-	std::mutex trenchStoreMutex;
-
-	void RegisterTrenchCoSave();
-	void SaveTrenchStore(const SKSE::SerializationInterface* a_intfc);
-	void LoadTrenchStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
-
-	void EncodeTrenchTile(const std::vector<uint8_t>& a_bytes, std::vector<uint8_t>& o_bytes) const;
-	bool DecodeTrenchTile(const uint8_t* a_bytes, uint32_t a_length, std::vector<uint8_t>& o_depth) const;
-
-	void ClearTrenchStore(const char* a_reason);
-	void ClearTrenchStoreLocked(const char* a_reason);
-	void TickTrenchClock();
-	bool DecayTrenchTile(TrenchTile& a_tile);
-	void SweepTrenchStore();
-	void EnforceTrenchBudget();
-
 	static constexpr float kPrintTexel = 3.0f;
 	static constexpr int kPrintTileDim = 32;
 	static constexpr int kPrintTileTexels = kPrintTileDim * kPrintTileDim;
@@ -2640,8 +2503,6 @@ protected:
 	static constexpr uint32_t kPrintBlockCap = 16384;
 	static constexpr uint32_t kPrintStagingSlots = 16;
 	static constexpr uint32_t kPrintMirrorPerFrame = 4;
-	static constexpr uint32_t kPrintRecord = 'SNOP';
-	static constexpr uint32_t kPrintRecordVersion = 1;
 	static constexpr UINT kPrintReaderSlot = 114;
 	static constexpr UINT kHorizonSnowAlbedoSlot = 33;
 	static constexpr UINT kHorizonSnowNormalSlot = 23;
@@ -2683,6 +2544,25 @@ protected:
 		float refillSince = 0.0f;
 		bool dirty = false;
 	};
+	struct TrenchTileKey
+	{
+		uint32_t worldspace;
+		int32_t x;
+		int32_t y;
+		bool operator==(const TrenchTileKey&) const = default;
+	};
+
+	struct TrenchTileKeyHash
+	{
+		size_t operator()(const TrenchTileKey& a_key) const noexcept
+		{
+			size_t h = a_key.worldspace * 0x9E3779B9u;
+			h ^= (size_t)(uint32_t)a_key.x + 0x9E3779B9u + (h << 6) + (h >> 2);
+			h ^= (size_t)(uint32_t)a_key.y + 0x9E3779B9u + (h << 6) + (h >> 2);
+			return h;
+		}
+	};
+
 	struct PrintStoreTile
 	{
 		std::vector<uint32_t> texels;
@@ -2786,9 +2666,6 @@ protected:
 	uint32_t InjectPrintRect(ID3D11DeviceContext* a_context, const DirectX::XMINT4& a_rect, float a_clock);
 	static bool DecayPrintTile(PrintStoreTile& a_tile, float a_clock);
 	void EnforcePrintStoreCap();
-	void RegisterPrintCoSave();
-	void SavePrintStore(const SKSE::SerializationInterface* a_intfc);
-	void LoadPrintStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
 	void ClearPrintStore(const char* a_why);
 	DirectX::XMINT4 PrintRectForFrame();
 	void PublishPrintTiles(ID3D11DeviceContext* a_context);
@@ -2804,17 +2681,6 @@ protected:
 
 	std::unordered_map<uint32_t, StampBones> stampBoneCache;
 
-	enum class SpellElement
-	{
-		None,
-		Fire,
-		Frost,
-		Shock,
-		Force
-	};
-
-	static SpellElement ClassifyElement(const RE::EffectSetting* a_effect);
-
 	float CrustBreakForce(float a_radius) const;
 
 	bool ActorIsFloating(RE::Actor* a_actor, RE::NiAVObject* a_root, const StampBones* a_bones, bool a_useFeet, float a_groundZ, float* a_gapOut = nullptr, bool* a_byFeetOut = nullptr) const;
@@ -2822,26 +2688,6 @@ protected:
 	bool ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root, StampBones* a_bones,
 		float* a_alphaOut = nullptr, bool* a_flagOut = nullptr) const;
 	static bool IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property);
-
-	struct ElementalHit
-	{
-		SpellElement element = SpellElement::None;
-		float remaining = 0.0f;
-	};
-	std::unordered_map<uint32_t, ElementalHit> lastElementalHit;
-
-	struct InnateAuraRecord
-	{
-		SpellElement element = SpellElement::None;
-		float rateScale = 1.0f;
-		float reachOverride = 0.0f;
-	};
-	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByRace;
-	std::unordered_map<uint32_t, InnateAuraRecord> innateAuraByBase;
-
-	const InnateAuraRecord* ResolveInnateAura(RE::Actor* a_actor);
-
-	static bool AuraFromSpellList(const RE::TESSpellList* a_list, InnateAuraRecord& a_out);
 
 	struct StampStats
 	{
@@ -2864,7 +2710,6 @@ protected:
 		bool nearestFallback = false;
 		float nearestDryTravel = 0.0f;
 		uint fallbackActors = 0;
-		bool nearestElemental = false;
 		uint floating = 0;
 		float nearestGapToRoot = 0.0f;
 		float nearestGapToLand = 0.0f;

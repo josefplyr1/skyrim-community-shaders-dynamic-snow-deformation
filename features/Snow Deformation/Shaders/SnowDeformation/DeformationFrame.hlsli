@@ -20,7 +20,7 @@
 	float CrustBreakOnCarve;
 	float SlumpRate;
 
-	uint InjectValid;
+	uint FramePad;
 	float GameDeltaTime;
 	uint DebugActivityView;
 	float AgeingClock;

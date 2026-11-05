@@ -1,6 +1,5 @@
 #include "Features/SnowDeformation.h"
 
-#include "Features/SnowDeformation/CoSave.h"
 #include "Globals.h"
 
 namespace
@@ -446,12 +445,8 @@ void SnowDeformation::UpdateObjectPrints(ID3D11DeviceContext* a_context, const P
 	printFrame++;
 	printStampBlocksLast = printInjectsLast = 0;
 
-	float clock;
-	{
-		std::scoped_lock lock(trenchStoreMutex);
-		clock = trenchDecayClock;
-	}
-	const bool persist = settings.PersistTrenches;
+	const float clock = 0.0f;
+	const bool persist = false;
 	{
 		std::scoped_lock lock(printStoreMutex);
 		printClockSnapshot = clock;
@@ -814,128 +809,6 @@ void SnowDeformation::BindPrintReaders(ID3D11DeviceContext* a_context) const
 	ID3D11ShaderResourceView* srvs[3] = { live ? printMap->srv.get() : nullptr, live ? printTiles->srv.get() : nullptr,
 		(live && printRim) ? printRim->srv.get() : nullptr };
 	a_context->PSSetShaderResources(kPrintReaderSlot, 3, srvs);
-}
-
-void SnowDeformation::SavePrintStore(const SKSE::SerializationInterface* a_intfc)
-{
-	std::scoped_lock lock(printStoreMutex);
-	if (!a_intfc->OpenRecord(kPrintRecord, kPrintRecordVersion)) {
-		logger::error("[SNOW DEFORMATION] Could not open the print co-save record");
-		return;
-	}
-	uint32_t tileCount = 0;
-	if (settings.PersistTrenches)
-		for (const auto& [key, tile] : printStore)
-			tileCount += AnyPrint(tile.texels) ? 1u : 0u;
-	const uint16_t tileDim = (uint16_t)kPrintTileDim;
-	const uint16_t pad = 0;
-	const float texel = kPrintTexel;
-	a_intfc->WriteRecordData(&tileCount, sizeof(tileCount));
-	a_intfc->WriteRecordData(&tileDim, sizeof(tileDim));
-	a_intfc->WriteRecordData(&pad, sizeof(pad));
-	a_intfc->WriteRecordData(&texel, sizeof(texel));
-	if (tileCount == 0) {
-		logger::info("[SNOW DEFORMATION] print co-save: no tiles");
-		return;
-	}
-
-	size_t entriesTotal = 0;
-	for (const auto& [key, tile] : printStore) {
-		if (!AnyPrint(tile.texels))
-			continue;
-		uint32_t entries = 0;
-		for (uint32_t v : tile.texels)
-			entries += (v & 1023u) ? 1u : 0u;
-		const float clockRel = std::min(tile.clock - printClockSnapshot, 0.0f);
-		a_intfc->WriteRecordData(&key.worldspace, sizeof(key.worldspace));
-		a_intfc->WriteRecordData(&key.x, sizeof(key.x));
-		a_intfc->WriteRecordData(&key.y, sizeof(key.y));
-		a_intfc->WriteRecordData(&clockRel, sizeof(clockRel));
-		a_intfc->WriteRecordData(&entries, sizeof(entries));
-		for (size_t i = 0; i < tile.texels.size(); i++) {
-			const uint32_t v = tile.texels[i];
-			if ((v & 1023u) == 0u)
-				continue;
-			const uint16_t index = (uint16_t)i;
-			a_intfc->WriteRecordData(&index, sizeof(index));
-			a_intfc->WriteRecordData(&v, sizeof(v));
-		}
-		entriesTotal += entries;
-	}
-	logger::info("[SNOW DEFORMATION] print co-save: {} tiles, {} prints, {} KB", tileCount, entriesTotal, (tileCount * 20 + entriesTotal * 6) / 1024);
-}
-
-void SnowDeformation::LoadPrintStore(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t)
-{
-	if (a_version != kPrintRecordVersion) {
-		logger::warn("[SNOW DEFORMATION] print co-save is version {}, this build reads {}; stored prints dropped", a_version, kPrintRecordVersion);
-		return;
-	}
-	uint32_t tileCount = 0;
-	uint16_t tileDim = 0;
-	uint16_t pad = 0;
-	float texel = 0.0f;
-	if (a_intfc->ReadRecordData(&tileCount, sizeof(tileCount)) != sizeof(tileCount) ||
-		a_intfc->ReadRecordData(&tileDim, sizeof(tileDim)) != sizeof(tileDim) ||
-		a_intfc->ReadRecordData(&pad, sizeof(pad)) != sizeof(pad) ||
-		a_intfc->ReadRecordData(&texel, sizeof(texel)) != sizeof(texel)) {
-		logger::warn("[SNOW DEFORMATION] print co-save header would not read; nothing restored");
-		return;
-	}
-	if (tileDim != (uint16_t)kPrintTileDim || std::abs(texel - kPrintTexel) > 0.01f) {
-		logger::warn("[SNOW DEFORMATION] print co-save was written at {} texels of {} units, this build uses {} of {}; dropped",
-			tileDim, texel, kPrintTileDim, kPrintTexel);
-		return;
-	}
-
-	std::scoped_lock lock(printStoreMutex);
-	printStore.clear();
-	printStoreGeneration.fetch_add(1, std::memory_order_acq_rel);
-	uint32_t restored = 0;
-	const uint32_t tileValues = 2u * (uint32_t)kPrintTileTexels;
-	for (uint32_t i = 0; i < tileCount; i++) {
-		TrenchTileKey key{};
-		float clockRel = 0.0f;
-		uint32_t entries = 0;
-		if (a_intfc->ReadRecordData(&key.worldspace, sizeof(key.worldspace)) != sizeof(key.worldspace) ||
-			a_intfc->ReadRecordData(&key.x, sizeof(key.x)) != sizeof(key.x) ||
-			a_intfc->ReadRecordData(&key.y, sizeof(key.y)) != sizeof(key.y) ||
-			a_intfc->ReadRecordData(&clockRel, sizeof(clockRel)) != sizeof(clockRel) ||
-			a_intfc->ReadRecordData(&entries, sizeof(entries)) != sizeof(entries))
-			break;
-		if (entries > tileValues) {
-			logger::warn("[SNOW DEFORMATION] print co-save tile {} claims {} prints; the rest is dropped", i, entries);
-			break;
-		}
-		PrintStoreTile tile{ std::vector<uint32_t>(tileValues, 0u), std::min(clockRel, 0.0f) };
-		bool intact = true;
-		for (uint32_t e = 0; e < entries && intact; e++) {
-			uint16_t index = 0;
-			uint32_t value = 0;
-			intact = a_intfc->ReadRecordData(&index, sizeof(index)) == sizeof(index) &&
-			         a_intfc->ReadRecordData(&value, sizeof(value)) == sizeof(value) && index < tileValues;
-			if (intact)
-				tile.texels[index] = value;
-		}
-		if (!intact) {
-			logger::warn("[SNOW DEFORMATION] print co-save tile {} would not read; the rest is dropped", i);
-			break;
-		}
-		printStore.insert_or_assign(key, std::move(tile));
-		restored++;
-	}
-	printReinjectRequested.store(true, std::memory_order_release);
-	logger::info("[SNOW DEFORMATION] print co-save restored {} of {} tiles (active worldspace {:08X})",
-		restored, tileCount, activeWorldspace.load(std::memory_order_acquire));
-}
-
-void SnowDeformation::RegisterPrintCoSave()
-{
-	CoSave::GetSingleton()->Register(
-		kPrintRecord, kPrintRecordVersion,
-		[this](const SKSE::SerializationInterface* a_intfc) { SavePrintStore(a_intfc); },
-		[this](const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length) { LoadPrintStore(a_intfc, a_version, a_length); },
-		[this]() { ClearPrintStore("the co-save revert"); });
 }
 
 void SnowDeformation::ClearPrintStore(const char* a_why)

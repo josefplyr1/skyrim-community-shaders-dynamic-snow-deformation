@@ -74,7 +74,6 @@ cbuffer PerFrame : register(b0)
 Texture2D<float4> PreviousDeformation : register(t0);
 RWTexture2D<float4> CurrentDeformation : register(u0);
 RWTexture2D<float2> EvolveSnapshot : register(u0);
-Texture2D<float2> InjectStore : register(t1);
 #define TRACK_AGE_HORIZON 128.0
 RWTexture2D<float> TrackClock : register(u4);
 static const float kTrackCutMin = 0.02;
@@ -220,16 +219,10 @@ float SlumpTap(int2 p, int2 dims)
 	}
 	const int2 logical = int2(rect.x + (int)(id % (uint)rect.z), rect.y + (int)(id / (uint)rect.z));
 
-	float2 stored = 0.0;
-	[branch] if (InjectValid)
-		stored = InjectStore[logical];
-	const float depth = stored.x;
 	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
-	CurrentDeformation[phys] = float4(depth, 0.0, 0.0, 0.0);
-	TrackClock[phys] = stored.y > 0.0 ? AgeingClock - (1.0 - stored.y) * TRACK_AGE_HORIZON : 0.0;
+	CurrentDeformation[phys] = 0.0;
+	TrackClock[phys] = 0.0;
 	BodyReachMax[phys] = 0.0;
-	if (depth > 0.0)
-		Occupancy[phys >> 3] = 1u;
 	BermDirty[phys >> 3] = 1u;
 }
 

@@ -14,11 +14,7 @@
 	X(SlumpRate) \
 	X(RefillRateMultiplier) \
 	X(RefillOnlyWhenSnowing) \
-	X(PersistTrenches) \
-	X(StoredTrenchFadeDays) \
-	X(TrenchMemoryMB) \
 	X(EnableSnowAccumulation) \
-	X(PersistAccumulation) \
 	X(RecoloredSnowAccumulates) \
 	X(SteepFaceThinning) \
 	X(AccumulationPeak) \
@@ -218,10 +214,6 @@ void SnowDeformation::CreateDeformationTextures()
 
 	deformationTextures[0] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::DeformationMap");
 	deformationTextures[1] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::EvolveScratch");
-
-	if (!CreateTrenchStoreResources()) {
-		logger::warn("[SNOW DEFORMATION] Trench store resources failed; trenches will not survive leaving the window");
-	}
 
 	delete bermFieldTexture;
 	bermFieldTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::BermField");
@@ -487,6 +479,21 @@ void SnowDeformation::SetupResources()
 	linearDesc.MaxLOD = D3D11_FLOAT32_MAX;
 	DX::ThrowIfFailed(device->CreateSamplerState(&linearDesc, shellLinearSampler.put()));
 	Util::SetResourceName(shellLinearSampler.get(), "SnowDeformation::ShellLinearSampler");
+}
+
+int SnowDeformation::ComputeArrivalRects(DirectX::XMINT2 a_scroll, bool a_clearing, ArrivalRect a_rects[2]) const
+{
+	const int dim = (int)deformMapDim;
+	if (a_clearing || std::abs(a_scroll.x) >= dim || std::abs(a_scroll.y) >= dim) {
+		a_rects[0] = { 0, 0, dim, dim };
+		return 1;
+	}
+	int count = 0;
+	if (a_scroll.x != 0)
+		a_rects[count++] = { a_scroll.x > 0 ? dim - a_scroll.x : 0, 0, std::abs(a_scroll.x), dim };
+	if (a_scroll.y != 0)
+		a_rects[count++] = { 0, a_scroll.y > 0 ? dim - a_scroll.y : 0, dim, std::abs(a_scroll.y) };
+	return count;
 }
 
 SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld)
@@ -936,9 +943,6 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
 
-	if (trenchReinjectRequested.exchange(false, std::memory_order_acq_rel))
-		clearRequested = true;
-
 	perFrameData.ClearMap = clearRequested;
 	clearRequested = false;
 
@@ -953,16 +957,9 @@ void SnowDeformation::PrepassSimulation()
 		}
 	}
 
-	TickTrenchClock();
 	TickSnowAgeing();
-	TickTrenchAgeing();
 	perFrameData.AgeingClock = snowClimate.ageingClock;
 	perFrameData.TrackRebase = trackClockTexture && bermFieldTexture ? snowClimate.ageingRebase : 0.0f;
-	SweepTrenchStore();
-	DrainTrenchBands();
-	FlushDepartingTrenches(scroll, perFrameData.ClearMap != 0);
-	RollTrenchWindow();
-	perFrameData.InjectValid = BuildTrenchInject(scroll, perFrameData.ClearMap != 0);
 
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
@@ -980,7 +977,6 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.TerrainTexelSize = kShellVertexSpacing;
 		perFrameData.TerrainDim = float(kShellWindowDim);
 	}
-	MarkTrenchDirtyRows(perFrameData);
 
 	PollDeformActivity(context);
 
@@ -1024,7 +1020,6 @@ void SnowDeformation::PrepassSimulation()
 	const bool inputsIdle =
 		scroll.x == 0 && scroll.y == 0 &&
 		stampsQuiet &&
-		perFrameData.InjectValid == 0 &&
 		perFrameData.RefillAmount <= 0.0f &&
 		perFrameData.ClearMap == 0 &&
 		perFrameData.ContactDim < 0.5f
@@ -1045,7 +1040,6 @@ void SnowDeformation::PrepassSimulation()
 
 		auto* map = deformationTextures[0];
 		auto* scratch = deformationTextures[1];
-		const bool ringRan = perFrameData.RingTotalTexels > 0;
 		const bool stampRan = perFrameData.StampCount > 0 || perFrameData.ContactDim > 0.5f;
 		bool stampDispatched = stampRan;
 
@@ -1098,8 +1092,8 @@ void SnowDeformation::PrepassSimulation()
 			ID3D11UnorderedAccessView* reachUAV = bodyReachTexture ? bodyReachTexture->uav.get() : nullptr;
 
 			if (perFrameData.RingTotalTexels > 0) {
-				ID3D11ShaderResourceView* ringSrvs[2] = { nullptr, trenchInjectSRV.get() };
-				context->CSSetShaderResources(0, ARRAYSIZE(ringSrvs), ringSrvs);
+				ID3D11ShaderResourceView* nullRingSrv = nullptr;
+				context->CSSetShaderResources(0, 1, &nullRingSrv);
 				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 				context->CSSetShader(GetSnowCS(kDeformationRingCS), nullptr, 0);
@@ -1165,8 +1159,8 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(4, 1, &nullOcc);
 
 				ID3D11ShaderResourceView* listSRV = evolveTileSRV.get();
-				ID3D11ShaderResourceView* srvs[2] = { scratch->srv.get(), trenchInjectSRV.get() };
-				context->CSSetShaderResources(0, ARRAYSIZE(srvs), srvs);
+				ID3D11ShaderResourceView* scratchSrv = scratch->srv.get();
+				context->CSSetShaderResources(0, 1, &scratchSrv);
 				context->CSSetShaderResources(3, 1, &listSRV);
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 				context->CSSetShader(GetSnowCS(kDeformationEvolveCS), nullptr, 0);
@@ -1309,8 +1303,6 @@ void SnowDeformation::PrepassSimulation()
 			deformLastNonIdleSeq = deformDispatchSeq;
 		if (stampDispatched)
 			evolveLastArmSeq = std::max(evolveLastArmSeq, deformDispatchSeq);
-		if (ringRan && perFrameData.InjectValid)
-			evolveLastArmSeq = std::max(evolveLastArmSeq, evolveNeeded ? deformDispatchSeq - 1 : deformDispatchSeq);
 		lastStampSet.assign(perFrameData.Stamps, perFrameData.Stamps + perFrameData.StampCount);
 		lastStampEnds.assign(perFrameData.StampEnds, perFrameData.StampEnds + perFrameData.StampCount);
 		for (uint i = 0; i < kDeformActivitySlots; i++) {
@@ -1325,12 +1317,6 @@ void SnowDeformation::PrepassSimulation()
 	}
 
 	UpdateObjectPrints(context, perFrameData, !deformIdleSkipped);
-
-	trenchMapOrigin = windowOrigin;
-	trenchMapTexel = perFrameData.TexelSize;
-	trenchMapWorldspace = activeWorldspace.load(std::memory_order_acquire);
-	trenchMapPhysOrigin = mapOrigin;
-	trenchMapPrimed = true;
 
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);

@@ -1,6 +1,5 @@
 #include "Features/SnowDeformation.h"
 
-#include "Features/SnowDeformation/CoSave.h"
 
 #include <DDSTextureLoader.h>
 #include <DirectXPackedVector.h>
@@ -1078,11 +1077,6 @@ void SnowDeformation::PostPostLoad()
 	InstallStaticsCaptureHook();
 	InstallCameraHook();
 	InstallLandscapeSnow();
-
-	CoSave::GetSingleton()->Install();
-	RegisterTrenchCoSave();
-	RegisterAccumulationCoSave();
-	RegisterPrintCoSave();
 }
 
 bool SnowDeformation::WindowHasSnow(float a_halfExtentUnits, bool a_unknownIsSnowy, uint32_t* a_verdictOut) const

@@ -820,9 +820,7 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 		                      ActorIsFloating(actor.get(), root, bones, footPath, groundZ + bodyLift, &floatingGap, &floatingByFeet);
 		float bodyAlpha = 1.0f;
 		bool ghostFlag = false;
-		const bool elemental = ResolveInnateAura(actor.get()) != nullptr;
-		const bool incorporeal = !isDead && !elemental &&
-		                         ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
+		const bool incorporeal = !isDead && ActorIsIncorporeal(actor.get(), root, bones, &bodyAlpha, &ghostFlag);
 
 		if (!actor->IsPlayerRef()) {
 			const float distSq = cameraPosition.GetSquaredDistance(position);
@@ -833,7 +831,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 				stampStats.nearestGapToRoot = floatingGap;
 				stampStats.nearestGapToLand = position.z - landZ;
 				stampStats.nearestFloating = floating;
-				stampStats.nearestElemental = elemental;
 				stampStats.nearestFeet = bones ? static_cast<uint>(bones->feet.size()) : 0;
 				stampStats.nearestLimbs = bones ? static_cast<uint>(bones->limbs.size()) : 0;
 				stampStats.nearestUsableFeet = usableFeet;
@@ -868,15 +865,14 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			}
 			return;
 		}
-		if (!isDead && !elemental && bones && bones->anyAlpha >= 0.0f && bones->anyAlpha < kIncorporealAlpha &&
+		if (!isDead && bones && bones->anyAlpha >= 0.0f && bones->anyAlpha < kIncorporealAlpha &&
 		    seeThroughKeptLogged.size() < 16 && seeThroughKeptLogged.insert(formID).second) {
 			logger::info("[SNOW DEFORMATION] '{}' ({:08X}) keeps its trench: see-through '{}' at alpha {:.2f}, most opaque body surface {:.2f} on '{}'",
 				actor->GetDisplayFullName(), formID,
 				bones->anyAlphaSource.c_str() ? bones->anyAlphaSource.c_str() : "", bones->anyAlpha,
 				bodyAlpha, bones->bodyAlphaSource.c_str() ? bones->bodyAlphaSource.c_str() : "");
 		}
-		const bool alphaGoverns = !elemental &&
-		                          (settings.IncorporealMode == 1 || settings.IncorporealMode == 3);
+		const bool alphaGoverns = settings.IncorporealMode == 1 || settings.IncorporealMode == 3;
 		if (!isDead && alphaGoverns && bones && bones->alphaSettle < kBodyAlphaSettleReads) {
 			stampStats.incorporeal++;
 			return;
