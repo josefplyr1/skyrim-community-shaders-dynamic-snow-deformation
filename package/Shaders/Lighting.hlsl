@@ -1883,9 +1883,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 #		if defined(LODOBJECTSHD)
 	projWeight += (-0.5 + input.Color.w) * 2.5;
 #		endif  // LODOBJECTSHD
-#		if defined(SNOW_DEFORMATION)
-	projWeight = SnowLighting::PrintBareWeight(snowState, projWeight, projNoise);
-#		endif
 #		if defined(SPARKLE)
 	if (projWeight < 0)
 		discard;

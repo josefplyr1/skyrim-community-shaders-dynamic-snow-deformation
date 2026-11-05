@@ -549,8 +549,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
-	data.PrintFullDepth = BodyPrintScale();
-	data.PrintRect = PrintRectForFrame();
 	if (globals::state->isMapMenuOpen) {
 		data.LODReplaceEnable = 0.0f;
 		data.ProjSnowEnable = 0.0f;
@@ -816,7 +814,6 @@ void SnowDeformation::PrepassSimulation()
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	ID3D11ShaderResourceView* waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
-	BindPrintReaders(context);
 	EnsureShellSnowTextures();
 	if (shellSnowDiffuseSRV) {
 		ID3D11ShaderResourceView* albedoSRV = shellSnowDiffuseSRV.get();
@@ -1316,13 +1313,10 @@ void SnowDeformation::PrepassSimulation()
 		}
 	}
 
-	UpdateObjectPrints(context, perFrameData, !deformIdleSkipped);
-
 	deformationSRV = GetDeformationSRV();
 	context->PSSetShaderResources(101, 1, &deformationSRV);
 	waterSRV = waterFineTexture ? waterFineTexture->srv.get() : nullptr;
 	context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
-	BindPrintReaders(context);
 }
 
 ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
@@ -1536,7 +1530,6 @@ void SnowDeformation::ClearShaderCache()
 		return;
 	deformationCSFailed = false;
 	ReleaseBloodShaders();
-	ReleaseObjectPrintShaders();
 	noiseHashBaked = false;
 	undulationFieldValid = false;
 	for (auto& cs : snowCS)
@@ -1590,8 +1583,8 @@ void SnowDeformation::ClearShaderCache()
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
 	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS, sssChangedRaymarchCS);
 	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
-	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass, staticsPSDrapePrintsNoDepth);
-	release(staticsVSParallax, staticsPSDrapeParallax, staticsPSDrapePrintsParallax, patchVS, patchShadowVS, patchTessVS, patchHS, patchDS, patchPS);
+	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass);
+	release(staticsVSParallax, staticsPSDrapeParallax, patchVS, patchShadowVS, patchTessVS, patchHS, patchDS, patchPS);
 	release(heightVS, heightPS, heightPSTopOnly, heightPSSkinDepth, heightScrollCS, heightScrollTopCS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
 }
 

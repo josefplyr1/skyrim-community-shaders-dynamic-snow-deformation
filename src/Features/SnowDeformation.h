@@ -372,7 +372,7 @@ public:
 
 		DirectX::XMINT2 DeformMapOrigin;
 		float LandWetPrint;
-		float PrintFullDepth;
+		float padPrintFullDepth;
 
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;
@@ -383,7 +383,7 @@ public:
 		float SnowSpecularLevel;
 		float LandRecolorLumLo;
 
-		DirectX::XMINT4 PrintRect;
+		DirectX::XMINT4 padPrintRect;
 
 		float ParallaxFlatten;
 		float IceClock;
@@ -2025,13 +2025,11 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> staticsPSPrepassNoDepth;
 	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeNoDepth;
 	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrepass;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrintsNoDepth;
 	winrt::com_ptr<ID3D11VertexShader> staticsVSParallax;
 	winrt::com_ptr<ID3DBlob> staticsVSParallaxBlob;
 	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeParallax;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrintsParallax;
 	bool coatParallaxTried = false;
-	/** @brief Compiles the three on first use (the setting on); true when the VS and the drape PS exist. */
+	/** @brief Compiles the two on first use (the setting on); true when both exist. */
 	bool EnsureCoatParallaxShaders();
 	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
 	struct alignas(16) SkinCullBound
@@ -2496,181 +2494,11 @@ public:
 
 protected:
 
-	static constexpr float kPrintTexel = 3.0f;
-	static constexpr int kPrintTileDim = 32;
-	static constexpr int kPrintTileTexels = kPrintTileDim * kPrintTileDim;
-	static constexpr size_t kPrintStoreCap = 2048;
-	static constexpr uint32_t kPrintBlockCap = 16384;
-	static constexpr uint32_t kPrintStagingSlots = 16;
-	static constexpr uint32_t kPrintMirrorPerFrame = 4;
-	static constexpr UINT kPrintReaderSlot = 114;
 	static constexpr UINT kHorizonSnowAlbedoSlot = 33;
 	static constexpr UINT kHorizonSnowNormalSlot = 23;
 	static constexpr UINT kWaterWindowSlot = 63;
 	static constexpr UINT kHorizonSnowRmaosSlot = 68;
 	static constexpr UINT kLandBermSlot = kBodyReachSlot;
-	static constexpr int kPrintRimApron = 5;
-
-	struct alignas(16) PrintFrameCB
-	{
-		DirectX::XMINT2 WindowMin;
-		uint RefillQuanta;
-		uint RingRectCount;
-		DirectX::XMINT4 RingRects[2];
-		uint RingTotal;
-		float RimWidth;
-		uint SpellCount;
-		uint Pad1;
-	};
-	STATIC_ASSERT_ALIGNAS_16(PrintFrameCB);
-	static_assert(sizeof(PrintFrameCB) == 64, "PrintFrameCB must match the fxc-reflected PrintFrame");
-
-	struct PrintSpellMark
-	{
-		RE::NiPoint3 a;
-		RE::NiPoint3 b;
-		float radius = 0.0f;
-		float depth = 0.0f;
-		float rate = 0.0f;
-		uint32_t flags = 0;
-		float reach = 0.0f;
-		float seed = 0.0f;
-	};
-	static constexpr uint32_t kPrintSpellChurn = 8u;
-	static constexpr uint32_t kPrintSpellCap = 32;
-
-	struct PrintLiveTile
-	{
-		float refillSince = 0.0f;
-		bool dirty = false;
-	};
-	struct TrenchTileKey
-	{
-		uint32_t worldspace;
-		int32_t x;
-		int32_t y;
-		bool operator==(const TrenchTileKey&) const = default;
-	};
-
-	struct TrenchTileKeyHash
-	{
-		size_t operator()(const TrenchTileKey& a_key) const noexcept
-		{
-			size_t h = a_key.worldspace * 0x9E3779B9u;
-			h ^= (size_t)(uint32_t)a_key.x + 0x9E3779B9u + (h << 6) + (h >> 2);
-			h ^= (size_t)(uint32_t)a_key.y + 0x9E3779B9u + (h << 6) + (h >> 2);
-			return h;
-		}
-	};
-
-	struct PrintStoreTile
-	{
-		std::vector<uint32_t> texels;
-		float clock = 0.0f;
-	};
-	struct PrintStagingSlot
-	{
-		winrt::com_ptr<ID3D11Texture2D> texture;
-		TrenchTileKey key{};
-		DirectX::XMINT2 windowMin{};
-		uint32_t dim = 0;
-		float clock = 0.0f;
-		uint64_t frame = 0;
-		uint32_t generation = 0;
-		bool busy = false;
-	};
-
-	Texture2D* printMap = nullptr;
-	Texture2D* printRim = nullptr;
-	ConstantBuffer* printFrameCB = nullptr;
-	winrt::com_ptr<ID3D11Buffer> printBlockBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> printBlockSRV;
-	winrt::com_ptr<ID3D11ComputeShader> printStampCS;
-	winrt::com_ptr<ID3D11ComputeShader> printRingCS;
-	winrt::com_ptr<ID3D11ComputeShader> printRefillCS;
-	winrt::com_ptr<ID3D11ComputeShader> printRimCS;
-	winrt::com_ptr<ID3D11ComputeShader> printRayCS;
-	struct HeldPrintSpell
-	{
-		PrintSpellMark mark;
-		float age = 0.0f;
-		float life = 0.0f;
-		float speed = 0.0f;
-	};
-	std::vector<HeldPrintSpell> heldPrintSpells;
-	winrt::com_ptr<ID3D11Buffer> printSpellBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> printSpellSRV;
-	winrt::com_ptr<ID3D11Buffer> printRayHitBuffer;
-	winrt::com_ptr<ID3D11ShaderResourceView> printRayHitSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> printRayHitUAV;
-	uint32_t printSpellsLast = 0;
-	bool printRayFailed = false;
-	bool printCSFailed = false;
-	bool printRimFailed = false;
-	float printRimWidthLast = -1.0f;
-	uint32_t printMapDim = 0;
-	DirectX::XMINT2 printWindowMin = { 0, 0 };
-	bool printWindowValid = false;
-	uint32_t printWorldspace = 0;
-	float printRefillBank = 0.0f;
-	std::atomic<bool> printReinjectRequested{ false };
-	std::unordered_map<uint64_t, PrintLiveTile> printLive;
-	std::mutex printStoreMutex;
-	std::unordered_map<TrenchTileKey, PrintStoreTile, TrenchTileKeyHash> printStore;
-	float printClockSnapshot = 0.0f;
-	std::atomic<uint32_t> printStoreGeneration{ 0 };
-	uint32_t printQueueGeneration = 0;
-	std::array<PrintStagingSlot, kPrintStagingSlots> printStaging;
-	winrt::com_ptr<ID3D11Buffer> printWriteBuffer;
-	winrt::com_ptr<ID3D11UnorderedAccessView> printWriteUAV;
-	struct PrintWriteReadback
-	{
-		winrt::com_ptr<ID3D11Buffer> staging;
-		DirectX::XMINT2 tileOrigin{};
-		uint32_t rowTiles = 0;
-		uint32_t worldspace = 0;
-		uint64_t frame = 0;
-		bool busy = false;
-	};
-	static constexpr uint32_t kPrintWriteSlots = 4;
-	std::array<PrintWriteReadback, kPrintWriteSlots> printWriteReadbacks;
-	uint64_t printLastClearFrame = 0;
-	std::vector<uint32_t> printBlockScratch;
-	std::vector<uint8_t> printBlockSeen;
-	uint64_t printFrame = 0;
-	uint32_t printStampBlocksLast = 0;
-	uint32_t printInjectsLast = 0;
-	Texture2D* printTiles = nullptr;
-	std::vector<uint8_t> printTilesScratch;
-	std::vector<uint8_t> printTilesUploaded;
-	std::vector<uint32_t> printTileSum;
-	DirectX::XMINT2 printTileSumOrigin = { 0, 0 };
-	int32_t printTileSumDim = 0;
-	DirectX::XMINT2 printWindowTarget = { 0, 0 };
-	uint32_t printDimTarget = 0;
-	DirectX::XMINT4 printRectPublished = { 0, 0, 0, 0 };
-
-	void UpdateObjectPrints(ID3D11DeviceContext* a_context, const PerFrame& a_frame, bool a_trenchPassRan);
-	void CreatePrintResources(uint32_t a_dim);
-	bool EnsurePrintShaders();
-	ID3D11ComputeShader* GetPrintStampCS();
-	ID3D11ComputeShader* GetPrintRingCS();
-	ID3D11ComputeShader* GetPrintRefillCS();
-	ID3D11ComputeShader* GetPrintRimCS();
-	ID3D11ComputeShader* GetPrintRayCS();
-	void ReleaseObjectPrintShaders();
-	PrintSpellMark HeldPrintFront(const HeldPrintSpell& a_held, float a_deltaTime) const;
-	bool QueuePrintMirror(ID3D11DeviceContext* a_context, int32_t a_tx, int32_t a_ty, float a_clock);
-	void PollPrintMirrors(ID3D11DeviceContext* a_context);
-	void PollPrintWrites(ID3D11DeviceContext* a_context);
-	uint32_t InjectPrintRect(ID3D11DeviceContext* a_context, const DirectX::XMINT4& a_rect, float a_clock);
-	static bool DecayPrintTile(PrintStoreTile& a_tile, float a_clock);
-	void EnforcePrintStoreCap();
-	void ClearPrintStore(const char* a_why);
-	DirectX::XMINT4 PrintRectForFrame();
-	void PublishPrintTiles(ID3D11DeviceContext* a_context);
-	bool PrintsUnder(const RE::NiBound& a_bound) const;
-	void BindPrintReaders(ID3D11DeviceContext* a_context) const;
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

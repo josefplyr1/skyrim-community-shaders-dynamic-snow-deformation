@@ -19,7 +19,6 @@ namespace SnowLighting
 		float4 projRMAOS;
 		float3 parallaxShift;
 		bool underWater;
-		float printShare;
 		float lodReplaceW;
 		float3 lodAlbedo;
 		bool texMatch;
@@ -315,10 +314,6 @@ namespace SnowLighting
 	{
 		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
-#	if defined(PROJECTED_UV)
-		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
-			s.printShare = SnowPrints::Share(worldRel + FrameBuffer::CameraPosAdjust.xyz);
-#	endif
 	}
 #endif
 
@@ -332,11 +327,6 @@ namespace SnowLighting
 		[flatten] if (s.underWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 			vertexAlpha = 0.0;
 		return vertexAlpha;
-	}
-
-	float PrintBareWeight(State s, float projWeight, float projNoise)
-	{
-		return lerp(projWeight, min(projWeight, -1.0), SnowPrints::Bare(s.printShare, projNoise));
 	}
 
 #	if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)

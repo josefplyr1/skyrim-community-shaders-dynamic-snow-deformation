@@ -62,9 +62,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetSnowCS(kDeformationSnapshotCS); },
 		[&] { GetSnowCS(kDeformationSnapshotFullCS); },
 		[&] { GetSnowCS(kDeformationScanBermCS); },
-		[&] { GetPrintStampCS(); },
-		[&] { GetPrintRingCS(); },
-		[&] { GetPrintRefillCS(); },
 		[&] { GetSnowCS(kUndulationFieldCS); },
 		[&] { GetSnowCS(kWindowFillCS); },
 	};

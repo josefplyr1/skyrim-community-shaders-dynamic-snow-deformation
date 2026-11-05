@@ -1,5 +1,4 @@
 #include "SnowDeformation/SnowCommon.hlsli"
-#include "SnowDeformation/SnowPrints.hlsli"
 
 namespace SnowDeformation
 {

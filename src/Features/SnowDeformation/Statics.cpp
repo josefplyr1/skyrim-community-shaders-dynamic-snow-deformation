@@ -584,7 +584,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	bool bindSnowSet = false;
-	bool projectedSnow = false;
 	if (settings.ProjSnowMatch) {
 		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
 		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
@@ -604,7 +603,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		if (passProjected && !treeAnim && rec.mato != MatoClass::kNotSnow && !NameFactsOf(a_pass->geometry).engineDecal) {
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
 			bindSnowSet = true;
-			projectedSnow = true;
 		}
 	}
 	if (settings.LODObjectSnow && !bindSnowSet &&
@@ -637,8 +635,6 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		context->PSSetShaderResources(kHorizonSnowNormalSlot, 1, &normalSRV);
 		context->PSSetShaderResources(kWaterWindowSlot, 1, &waterSRV);
 		context->PSSetShaderResources(kHorizonSnowRmaosSlot, 1, &rmaosSRV);
-		if (projectedSnow && printRectPublished.z > printRectPublished.x)
-			BindPrintReaders(globals::d3d::context);
 	}
 }
 
@@ -1282,11 +1278,6 @@ bool SnowDeformation::EnsureStaticsShaders()
 		staticsPSDrapePrepass.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE" })));
 		if (staticsPSDrapePrepass)
 			Util::SetResourceName(staticsPSDrapePrepass.get(), "SnowDeformation::StaticsShellPS Drape Prepass");
-	}
-	if (!staticsPSDrapePrintsNoDepth) {
-		staticsPSDrapePrintsNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS" })));
-		if (staticsPSDrapePrintsNoDepth)
-			Util::SetResourceName(staticsPSDrapePrintsNoDepth.get(), "SnowDeformation::StaticsShellPS Drape Prints NoDepth");
 	}
 
 	if (!patchVS) {
@@ -3067,7 +3058,6 @@ void SnowDeformation::DrawCapturedStatics()
 	context->PSSetShaderResources(53, 1, &preDecalSRV);
 	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
 	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
-	BindPrintReaders(context);
 
 	ID3D11DepthStencilState* boundDepthState = nullptr;
 
@@ -3116,7 +3106,6 @@ void SnowDeformation::DrawCapturedStatics()
 		uint32_t scratchBase;
 		bool decalDepth;
 		ID3D11ShaderResourceView* smoothSRV;
-		bool prints;
 		ID3D11InputLayout* layoutParallax;
 	};
 	std::vector<SkinDraw> skinDraws;
@@ -3188,7 +3177,7 @@ void SnowDeformation::DrawCapturedStatics()
 			layout, stride, indexCount,
 			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
 			uint32_t(skinDraws.size()), cached ? smooth->boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV, s4Shell && PrintsUnder(geometry->worldBound),
+			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV,
 			(coatParallax && s4Shell && cap.parallaxSRV) ? StaticsParallaxInputLayoutFor(descKey, desc) : nullptr });
 	}
 
@@ -3390,9 +3379,7 @@ void SnowDeformation::DrawCapturedStatics()
 			}
 
 			const bool drapePS = d.s4Shell;
-			ID3D11PixelShader* drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? staticsPSDrapePrintsNoDepth.get() : staticsPSDrapeNoDepth.get();
-			if (d.layoutParallax)
-				drapeShadePS = (d.prints && staticsPSDrapePrintsNoDepth) ? (staticsPSDrapePrintsParallax ? staticsPSDrapePrintsParallax.get() : staticsPSDrapePrintsNoDepth.get()) : staticsPSDrapeParallax.get();
+			ID3D11PixelShader* drapeShadePS = d.layoutParallax ? staticsPSDrapeParallax.get() : staticsPSDrapeNoDepth.get();
 			ID3D11PixelShader* wantPS = nullptr;
 			if (a_prepass)
 				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass.get() : staticsPSPrepassNoDepth.get();
@@ -3850,11 +3837,8 @@ bool SnowDeformation::EnsureCoatParallaxShaders()
 		staticsPSDrapeParallax.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX" })));
 		if (staticsPSDrapeParallax)
 			Util::SetResourceName(staticsPSDrapeParallax.get(), "SnowDeformation::StaticsShellPS Drape Parallax");
-		staticsPSDrapePrintsParallax.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_OBJECT_PRINTS", "SNOW_COAT_PARALLAX" })));
-		if (staticsPSDrapePrintsParallax)
-			Util::SetResourceName(staticsPSDrapePrintsParallax.get(), "SnowDeformation::StaticsShellPS Drape Prints Parallax");
-		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}, prints {}",
-			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED", staticsPSDrapePrintsParallax ? "ok" : "FAILED");
+		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}",
+			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED");
 	}
 	return staticsVSParallax && staticsPSDrapeParallax;
 }
