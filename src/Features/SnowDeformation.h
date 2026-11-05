@@ -713,7 +713,6 @@ public:
 	std::unordered_set<std::string> decalOverlayNamesLogged;
 	uint32_t decalMasksLast = 0;
 	bool EnsureDecalMask(uint32_t a_width, uint32_t a_height);
-	void APIDepositBlood(float a_x, float a_y, float a_z, float a_radius, float a_r, float a_g, float a_b, float a_amount);
 
 	struct BloodFineRequest
 	{
@@ -1399,16 +1398,6 @@ public:
 	void InstallStaticsCaptureHook();
 	/** @brief PlayerCamera::Update vfunc: after the game has placed the camera, ClampCameraAboveSnow. Implemented in TerrainData.cpp. */
 	void InstallCameraHook();
-	/** @brief Queues the Papyrus native registration. */
-	void InstallAPI();
-	/** @brief Loaded and switched on. */
-	bool APIIsActive() const;
-	/** @brief Untrampled terrain snow depth at a world XY, accumulation-scaled, clamped at 0; 0 when off or unbaked. Trenches are not subtracted. */
-	float APISnowDepthAt(float a_x, float a_y);
-	/** @brief APISnowDepthAt under a reference, 0 when it stands more than kElevatedStampCutoff above the land. */
-	float APISnowDepthAtRef(RE::TESObjectREFR* a_ref);
-	/** @brief The accumulation scalar 0..1, 0 when accumulation or the feature is off. */
-	float APISnowAccumulation() const;
 	/** @brief Snow surface (ground + class depth, accumulation-scaled) at a world XY from the CPU terrain window; false where the window has no ground or no snow. */
 	bool SampleShellSurface(float a_x, float a_y, float& a_surface) const;
 	/** @brief Third person, mount, bleedout (ragdoll, death), dragon and PCTransition, plus any non-free camera while the player is down: if the camera sits under the shell, pull it toward the player along its own line until it clears the snow, the way a terrain hit would; while knocked down, ragdolled or dead, lift it straight up instead. */
@@ -2584,70 +2573,6 @@ protected:
 	float LandSnowShareAround(float a_x, float a_y);
 	void SaveAccumulation(const SKSE::SerializationInterface* a_intfc);
 	void LoadAccumulation(const SKSE::SerializationInterface* a_intfc, uint32_t a_version, uint32_t a_length);
-
-	enum class SnowEventKind : uint8_t
-	{
-		KickUp,
-		Crumble,
-		Landing,
-		Knockdown,
-		Rush,
-		BodyDrop,
-		Shout,
-		Blast,
-		Lightning,
-		Count
-	};
-	struct SnowEvent
-	{
-		RE::NiPoint3 position;
-		RE::NiPoint3 velocity;
-		float strength = 0.0f;
-		float amount = 0.0f;
-		float surfaceZ = 0.0f;
-		float snowDepth = 0.0f;
-		float stickiness = 0.0f;
-		uint32_t formID = 0;
-		uint32_t seed = 0;
-		SnowEventKind kind = SnowEventKind::KickUp;
-	};
-	static constexpr uint32_t kMaxSnowEventsPerFrame = 256;
-	void RequestSnowEvents();
-	bool SnowEventsWanted() const;
-	const std::vector<SnowEvent>& PublishedSnowEvents() const { return snowEventsPublished; }
-	void PushSnowEvent(const SnowEvent& a_event);
-	void CollectActorSnowEvents(RE::Actor* a_actor, bool a_dead, const RE::NiPoint3& a_position, float a_groundZ,
-		const StampBones* a_bones, const RE::NiAVObject* a_root);
-	void TickSnowEvents();
-	std::vector<SnowEvent> snowEventsBuilding;
-	std::vector<SnowEvent> snowEventsPublished;
-	uint32_t snowEventRequestFrame = UINT32_MAX;
-	struct SnowEventFoot
-	{
-		RE::NiPoint3 prev;
-		double time = 0.0;
-		float travel = 0.0f;
-		float pushed = 0.0f;
-		float wallHeight = 0.0f;
-		uint32_t frame = 0;
-		bool inSnow = false;
-	};
-	std::unordered_map<uint64_t, SnowEventFoot> snowEventFeet;
-	struct SnowEventBody
-	{
-		double trackTime = -1.0;
-		double time = 0.0;
-		RE::NiPoint3 prev;
-		float centreZ = 0.0f;
-		float peakFall = 0.0f;
-		float descent = 0.0f;
-		uint32_t frame = 0;
-		bool valid = false;
-		bool knocked = false;
-		bool rushing = false;
-	};
-	std::unordered_map<uint32_t, SnowEventBody> snowEventBodies;
-	std::unordered_map<uint64_t, uint32_t> snowEventMarksSeen;
 
 	uint32_t stampGatherFrame = UINT32_MAX;
 

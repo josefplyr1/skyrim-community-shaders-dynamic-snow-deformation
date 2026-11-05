@@ -968,7 +968,6 @@ void SnowDeformation::PrepassSimulation()
 
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
-	TickSnowEvents();
 	DrawContactCapture(context);
 	perFrameData.ContactCenter = contactCenter;
 	perFrameData.ContactHalfExtent = kContactHalfExtent;

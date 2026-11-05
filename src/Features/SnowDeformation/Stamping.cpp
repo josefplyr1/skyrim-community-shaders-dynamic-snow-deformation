@@ -886,9 +886,6 @@ void SnowDeformation::GatherStamps(PerFrame& perFrameData)
 			return;
 		}
 
-		if (SnowEventsWanted())
-			CollectActorSnowEvents(actor.get(), isDead, position, groundZ, bones, root);
-
 		const float impactWeight = creatureWeight > 0.0f ? std::cbrt(creatureWeight) : 1.0f;
 		footImpact = std::min(footImpact * impactWeight, 1.0f);
 		knockImpact = std::min(knockImpact * impactWeight, 1.0f);

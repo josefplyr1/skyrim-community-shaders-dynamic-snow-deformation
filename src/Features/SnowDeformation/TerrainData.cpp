@@ -1081,7 +1081,6 @@ void SnowDeformation::PostPostLoad()
 
 	InstallStaticsCaptureHook();
 	InstallCameraHook();
-	InstallAPI();
 	InstallLandscapeSnow();
 
 	CoSave::GetSingleton()->Install();

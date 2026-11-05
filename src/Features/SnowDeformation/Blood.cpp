@@ -523,10 +523,6 @@ void SnowDeformation::CopyBloodTargets(bool a_preDecal)
 	valid = ok;
 }
 
-void SnowDeformation::APIDepositBlood(float, float, float, float, float, float, float, float)
-{
-}
-
 uint32_t SnowDeformation::DrawBloodList(ID3D11DeviceContext* a_context, const std::vector<BloodCapture>& a_list, BloodCB& a_cb, ID3D11VertexShader* a_rigidVS, UINT a_instances, bool a_ownClock, ID3D11VertexShader* a_skinnedVS)
 {
 	auto* context = a_context;
